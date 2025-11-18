@@ -1,3 +1,15 @@
+use std::io::Write;
+
+const HELP_STRING: &str  = r#"Usage:
+
+diaryx <COMMAND> <OPTION> [more options...]
+
+Commands:
+- create: Creates a new Diaryx file at the path given by <OPTION>
+- data: get, edit, or add metadata to a Diaryx file
+- export:
+"#;
+
 struct Config {
     pub command: String,
     pub option: String,
@@ -5,7 +17,7 @@ struct Config {
 
 impl Config {
     fn help() {
-        println!("Usage:");
+        println!("{}", HELP_STRING);
         std::process::exit(0);
     }
 
@@ -35,5 +47,22 @@ impl DiaryxCli {
     pub fn print_config(&self) {
         println!("Config command: {}", self.config.command);
         println!("Config option: {}", self.config.option);
+    }
+
+    fn create(&self) -> Result<(), std::io::Error> {
+        println!("Called create with option: {}", self.config.option);
+        let mut file = std::fs::File::create_new(self.config.option.as_str())?;
+        file.write_all(format!("---\ntitle: {}\n---\n\n# {}\n\n", self.config.option.as_str(), self.config.option.as_str()).as_bytes());
+        Ok(())
+    }
+
+    pub fn run_command(&self) {
+        match self.config.command.as_str() {
+            "create" => self.create().unwrap_or_else(|err| {
+                eprintln!("Error: {}", err)
+            }),
+            _ => Config::help(),
+        }
+
     }
 }

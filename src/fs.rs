@@ -18,6 +18,9 @@ pub trait FileSystem {
 
     /// (Recommended Addition) Finds markdown files in a folder
     fn list_md_files(&self, dir: &Path) -> Result<Vec<PathBuf>>;
+
+    /// Checks if a file exists
+    fn exists(&self, path: &Path) -> bool;
 }
 
 use std::fs::{self, OpenOptions};
@@ -63,5 +66,7 @@ impl FileSystem for RealFileSystem {
         Ok(files)
     }
 
-
+    fn exists(&self, path: &Path) -> bool {
+        path.exists()
+    }
 }

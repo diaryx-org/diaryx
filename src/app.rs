@@ -1,6 +1,10 @@
 use crate::fs::FileSystem;
+use crate::date::{parse_date, date_to_path};
+use crate::config::Config;
+use chrono::NaiveDate;
 use serde_yaml::Value;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 pub struct DiaryxApp<FS: FileSystem> {
     fs: FS,
@@ -106,5 +110,63 @@ impl<FS: FileSystem> DiaryxApp<FS> {
     pub fn get_all_frontmatter(&self, path: &str) -> Result<HashMap<String, Value>, FrontmatterError> {
         let (frontmatter, _) = self.parse_file(path)?;
         Ok(frontmatter)
+    }
+
+    /// Get the full path for a date-based entry
+    pub fn get_dated_entry_path(&self, date_str: &str, config: &Config) -> Result<PathBuf, FrontmatterError> {
+        let date = parse_date(date_str)
+            .map_err(|e| FrontmatterError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))?;
+        Ok(date_to_path(&config.base_dir, &date))
+    }
+
+    /// Resolve a path string - either a date string ("today", "2024-01-15") or a literal path
+    /// If it parses as a date, returns the dated entry path. Otherwise, treats it as a literal path.
+    pub fn resolve_path(&self, path_str: &str, config: &Config) -> PathBuf {
+        // Try to parse as a date first
+        if let Ok(date) = parse_date(path_str) {
+            date_to_path(&config.base_dir, &date)
+        } else {
+            // Treat as literal path
+            PathBuf::from(path_str)
+        }
+    }
+
+    /// Create a dated entry with proper frontmatter
+    pub fn create_dated_entry(&self, date: &NaiveDate, config: &Config) -> Result<PathBuf, FrontmatterError> {
+        let path = date_to_path(&config.base_dir, date);
+
+        // Create parent directories if they don't exist
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| FrontmatterError::Io(e))?;
+        }
+
+        // Create entry with date-based frontmatter
+        let date_str = date.format("%Y-%m-%d").to_string();
+        let title = date.format("%B %d, %Y").to_string(); // e.g., "January 15, 2024"
+
+        let content = format!(
+            "---\ndate: {}\ntitle: {}\n---\n\n# {}\n\n",
+            date_str, title, title
+        );
+
+        self.fs.create_new(&path, &content)
+            .map_err(|e| FrontmatterError::Io(e))?;
+
+        Ok(path)
+    }
+
+    /// Ensure a dated entry exists, creating it if necessary
+    /// This will NEVER overwrite an existing file
+    pub fn ensure_dated_entry(&self, date: &NaiveDate, config: &Config) -> Result<PathBuf, FrontmatterError> {
+        let path = date_to_path(&config.base_dir, date);
+
+        // Check if file already exists using FileSystem trait
+        if self.fs.exists(&path) {
+            return Ok(path);
+        }
+
+        // Create the entry (create_new will fail if file exists)
+        self.create_dated_entry(date, config)
     }
 }

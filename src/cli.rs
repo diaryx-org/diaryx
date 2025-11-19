@@ -2,8 +2,12 @@
 
 use clap::{Parser, Subcommand};
 use diaryx_core::app::DiaryxApp;
+use diaryx_core::config::Config;
+use diaryx_core::date::parse_date;
+use diaryx_core::editor::launch_editor;
 use diaryx_core::fs::RealFileSystem;
 use serde_yaml::Value;
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "diaryx")]
@@ -56,6 +60,28 @@ enum Commands {
         /// Path to the entry file
         path: String,
     },
+
+    /// Initialize diaryx configuration
+    Init {
+        /// Base directory for diary entries (default: ~/diaryx)
+        #[arg(short, long)]
+        base_dir: Option<PathBuf>,
+    },
+
+    /// Open today's entry in your editor
+    Today,
+
+    /// Open yesterday's entry in your editor
+    Yesterday,
+
+    /// Open an entry for a specific date
+    Open {
+        /// Date to open (e.g., "2024-01-15", "today", "yesterday")
+        date: String,
+    },
+
+    /// Show current configuration
+    Config,
 }
 
 pub fn run_cli() {
@@ -67,6 +93,120 @@ pub fn run_cli() {
 
     // Execute commands
     match cli.command {
+        Commands::Init { base_dir } => {
+            let dir = base_dir.unwrap_or_else(|| {
+                dirs::home_dir()
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join("diaryx")
+            });
+
+            match Config::init(dir.clone()) {
+                Ok(_) => {
+                    println!("✓ Initialized diaryx configuration");
+                    println!("  Base directory: {}", dir.display());
+                    if let Some(config_path) = Config::config_path() {
+                        println!("  Config file: {}", config_path.display());
+                    }
+                }
+                Err(e) => eprintln!("✗ Error initializing config: {}", e),
+            }
+        }
+
+        Commands::Today => {
+            let config = match Config::load() {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("✗ Error loading config: {}", e);
+                    eprintln!("  Run 'diaryx init' first");
+                    return;
+                }
+            };
+
+            match parse_date("today") {
+                Ok(date) => {
+                    match app.ensure_dated_entry(&date, &config) {
+                        Ok(path) => {
+                            println!("Opening: {}", path.display());
+                            if let Err(e) = launch_editor(&path, &config) {
+                                eprintln!("✗ Error launching editor: {}", e);
+                            }
+                        }
+                        Err(e) => eprintln!("✗ Error creating entry: {}", e),
+                    }
+                }
+                Err(e) => eprintln!("✗ Error parsing date: {}", e),
+            }
+        }
+
+        Commands::Yesterday => {
+            let config = match Config::load() {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("✗ Error loading config: {}", e);
+                    eprintln!("  Run 'diaryx init' first");
+                    return;
+                }
+            };
+
+            match parse_date("yesterday") {
+                Ok(date) => {
+                    match app.ensure_dated_entry(&date, &config) {
+                        Ok(path) => {
+                            println!("Opening: {}", path.display());
+                            if let Err(e) = launch_editor(&path, &config) {
+                                eprintln!("✗ Error launching editor: {}", e);
+                            }
+                        }
+                        Err(e) => eprintln!("✗ Error creating entry: {}", e),
+                    }
+                }
+                Err(e) => eprintln!("✗ Error parsing date: {}", e),
+            }
+        }
+
+        Commands::Open { date } => {
+            let config = match Config::load() {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("✗ Error loading config: {}", e);
+                    eprintln!("  Run 'diaryx init' first");
+                    return;
+                }
+            };
+
+            match parse_date(&date) {
+                Ok(parsed_date) => {
+                    match app.ensure_dated_entry(&parsed_date, &config) {
+                        Ok(path) => {
+                            println!("Opening: {}", path.display());
+                            if let Err(e) = launch_editor(&path, &config) {
+                                eprintln!("✗ Error launching editor: {}", e);
+                            }
+                        }
+                        Err(e) => eprintln!("✗ Error creating entry: {}", e),
+                    }
+                }
+                Err(e) => eprintln!("✗ {}", e),
+            }
+        }
+
+        Commands::Config => {
+            match Config::load() {
+                Ok(config) => {
+                    println!("Current configuration:");
+                    println!("  Base directory: {}", config.base_dir.display());
+                    println!("  Editor: {}", config.editor.as_deref().unwrap_or("$EDITOR"));
+                    println!("  Default template: {}", config.default_template.as_deref().unwrap_or("none"));
+                    if let Some(config_path) = Config::config_path() {
+                        println!("\nConfig file: {}", config_path.display());
+                    }
+                }
+                Err(e) => {
+                    eprintln!("✗ Error loading config: {}", e);
+                    eprintln!("  Run 'diaryx init' to create a config file");
+                }
+            }
+        }
         Commands::Create { path } => {
             match app.create_entry(&path) {
                 Ok(_) => println!("✓ Created entry: {}", path),
@@ -75,10 +215,23 @@ pub fn run_cli() {
         }
 
         Commands::Set { path, key, value } => {
+            let config = match Config::load() {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("✗ Error loading config: {}", e);
+                    eprintln!("  Run 'diaryx init' first");
+                    return;
+                }
+            };
+
+            // Resolve path (supports "today", "yesterday", or literal paths)
+            let resolved_path = app.resolve_path(&path, &config);
+            let path_str = resolved_path.to_string_lossy();
+
             // Parse the value as YAML
             match serde_yaml::from_str::<Value>(&value) {
                 Ok(yaml_value) => {
-                    match app.set_frontmatter_property(&path, &key, yaml_value) {
+                    match app.set_frontmatter_property(&path_str, &key, yaml_value) {
                         Ok(_) => println!("✓ Set '{}' in {}", key, path),
                         Err(e) => eprintln!("✗ Error setting property: {}", e),
                     }
@@ -88,7 +241,20 @@ pub fn run_cli() {
         }
 
         Commands::Get { path, key } => {
-            match app.get_frontmatter_property(&path, &key) {
+            let config = match Config::load() {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("✗ Error loading config: {}", e);
+                    eprintln!("  Run 'diaryx init' first");
+                    return;
+                }
+            };
+
+            // Resolve path (supports "today", "yesterday", or literal paths)
+            let resolved_path = app.resolve_path(&path, &config);
+            let path_str = resolved_path.to_string_lossy();
+
+            match app.get_frontmatter_property(&path_str, &key) {
                 Ok(Some(value)) => {
                     println!("{}: {}", key, serde_yaml::to_string(&value).unwrap_or_default().trim());
                 }
@@ -100,14 +266,40 @@ pub fn run_cli() {
         }
 
         Commands::Remove { path, key } => {
-            match app.remove_frontmatter_property(&path, &key) {
+            let config = match Config::load() {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("✗ Error loading config: {}", e);
+                    eprintln!("  Run 'diaryx init' first");
+                    return;
+                }
+            };
+
+            // Resolve path (supports "today", "yesterday", or literal paths)
+            let resolved_path = app.resolve_path(&path, &config);
+            let path_str = resolved_path.to_string_lossy();
+
+            match app.remove_frontmatter_property(&path_str, &key) {
                 Ok(_) => println!("✓ Removed '{}' from {}", key, path),
                 Err(e) => eprintln!("✗ Error removing property: {}", e),
             }
         }
 
         Commands::List { path } => {
-            match app.get_all_frontmatter(&path) {
+            let config = match Config::load() {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("✗ Error loading config: {}", e);
+                    eprintln!("  Run 'diaryx init' first");
+                    return;
+                }
+            };
+
+            // Resolve path (supports "today", "yesterday", or literal paths)
+            let resolved_path = app.resolve_path(&path, &config);
+            let path_str = resolved_path.to_string_lossy();
+
+            match app.get_all_frontmatter(&path_str) {
                 Ok(frontmatter) => {
                     if frontmatter.is_empty() {
                         println!("No frontmatter properties in {}", path);

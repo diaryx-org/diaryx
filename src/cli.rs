@@ -256,7 +256,26 @@ pub fn run_cli() {
 
             match app.get_frontmatter_property(&path_str, &key) {
                 Ok(Some(value)) => {
-                    println!("{}: {}", key, serde_yaml::to_string(&value).unwrap_or_default().trim());
+                    // Format output based on value type
+                    match &value {
+                        Value::Sequence(items) => {
+                            // Print each array item on its own line
+                            for item in items {
+                                match item {
+                                    Value::String(s) => println!("{}", s),
+                                    _ => println!("{}", serde_yaml::to_string(item).unwrap_or_default().trim()),
+                                }
+                            }
+                        }
+                        Value::String(s) => {
+                            // Print strings directly without quotes
+                            println!("{}", s);
+                        }
+                        _ => {
+                            // For other types, use YAML formatting
+                            println!("{}", serde_yaml::to_string(&value).unwrap_or_default().trim());
+                        }
+                    }
                 }
                 Ok(None) => {
                     eprintln!("Property '{}' not found in {}", key, path);

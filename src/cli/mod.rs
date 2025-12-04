@@ -74,7 +74,7 @@ pub fn run_cli() {
         }
 
         Commands::Workspace { command } => {
-            workspace::handle_workspace_command(command, cli.workspace, &ws);
+            workspace::handle_workspace_command(command, cli.workspace, &ws, &app);
         }
     }
 }

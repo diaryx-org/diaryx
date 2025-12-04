@@ -93,7 +93,7 @@ pub enum Commands {
     },
 
     /// Workspace management commands
-    #[command(alias = "space")]
+    #[command(aliases = ["space", "w"])]
     Workspace {
         #[command(subcommand)]
         command: WorkspaceCommands,
@@ -327,4 +327,61 @@ pub enum WorkspaceCommands {
 
     /// Show the current workspace root path
     Path,
+
+    /// Add an existing file as a child of a parent index
+    /// Updates both the parent's `contents` and the child's `part_of`
+    /// If only one argument is provided, uses the local index as parent
+    Add {
+        /// Parent index file, or child file if only one argument (supports fuzzy matching)
+        parent_or_child: String,
+
+        /// Child file to add (optional if parent_or_child is the child)
+        child: Option<String>,
+
+        /// Show what would be done without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Create a new child file under a parent index
+    /// If only one argument is provided, uses the local index as parent
+    Create {
+        /// Parent index file, or name if only one argument (supports fuzzy matching)
+        parent_or_name: String,
+
+        /// Name for the new child file (optional if parent_or_name is the name)
+        name: Option<String>,
+
+        /// Title for the new file (defaults to name)
+        #[arg(short, long)]
+        title: Option<String>,
+
+        /// Description for the new file
+        #[arg(short = 'D', long)]
+        description: Option<String>,
+
+        /// Make the new file an index (add empty `contents` property)
+        #[arg(short, long)]
+        index: bool,
+
+        /// Open the new file in editor after creating
+        #[arg(short, long)]
+        edit: bool,
+    },
+
+    /// Remove a child from a parent's hierarchy
+    /// Updates both the parent's `contents` and the child's `part_of`, but does not delete the file
+    /// If only one argument is provided, uses the local index as parent
+    #[command(alias = "rm")]
+    Remove {
+        /// Parent index file, or child file if only one argument (supports fuzzy matching)
+        parent_or_child: String,
+
+        /// Child file to remove (optional if parent_or_child is the child)
+        child: Option<String>,
+
+        /// Show what would be done without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
 }

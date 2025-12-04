@@ -73,8 +73,28 @@ pub fn resolve_paths(path: &str, config: &Config, app: &DiaryxApp<RealFileSystem
             }
         }
     } else {
-        // Try to resolve as date or literal path
-        vec![app.resolve_path(path, config)]
+        // Try to resolve as date or literal path first
+        let resolved = app.resolve_path(path, config);
+
+        // If the resolved path exists, use it
+        if resolved.exists() {
+            return vec![resolved];
+        }
+
+        // If path doesn't exist and doesn't look like a date, try fuzzy matching
+        // (date resolution would have returned a path in base_dir)
+        if !resolved.starts_with(&config.base_dir) || path.contains('/') || path.contains('\\') {
+            // This was likely meant as a literal path that doesn't exist
+            // Try fuzzy matching in current directory
+            if let Some(matches) = fuzzy_match_files(path) {
+                if !matches.is_empty() {
+                    return matches;
+                }
+            }
+        }
+
+        // Fall back to the resolved path (may not exist, but that's the user's intent)
+        vec![resolved]
     }
 }
 
@@ -131,6 +151,66 @@ fn resolve_workspace_files_in_dir(dir: &Path) -> Vec<PathBuf> {
             vec![]
         }
     }
+}
+
+/// Fuzzy match a string against .md files in the current directory
+/// Returns files where the filename (without extension) contains the query (case-insensitive)
+/// or where the query is a prefix of the filename
+fn fuzzy_match_files(query: &str) -> Option<Vec<PathBuf>> {
+    let current_dir = std::env::current_dir().ok()?;
+    let query_lower = query.to_lowercase();
+
+    let mut matches: Vec<(PathBuf, usize)> = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(&current_dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+
+            // Only consider .md files
+            if path.extension().is_none_or(|ext| ext != "md") {
+                continue;
+            }
+
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                let stem_lower = stem.to_lowercase();
+
+                // Score the match:
+                // - Exact match (without extension): highest priority (score 0)
+                // - Prefix match: high priority (score 1)
+                // - Contains match: lower priority (score 2)
+                let score = if stem_lower == query_lower {
+                    Some(0)
+                } else if stem_lower.starts_with(&query_lower) {
+                    Some(1)
+                } else if stem_lower.contains(&query_lower) {
+                    Some(2)
+                } else {
+                    None
+                };
+
+                if let Some(s) = score {
+                    matches.push((path, s));
+                }
+            }
+        }
+    }
+
+    if matches.is_empty() {
+        return None;
+    }
+
+    // Sort by score (best first), then by path name
+    matches.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+
+    // Return all matches with the best score
+    let best_score = matches[0].1;
+    let best_matches: Vec<PathBuf> = matches
+        .into_iter()
+        .filter(|(_, score)| *score == best_score)
+        .map(|(path, _)| path)
+        .collect();
+
+    Some(best_matches)
 }
 
 /// Load config or print error message

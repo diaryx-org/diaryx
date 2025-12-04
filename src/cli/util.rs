@@ -3,10 +3,11 @@
 use diaryx_core::config::Config;
 use diaryx_core::entry::DiaryxApp;
 use diaryx_core::fs::RealFileSystem;
+use diaryx_core::workspace::Workspace;
 use glob::glob;
 use serde_yaml::Value;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Result of a confirmation prompt
 pub enum ConfirmResult {
@@ -41,9 +42,21 @@ pub fn is_glob_pattern(path: &str) -> bool {
 }
 
 /// Resolve a path pattern to a list of files
-/// Returns either a single resolved path (for dates/literals) or multiple paths (for globs)
+/// Returns either a single resolved path (for dates/literals) or multiple paths (for globs/workspace)
+///
+/// Special handling:
+/// - `.` resolves to all files in the current workspace (traversing from local index)
+/// - Glob patterns (`*.md`, `**/*.md`) match files by pattern
+/// - Date strings (via chrono-english) resolve to dated entry paths
+/// - Literal paths are returned as-is
 pub fn resolve_paths(path: &str, config: &Config, app: &DiaryxApp<RealFileSystem>) -> Vec<PathBuf> {
-    // First check if it's a glob pattern
+    // Handle directories as workspace-aware path resolution
+    let path_buf = Path::new(path);
+    if path_buf.is_dir() {
+        return resolve_workspace_files_in_dir(path_buf);
+    }
+
+    // Check if it's a glob pattern
     if is_glob_pattern(path) {
         match glob(path) {
             Ok(paths) => {
@@ -62,6 +75,61 @@ pub fn resolve_paths(path: &str, config: &Config, app: &DiaryxApp<RealFileSystem
     } else {
         // Try to resolve as date or literal path
         vec![app.resolve_path(path, config)]
+    }
+}
+
+/// Resolve a directory to all files in its workspace
+/// Finds the local index in the directory and traverses its contents
+fn resolve_workspace_files_in_dir(dir: &Path) -> Vec<PathBuf> {
+    let fs = RealFileSystem;
+    let workspace = Workspace::new(fs);
+
+    // Canonicalize the directory path
+    let dir = match dir.canonicalize() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("✗ Could not resolve directory '{}': {}", dir.display(), e);
+            return vec![];
+        }
+    };
+
+    // Find a local index in the directory
+    match workspace.find_any_index_in_dir(&dir) {
+        Ok(Some(index_path)) => {
+            // Collect all files from the index
+            match workspace.collect_workspace_files(&index_path) {
+                Ok(files) => files,
+                Err(e) => {
+                    eprintln!("✗ Error traversing workspace: {}", e);
+                    vec![]
+                }
+            }
+        }
+        Ok(None) => {
+            // No index found, fall back to all .md files in the directory
+            let glob_pattern = format!("{}/*.md", dir.display());
+            match glob(&glob_pattern) {
+                Ok(paths) => {
+                    let mut result: Vec<PathBuf> = paths.filter_map(|p| p.ok()).collect();
+                    result.sort();
+                    if result.is_empty() {
+                        eprintln!(
+                            "⚠ No index file found in '{}' and no .md files present",
+                            dir.display()
+                        );
+                    }
+                    result
+                }
+                Err(e) => {
+                    eprintln!("✗ Error listing files: {}", e);
+                    vec![]
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("✗ Error searching for index: {}", e);
+            vec![]
+        }
     }
 }
 

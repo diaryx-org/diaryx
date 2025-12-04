@@ -169,6 +169,83 @@ impl<FS: FileSystem> Workspace<FS> {
         Ok(None)
     }
 
+    /// Find any index file in the given directory (has `contents` property)
+    /// Prefers root indexes over non-root indexes
+    pub fn find_any_index_in_dir(&self, dir: &Path) -> Result<Option<PathBuf>> {
+        let md_files = self
+            .fs
+            .list_md_files(dir)
+            .map_err(|e| DiaryxError::FileRead {
+                path: dir.to_path_buf(),
+                source: e,
+            })?;
+
+        let mut found_index: Option<PathBuf> = None;
+
+        for file in md_files {
+            if let Ok(index) = self.parse_index(&file) {
+                if index.frontmatter.is_index() {
+                    // Prefer root index if found
+                    if index.frontmatter.is_root() {
+                        return Ok(Some(file));
+                    }
+                    // Otherwise remember the first index we find
+                    if found_index.is_none() {
+                        found_index = Some(file);
+                    }
+                }
+            }
+        }
+
+        Ok(found_index)
+    }
+
+    /// Collect all files reachable from an index via `contents` traversal
+    /// Returns a list of all files including the index itself and all nested contents
+    pub fn collect_workspace_files(&self, index_path: &Path) -> Result<Vec<PathBuf>> {
+        let mut files = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+        self.collect_workspace_files_recursive(index_path, &mut files, &mut visited)?;
+        files.sort();
+        Ok(files)
+    }
+
+    /// Recursive helper for collecting workspace files
+    fn collect_workspace_files_recursive(
+        &self,
+        path: &Path,
+        files: &mut Vec<PathBuf>,
+        visited: &mut std::collections::HashSet<PathBuf>,
+    ) -> Result<()> {
+        // Canonicalize to handle relative paths consistently
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+
+        // Avoid cycles
+        if visited.contains(&canonical) {
+            return Ok(());
+        }
+        visited.insert(canonical.clone());
+
+        // Add this file to the list
+        files.push(path.to_path_buf());
+
+        // If this is an index file, recurse into its contents
+        if let Ok(index) = self.parse_index(path) {
+            if index.frontmatter.is_index() {
+                for child_path_str in index.frontmatter.contents_list() {
+                    let child_path = index.resolve_path(child_path_str);
+
+                    // Only include if the file exists
+                    if self.fs.exists(&child_path) {
+                        self.collect_workspace_files_recursive(&child_path, files, visited)?;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Detect the workspace root from the current directory
     /// Searches current directory for a root index file
     pub fn detect_workspace(&self, start_dir: &Path) -> Result<Option<PathBuf>> {

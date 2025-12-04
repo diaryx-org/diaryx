@@ -86,6 +86,381 @@ pub fn handle_workspace_command(
                 eprintln!("✗ No config found. Run 'diaryx init' first");
             }
         }
+
+        WorkspaceCommands::Mv {
+            source,
+            dest,
+            dry_run,
+        } => {
+            if let Some(ref cfg) = config {
+                handle_mv(app, cfg, ws, &source, &dest, dry_run);
+            } else {
+                eprintln!("✗ No config found. Run 'diaryx init' first");
+            }
+        }
+
+        WorkspaceCommands::Orphans { dir, recursive } => {
+            handle_orphans(ws, &current_dir, dir, recursive);
+        }
+    }
+}
+
+/// Handle the 'workspace mv' command
+/// Moves/renames a file while updating workspace hierarchy references
+fn handle_mv(
+    app: &DiaryxApp<RealFileSystem>,
+    config: &Config,
+    _ws: &Workspace<RealFileSystem>,
+    source: &str,
+    dest: &str,
+    dry_run: bool,
+) {
+    // Resolve source path (should be a single file)
+    let source_paths = resolve_paths(source, config, app);
+    if source_paths.is_empty() {
+        eprintln!("✗ No files matched source: {}", source);
+        return;
+    }
+    if source_paths.len() > 1 {
+        eprintln!("✗ Source must be a single file, but matched multiple:");
+        for p in &source_paths {
+            eprintln!("  {}", p.display());
+        }
+        return;
+    }
+    let source_path = &source_paths[0];
+
+    if !source_path.exists() {
+        eprintln!("✗ Source file does not exist: {}", source_path.display());
+        return;
+    }
+
+    // Determine destination path
+    let dest_input = PathBuf::from(dest);
+    // Canonicalize the destination directory if it exists, to get clean paths
+    let dest_path = if dest_input.is_dir() {
+        // If dest is a directory, move file into it with same name
+        let canonical_dir = dest_input.canonicalize().unwrap_or(dest_input);
+        canonical_dir.join(source_path.file_name().unwrap_or_default())
+    } else if !dest.ends_with(".md") {
+        // Add .md extension if not present
+        let with_ext = PathBuf::from(format!("{}.md", dest));
+        // Try to canonicalize the parent directory
+        if let Some(parent) = with_ext.parent() {
+            if parent.exists() {
+                if let Ok(canonical_parent) = parent.canonicalize() {
+                    canonical_parent.join(with_ext.file_name().unwrap_or_default())
+                } else {
+                    with_ext
+                }
+            } else {
+                with_ext
+            }
+        } else {
+            with_ext
+        }
+    } else {
+        // Try to canonicalize the parent directory
+        if let Some(parent) = dest_input.parent() {
+            if parent.exists() {
+                if let Ok(canonical_parent) = parent.canonicalize() {
+                    canonical_parent.join(dest_input.file_name().unwrap_or_default())
+                } else {
+                    dest_input
+                }
+            } else {
+                dest_input
+            }
+        } else {
+            dest_input
+        }
+    };
+
+    if dest_path.exists() {
+        eprintln!("✗ Destination already exists: {}", dest_path.display());
+        return;
+    }
+
+    // Read source file's frontmatter to find its part_of (parent)
+    let source_str = source_path.to_string_lossy();
+    let parent_path = match app.get_frontmatter_property(&source_str, "part_of") {
+        Ok(Some(serde_yaml::Value::String(part_of))) => {
+            // Resolve relative path from source file's directory
+            source_path.parent().map(|dir| dir.join(&part_of))
+        }
+        _ => None,
+    };
+
+    // Canonicalize source path for consistent relative path calculations
+    let source_canonical = source_path.canonicalize().unwrap_or_else(|_| source_path.clone());
+
+    // Calculate what the old and new relative paths would be (from parent's perspective)
+    let (old_relative, new_relative) = if let Some(ref parent) = parent_path {
+        // Canonicalize parent path for consistent relative path calculations
+        let parent_canonical = parent.canonicalize().unwrap_or_else(|_| parent.clone());
+        let parent_dir = parent_canonical.parent().unwrap_or(&parent_canonical);
+        
+        let old_rel = pathdiff::diff_paths(&source_canonical, parent_dir)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| {
+                source_path
+                    .file_name()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            });
+        let new_rel = pathdiff::diff_paths(&dest_path, parent_dir)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| {
+                dest_path
+                    .file_name()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            });
+        (old_rel, new_rel)
+    } else {
+        // No parent, just use filenames
+        let old_rel = source_path
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let new_rel = dest_path
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default();
+        (old_rel, new_rel)
+    };
+
+    if dry_run {
+        println!(
+            "Would move '{}' to '{}'",
+            source_path.display(),
+            dest_path.display()
+        );
+        if let Some(ref parent) = parent_path {
+            if parent.exists() {
+                println!(
+                    "Would update contents in '{}': '{}' -> '{}'",
+                    parent.display(),
+                    old_relative,
+                    new_relative
+                );
+            }
+        }
+        // Check for children that reference this file
+        if let Ok(Some(serde_yaml::Value::Sequence(contents))) =
+            app.get_frontmatter_property(&source_str, "contents")
+        {
+            if !contents.is_empty() {
+                println!("Would update part_of in {} child file(s)", contents.len());
+            }
+        }
+        return;
+    }
+
+    // 1. Update parent's contents (if parent exists)
+    if let Some(ref parent) = parent_path {
+        if parent.exists() {
+            let parent_str = parent.to_string_lossy();
+            if let Ok(Some(serde_yaml::Value::Sequence(mut items))) =
+                app.get_frontmatter_property(&parent_str, "contents")
+            {
+                // Replace old reference with new reference
+                for item in &mut items {
+                    if let serde_yaml::Value::String(s) = item {
+                        if *s == old_relative {
+                            *s = new_relative.clone();
+                        }
+                    }
+                }
+                if let Err(e) = app.set_frontmatter_property(
+                    &parent_str,
+                    "contents",
+                    serde_yaml::Value::Sequence(items),
+                ) {
+                    eprintln!("✗ Error updating parent contents: {}", e);
+                    return;
+                }
+                println!(
+                    "✓ Updated contents in '{}': '{}' -> '{}'",
+                    parent.display(),
+                    old_relative,
+                    new_relative
+                );
+            }
+        }
+    }
+
+    // 2. Get children before moving (need to update their part_of after move)
+    let children: Vec<PathBuf> = match app.get_frontmatter_property(&source_str, "contents") {
+        Ok(Some(serde_yaml::Value::Sequence(contents))) => contents
+            .iter()
+            .filter_map(|v| {
+                if let serde_yaml::Value::String(s) = v {
+                    source_path.parent().map(|dir| dir.join(s))
+                } else {
+                    None
+                }
+            })
+            .filter(|p| p.exists())
+            .collect(),
+        _ => Vec::new(),
+    };
+
+    // 3. Move the file
+    if let Some(parent_dir) = dest_path.parent() {
+        if !parent_dir.exists() {
+            if let Err(e) = std::fs::create_dir_all(parent_dir) {
+                eprintln!("✗ Error creating directory: {}", e);
+                return;
+            }
+        }
+    }
+
+    if let Err(e) = std::fs::rename(source_path, &dest_path) {
+        eprintln!("✗ Error moving file: {}", e);
+        return;
+    }
+    println!(
+        "✓ Moved '{}' to '{}'",
+        source_path.display(),
+        dest_path.display()
+    );
+
+    // 4. Update part_of in the moved file (if parent is in same directory, path stays same)
+    // Only update if the relative path to parent changed
+    if parent_path.is_some() {
+        let dest_str = dest_path.to_string_lossy();
+        if let Some(ref parent) = parent_path {
+            let new_part_of = calculate_relative_path(&dest_path, parent);
+            if let Err(e) = app.set_frontmatter_property(
+                &dest_str,
+                "part_of",
+                serde_yaml::Value::String(new_part_of),
+            ) {
+                eprintln!("⚠ Error updating part_of in moved file: {}", e);
+            }
+        }
+    }
+
+    // 5. Update children's part_of to point to new location
+    for child in &children {
+        let child_str = child.to_string_lossy();
+        let new_part_of = calculate_relative_path(child, &dest_path);
+        if let Err(e) = app.set_frontmatter_property(
+            &child_str,
+            "part_of",
+            serde_yaml::Value::String(new_part_of),
+        ) {
+            eprintln!("⚠ Error updating part_of in '{}': {}", child.display(), e);
+        } else {
+            println!("✓ Updated part_of in '{}'", child.display());
+        }
+    }
+}
+
+/// Handle the 'workspace orphans' command
+/// Finds markdown files not connected to the workspace hierarchy
+fn handle_orphans(
+    ws: &Workspace<RealFileSystem>,
+    current_dir: &Path,
+    dir: Option<PathBuf>,
+    recursive: bool,
+) {
+    let search_dir = dir.unwrap_or_else(|| current_dir.to_path_buf());
+
+    // Find the local index to get workspace files
+    let index_path = match ws.find_any_index_in_dir(&search_dir) {
+        Ok(Some(path)) => path,
+        Ok(None) => {
+            eprintln!("✗ No index file found in '{}'", search_dir.display());
+            return;
+        }
+        Err(e) => {
+            eprintln!("✗ Error finding index: {}", e);
+            return;
+        }
+    };
+
+    // Collect all files in the workspace hierarchy
+    let workspace_files: std::collections::HashSet<PathBuf> =
+        match ws.collect_workspace_files(&index_path) {
+            Ok(files) => files
+                .into_iter()
+                .filter_map(|p| p.canonicalize().ok())
+                .collect(),
+            Err(e) => {
+                eprintln!("✗ Error collecting workspace files: {}", e);
+                return;
+            }
+        };
+
+    // Find all markdown files in the directory
+    let all_md_files = if recursive {
+        collect_md_files_recursive(&search_dir)
+    } else {
+        collect_md_files(&search_dir)
+    };
+
+    // Find orphans (files not in workspace hierarchy)
+    let mut orphans: Vec<PathBuf> = all_md_files
+        .into_iter()
+        .filter(|p| {
+            if let Ok(canonical) = p.canonicalize() {
+                !workspace_files.contains(&canonical)
+            } else {
+                true // Include files we can't canonicalize
+            }
+        })
+        .collect();
+
+    orphans.sort();
+
+    if orphans.is_empty() {
+        println!("✓ No orphan files found");
+    } else {
+        println!("Found {} orphan file(s):", orphans.len());
+        for orphan in &orphans {
+            // Try to show relative path
+            if let Ok(relative) = orphan.strip_prefix(&search_dir) {
+                println!("  {}", relative.display());
+            } else {
+                println!("  {}", orphan.display());
+            }
+        }
+    }
+}
+
+/// Collect markdown files in a directory (non-recursive)
+fn collect_md_files(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.is_file() && path.extension().is_some_and(|ext| ext == "md") {
+                files.push(path);
+            }
+        }
+    }
+    files
+}
+
+/// Collect markdown files in a directory (recursive)
+fn collect_md_files_recursive(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    collect_md_files_recursive_helper(dir, &mut files);
+    files
+}
+
+fn collect_md_files_recursive_helper(dir: &Path, files: &mut Vec<PathBuf>) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_md_files_recursive_helper(&path, files);
+            } else if path.is_file() && path.extension().is_some_and(|ext| ext == "md") {
+                files.push(path);
+            }
+        }
     }
 }
 

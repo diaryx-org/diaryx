@@ -328,6 +328,32 @@ pub enum WorkspaceCommands {
     /// Show the current workspace root path
     Path,
 
+    /// Move/rename a file while updating the workspace hierarchy
+    /// Updates contents and part_of references automatically
+    #[command(alias = "move")]
+    Mv {
+        /// Source file path (supports fuzzy matching)
+        source: String,
+
+        /// Destination file path
+        dest: String,
+
+        /// Show what would be done without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Find orphan files (markdown files not in the workspace hierarchy)
+    Orphans {
+        /// Directory to search for orphans (default: current directory)
+        #[arg(short, long)]
+        dir: Option<PathBuf>,
+
+        /// Search recursively in subdirectories
+        #[arg(short, long)]
+        recursive: bool,
+    },
+
     /// Add an existing file as a child of a parent index
     /// Updates both the parent's `contents` and the child's `part_of`
     /// If only one argument is provided, uses the local index as parent

@@ -23,6 +23,7 @@ impl<FS: FileSystem> DiaryxApp<FS> {
     }
 
     /// Parses a markdown file and extracts frontmatter and body
+    /// Returns an error if no frontmatter is found
     fn parse_file(&self, path: &str) -> Result<(IndexMap<String, Value>, String)> {
         let path_buf = PathBuf::from(path);
         let content = self
@@ -54,6 +55,51 @@ impl<FS: FileSystem> DiaryxApp<FS> {
         Ok((frontmatter, body.to_string()))
     }
 
+    /// Parses a markdown file, creating empty frontmatter if none exists
+    /// Use this for operations that should create frontmatter when missing (like set)
+    fn parse_file_or_create_frontmatter(
+        &self,
+        path: &str,
+    ) -> Result<(IndexMap<String, Value>, String)> {
+        let path_buf = PathBuf::from(path);
+        let content = self
+            .fs
+            .read_to_string(std::path::Path::new(path))
+            .map_err(|e| DiaryxError::FileRead {
+                path: path_buf.clone(),
+                source: e,
+            })?;
+
+        // Check if content starts with frontmatter delimiter
+        if !content.starts_with("---\n") && !content.starts_with("---\r\n") {
+            // No frontmatter - return empty frontmatter and entire content as body
+            return Ok((IndexMap::new(), content));
+        }
+
+        // Find the closing delimiter
+        let rest = &content[4..]; // Skip first "---\n"
+        let end_idx = rest
+            .find("\n---\n")
+            .or_else(|| rest.find("\n---\r\n"));
+
+        match end_idx {
+            Some(idx) => {
+                let frontmatter_str = &rest[..idx];
+                let body = &rest[idx + 5..]; // Skip "\n---\n"
+
+                // Parse YAML frontmatter into IndexMap to preserve order
+                let frontmatter: IndexMap<String, Value> =
+                    serde_yaml::from_str(frontmatter_str)?;
+
+                Ok((frontmatter, body.to_string()))
+            }
+            None => {
+                // Malformed frontmatter (no closing delimiter) - treat as no frontmatter
+                Ok((IndexMap::new(), content))
+            }
+        }
+    }
+
     /// Reconstructs a markdown file with updated frontmatter
     fn reconstruct_file(
         &self,
@@ -73,28 +119,39 @@ impl<FS: FileSystem> DiaryxApp<FS> {
     }
 
     /// Adds or updates a frontmatter property
+    /// Creates frontmatter if none exists
     pub fn set_frontmatter_property(&self, path: &str, key: &str, value: Value) -> Result<()> {
-        let (mut frontmatter, body) = self.parse_file(path)?;
+        let (mut frontmatter, body) = self.parse_file_or_create_frontmatter(path)?;
         frontmatter.insert(key.to_string(), value);
         self.reconstruct_file(path, &frontmatter, &body)
     }
 
     /// Removes a frontmatter property
+    /// Does nothing if no frontmatter exists or key is not found
     pub fn remove_frontmatter_property(&self, path: &str, key: &str) -> Result<()> {
-        let (mut frontmatter, body) = self.parse_file(path)?;
-        frontmatter.shift_remove(key);
-        self.reconstruct_file(path, &frontmatter, &body)
+        match self.parse_file(path) {
+            Ok((mut frontmatter, body)) => {
+                frontmatter.shift_remove(key);
+                self.reconstruct_file(path, &frontmatter, &body)
+            }
+            Err(DiaryxError::NoFrontmatter(_)) => Ok(()), // No frontmatter, nothing to remove
+            Err(e) => Err(e),
+        }
     }
 
     /// Renames a frontmatter property key
-    /// Returns Ok(true) if the key was found and renamed, Ok(false) if key was not found
+    /// Returns Ok(true) if the key was found and renamed, Ok(false) if key was not found or no frontmatter
     pub fn rename_frontmatter_property(
         &self,
         path: &str,
         old_key: &str,
         new_key: &str,
     ) -> Result<bool> {
-        let (frontmatter, body) = self.parse_file(path)?;
+        let (frontmatter, body) = match self.parse_file(path) {
+            Ok(result) => result,
+            Err(DiaryxError::NoFrontmatter(_)) => return Ok(false), // No frontmatter, key not found
+            Err(e) => return Err(e),
+        };
 
         if !frontmatter.contains_key(old_key) {
             return Ok(false);
@@ -115,22 +172,35 @@ impl<FS: FileSystem> DiaryxApp<FS> {
     }
 
     /// Gets a frontmatter property value
+    /// Returns Ok(None) if no frontmatter exists or key is not found
     pub fn get_frontmatter_property(&self, path: &str, key: &str) -> Result<Option<Value>> {
-        let (frontmatter, _) = self.parse_file(path)?;
-        Ok(frontmatter.get(key).cloned())
+        match self.parse_file(path) {
+            Ok((frontmatter, _)) => Ok(frontmatter.get(key).cloned()),
+            Err(DiaryxError::NoFrontmatter(_)) => Ok(None), // No frontmatter, key not found
+            Err(e) => Err(e),
+        }
     }
 
     /// Gets all frontmatter properties
+    /// Returns empty map if no frontmatter exists
     pub fn get_all_frontmatter(&self, path: &str) -> Result<IndexMap<String, Value>> {
-        let (frontmatter, _) = self.parse_file(path)?;
-        Ok(frontmatter)
+        match self.parse_file(path) {
+            Ok((frontmatter, _)) => Ok(frontmatter),
+            Err(DiaryxError::NoFrontmatter(_)) => Ok(IndexMap::new()), // No frontmatter, return empty
+            Err(e) => Err(e),
+        }
     }
 
     /// Sort frontmatter keys according to a pattern
     /// Pattern is comma-separated keys, with "*" meaning "rest alphabetically"
     /// Example: "title,description,*" puts title first, description second, rest alphabetically
+    /// Does nothing if no frontmatter exists (won't add empty frontmatter)
     pub fn sort_frontmatter(&self, path: &str, pattern: Option<&str>) -> Result<()> {
-        let (frontmatter, body) = self.parse_file(path)?;
+        let (frontmatter, body) = match self.parse_file(path) {
+            Ok(result) => result,
+            Err(DiaryxError::NoFrontmatter(_)) => return Ok(()), // No frontmatter, nothing to sort
+            Err(e) => return Err(e),
+        };
 
         let sorted = match pattern {
             Some(p) => self.sort_by_pattern(frontmatter, p),

@@ -2,6 +2,7 @@
 
 mod args;
 mod entry;
+mod normalize;
 mod property;
 mod sort;
 mod util;
@@ -75,6 +76,15 @@ pub fn run_cli() {
 
         Commands::Workspace { command } => {
             workspace::handle_workspace_command(command, cli.workspace, &ws, &app);
+        }
+
+        Commands::NormalizeFilename {
+            path,
+            title,
+            yes,
+            dry_run,
+        } => {
+            normalize::handle_normalize_filename(&app, &path, title, yes, dry_run);
         }
     }
 }

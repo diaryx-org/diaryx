@@ -98,6 +98,26 @@ pub enum Commands {
         #[command(subcommand)]
         command: WorkspaceCommands,
     },
+
+    /// Normalize filename(s) to match their title property
+    /// Converts title to snake_case slug and renames file
+    #[command(alias = "norm")]
+    NormalizeFilename {
+        /// Path to file(s) (supports directories, globs, dates, fuzzy matching, title:)
+        path: String,
+
+        /// Set this title before normalizing (also updates the title property)
+        #[arg(short, long)]
+        title: Option<String>,
+
+        /// Skip confirmation prompts for multi-file operations
+        #[arg(short = 'y', long)]
+        yes: bool,
+
+        /// Show what would be done without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand, Clone)]

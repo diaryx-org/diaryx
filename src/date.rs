@@ -1,18 +1,26 @@
-use chrono::{Local, NaiveDate, Duration};
+use chrono::{Local, NaiveDate};
+use chrono_english::{parse_date_string, Dialect};
 use std::path::PathBuf;
 
 /// Parse a date string into a NaiveDate
-/// Supports: "today", "yesterday", "YYYY-MM-DD"
+/// Supports natural language dates via chrono-english:
+/// - "today", "yesterday", "tomorrow"
+/// - "3 days ago", "in 5 days"
+/// - "last friday", "next monday", "this wednesday"
+/// - "last week", "last month"
+/// - "YYYY-MM-DD" format
 pub fn parse_date(date_str: &str) -> Result<NaiveDate, DateError> {
-    match date_str.to_lowercase().as_str() {
-        "today" => Ok(Local::now().date_naive()),
-        "yesterday" => Ok(Local::now().date_naive() - Duration::days(1)),
-        _ => {
-            // Try parsing as YYYY-MM-DD
-            NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
-                .map_err(|_| DateError::InvalidFormat(date_str.to_string()))
-        }
+    let now = Local::now();
+    
+    // First try parsing as YYYY-MM-DD for exact dates
+    if let Ok(date) = NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+        return Ok(date);
     }
+    
+    // Use chrono-english for natural language parsing
+    parse_date_string(date_str, now, Dialect::Us)
+        .map(|dt| dt.date_naive())
+        .map_err(|_| DateError::InvalidFormat(date_str.to_string()))
 }
 
 /// Generate the file path for a given date
@@ -41,7 +49,7 @@ impl std::fmt::Display for DateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DateError::InvalidFormat(s) => {
-                write!(f, "Invalid date format: '{}'. Use 'today', 'yesterday', or 'YYYY-MM-DD'", s)
+                write!(f, "Invalid date format: '{}'. Try 'today', 'yesterday', 'last friday', '3 days ago', or 'YYYY-MM-DD'", s)
             }
         }
     }
@@ -52,19 +60,41 @@ impl std::error::Error for DateError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Duration;
 
     #[test]
-    fn test_parse_date() {
-        // Test YYYY-MM-DD format
+    fn test_parse_date_iso_format() {
         let date = parse_date("2024-01-15").unwrap();
         assert_eq!(date, NaiveDate::from_ymd_opt(2024, 1, 15).unwrap());
+    }
 
-        // Test today/yesterday (just ensure they don't panic)
-        assert!(parse_date("today").is_ok());
-        assert!(parse_date("yesterday").is_ok());
+    #[test]
+    fn test_parse_date_today() {
+        let date = parse_date("today").unwrap();
+        assert_eq!(date, Local::now().date_naive());
+    }
 
-        // Test invalid format
-        assert!(parse_date("invalid").is_err());
+    #[test]
+    fn test_parse_date_yesterday() {
+        let date = parse_date("yesterday").unwrap();
+        assert_eq!(date, Local::now().date_naive() - Duration::days(1));
+    }
+
+    #[test]
+    fn test_parse_date_tomorrow() {
+        let date = parse_date("tomorrow").unwrap();
+        assert_eq!(date, Local::now().date_naive() + Duration::days(1));
+    }
+
+    #[test]
+    fn test_parse_date_days_ago() {
+        let date = parse_date("3 days ago").unwrap();
+        assert_eq!(date, Local::now().date_naive() - Duration::days(3));
+    }
+
+    #[test]
+    fn test_parse_date_invalid() {
+        assert!(parse_date("not a date").is_err());
     }
 
     #[test]

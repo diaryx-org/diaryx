@@ -2,26 +2,31 @@
 
 use std::path::Path;
 use std::process::Command;
+
 use crate::config::Config;
+use crate::error::{DiaryxError, Result};
 
 /// Launch an editor to open a file
-pub fn launch_editor(path: &Path, config: &Config) -> Result<(), EditorError> {
+pub fn launch_editor(path: &Path, config: &Config) -> Result<()> {
     let editor = determine_editor(config)?;
 
     let status = Command::new(&editor)
         .arg(path)
         .status()
-        .map_err(|e| EditorError::LaunchFailed(editor.clone(), e))?;
+        .map_err(|e| DiaryxError::EditorLaunchFailed {
+            editor: editor.clone(),
+            source: e,
+        })?;
 
     if !status.success() {
-        return Err(EditorError::EditorExited(status.code().unwrap_or(-1)));
+        return Err(DiaryxError::EditorExited(status.code().unwrap_or(-1)));
     }
 
     Ok(())
 }
 
 /// Determine which editor to use
-fn determine_editor(config: &Config) -> Result<String, EditorError> {
+fn determine_editor(config: &Config) -> Result<String> {
     // 1. Check config file
     if let Some(ref editor) = config.editor {
         return Ok(editor.clone());
@@ -53,7 +58,7 @@ fn determine_editor(config: &Config) -> Result<String, EditorError> {
         }
     }
 
-    Err(EditorError::NoEditorFound)
+    Err(DiaryxError::NoEditorFound)
 }
 
 /// Check if a command exists in PATH
@@ -65,28 +70,3 @@ fn which(cmd: &str) -> bool {
         .map(|output| output.status.success())
         .unwrap_or(false)
 }
-
-#[derive(Debug)]
-pub enum EditorError {
-    NoEditorFound,
-    LaunchFailed(String, std::io::Error),
-    EditorExited(i32),
-}
-
-impl std::fmt::Display for EditorError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            EditorError::NoEditorFound => {
-                write!(f, "No editor found. Set $EDITOR, $VISUAL, or configure editor in config file")
-            }
-            EditorError::LaunchFailed(editor, e) => {
-                write!(f, "Failed to launch editor '{}': {}", editor, e)
-            }
-            EditorError::EditorExited(code) => {
-                write!(f, "Editor exited with code {}", code)
-            }
-        }
-    }
-}
-
-impl std::error::Error for EditorError {}

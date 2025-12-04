@@ -2,6 +2,8 @@ use chrono::{Local, NaiveDate};
 use chrono_english::{parse_date_string, Dialect};
 use std::path::PathBuf;
 
+use crate::error::{DiaryxError, Result};
+
 /// Parse a date string into a NaiveDate
 /// Supports natural language dates via chrono-english:
 /// - "today", "yesterday", "tomorrow"
@@ -9,7 +11,7 @@ use std::path::PathBuf;
 /// - "last friday", "next monday", "this wednesday"
 /// - "last week", "last month"
 /// - "YYYY-MM-DD" format
-pub fn parse_date(date_str: &str) -> Result<NaiveDate, DateError> {
+pub fn parse_date(date_str: &str) -> Result<NaiveDate> {
     let now = Local::now();
     
     // First try parsing as YYYY-MM-DD for exact dates
@@ -20,7 +22,7 @@ pub fn parse_date(date_str: &str) -> Result<NaiveDate, DateError> {
     // Use chrono-english for natural language parsing
     parse_date_string(date_str, now, Dialect::Us)
         .map(|dt| dt.date_naive())
-        .map_err(|_| DateError::InvalidFormat(date_str.to_string()))
+        .map_err(|_| DiaryxError::InvalidDateFormat(date_str.to_string()))
 }
 
 /// Generate the file path for a given date
@@ -39,23 +41,6 @@ pub fn path_to_date(path: &PathBuf) -> Option<NaiveDate> {
     let filename = path.file_stem()?.to_str()?;
     NaiveDate::parse_from_str(filename, "%Y-%m-%d").ok()
 }
-
-#[derive(Debug)]
-pub enum DateError {
-    InvalidFormat(String),
-}
-
-impl std::fmt::Display for DateError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DateError::InvalidFormat(s) => {
-                write!(f, "Invalid date format: '{}'. Try 'today', 'yesterday', 'last friday', '3 days ago', or 'YYYY-MM-DD'", s)
-            }
-        }
-    }
-}
-
-impl std::error::Error for DateError {}
 
 #[cfg(test)]
 mod tests {

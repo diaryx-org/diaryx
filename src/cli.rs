@@ -1,10 +1,10 @@
 #![cfg(feature = "cli")]
 
 use clap::{Parser, Subcommand};
-use diaryx_core::app::DiaryxApp;
 use diaryx_core::config::Config;
 use diaryx_core::date::parse_date;
 use diaryx_core::editor::launch_editor;
+use diaryx_core::entry::DiaryxApp;
 use diaryx_core::fs::RealFileSystem;
 use serde_yaml::Value;
 use std::path::PathBuf;

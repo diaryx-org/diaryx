@@ -47,11 +47,6 @@ jobs:
             os: windows-latest
             archive: zip
 
-          # WebAssembly
-          - target: wasm32-unknown-unknown
-            os: ubuntu-latest
-            archive: tar.gz
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -67,27 +62,18 @@ jobs:
         with:
           target: ${{ matrix.target }}
 
-      - name: Install wasm-pack
-        if: matrix.target == 'wasm32-unknown-unknown'
-        run: cargo install wasm-pack
-
       - name: Build binary
-        if: matrix.target != 'wasm32-unknown-unknown'
         run: cargo build --release --features cli --target ${{ matrix.target }}
 
-      - name: Build WebAssembly
-        if: matrix.target == 'wasm32-unknown-unknown'
-        run: |
-          cargo build --release --target ${{ matrix.target }}
-          mkdir -p wasm-dist
-          cp target/${{ matrix.target }}/release/*.wasm wasm-dist/ || true
-
       - name: Prepare artifacts (Unix)
-        if: matrix.os != 'windows-latest' && matrix.target != 'wasm32-unknown-unknown'
+        if: matrix.os != 'windows-latest'
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }} dist/
-          cp README.md LICENSE.md dist/ || true
+          # Copy README and LICENSE if they exist
+          [ -f README.md ] && cp README.md dist/ || true
+          [ -f LICENSE ] && cp LICENSE dist/ || true
+          [ -f LICENSE.md ] && cp LICENSE.md dist/ || true
           cd dist
           tar -czvf ../${{ env.BINARY_NAME }}-${{ matrix.target }}.tar.gz *
 
@@ -97,17 +83,10 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist
           Copy-Item "target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}.exe" -Destination dist/
-          Copy-Item README.md, LICENSE.md -Destination dist/ -ErrorAction SilentlyContinue
+          if (Test-Path README.md) { Copy-Item README.md -Destination dist/ }
+          if (Test-Path LICENSE) { Copy-Item LICENSE -Destination dist/ }
+          if (Test-Path LICENSE.md) { Copy-Item LICENSE.md -Destination dist/ }
           Compress-Archive -Path dist/* -DestinationPath "${{ env.BINARY_NAME }}-${{ matrix.target }}.zip"
-
-      - name: Prepare artifacts (WebAssembly)
-        if: matrix.target == 'wasm32-unknown-unknown'
-        run: |
-          mkdir -p dist
-          cp wasm-dist/* dist/ || cp target/${{ matrix.target }}/release/*.wasm dist/ || true
-          cp README.md LICENSE.md dist/ || true
-          cd dist
-          tar -czvf ../${{ env.BINARY_NAME }}-${{ matrix.target }}.tar.gz *
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

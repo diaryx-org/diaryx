@@ -21,8 +21,8 @@ pub fn handle_workspace_command(
     let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     match command {
-        WorkspaceCommands::Info => {
-            handle_info(workspace_override, ws, &config, &current_dir);
+        WorkspaceCommands::Info { path, depth } => {
+            handle_info(workspace_override, ws, &config, &current_dir, path, depth);
         }
 
         WorkspaceCommands::Init {
@@ -566,8 +566,48 @@ fn handle_info(
     ws: &Workspace<RealFileSystem>,
     config: &Option<Config>,
     current_dir: &Path,
+    path: Option<String>,
+    max_depth: usize,
 ) {
-    let root_path = if let Some(ref override_path) = workspace_override {
+    // If a path is provided, resolve it (supports "." for local index)
+    let root_path = if let Some(ref p) = path {
+        if p == "." {
+            // Resolve to local index in current directory
+            match ws.find_any_index_in_dir(current_dir) {
+                Ok(Some(index)) => index,
+                Ok(None) => {
+                    eprintln!("✗ No index found in current directory");
+                    return;
+                }
+                Err(e) => {
+                    eprintln!("✗ Error finding index: {}", e);
+                    return;
+                }
+            }
+        } else {
+            // Treat as a path to resolve
+            let path_buf = Path::new(p);
+            if path_buf.is_file() {
+                path_buf.to_path_buf()
+            } else if path_buf.is_dir() {
+                // Find index in that directory
+                match ws.find_any_index_in_dir(path_buf) {
+                    Ok(Some(index)) => index,
+                    Ok(None) => {
+                        eprintln!("✗ No index found in directory: {}", p);
+                        return;
+                    }
+                    Err(e) => {
+                        eprintln!("✗ Error finding index: {}", e);
+                        return;
+                    }
+                }
+            } else {
+                eprintln!("✗ Path not found: {}", p);
+                return;
+            }
+        }
+    } else if let Some(ref override_path) = workspace_override {
         override_path.clone()
     } else if let Ok(Some(detected)) = ws.detect_workspace(current_dir) {
         detected
@@ -585,7 +625,14 @@ fn handle_info(
         return;
     };
 
-    match ws.workspace_info(&root_path) {
+    // Convert 0 to None (unlimited), otherwise Some(depth)
+    let depth_limit = if max_depth == 0 {
+        None
+    } else {
+        Some(max_depth)
+    };
+
+    match ws.workspace_info_with_depth(&root_path, depth_limit) {
         Ok(tree_output) => {
             println!("{}", tree_output);
         }

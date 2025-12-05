@@ -318,7 +318,37 @@ impl<FS: FileSystem> Workspace<FS> {
 
     /// Build a tree structure from the workspace hierarchy
     pub fn build_tree(&self, root_path: &Path) -> Result<TreeNode> {
+        self.build_tree_with_depth(root_path, None, &mut std::collections::HashSet::new())
+    }
+
+    /// Build a tree structure with depth limit and cycle detection
+    /// `max_depth` of None means unlimited, Some(0) means just the root node
+    pub fn build_tree_with_depth(
+        &self,
+        root_path: &Path,
+        max_depth: Option<usize>,
+        visited: &mut std::collections::HashSet<PathBuf>,
+    ) -> Result<TreeNode> {
         let index = self.parse_index(root_path)?;
+
+        // Canonicalize path for cycle detection
+        let canonical = root_path
+            .canonicalize()
+            .unwrap_or_else(|_| root_path.to_path_buf());
+
+        // Check for cycles
+        if visited.contains(&canonical) {
+            return Ok(TreeNode {
+                name: format!(
+                    "{} (cycle)",
+                    root_path.file_name().unwrap_or_default().to_string_lossy()
+                ),
+                description: None,
+                path: root_path.to_path_buf(),
+                children: Vec::new(),
+            });
+        }
+        visited.insert(canonical);
 
         let name = index
             .frontmatter
@@ -334,26 +364,43 @@ impl<FS: FileSystem> Workspace<FS> {
             });
 
         let mut children = Vec::new();
+        let contents = index.frontmatter.contents_list();
+        let child_count = contents.len();
 
-        for child_path_str in index.frontmatter.contents_list() {
-            let child_path = index.resolve_path(child_path_str);
+        // Check if we've hit depth limit
+        let at_depth_limit = max_depth.map(|d| d == 0).unwrap_or(false);
 
-            // Only include if the file exists
-            if self.fs.exists(&child_path) {
-                match self.build_tree(&child_path) {
-                    Ok(child_node) => children.push(child_node),
-                    Err(_) => {
-                        // If we can't parse a child, include it as a leaf with error indication
-                        children.push(TreeNode {
-                            name: format!("{} (error)", child_path_str),
-                            description: None,
-                            path: child_path,
-                            children: Vec::new(),
-                        });
+        if at_depth_limit && child_count > 0 {
+            // Show truncation indicator
+            children.push(TreeNode {
+                name: format!("... ({} more)", child_count),
+                description: None,
+                path: root_path.to_path_buf(),
+                children: Vec::new(),
+            });
+        } else {
+            let next_depth = max_depth.map(|d| d.saturating_sub(1));
+
+            for child_path_str in contents {
+                let child_path = index.resolve_path(child_path_str);
+
+                // Only include if the file exists
+                if self.fs.exists(&child_path) {
+                    match self.build_tree_with_depth(&child_path, next_depth, visited) {
+                        Ok(child_node) => children.push(child_node),
+                        Err(_) => {
+                            // If we can't parse a child, include it as a leaf with error indication
+                            children.push(TreeNode {
+                                name: format!("{} (error)", child_path_str),
+                                description: None,
+                                path: child_path,
+                                children: Vec::new(),
+                            });
+                        }
                     }
                 }
+                // Ignore non-existent paths (as per spec: "ignore by default")
             }
-            // Ignore non-existent paths (as per spec: "ignore by default")
         }
 
         Ok(TreeNode {
@@ -403,7 +450,18 @@ impl<FS: FileSystem> Workspace<FS> {
 
     /// Get workspace info as formatted string
     pub fn workspace_info(&self, root_path: &Path) -> Result<String> {
-        let tree = self.build_tree(root_path)?;
+        self.workspace_info_with_depth(root_path, None)
+    }
+
+    /// Get workspace info as formatted string with depth limit
+    /// `max_depth` of None means unlimited
+    pub fn workspace_info_with_depth(
+        &self,
+        root_path: &Path,
+        max_depth: Option<usize>,
+    ) -> Result<String> {
+        let mut visited = std::collections::HashSet::new();
+        let tree = self.build_tree_with_depth(root_path, max_depth, &mut visited)?;
         Ok(self.format_tree(&tree, "").trim_end().to_string())
     }
 }

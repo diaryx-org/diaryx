@@ -341,7 +341,14 @@ pub enum PropertyCommands {
 #[derive(Subcommand)]
 pub enum WorkspaceCommands {
     /// Show workspace info as a tree
-    Info,
+    Info {
+        /// Path to show tree for (use "." for current directory's index)
+        path: Option<String>,
+
+        /// Maximum depth to display (default: 3, use 0 for unlimited)
+        #[arg(short, long, default_value = "3")]
+        depth: usize,
+    },
 
     /// Initialize a new workspace in the current or specified directory
     Init {

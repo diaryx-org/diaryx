@@ -3,7 +3,7 @@ title: diaryx-core
 description: A diaryx workspace
 contents:
 - LICENSE.md
-version: "v0.2.0"
+version: "v0.2.1"
 ---
 
 # diaryx-core
@@ -13,5 +13,5 @@ An opinionated command line tool for keeping a journal. Emphasizes Markdown fron
 ## Installation
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/diaryx-org/diaryx-core/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/diaryx-org/diaryx-core/refs/heads/master/install.sh | bash
 ```

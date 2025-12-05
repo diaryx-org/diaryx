@@ -1,9 +1,9 @@
 #!/bin/bash
 #
 # Diaryx Install Script
-# 
+#
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/diaryx-org/diaryx-core/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/diaryx-org/diaryx-core/refs/heads/master/install.sh | bash
 #
 # Options (via environment variables):
 #   DIARYX_VERSION  - Specific version to install (default: latest)
@@ -71,7 +71,7 @@ detect_platform() {
 # Get the latest release version from GitHub
 get_latest_version() {
     local latest_url="https://api.github.com/repos/${REPO}/releases/latest"
-    
+
     if command -v curl &> /dev/null; then
         curl -fsSL "$latest_url" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/'
     elif command -v wget &> /dev/null; then
@@ -85,9 +85,9 @@ get_latest_version() {
 download() {
     local url="$1"
     local output="$2"
-    
+
     info "Downloading from: $url"
-    
+
     if command -v curl &> /dev/null; then
         curl -fsSL "$url" -o "$output"
     elif command -v wget &> /dev/null; then
@@ -101,7 +101,7 @@ download() {
 verify_checksum() {
     local file="$1"
     local expected="$2"
-    
+
     local actual
     if command -v sha256sum &> /dev/null; then
         actual=$(sha256sum "$file" | awk '{print $1}')
@@ -111,11 +111,11 @@ verify_checksum() {
         warn "Neither sha256sum nor shasum found. Skipping checksum verification."
         return 0
     fi
-    
+
     if [ "$actual" != "$expected" ]; then
         error "Checksum verification failed!\n  Expected: $expected\n  Actual:   $actual"
     fi
-    
+
     info "Checksum verified successfully"
 }
 
@@ -170,7 +170,7 @@ main() {
     # Download and verify checksum
     local checksum_path="${tmp_dir}/SHA256SUMS.txt"
     download "$checksum_url" "$checksum_path"
-    
+
     local expected_checksum
     expected_checksum=$(grep "$archive_name" "$checksum_path" | awk '{print $1}')
     if [ -n "$expected_checksum" ]; then
@@ -183,7 +183,7 @@ main() {
     info "Extracting archive..."
     local extract_dir="${tmp_dir}/extracted"
     mkdir -p "$extract_dir"
-    
+
     if [[ "$archive_ext" == "tar.gz" ]]; then
         tar -xzf "$archive_path" -C "$extract_dir"
     else

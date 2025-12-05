@@ -155,12 +155,16 @@ pub enum ContentCommands {
         /// Path to the entry file (supports fuzzy matching, dates)
         path: String,
 
-        /// Content to set (use --file to read from file instead)
+        /// Content to set (use --file or --stdin to read from elsewhere)
         content: Option<String>,
 
         /// Read content from a file
-        #[arg(short, long, value_name = "FILE")]
+        #[arg(short, long, value_name = "FILE", conflicts_with = "stdin")]
         file: Option<PathBuf>,
+
+        /// Read content from stdin
+        #[arg(long, conflicts_with = "file")]
+        stdin: bool,
 
         /// Show what would be done without making changes
         #[arg(long)]
@@ -187,12 +191,16 @@ pub enum ContentCommands {
         /// Path to the entry file (supports fuzzy matching, dates)
         path: String,
 
-        /// Content to append (use --file to read from file instead)
+        /// Content to append (use --file or --stdin to read from elsewhere)
         content: Option<String>,
 
         /// Read content from a file
-        #[arg(short, long, value_name = "FILE")]
+        #[arg(short, long, value_name = "FILE", conflicts_with = "stdin")]
         file: Option<PathBuf>,
+
+        /// Read content from stdin
+        #[arg(long, conflicts_with = "file")]
+        stdin: bool,
 
         /// Show what would be done without making changes
         #[arg(long)]
@@ -204,12 +212,16 @@ pub enum ContentCommands {
         /// Path to the entry file (supports fuzzy matching, dates)
         path: String,
 
-        /// Content to prepend (use --file to read from file instead)
+        /// Content to prepend (use --file or --stdin to read from elsewhere)
         content: Option<String>,
 
         /// Read content from a file
-        #[arg(short, long, value_name = "FILE")]
+        #[arg(short, long, value_name = "FILE", conflicts_with = "stdin")]
         file: Option<PathBuf>,
+
+        /// Read content from stdin
+        #[arg(long, conflicts_with = "file")]
+        stdin: bool,
 
         /// Show what would be done without making changes
         #[arg(long)]

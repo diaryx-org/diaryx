@@ -1,7 +1,7 @@
 //! Content manipulation commands for diaryx CLI
 
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
 use diaryx_core::config::Config;
@@ -27,9 +27,10 @@ pub fn handle_content_command(app: &DiaryxApp<RealFileSystem>, operation: Conten
             path,
             content,
             file,
+            stdin,
             dry_run,
         } => {
-            handle_set(app, &config, &path, content, file, dry_run);
+            handle_set(app, &config, &path, content, file, stdin, dry_run);
         }
 
         ContentCommands::Clear { path, yes, dry_run } => {
@@ -40,29 +41,48 @@ pub fn handle_content_command(app: &DiaryxApp<RealFileSystem>, operation: Conten
             path,
             content,
             file,
+            stdin,
             dry_run,
         } => {
-            handle_append(app, &config, &path, content, file, dry_run);
+            handle_append(app, &config, &path, content, file, stdin, dry_run);
         }
 
         ContentCommands::Prepend {
             path,
             content,
             file,
+            stdin,
             dry_run,
         } => {
-            handle_prepend(app, &config, &path, content, file, dry_run);
+            handle_prepend(app, &config, &path, content, file, stdin, dry_run);
         }
     }
 }
 
-/// Get content from file or argument
-fn get_input_content(content: Option<String>, file: Option<PathBuf>) -> Result<String, String> {
+/// Get content from file, stdin, or argument
+fn get_input_content(
+    content: Option<String>,
+    file: Option<PathBuf>,
+    stdin: bool,
+) -> Result<String, String> {
+    if stdin {
+        if content.is_some() || file.is_some() {
+            return Err("Cannot use --stdin with content argument or --file".to_string());
+        }
+        let mut buffer = String::new();
+        io::stdin()
+            .read_to_string(&mut buffer)
+            .map_err(|e| format!("Failed to read from stdin: {}", e))?;
+        return Ok(buffer);
+    }
+
     match (content, file) {
         (Some(c), None) => Ok(c),
         (None, Some(f)) => fs::read_to_string(&f)
             .map_err(|e| format!("Failed to read file '{}': {}", f.display(), e)),
-        (None, None) => Err("No content provided. Use a content argument or --file.".to_string()),
+        (None, None) => {
+            Err("No content provided. Use a content argument, --file, or --stdin.".to_string())
+        }
         (Some(_), Some(_)) => Err("Cannot specify both content argument and --file".to_string()),
     }
 }
@@ -98,9 +118,10 @@ fn handle_set(
     path: &str,
     content: Option<String>,
     file: Option<PathBuf>,
+    stdin: bool,
     dry_run: bool,
 ) {
-    let input = match get_input_content(content, file) {
+    let input = match get_input_content(content, file, stdin) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("✗ {}", e);
@@ -207,9 +228,10 @@ fn handle_append(
     path: &str,
     content: Option<String>,
     file: Option<PathBuf>,
+    stdin: bool,
     dry_run: bool,
 ) {
-    let input = match get_input_content(content, file) {
+    let input = match get_input_content(content, file, stdin) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("✗ {}", e);
@@ -261,9 +283,10 @@ fn handle_prepend(
     path: &str,
     content: Option<String>,
     file: Option<PathBuf>,
+    stdin: bool,
     dry_run: bool,
 ) {
-    let input = match get_input_content(content, file) {
+    let input = match get_input_content(content, file, stdin) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("✗ {}", e);

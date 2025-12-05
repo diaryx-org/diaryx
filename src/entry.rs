@@ -556,3 +556,265 @@ impl<FS: FileSystem> DiaryxApp<FS> {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::io;
+    use std::path::Path;
+    use std::sync::{Arc, Mutex};
+
+    /// A mock filesystem for testing
+    #[derive(Clone, Default)]
+    struct MockFileSystem {
+        files: Arc<Mutex<HashMap<PathBuf, String>>>,
+    }
+
+    impl MockFileSystem {
+        fn new() -> Self {
+            Self {
+                files: Arc::new(Mutex::new(HashMap::new())),
+            }
+        }
+
+        fn with_file(self, path: &str, content: &str) -> Self {
+            self.files
+                .lock()
+                .unwrap()
+                .insert(PathBuf::from(path), content.to_string());
+            self
+        }
+
+        fn get_content(&self, path: &str) -> Option<String> {
+            self.files
+                .lock()
+                .unwrap()
+                .get(&PathBuf::from(path))
+                .cloned()
+        }
+    }
+
+    impl crate::fs::FileSystem for MockFileSystem {
+        fn read_to_string(&self, path: &Path) -> io::Result<String> {
+            self.files
+                .lock()
+                .unwrap()
+                .get(path)
+                .cloned()
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "File not found"))
+        }
+
+        fn write_file(&self, path: &Path, content: &str) -> io::Result<()> {
+            self.files
+                .lock()
+                .unwrap()
+                .insert(path.to_path_buf(), content.to_string());
+            Ok(())
+        }
+
+        fn exists(&self, path: &Path) -> bool {
+            self.files.lock().unwrap().contains_key(path)
+        }
+
+        fn create_new(&self, path: &Path, content: &str) -> io::Result<()> {
+            let mut files = self.files.lock().unwrap();
+            if files.contains_key(path) {
+                return Err(io::Error::new(io::ErrorKind::AlreadyExists, "File exists"));
+            }
+            files.insert(path.to_path_buf(), content.to_string());
+            Ok(())
+        }
+
+        fn delete_file(&self, path: &Path) -> io::Result<()> {
+            self.files.lock().unwrap().remove(path);
+            Ok(())
+        }
+
+        fn list_md_files(&self, dir: &Path) -> io::Result<Vec<PathBuf>> {
+            let files = self.files.lock().unwrap();
+            let mut result = Vec::new();
+            for path in files.keys() {
+                if path.parent() == Some(dir) && path.extension().is_some_and(|ext| ext == "md") {
+                    result.push(path.clone());
+                }
+            }
+            Ok(result)
+        }
+    }
+
+    #[test]
+    fn test_get_content() {
+        let fs = MockFileSystem::new().with_file("test.md", "---\ntitle: Test\n---\nHello, world!");
+        let app = DiaryxApp::new(fs);
+
+        let content = app.get_content("test.md").unwrap();
+        assert_eq!(content, "Hello, world!");
+    }
+
+    #[test]
+    fn test_get_content_empty_body() {
+        let fs = MockFileSystem::new().with_file("test.md", "---\ntitle: Test\n---\n");
+        let app = DiaryxApp::new(fs);
+
+        let content = app.get_content("test.md").unwrap();
+        assert_eq!(content, "");
+    }
+
+    #[test]
+    fn test_get_content_no_frontmatter() {
+        let fs = MockFileSystem::new().with_file("test.md", "Just plain content");
+        let app = DiaryxApp::new(fs);
+
+        let content = app.get_content("test.md").unwrap();
+        assert_eq!(content, "Just plain content");
+    }
+
+    #[test]
+    fn test_set_content() {
+        let fs = MockFileSystem::new().with_file("test.md", "---\ntitle: Test\n---\nOld content");
+        let app = DiaryxApp::new(fs.clone());
+
+        app.set_content("test.md", "New content").unwrap();
+
+        let result = fs.get_content("test.md").unwrap();
+        assert!(result.contains("title: Test"));
+        assert!(result.contains("New content"));
+        assert!(!result.contains("Old content"));
+    }
+
+    #[test]
+    fn test_set_content_preserves_frontmatter() {
+        let fs = MockFileSystem::new().with_file(
+            "test.md",
+            "---\ntitle: My Title\ndescription: A description\n---\nOld",
+        );
+        let app = DiaryxApp::new(fs.clone());
+
+        app.set_content("test.md", "New body").unwrap();
+
+        let result = fs.get_content("test.md").unwrap();
+        assert!(result.contains("title: My Title"));
+        assert!(result.contains("description: A description"));
+        assert!(result.contains("New body"));
+    }
+
+    #[test]
+    fn test_clear_content() {
+        let fs =
+            MockFileSystem::new().with_file("test.md", "---\ntitle: Test\n---\nSome content here");
+        let app = DiaryxApp::new(fs.clone());
+
+        app.clear_content("test.md").unwrap();
+
+        let result = fs.get_content("test.md").unwrap();
+        assert!(result.contains("title: Test"));
+        // Content should be empty after the frontmatter closing
+        assert!(result.ends_with("---\n"));
+    }
+
+    #[test]
+    fn test_append_content() {
+        let fs = MockFileSystem::new().with_file("test.md", "---\ntitle: Test\n---\nFirst line");
+        let app = DiaryxApp::new(fs.clone());
+
+        app.append_content("test.md", "Second line").unwrap();
+
+        let result = fs.get_content("test.md").unwrap();
+        assert!(result.contains("First line"));
+        assert!(result.contains("Second line"));
+        // Second line should come after first
+        let first_pos = result.find("First line").unwrap();
+        let second_pos = result.find("Second line").unwrap();
+        assert!(second_pos > first_pos);
+    }
+
+    #[test]
+    fn test_append_content_adds_newline() {
+        let fs = MockFileSystem::new()
+            .with_file("test.md", "---\ntitle: Test\n---\nNo trailing newline");
+        let app = DiaryxApp::new(fs.clone());
+
+        app.append_content("test.md", "Appended").unwrap();
+
+        let content = app.get_content("test.md").unwrap();
+        assert!(content.contains("No trailing newline\nAppended"));
+    }
+
+    #[test]
+    fn test_append_content_to_empty_body() {
+        let fs = MockFileSystem::new().with_file("test.md", "---\ntitle: Test\n---\n");
+        let app = DiaryxApp::new(fs.clone());
+
+        app.append_content("test.md", "New content").unwrap();
+
+        let content = app.get_content("test.md").unwrap();
+        assert_eq!(content, "New content");
+    }
+
+    #[test]
+    fn test_prepend_content() {
+        let fs =
+            MockFileSystem::new().with_file("test.md", "---\ntitle: Test\n---\nExisting content");
+        let app = DiaryxApp::new(fs.clone());
+
+        app.prepend_content("test.md", "# Header").unwrap();
+
+        let result = fs.get_content("test.md").unwrap();
+        assert!(result.contains("# Header"));
+        assert!(result.contains("Existing content"));
+        // Header should come before existing content
+        let header_pos = result.find("# Header").unwrap();
+        let existing_pos = result.find("Existing content").unwrap();
+        assert!(header_pos < existing_pos);
+    }
+
+    #[test]
+    fn test_prepend_content_adds_newline() {
+        let fs = MockFileSystem::new().with_file("test.md", "---\ntitle: Test\n---\nExisting");
+        let app = DiaryxApp::new(fs.clone());
+
+        app.prepend_content("test.md", "Prepended").unwrap();
+
+        let content = app.get_content("test.md").unwrap();
+        assert!(content.contains("Prepended\nExisting"));
+    }
+
+    #[test]
+    fn test_prepend_content_to_empty_body() {
+        let fs = MockFileSystem::new().with_file("test.md", "---\ntitle: Test\n---\n");
+        let app = DiaryxApp::new(fs.clone());
+
+        app.prepend_content("test.md", "New content").unwrap();
+
+        let content = app.get_content("test.md").unwrap();
+        assert_eq!(content, "New content");
+    }
+
+    #[test]
+    fn test_content_operations_on_nonexistent_file() {
+        let fs = MockFileSystem::new();
+        let app = DiaryxApp::new(fs.clone());
+
+        // set_content should create the file
+        app.set_content("new.md", "Content").unwrap();
+
+        let result = fs.get_content("new.md").unwrap();
+        assert!(result.contains("Content"));
+    }
+
+    #[test]
+    fn test_multiple_content_operations() {
+        let fs = MockFileSystem::new().with_file("test.md", "---\ntitle: Test\n---\n");
+        let app = DiaryxApp::new(fs.clone());
+
+        app.append_content("test.md", "Line 1").unwrap();
+        app.append_content("test.md", "Line 2").unwrap();
+        app.prepend_content("test.md", "# Title").unwrap();
+
+        let content = app.get_content("test.md").unwrap();
+        assert!(content.starts_with("# Title"));
+        assert!(content.contains("Line 1"));
+        assert!(content.contains("Line 2"));
+    }
+}

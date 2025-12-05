@@ -32,9 +32,13 @@ pub enum Commands {
 
     /// Initialize diaryx configuration and workspace
     Init {
-        /// Base directory for diary entries (default: ~/diaryx)
-        #[arg(short, long)]
-        base_dir: Option<PathBuf>,
+        /// Default workspace directory (default: ~/diaryx)
+        #[arg(short = 'd', long, alias = "base-dir")]
+        default_workspace: Option<PathBuf>,
+
+        /// Subfolder for daily entries (e.g., "Daily" or "Journal/Daily")
+        #[arg(long)]
+        daily_folder: Option<String>,
 
         /// Title for the workspace
         #[arg(short, long)]
@@ -358,6 +362,11 @@ pub enum WorkspaceCommands {
         /// Destination file path
         dest: String,
 
+        /// Create a new index file as the parent for the moved file
+        /// Example: --new-index archive_index creates archive_index.md in dest directory
+        #[arg(long, value_name = "NAME")]
+        new_index: Option<String>,
+
         /// Show what would be done without making changes
         #[arg(long)]
         dry_run: bool,
@@ -384,6 +393,11 @@ pub enum WorkspaceCommands {
 
         /// Child file(s) to add (optional if parent_or_child is the child, supports globs)
         child: Option<String>,
+
+        /// Create a new index file to hold the added files
+        /// Example: --new-index docs_index creates docs_index.md as parent
+        #[arg(long, value_name = "NAME")]
+        new_index: Option<String>,
 
         /// Skip confirmation prompts for multi-file operations
         #[arg(short = 'y', long)]

@@ -353,8 +353,8 @@ pub fn resolve_paths(path: &str, config: &Config, app: &DiaryxApp<RealFileSystem
         }
 
         // If path doesn't exist and doesn't look like a date, try fuzzy matching
-        // (date resolution would have returned a path in base_dir)
-        if !resolved.starts_with(&config.base_dir) || path.contains('/') || path.contains('\\') {
+        // (date resolution would have returned a path in daily_entry_dir)
+        if !resolved.starts_with(config.daily_entry_dir()) || path.contains('/') || path.contains('\\') {
             // This was likely meant as a literal path that doesn't exist
             // Try fuzzy matching in current directory
             if let Some(matches) = fuzzy_match_files(path) {

@@ -6,8 +6,16 @@ use crate::error::{DiaryxError, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    /// Base directory for diary entries
-    pub base_dir: PathBuf,
+    /// Default workspace directory
+    /// This is the main directory for your workspace/journal
+    #[serde(alias = "base_dir")]
+    pub default_workspace: PathBuf,
+
+    /// Subfolder within the workspace for daily entries (optional)
+    /// If not set, daily entries are created in the workspace root
+    /// Example: "Daily" or "Journal/Daily"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daily_entry_folder: Option<String>,
 
     /// Preferred editor (falls back to $EDITOR if not set)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -18,6 +26,22 @@ pub struct Config {
     pub default_template: Option<String>,
 }
 
+impl Config {
+    /// Get the directory where daily entries should be created
+    /// Returns daily_entry_folder joined with default_workspace, or just default_workspace
+    pub fn daily_entry_dir(&self) -> PathBuf {
+        match &self.daily_entry_folder {
+            Some(folder) => self.default_workspace.join(folder),
+            None => self.default_workspace.clone(),
+        }
+    }
+
+    /// Alias for backwards compatibility
+    pub fn base_dir(&self) -> &PathBuf {
+        &self.default_workspace
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         let default_base = dirs::home_dir()
@@ -25,7 +49,8 @@ impl Default for Config {
             .join("diaryx");
 
         Self {
-            base_dir: default_base,
+            default_workspace: default_base,
+            daily_entry_folder: None,
             editor: None,
             default_template: None,
         }
@@ -68,9 +93,15 @@ impl Config {
     }
 
     /// Initialize config with user-provided values
-    pub fn init(base_dir: PathBuf) -> Result<Self> {
+    pub fn init(default_workspace: PathBuf) -> Result<Self> {
+        Self::init_with_options(default_workspace, None)
+    }
+
+    /// Initialize config with user-provided values including daily folder
+    pub fn init_with_options(default_workspace: PathBuf, daily_entry_folder: Option<String>) -> Result<Self> {
         let config = Config {
-            base_dir,
+            default_workspace,
+            daily_entry_folder,
             editor: None,
             default_template: None,
         };

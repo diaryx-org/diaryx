@@ -56,19 +56,29 @@ impl<FS: FileSystem> DiaryxApp<FS> {
     }
 
     /// Parses a markdown file, creating empty frontmatter if none exists
+    /// Creates the file if it doesn't exist
     /// Use this for operations that should create frontmatter when missing (like set)
     fn parse_file_or_create_frontmatter(
         &self,
         path: &str,
     ) -> Result<(IndexMap<String, Value>, String)> {
         let path_buf = PathBuf::from(path);
-        let content = self
-            .fs
-            .read_to_string(std::path::Path::new(path))
-            .map_err(|e| DiaryxError::FileRead {
-                path: path_buf.clone(),
-                source: e,
-            })?;
+        
+        // Try to read the file, if it doesn't exist, return empty frontmatter and body
+        let content = match self.fs.read_to_string(std::path::Path::new(path)) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // File doesn't exist - return empty frontmatter and body
+                // The file will be created when reconstruct_file is called
+                return Ok((IndexMap::new(), String::new()));
+            }
+            Err(e) => {
+                return Err(DiaryxError::FileRead {
+                    path: path_buf,
+                    source: e,
+                });
+            }
+        };
 
         // Check if content starts with frontmatter delimiter
         if !content.starts_with("---\n") && !content.starts_with("---\r\n") {
@@ -255,7 +265,7 @@ impl<FS: FileSystem> DiaryxApp<FS> {
     /// Get the full path for a date-based entry
     pub fn get_dated_entry_path(&self, date_str: &str, config: &Config) -> Result<PathBuf> {
         let date = parse_date(date_str)?;
-        Ok(date_to_path(&config.base_dir, &date))
+        Ok(date_to_path(&config.daily_entry_dir(), &date))
     }
 
     /// Resolve a path string - either a date string ("today", "2024-01-15") or a literal path
@@ -263,7 +273,7 @@ impl<FS: FileSystem> DiaryxApp<FS> {
     pub fn resolve_path(&self, path_str: &str, config: &Config) -> PathBuf {
         // Try to parse as a date first
         if let Ok(date) = parse_date(path_str) {
-            date_to_path(&config.base_dir, &date)
+            date_to_path(&config.daily_entry_dir(), &date)
         } else {
             // Treat as literal path
             PathBuf::from(path_str)
@@ -272,7 +282,7 @@ impl<FS: FileSystem> DiaryxApp<FS> {
 
     /// Create a dated entry with proper frontmatter
     pub fn create_dated_entry(&self, date: &NaiveDate, config: &Config) -> Result<PathBuf> {
-        let path = date_to_path(&config.base_dir, date);
+        let path = date_to_path(&config.daily_entry_dir(), date);
 
         // Create parent directories if they don't exist
         if let Some(parent) = path.parent() {
@@ -296,7 +306,7 @@ impl<FS: FileSystem> DiaryxApp<FS> {
     /// Ensure a dated entry exists, creating it if necessary
     /// This will NEVER overwrite an existing file
     pub fn ensure_dated_entry(&self, date: &NaiveDate, config: &Config) -> Result<PathBuf> {
-        let path = date_to_path(&config.base_dir, date);
+        let path = date_to_path(&config.daily_entry_dir(), date);
 
         // Check if file already exists using FileSystem trait
         if self.fs.exists(&path) {

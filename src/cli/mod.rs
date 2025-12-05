@@ -31,11 +31,12 @@ pub fn run_cli() {
     // Execute commands
     match cli.command {
         Commands::Init {
-            base_dir,
+            default_workspace,
+            daily_folder,
             title,
             description,
         } => {
-            handle_init(base_dir, title, description, &ws);
+            handle_init(default_workspace, daily_folder, title, description, &ws);
         }
 
         Commands::Today => {
@@ -91,22 +92,26 @@ pub fn run_cli() {
 
 /// Handle the init command
 fn handle_init(
-    base_dir: Option<PathBuf>,
+    default_workspace: Option<PathBuf>,
+    daily_folder: Option<String>,
     title: Option<String>,
     description: Option<String>,
     ws: &Workspace<RealFileSystem>,
 ) {
-    let dir = base_dir.unwrap_or_else(|| {
+    let dir = default_workspace.unwrap_or_else(|| {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("diaryx")
     });
 
     // Initialize config
-    match Config::init(dir.clone()) {
+    match Config::init_with_options(dir.clone(), daily_folder.clone()) {
         Ok(_) => {
             println!("✓ Initialized diaryx configuration");
-            println!("  Base directory: {}", dir.display());
+            println!("  Default workspace: {}", dir.display());
+            if let Some(ref folder) = daily_folder {
+                println!("  Daily entry folder: {}", folder);
+            }
             if let Some(config_path) = Config::config_path() {
                 println!("  Config file: {}", config_path.display());
             }

@@ -264,14 +264,14 @@ impl<FS: FileSystem> Workspace<FS> {
             return Ok(root);
         }
 
-        // Fall back to config's base_dir and look for root index there
-        if let Some(root) = self.find_root_index_in_dir(&config.base_dir)? {
+        // Fall back to config's default_workspace and look for root index there
+        if let Some(root) = self.find_root_index_in_dir(&config.default_workspace)? {
             return Ok(root);
         }
 
-        // If no root index exists in base_dir, return the expected README.md path
+        // If no root index exists in default_workspace, return the expected README.md path
         // (it may need to be created)
-        Ok(config.base_dir.join("README.md"))
+        Ok(config.default_workspace.join("README.md"))
     }
 
     /// Initialize a new workspace with a root index file

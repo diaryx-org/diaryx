@@ -40,14 +40,22 @@ pub fn handle_workspace_command(
         WorkspaceCommands::Add {
             parent_or_child,
             child,
+            new_index,
             yes,
             dry_run,
         } => {
             if let Some(ref cfg) = config {
-                let (parent, child_pattern) =
-                    resolve_parent_child(ws, &current_dir, &parent_or_child, child);
-                if let (Some(p), Some(c)) = (parent, child_pattern) {
-                    handle_add(app, cfg, &p, &c, yes, dry_run);
+                if let Some(index_name) = new_index {
+                    // Create new index and add files to it
+                    handle_add_with_new_index(
+                        app, cfg, ws, &current_dir, &parent_or_child, child, &index_name, yes, dry_run,
+                    );
+                } else {
+                    let (parent, child_pattern) =
+                        resolve_parent_child(ws, &current_dir, &parent_or_child, child);
+                    if let (Some(p), Some(c)) = (parent, child_pattern) {
+                        handle_add(app, cfg, &p, &c, yes, dry_run);
+                    }
                 }
             } else {
                 eprintln!("✗ No config found. Run 'diaryx init' first");
@@ -91,10 +99,11 @@ pub fn handle_workspace_command(
         WorkspaceCommands::Mv {
             source,
             dest,
+            new_index,
             dry_run,
         } => {
             if let Some(ref cfg) = config {
-                handle_mv(app, cfg, ws, &source, &dest, dry_run);
+                handle_mv(app, cfg, ws, &source, &dest, new_index, dry_run);
             } else {
                 eprintln!("✗ No config found. Run 'diaryx init' first");
             }
@@ -111,9 +120,10 @@ pub fn handle_workspace_command(
 fn handle_mv(
     app: &DiaryxApp<RealFileSystem>,
     config: &Config,
-    _ws: &Workspace<RealFileSystem>,
+    ws: &Workspace<RealFileSystem>,
     source: &str,
     dest: &str,
+    new_index: Option<String>,
     dry_run: bool,
 ) {
     // Resolve source path (should be a single file)
@@ -183,7 +193,172 @@ fn handle_mv(
     }
 
     // Use shared utility for workspace-aware rename/move
-    rename_file_with_refs(app, source_path, &dest_path, dry_run);
+    let result = rename_file_with_refs(app, source_path, &dest_path, dry_run);
+
+    // If --new-index is specified and move succeeded, create/use index as parent
+    if result.success && !dry_run {
+        if let Some(index_name) = new_index {
+            set_new_index_as_parent(app, ws, &dest_path, &index_name);
+        }
+    } else if dry_run {
+        if let Some(index_name) = new_index {
+            let index_filename = if index_name.ends_with(".md") {
+                index_name
+            } else {
+                format!("{}.md", index_name)
+            };
+            let index_path = dest_path.parent()
+                .map(|p| p.join(&index_filename))
+                .unwrap_or_else(|| PathBuf::from(&index_filename));
+            if index_path.exists() {
+                println!("Would set part_of to existing index '{}'", index_path.display());
+            } else {
+                println!("Would create new index '{}' and set as parent", index_path.display());
+            }
+        }
+    }
+}
+
+/// Set a new or existing index as the parent of a file
+fn set_new_index_as_parent(
+    app: &DiaryxApp<RealFileSystem>,
+    ws: &Workspace<RealFileSystem>,
+    file_path: &Path,
+    index_name: &str,
+) {
+    let file_dir = file_path.parent().unwrap_or(Path::new("."));
+    
+    // Create index filename
+    let index_filename = if index_name.ends_with(".md") {
+        index_name.to_string()
+    } else {
+        format!("{}.md", index_name)
+    };
+    let index_path = file_dir.join(&index_filename);
+    let index_str = index_path.to_string_lossy();
+
+    // Check if index exists, if not create it
+    if !index_path.exists() {
+        // Create title from index name
+        let title = index_name
+            .trim_end_matches(".md")
+            .replace(['_', '-'], " ");
+        let title = title
+            .split_whitespace()
+            .map(|word| {
+                let mut chars = word.chars();
+                match chars.next() {
+                    None => String::new(),
+                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        // Create the index with title and empty contents
+        if let Err(e) = app.set_frontmatter_property(
+            &index_str,
+            "title",
+            serde_yaml::Value::String(title),
+        ) {
+            eprintln!("✗ Error creating index file: {}", e);
+            return;
+        }
+
+        if let Err(e) = app.set_frontmatter_property(
+            &index_str,
+            "contents",
+            serde_yaml::Value::Sequence(vec![]),
+        ) {
+            eprintln!("✗ Error setting contents in index: {}", e);
+            return;
+        }
+
+        // Find parent index for the new index
+        if let Ok(Some(parent_index)) = ws.find_any_index_in_dir(file_dir) {
+            // Don't set parent if it's the same as the new index
+            if parent_index != index_path {
+                let relative_parent = calculate_relative_path(&index_path, &parent_index);
+                if let Err(e) = app.set_frontmatter_property(
+                    &index_str,
+                    "part_of",
+                    serde_yaml::Value::String(relative_parent),
+                ) {
+                    eprintln!("⚠ Error setting part_of in new index: {}", e);
+                }
+
+                // Add new index to parent's contents
+                let parent_str = parent_index.to_string_lossy();
+                let relative_index = calculate_relative_path(&parent_index, &index_path);
+                
+                if let Ok(Some(serde_yaml::Value::Sequence(mut items))) =
+                    app.get_frontmatter_property(&parent_str, "contents")
+                {
+                    items.push(serde_yaml::Value::String(relative_index.clone()));
+                    if let Err(e) = app.set_frontmatter_property(
+                        &parent_str,
+                        "contents",
+                        serde_yaml::Value::Sequence(items),
+                    ) {
+                        eprintln!("⚠ Error updating parent contents: {}", e);
+                    } else {
+                        println!("✓ Added '{}' to parent '{}'", relative_index, parent_index.display());
+                    }
+                }
+            }
+        }
+
+        println!("✓ Created index '{}'", index_path.display());
+    }
+
+    // Add file to index's contents
+    let relative_file = calculate_relative_path(&index_path, file_path);
+    match app.get_frontmatter_property(&index_str, "contents") {
+        Ok(Some(serde_yaml::Value::Sequence(mut items))) => {
+            let file_value = serde_yaml::Value::String(relative_file.clone());
+            if !items.contains(&file_value) {
+                items.push(file_value);
+                if let Err(e) = app.set_frontmatter_property(
+                    &index_str,
+                    "contents",
+                    serde_yaml::Value::Sequence(items),
+                ) {
+                    eprintln!("✗ Error updating index contents: {}", e);
+                    return;
+                }
+                println!("✓ Added '{}' to index '{}'", relative_file, index_path.display());
+            }
+        }
+        Ok(None) => {
+            let items = vec![serde_yaml::Value::String(relative_file.clone())];
+            if let Err(e) = app.set_frontmatter_property(
+                &index_str,
+                "contents",
+                serde_yaml::Value::Sequence(items),
+            ) {
+                eprintln!("✗ Error creating index contents: {}", e);
+                return;
+            }
+            println!("✓ Added '{}' to index '{}'", relative_file, index_path.display());
+        }
+        _ => {
+            eprintln!("✗ Index contents is not a list");
+            return;
+        }
+    }
+
+    // Set part_of in the moved file
+    let file_str = file_path.to_string_lossy();
+    let relative_index = calculate_relative_path(file_path, &index_path);
+    if let Err(e) = app.set_frontmatter_property(
+        &file_str,
+        "part_of",
+        serde_yaml::Value::String(relative_index),
+    ) {
+        eprintln!("✗ Error setting part_of in moved file: {}", e);
+    } else {
+        println!("✓ Set part_of in '{}'", file_path.display());
+    }
 }
 
 /// Handle the 'workspace orphans' command
@@ -362,7 +537,7 @@ fn handle_info(
     } else if let Ok(Some(detected)) = ws.detect_workspace(current_dir) {
         detected
     } else if let Some(ref cfg) = config {
-        if let Ok(Some(root)) = ws.find_root_index_in_dir(&cfg.base_dir) {
+        if let Ok(Some(root)) = ws.find_root_index_in_dir(&cfg.default_workspace) {
             root
         } else {
             eprintln!("✗ No workspace found");
@@ -414,7 +589,7 @@ fn handle_path(
     } else if let Ok(Some(detected)) = ws.detect_workspace(current_dir) {
         Some(detected)
     } else if let Some(ref cfg) = config {
-        ws.find_root_index_in_dir(&cfg.base_dir).ok().flatten()
+        ws.find_root_index_in_dir(&cfg.default_workspace).ok().flatten()
     } else {
         None
     };
@@ -432,6 +607,221 @@ fn handle_path(
             eprintln!("  Run 'diaryx init' or 'diaryx workspace init' first");
         }
     }
+}
+
+/// Handle the 'workspace add --new-index' command
+/// Creates a new index file and adds files to it
+#[allow(clippy::too_many_arguments)]
+fn handle_add_with_new_index(
+    app: &DiaryxApp<RealFileSystem>,
+    config: &Config,
+    ws: &Workspace<RealFileSystem>,
+    current_dir: &Path,
+    file_pattern: &str,
+    additional_pattern: Option<String>,
+    index_name: &str,
+    yes: bool,
+    dry_run: bool,
+) {
+    use crate::cli::util::{prompt_confirm, ConfirmResult};
+
+    // Collect all file patterns
+    let mut all_patterns = vec![file_pattern.to_string()];
+    if let Some(additional) = additional_pattern {
+        all_patterns.push(additional);
+    }
+
+    // Resolve all file paths
+    let mut all_files: Vec<PathBuf> = Vec::new();
+    for pattern in &all_patterns {
+        let paths = resolve_paths(pattern, config, app);
+        all_files.extend(paths);
+    }
+
+    if all_files.is_empty() {
+        eprintln!("✗ No files matched the pattern(s)");
+        return;
+    }
+
+    // Determine the directory for the new index
+    // Use the directory of the first file, or current directory
+    let index_dir = all_files
+        .first()
+        .and_then(|p| p.parent())
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| current_dir.to_path_buf());
+
+    // Create index filename
+    let index_filename = if index_name.ends_with(".md") {
+        index_name.to_string()
+    } else {
+        format!("{}.md", index_name)
+    };
+    let index_path = index_dir.join(&index_filename);
+    let index_dir = &index_path.parent().unwrap_or(&index_dir);
+
+    if index_path.exists() {
+        eprintln!("✗ Index file already exists: {}", index_path.display());
+        eprintln!("  Use 'diaryx w add {}' to add files to it", index_path.display());
+        return;
+    }
+
+    // Filter out the new index path from files (in case of glob matching)
+    let index_canonical = index_path.canonicalize().ok();
+    let all_files: Vec<_> = all_files
+        .into_iter()
+        .filter(|p| {
+            if let Some(ref ic) = index_canonical {
+                p.canonicalize().ok().as_ref() != Some(ic)
+            } else {
+                true
+            }
+        })
+        .collect();
+
+    if all_files.is_empty() {
+        eprintln!("✗ No files to add after filtering");
+        return;
+    }
+
+    // Find parent index for the new index (local index in that directory)
+    let parent_index = ws.find_any_index_in_dir(index_dir).ok().flatten();
+
+    if dry_run {
+        println!("Would create new index: {}", index_path.display());
+        if let Some(ref parent) = parent_index {
+            println!("Would add new index to parent: {}", parent.display());
+        }
+        println!("Would add {} file(s) to new index:", all_files.len());
+        for f in &all_files {
+            println!("  {}", f.display());
+        }
+        return;
+    }
+
+    // Confirm creation
+    if !yes {
+        println!("Create new index '{}' with {} file(s)?", index_path.display(), all_files.len());
+        match prompt_confirm("Proceed?") {
+            ConfirmResult::Yes | ConfirmResult::All => {}
+            _ => {
+                println!("Aborted");
+                return;
+            }
+        }
+    }
+
+    // Create the index file with title
+    let title = index_name.replace(['_', '-'], " ");
+    let title = title
+        .split_whitespace()
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    // Build initial contents list
+    let contents: Vec<String> = all_files
+        .iter()
+        .map(|f| calculate_relative_path(&index_path, f))
+        .collect();
+
+    let contents_yaml: Vec<serde_yaml::Value> = contents
+        .iter()
+        .map(|s| serde_yaml::Value::String(s.clone()))
+        .collect();
+
+    // Create the index file
+    let index_str = index_path.to_string_lossy();
+    
+    // First create with title
+    if let Err(e) = app.set_frontmatter_property(
+        &index_str,
+        "title",
+        serde_yaml::Value::String(title.clone()),
+    ) {
+        eprintln!("✗ Error creating index file: {}", e);
+        return;
+    }
+
+    // Add contents
+    if let Err(e) = app.set_frontmatter_property(
+        &index_str,
+        "contents",
+        serde_yaml::Value::Sequence(contents_yaml),
+    ) {
+        eprintln!("✗ Error setting contents: {}", e);
+        return;
+    }
+
+    println!("✓ Created index '{}'", index_path.display());
+
+    // Add part_of to new index if there's a parent
+    if let Some(ref parent) = parent_index {
+        let relative_parent = calculate_relative_path(&index_path, parent);
+        if let Err(e) = app.set_frontmatter_property(
+            &index_str,
+            "part_of",
+            serde_yaml::Value::String(relative_parent.clone()),
+        ) {
+            eprintln!("⚠ Error setting part_of in new index: {}", e);
+        }
+
+        // Add new index to parent's contents
+        let parent_str = parent.to_string_lossy();
+        let relative_index = calculate_relative_path(parent, &index_path);
+        
+        match app.get_frontmatter_property(&parent_str, "contents") {
+            Ok(Some(serde_yaml::Value::Sequence(mut items))) => {
+                items.push(serde_yaml::Value::String(relative_index.clone()));
+                if let Err(e) = app.set_frontmatter_property(
+                    &parent_str,
+                    "contents",
+                    serde_yaml::Value::Sequence(items),
+                ) {
+                    eprintln!("⚠ Error updating parent contents: {}", e);
+                } else {
+                    println!("✓ Added '{}' to parent '{}'", relative_index, parent.display());
+                }
+            }
+            Ok(None) => {
+                let items = vec![serde_yaml::Value::String(relative_index.clone())];
+                if let Err(e) = app.set_frontmatter_property(
+                    &parent_str,
+                    "contents",
+                    serde_yaml::Value::Sequence(items),
+                ) {
+                    eprintln!("⚠ Error creating parent contents: {}", e);
+                } else {
+                    println!("✓ Added '{}' to parent '{}'", relative_index, parent.display());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Update part_of in all added files
+    for file_path in &all_files {
+        let file_str = file_path.to_string_lossy();
+        let relative_to_index = calculate_relative_path(file_path, &index_path);
+        
+        if let Err(e) = app.set_frontmatter_property(
+            &file_str,
+            "part_of",
+            serde_yaml::Value::String(relative_to_index),
+        ) {
+            eprintln!("⚠ Error setting part_of in '{}': {}", file_path.display(), e);
+        } else {
+            println!("✓ Set part_of in '{}'", file_path.display());
+        }
+    }
+
+    println!("✓ Added {} file(s) to '{}'", all_files.len(), index_path.display());
 }
 
 /// Handle the 'workspace add' command

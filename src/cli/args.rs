@@ -123,6 +123,14 @@ pub enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+
+    /// Uninstall diaryx by removing the binary
+    /// Does not remove any files created by diaryx (config, workspace, entries, etc.)
+    Uninstall {
+        /// Confirm uninstallation without prompting
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand, Clone)]

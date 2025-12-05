@@ -87,6 +87,70 @@ pub fn run_cli() {
         } => {
             normalize::handle_normalize_filename(&app, &path, title, yes, dry_run);
         }
+
+        Commands::Uninstall { yes } => {
+            handle_uninstall(yes);
+        }
+    }
+}
+
+/// Handle the uninstall command
+fn handle_uninstall(yes: bool) {
+    use std::io::{self, Write};
+
+    // Determine the binary location
+    let binary_path = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("✗ Could not determine binary location: {}", e);
+            return;
+        }
+    };
+
+    println!("Uninstall diaryx");
+    println!("================");
+    println!();
+    println!("This will remove the diaryx binary at:");
+    println!("  {}", binary_path.display());
+    println!();
+    println!("Note: Your config, workspace, and entries will NOT be removed.");
+    println!();
+
+    // Confirm unless -y flag is provided
+    if !yes {
+        print!("Are you sure you want to uninstall? [y/N] ");
+        io::stdout().flush().unwrap();
+
+        let mut input = String::new();
+        if io::stdin().read_line(&mut input).is_err() {
+            eprintln!("✗ Failed to read input");
+            return;
+        }
+
+        let input = input.trim().to_lowercase();
+        if input != "y" && input != "yes" {
+            println!("Uninstall cancelled.");
+            return;
+        }
+    }
+
+    // Remove the binary
+    match std::fs::remove_file(&binary_path) {
+        Ok(()) => {
+            println!();
+            println!("✓ Diaryx has been uninstalled.");
+            println!();
+            println!("To reinstall, run:");
+            println!("  curl -fsSL https://raw.githubusercontent.com/diaryx-org/diaryx-core/main/install.sh | bash");
+        }
+        Err(e) => {
+            eprintln!("✗ Failed to remove binary: {}", e);
+            if e.kind() == std::io::ErrorKind::PermissionDenied {
+                eprintln!();
+                eprintln!("Try running with elevated permissions:");
+                eprintln!("  sudo {} uninstall -y", binary_path.display());
+            }
+        }
     }
 }
 

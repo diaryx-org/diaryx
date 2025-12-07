@@ -25,6 +25,7 @@ pub trait FileSystem {
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 
+#[derive(Clone, Copy)]
 pub struct RealFileSystem;
 
 impl FileSystem for RealFileSystem {

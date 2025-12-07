@@ -3,6 +3,7 @@
 mod args;
 mod content;
 mod entry;
+mod export;
 mod normalize;
 mod property;
 mod sort;
@@ -87,6 +88,32 @@ pub fn run_cli() {
             dry_run,
         } => {
             normalize::handle_normalize_filename(&app, &path, title, yes, dry_run);
+        }
+
+        Commands::Export {
+            audience,
+            destination,
+            force,
+            keep_audience,
+            verbose,
+            dry_run,
+        } => {
+            let workspace_root = match export::resolve_workspace_for_export(cli.workspace) {
+                Ok(root) => root,
+                Err(e) => {
+                    eprintln!("✗ {}", e);
+                    return;
+                }
+            };
+            export::handle_export(
+                workspace_root,
+                &audience,
+                &destination,
+                force,
+                keep_audience,
+                verbose,
+                dry_run,
+            );
         }
 
         Commands::Uninstall { yes } => {

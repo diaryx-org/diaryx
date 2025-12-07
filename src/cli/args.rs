@@ -132,6 +132,33 @@ pub enum Commands {
         yes: bool,
     },
 
+    /// Export workspace filtered by audience
+    /// Creates a copy of the workspace with only files visible to the specified audience
+    Export {
+        /// Target audience to export for (e.g., "family", "public", "work")
+        #[arg(short, long)]
+        audience: String,
+
+        /// Destination directory for the export
+        destination: PathBuf,
+
+        /// Overwrite existing destination
+        #[arg(short, long)]
+        force: bool,
+
+        /// Keep the audience property in exported files
+        #[arg(long)]
+        keep_audience: bool,
+
+        /// Show detailed information about what's being exported/excluded
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Show what would be done without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Manipulate file content (body text after frontmatter)
     #[command(alias = "c")]
     Content {

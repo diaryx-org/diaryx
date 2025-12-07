@@ -25,6 +25,12 @@ pub struct IndexFrontmatter {
     /// If absent, this is a root index (workspace root)
     pub part_of: Option<String>,
 
+    /// Audience groups that can see this file and its contents
+    /// If absent, inherits from parent; if at root with no audience, treated as private
+    /// Special value "private" means never export regardless of other values
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audience: Option<Vec<String>>,
+
     /// Additional frontmatter properties
     #[serde(flatten)]
     pub extra: std::collections::HashMap<String, Value>,
@@ -49,6 +55,32 @@ impl IndexFrontmatter {
     /// Get display name
     pub fn display_name(&self) -> Option<&str> {
         self.title.as_deref()
+    }
+
+    /// Returns true if this file is marked as private (has "private" in audience)
+    pub fn is_private(&self) -> bool {
+        self.audience
+            .as_ref()
+            .is_some_and(|a| a.iter().any(|s| s.eq_ignore_ascii_case("private")))
+    }
+
+    /// Check if this file is visible to a given audience group
+    /// Returns None if audience should be inherited from parent
+    pub fn is_visible_to(&self, audience_group: &str) -> Option<bool> {
+        // If marked private, never visible
+        if self.is_private() {
+            return Some(false);
+        }
+
+        // If no audience specified, inherit from parent
+        let audience = self.audience.as_ref()?;
+
+        // Check if the requested audience is in the list
+        Some(
+            audience
+                .iter()
+                .any(|a| a.eq_ignore_ascii_case(audience_group)),
+        )
     }
 }
 
@@ -96,6 +128,11 @@ pub struct Workspace<FS: FileSystem> {
 impl<FS: FileSystem> Workspace<FS> {
     pub fn new(fs: FS) -> Self {
         Self { fs }
+    }
+
+    /// Get a reference to the underlying filesystem
+    pub fn fs_ref(&self) -> &FS {
+        &self.fs
     }
 
     /// Parse a markdown file and extract index frontmatter
@@ -512,6 +549,7 @@ mod tests {
             description: None,
             contents: Some(vec!["child/README.md".to_string()]),
             part_of: None,
+            audience: None,
             extra: Default::default(),
         };
         assert!(root.is_root());
@@ -523,6 +561,7 @@ mod tests {
             description: None,
             contents: Some(vec![]),
             part_of: None,
+            audience: None,
             extra: Default::default(),
         };
         assert!(empty_root.is_root());
@@ -534,6 +573,7 @@ mod tests {
             description: None,
             contents: Some(vec![]),
             part_of: Some("../README.md".to_string()),
+            audience: None,
             extra: Default::default(),
         };
         assert!(!leaf.is_root());
@@ -545,6 +585,7 @@ mod tests {
             description: None,
             contents: None,
             part_of: Some("../README.md".to_string()),
+            audience: None,
             extra: Default::default(),
         };
         assert!(!entry.is_root());
@@ -556,6 +597,7 @@ mod tests {
             description: None,
             contents: Some(vec!["sub/README.md".to_string()]),
             part_of: Some("../README.md".to_string()),
+            audience: None,
             extra: Default::default(),
         };
         assert!(!middle.is_root()); // has part_of, so not root

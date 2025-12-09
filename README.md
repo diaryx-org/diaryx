@@ -1,9 +1,10 @@
 ---
 title: diaryx-core
 description: Repository for the Diaryx project
+author: adammharris
 contents:
-    - LICENSE.md
-    - roadmap.md
+  - LICENSE.md
+  - roadmap.md
 version: v0.3.0
 ---
 
@@ -73,7 +74,7 @@ If you look in README, a new property has been added:
 
 ```yaml
 contents:
-    - test.md
+  - test.md
 ```
 
 And you can use `diaryx open test` to look at the new file. It has a corresponding property:

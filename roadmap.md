@@ -3,7 +3,7 @@ title: Roadmap
 description: The plan for future Diaryx features
 author: adammharris
 created: 2025-12-05T12:06:55-07:00
-updated: 2025-12-07T01:20:00-07:00
+updated: 2025-12-08T08:09:55-07:00
 audience:
   - public
 part_of: README.md
@@ -11,13 +11,20 @@ part_of: README.md
 
 # Roadmap
 
-## Road to v0.3.0
+## v0.4.0
 
-Here are features I want to implement before a full v0.3.0 release.
-
-### Publish
+- Improved publish and export (including attachments as described below)
+- Link validation
 
 ## Future considerations
+
+## Better documentation
+
+We have just one README file right now.
+
+## Tauri frontend
+
+The big problem is the editor—what editor should we use? The top contender seems to be TipTap
 
 ### Attachments/Images
 

@@ -5,12 +5,13 @@ use std::path::PathBuf;
 use diaryx_core::export::{ExportOptions, ExportPlan, Exporter};
 use diaryx_core::fs::RealFileSystem;
 use diaryx_core::workspace::Workspace;
+use std::path::Path;
 
 /// Handle the export command
 pub fn handle_export(
     workspace_root: PathBuf,
     audience: &str,
-    destination: &PathBuf,
+    destination: &Path,
     force: bool,
     keep_audience: bool,
     verbose: bool,

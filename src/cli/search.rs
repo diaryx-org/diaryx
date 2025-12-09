@@ -7,6 +7,7 @@ use diaryx_core::search::{SearchMode, SearchQuery, SearchResults, Searcher};
 use diaryx_core::workspace::Workspace;
 
 /// Handle the search command
+#[allow(clippy::too_many_arguments)]
 pub fn handle_search(
     pattern: String,
     workspace_override: Option<PathBuf>,

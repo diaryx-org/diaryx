@@ -471,7 +471,7 @@ impl<FS: FileSystem + Clone> Publisher<FS> {
         options.extension.table = true;
         options.extension.autolink = true;
         options.extension.tasklist = true;
-        options.render.unsafe_ = true; // Allow raw HTML
+        options.render.r#unsafe = true; // Allow raw HTML
 
         markdown_to_html(markdown, &options)
     }

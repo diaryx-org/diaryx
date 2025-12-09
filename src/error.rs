@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+
+use serde::Serialize;
 use thiserror::Error;
 
 /// Unified error type for diaryx operations
@@ -70,3 +72,67 @@ pub enum DiaryxError {
 
 /// Result type alias for diaryx operations
 pub type Result<T> = std::result::Result<T, DiaryxError>;
+
+/// A serializable representation of DiaryxError for IPC (e.g., Tauri)
+#[derive(Debug, Clone, Serialize)]
+pub struct SerializableError {
+    /// Error kind/variant name
+    pub kind: String,
+    /// Human-readable error message
+    pub message: String,
+    /// Associated path (if applicable)
+    pub path: Option<PathBuf>,
+}
+
+impl From<&DiaryxError> for SerializableError {
+    fn from(err: &DiaryxError) -> Self {
+        let kind = match err {
+            DiaryxError::Io(_) => "Io",
+            DiaryxError::FileRead { .. } => "FileRead",
+            DiaryxError::FileWrite { .. } => "FileWrite",
+            DiaryxError::Yaml(_) => "Yaml",
+            DiaryxError::NoFrontmatter(_) => "NoFrontmatter",
+            DiaryxError::InvalidFrontmatter(_) => "InvalidFrontmatter",
+            DiaryxError::InvalidDateFormat(_) => "InvalidDateFormat",
+            DiaryxError::ConfigParse(_) => "ConfigParse",
+            DiaryxError::ConfigSerialize(_) => "ConfigSerialize",
+            DiaryxError::NoConfigDir => "NoConfigDir",
+            DiaryxError::ConfigNotInitialized => "ConfigNotInitialized",
+            DiaryxError::NoEditorFound => "NoEditorFound",
+            DiaryxError::EditorLaunchFailed { .. } => "EditorLaunchFailed",
+            DiaryxError::EditorExited(_) => "EditorExited",
+            DiaryxError::WorkspaceNotFound(_) => "WorkspaceNotFound",
+            DiaryxError::WorkspaceAlreadyExists(_) => "WorkspaceAlreadyExists",
+        }
+        .to_string();
+
+        let path = match err {
+            DiaryxError::FileRead { path, .. } => Some(path.clone()),
+            DiaryxError::FileWrite { path, .. } => Some(path.clone()),
+            DiaryxError::NoFrontmatter(path) => Some(path.clone()),
+            DiaryxError::InvalidFrontmatter(path) => Some(path.clone()),
+            DiaryxError::WorkspaceNotFound(path) => Some(path.clone()),
+            DiaryxError::WorkspaceAlreadyExists(path) => Some(path.clone()),
+            _ => None,
+        };
+
+        Self {
+            kind,
+            message: err.to_string(),
+            path,
+        }
+    }
+}
+
+impl From<DiaryxError> for SerializableError {
+    fn from(err: DiaryxError) -> Self {
+        SerializableError::from(&err)
+    }
+}
+
+impl DiaryxError {
+    /// Convert to a serializable representation for IPC
+    pub fn to_serializable(&self) -> SerializableError {
+        SerializableError::from(self)
+    }
+}

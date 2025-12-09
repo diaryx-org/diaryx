@@ -85,7 +85,7 @@ impl IndexFrontmatter {
 }
 
 /// Represents a parsed index file
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct IndexFile {
     /// Path to the index file
     pub path: PathBuf,
@@ -112,7 +112,7 @@ impl IndexFile {
 }
 
 /// Node in the workspace tree (for display purposes)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TreeNode {
     pub name: String,
     pub description: Option<String>,

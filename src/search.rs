@@ -4,11 +4,13 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
+
 use crate::fs::FileSystem;
 use crate::workspace::Workspace;
 
 /// Represents a search query configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SearchQuery {
     /// The pattern to search for
     pub pattern: String,
@@ -19,7 +21,7 @@ pub struct SearchQuery {
 }
 
 /// What to search in files
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum SearchMode {
     /// Search only the body content (after frontmatter)
     Content,
@@ -65,7 +67,7 @@ impl SearchQuery {
 }
 
 /// A single match within a file
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SearchMatch {
     /// Line number (1-based)
     pub line_number: usize,
@@ -78,7 +80,7 @@ pub struct SearchMatch {
 }
 
 /// Search results for a single file
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct FileSearchResult {
     /// Path to the file
     pub path: PathBuf,
@@ -101,7 +103,7 @@ impl FileSearchResult {
 }
 
 /// Aggregated search results
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SearchResults {
     /// Results per file (only files with matches)
     pub files: Vec<FileSearchResult>,

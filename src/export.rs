@@ -3,12 +3,14 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
+
 use crate::error::{DiaryxError, Result};
 use crate::fs::FileSystem;
 use crate::workspace::{IndexFrontmatter, Workspace};
 
 /// Result of planning an export operation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ExportPlan {
     /// Files that will be exported
     pub included: Vec<ExportFile>,
@@ -23,7 +25,7 @@ pub struct ExportPlan {
 }
 
 /// A file to be exported
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ExportFile {
     /// Original path in the workspace
     pub source_path: PathBuf,
@@ -36,7 +38,7 @@ pub struct ExportFile {
 }
 
 /// A file that was excluded from export
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ExcludedFile {
     /// Path to the excluded file
     pub path: PathBuf,
@@ -45,7 +47,7 @@ pub struct ExcludedFile {
 }
 
 /// Why a file was excluded
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum ExclusionReason {
     /// File is marked as private
     Private,
@@ -85,7 +87,7 @@ impl std::fmt::Display for ExclusionReason {
 }
 
 /// Options for export operation
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ExportOptions {
     /// Whether to overwrite existing destination
     pub force: bool,
@@ -432,7 +434,7 @@ impl<FS: FileSystem + Clone> Exporter<FS> {
 }
 
 /// Statistics from an export operation
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ExportStats {
     pub files_exported: usize,
     pub files_excluded: usize,

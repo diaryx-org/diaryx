@@ -5,13 +5,15 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
+
 use crate::error::{DiaryxError, Result};
 use crate::export::{ExportPlan, Exporter};
 use crate::fs::FileSystem;
 use crate::workspace::Workspace;
 
 /// Options for publishing
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize)]
 pub struct PublishOptions {
     /// Output as a single HTML file instead of multiple files
     pub single_file: bool,
@@ -24,7 +26,7 @@ pub struct PublishOptions {
 }
 
 /// A navigation link
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct NavLink {
     /// Link href (relative path or anchor)
     pub href: String,
@@ -33,7 +35,7 @@ pub struct NavLink {
 }
 
 /// A processed file ready for publishing
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PublishedPage {
     /// Original source path
     pub source_path: PathBuf,
@@ -54,7 +56,7 @@ pub struct PublishedPage {
 }
 
 /// Result of publishing operation
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct PublishResult {
     /// Pages that were published
     pub pages: Vec<PublishedPage>,
@@ -450,7 +452,7 @@ impl<FS: FileSystem + Clone> Publisher<FS> {
     }
 
     /// Convert markdown to HTML using comrak
-    #[cfg(feature = "cli")]
+    #[cfg(feature = "markdown")]
     fn markdown_to_html(&self, markdown: &str) -> String {
         use comrak::{markdown_to_html, Options};
 
@@ -464,7 +466,7 @@ impl<FS: FileSystem + Clone> Publisher<FS> {
         markdown_to_html(markdown, &options)
     }
 
-    #[cfg(not(feature = "cli"))]
+    #[cfg(not(feature = "markdown"))]
     fn markdown_to_html(&self, markdown: &str) -> String {
         // Basic fallback without comrak
         format!("<pre>{}</pre>", markdown)

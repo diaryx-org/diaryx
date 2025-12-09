@@ -183,8 +183,8 @@ impl<FS: FileSystem + Clone> Exporter<FS> {
         }
 
         // Calculate relative and destination paths
-        let relative_path = pathdiff::diff_paths(path, root_dir)
-            .unwrap_or_else(|| path.to_path_buf());
+        let relative_path =
+            pathdiff::diff_paths(path, root_dir).unwrap_or_else(|| path.to_path_buf());
         let dest_path = dest_dir.join(&relative_path);
 
         // If this is an index file, process children and track which will be filtered
@@ -289,7 +289,11 @@ impl<FS: FileSystem + Clone> Exporter<FS> {
     }
 
     /// Execute an export plan
-    pub fn execute_export(&self, plan: &ExportPlan, options: &ExportOptions) -> Result<ExportStats> {
+    pub fn execute_export(
+        &self,
+        plan: &ExportPlan,
+        options: &ExportOptions,
+    ) -> Result<ExportStats> {
         // Check if destination exists
         if self.workspace.fs_ref().exists(&plan.destination) && !options.force {
             return Err(DiaryxError::WorkspaceAlreadyExists(
@@ -395,9 +399,7 @@ impl<FS: FileSystem + Clone> Exporter<FS> {
         }
 
         let rest = &content[4..];
-        let end_idx = rest
-            .find("\n---\n")
-            .or_else(|| rest.find("\n---\r\n"));
+        let end_idx = rest.find("\n---\n").or_else(|| rest.find("\n---\r\n"));
 
         let Some(end_idx) = end_idx else {
             return Ok(content.to_string());
@@ -544,13 +546,15 @@ mod tests {
 
     #[test]
     fn test_audience_inheritance() {
-        let fs = MockFs::new().with_file(
-            "/workspace/README.md",
-            "---\ntitle: Root\ncontents:\n  - child.md\naudience:\n  - family\n---\n\n# Root\n",
-        ).with_file(
-            "/workspace/child.md",
-            "---\ntitle: Child\npart_of: README.md\n---\n\n# Child inherits family audience\n",
-        );
+        let fs = MockFs::new()
+            .with_file(
+                "/workspace/README.md",
+                "---\ntitle: Root\ncontents:\n  - child.md\naudience:\n  - family\n---\n\n# Root\n",
+            )
+            .with_file(
+                "/workspace/child.md",
+                "---\ntitle: Child\npart_of: README.md\n---\n\n# Child inherits family audience\n",
+            );
 
         let exporter = Exporter::new(fs);
         let plan = exporter

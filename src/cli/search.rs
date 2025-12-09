@@ -50,7 +50,12 @@ pub fn handle_search(
 }
 
 /// Build a SearchQuery from CLI arguments
-fn build_query(pattern: &str, frontmatter: bool, property: Option<&str>, case_sensitive: bool) -> SearchQuery {
+fn build_query(
+    pattern: &str,
+    frontmatter: bool,
+    property: Option<&str>,
+    case_sensitive: bool,
+) -> SearchQuery {
     let mode = if let Some(prop) = property {
         SearchMode::Property(prop.to_string())
     } else if frontmatter {
@@ -89,17 +94,24 @@ fn display_results(
         }
 
         // Display file header
-        let display_name = file_result
-            .title
-            .as_deref()
-            .unwrap_or_else(|| file_result.path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown"));
+        let display_name = file_result.title.as_deref().unwrap_or_else(|| {
+            file_result
+                .path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown")
+        });
 
         println!(
             "\x1b[1;34m{}\x1b[0m: {} ({} match{})",
             file_result.path.display(),
             display_name,
             file_result.match_count(),
-            if file_result.match_count() == 1 { "" } else { "es" }
+            if file_result.match_count() == 1 {
+                ""
+            } else {
+                "es"
+            }
         );
 
         // Display match lines (context support would require re-reading files)
@@ -119,8 +131,12 @@ fn display_results(
             }
 
             // Highlight and display the match line
-            let highlighted = highlight_matches(&search_match.line_content, pattern, case_sensitive);
-            println!("  \x1b[90m{:>4}:\x1b[0m {}", search_match.line_number, highlighted);
+            let highlighted =
+                highlight_matches(&search_match.line_content, pattern, case_sensitive);
+            println!(
+                "  \x1b[90m{:>4}:\x1b[0m {}",
+                search_match.line_number, highlighted
+            );
             total_shown += 1;
 
             last_line = Some(search_match.line_number);
@@ -133,9 +149,17 @@ fn display_results(
     println!(
         "\x1b[1mFound {} match{} in {} file{}\x1b[0m (searched {} files)",
         results.total_matches(),
-        if results.total_matches() == 1 { "" } else { "es" },
+        if results.total_matches() == 1 {
+            ""
+        } else {
+            "es"
+        },
         results.files_with_matches(),
-        if results.files_with_matches() == 1 { "" } else { "s" },
+        if results.files_with_matches() == 1 {
+            ""
+        } else {
+            "s"
+        },
         results.files_searched
     );
 
@@ -145,8 +169,6 @@ fn display_results(
         }
     }
 }
-
-
 
 /// Highlight matches in a line
 fn highlight_matches(line: &str, pattern: &str, case_sensitive: bool) -> String {
@@ -216,7 +238,11 @@ fn display_count_results(results: &SearchResults) {
             "{}: {} match{}",
             file_result.path.display(),
             file_result.match_count(),
-            if file_result.match_count() == 1 { "" } else { "es" }
+            if file_result.match_count() == 1 {
+                ""
+            } else {
+                "es"
+            }
         );
     }
 
@@ -224,9 +250,17 @@ fn display_count_results(results: &SearchResults) {
     println!(
         "Total: {} match{} in {} file{}",
         results.total_matches(),
-        if results.total_matches() == 1 { "" } else { "es" },
+        if results.total_matches() == 1 {
+            ""
+        } else {
+            "es"
+        },
         results.files_with_matches(),
-        if results.files_with_matches() == 1 { "" } else { "s" }
+        if results.files_with_matches() == 1 {
+            ""
+        } else {
+            "s"
+        }
     );
 }
 
@@ -258,8 +292,8 @@ fn resolve_workspace_for_search(workspace_override: Option<PathBuf>) -> Result<P
     }
 
     // Fall back to config default
-    let config = diaryx_core::config::Config::load()
-        .map_err(|e| format!("Failed to load config: {}", e))?;
+    let config =
+        diaryx_core::config::Config::load().map_err(|e| format!("Failed to load config: {}", e))?;
 
     if let Ok(Some(root)) = ws.find_root_index_in_dir(&config.default_workspace) {
         return Ok(root);

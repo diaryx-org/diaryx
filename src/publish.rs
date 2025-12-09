@@ -130,9 +130,10 @@ impl<FS: FileSystem + Clone> Publisher<FS> {
         let root_canonical = workspace_root
             .canonicalize()
             .unwrap_or_else(|_| workspace_root.to_path_buf());
-        if let Some(pos) = files.iter().position(|p| {
-            p.canonicalize().unwrap_or_else(|_| p.clone()) == root_canonical
-        }) {
+        if let Some(pos) = files
+            .iter()
+            .position(|p| p.canonicalize().unwrap_or_else(|_| p.clone()) == root_canonical)
+        {
             if pos != 0 {
                 let root_file = files.remove(pos);
                 files.insert(0, root_file);
@@ -242,7 +243,8 @@ impl<FS: FileSystem + Clone> Publisher<FS> {
         };
 
         let (frontmatter, body) = self.parse_frontmatter(&content);
-        let title = self.extract_property(&frontmatter, "title")
+        let title = self
+            .extract_property(&frontmatter, "title")
             .unwrap_or_else(|| {
                 path.file_stem()
                     .and_then(|s| s.to_str())
@@ -420,10 +422,7 @@ impl<FS: FileSystem + Clone> Publisher<FS> {
 
     /// Convert a path to an HTML filename
     fn path_to_html_filename(&self, path: &Path) -> String {
-        let stem = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("page");
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("page");
 
         format!("{}.html", self.slugify(stem))
     }

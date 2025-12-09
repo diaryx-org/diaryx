@@ -193,9 +193,12 @@ impl<FS: FileSystem + Clone> Searcher<FS> {
             SearchMode::Frontmatter => {
                 self.search_text(&frontmatter_str, &query.pattern, query.case_sensitive)
             }
-            SearchMode::Property(prop_name) => {
-                self.search_property(&frontmatter_str, prop_name, &query.pattern, query.case_sensitive)
-            }
+            SearchMode::Property(prop_name) => self.search_property(
+                &frontmatter_str,
+                prop_name,
+                &query.pattern,
+                query.case_sensitive,
+            ),
         };
 
         Ok(Some(FileSearchResult {
@@ -552,7 +555,8 @@ mod tests {
 
     #[test]
     fn test_search_no_frontmatter() {
-        let fs = MockFs::new().with_file("/test/entry.md", "Just plain content.\nNo frontmatter.\n");
+        let fs =
+            MockFs::new().with_file("/test/entry.md", "Just plain content.\nNo frontmatter.\n");
 
         let searcher = Searcher::new(fs);
         let query = SearchQuery::content("plain");

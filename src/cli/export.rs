@@ -129,14 +129,16 @@ pub fn resolve_workspace_for_export(
     }
 
     // Try current directory first
-    let current_dir = std::env::current_dir().map_err(|e| format!("Cannot get current directory: {}", e))?;
+    let current_dir =
+        std::env::current_dir().map_err(|e| format!("Cannot get current directory: {}", e))?;
 
     if let Ok(Some(root)) = ws.detect_workspace(&current_dir) {
         return Ok(root);
     }
 
     // Fall back to config default
-    let config = diaryx_core::config::Config::load().map_err(|e| format!("Failed to load config: {}", e))?;
+    let config =
+        diaryx_core::config::Config::load().map_err(|e| format!("Failed to load config: {}", e))?;
 
     if let Ok(Some(root)) = ws.find_root_index_in_dir(&config.default_workspace) {
         return Ok(root);

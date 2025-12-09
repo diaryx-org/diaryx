@@ -134,8 +134,8 @@ fn resolve_workspace_for_publish(workspace_override: Option<PathBuf>) -> Result<
     }
 
     // Fall back to config default
-    let config = diaryx_core::config::Config::load()
-        .map_err(|e| format!("Failed to load config: {}", e))?;
+    let config =
+        diaryx_core::config::Config::load().map_err(|e| format!("Failed to load config: {}", e))?;
 
     if let Ok(Some(root)) = ws.find_root_index_in_dir(&config.default_workspace) {
         return Ok(root);

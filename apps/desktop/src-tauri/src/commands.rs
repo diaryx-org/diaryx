@@ -184,12 +184,8 @@ pub fn create_entry(
     app.create_entry(&path).map_err(|e| e.to_serializable())?;
 
     // Set title
-    app.set_frontmatter_property(
-        &path,
-        "title",
-        serde_yaml::Value::String(entry_title),
-    )
-    .map_err(|e| e.to_serializable())?;
+    app.set_frontmatter_property(&path, "title", serde_yaml::Value::String(entry_title))
+        .map_err(|e| e.to_serializable())?;
 
     // Set part_of if provided
     if let Some(parent) = part_of {
@@ -202,7 +198,9 @@ pub fn create_entry(
 
 /// Get frontmatter for an entry
 #[tauri::command]
-pub fn get_frontmatter(path: String) -> Result<serde_json::Map<String, JsonValue>, SerializableError> {
+pub fn get_frontmatter(
+    path: String,
+) -> Result<serde_json::Map<String, JsonValue>, SerializableError> {
     let app = DiaryxApp::new(RealFileSystem);
 
     let frontmatter = app
@@ -229,11 +227,12 @@ pub fn set_frontmatter_property(
     let app = DiaryxApp::new(RealFileSystem);
 
     // Convert JSON value to YAML value
-    let yaml_value: serde_yaml::Value = serde_json::from_value(value).map_err(|e| SerializableError {
-        kind: "SerializationError".to_string(),
-        message: format!("Failed to convert value: {}", e),
-        path: None,
-    })?;
+    let yaml_value: serde_yaml::Value =
+        serde_json::from_value(value).map_err(|e| SerializableError {
+            kind: "SerializationError".to_string(),
+            message: format!("Failed to convert value: {}", e),
+            path: None,
+        })?;
 
     app.set_frontmatter_property(&path, &key, yaml_value)
         .map_err(|e| e.to_serializable())

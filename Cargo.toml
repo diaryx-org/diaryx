@@ -6,7 +6,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.3.3"
+version = "0.4.0"
 edition = "2021"
 license = "PolyForm Shield License 1.0.0"
 repository = "https://github.com/diaryx-org/diaryx-core"

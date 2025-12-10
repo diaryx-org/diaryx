@@ -15,6 +15,7 @@ part_of: README.md
 
 - Improved publish and export (including attachments as described below)
 - Link validation
+- Templates
 
 ## Future considerations
 

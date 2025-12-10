@@ -68,6 +68,13 @@ pub enum DiaryxError {
 
     #[error("Workspace already exists at '{0}'")]
     WorkspaceAlreadyExists(PathBuf),
+
+    // Template errors
+    #[error("Template not found: '{0}'")]
+    TemplateNotFound(String),
+
+    #[error("Template already exists: '{0}'")]
+    TemplateAlreadyExists(PathBuf),
 }
 
 /// Result type alias for diaryx operations
@@ -103,6 +110,8 @@ impl From<&DiaryxError> for SerializableError {
             DiaryxError::EditorExited(_) => "EditorExited",
             DiaryxError::WorkspaceNotFound(_) => "WorkspaceNotFound",
             DiaryxError::WorkspaceAlreadyExists(_) => "WorkspaceAlreadyExists",
+            DiaryxError::TemplateNotFound(_) => "TemplateNotFound",
+            DiaryxError::TemplateAlreadyExists(_) => "TemplateAlreadyExists",
         }
         .to_string();
 
@@ -113,6 +122,7 @@ impl From<&DiaryxError> for SerializableError {
             DiaryxError::InvalidFrontmatter(path) => Some(path.clone()),
             DiaryxError::WorkspaceNotFound(path) => Some(path.clone()),
             DiaryxError::WorkspaceAlreadyExists(path) => Some(path.clone()),
+            DiaryxError::TemplateAlreadyExists(path) => Some(path.clone()),
             _ => None,
         };
 

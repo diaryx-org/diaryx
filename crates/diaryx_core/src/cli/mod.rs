@@ -43,12 +43,12 @@ pub fn run_cli() {
             handle_init(default_workspace, daily_folder, title, description, &ws);
         }
 
-        Commands::Today => {
-            entry::handle_today(&app);
+        Commands::Today { template } => {
+            entry::handle_today(&app, template);
         }
 
-        Commands::Yesterday => {
-            entry::handle_yesterday(&app);
+        Commands::Yesterday { template } => {
+            entry::handle_yesterday(&app, template);
         }
 
         Commands::Open { path } => {
@@ -59,8 +59,12 @@ pub fn run_cli() {
             entry::handle_config();
         }
 
-        Commands::Create { path } => {
-            entry::handle_create(&app, &path);
+        Commands::Create {
+            path,
+            template,
+            title,
+        } => {
+            entry::handle_create(&app, &path, template, title);
         }
 
         Commands::Property { operation } => {

@@ -22,6 +22,14 @@ pub enum Commands {
     Create {
         /// Path to the new entry file
         path: String,
+
+        /// Template to use (default: "note")
+        #[arg(short, long)]
+        template: Option<String>,
+
+        /// Title for the entry (defaults to filename)
+        #[arg(long)]
+        title: Option<String>,
     },
 
     /// Manipulate frontmatter properties
@@ -51,10 +59,18 @@ pub enum Commands {
     },
 
     /// Open today's entry in your editor
-    Today,
+    Today {
+        /// Template to use (default: config's daily_template or "daily")
+        #[arg(short, long)]
+        template: Option<String>,
+    },
 
     /// Open yesterday's entry in your editor
-    Yesterday,
+    Yesterday {
+        /// Template to use (default: config's daily_template or "daily")
+        #[arg(short, long)]
+        template: Option<String>,
+    },
 
     /// Open an entry in your editor
     Open {
@@ -627,6 +643,10 @@ pub enum WorkspaceCommands {
         /// Description for the new file
         #[arg(short = 'D', long)]
         description: Option<String>,
+
+        /// Template to use (default: "note")
+        #[arg(long)]
+        template: Option<String>,
 
         /// Make the new file an index (add empty `contents` property)
         #[arg(short, long)]

@@ -1,5 +1,7 @@
 //! Entry command handlers (today, yesterday, open, create, config)
 
+use std::path::Path;
+
 use diaryx_core::config::Config;
 use diaryx_core::date::parse_date;
 use diaryx_core::editor::launch_editor;
@@ -9,43 +11,47 @@ use diaryx_core::fs::RealFileSystem;
 use crate::cli::util::{load_config, resolve_paths};
 
 /// Handle the 'today' command
-pub fn handle_today(app: &DiaryxApp<RealFileSystem>) {
+pub fn handle_today(app: &DiaryxApp<RealFileSystem>, template: Option<String>) {
     let config = match load_config() {
         Some(c) => c,
         None => return,
     };
 
     match parse_date("today") {
-        Ok(date) => match app.ensure_dated_entry(&date, &config) {
-            Ok(path) => {
-                println!("Opening: {}", path.display());
-                if let Err(e) = launch_editor(&path, &config) {
-                    eprintln!("✗ Error launching editor: {}", e);
+        Ok(date) => {
+            match app.ensure_dated_entry_with_template(&date, &config, template.as_deref()) {
+                Ok(path) => {
+                    println!("Opening: {}", path.display());
+                    if let Err(e) = launch_editor(&path, &config) {
+                        eprintln!("✗ Error launching editor: {}", e);
+                    }
                 }
+                Err(e) => eprintln!("✗ Error creating entry: {}", e),
             }
-            Err(e) => eprintln!("✗ Error creating entry: {}", e),
-        },
+        }
         Err(e) => eprintln!("✗ Error parsing date: {}", e),
     }
 }
 
 /// Handle the 'yesterday' command
-pub fn handle_yesterday(app: &DiaryxApp<RealFileSystem>) {
+pub fn handle_yesterday(app: &DiaryxApp<RealFileSystem>, template: Option<String>) {
     let config = match load_config() {
         Some(c) => c,
         None => return,
     };
 
     match parse_date("yesterday") {
-        Ok(date) => match app.ensure_dated_entry(&date, &config) {
-            Ok(path) => {
-                println!("Opening: {}", path.display());
-                if let Err(e) = launch_editor(&path, &config) {
-                    eprintln!("✗ Error launching editor: {}", e);
+        Ok(date) => {
+            match app.ensure_dated_entry_with_template(&date, &config, template.as_deref()) {
+                Ok(path) => {
+                    println!("Opening: {}", path.display());
+                    if let Err(e) = launch_editor(&path, &config) {
+                        eprintln!("✗ Error launching editor: {}", e);
+                    }
                 }
+                Err(e) => eprintln!("✗ Error creating entry: {}", e),
             }
-            Err(e) => eprintln!("✗ Error creating entry: {}", e),
-        },
+        }
         Err(e) => eprintln!("✗ Error parsing date: {}", e),
     }
 }
@@ -113,10 +119,37 @@ pub fn handle_open(app: &DiaryxApp<RealFileSystem>, path_or_date: &str) {
 
 /// Handle the 'create' command
 /// Supports fuzzy path resolution for the parent directory
-pub fn handle_create(app: &DiaryxApp<RealFileSystem>, path: &str) {
-    // For create, we use the path as-is since we're creating a new file
-    // But we could resolve the parent directory
-    match app.create_entry(path) {
+pub fn handle_create(
+    app: &DiaryxApp<RealFileSystem>,
+    path: &str,
+    template: Option<String>,
+    title: Option<String>,
+) {
+    let config = match load_config() {
+        Some(c) => c,
+        None => return,
+    };
+
+    let path_buf = Path::new(path);
+
+    // Create parent directories if they don't exist
+    if let Some(parent) = path_buf.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                eprintln!("✗ Error creating directories: {}", e);
+                return;
+            }
+        }
+    }
+
+    // Use template-based creation
+    let workspace_dir = Some(config.default_workspace.as_path());
+    match app.create_entry_from_template(
+        path_buf,
+        template.as_deref().or(config.default_template.as_deref()),
+        title.as_deref(),
+        workspace_dir,
+    ) {
         Ok(_) => println!("✓ Created entry: {}", path),
         Err(e) => eprintln!("✗ Error creating entry: {}", e),
     }
@@ -145,6 +178,10 @@ pub fn handle_config() {
             println!(
                 "  Default template: {}",
                 config.default_template.as_deref().unwrap_or("none")
+            );
+            println!(
+                "  Daily template: {}",
+                config.daily_template.as_deref().unwrap_or("none")
             );
             if let Some(config_path) = Config::config_path() {
                 println!("\nConfig file: {}", config_path.display());

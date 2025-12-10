@@ -24,6 +24,11 @@ pub struct Config {
     /// Default template to use when creating entries
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_template: Option<String>,
+
+    /// Default template for daily entries (today, yesterday commands)
+    /// Falls back to "daily" built-in template if not set
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daily_template: Option<String>,
 }
 
 impl Config {
@@ -53,6 +58,7 @@ impl Default for Config {
             daily_entry_folder: None,
             editor: None,
             default_template: None,
+            daily_template: None,
         }
     }
 }
@@ -107,6 +113,7 @@ impl Config {
             daily_entry_folder,
             editor: None,
             default_template: None,
+            daily_template: None,
         };
 
         config.save()?;

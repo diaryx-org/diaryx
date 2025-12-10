@@ -4,6 +4,7 @@ use diaryx_core::config::Config;
 use diaryx_core::editor::launch_editor;
 use diaryx_core::entry::DiaryxApp;
 use diaryx_core::fs::RealFileSystem;
+use diaryx_core::template::TemplateContext;
 use diaryx_core::workspace::Workspace;
 use serde_yaml::Value;
 use std::path::{Path, PathBuf};
@@ -87,13 +88,14 @@ pub fn handle_workspace_command(
             name,
             title,
             description,
+            template,
             index,
             edit,
         } => {
             if let Some(ref cfg) = config {
                 let (parent, name) = resolve_parent_name(ws, &current_dir, &parent_or_name, name);
                 if let (Some(p), Some(n)) = (parent, name) {
-                    handle_create(app, cfg, &p, &n, title, description, index, edit);
+                    handle_create(app, cfg, &p, &n, title, description, template, index, edit);
                 }
             } else {
                 eprintln!("✗ No config found. Run 'diaryx init' first");
@@ -1564,6 +1566,7 @@ fn handle_create(
     name: &str,
     title: Option<String>,
     description: Option<String>,
+    template: Option<String>,
     is_index: bool,
     edit: bool,
 ) {
@@ -1603,35 +1606,65 @@ fn handle_create(
         .map(|f| f.to_string_lossy().to_string())
         .unwrap_or_else(|| parent_path.to_string_lossy().to_string());
 
-    // Build frontmatter
+    // Build title
     let display_title = title.unwrap_or_else(|| {
         // Convert filename to title (capitalize, remove extension)
         let stem = name.trim_end_matches(".md");
-        stem.chars()
-            .enumerate()
-            .map(|(i, c)| {
-                if i == 0 {
-                    c.to_uppercase().next().unwrap_or(c)
-                } else {
-                    c
-                }
-            })
-            .collect()
+        prettify_filename(stem)
     });
 
-    let mut frontmatter = format!("---\ntitle: {}\n", display_title);
-    if let Some(ref desc) = description {
-        frontmatter.push_str(&format!("description: {}\n", desc));
-    }
-    frontmatter.push_str(&format!("part_of: {}\n", relative_parent));
-    if is_index {
-        frontmatter.push_str("contents: []\n");
-    }
-    frontmatter.push_str("---\n\n");
+    // Get template manager and template
+    let manager = app.template_manager(Some(&config.default_workspace));
+    let template_name = template
+        .as_deref()
+        .or(config.default_template.as_deref())
+        .unwrap_or("note");
 
-    // Add body content
-    let body = format!("# {}\n\n", display_title);
-    let content = format!("{}{}", frontmatter, body);
+    // Try to get the template, fall back to building content manually if not found
+    let content = if let Some(tmpl) = manager.get(template_name) {
+        // Use template system
+        let filename = child_filename.trim_end_matches(".md");
+        let mut context = TemplateContext::new()
+            .with_title(&display_title)
+            .with_filename(filename)
+            .with_part_of(&relative_parent);
+
+        // Add description as custom variable if provided
+        if let Some(ref desc) = description {
+            context = context.with_custom("description", desc.as_str());
+        }
+
+        let mut rendered = tmpl.render(&context);
+
+        // If this should be an index, we need to add contents: [] to frontmatter
+        // We do this by modifying the rendered content
+        if is_index && !rendered.contains("contents:") {
+            // Insert contents: [] before the closing ---
+            if let Some(idx) = rendered.find("\n---\n") {
+                // Find the position after the first ---\n
+                if rendered.starts_with("---\n") {
+                    let insert_pos = idx;
+                    rendered.insert_str(insert_pos, "\ncontents: []");
+                }
+            }
+        }
+
+        rendered
+    } else {
+        // Fallback: build content manually (template not found)
+        eprintln!("⚠ Template '{}' not found, using default format", template_name);
+        let mut frontmatter = format!("---\ntitle: {}\n", display_title);
+        if let Some(ref desc) = description {
+            frontmatter.push_str(&format!("description: {}\n", desc));
+        }
+        frontmatter.push_str(&format!("part_of: {}\n", relative_parent));
+        if is_index {
+            frontmatter.push_str("contents: []\n");
+        }
+        frontmatter.push_str("---\n\n");
+        let body = format!("# {}\n\n", display_title);
+        format!("{}{}", frontmatter, body)
+    };
 
     // Create the file
     if let Err(e) = std::fs::write(&child_path, &content) {
@@ -1689,6 +1722,24 @@ fn handle_create(
             }
         }
     }
+}
+
+/// Convert a filename to a prettier title
+/// e.g., "my-note" -> "My Note", "some_file" -> "Some File"
+fn prettify_filename(filename: &str) -> String {
+    filename
+        .replace('-', " ")
+        .replace('_', " ")
+        .split_whitespace()
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => first.to_uppercase().chain(chars).collect(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Handle the 'workspace remove' command

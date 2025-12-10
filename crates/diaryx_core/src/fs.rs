@@ -66,3 +66,30 @@ impl FileSystem for RealFileSystem {
         path.exists()
     }
 }
+
+// Blanket implementation for references to FileSystem
+impl<T: FileSystem> FileSystem for &T {
+    fn read_to_string(&self, path: &Path) -> Result<String> {
+        (*self).read_to_string(path)
+    }
+
+    fn write_file(&self, path: &Path, content: &str) -> Result<()> {
+        (*self).write_file(path, content)
+    }
+
+    fn create_new(&self, path: &Path, content: &str) -> Result<()> {
+        (*self).create_new(path, content)
+    }
+
+    fn delete_file(&self, path: &Path) -> Result<()> {
+        (*self).delete_file(path)
+    }
+
+    fn list_md_files(&self, dir: &Path) -> Result<Vec<PathBuf>> {
+        (*self).list_md_files(dir)
+    }
+
+    fn exists(&self, path: &Path) -> bool {
+        (*self).exists(path)
+    }
+}

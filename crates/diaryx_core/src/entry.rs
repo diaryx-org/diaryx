@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::date::{date_to_path, parse_date};
 use crate::error::{DiaryxError, Result};
 use crate::fs::FileSystem;
+use crate::template::{Template, TemplateContext, TemplateManager};
 use chrono::NaiveDate;
 use indexmap::IndexMap;
 use serde_yaml::Value;
@@ -20,6 +21,75 @@ impl<FS: FileSystem> DiaryxApp<FS> {
         let content = format!("---\ntitle: {}\n---\n\n# {}\n\n", path, path);
         self.fs.create_new(std::path::Path::new(path), &content)?;
         Ok(())
+    }
+
+    /// Create a new entry using a template
+    ///
+    /// # Arguments
+    /// * `path` - Path where the entry will be created
+    /// * `template` - The template to use
+    /// * `context` - Context for variable substitution
+    pub fn create_entry_with_template(
+        &self,
+        path: &Path,
+        template: &Template,
+        context: &TemplateContext,
+    ) -> Result<()> {
+        let content = template.render(context);
+        self.fs.create_new(path, &content)?;
+        Ok(())
+    }
+
+    /// Create a new entry, optionally using a template
+    ///
+    /// If template_name is provided, looks up the template and uses it.
+    /// Falls back to the "note" built-in template if not found.
+    ///
+    /// # Arguments
+    /// * `path` - Path where the entry will be created
+    /// * `template_name` - Optional template name to use
+    /// * `title` - Optional title for the entry
+    /// * `workspace_dir` - Optional workspace directory for template lookup
+    pub fn create_entry_from_template(
+        &self,
+        path: &Path,
+        template_name: Option<&str>,
+        title: Option<&str>,
+        workspace_dir: Option<&Path>,
+    ) -> Result<()> {
+        let manager = self.template_manager(workspace_dir);
+
+        // Get template (use "note" as default)
+        let template_name = template_name.unwrap_or("note");
+        let template = manager
+            .get(template_name)
+            .ok_or_else(|| DiaryxError::TemplateNotFound(template_name.to_string()))?;
+
+        // Build context
+        let filename = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Untitled");
+
+        let mut context = TemplateContext::new().with_filename(filename);
+
+        if let Some(t) = title {
+            context = context.with_title(t);
+        } else {
+            // Use filename as title, but prettified
+            context = context.with_title(prettify_filename(filename));
+        }
+
+        self.create_entry_with_template(path, &template, &context)
+    }
+
+    /// Get a template manager configured for this app
+    pub fn template_manager(&self, workspace_dir: Option<&Path>) -> TemplateManager<&FS> {
+        let mut manager = TemplateManager::new(&self.fs);
+        if let Some(dir) = workspace_dir {
+            manager = manager.with_workspace_dir(dir);
+        }
+        manager
     }
 
     /// Parses a markdown file and extracts frontmatter and body
@@ -327,6 +397,19 @@ impl<FS: FileSystem> DiaryxApp<FS> {
 
     /// Create a dated entry with proper frontmatter and index hierarchy
     pub fn create_dated_entry(&self, date: &NaiveDate, config: &Config) -> Result<PathBuf> {
+        self.create_dated_entry_with_template(date, config, None)
+    }
+
+    /// Create a dated entry with an optional template
+    ///
+    /// If template_name is provided, uses that template.
+    /// Otherwise uses `daily_template` from config, or falls back to built-in "daily" template.
+    pub fn create_dated_entry_with_template(
+        &self,
+        date: &NaiveDate,
+        config: &Config,
+        template_name: Option<&str>,
+    ) -> Result<PathBuf> {
         let daily_dir = config.daily_entry_dir();
         let path = date_to_path(&daily_dir, date);
 
@@ -338,19 +421,32 @@ impl<FS: FileSystem> DiaryxApp<FS> {
         // Ensure the index hierarchy exists
         self.ensure_daily_index_hierarchy(date, config)?;
 
-        // Create entry with date-based frontmatter
-        let date_str = date.format("%Y-%m-%d").to_string();
+        // Get template
+        let manager = self.template_manager(Some(&config.default_workspace));
+
+        // Priority: explicit template_name > config.daily_template > "daily" built-in
+        let effective_template_name = template_name
+            .or(config.daily_template.as_deref())
+            .unwrap_or("daily");
+
+        let template = manager
+            .get(effective_template_name)
+            .ok_or_else(|| DiaryxError::TemplateNotFound(effective_template_name.to_string()))?;
+
+        // Build context
         let title = date.format("%B %d, %Y").to_string(); // e.g., "January 15, 2024"
         let month_index_name = Self::month_index_filename(date);
 
-        let content = format!(
-            "---\ndate: {}\ntitle: {}\npart_of: {}\n---\n\n# {}\n\n",
-            date_str, title, month_index_name, title
-        );
+        let context = TemplateContext::new()
+            .with_title(&title)
+            .with_date(*date)
+            .with_part_of(&month_index_name);
 
+        let content = template.render(&context);
         self.fs.create_new(&path, &content)?;
 
         // Add entry to month index contents
+        let date_str = date.format("%Y-%m-%d").to_string();
         let month_index_path = path.parent().unwrap().join(&month_index_name);
         self.add_to_index_contents(&month_index_path, &format!("{}.md", date_str))?;
 
@@ -360,6 +456,17 @@ impl<FS: FileSystem> DiaryxApp<FS> {
     /// Ensure a dated entry exists, creating it if necessary
     /// This will NEVER overwrite an existing file
     pub fn ensure_dated_entry(&self, date: &NaiveDate, config: &Config) -> Result<PathBuf> {
+        self.ensure_dated_entry_with_template(date, config, None)
+    }
+
+    /// Ensure a dated entry exists with an optional template
+    /// This will NEVER overwrite an existing file
+    pub fn ensure_dated_entry_with_template(
+        &self,
+        date: &NaiveDate,
+        config: &Config,
+        template_name: Option<&str>,
+    ) -> Result<PathBuf> {
         let path = date_to_path(&config.daily_entry_dir(), date);
 
         // Check if file already exists using FileSystem trait
@@ -368,7 +475,7 @@ impl<FS: FileSystem> DiaryxApp<FS> {
         }
 
         // Create the entry (create_new will fail if file exists)
-        self.create_dated_entry(date, config)
+        self.create_dated_entry_with_template(date, config, template_name)
     }
 
     /// Ensure the daily index hierarchy exists for a given date
@@ -555,6 +662,24 @@ impl<FS: FileSystem> DiaryxApp<FS> {
             date.format("%B").to_string().to_lowercase()
         )
     }
+}
+
+/// Convert a filename to a prettier title
+/// e.g., "my-note" -> "My Note", "some_file" -> "Some File"
+fn prettify_filename(filename: &str) -> String {
+    filename
+        .replace('-', " ")
+        .replace('_', " ")
+        .split_whitespace()
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => first.to_uppercase().chain(chars).collect(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(test)]

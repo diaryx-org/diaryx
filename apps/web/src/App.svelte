@@ -31,12 +31,9 @@
   let isSearching = $state(false);
   let expandedNodes = $state(new Set<string>());
   let editorRef: any = $state(null);
-  let isBrowser = $state(false);
 
   // Load initial data
   onMount(async () => {
-    // We're in the browser now
-    isBrowser = true;
     console.log("[App] onMount started");
 
     try {
@@ -291,6 +288,7 @@
       onclick={() => openEntry(node.path)}
     >
       {#if node.children.length > 0}
+        <!-- svelte-ignore node_invalid_placement_ssr -->
         <button
           type="button"
           class="expand-icon"

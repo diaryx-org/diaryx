@@ -1,24 +1,26 @@
 ---
-title: diaryx-core
+title: Diaryx
 description: Repository for the Diaryx project
 author: adammharris
 contents:
   - LICENSE.md
   - roadmap.md
-version: v0.4.0
+version: v0.4.1
 ---
 
-# diaryx-core
+# Diaryx
 
-An opinionated command line tool for keeping a journal. Emphasizes Markdown frontmatter, daily journal keeping, ease of use, and hierarchal connections between files.
+A monorepo for the Diaryx project, consisting of:
+
+1. `crates/diaryx_core`: Core logic for all Diaryx apps
+2. `crates/diaryx_cli`: An opinionated command line tool for keeping a journal. Emphasizes Markdown frontmatter, daily journal keeping, ease of use, and hierarchal connections between files.
+3. `crates/diaryx_wasm`: WebAssembly bindings for `diaryx_core`, used in the web app below.
+4. `apps/web`: A web app using the same Rust core under the surface as a WebAssembly module.
+5. `apps/tauri`: A Tauri app using the same web frontend, but calling the functions through the Tauri backend instead of through WebAssembly, allowing for native filesystem access.
 
 ## Installation
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/diaryx-org/diaryx-core/refs/heads/master/install.sh | bash
-```
-
-This script downloads the latest release and puts it in `.local/share/bin`. You may also download the latest release manually and use it how you please.
+You may also download the desired release manually from GitHub releases and use it how you please.
 
 ## roadmap
 
@@ -28,7 +30,7 @@ See [the roadmap document here](roadmap.md).
 
 PolyForm Shield 1.0. Read it [here](LICENSE.md).
 
-## A Brief Introduction
+## A Brief Introduction (to the CLI)
 
 Diaryx saves entries as markdown files in a folder, and provides tools for modifying frontmatter properties. It also provides a "workspace" feature for defining relationships between different entries. In this way it is similar to other "knowledge management" tools like Obsidian. But it differs by defining these relationships primarily in the frontmatter in the form of `part_of` and `contents` properties.
 

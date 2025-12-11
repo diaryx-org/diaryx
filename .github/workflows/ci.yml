@@ -33,13 +33,13 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build library
-        run: cargo build --verbose
+        run: cargo build -p diaryx_core --verbose
 
       - name: Build CLI
-        run: cargo build --features cli --verbose
+        run: cargo build -p diaryx_cli --verbose
 
       - name: Run tests
-        run: cargo test --features cli --verbose
+        run: cargo test -p diaryx_cli --verbose
 
   # Rust formatting check
   fmt:
@@ -74,7 +74,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run Clippy
-        run: cargo clippy --features cli -- -D warnings
+        run: cargo clippy -p diaryx_core -- -D warnings
 
   # WASM build
   wasm:
@@ -228,4 +228,4 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --features cli
+        run: cargo build -p diaryx_cli

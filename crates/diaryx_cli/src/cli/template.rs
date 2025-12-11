@@ -290,12 +290,13 @@ fn handle_variables() {
 
 /// Generate default content for a new template
 fn default_template_content(_name: &str) -> String {
-        r#"---
+    r#"---
 title: "{{{{title}}}}"
 created: {{{{timestamp}}}}
 ---
 
 # {{{{title}}}}
 
-"#.to_string()
+"#
+    .to_string()
 }

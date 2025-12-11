@@ -295,7 +295,7 @@ impl FileSystem for InMemoryFileSystem {
             if let Some(parent) = path.parent() {
                 if parent == normalized && path.extension().is_some_and(|ext| ext == "md") {
                     result.push(path.clone());
-              }
+                }
             }
         }
         Ok(result)

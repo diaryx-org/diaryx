@@ -91,10 +91,10 @@ impl Config {
     /// Save config to a specific path using a FileSystem
     pub fn save_to<FS: FileSystem>(&self, fs: &FS, path: &std::path::Path) -> Result<()> {
         // Create parent directory if needed
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs.create_dir_all(parent)?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs.create_dir_all(parent)?;
         }
 
         let contents = toml::to_string_pretty(self)?;
@@ -147,12 +147,12 @@ impl Config {
     /// Load config from default location, or return default if file doesn't exist
     /// Only available on native platforms
     pub fn load() -> Result<Self> {
-        if let Some(path) = Self::config_path() {
-            if path.exists() {
-                let contents = fs::read_to_string(&path)?;
-                let config: Config = toml::from_str(&contents)?;
-                return Ok(config);
-            }
+        if let Some(path) = Self::config_path()
+            && path.exists()
+        {
+            let contents = fs::read_to_string(&path)?;
+            let config: Config = toml::from_str(&contents)?;
+            return Ok(config);
         }
 
         // Return default config if file doesn't exist

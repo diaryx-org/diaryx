@@ -5,7 +5,7 @@ use diaryx_core::fs::RealFileSystem;
 use serde_yaml::Value;
 
 use crate::cli::args::PropertyCommands;
-use crate::cli::util::{format_value, load_config, prompt_confirm, resolve_paths, ConfirmResult};
+use crate::cli::util::{ConfirmResult, format_value, load_config, prompt_confirm, resolve_paths};
 
 /// Handle the property command
 pub fn handle_property_command(app: &DiaryxApp<RealFileSystem>, operation: PropertyCommands) {

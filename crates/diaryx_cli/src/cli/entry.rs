@@ -134,13 +134,13 @@ pub fn handle_create(
     let path_buf = Path::new(path);
 
     // Create parent directories if they don't exist
-    if let Some(parent) = path_buf.parent() {
-        if !parent.as_os_str().is_empty() && !parent.exists() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                eprintln!("✗ Error creating directories: {}", e);
-                return;
-            }
-        }
+    if let Some(parent) = path_buf.parent()
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        eprintln!("✗ Error creating directories: {}", e);
+        return;
     }
 
     // Use template-based creation

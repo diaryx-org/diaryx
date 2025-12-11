@@ -1,5 +1,5 @@
 use chrono::{Local, NaiveDate};
-use chrono_english::{parse_date_string, Dialect};
+use chrono_english::{Dialect, parse_date_string};
 use std::path::{Path, PathBuf};
 
 use crate::error::{DiaryxError, Result};

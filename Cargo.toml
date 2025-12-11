@@ -8,9 +8,9 @@ members = [
 ]
 
 [workspace.package]
-version = "0.4.3"
-edition = "2021"
-rust-version = "1.82"
+version = "0.4.4"
+edition = "2024"
+rust-version = "1.91"
 repository = "https://github.com/diaryx-org/diaryx"
 homepage = "https://github.com/diaryx-org/diaryx"
 readme = "README.md"

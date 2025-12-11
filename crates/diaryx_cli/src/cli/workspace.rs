@@ -222,28 +222,26 @@ fn handle_mv(
         if let Some(index_name) = new_index {
             set_new_index_as_parent(app, ws, &dest_path, &index_name);
         }
-    } else if dry_run {
-        if let Some(index_name) = new_index {
-            let index_filename = if index_name.ends_with(".md") {
-                index_name
-            } else {
-                format!("{}.md", index_name)
-            };
-            let index_path = dest_path
-                .parent()
-                .map(|p| p.join(&index_filename))
-                .unwrap_or_else(|| PathBuf::from(&index_filename));
-            if index_path.exists() {
-                println!(
-                    "Would set part_of to existing index '{}'",
-                    index_path.display()
-                );
-            } else {
-                println!(
-                    "Would create new index '{}' and set as parent",
-                    index_path.display()
-                );
-            }
+    } else if dry_run && let Some(index_name) = new_index {
+        let index_filename = if index_name.ends_with(".md") {
+            index_name
+        } else {
+            format!("{}.md", index_name)
+        };
+        let index_path = dest_path
+            .parent()
+            .map(|p| p.join(&index_filename))
+            .unwrap_or_else(|| PathBuf::from(&index_filename));
+        if index_path.exists() {
+            println!(
+                "Would set part_of to existing index '{}'",
+                index_path.display()
+            );
+        } else {
+            println!(
+                "Would create new index '{}' and set as parent",
+                index_path.display()
+            );
         }
     }
 }
@@ -609,11 +607,11 @@ fn handle_info(
                 return;
             }
         }
-    } else if let Some(ref override_path) = workspace_override {
+    } else if let Some(override_path) = workspace_override {
         override_path.clone()
     } else if let Ok(Some(detected)) = ws.detect_workspace(current_dir) {
         detected
-    } else if let Some(ref cfg) = config {
+    } else if let Some(cfg) = config {
         if let Ok(Some(root)) = ws.find_root_index_in_dir(&cfg.default_workspace) {
             root
         } else {
@@ -668,11 +666,11 @@ fn handle_path(
     config: &Option<Config>,
     current_dir: &Path,
 ) {
-    let root_path = if let Some(ref override_path) = workspace_override {
+    let root_path = if let Some(override_path) = workspace_override {
         Some(override_path.clone())
     } else if let Ok(Some(detected)) = ws.detect_workspace(current_dir) {
         Some(detected)
-    } else if let Some(ref cfg) = config {
+    } else if let Some(cfg) = config {
         ws.find_root_index_in_dir(&cfg.default_workspace)
             .ok()
             .flatten()
@@ -706,7 +704,7 @@ fn handle_add_recursive(
     yes: bool,
     dry_run: bool,
 ) {
-    use crate::cli::util::{prompt_confirm, ConfirmResult};
+    use crate::cli::util::{ConfirmResult, prompt_confirm};
 
     // Resolve the directory path
     let path = Path::new(dir_path);
@@ -815,74 +813,73 @@ fn handle_add_recursive(
     // Connect root index to workspace if applicable
     if let Some(root_plan) = plan.directories.first() {
         // Find parent index for the root directory
-        if let Some(parent_dir) = root_plan.dir.parent() {
-            if let Ok(Some(parent_index)) = ws.find_any_index_in_dir(parent_dir) {
-                // Check if root index is already in parent's contents
-                let parent_str = parent_index.to_string_lossy();
-                let relative_root = calculate_relative_path(&parent_index, &root_plan.index_path);
+        if let Some(parent_dir) = root_plan.dir.parent()
+            && let Ok(Some(parent_index)) = ws.find_any_index_in_dir(parent_dir)
+        {
+            // Check if root index is already in parent's contents
+            let parent_str = parent_index.to_string_lossy();
+            let relative_root = calculate_relative_path(&parent_index, &root_plan.index_path);
 
-                let already_linked = match app.get_frontmatter_property(&parent_str, "contents") {
-                    Ok(Some(serde_yaml::Value::Sequence(items))) => items.iter().any(|item| {
-                        if let serde_yaml::Value::String(s) = item {
-                            s == &relative_root
+            let already_linked = match app.get_frontmatter_property(&parent_str, "contents") {
+                Ok(Some(serde_yaml::Value::Sequence(items))) => items.iter().any(|item| {
+                    if let serde_yaml::Value::String(s) = item {
+                        s == &relative_root
+                    } else {
+                        false
+                    }
+                }),
+                _ => false,
+            };
+
+            if !already_linked {
+                // Add to parent's contents
+                match app.get_frontmatter_property(&parent_str, "contents") {
+                    Ok(Some(serde_yaml::Value::Sequence(mut items))) => {
+                        items.push(serde_yaml::Value::String(relative_root.clone()));
+                        if let Err(e) = app.set_frontmatter_property(
+                            &parent_str,
+                            "contents",
+                            serde_yaml::Value::Sequence(items),
+                        ) {
+                            eprintln!("⚠ Error updating parent contents: {}", e);
                         } else {
-                            false
-                        }
-                    }),
-                    _ => false,
-                };
-
-                if !already_linked {
-                    // Add to parent's contents
-                    match app.get_frontmatter_property(&parent_str, "contents") {
-                        Ok(Some(serde_yaml::Value::Sequence(mut items))) => {
-                            items.push(serde_yaml::Value::String(relative_root.clone()));
-                            if let Err(e) = app.set_frontmatter_property(
-                                &parent_str,
-                                "contents",
-                                serde_yaml::Value::Sequence(items),
-                            ) {
-                                eprintln!("⚠ Error updating parent contents: {}", e);
-                            } else {
-                                println!(
-                                    "✓ Added '{}' to workspace index '{}'",
-                                    relative_root,
-                                    parent_index.display()
-                                );
-                            }
-                        }
-                        Ok(None) | Ok(Some(_)) => {
-                            let items = vec![serde_yaml::Value::String(relative_root.clone())];
-                            if let Err(e) = app.set_frontmatter_property(
-                                &parent_str,
-                                "contents",
-                                serde_yaml::Value::Sequence(items),
-                            ) {
-                                eprintln!("⚠ Error creating parent contents: {}", e);
-                            } else {
-                                println!(
-                                    "✓ Added '{}' to workspace index '{}'",
-                                    relative_root,
-                                    parent_index.display()
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("⚠ Error reading parent contents: {}", e);
+                            println!(
+                                "✓ Added '{}' to workspace index '{}'",
+                                relative_root,
+                                parent_index.display()
+                            );
                         }
                     }
-
-                    // Set part_of in root index
-                    let root_str = root_plan.index_path.to_string_lossy();
-                    let relative_parent =
-                        calculate_relative_path(&root_plan.index_path, &parent_index);
-                    if let Err(e) = app.set_frontmatter_property(
-                        &root_str,
-                        "part_of",
-                        serde_yaml::Value::String(relative_parent),
-                    ) {
-                        eprintln!("⚠ Error setting part_of in root index: {}", e);
+                    Ok(None) | Ok(Some(_)) => {
+                        let items = vec![serde_yaml::Value::String(relative_root.clone())];
+                        if let Err(e) = app.set_frontmatter_property(
+                            &parent_str,
+                            "contents",
+                            serde_yaml::Value::Sequence(items),
+                        ) {
+                            eprintln!("⚠ Error creating parent contents: {}", e);
+                        } else {
+                            println!(
+                                "✓ Added '{}' to workspace index '{}'",
+                                relative_root,
+                                parent_index.display()
+                            );
+                        }
                     }
+                    Err(e) => {
+                        eprintln!("⚠ Error reading parent contents: {}", e);
+                    }
+                }
+
+                // Set part_of in root index
+                let root_str = root_plan.index_path.to_string_lossy();
+                let relative_parent = calculate_relative_path(&root_plan.index_path, &parent_index);
+                if let Err(e) = app.set_frontmatter_property(
+                    &root_str,
+                    "part_of",
+                    serde_yaml::Value::String(relative_parent),
+                ) {
+                    eprintln!("⚠ Error setting part_of in root index: {}", e);
                 }
             }
         }
@@ -1021,14 +1018,13 @@ fn execute_dir_plan(
     let mut contents: Vec<String> = Vec::new();
 
     // Get existing contents if index existed
-    if dir_plan.index_exists {
-        if let Ok(Some(serde_yaml::Value::Sequence(items))) =
+    if dir_plan.index_exists
+        && let Ok(Some(serde_yaml::Value::Sequence(items))) =
             app.get_frontmatter_property(&index_str, "contents")
-        {
-            for item in items {
-                if let serde_yaml::Value::String(s) = item {
-                    contents.push(s);
-                }
+    {
+        for item in items {
+            if let serde_yaml::Value::String(s) = item {
+                contents.push(s);
             }
         }
     }
@@ -1142,7 +1138,7 @@ fn handle_add_with_new_index(
     yes: bool,
     dry_run: bool,
 ) {
-    use crate::cli::util::{prompt_confirm, ConfirmResult};
+    use crate::cli::util::{ConfirmResult, prompt_confirm};
 
     // Collect all file patterns
     let mut all_patterns = vec![file_pattern.to_string()];
@@ -1376,7 +1372,7 @@ fn handle_add(
     yes: bool,
     dry_run: bool,
 ) {
-    use crate::cli::util::{prompt_confirm, ConfirmResult};
+    use crate::cli::util::{ConfirmResult, prompt_confirm};
 
     // Resolve parent path (should be a single file)
     let parent_paths = resolve_paths(parent, config, app);
@@ -1717,12 +1713,10 @@ fn handle_create(
     }
 
     // Open in editor if requested
-    if edit {
-        if let Ok(cfg) = Config::load() {
-            println!("Opening: {}", child_path.display());
-            if let Err(e) = launch_editor(&child_path, &cfg) {
-                eprintln!("✗ Error launching editor: {}", e);
-            }
+    if edit && let Ok(cfg) = Config::load() {
+        println!("Opening: {}", child_path.display());
+        if let Err(e) = launch_editor(&child_path, &cfg) {
+            eprintln!("✗ Error launching editor: {}", e);
         }
     }
 }

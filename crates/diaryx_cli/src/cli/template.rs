@@ -3,7 +3,7 @@
 use diaryx_core::config::Config;
 use diaryx_core::entry::DiaryxApp;
 use diaryx_core::fs::RealFileSystem;
-use diaryx_core::template::{TemplateManager, TemplateSource, TEMPLATE_VARIABLES};
+use diaryx_core::template::{TEMPLATE_VARIABLES, TemplateManager, TemplateSource};
 use std::io::{self, Write};
 
 use crate::cli::args::TemplateCommands;

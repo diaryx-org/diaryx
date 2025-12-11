@@ -126,11 +126,10 @@ impl<FS: FileSystem + Clone> Publisher<FS> {
         if let Some(pos) = files
             .iter()
             .position(|p| p.canonicalize().unwrap_or_else(|_| p.clone()) == root_canonical)
+            && pos != 0
         {
-            if pos != 0 {
-                let root_file = files.remove(pos);
-                files.insert(0, root_file);
-            }
+            let root_file = files.remove(pos);
+            files.insert(0, root_file);
         }
 
         let mut pages = Vec::new();
@@ -231,7 +230,7 @@ impl<FS: FileSystem + Clone> Publisher<FS> {
                 return Err(DiaryxError::FileRead {
                     path: path.to_path_buf(),
                     source: e,
-                })
+                });
             }
         };
 
@@ -456,7 +455,7 @@ impl<FS: FileSystem + Clone> Publisher<FS> {
     /// Convert markdown to HTML using comrak
     #[cfg(feature = "markdown")]
     fn markdown_to_html(&self, markdown: &str) -> String {
-        use comrak::{markdown_to_html, Options};
+        use comrak::{Options, markdown_to_html};
 
         let mut options = Options::default();
         options.extension.strikethrough = true;

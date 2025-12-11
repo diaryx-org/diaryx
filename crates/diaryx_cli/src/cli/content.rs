@@ -9,7 +9,7 @@ use diaryx_core::entry::DiaryxApp;
 use diaryx_core::fs::RealFileSystem;
 
 use crate::cli::args::ContentCommands;
-use crate::cli::util::{load_config, prompt_confirm, resolve_paths, ConfirmResult};
+use crate::cli::util::{ConfirmResult, load_config, prompt_confirm, resolve_paths};
 
 /// Handle all content subcommands
 pub fn handle_content_command(app: &DiaryxApp<RealFileSystem>, operation: ContentCommands) {

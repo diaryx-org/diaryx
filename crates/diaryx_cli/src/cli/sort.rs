@@ -3,7 +3,7 @@
 use diaryx_core::entry::DiaryxApp;
 use diaryx_core::fs::RealFileSystem;
 
-use crate::cli::util::{load_config, prompt_confirm, resolve_paths, ConfirmResult};
+use crate::cli::util::{ConfirmResult, load_config, prompt_confirm, resolve_paths};
 
 /// Handle the sort command
 pub fn handle_sort_command(

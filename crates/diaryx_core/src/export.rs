@@ -371,23 +371,23 @@ impl<FS: FileSystem + Clone> Exporter<FS> {
         let mut frontmatter: serde_yaml::Value = serde_yaml::from_str(frontmatter_str)?;
 
         // Filter contents array
-        if let Some(contents) = frontmatter.get_mut("contents") {
-            if let Some(arr) = contents.as_sequence_mut() {
-                arr.retain(|item| {
-                    if let Some(s) = item.as_str() {
-                        !filtered.iter().any(|f| f == s)
-                    } else {
-                        true
-                    }
-                });
-            }
+        if let Some(contents) = frontmatter.get_mut("contents")
+            && let Some(arr) = contents.as_sequence_mut()
+        {
+            arr.retain(|item| {
+                if let Some(s) = item.as_str() {
+                    !filtered.iter().any(|f| f == s)
+                } else {
+                    true
+                }
+            });
         }
 
         // Optionally remove audience property
-        if !options.keep_audience {
-            if let Some(map) = frontmatter.as_mapping_mut() {
-                map.remove(serde_yaml::Value::String("audience".to_string()));
-            }
+        if !options.keep_audience
+            && let Some(map) = frontmatter.as_mapping_mut()
+        {
+            map.remove(serde_yaml::Value::String("audience".to_string()));
         }
 
         // Reconstruct file

@@ -6,7 +6,7 @@ use serde_yaml::Value;
 use std::path::PathBuf;
 
 use crate::cli::util::{
-    load_config, prompt_confirm, rename_file_with_refs, resolve_paths, ConfirmResult,
+    ConfirmResult, load_config, prompt_confirm, rename_file_with_refs, resolve_paths,
 };
 
 /// Convert a filename (without extension) to a human-readable title

@@ -220,16 +220,16 @@ impl<FS: FileSystem> Workspace<FS> {
         let mut found_index: Option<PathBuf> = None;
 
         for file in md_files {
-            if let Ok(index) = self.parse_index(&file) {
-                if index.frontmatter.is_index() {
-                    // Prefer root index if found
-                    if index.frontmatter.is_root() {
-                        return Ok(Some(file));
-                    }
-                    // Otherwise remember the first index we find
-                    if found_index.is_none() {
-                        found_index = Some(file);
-                    }
+            if let Ok(index) = self.parse_index(&file)
+                && index.frontmatter.is_index()
+            {
+                // Prefer root index if found
+                if index.frontmatter.is_root() {
+                    return Ok(Some(file));
+                }
+                // Otherwise remember the first index we find
+                if found_index.is_none() {
+                    found_index = Some(file);
                 }
             }
         }
@@ -267,15 +267,15 @@ impl<FS: FileSystem> Workspace<FS> {
         files.push(path.to_path_buf());
 
         // If this is an index file, recurse into its contents
-        if let Ok(index) = self.parse_index(path) {
-            if index.frontmatter.is_index() {
-                for child_path_str in index.frontmatter.contents_list() {
-                    let child_path = index.resolve_path(child_path_str);
+        if let Ok(index) = self.parse_index(path)
+            && index.frontmatter.is_index()
+        {
+            for child_path_str in index.frontmatter.contents_list() {
+                let child_path = index.resolve_path(child_path_str);
 
-                    // Only include if the file exists
-                    if self.fs.exists(&child_path) {
-                        self.collect_workspace_files_recursive(&child_path, files, visited)?;
-                    }
+                // Only include if the file exists
+                if self.fs.exists(&child_path) {
+                    self.collect_workspace_files_recursive(&child_path, files, visited)?;
                 }
             }
         }

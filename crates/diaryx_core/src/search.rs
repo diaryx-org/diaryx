@@ -161,10 +161,10 @@ impl<FS: FileSystem + Clone> Searcher<FS> {
         results.files_searched = files.len();
 
         for file_path in files {
-            if let Some(file_result) = self.search_file(&file_path, query)? {
-                if file_result.has_matches() {
-                    results.files.push(file_result);
-                }
+            if let Some(file_result) = self.search_file(&file_path, query)?
+                && file_result.has_matches()
+            {
+                results.files.push(file_result);
             }
         }
 
@@ -184,7 +184,7 @@ impl<FS: FileSystem + Clone> Searcher<FS> {
                 return Err(crate::error::DiaryxError::FileRead {
                     path: path.to_path_buf(),
                     source: e,
-                })
+                });
             }
         };
 

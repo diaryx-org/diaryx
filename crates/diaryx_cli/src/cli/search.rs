@@ -125,10 +125,10 @@ fn display_results(
             }
 
             // Show separator if there's a gap between matches
-            if let Some(last) = last_line {
-                if search_match.line_number > last + 1 {
-                    println!("  \x1b[90m...\x1b[0m");
-                }
+            if let Some(last) = last_line
+                && search_match.line_number > last + 1
+            {
+                println!("  \x1b[90m...\x1b[0m");
             }
 
             // Highlight and display the match line
@@ -164,10 +164,11 @@ fn display_results(
         results.files_searched
     );
 
-    if let Some(max) = limit {
-        if total_shown >= max && results.total_matches() > max {
-            println!("(showing first {} results, use --limit to see more)", max);
-        }
+    if let Some(max) = limit
+        && total_shown >= max
+        && results.total_matches() > max
+    {
+        println!("(showing first {} results, use --limit to see more)", max);
     }
 }
 

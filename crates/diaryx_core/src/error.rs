@@ -33,7 +33,9 @@ pub enum DiaryxError {
     InvalidFrontmatter(PathBuf),
 
     // Date errors
-    #[error("Invalid date format: '{0}'. Try 'today', 'yesterday', 'last friday', '3 days ago', or 'YYYY-MM-DD'")]
+    #[error(
+        "Invalid date format: '{0}'. Try 'today', 'yesterday', 'last friday', '3 days ago', or 'YYYY-MM-DD'"
+    )]
     InvalidDateFormat(String),
 
     // Config errors

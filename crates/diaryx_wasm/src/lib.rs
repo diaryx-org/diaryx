@@ -299,29 +299,29 @@ pub fn create_entry(path: &str, options: JsValue) -> Result<String, JsValue> {
             });
 
         // Check if template is requested
-        if let Some(ref opts) = options {
-            if let Some(ref template_name) = opts.template {
-                let manager = TemplateManager::new(fs);
-                if let Some(template) = manager.get(template_name) {
-                    let mut context = diaryx_core::template::TemplateContext::new()
-                        .with_title(&title)
-                        .with_date(chrono::Utc::now().date_naive());
+        if let Some(ref opts) = options
+            && let Some(ref template_name) = opts.template
+        {
+            let manager = TemplateManager::new(fs);
+            if let Some(template) = manager.get(template_name) {
+                let mut context = diaryx_core::template::TemplateContext::new()
+                    .with_title(&title)
+                    .with_date(chrono::Utc::now().date_naive());
 
-                    if let Some(ref part_of) = opts.part_of {
-                        context = context.with_part_of(part_of);
-                    }
-
-                    let content = template.render(&context);
-
-                    use diaryx_core::fs::FileSystem;
-                    fs.create_new(&path_buf, &content)
-                        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-
-                    // Add to parent index contents
-                    add_to_parent_index(fs, path)?;
-
-                    return Ok(path.to_string());
+                if let Some(ref part_of) = opts.part_of {
+                    context = context.with_part_of(part_of);
                 }
+
+                let content = template.render(&context);
+
+                use diaryx_core::fs::FileSystem;
+                fs.create_new(&path_buf, &content)
+                    .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+                // Add to parent index contents
+                add_to_parent_index(fs, path)?;
+
+                return Ok(path.to_string());
             }
         }
 
@@ -341,15 +341,15 @@ pub fn create_entry(path: &str, options: JsValue) -> Result<String, JsValue> {
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
         // Set part_of if provided
-        if let Some(ref opts) = options {
-            if let Some(ref part_of) = opts.part_of {
-                app.set_frontmatter_property(
-                    path,
-                    "part_of",
-                    serde_yaml::Value::String(part_of.clone()),
-                )
-                .map_err(|e| JsValue::from_str(&e.to_string()))?;
-            }
+        if let Some(ref opts) = options
+            && let Some(ref part_of) = opts.part_of
+        {
+            app.set_frontmatter_property(
+                path,
+                "part_of",
+                serde_yaml::Value::String(part_of.clone()),
+            )
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
         }
 
         // Add to parent index contents
@@ -699,7 +699,7 @@ pub fn parse_frontmatter(content: &str) -> Result<JsValue, JsValue> {
             return Ok(serde_wasm_bindgen::to_value(&serde_json::Map::<
                 String,
                 serde_json::Value,
-            >::new())?)
+            >::new())?);
         }
     };
 

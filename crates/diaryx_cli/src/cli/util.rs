@@ -124,15 +124,15 @@ pub fn rename_file_with_refs(
             source_path.display(),
             dest_path.display()
         );
-        if let Some(ref parent) = parent_path {
-            if parent.exists() {
-                println!(
-                    "Would update contents in '{}': '{}' -> '{}'",
-                    parent.display(),
-                    old_relative,
-                    new_relative
-                );
-            }
+        if let Some(ref parent) = parent_path
+            && parent.exists()
+        {
+            println!(
+                "Would update contents in '{}': '{}' -> '{}'",
+                parent.display(),
+                old_relative,
+                new_relative
+            );
         }
         if !children.is_empty() {
             println!("Would update part_of in {} child file(s)", children.len());
@@ -142,50 +142,47 @@ pub fn rename_file_with_refs(
     }
 
     // 1. Update parent's contents (if parent exists)
-    if let Some(ref parent) = parent_path {
-        if parent.exists() {
-            let parent_str = parent.to_string_lossy();
-            if let Ok(Some(Value::Sequence(mut items))) =
-                app.get_frontmatter_property(&parent_str, "contents")
-            {
-                let mut updated = false;
-                for item in &mut items {
-                    if let Value::String(s) = item {
-                        if *s == old_relative {
-                            *s = new_relative.clone();
-                            updated = true;
-                        }
-                    }
+    if let Some(ref parent) = parent_path
+        && parent.exists()
+    {
+        let parent_str = parent.to_string_lossy();
+        if let Ok(Some(Value::Sequence(mut items))) =
+            app.get_frontmatter_property(&parent_str, "contents")
+        {
+            let mut updated = false;
+            for item in &mut items {
+                if let Value::String(s) = item
+                    && *s == old_relative
+                {
+                    *s = new_relative.clone();
+                    updated = true;
                 }
-                if updated {
-                    if let Err(e) = app.set_frontmatter_property(
-                        &parent_str,
-                        "contents",
-                        Value::Sequence(items),
-                    ) {
-                        eprintln!("⚠ Error updating parent contents: {}", e);
-                    } else {
-                        println!(
-                            "✓ Updated contents in '{}': '{}' -> '{}'",
-                            parent.display(),
-                            old_relative,
-                            new_relative
-                        );
-                        result.parent_updated = Some(parent.clone());
-                    }
+            }
+            if updated {
+                if let Err(e) =
+                    app.set_frontmatter_property(&parent_str, "contents", Value::Sequence(items))
+                {
+                    eprintln!("⚠ Error updating parent contents: {}", e);
+                } else {
+                    println!(
+                        "✓ Updated contents in '{}': '{}' -> '{}'",
+                        parent.display(),
+                        old_relative,
+                        new_relative
+                    );
+                    result.parent_updated = Some(parent.clone());
                 }
             }
         }
     }
 
     // 2. Create destination directory if needed
-    if let Some(parent_dir) = dest_path.parent() {
-        if !parent_dir.exists() {
-            if let Err(e) = std::fs::create_dir_all(parent_dir) {
-                eprintln!("✗ Error creating directory: {}", e);
-                return result;
-            }
-        }
+    if let Some(parent_dir) = dest_path.parent()
+        && !parent_dir.exists()
+        && let Err(e) = std::fs::create_dir_all(parent_dir)
+    {
+        eprintln!("✗ Error creating directory: {}", e);
+        return result;
     }
 
     // 3. Move/rename the file
@@ -248,22 +245,21 @@ pub fn calculate_relative_path(from: &Path, to: &Path) -> String {
     }
 
     // Use canonical paths for pathdiff calculation
-    if let (Some(from_canon), Some(to_canon)) = (&from_canonical, &to_canonical) {
-        if let Some(from_dir) = from_canon.parent() {
-            if let Some(rel) = pathdiff::diff_paths(to_canon, from_dir) {
-                return rel.to_string_lossy().to_string();
-            }
-        }
+    if let (Some(from_canon), Some(to_canon)) = (&from_canonical, &to_canonical)
+        && let Some(from_dir) = from_canon.parent()
+        && let Some(rel) = pathdiff::diff_paths(to_canon, from_dir)
+    {
+        return rel.to_string_lossy().to_string();
     }
 
     // Fall back to non-canonical paths
-    if let Some(from_dir) = from.parent() {
-        if let Some(rel) = pathdiff::diff_paths(to, from_dir) {
-            let rel_str = rel.to_string_lossy().to_string();
-            // Ensure we don't return an absolute path
-            if !rel.is_absolute() {
-                return rel_str;
-            }
+    if let Some(from_dir) = from.parent()
+        && let Some(rel) = pathdiff::diff_paths(to, from_dir)
+    {
+        let rel_str = rel.to_string_lossy().to_string();
+        // Ensure we don't return an absolute path
+        if !rel.is_absolute() {
+            return rel_str;
         }
     }
 
@@ -362,10 +358,10 @@ pub fn resolve_paths(path: &str, config: &Config, app: &DiaryxApp<RealFileSystem
         {
             // This was likely meant as a literal path that doesn't exist
             // Try fuzzy matching in current directory
-            if let Some(matches) = fuzzy_match_files(path) {
-                if !matches.is_empty() {
-                    return matches;
-                }
+            if let Some(matches) = fuzzy_match_files(path)
+                && !matches.is_empty()
+            {
+                return matches;
             }
         }
 
@@ -509,10 +505,10 @@ fn extract_title_from_file(path: &Path) -> Option<String> {
     let frontmatter: serde_yaml::Value = serde_yaml::from_str(frontmatter_str).ok()?;
 
     // Extract title
-    if let Value::Mapping(map) = frontmatter {
-        if let Some(Value::String(title)) = map.get(Value::String("title".to_string())) {
-            return Some(title.clone());
-        }
+    if let Value::Mapping(map) = frontmatter
+        && let Some(Value::String(title)) = map.get(Value::String("title".to_string()))
+    {
+        return Some(title.clone());
     }
 
     None

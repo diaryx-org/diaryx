@@ -8,7 +8,7 @@ contents:
   - crates/diaryx_cli/README.md
   - crates/diaryx_core/README.md
   - apps/README.md
-version: v0.4.3
+version: v0.4.4
 ---
 
 # Diaryx

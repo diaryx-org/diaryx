@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "crates/diaryx_core",
-    "crates/diaryx_cli",
+    "crates/diaryx",
     "crates/diaryx_wasm",
     "apps/tauri/src-tauri",
 ]

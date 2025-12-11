@@ -293,11 +293,9 @@ impl FileSystem for InMemoryFileSystem {
         for path in files.keys() {
             // Check if the file is directly in this directory (not in a subdirectory)
             if let Some(parent) = path.parent() {
-                if parent == normalized {
-                    if path.extension().is_some_and(|ext| ext == "md") {
-                        result.push(path.clone());
-                    }
-                }
+                if parent == normalized && path.extension().is_some_and(|ext| ext == "md") {
+                    result.push(path.clone());
+              }
             }
         }
         Ok(result)

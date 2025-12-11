@@ -9,8 +9,8 @@ use serde_yaml::Value;
 use std::path::{Path, PathBuf};
 
 use crate::cli::args::WorkspaceCommands;
-use crate::editor::launch_editor;
 use crate::cli::util::{calculate_relative_path, rename_file_with_refs, resolve_paths};
+use crate::editor::launch_editor;
 
 pub fn handle_workspace_command(
     command: WorkspaceCommands,
@@ -1652,7 +1652,10 @@ fn handle_create(
         rendered
     } else {
         // Fallback: build content manually (template not found)
-        eprintln!("⚠ Template '{}' not found, using default format", template_name);
+        eprintln!(
+            "⚠ Template '{}' not found, using default format",
+            template_name
+        );
         let mut frontmatter = format!("---\ntitle: {}\n", display_title);
         if let Some(ref desc) = description {
             frontmatter.push_str(&format!("description: {}\n", desc));
@@ -1728,8 +1731,7 @@ fn handle_create(
 /// e.g., "my-note" -> "My Note", "some_file" -> "Some File"
 fn prettify_filename(filename: &str) -> String {
     filename
-        .replace('-', " ")
-        .replace('_', " ")
+        .replace(['-', '_'], " ")
         .split_whitespace()
         .map(|word| {
             let mut chars = word.chars();

@@ -160,10 +160,7 @@ fn handle_edit(manager: &TemplateManager<&RealFileSystem>, name: &str, config: O
             match &info.source {
                 TemplateSource::Builtin => {
                     // Can't edit built-in, offer to copy to user templates
-                    eprintln!(
-                        "✗ Cannot edit built-in template '{}' directly.",
-                        name
-                    );
+                    eprintln!("✗ Cannot edit built-in template '{}' directly.", name);
                     eprintln!(
                         "  Use 'diaryx template new {} --from {}' to create an editable copy.",
                         name, name
@@ -210,11 +207,7 @@ fn handle_delete(manager: &TemplateManager<&RealFileSystem>, name: &str, yes: bo
                     if let Some(path) = &info.path {
                         // Confirm deletion
                         if !yes {
-                            print!(
-                                "Delete template '{}' at {}? [y/N] ",
-                                name,
-                                path.display()
-                            );
+                            print!("Delete template '{}' at {}? [y/N] ", name, path.display());
                             io::stdout().flush().unwrap();
 
                             let mut input = String::new();
@@ -297,7 +290,6 @@ fn handle_variables() {
 
 /// Generate default content for a new template
 fn default_template_content(_name: &str) -> String {
-    format!(
         r#"---
 title: "{{{{title}}}}"
 created: {{{{timestamp}}}}
@@ -305,6 +297,5 @@ created: {{{{timestamp}}}}
 
 # {{{{title}}}}
 
-"#
-    )
+"#.to_string()
 }

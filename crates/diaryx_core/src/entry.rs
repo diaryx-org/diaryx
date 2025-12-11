@@ -668,8 +668,7 @@ impl<FS: FileSystem> DiaryxApp<FS> {
 /// e.g., "my-note" -> "My Note", "some_file" -> "Some File"
 fn prettify_filename(filename: &str) -> String {
     filename
-        .replace('-', " ")
-        .replace('_', " ")
+        .replace(['-', '_'], " ")
         .split_whitespace()
         .map(|word| {
             let mut chars = word.chars();

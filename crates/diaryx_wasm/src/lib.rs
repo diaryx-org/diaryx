@@ -367,7 +367,9 @@ fn add_to_parent_index(fs: &InMemoryFileSystem, entry_path: &str) -> Result<(), 
         .and_then(|n| n.to_str())
         .ok_or_else(|| JsValue::from_str("Invalid path"))?;
 
-    let parent = path.parent().ok_or_else(|| JsValue::from_str("No parent directory"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| JsValue::from_str("No parent directory"))?;
     let index_path = parent.join("index.md");
 
     // Check if parent index exists
@@ -612,7 +614,10 @@ pub fn list_templates(workspace_path: Option<String>) -> Result<JsValue, JsValue
             .into_iter()
             .map(|t| JsTemplateInfo {
                 name: t.name,
-                path: t.path.map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+                path: t
+                    .path
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default(),
                 source: format!("{}", t.source),
             })
             .collect();
@@ -679,9 +684,10 @@ pub fn delete_template(name: &str, workspace_path: &str) -> Result<(), JsValue> 
 #[wasm_bindgen]
 pub fn parse_frontmatter(content: &str) -> Result<JsValue, JsValue> {
     if !content.starts_with("---\n") {
-        return Ok(serde_wasm_bindgen::to_value(
-            &serde_json::Map::<String, serde_json::Value>::new(),
-        )?);
+        return Ok(serde_wasm_bindgen::to_value(&serde_json::Map::<
+            String,
+            serde_json::Value,
+        >::new())?);
     }
 
     let rest = &content[4..];
@@ -690,9 +696,10 @@ pub fn parse_frontmatter(content: &str) -> Result<JsValue, JsValue> {
     let yaml_str = match end_idx {
         Some(idx) => &rest[..idx],
         None => {
-            return Ok(serde_wasm_bindgen::to_value(
-                &serde_json::Map::<String, serde_json::Value>::new(),
-            )?)
+            return Ok(serde_wasm_bindgen::to_value(&serde_json::Map::<
+                String,
+                serde_json::Value,
+            >::new())?)
         }
     };
 
@@ -701,14 +708,16 @@ pub fn parse_frontmatter(content: &str) -> Result<JsValue, JsValue> {
             if let serde_json::Value::Object(map) = value {
                 Ok(serde_wasm_bindgen::to_value(&map)?)
             } else {
-                Ok(serde_wasm_bindgen::to_value(
-                    &serde_json::Map::<String, serde_json::Value>::new(),
-                )?)
+                Ok(serde_wasm_bindgen::to_value(&serde_json::Map::<
+                    String,
+                    serde_json::Value,
+                >::new())?)
             }
         }
-        Err(_) => Ok(serde_wasm_bindgen::to_value(
-            &serde_json::Map::<String, serde_json::Value>::new(),
-        )?),
+        Err(_) => Ok(serde_wasm_bindgen::to_value(&serde_json::Map::<
+            String,
+            serde_json::Value,
+        >::new())?),
     }
 }
 
@@ -718,8 +727,7 @@ pub fn serialize_frontmatter(frontmatter: JsValue) -> Result<String, JsValue> {
     let map: serde_json::Map<String, serde_json::Value> =
         serde_wasm_bindgen::from_value(frontmatter)?;
 
-    let yaml =
-        serde_yaml::to_string(&map).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let yaml = serde_yaml::to_string(&map).map_err(|e| JsValue::from_str(&e.to_string()))?;
 
     let yaml = yaml.trim_end();
     Ok(format!("---\n{}\n---", yaml))

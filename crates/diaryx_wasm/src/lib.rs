@@ -209,6 +209,9 @@ pub struct JsEntryData {
 /// Get an entry's content and metadata.
 #[wasm_bindgen]
 pub fn get_entry(path: &str) -> Result<JsValue, JsValue> {
+    // Use a serializer that converts Maps to plain JS objects
+    let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+
     with_fs(|fs| {
         let app = DiaryxApp::new(fs);
 
@@ -240,7 +243,7 @@ pub fn get_entry(path: &str) -> Result<JsValue, JsValue> {
             content,
         };
 
-        Ok(serde_wasm_bindgen::to_value(&entry)?)
+        Ok(entry.serialize(&serializer)?)
     })
 }
 

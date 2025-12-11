@@ -9,6 +9,7 @@
     FileText,
     Folder,
     Loader2,
+    PanelLeftClose,
   } from "@lucide/svelte";
 
   interface Props {
@@ -20,11 +21,13 @@
     searchResults: SearchResults | null;
     isSearching: boolean;
     expandedNodes: Set<string>;
+    collapsed: boolean;
     onOpenEntry: (path: string) => void;
     onSearch: () => void;
     onClearSearch: () => void;
     onToggleNode: (path: string) => void;
     onNewEntry: () => void;
+    onToggleCollapse: () => void;
   }
 
   let {
@@ -36,11 +39,13 @@
     searchResults,
     isSearching,
     expandedNodes,
+    collapsed,
     onOpenEntry,
     onSearch,
     onClearSearch,
     onToggleNode,
     onNewEntry,
+    onToggleCollapse,
   }: Props = $props();
 
   function getFileName(path: string): string {
@@ -54,14 +59,34 @@
       onClearSearch();
     }
   }
+
+  function handleEntryClick(path: string) {
+    onOpenEntry(path);
+    // On mobile, collapse after selection
+    if (window.innerWidth < 768) {
+      onToggleCollapse();
+    }
+  }
 </script>
 
+<!-- Mobile overlay backdrop -->
+{#if !collapsed}
+  <button
+    type="button"
+    class="fixed inset-0 bg-black/50 z-30 md:hidden"
+    onclick={onToggleCollapse}
+    aria-label="Close sidebar"
+  ></button>
+{/if}
+
 <aside
-  class="flex flex-col w-72 h-screen border-r border-border bg-sidebar text-sidebar-foreground"
+  class="flex flex-col h-screen border-r border-border bg-sidebar text-sidebar-foreground transition-all duration-300 ease-in-out
+    {collapsed ? 'w-0 opacity-0 overflow-hidden md:w-0' : 'w-72'}
+    fixed md:relative z-40 md:z-auto"
 >
   <!-- Header -->
   <div
-    class="flex items-center justify-between px-4 py-4 border-b border-sidebar-border"
+    class="flex items-center justify-between px-4 py-4 border-b border-sidebar-border shrink-0"
   >
     <a
       href="/"
@@ -69,10 +94,19 @@
     >
       Diaryx
     </a>
+    <Button
+      variant="ghost"
+      size="icon"
+      onclick={onToggleCollapse}
+      class="size-8"
+      aria-label="Collapse sidebar"
+    >
+      <PanelLeftClose class="size-4" />
+    </Button>
   </div>
 
   <!-- New Entry Button -->
-  <div class="p-3">
+  <div class="p-3 shrink-0">
     <Button onclick={onNewEntry} class="w-full justify-center gap-2">
       <Plus class="size-4" />
       New Entry
@@ -80,7 +114,7 @@
   </div>
 
   <!-- Search -->
-  <div class="px-3 pb-3">
+  <div class="px-3 pb-3 shrink-0">
     <div class="relative flex items-center">
       <input
         type="text"
@@ -129,7 +163,7 @@
             result.path
               ? 'bg-sidebar-accent text-sidebar-accent-foreground'
               : ''}"
-            onclick={() => onOpenEntry(result.path)}
+            onclick={() => handleEntryClick(result.path)}
           >
             <FileText class="size-4 shrink-0 text-muted-foreground" />
             <span class="truncate"
@@ -199,7 +233,7 @@
         node.path
           ? 'text-sidebar-primary font-medium'
           : 'text-sidebar-foreground'}"
-        onclick={() => onOpenEntry(node.path)}
+        onclick={() => handleEntryClick(node.path)}
       >
         {#if node.children.length > 0}
           <Folder class="size-4 shrink-0 text-muted-foreground" />

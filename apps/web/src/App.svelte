@@ -10,10 +10,11 @@
     type EntryData,
     type SearchResults,
   } from "./lib/backend";
-  import Sidebar from "./lib/Sidebar.svelte";
+  import LeftSidebar from "./lib/LeftSidebar.svelte";
+  import RightSidebar from "./lib/RightSidebar.svelte";
   import NewEntryModal from "./lib/NewEntryModal.svelte";
   import { Button } from "$lib/components/ui/button";
-  import { Save, Download } from "@lucide/svelte";
+  import { Save, Download, PanelLeft, PanelRight, Menu } from "@lucide/svelte";
 
   // Dynamically import Editor to avoid SSR issues
   let Editor: typeof import("./lib/Editor.svelte").default | null =
@@ -35,8 +36,18 @@
   let editorRef: any = $state(null);
   let showNewEntryModal = $state(false);
 
-  // Load initial data
+  // Sidebar states - collapsed by default on mobile
+  let leftSidebarCollapsed = $state(true);
+  let rightSidebarCollapsed = $state(true);
+
+  // Check if we're on desktop and expand sidebars by default
   onMount(async () => {
+    // Expand sidebars on desktop
+    if (window.innerWidth >= 768) {
+      leftSidebarCollapsed = false;
+      rightSidebarCollapsed = false;
+    }
+
     try {
       // Dynamically import the Editor component
       const module = await import("./lib/Editor.svelte");
@@ -82,6 +93,12 @@
     try {
       isLoading = true;
       currentEntry = await backend.getEntry(path);
+      console.log("[App] Loaded entry:", currentEntry);
+      console.log("[App] Frontmatter:", currentEntry?.frontmatter);
+      console.log(
+        "[App] Frontmatter keys:",
+        Object.keys(currentEntry?.frontmatter ?? {}),
+      );
       isDirty = false;
       error = null;
     } catch (e) {
@@ -143,11 +160,34 @@
     expandedNodes = new Set(expandedNodes); // Trigger reactivity
   }
 
+  // Sidebar toggles
+  function toggleLeftSidebar() {
+    leftSidebarCollapsed = !leftSidebarCollapsed;
+  }
+
+  function toggleRightSidebar() {
+    rightSidebarCollapsed = !rightSidebarCollapsed;
+  }
+
   // Keyboard shortcuts
   function handleKeydown(event: KeyboardEvent) {
     if ((event.metaKey || event.ctrlKey) && event.key === "s") {
       event.preventDefault();
       save();
+    }
+    // Toggle left sidebar with Cmd/Ctrl + B
+    if ((event.metaKey || event.ctrlKey) && event.key === "b") {
+      event.preventDefault();
+      toggleLeftSidebar();
+    }
+    // Toggle right sidebar with Cmd/Ctrl + I (for Info)
+    if (
+      (event.metaKey || event.ctrlKey) &&
+      event.shiftKey &&
+      event.key === "I"
+    ) {
+      event.preventDefault();
+      toggleRightSidebar();
     }
   }
 
@@ -200,8 +240,9 @@
   />
 {/if}
 
-<div class="flex h-screen bg-background">
-  <Sidebar
+<div class="flex h-screen bg-background overflow-hidden">
+  <!-- Left Sidebar -->
+  <LeftSidebar
     {tree}
     {currentEntry}
     {isLoading}
@@ -210,46 +251,101 @@
     {searchResults}
     {isSearching}
     {expandedNodes}
+    collapsed={leftSidebarCollapsed}
     onOpenEntry={openEntry}
     onSearch={handleSearch}
     onClearSearch={clearSearch}
     onToggleNode={toggleNode}
     onNewEntry={handleNewEntry}
+    onToggleCollapse={toggleLeftSidebar}
   />
 
-  <main class="flex-1 flex flex-col overflow-hidden">
+  <!-- Main Content Area -->
+  <main class="flex-1 flex flex-col overflow-hidden min-w-0">
     {#if currentEntry}
       <header
-        class="flex items-center justify-between px-6 py-4 border-b border-border bg-card"
+        class="flex items-center justify-between px-4 md:px-6 py-3 md:py-4 border-b border-border bg-card shrink-0"
       >
-        <div class="min-w-0 flex-1">
-          <h2 class="text-xl font-semibold text-foreground truncate">
-            {getEntryTitle(currentEntry)}
-          </h2>
-          <p class="text-sm text-muted-foreground truncate">
-            {currentEntry.path}
-          </p>
+        <!-- Left side: toggle + title -->
+        <div class="flex items-center gap-2 min-w-0 flex-1">
+          <!-- Mobile menu button -->
+          <Button
+            variant="ghost"
+            size="icon"
+            onclick={toggleLeftSidebar}
+            class="size-8 md:hidden shrink-0"
+            aria-label="Toggle navigation"
+          >
+            <Menu class="size-4" />
+          </Button>
+
+          <!-- Desktop left sidebar toggle -->
+          <Button
+            variant="ghost"
+            size="icon"
+            onclick={toggleLeftSidebar}
+            class="size-8 hidden md:flex shrink-0"
+            aria-label="Toggle navigation sidebar"
+          >
+            <PanelLeft class="size-4" />
+          </Button>
+
+          <div class="min-w-0 flex-1">
+            <h2
+              class="text-lg md:text-xl font-semibold text-foreground truncate"
+            >
+              {getEntryTitle(currentEntry)}
+            </h2>
+            <p
+              class="text-xs md:text-sm text-muted-foreground truncate hidden sm:block"
+            >
+              {currentEntry.path}
+            </p>
+          </div>
         </div>
-        <div class="flex items-center gap-2 ml-4">
+
+        <!-- Right side: actions -->
+        <div class="flex items-center gap-1 md:gap-2 ml-2 shrink-0">
           {#if isDirty}
             <span
-              class="px-2 py-1 text-xs font-medium rounded-md bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400"
+              class="hidden sm:inline-flex px-2 py-1 text-xs font-medium rounded-md bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400"
             >
-              Unsaved changes
+              Unsaved
             </span>
           {/if}
-          <Button onclick={save} disabled={!isDirty} size="sm">
+          <Button
+            onclick={save}
+            disabled={!isDirty}
+            size="sm"
+            class="gap-1 md:gap-2"
+          >
             <Save class="size-4" />
-            Save
+            <span class="hidden sm:inline">Save</span>
           </Button>
-          <Button onclick={exportEntry} variant="outline" size="sm">
+          <Button
+            onclick={exportEntry}
+            variant="outline"
+            size="sm"
+            class="gap-1 md:gap-2 hidden sm:flex"
+          >
             <Download class="size-4" />
-            Export
+            <span class="hidden md:inline">Export</span>
+          </Button>
+
+          <!-- Properties panel toggle -->
+          <Button
+            variant="ghost"
+            size="icon"
+            onclick={toggleRightSidebar}
+            class="size-8"
+            aria-label="Toggle properties panel"
+          >
+            <PanelRight class="size-4" />
           </Button>
         </div>
       </header>
 
-      <div class="flex-1 overflow-y-auto p-6">
+      <div class="flex-1 overflow-y-auto p-4 md:p-6">
         {#if Editor}
           <Editor
             bind:this={editorRef}
@@ -266,8 +362,39 @@
         {/if}
       </div>
     {:else}
+      <!-- Empty state with sidebar toggles -->
+      <header
+        class="flex items-center justify-between px-4 py-3 border-b border-border bg-card shrink-0 md:hidden"
+      >
+        <Button
+          variant="ghost"
+          size="icon"
+          onclick={toggleLeftSidebar}
+          class="size-8"
+          aria-label="Toggle navigation"
+        >
+          <Menu class="size-4" />
+        </Button>
+        <span class="text-lg font-semibold">Diaryx</span>
+        <div class="size-8"></div>
+      </header>
+
       <div class="flex-1 flex items-center justify-center">
         <div class="text-center max-w-md px-4">
+          <!-- Desktop sidebar toggle when no entry -->
+          <div class="hidden md:flex justify-center mb-4">
+            {#if leftSidebarCollapsed}
+              <Button
+                variant="outline"
+                size="sm"
+                onclick={toggleLeftSidebar}
+                class="gap-2"
+              >
+                <PanelLeft class="size-4" />
+                Show Sidebar
+              </Button>
+            {/if}
+          </div>
           <h2 class="text-2xl font-semibold text-foreground mb-2">
             Welcome to Diaryx
           </h2>
@@ -279,4 +406,11 @@
       </div>
     {/if}
   </main>
+
+  <!-- Right Sidebar (Properties) -->
+  <RightSidebar
+    entry={currentEntry}
+    collapsed={rightSidebarCollapsed}
+    onToggleCollapse={toggleRightSidebar}
+  />
 </div>

@@ -1,7 +1,15 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import TurndownService from "turndown";
-  import type { Editor as EditorType } from "@tiptap/core";
+  import { Editor } from "@tiptap/core";
+  import StarterKit from "@tiptap/starter-kit";
+  import { Markdown } from "@tiptap/markdown";
+  import Link from "@tiptap/extension-link";
+  import TaskList from "@tiptap/extension-task-list";
+  import TaskItem from "@tiptap/extension-task-item";
+  import Placeholder from "@tiptap/extension-placeholder";
+  import CodeBlock from "@tiptap/extension-code-block";
+  import Highlight from "@tiptap/extension-highlight";
+  import Typography from "@tiptap/extension-typography";
   import {
     Bold,
     Italic,
@@ -15,7 +23,7 @@
     CheckSquare,
     Quote,
     Braces,
-    Link,
+    Link as LinkIcon,
   } from "@lucide/svelte";
 
   interface Props {
@@ -33,100 +41,18 @@
   }: Props = $props();
 
   let element: HTMLDivElement;
-  let editor: EditorType | null = $state(null);
+  let editor: Editor | null = $state(null);
   let isUpdatingContent = false; // Flag to skip onchange during programmatic updates
 
-  // Turndown service for HTML -> Markdown conversion
-  const turndownService = new TurndownService({
-    headingStyle: "atx",
-    codeBlockStyle: "fenced",
-    bulletListMarker: "-",
-  });
-
-  // Custom rules for better markdown output
-  turndownService.addRule("taskList", {
-    filter: (node) => {
-      return (
-        node.nodeName === "LI" &&
-        node.parentElement?.getAttribute("data-type") === "taskList"
-      );
-    },
-    replacement: (content, node) => {
-      const checkbox = (node as HTMLElement).querySelector(
-        'input[type="checkbox"]',
-      );
-      const checked = checkbox?.hasAttribute("checked") ? "x" : " ";
-      return `- [${checked}] ${content.trim()}\n`;
-    },
-  });
-
-  turndownService.addRule("strikethrough", {
-    filter: ["s", "strike", "del"] as any,
-    replacement: (content) => `~~${content}~~`,
-  });
-
-  /**
-   * Convert markdown to HTML for the editor
-   */
-  function markdownToHtml(markdown: string): string {
-    // Basic markdown to HTML conversion
-    // TipTap will handle most of this, but we need initial conversion
-    let html = markdown
-      // Headers
-      .replace(/^### (.*$)/gm, "<h3>$1</h3>")
-      .replace(/^## (.*$)/gm, "<h2>$1</h2>")
-      .replace(/^# (.*$)/gm, "<h1>$1</h1>")
-      // Bold and italic
-      .replace(/\*\*\*(.*?)\*\*\*/g, "<strong><em>$1</em></strong>")
-      .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
-      .replace(/\*(.*?)\*/g, "<em>$1</em>")
-      // Strikethrough
-      .replace(/~~(.*?)~~/g, "<s>$1</s>")
-      // Inline code
-      .replace(/`([^`]+)`/g, "<code>$1</code>")
-      // Links
-      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
-      // Task lists
-      .replace(
-        /^- \[x\] (.*$)/gm,
-        '<ul data-type="taskList"><li data-type="taskItem" data-checked="true">$1</li></ul>',
-      )
-      .replace(
-        /^- \[ \] (.*$)/gm,
-        '<ul data-type="taskList"><li data-type="taskItem" data-checked="false">$1</li></ul>',
-      )
-      // Unordered lists
-      .replace(/^- (.*$)/gm, "<li>$1</li>")
-      // Blockquotes
-      .replace(/^> (.*$)/gm, "<blockquote>$1</blockquote>")
-      // Horizontal rules
-      .replace(/^---$/gm, "<hr>")
-      // Paragraphs (lines with content)
-      .replace(/^(?!<[hlubo]|<li|<hr)(.*$)/gm, (match) => {
-        if (match.trim() === "") return "";
-        if (match.startsWith("<")) return match;
-        return `<p>${match}</p>`;
-      });
-
-    return html;
+  export function getMarkdown(): string | undefined {
+    return editor?.getMarkdown();
   }
-
-  /**
-   * Get the current content as markdown
-   */
-  export function getMarkdown(): string {
-    if (!editor) return "";
-    const html = editor.getHTML();
-    return turndownService.turndown(html);
-  }
-
   /**
    * Set content from markdown
    */
   export function setContent(markdown: string): void {
     if (!editor) return;
-    const html = markdownToHtml(markdown);
-    editor.commands.setContent(html);
+    editor.commands.setContent(markdown, { contentType: "markdown" });
   }
 
   /**
@@ -143,35 +69,16 @@
     return editor?.isEmpty ?? true;
   }
 
-  onMount(async () => {
-    // Dynamically import TipTap modules to avoid SSR issues
-    const [
-      { Editor },
-      { default: StarterKit },
-      { default: Link },
-      { default: TaskList },
-      { default: TaskItem },
-      { default: Placeholder },
-      { default: CodeBlock },
-      { default: Highlight },
-      { default: Typography },
-    ] = await Promise.all([
-      import("@tiptap/core"),
-      import("@tiptap/starter-kit"),
-      import("@tiptap/extension-link"),
-      import("@tiptap/extension-task-list"),
-      import("@tiptap/extension-task-item"),
-      import("@tiptap/extension-placeholder"),
-      import("@tiptap/extension-code-block"),
-      import("@tiptap/extension-highlight"),
-      import("@tiptap/extension-typography"),
-    ]);
-
+  onMount(() => {
     editor = new Editor({
       element,
       extensions: [
         StarterKit.configure({
           codeBlock: false, // We'll use the separate extension
+        }),
+        Markdown.configure({
+          //transformPastedText: true,
+          //transformCopiedText: true,
         }),
         Link.configure({
           openOnClick: false,
@@ -194,12 +101,13 @@
         Highlight,
         Typography,
       ],
-      content: markdownToHtml(content),
+      content: content,
+      contentType: "markdown",
       editable: !readonly,
       onUpdate: ({ editor }) => {
         // Skip onchange during programmatic content updates (e.g., switching files)
         if (onchange && !isUpdatingContent) {
-          const markdown = turndownService.turndown(editor.getHTML());
+          const markdown = editor.getMarkdown();
           onchange(markdown);
         }
       },
@@ -217,13 +125,13 @@
 
   // Update editor content when the content prop changes (e.g., switching files)
   $effect(() => {
-    if (editor) {
+    if (editor && content !== undefined) {
       // Only update if the new content is different from what's currently in the editor
-      const currentEditorContent = turndownService.turndown(editor.getHTML());
+      const currentEditorContent = editor.getMarkdown();
       if (content !== currentEditorContent) {
         // Set flag to prevent onchange from firing during programmatic update
         isUpdatingContent = true;
-        editor.commands.setContent(markdownToHtml(content));
+        editor.commands.setContent(content, { contentType: "markdown" });
         // Reset flag after a tick to allow future user edits to trigger onchange
         setTimeout(() => {
           isUpdatingContent = false;
@@ -474,7 +382,7 @@
           onclick={isActive("link") ? unsetLink : setLink}
           title="Link"
         >
-          <Link class="size-4" />
+          <LinkIcon class="size-4" />
         </button>
       </div>
     </div>

@@ -211,7 +211,43 @@
 
   function exportEntry() {
     if (!currentEntry) return;
-    const blob = new Blob([currentEntry.content], {
+
+    // Reconstruct full markdown with frontmatter
+    let fullContent = "";
+    if (
+      currentEntry.frontmatter &&
+      Object.keys(currentEntry.frontmatter).length > 0
+    ) {
+      const yamlLines = ["---"];
+      for (const [key, value] of Object.entries(currentEntry.frontmatter)) {
+        if (Array.isArray(value)) {
+          yamlLines.push(`${key}:`);
+          for (const item of value) {
+            yamlLines.push(`  - ${item}`);
+          }
+        } else if (typeof value === "string" && value.includes("\n")) {
+          // Multi-line string
+          yamlLines.push(`${key}: |`);
+          for (const line of value.split("\n")) {
+            yamlLines.push(`  ${line}`);
+          }
+        } else if (typeof value === "string") {
+          // Quote strings that might need it
+          const needsQuotes = /[:#{}[\],&*?|<>=!%@`]/.test(value);
+          yamlLines.push(
+            `${key}: ${needsQuotes ? `"${value.replace(/"/g, '\\"')}"` : value}`,
+          );
+        } else {
+          yamlLines.push(`${key}: ${JSON.stringify(value)}`);
+        }
+      }
+      yamlLines.push("---");
+      fullContent = yamlLines.join("\n") + "\n" + currentEntry.content;
+    } else {
+      fullContent = currentEntry.content;
+    }
+
+    const blob = new Blob([fullContent], {
       type: "text/markdown;charset=utf-8",
     });
     const url = URL.createObjectURL(blob);

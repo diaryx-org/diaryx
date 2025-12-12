@@ -12,6 +12,31 @@ import type {
 } from "./interface";
 import { BackendError } from "./interface";
 
+function normalizeEntryPathToWorkspaceRoot(
+  inputPath: string,
+  workspaceRoot: string,
+): string {
+  const raw = inputPath.trim();
+
+  // If the user only typed a filename (no folder), treat it as relative to the
+  // configured workspace root folder so it appears in the workspace tree.
+  if (!raw.includes("/")) {
+    const root = (workspaceRoot || "workspace").replace(/\/+$/, "");
+    return `${root}/${raw}`;
+  }
+
+  return raw;
+}
+
+function normalizeIndexPathToWorkspaceRoot(
+  inputPath: string,
+  workspaceRoot: string,
+): string {
+  // For consistency with createEntry: if the caller passes "index.md" we interpret
+  // it as the workspace root index file.
+  return normalizeEntryPathToWorkspaceRoot(inputPath, workspaceRoot);
+}
+
 // ============================================================================
 // IndexedDB Storage (for persisting the in-memory filesystem)
 // ============================================================================
@@ -224,9 +249,12 @@ export class WasmBackend implements Backend {
     return wasm.get_workspace_tree(path, depth ?? null);
   }
 
-  async createWorkspace(path: string, name: string): Promise<void> {
+  async createWorkspace(path?: string, name?: string): Promise<string> {
     const wasm = this.requireWasm();
-    wasm.create_workspace(path, name);
+    const workspacePath = path ?? "workspace";
+    const workspaceName = name ?? "My Workspace";
+    wasm.create_workspace(workspacePath, workspaceName);
+    return workspacePath;
   }
 
   // --------------------------------------------------------------------------
@@ -248,12 +276,43 @@ export class WasmBackend implements Backend {
     options?: CreateEntryOptions,
   ): Promise<string> {
     const wasm = this.requireWasm();
-    return wasm.create_entry(path, options ?? null);
+
+    const workspaceRoot = this.config?.default_workspace ?? "workspace";
+    const normalizedPath = normalizeEntryPathToWorkspaceRoot(
+      path,
+      workspaceRoot,
+    );
+
+    return wasm.create_entry(normalizedPath, options ?? null);
   }
 
   async deleteEntry(path: string): Promise<void> {
     const wasm = this.requireWasm();
     wasm.delete_entry(path);
+  }
+
+  async moveEntry(fromPath: string, toPath: string): Promise<string> {
+    const wasm = this.requireWasm();
+    return wasm.move_entry(fromPath, toPath);
+  }
+
+  async attachEntryToParent(
+    entryPath: string,
+    parentIndexPath: string,
+  ): Promise<void> {
+    const wasm = this.requireWasm();
+    const workspaceRoot = this.config?.default_workspace ?? "workspace";
+
+    const normalizedEntryPath = normalizeEntryPathToWorkspaceRoot(
+      entryPath,
+      workspaceRoot,
+    );
+    const normalizedParentIndexPath = normalizeIndexPathToWorkspaceRoot(
+      parentIndexPath,
+      workspaceRoot,
+    );
+
+    wasm.attach_entry_to_parent(normalizedEntryPath, normalizedParentIndexPath);
   }
 
   // --------------------------------------------------------------------------

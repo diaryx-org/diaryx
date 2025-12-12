@@ -113,10 +113,11 @@ export interface Backend {
 
   /**
    * Create a new workspace at the given path.
-   * @param path Path where the workspace should be created.
-   * @param name Name of the workspace.
+   * @param path Path where the workspace should be created. Uses platform default if not provided.
+   * @param name Name of the workspace. Defaults to "My Workspace".
+   * @returns The path to the created workspace.
    */
-  createWorkspace(path: string, name: string): Promise<void>;
+  createWorkspace(path?: string, name?: string): Promise<string>;
 
   // --------------------------------------------------------------------------
   // Entries
@@ -149,6 +150,28 @@ export interface Backend {
    */
   deleteEntry(path: string): Promise<void>;
 
+  /**
+   * Move/rename an entry.
+   * Implementations should keep parent index `contents` and the entry's `part_of` metadata consistent.
+   * @param fromPath Existing path to the entry file.
+   * @param toPath New path for the entry file.
+   * @returns The destination path.
+   */
+  moveEntry(fromPath: string, toPath: string): Promise<string>;
+
+  /**
+   * Attach an existing entry to a parent index.
+   * This is equivalent to "workspace add": it adds the entry to the parent's `contents`
+   * and sets the entry's `part_of` to point back to the parent index (both as relative paths).
+   *
+   * @param entryPath Path to the entry to attach.
+   * @param parentIndexPath Path to the parent index file (typically ".../index.md").
+   */
+  attachEntryToParent(
+    entryPath: string,
+    parentIndexPath: string,
+  ): Promise<void>;
+
   // --------------------------------------------------------------------------
   // Frontmatter
   // --------------------------------------------------------------------------
@@ -168,7 +191,7 @@ export interface Backend {
   setFrontmatterProperty(
     path: string,
     key: string,
-    value: unknown
+    value: unknown,
   ): Promise<void>;
 
   /**
@@ -189,7 +212,7 @@ export interface Backend {
    */
   searchWorkspace(
     pattern: string,
-    options?: SearchOptions
+    options?: SearchOptions,
   ): Promise<SearchResults>;
 
   // --------------------------------------------------------------------------
@@ -240,7 +263,7 @@ export class BackendError extends Error {
   constructor(
     message: string,
     public readonly kind: string,
-    public readonly path?: string
+    public readonly path?: string,
   ) {
     super(message);
     this.name = "BackendError";

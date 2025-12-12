@@ -3,7 +3,7 @@ use crate::date::{date_to_path, parse_date};
 use crate::error::{DiaryxError, Result};
 use crate::fs::FileSystem;
 use crate::template::{Template, TemplateContext, TemplateManager};
-use chrono::NaiveDate;
+use chrono::{NaiveDate, Utc};
 use indexmap::IndexMap;
 use serde_yaml::Value;
 use std::path::{Path, PathBuf};
@@ -286,6 +286,20 @@ impl<FS: FileSystem> DiaryxApp<FS> {
     /// Clear the content (body) of a file, preserving frontmatter
     pub fn clear_content(&self, path: &str) -> Result<()> {
         self.set_content(path, "")
+    }
+
+    /// Update the 'updated' frontmatter property with the current timestamp (RFC 3339 format)
+    /// Creates frontmatter if none exists
+    pub fn touch_updated(&self, path: &str) -> Result<()> {
+        let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        self.set_frontmatter_property(path, "updated", Value::String(timestamp))
+    }
+
+    /// Save content and update the 'updated' timestamp in one operation
+    /// This is a convenience method that combines set_content and touch_updated
+    pub fn save_content(&self, path: &str, content: &str) -> Result<()> {
+        self.set_content(path, content)?;
+        self.touch_updated(path)
     }
 
     /// Append content to the end of a file's body
@@ -774,6 +788,27 @@ mod tests {
         fn is_dir(&self, _path: &Path) -> bool {
             // Mock implementation - assume any non-file path could be a directory
             false
+        }
+
+        fn move_file(&self, from: &Path, to: &Path) -> io::Result<()> {
+            let mut files = self.files.lock().unwrap();
+
+            if !files.contains_key(from) {
+                return Err(io::Error::new(io::ErrorKind::NotFound, "File not found"));
+            }
+            if files.contains_key(to) {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "Destination exists",
+                ));
+            }
+
+            let content = files
+                .remove(from)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "File not found"))?;
+            files.insert(to.to_path_buf(), content);
+
+            Ok(())
         }
     }
 

@@ -534,6 +534,27 @@ mod tests {
             // Mock implementation
             false
         }
+
+        fn move_file(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+            if !self.files.borrow().contains_key(from) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "not found",
+                ));
+            }
+            if self.files.borrow().contains_key(to) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "exists",
+                ));
+            }
+
+            let content = self.files.borrow_mut().remove(from).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, "not found")
+            })?;
+            self.files.borrow_mut().insert(to.to_path_buf(), content);
+            Ok(())
+        }
     }
 
     #[test]

@@ -5,7 +5,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use diaryx_core::{
     entry::DiaryxApp,
@@ -253,14 +253,8 @@ pub fn save_entry(path: &str, content: &str) -> Result<(), JsValue> {
     with_fs_mut(|fs| {
         let app = DiaryxApp::new(fs);
 
-        // Update the "updated" timestamp
-        let _ = app.set_frontmatter_property(
-            path,
-            "updated",
-            serde_yaml::Value::String(chrono::Utc::now().to_rfc3339()),
-        );
-
-        app.set_content(path, content)
+        // Save content and update the "updated" timestamp
+        app.save_content(path, content)
             .map_err(|e| JsValue::from_str(&e.to_string()))
     })
 }
@@ -421,6 +415,131 @@ fn add_to_parent_index(fs: &InMemoryFileSystem, entry_path: &str) -> Result<(), 
     Ok(())
 }
 
+/// Attach an existing entry to a parent index:
+/// - Adds the entry to the parent index's `contents` (using a relative child path)
+/// - Sets the entry's `part_of` to point back to the parent index (relative to the entry)
+///
+/// This is the WASM equivalent of "workspace add" behavior.
+#[wasm_bindgen]
+pub fn attach_entry_to_parent(entry_path: &str, parent_index_path: &str) -> Result<(), JsValue> {
+    with_fs_mut(|fs| {
+        let app = DiaryxApp::new(fs);
+
+        let entry = PathBuf::from(entry_path);
+        let parent_index = PathBuf::from(parent_index_path);
+
+        if !fs.exists(&entry) {
+            return Err(JsValue::from_str(&format!(
+                "Entry does not exist: {}",
+                entry_path
+            )));
+        }
+        if !fs.exists(&parent_index) {
+            return Err(JsValue::from_str(&format!(
+                "Parent index does not exist: {}",
+                parent_index_path
+            )));
+        }
+
+        // Add child link to parent's contents (path relative to the parent index directory)
+        let child_rel = relative_path_from_dir_to_target(
+            parent_index
+                .parent()
+                .unwrap_or_else(|| Path::new("")),
+            &entry,
+        );
+
+        let parent_index_str = parent_index.to_string_lossy().to_string();
+        add_to_index_contents(&app, &parent_index_str, &child_rel)?;
+
+        // Set child's part_of (path relative to the entry directory)
+        let parent_rel = relative_path_from_entry_to_target(&entry, &parent_index);
+        app.set_frontmatter_property(
+            entry_path,
+            "part_of",
+            serde_yaml::Value::String(parent_rel),
+        )
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+        Ok(())
+    })
+}
+
+/// Add `entry` to `index_path` frontmatter `contents` sequence (if not already present).
+fn add_to_index_contents(
+    app: &DiaryxApp<&InMemoryFileSystem>,
+    index_path: &str,
+    entry: &str,
+) -> Result<(), JsValue> {
+    let frontmatter = app
+        .get_all_frontmatter(index_path)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+    let mut contents: Vec<String> = frontmatter
+        .get("contents")
+        .and_then(|v| {
+            if let serde_yaml::Value::Sequence(seq) = v {
+                Some(
+                    seq.iter()
+                        .filter_map(|item| item.as_str().map(String::from))
+                        .collect(),
+                )
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+
+    if !contents.contains(&entry.to_string()) {
+        contents.push(entry.to_string());
+        contents.sort();
+
+        let yaml_contents: Vec<serde_yaml::Value> = contents
+            .into_iter()
+            .map(serde_yaml::Value::String)
+            .collect();
+
+        app.set_frontmatter_property(
+            index_path,
+            "contents",
+            serde_yaml::Value::Sequence(yaml_contents),
+        )
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    }
+
+    Ok(())
+}
+
+/// Compute a relative path from a base directory to a target file.
+/// Example: base_dir `workspace`, target `workspace/Daily/daily_index.md` => `Daily/daily_index.md`
+fn relative_path_from_dir_to_target(base_dir: &Path, target_path: &Path) -> String {
+    let base_components: Vec<_> = base_dir.components().collect();
+    let target_components: Vec<_> = target_path.components().collect();
+
+    let mut common = 0usize;
+    while common < base_components.len()
+        && common < target_components.len()
+        && base_components[common] == target_components[common]
+    {
+        common += 1;
+    }
+
+    let mut parts: Vec<String> = Vec::new();
+    for _ in common..base_components.len() {
+        parts.push("..".to_string());
+    }
+
+    for comp in target_components.iter().skip(common) {
+        parts.push(comp.as_os_str().to_string_lossy().to_string());
+    }
+
+    if parts.is_empty() {
+        ".".to_string()
+    } else {
+        parts.join("/")
+    }
+}
+
 /// Delete an entry.
 #[wasm_bindgen]
 pub fn delete_entry(path: &str) -> Result<(), JsValue> {
@@ -430,6 +549,159 @@ pub fn delete_entry(path: &str) -> Result<(), JsValue> {
         fs.delete_file(std::path::Path::new(path))
             .map_err(|e| JsValue::from_str(&e.to_string()))
     })
+}
+
+/// Move/rename an entry, keeping index `contents` and the entry's `part_of` metadata up to date.
+///
+/// Rules:
+/// - Moves the file from `from_path` to `to_path` (errors if source missing or destination exists).
+/// - Removes the entry from the old parent index's `contents` (if that index exists).
+/// - Adds the entry to the new parent index's `contents` (if that index exists).
+/// - Updates the moved entry's `part_of` to point at the new parent index (`index.md`) **relative to the entry** (only if the new parent index exists).
+#[wasm_bindgen]
+pub fn move_entry(from_path: &str, to_path: &str) -> Result<String, JsValue> {
+    with_fs_mut(|fs| {
+        let app = DiaryxApp::new(fs);
+
+        // Validate paths
+        let from = PathBuf::from(from_path);
+        let to = PathBuf::from(to_path);
+
+        if from == to {
+            return Ok(to_path.to_string());
+        }
+
+        // Capture old parent/index and filenames before moving
+        let old_parent = from
+            .parent()
+            .ok_or_else(|| JsValue::from_str("No parent directory for source path"))?
+            .to_path_buf();
+        let old_index_path = old_parent.join("index.md");
+        let old_file_name = from
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| JsValue::from_str("Invalid source file name"))?
+            .to_string();
+
+        let new_parent = to
+            .parent()
+            .ok_or_else(|| JsValue::from_str("No parent directory for destination path"))?
+            .to_path_buf();
+        let new_index_path = new_parent.join("index.md");
+        let new_file_name = to
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| JsValue::from_str("Invalid destination file name"))?
+            .to_string();
+
+        // Move/rename the file itself (this also creates destination dirs if FS implementation supports it)
+        fs.move_file(&from, &to)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+        // Update old parent index: remove old_file_name from contents (if index exists)
+        if fs.exists(&old_index_path) {
+            let old_index_str = old_index_path.to_string_lossy().to_string();
+            remove_from_index_contents(&app, &old_index_str, &old_file_name)?;
+        }
+
+        // Update new parent index: add new_file_name to contents (if index exists)
+        if fs.exists(&new_index_path) {
+            let new_index_str = new_index_path.to_string_lossy().to_string();
+            add_to_index_contents(&app, &new_index_str, &new_file_name)?;
+
+            // Update moved entry's part_of to point to the new parent index, relative to the entry location.
+            let rel_part_of = relative_path_from_entry_to_target(&to, &new_index_path);
+            app.set_frontmatter_property(
+                &to_path,
+                "part_of",
+                serde_yaml::Value::String(rel_part_of),
+            )
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        }
+
+        Ok(to_path.to_string())
+    })
+}
+
+/// (removed) duplicate `add_to_index_contents` helper
+/// Use the earlier `add_to_index_contents` defined above (used by `attach_entry_to_parent`).
+
+/// Remove `entry` from `index_path` frontmatter `contents` sequence (if present).
+fn remove_from_index_contents(app: &DiaryxApp<&InMemoryFileSystem>, index_path: &str, entry: &str) -> Result<(), JsValue> {
+    let frontmatter = app
+        .get_all_frontmatter(index_path)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+    let mut contents: Vec<String> = frontmatter
+        .get("contents")
+        .and_then(|v| {
+            if let serde_yaml::Value::Sequence(seq) = v {
+                Some(
+                    seq.iter()
+                        .filter_map(|item| item.as_str().map(String::from))
+                        .collect(),
+                )
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+
+    let before_len = contents.len();
+    contents.retain(|c| c != entry);
+
+    if contents.len() != before_len {
+        contents.sort();
+        let yaml_contents: Vec<serde_yaml::Value> = contents
+            .into_iter()
+            .map(serde_yaml::Value::String)
+            .collect();
+
+        app.set_frontmatter_property(
+            index_path,
+            "contents",
+            serde_yaml::Value::Sequence(yaml_contents),
+        )
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    }
+
+    Ok(())
+}
+
+/// Compute a relative path from the entry file location to a target file.
+/// Example: entry at `a/b/note.md`, target at `a/index.md` => `../index.md`
+fn relative_path_from_entry_to_target(entry_path: &Path, target_path: &Path) -> String {
+    // We want relative from entry's directory.
+    let entry_dir = entry_path.parent().unwrap_or_else(|| Path::new(""));
+
+    let entry_components: Vec<_> = entry_dir.components().collect();
+    let target_components: Vec<_> = target_path.components().collect();
+
+    // Find common prefix length
+    let mut common = 0usize;
+    while common < entry_components.len()
+        && common < target_components.len()
+        && entry_components[common] == target_components[common]
+    {
+        common += 1;
+    }
+
+    // For each remaining entry_dir component, we need a `..`
+    let mut parts: Vec<String> = Vec::new();
+    for _ in common..entry_components.len() {
+        parts.push("..".to_string());
+    }
+
+    // Then append the remaining target components
+    for comp in target_components.iter().skip(common) {
+        parts.push(comp.as_os_str().to_string_lossy().to_string());
+    }
+
+    if parts.is_empty() {
+        ".".to_string()
+    } else {
+        parts.join("/")
+    }
 }
 
 // ============================================================================

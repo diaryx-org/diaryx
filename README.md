@@ -2,13 +2,13 @@
 title: Diaryx
 description: Repository for the Diaryx project
 author: adammharris
+version: v0.4.5
 contents:
   - LICENSE.md
   - roadmap.md
   - crates/diaryx_cli/README.md
   - crates/diaryx_core/README.md
   - apps/README.md
-version: v0.4.5
 ---
 
 # Diaryx
@@ -27,7 +27,7 @@ Click [here](crates/diaryx_cli/README.md) for information about the `diaryx` com
 
 Click [here](apps/tauri/README.md) for information about the Diaryx app (Tauri).
 
-Also, you can try a live demo at <https://diaryx-org.github.io/diaryx-core/>.
+Also, you can try a live demo at <https://diaryx-org.github.io/diaryx/>.
 
 You can also go into GitHub releases and use the app as you please, "except for providing any product that competes with the software or any product the licensor or any of its affiliates provides using the software." (See [the license](./LICENSE.md)).
 

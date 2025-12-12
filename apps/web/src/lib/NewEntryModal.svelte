@@ -15,9 +15,23 @@
   let title = $state("");
   let open = $state(true);
 
+  function normalizeEntryPath(input: string): string {
+    const raw = input.trim();
+    if (!raw) return "";
+
+    // If the user only typed a filename (no folder), default to workspace root.
+    // (We keep it simple: no leading "./", no absolute paths.)
+    const hasFolder = raw.includes("/");
+    if (!hasFolder) return raw;
+
+    // Otherwise, use what they typed.
+    return raw;
+  }
+
   function handleSave() {
-    if (path.trim()) {
-      onSave(path, title);
+    const normalizedPath = normalizeEntryPath(path);
+    if (normalizedPath) {
+      onSave(normalizedPath, title);
       open = false;
     }
   }
@@ -30,7 +44,7 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
-    if (e.key === "Enter" && path.trim()) {
+    if (e.key === "Enter" && normalizeEntryPath(path)) {
       e.preventDefault();
       handleSave();
     }
@@ -42,7 +56,8 @@
     <Dialog.Header>
       <Dialog.Title>New Entry</Dialog.Title>
       <Dialog.Description>
-        Create a new journal entry. Enter the path and optionally a title.
+        Create a new journal entry. Enter a filename (it will be created in the
+        workspace root) or a full relative path, plus an optional title.
       </Dialog.Description>
     </Dialog.Header>
 
@@ -52,11 +67,12 @@
         <Input
           id="entry-path"
           bind:value={path}
-          placeholder="e.g., journal/2025-01-15.md"
+          placeholder="e.g., 2025-01-15.md (workspace root) or journal/2025-01-15.md"
           onkeydown={handleKeydown}
         />
         <p class="text-xs text-muted-foreground">
-          The path for the new entry. Should end with .md
+          If you enter only a filename, it will be created in the workspace root
+          folder. Paths should end with .md
         </p>
       </div>
 
@@ -75,7 +91,9 @@
       <Button variant="outline" onclick={() => handleOpenChange(false)}>
         Cancel
       </Button>
-      <Button onclick={handleSave} disabled={!path.trim()}>Create</Button>
+      <Button onclick={handleSave} disabled={!normalizeEntryPath(path)}
+        >Create</Button
+      >
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

@@ -50,7 +50,7 @@ fn determine_editor(config: &Config) -> Result<String> {
     #[cfg(not(target_os = "windows"))]
     {
         // Try common editors
-        for editor in &["vim", "vi", "nano", "emacs"] {
+        for editor in &["hx", "nvim", "nano", "vim", "emacs", "vi"] {
             if which(editor) {
                 return Ok(editor.to_string());
             }

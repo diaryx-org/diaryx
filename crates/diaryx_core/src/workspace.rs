@@ -114,9 +114,13 @@ impl IndexFile {
 /// Node in the workspace tree (for display purposes)
 #[derive(Debug, Clone, Serialize)]
 pub struct TreeNode {
+    /// Title of index/root file (or filename if no title)
     pub name: String,
+    /// Description attribute (if given)
     pub description: Option<String>,
+    /// Path to index/root file
     pub path: PathBuf,
+    /// `contents` property list
     pub children: Vec<TreeNode>,
 }
 
@@ -126,6 +130,7 @@ pub struct Workspace<FS: FileSystem> {
 }
 
 impl<FS: FileSystem> Workspace<FS> {
+  /// Create a new workspace
     pub fn new(fs: FS) -> Self {
         Self { fs }
     }

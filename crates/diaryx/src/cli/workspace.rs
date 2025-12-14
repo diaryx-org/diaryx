@@ -1,7 +1,7 @@
 //! Workspace command handlers
 
 use diaryx_core::config::Config;
-use diaryx_core::entry::DiaryxApp;
+use diaryx_core::entry::{DiaryxApp, prettify_filename};
 use diaryx_core::fs::RealFileSystem;
 use diaryx_core::template::TemplateContext;
 use diaryx_core::workspace::Workspace;
@@ -1719,23 +1719,6 @@ fn handle_create(
             eprintln!("✗ Error launching editor: {}", e);
         }
     }
-}
-
-/// Convert a filename to a prettier title
-/// e.g., "my-note" -> "My Note", "some_file" -> "Some File"
-fn prettify_filename(filename: &str) -> String {
-    filename
-        .replace(['-', '_'], " ")
-        .split_whitespace()
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(first) => first.to_uppercase().chain(chars).collect(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 /// Handle the 'workspace remove' command

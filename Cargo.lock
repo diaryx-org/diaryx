@@ -3,24 +3,6 @@
 version = 4
 
 [[package]]
-name = "Diaryx"
-version = "0.4.5"
-dependencies = [
- "diaryx_core",
- "env_logger",
- "log",
- "serde",
- "serde_json",
- "serde_yaml",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-fs",
- "tauri-plugin-shell",
- "thiserror 2.0.17",
-]
-
-[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -832,6 +814,24 @@ dependencies = [
  "serde_yaml",
  "thiserror 2.0.17",
  "toml 0.9.8",
+]
+
+[[package]]
+name = "diaryx_tauri"
+version = "0.4.5"
+dependencies = [
+ "diaryx_core",
+ "env_logger",
+ "log",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-fs",
+ "tauri-plugin-shell",
+ "thiserror 2.0.17",
 ]
 
 [[package]]

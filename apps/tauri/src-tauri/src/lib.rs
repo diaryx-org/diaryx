@@ -1,9 +1,12 @@
-// src-tauri/src/lib.rs
+//! # Diaryx Tauri Library
+//!
+//! This is the library file for the Tauri backend.
+//!
 
-// 1. Declare the commands module here so the library owns it
+/// Where all the Tauri `invoke` functions are defined.
 mod commands;
 
-// 2. Create the run function that mobile and desktop will both use
+/// Run function used by Tauri clients. Builds Tauri plugins and invokable commands.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize logging

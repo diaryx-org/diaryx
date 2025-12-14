@@ -1,3 +1,4 @@
+//!
 //! Tauri IPC command handlers
 //!
 //! These commands are callable from the frontend via Tauri's invoke system.
@@ -560,14 +561,14 @@ pub fn delete_entry(path: String) -> Result<(), SerializableError> {
 
 #[derive(serde::Deserialize)]
 pub struct MoveEntryRequest {
-    pub fromPath: String,
-    pub toPath: String,
+    pub from_path: String,
+    pub to_path: String,
 }
 
 #[derive(serde::Deserialize)]
 pub struct AttachEntryToParentRequest {
-    pub entryPath: String,
-    pub parentIndexPath: String,
+    pub entry_path: String,
+    pub parent_index_path: String,
 }
 
 /// Move/rename an entry, keeping parent index `contents` and entry `part_of` consistent.
@@ -575,8 +576,8 @@ pub struct AttachEntryToParentRequest {
 pub fn move_entry(request: MoveEntryRequest) -> Result<PathBuf, SerializableError> {
     let app = DiaryxApp::new(RealFileSystem);
 
-    let from = PathBuf::from(&request.fromPath);
-    let to = PathBuf::from(&request.toPath);
+    let from = PathBuf::from(&request.from_path);
+    let to = PathBuf::from(&request.to_path);
 
     if from == to {
         return Ok(to);
@@ -618,7 +619,7 @@ pub fn move_entry(request: MoveEntryRequest) -> Result<PathBuf, SerializableErro
             kind: "FileMoveError".to_string(),
             message: format!(
                 "Failed to move entry '{}' -> '{}': {}",
-                request.fromPath, request.toPath, e
+                request.from_path, request.to_path, e
             ),
             path: Some(from.clone()),
         })?;
@@ -633,7 +634,7 @@ pub fn move_entry(request: MoveEntryRequest) -> Result<PathBuf, SerializableErro
         add_to_index_contents(&app, &new_index, new_file_name)?;
 
         let rel_part_of = relative_path_from_entry_to_target(&to, &new_index);
-        let to_str = request.toPath.clone();
+        let to_str = request.to_path.clone();
         app.set_frontmatter_property(
             &to_str,
             "part_of",
@@ -825,13 +826,13 @@ fn add_to_index_contents_tauri(
 pub fn attach_entry_to_parent(request: AttachEntryToParentRequest) -> Result<(), SerializableError> {
     let app = DiaryxApp::new(RealFileSystem);
 
-    let entry = PathBuf::from(&request.entryPath);
-    let parent_index = PathBuf::from(&request.parentIndexPath);
+    let entry = PathBuf::from(&request.entry_path);
+    let parent_index = PathBuf::from(&request.parent_index_path);
 
     if !RealFileSystem.exists(&entry) {
         return Err(SerializableError {
             kind: "FileNotFound".to_string(),
-            message: format!("Entry does not exist: {}", request.entryPath),
+            message: format!("Entry does not exist: {}", request.entry_path),
             path: Some(entry),
         });
     }
@@ -839,7 +840,7 @@ pub fn attach_entry_to_parent(request: AttachEntryToParentRequest) -> Result<(),
     if !RealFileSystem.exists(&parent_index) {
         return Err(SerializableError {
             kind: "FileNotFound".to_string(),
-            message: format!("Parent index does not exist: {}", request.parentIndexPath),
+            message: format!("Parent index does not exist: {}", request.parent_index_path),
             path: Some(parent_index),
         });
     }
@@ -852,7 +853,7 @@ pub fn attach_entry_to_parent(request: AttachEntryToParentRequest) -> Result<(),
     // Set child's part_of (relative to the entry directory)
     let parent_rel = relative_path_from_entry_to_target(&entry, &parent_index);
     app.set_frontmatter_property(
-        &request.entryPath,
+        &request.entry_path,
         "part_of",
         serde_yaml::Value::String(parent_rel),
     )

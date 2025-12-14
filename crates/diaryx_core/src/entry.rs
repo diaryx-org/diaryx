@@ -8,15 +8,21 @@ use indexmap::IndexMap;
 use serde_yaml::Value;
 use std::path::{Path, PathBuf};
 
+/// This is the struct representing a Diaryx app. It takes a filesystem interface so Diaryx operations
+/// can be performed in multiple clients.
 pub struct DiaryxApp<FS: FileSystem> {
     fs: FS,
 }
 
+/// This is the implementation of a Diaryx app. Given a filesytem, it can do various operations in any filesystem environment.
 impl<FS: FileSystem> DiaryxApp<FS> {
+
+    /// Create a new Diaryx app
     pub fn new(fs: FS) -> Self {
         Self { fs }
     }
 
+    /// Create a new entry
     pub fn create_entry(&self, path: &str) -> Result<()> {
         let content = format!("---\ntitle: {}\n---\n\n# {}\n\n", path, path);
         self.fs.create_new(std::path::Path::new(path), &content)?;
@@ -680,7 +686,7 @@ impl<FS: FileSystem> DiaryxApp<FS> {
 
 /// Convert a filename to a prettier title
 /// e.g., "my-note" -> "My Note", "some_file" -> "Some File"
-fn prettify_filename(filename: &str) -> String {
+pub fn prettify_filename(filename: &str) -> String {
     filename
         .replace(['-', '_'], " ")
         .split_whitespace()

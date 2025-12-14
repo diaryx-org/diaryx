@@ -3,83 +3,137 @@ use std::path::PathBuf;
 use serde::Serialize;
 use thiserror::Error;
 
-/// Unified error type for diaryx operations
+/// Unified error type for Diaryx operations
+///
+/// Many of these are necessary because of the abstracted FileSystem in `fs.rs`.
 #[derive(Debug, Error)]
 pub enum DiaryxError {
-    // IO errors
+    /// General error for any kind of I/O issue not otherwise documented here.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// A kind of error representing a failed file read.
+    ///
+    /// Can occur due to:
+    /// - insufficient permissions
+    /// - locking/concurrent access
+    /// - resource issues
+    /// and so forth.
+    ///
+    /// Diaryx should display an error message if a file cannot be read.
     #[error("Failed to read file '{path}': {source}")]
     FileRead {
+        /// Path to the file that failed to be read
         path: PathBuf,
+        /// std::io error that caused this error
         source: std::io::Error,
     },
 
+    /// A kind of error representing a failed file write.
+    ///
+    /// Can occur due to:
+    /// - insufficient permissions
+    /// - locking/concurrent access
+    /// - resource issues
+    /// and so forth.
+    ///
+    /// Diaryx should display an error message if a file cannot be written.
     #[error("Failed to write file '{path}': {source}")]
     FileWrite {
+        /// Path to file that failed to be written
         path: PathBuf,
+        /// std::io error that caused this error
         source: std::io::Error,
     },
 
-    // Frontmatter errors
+    /// An error that occured while serializing or deserializing YAML data from the frontmatter.
+    ///
+    /// Inherited from `serde_yaml::Error`
     #[error("YAML parsing error: {0}")]
     Yaml(#[from] serde_yaml::Error),
 
+    /// An error that occurs when no frontmatter is found in a file.
+    ///
+    /// Diaryx should gracefully work around this error by doing things such as the following:
+    /// - If attempting to read frontmatter, simply display empty values for all possible.
+    /// - If trying to write to frontmatter, initialize it first by adding `---` delimiters before and after.
     #[error("No frontmatter found in '{0}'")]
     NoFrontmatter(PathBuf),
 
+    /// Error from invalid/unparseable frontmatter.
+    ///
+    /// Diaryx should gracefully work around this error whenever possible.
     #[error("Invalid frontmatter structure in '{0}'")]
     InvalidFrontmatter(PathBuf),
 
-    // Date errors
+    /// Date errors
     #[error(
         "Invalid date format: '{0}'. Try 'today', 'yesterday', 'last friday', '3 days ago', or 'YYYY-MM-DD'"
     )]
     InvalidDateFormat(String),
 
-    // Config errors
+    /// Error that occurs when deserializing config.toml file.
+    ///
+    /// Inherited from `toml::de::Error`
     #[error("Config parse error: {0}")]
     ConfigParse(#[from] toml::de::Error),
 
+    /// Config failed to serialize.
+    ///
+    /// Inherited from `toml::ser::Error`.
     #[error("Config serialize error: {0}")]
     ConfigSerialize(#[from] toml::ser::Error),
 
+    /// Error indicating a failure to find config directory.
+    /// Diaryx should fall back to default config when this occurs.
     #[error("Could not determine config directory")]
     NoConfigDir,
 
+    /// Error from missing config.
     #[error("Configuration not initialized. Run 'diaryx init' first.")]
     ConfigNotInitialized,
 
-    // Editor errors
+    /// Error when editor is not configured for `diaryx open` commands and similar.
+    /// This should be rare, because in Diaryx CLI it tries common editors like `nano` before returning this.
     #[error("No editor found. Set $EDITOR, $VISUAL, or configure editor in config file")]
     NoEditorFound,
 
+    /// Error from failing to launch an editor.
+    /// Common in WASI or other environments that don't support forking a process.
     #[error("Failed to launch editor '{editor}': {source}")]
     EditorLaunchFailed {
+        /// Name of editor command that failed
         editor: String,
+        /// std::io error that caused this error
         source: std::io::Error,
     },
 
+    /// Error for when editor fails for some reason.
+    /// Should be passed onto the user.
     #[error("Editor exited with code {0}")]
     EditorExited(i32),
 
-    // Workspace errors
+    /// Error for when workspace is not found.
+    /// Should give an error message to user, then possibly fall back to default config.
     #[error("Workspace not found at '{0}'")]
     WorkspaceNotFound(PathBuf),
 
+    /// When creating a workspace, workspace already exists.
+    /// Should give a message to user.
     #[error("Workspace already exists at '{0}'")]
     WorkspaceAlreadyExists(PathBuf),
 
-    // Template errors
+    /// Error for when template is not defined.
+    /// Should give a message to the user.
     #[error("Template not found: '{0}'")]
     TemplateNotFound(String),
 
+    /// Error for when trying to create a template that already exists.
     #[error("Template already exists: '{0}'")]
     TemplateAlreadyExists(PathBuf),
 }
 
-/// Result type alias for diaryx operations
+/// Result type alias for Diaryx operations
 pub type Result<T> = std::result::Result<T, DiaryxError>;
 
 /// A serializable representation of DiaryxError for IPC (e.g., Tauri)

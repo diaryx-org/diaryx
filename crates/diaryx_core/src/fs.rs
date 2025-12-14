@@ -86,6 +86,7 @@ use std::io::Write;
 
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy)]
+/// This is a simple filesystem implementation that simply maps to std::fs methods
 pub struct RealFileSystem;
 
 #[cfg(not(target_arch = "wasm32"))]

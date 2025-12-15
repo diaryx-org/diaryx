@@ -1,16 +1,39 @@
-//! CLI module - command-line interface for diaryx
+#![doc = include_str!("./README.md")]
 
+/// Clap argument definitions
 mod args;
+
+/// Body content manipulation
 mod content;
+
+/// `today`, `yesterday`, `open`, `create` commands
 mod entry;
+
+/// `diaryx_core` export with audience filtering
 mod export;
+
+/// normalize command changes filenames to slug
 mod normalize;
+
+/// Frontmatter property manipulation
 mod property;
+
+/// `diaryx_core` publish
 mod publish;
+
+/// Search command handler
 mod search;
+
+/// diaryx sort command (sorting frontmatter properties)
 mod sort;
+
+/// Template management
 mod template;
+
+/// Shared CLI utilities
 mod util;
+
+/// `diaryx_core` workspace index management
 mod workspace;
 
 use clap::Parser;

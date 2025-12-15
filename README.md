@@ -23,7 +23,7 @@ A monorepo for the Diaryx project, consisting of:
 
 ## Installation
 
-Click [here](crates/diaryx_cli/README.md) for information about the `diaryx` command-line tool.
+Click [here](crates/diaryx/README.md) for information about the `diaryx` command-line tool.
 
 Click [here](apps/tauri/README.md) for information about the Diaryx app (Tauri).
 
@@ -51,7 +51,7 @@ cd /path/to/diaryx-core
 To install the CLI:
 
 ```bash
-cargo install --path crates/diaryx_cli .
+cargo install --path crates/diaryx_cli
 ```
 
 To build the Tauri app:

@@ -1,8 +1,11 @@
 ---
 title: Diaryx CLI
+
 author: adammharris
+
 audience:
   - public
+
 part_of: ../../README.md
 ---
 

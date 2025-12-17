@@ -53,11 +53,16 @@ pub enum ExclusionReason {
     Private,
     /// File's audience doesn't include the target audience
     AudienceMismatch {
+        /// What audiences are intended to view the document
         file_audience: Vec<String>,
+        /// What audiences were requested for the export
         requested: String,
     },
     /// File inherits private from parent
-    InheritedPrivate { from: PathBuf },
+    InheritedPrivate {
+      /// Path to the parent that was marked as `private`
+      from: PathBuf
+    },
     /// File has no audience and inherits to root which has no audience (default private)
     NoAudienceDefined,
 }
@@ -101,6 +106,8 @@ pub struct Exporter<FS: FileSystem> {
 }
 
 impl<FS: FileSystem + Clone> Exporter<FS> {
+
+    /// Create a new exporter
     pub fn new(fs: FS) -> Self {
         Self {
             workspace: Workspace::new(fs),
@@ -440,7 +447,9 @@ impl<FS: FileSystem + Clone> Exporter<FS> {
 /// Statistics from an export operation
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ExportStats {
+    /// Number of files successfully exported
     pub files_exported: usize,
+    /// Number of files excluded for some reason
     pub files_excluded: usize,
 }
 
@@ -533,6 +542,27 @@ mod tests {
         fn is_dir(&self, _path: &Path) -> bool {
             // Mock implementation
             false
+        }
+
+        fn move_file(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+            if !self.files.borrow().contains_key(from) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "not found",
+                ));
+            }
+            if self.files.borrow().contains_key(to) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "exists",
+                ));
+            }
+
+            let content = self.files.borrow_mut().remove(from).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, "not found")
+            })?;
+            self.files.borrow_mut().insert(to.to_path_buf(), content);
+            Ok(())
         }
     }
 

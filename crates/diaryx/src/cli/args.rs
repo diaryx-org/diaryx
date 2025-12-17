@@ -621,7 +621,7 @@ pub enum WorkspaceCommands {
         new_index: Option<String>,
 
         /// Recursively add all files in subdirectories, creating indexes for each
-        /// Each directory gets a <dirname>_index.md file
+        /// Each directory gets a `<dirname>_index.md` file
         #[arg(short, long)]
         recursive: bool,
 

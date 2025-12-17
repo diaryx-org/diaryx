@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use crate::error::{DiaryxError, Result};
 use crate::fs::FileSystem;
 
+/// `Config` is a data structure that represents the parts of Diaryx that the user can configure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Default workspace directory

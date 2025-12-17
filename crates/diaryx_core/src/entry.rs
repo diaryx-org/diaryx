@@ -3,20 +3,26 @@ use crate::date::{date_to_path, parse_date};
 use crate::error::{DiaryxError, Result};
 use crate::fs::FileSystem;
 use crate::template::{Template, TemplateContext, TemplateManager};
-use chrono::NaiveDate;
+use chrono::{NaiveDate, Utc};
 use indexmap::IndexMap;
 use serde_yaml::Value;
 use std::path::{Path, PathBuf};
 
+/// This is the struct representing a Diaryx app. It takes a filesystem interface so Diaryx operations
+/// can be performed in multiple clients.
 pub struct DiaryxApp<FS: FileSystem> {
     fs: FS,
 }
 
+/// This is the implementation of a Diaryx app. Given a filesytem, it can do various operations in any filesystem environment.
 impl<FS: FileSystem> DiaryxApp<FS> {
+
+    /// DiaryxApp constructor
     pub fn new(fs: FS) -> Self {
         Self { fs }
     }
 
+    /// Create a new entry
     pub fn create_entry(&self, path: &str) -> Result<()> {
         let content = format!("---\ntitle: {}\n---\n\n# {}\n\n", path, path);
         self.fs.create_new(std::path::Path::new(path), &content)?;
@@ -195,16 +201,16 @@ impl<FS: FileSystem> DiaryxApp<FS> {
         Ok(())
     }
 
-    /// Adds or updates a frontmatter property
-    /// Creates frontmatter if none exists
+    /// Adds or updates a frontmatter property.
+    /// Creates frontmatter if none exists.
     pub fn set_frontmatter_property(&self, path: &str, key: &str, value: Value) -> Result<()> {
         let (mut frontmatter, body) = self.parse_file_or_create_frontmatter(path)?;
         frontmatter.insert(key.to_string(), value);
         self.reconstruct_file(path, &frontmatter, &body)
     }
 
-    /// Removes a frontmatter property
-    /// Does nothing if no frontmatter exists or key is not found
+    /// Removes a frontmatter property.
+    /// Does nothing if no frontmatter exists or key is not found.
     pub fn remove_frontmatter_property(&self, path: &str, key: &str) -> Result<()> {
         match self.parse_file(path) {
             Ok((mut frontmatter, body)) => {
@@ -216,8 +222,8 @@ impl<FS: FileSystem> DiaryxApp<FS> {
         }
     }
 
-    /// Renames a frontmatter property key
-    /// Returns Ok(true) if the key was found and renamed, Ok(false) if key was not found or no frontmatter
+    /// Renames a frontmatter property key.
+    /// Returns Ok(true) if the key was found and renamed, Ok(false) if key was not found or no frontmatter.
     pub fn rename_frontmatter_property(
         &self,
         path: &str,
@@ -248,8 +254,8 @@ impl<FS: FileSystem> DiaryxApp<FS> {
         Ok(true)
     }
 
-    /// Gets a frontmatter property value
-    /// Returns Ok(None) if no frontmatter exists or key is not found
+    /// Gets a frontmatter property value.
+    /// Returns Ok(None) if no frontmatter exists or key is not found.
     pub fn get_frontmatter_property(&self, path: &str, key: &str) -> Result<Option<Value>> {
         match self.parse_file(path) {
             Ok((frontmatter, _)) => Ok(frontmatter.get(key).cloned()),
@@ -258,8 +264,8 @@ impl<FS: FileSystem> DiaryxApp<FS> {
         }
     }
 
-    /// Gets all frontmatter properties
-    /// Returns empty map if no frontmatter exists
+    /// Gets all frontmatter properties.
+    /// Returns empty map if no frontmatter exists.
     pub fn get_all_frontmatter(&self, path: &str) -> Result<IndexMap<String, Value>> {
         match self.parse_file(path) {
             Ok((frontmatter, _)) => Ok(frontmatter),
@@ -270,25 +276,39 @@ impl<FS: FileSystem> DiaryxApp<FS> {
 
     // ==================== Content Methods ====================
 
-    /// Get the content (body) of a file, excluding frontmatter
+    /// Get the content (body) of a file, excluding frontmatter.
     pub fn get_content(&self, path: &str) -> Result<String> {
         let (_, body) = self.parse_file_or_create_frontmatter(path)?;
         Ok(body)
     }
 
-    /// Set the content (body) of a file, preserving frontmatter
-    /// Creates frontmatter if none exists
+    /// Set the content (body) of a file, preserving frontmatter.
+    /// Creates frontmatter if none exists.
     pub fn set_content(&self, path: &str, content: &str) -> Result<()> {
         let (frontmatter, _) = self.parse_file_or_create_frontmatter(path)?;
         self.reconstruct_file(path, &frontmatter, content)
     }
 
-    /// Clear the content (body) of a file, preserving frontmatter
+    /// Clear the content (body) of a file, preserving frontmatter.
     pub fn clear_content(&self, path: &str) -> Result<()> {
         self.set_content(path, "")
     }
 
-    /// Append content to the end of a file's body
+    /// Update the 'updated' frontmatter property with the current timestamp (RFC 3339 format).
+    /// Creates frontmatter if none exists.
+    pub fn touch_updated(&self, path: &str) -> Result<()> {
+        let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        self.set_frontmatter_property(path, "updated", Value::String(timestamp))
+    }
+
+    /// Save content and update the 'updated' timestamp in one operation.
+    /// This is a convenience method that combines set_content and touch_updated.
+    pub fn save_content(&self, path: &str, content: &str) -> Result<()> {
+        self.set_content(path, content)?;
+        self.touch_updated(path)
+    }
+
+    /// Append content to the end of a file's body.
     pub fn append_content(&self, path: &str, content: &str) -> Result<()> {
         let (frontmatter, body) = self.parse_file_or_create_frontmatter(path)?;
         let new_body = if body.is_empty() {
@@ -301,7 +321,7 @@ impl<FS: FileSystem> DiaryxApp<FS> {
         self.reconstruct_file(path, &frontmatter, &new_body)
     }
 
-    /// Prepend content to the beginning of a file's body
+    /// Prepend content to the beginning of a file's body.
     pub fn prepend_content(&self, path: &str, content: &str) -> Result<()> {
         let (frontmatter, body) = self.parse_file_or_create_frontmatter(path)?;
         let new_body = if body.is_empty() {
@@ -316,10 +336,10 @@ impl<FS: FileSystem> DiaryxApp<FS> {
 
     // ==================== Frontmatter Sorting ====================
 
-    /// Sort frontmatter keys according to a pattern
-    /// Pattern is comma-separated keys, with "*" meaning "rest alphabetically"
+    /// Sort frontmatter keys according to a pattern.
+    /// Pattern is comma-separated keys, with "*" meaning "rest alphabetically".
     /// Example: "title,description,*" puts title first, description second, rest alphabetically
-    /// Does nothing if no frontmatter exists (won't add empty frontmatter)
+    /// Does nothing if no frontmatter exists (won't add empty frontmatter).
     pub fn sort_frontmatter(&self, path: &str, pattern: Option<&str>) -> Result<()> {
         let (frontmatter, body) = match self.parse_file(path) {
             Ok(result) => result,
@@ -365,7 +385,7 @@ impl<FS: FileSystem> DiaryxApp<FS> {
             }
         }
 
-        // If no "*" was in pattern, append any remaining keys alphabetically
+        // If no "*" was in pattern, append any remaining keys alphabetically.
         if !remaining.is_empty() {
             let mut rest: Vec<_> = remaining.drain(..).collect();
             rest.sort_by(|a, b| a.0.cmp(&b.0));
@@ -377,13 +397,13 @@ impl<FS: FileSystem> DiaryxApp<FS> {
         result
     }
 
-    /// Get the full path for a date-based entry
+    /// Get the full path for a date-based entry.
     pub fn get_dated_entry_path(&self, date_str: &str, config: &Config) -> Result<PathBuf> {
         let date = parse_date(date_str)?;
         Ok(date_to_path(&config.daily_entry_dir(), &date))
     }
 
-    /// Resolve a path string - either a date string ("today", "2024-01-15") or a literal path
+    /// Resolve a path string - either a date string ("today", "2024-01-15") or a literal path.
     /// If it parses as a date, returns the dated entry path. Otherwise, treats it as a literal path.
     pub fn resolve_path(&self, path_str: &str, config: &Config) -> PathBuf {
         // Try to parse as a date first
@@ -395,12 +415,12 @@ impl<FS: FileSystem> DiaryxApp<FS> {
         }
     }
 
-    /// Create a dated entry with proper frontmatter and index hierarchy
+    /// Create a dated entry with proper frontmatter and index hierarchy.
     pub fn create_dated_entry(&self, date: &NaiveDate, config: &Config) -> Result<PathBuf> {
         self.create_dated_entry_with_template(date, config, None)
     }
 
-    /// Create a dated entry with an optional template
+    /// Create a dated entry with an optional template.
     ///
     /// If template_name is provided, uses that template.
     /// Otherwise uses `daily_template` from config, or falls back to built-in "daily" template.
@@ -453,14 +473,14 @@ impl<FS: FileSystem> DiaryxApp<FS> {
         Ok(path)
     }
 
-    /// Ensure a dated entry exists, creating it if necessary
-    /// This will NEVER overwrite an existing file
+    /// Ensure a dated entry exists, creating it if necessary.
+    /// This will NEVER overwrite an existing file.
     pub fn ensure_dated_entry(&self, date: &NaiveDate, config: &Config) -> Result<PathBuf> {
         self.ensure_dated_entry_with_template(date, config, None)
     }
 
-    /// Ensure a dated entry exists with an optional template
-    /// This will NEVER overwrite an existing file
+    /// Ensure a dated entry exists with an optional template.
+    /// This will NEVER overwrite an existing file.
     pub fn ensure_dated_entry_with_template(
         &self,
         date: &NaiveDate,
@@ -478,9 +498,9 @@ impl<FS: FileSystem> DiaryxApp<FS> {
         self.create_dated_entry_with_template(date, config, template_name)
     }
 
-    /// Ensure the daily index hierarchy exists for a given date
+    /// Ensure the daily index hierarchy exists for a given date.
     /// Creates: daily_index.md -> YYYY_index.md -> YYYY_month.md
-    /// Also connects daily_index.md to workspace root if daily_entry_folder is configured
+    /// Also connects daily_index.md to workspace root if daily_entry_folder is configured.
     fn ensure_daily_index_hierarchy(&self, date: &NaiveDate, config: &Config) -> Result<()> {
         let daily_dir = config.daily_entry_dir();
         let year = date.format("%Y").to_string();
@@ -540,7 +560,7 @@ impl<FS: FileSystem> DiaryxApp<FS> {
         Ok(())
     }
 
-    /// Find the workspace root index relative to a directory
+    /// Find the workspace root index relative to a directory.
     fn find_workspace_root_relative(&self, from_dir: &Path) -> Option<String> {
         // Look for README.md in parent directory (workspace root)
         let parent = from_dir.parent()?;
@@ -559,7 +579,7 @@ impl<FS: FileSystem> DiaryxApp<FS> {
         None
     }
 
-    /// Create the root daily index file
+    /// Create the root daily index file.
     fn create_daily_index(&self, path: &Path, part_of: Option<&str>) -> Result<()> {
         let part_of_line = match part_of {
             Some(p) => format!("part_of: {}\n", p),
@@ -580,7 +600,7 @@ impl<FS: FileSystem> DiaryxApp<FS> {
         Ok(())
     }
 
-    /// Create a year index file
+    /// Create a year index file.
     fn create_year_index(&self, path: &Path, date: &NaiveDate) -> Result<()> {
         let year = date.format("%Y").to_string();
         let content = format!(
@@ -597,7 +617,7 @@ impl<FS: FileSystem> DiaryxApp<FS> {
         Ok(())
     }
 
-    /// Create a month index file
+    /// Create a month index file.
     fn create_month_index(&self, path: &Path, date: &NaiveDate) -> Result<()> {
         let year = date.format("%Y").to_string();
         let month_name = date.format("%B").to_string(); // e.g., "January"
@@ -664,9 +684,9 @@ impl<FS: FileSystem> DiaryxApp<FS> {
     }
 }
 
-/// Convert a filename to a prettier title
+/// Convert a filename to a prettier title.
 /// e.g., "my-note" -> "My Note", "some_file" -> "Some File"
-fn prettify_filename(filename: &str) -> String {
+pub fn prettify_filename(filename: &str) -> String {
     filename
         .replace(['-', '_'], " ")
         .split_whitespace()
@@ -774,6 +794,27 @@ mod tests {
         fn is_dir(&self, _path: &Path) -> bool {
             // Mock implementation - assume any non-file path could be a directory
             false
+        }
+
+        fn move_file(&self, from: &Path, to: &Path) -> io::Result<()> {
+            let mut files = self.files.lock().unwrap();
+
+            if !files.contains_key(from) {
+                return Err(io::Error::new(io::ErrorKind::NotFound, "File not found"));
+            }
+            if files.contains_key(to) {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "Destination exists",
+                ));
+            }
+
+            let content = files
+                .remove(from)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "File not found"))?;
+            files.insert(to.to_path_buf(), content);
+
+            Ok(())
         }
     }
 

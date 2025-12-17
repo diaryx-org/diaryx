@@ -28,6 +28,12 @@ pub trait FileSystem {
 
     /// Checks if a path is a directory
     fn is_dir(&self, path: &Path) -> bool;
+
+    /// Move/rename a file from `from` to `to`.
+    ///
+    /// Implementations should treat this as an atomic-ish move when possible,
+    /// and should error if the source does not exist or if the destination already exists.
+    fn move_file(&self, from: &Path, to: &Path) -> Result<()>;
 }
 
 // Blanket implementation for references to FileSystem
@@ -63,6 +69,10 @@ impl<T: FileSystem> FileSystem for &T {
     fn is_dir(&self, path: &Path) -> bool {
         (*self).is_dir(path)
     }
+
+    fn move_file(&self, from: &Path, to: &Path) -> Result<()> {
+        (*self).move_file(from, to)
+    }
 }
 
 // ============================================================================
@@ -76,6 +86,7 @@ use std::io::Write;
 
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy)]
+/// This is a simple filesystem implementation that simply maps to std::fs methods
 pub struct RealFileSystem;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -118,6 +129,27 @@ impl FileSystem for RealFileSystem {
 
     fn create_dir_all(&self, path: &Path) -> Result<()> {
         fs::create_dir_all(path)
+    }
+
+    fn move_file(&self, from: &Path, to: &Path) -> Result<()> {
+        if !from.exists() {
+            return Err(Error::new(
+                ErrorKind::NotFound,
+                format!("Source file not found: {:?}", from),
+            ));
+        }
+        if to.exists() {
+            return Err(Error::new(
+                ErrorKind::AlreadyExists,
+                format!("Destination already exists: {:?}", to),
+            ));
+        }
+
+        if let Some(parent) = to.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        fs::rename(from, to)
     }
 
     fn is_dir(&self, path: &Path) -> bool {
@@ -334,6 +366,51 @@ impl FileSystem for InMemoryFileSystem {
         let normalized = Self::normalize_path(path);
         let dirs = self.directories.read().unwrap();
         dirs.contains(&normalized)
+    }
+
+    fn move_file(&self, from: &Path, to: &Path) -> Result<()> {
+        let from_norm = Self::normalize_path(from);
+        let to_norm = Self::normalize_path(to);
+
+        if from_norm == to_norm {
+            return Ok(());
+        }
+
+        // Validate existence and destination availability up-front.
+        {
+            let files = self.files.read().unwrap();
+
+            if !files.contains_key(&from_norm) {
+                return Err(Error::new(
+                    ErrorKind::NotFound,
+                    format!("Source file not found: {:?}", from),
+                ));
+            }
+
+            if files.contains_key(&to_norm) {
+                return Err(Error::new(
+                    ErrorKind::AlreadyExists,
+                    format!("Destination already exists: {:?}", to),
+                ));
+            }
+        }
+
+        // Ensure destination parent directories exist.
+        if let Some(parent) = to_norm.parent() {
+            self.create_dir_all(parent)?;
+        }
+
+        // Perform the move.
+        let mut files = self.files.write().unwrap();
+        let content = files.remove(&from_norm).ok_or_else(|| {
+            Error::new(
+                ErrorKind::NotFound,
+                format!("Source file not found: {:?}", from),
+            )
+        })?;
+        files.insert(to_norm, content);
+
+        Ok(())
     }
 }
 

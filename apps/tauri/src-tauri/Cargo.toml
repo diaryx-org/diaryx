@@ -1,5 +1,5 @@
 [package]
-name = "Diaryx"
+name = "diaryx_tauri"
 version.workspace = true
 edition.workspace = true
 license-file.workspace = true
@@ -7,8 +7,9 @@ description = "Tauri application for Diaryx journal management (desktop and mobi
 publish = false
 
 [lib]
-name = "diaryx_lib" # Optional, but good practice. Defaults to package name if omitted.
+name = "diaryx_tauri_lib"
 crate-type = ["staticlib", "cdylib", "lib"]
+private-items = true
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -23,6 +24,8 @@ tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
+log = "0.4"
+env_logger = "0.11"
 
 [features]
 default = ["custom-protocol"]

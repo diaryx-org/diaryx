@@ -389,7 +389,7 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::collections::HashMap;
-    use std::io::{Error, ErrorKind, Result};
+    // (no std::io imports needed in these tests)
 
     #[derive(Clone)]
     struct MockFs {
@@ -412,42 +412,42 @@ mod tests {
     }
 
     impl FileSystem for MockFs {
-        fn read_to_string(&self, path: &Path) -> Result<String> {
+        fn read_to_string(&self, path: &Path) -> std::io::Result<String> {
             self.files
                 .borrow()
                 .get(path)
                 .cloned()
-                .ok_or_else(|| Error::new(ErrorKind::NotFound, "file not found"))
+                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "not found"))
         }
 
-        fn write_file(&self, path: &Path, content: &str) -> Result<()> {
+        fn write_file(&self, path: &Path, content: &str) -> std::io::Result<()> {
             self.files
                 .borrow_mut()
                 .insert(path.to_path_buf(), content.to_string());
             Ok(())
         }
 
-        fn create_new(&self, path: &Path, content: &str) -> Result<()> {
+        fn create_new(&self, path: &Path, content: &str) -> std::io::Result<()> {
             if self.files.borrow().contains_key(path) {
-                return Err(Error::new(ErrorKind::AlreadyExists, "file exists"));
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "exists",
+                ));
             }
-            self.files
-                .borrow_mut()
-                .insert(path.to_path_buf(), content.to_string());
-            Ok(())
+            self.write_file(path, content)
         }
 
-        fn delete_file(&self, path: &Path) -> Result<()> {
+        fn delete_file(&self, path: &Path) -> std::io::Result<()> {
             self.files.borrow_mut().remove(path);
             Ok(())
         }
 
-        fn list_md_files(&self, dir: &Path) -> Result<Vec<PathBuf>> {
+        fn list_md_files(&self, dir: &Path) -> std::io::Result<Vec<PathBuf>> {
             Ok(self
                 .files
                 .borrow()
                 .keys()
-                .filter(|p| p.starts_with(dir) && p.extension().is_some_and(|e| e == "md"))
+                .filter(|p| p.parent() == Some(dir) && p.extension().is_some_and(|e| e == "md"))
                 .cloned()
                 .collect())
         }
@@ -456,7 +456,7 @@ mod tests {
             self.files.borrow().contains_key(path)
         }
 
-        fn create_dir_all(&self, _path: &Path) -> Result<()> {
+        fn create_dir_all(&self, _path: &Path) -> std::io::Result<()> {
             // Mock implementation - directories are implicit
             Ok(())
         }
@@ -464,6 +464,27 @@ mod tests {
         fn is_dir(&self, _path: &Path) -> bool {
             // Mock implementation
             false
+        }
+
+        fn move_file(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+            if !self.files.borrow().contains_key(from) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "not found",
+                ));
+            }
+            if self.files.borrow().contains_key(to) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "exists",
+                ));
+            }
+
+            let content = self.files.borrow_mut().remove(from).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, "not found")
+            })?;
+            self.files.borrow_mut().insert(to.to_path_buf(), content);
+            Ok(())
         }
     }
 

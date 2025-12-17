@@ -25,6 +25,11 @@ pub fn handle_today(app: &DiaryxApp<RealFileSystem>, template: Option<String>) {
                     println!("Opening: {}", path.display());
                     if let Err(e) = launch_editor(&path, &config) {
                         eprintln!("✗ Error launching editor: {}", e);
+                    } else {
+                        // Update the 'updated' timestamp after successful edit
+                        if let Err(e) = app.touch_updated(path.to_str().unwrap_or_default()) {
+                            eprintln!("✗ Warning: could not update timestamp: {}", e);
+                        }
                     }
                 }
                 Err(e) => eprintln!("✗ Error creating entry: {}", e),
@@ -48,6 +53,11 @@ pub fn handle_yesterday(app: &DiaryxApp<RealFileSystem>, template: Option<String
                     println!("Opening: {}", path.display());
                     if let Err(e) = launch_editor(&path, &config) {
                         eprintln!("✗ Error launching editor: {}", e);
+                    } else {
+                        // Update the 'updated' timestamp after successful edit
+                        if let Err(e) = app.touch_updated(path.to_str().unwrap_or_default()) {
+                            eprintln!("✗ Warning: could not update timestamp: {}", e);
+                        }
                     }
                 }
                 Err(e) => eprintln!("✗ Error creating entry: {}", e),
@@ -87,6 +97,11 @@ pub fn handle_open(app: &DiaryxApp<RealFileSystem>, path_or_date: &str) {
                     println!("Opening: {}", path.display());
                     if let Err(e) = launch_editor(&path, &config) {
                         eprintln!("✗ Error launching editor: {}", e);
+                    } else {
+                        // Update the 'updated' timestamp after successful edit
+                        if let Err(e) = app.touch_updated(path.to_str().unwrap_or_default()) {
+                            eprintln!("✗ Warning: could not update timestamp: {}", e);
+                        }
                     }
                     return;
                 }
@@ -114,6 +129,11 @@ pub fn handle_open(app: &DiaryxApp<RealFileSystem>, path_or_date: &str) {
 
         if let Err(e) = launch_editor(path, &config) {
             eprintln!("✗ Error launching editor for {}: {}", path.display(), e);
+        } else {
+            // Update the 'updated' timestamp after successful edit
+            if let Err(e) = app.touch_updated(path.to_str().unwrap_or_default()) {
+                eprintln!("✗ Warning: could not update timestamp: {}", e);
+            }
         }
     }
 }

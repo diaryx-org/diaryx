@@ -1,8 +1,9 @@
 {
-  "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "default",
-  "description": "Default capabilities for the Diaryx desktop app",
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "mobile",
+  "description": "Capabilities for the Diaryx mobile app (iOS/Android)",
   "windows": ["main"],
+  "platforms": ["iOS", "android"],
   "permissions": [
     "core:default",
     "core:path:default",
@@ -12,7 +13,26 @@
     "dialog:allow-message",
     "dialog:allow-ask",
     "dialog:allow-confirm",
-    "fs:default",
+    {
+      "identifier": "fs:default",
+      "allow": [
+        {
+          "path": "$APPDATA/**"
+        },
+        {
+          "path": "$APPCACHE/**"
+        },
+        {
+          "path": "$APPLOCALDATA/**"
+        },
+        {
+          "path": "$APPCONFIG/**"
+        },
+        {
+          "path": "$DOCUMENT/**"
+        }
+      ]
+    },
     "fs:allow-app-read-recursive",
     "fs:allow-app-write-recursive",
     "fs:allow-appcache-read-recursive",

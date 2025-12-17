@@ -280,7 +280,7 @@ pub struct TemplateManager<FS> {
     fs: FS,
     /// User templates directory (~/.config/diaryx/templates/)
     user_templates_dir: Option<PathBuf>,
-    /// Workspace templates directory (<workspace>/.diaryx/templates/)
+    /// Workspace templates directory (`<workspace>/.diaryx/templates/`)
     workspace_templates_dir: Option<PathBuf>,
 }
 
@@ -482,7 +482,7 @@ pub enum TemplateSource {
     Builtin,
     /// User template (~/.config/diaryx/templates/)
     User,
-    /// Workspace template (<workspace>/.diaryx/templates/)
+    /// Workspace template (`<workspace>/.diaryx/templates/`)
     Workspace,
 }
 

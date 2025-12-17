@@ -131,6 +131,15 @@ pub enum DiaryxError {
     /// Error for when trying to create a template that already exists.
     #[error("Template already exists: '{0}'")]
     TemplateAlreadyExists(PathBuf),
+
+    /// Error for invalid path structure (e.g., missing parent directory or filename).
+    #[error("Invalid path '{path}': {message}")]
+    InvalidPath {
+        /// Path that is invalid
+        path: PathBuf,
+        /// Description of what's wrong with the path
+        message: String,
+    },
 }
 
 /// Result type alias for Diaryx operations
@@ -168,6 +177,7 @@ impl From<&DiaryxError> for SerializableError {
             DiaryxError::WorkspaceAlreadyExists(_) => "WorkspaceAlreadyExists",
             DiaryxError::TemplateNotFound(_) => "TemplateNotFound",
             DiaryxError::TemplateAlreadyExists(_) => "TemplateAlreadyExists",
+            DiaryxError::InvalidPath { .. } => "InvalidPath",
         }
         .to_string();
 
@@ -179,6 +189,7 @@ impl From<&DiaryxError> for SerializableError {
             DiaryxError::WorkspaceNotFound(path) => Some(path.clone()),
             DiaryxError::WorkspaceAlreadyExists(path) => Some(path.clone()),
             DiaryxError::TemplateAlreadyExists(path) => Some(path.clone()),
+            DiaryxError::InvalidPath { path, .. } => Some(path.clone()),
             _ => None,
         };
 

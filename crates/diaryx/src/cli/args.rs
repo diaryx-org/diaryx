@@ -679,6 +679,13 @@ pub enum WorkspaceCommands {
         #[arg(long)]
         dry_run: bool,
     },
+
+    /// Validate workspace links (check part_of and contents references)
+    Validate {
+        /// Show verbose output with file paths
+        #[arg(short, long)]
+        verbose: bool,
+    },
 }
 
 #[derive(Subcommand)]

@@ -134,7 +134,102 @@ pub fn handle_workspace_command(
         WorkspaceCommands::Orphans { dir, recursive } => {
             handle_orphans(ws, &current_dir, dir, recursive);
         }
+
+        WorkspaceCommands::Validate { verbose } => {
+            handle_validate(workspace_override, ws, &config, &current_dir, verbose);
+        }
     }
+}
+
+/// Handle the 'workspace validate' command
+/// Validates workspace link integrity (part_of and contents references)
+fn handle_validate(
+    workspace_override: Option<PathBuf>,
+    ws: &Workspace<RealFileSystem>,
+    config: &Option<Config>,
+    current_dir: &Path,
+    verbose: bool,
+) {
+    use diaryx_core::fs::RealFileSystem as CoreRealFileSystem;
+    use diaryx_core::validate::{ValidationError, ValidationWarning, Validator};
+
+    // Find workspace root
+    let root_path = if let Some(override_path) = workspace_override {
+        override_path.clone()
+    } else if let Ok(Some(detected)) = ws.detect_workspace(current_dir) {
+        detected
+    } else if let Some(cfg) = config {
+        if let Ok(Some(root)) = ws.find_root_index_in_dir(&cfg.default_workspace) {
+            root
+        } else {
+            eprintln!("✗ No workspace found");
+            eprintln!("  Run 'diaryx init' or 'diaryx workspace init' first");
+            return;
+        }
+    } else {
+        eprintln!("✗ No workspace found");
+        eprintln!("  Run 'diaryx init' or 'diaryx workspace init' first");
+        return;
+    };
+
+    if verbose {
+        println!("Validating workspace: {}", root_path.display());
+    }
+
+    let validator = Validator::new(CoreRealFileSystem);
+    let result = match validator.validate_workspace(&root_path) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("✗ Error validating workspace: {}", e);
+            return;
+        }
+    };
+
+    if result.is_ok() && result.warnings.is_empty() {
+        println!(
+            "✓ Workspace validation passed ({} files checked)",
+            result.files_checked
+        );
+        return;
+    }
+
+    // Report errors
+    if !result.errors.is_empty() {
+        println!("Errors ({}):", result.errors.len());
+        for err in &result.errors {
+            match err {
+                ValidationError::BrokenPartOf { file, target } => {
+                    println!("  ✗ Broken part_of: {} -> {}", file.display(), target);
+                }
+                ValidationError::BrokenContentsRef { index, target } => {
+                    println!("  ✗ Broken contents ref: {} -> {}", index.display(), target);
+                }
+            }
+        }
+    }
+
+    // Report warnings
+    if !result.warnings.is_empty() {
+        println!("Warnings ({}):", result.warnings.len());
+        for warn in &result.warnings {
+            match warn {
+                ValidationWarning::OrphanFile { file } => {
+                    println!("  ⚠ Orphan file: {}", file.display());
+                }
+                ValidationWarning::CircularReference { files } => {
+                    println!("  ⚠ Circular reference involving: {:?}", files);
+                }
+            }
+        }
+    }
+
+    println!();
+    println!(
+        "Summary: {} error(s), {} warning(s), {} files checked",
+        result.errors.len(),
+        result.warnings.len(),
+        result.files_checked
+    );
 }
 
 /// Handle the 'workspace mv' command

@@ -506,6 +506,134 @@ impl<FS: FileSystem> Workspace<FS> {
         let tree = self.build_tree_with_depth(root_path, max_depth, &mut visited)?;
         Ok(self.format_tree(&tree, "").trim_end().to_string())
     }
+
+    /// Attach an entry to a parent index, creating bidirectional links.
+    ///
+    /// This method:
+    /// - Adds the entry to the parent index's `contents` list (relative to parent's directory)
+    /// - Sets the entry's `part_of` property to point to the parent index (relative to entry)
+    ///
+    /// Both paths must exist. Uses `DiaryxApp` for frontmatter manipulation.
+    pub fn attach_entry_to_parent(
+        &self,
+        entry_path: &Path,
+        parent_index_path: &Path,
+    ) -> Result<()> {
+        use crate::entry::DiaryxApp;
+        use crate::path_utils::{
+            relative_path_from_dir_to_target, relative_path_from_file_to_target,
+        };
+
+        // Validate both paths exist
+        if !self.fs.exists(entry_path) {
+            return Err(DiaryxError::FileRead {
+                path: entry_path.to_path_buf(),
+                source: std::io::Error::new(std::io::ErrorKind::NotFound, "Entry does not exist"),
+            });
+        }
+        if !self.fs.exists(parent_index_path) {
+            return Err(DiaryxError::FileRead {
+                path: parent_index_path.to_path_buf(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "Parent index does not exist",
+                ),
+            });
+        }
+
+        let app = DiaryxApp::new(&self.fs);
+
+        // Calculate relative path from parent's directory to entry
+        let parent_dir = parent_index_path.parent().unwrap_or_else(|| Path::new(""));
+        let child_rel = relative_path_from_dir_to_target(parent_dir, entry_path);
+
+        // Add entry to parent's contents
+        app.add_to_index_contents(parent_index_path, &child_rel)?;
+
+        // Calculate relative path from entry to parent index
+        let parent_rel = relative_path_from_file_to_target(entry_path, parent_index_path);
+
+        // Set entry's part_of
+        let entry_str = entry_path.to_string_lossy();
+        app.set_frontmatter_property(&entry_str, "part_of", Value::String(parent_rel))?;
+
+        Ok(())
+    }
+
+    /// Move/rename an entry while updating workspace index references.
+    ///
+    /// This method:
+    /// - Moves the file from `from_path` to `to_path`
+    /// - Removes the entry from old parent's `contents` (if old `index.md` exists)
+    /// - Adds the entry to new parent's `contents` (if new `index.md` exists)
+    /// - Updates the moved file's `part_of` to point to new parent index
+    ///
+    /// Returns `Ok(())` if successful. Does nothing if source equals destination.
+    pub fn move_entry(&self, from_path: &Path, to_path: &Path) -> Result<()> {
+        use crate::entry::DiaryxApp;
+        use crate::path_utils::relative_path_from_file_to_target;
+
+        // No-op if same path
+        if from_path == to_path {
+            return Ok(());
+        }
+
+        // Get filenames and parent directories before moving
+        let old_parent = from_path.parent().ok_or_else(|| DiaryxError::InvalidPath {
+            path: from_path.to_path_buf(),
+            message: "No parent directory for source path".to_string(),
+        })?;
+        let old_index_path = old_parent.join("index.md");
+        let old_file_name = from_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| DiaryxError::InvalidPath {
+                path: from_path.to_path_buf(),
+                message: "Invalid source file name".to_string(),
+            })?
+            .to_string();
+
+        let new_parent = to_path.parent().ok_or_else(|| DiaryxError::InvalidPath {
+            path: to_path.to_path_buf(),
+            message: "No parent directory for destination path".to_string(),
+        })?;
+        let new_index_path = new_parent.join("index.md");
+        let new_file_name = to_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| DiaryxError::InvalidPath {
+                path: to_path.to_path_buf(),
+                message: "Invalid destination file name".to_string(),
+            })?
+            .to_string();
+
+        // Move the file
+        self.fs
+            .move_file(from_path, to_path)
+            .map_err(|e| DiaryxError::FileWrite {
+                path: to_path.to_path_buf(),
+                source: e,
+            })?;
+
+        let app = DiaryxApp::new(&self.fs);
+
+        // Remove from old parent's contents (if old index exists)
+        if self.fs.exists(&old_index_path) {
+            let _ = app.remove_from_index_contents(&old_index_path, &old_file_name);
+        }
+
+        // Add to new parent's contents and update part_of (if new index exists)
+        if self.fs.exists(&new_index_path) {
+            let _ = app.add_to_index_contents(&new_index_path, &new_file_name);
+
+            // Update moved entry's part_of
+            let rel_part_of = relative_path_from_file_to_target(to_path, &new_index_path);
+            let to_str = to_path.to_string_lossy();
+            let _ = app.set_frontmatter_property(&to_str, "part_of", Value::String(rel_part_of));
+        }
+
+        Ok(())
+    }
 }
 
 /// Format a child node and its descendants (standalone helper function)

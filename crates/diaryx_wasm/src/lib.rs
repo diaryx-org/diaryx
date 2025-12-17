@@ -5,12 +5,11 @@
 
 use std::cell::RefCell;
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use diaryx_core::{
     entry::DiaryxApp,
     fs::{FileSystem, InMemoryFileSystem},
-    path_utils::{relative_path_from_dir_to_target, relative_path_from_file_to_target},
     search::{SearchQuery, Searcher},
     template::TemplateManager,
     workspace::Workspace,
@@ -416,60 +415,21 @@ fn add_to_parent_index(fs: &InMemoryFileSystem, entry_path: &str) -> Result<(), 
     Ok(())
 }
 
-/// Attach an existing entry to a parent index:
+/// Attach an existing entry to a parent index.
+///
+/// Uses core `Workspace::attach_entry_to_parent` which:
 /// - Adds the entry to the parent index's `contents` (using a relative child path)
 /// - Sets the entry's `part_of` to point back to the parent index (relative to the entry)
-///
-/// This is the WASM equivalent of "workspace add" behavior.
 #[wasm_bindgen]
 pub fn attach_entry_to_parent(entry_path: &str, parent_index_path: &str) -> Result<(), JsValue> {
     with_fs_mut(|fs| {
-        let app = DiaryxApp::new(fs);
-
+        let ws = Workspace::new(fs);
         let entry = PathBuf::from(entry_path);
         let parent_index = PathBuf::from(parent_index_path);
 
-        if !fs.exists(&entry) {
-            return Err(JsValue::from_str(&format!(
-                "Entry does not exist: {}",
-                entry_path
-            )));
-        }
-        if !fs.exists(&parent_index) {
-            return Err(JsValue::from_str(&format!(
-                "Parent index does not exist: {}",
-                parent_index_path
-            )));
-        }
-
-        // Add child link to parent's contents (path relative to the parent index directory)
-        let child_rel = relative_path_from_dir_to_target(
-            parent_index.parent().unwrap_or_else(|| Path::new("")),
-            &entry,
-        );
-
-        let parent_index_str = parent_index.to_string_lossy().to_string();
-        add_to_index_contents(&app, &parent_index_str, &child_rel)?;
-
-        // Set child's part_of (path relative to the entry directory)
-        let parent_rel = relative_path_from_file_to_target(&entry, &parent_index);
-        app.set_frontmatter_property(entry_path, "part_of", serde_yaml::Value::String(parent_rel))
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
-
-        Ok(())
+        ws.attach_entry_to_parent(&entry, &parent_index)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
     })
-}
-
-/// Add `entry` to `index_path` frontmatter `contents` sequence (if not already present).
-/// Uses the core implementation from `DiaryxApp::add_to_index_contents`.
-fn add_to_index_contents(
-    app: &DiaryxApp<&InMemoryFileSystem>,
-    index_path: &str,
-    entry: &str,
-) -> Result<(), JsValue> {
-    app.add_to_index_contents(std::path::Path::new(index_path), entry)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    Ok(())
 }
 
 /// Delete an entry.
@@ -483,89 +443,27 @@ pub fn delete_entry(path: &str) -> Result<(), JsValue> {
     })
 }
 
-/// Move/rename an entry, keeping index `contents` and the entry's `part_of` metadata up to date.
+/// Move/rename an entry while updating workspace index references.
 ///
-/// Rules:
-/// - Moves the file from `from_path` to `to_path` (errors if source missing or destination exists).
-/// - Removes the entry from the old parent index's `contents` (if that index exists).
-/// - Adds the entry to the new parent index's `contents` (if that index exists).
-/// - Updates the moved entry's `part_of` to point at the new parent index (`index.md`) **relative to the entry** (only if the new parent index exists).
+/// Uses core `Workspace::move_entry` which:
+/// - Moves the file from `from_path` to `to_path`
+/// - Removes the entry from old parent's `contents` (if `index.md` exists)
+/// - Adds the entry to new parent's `contents` (if `index.md` exists)
+/// - Updates the moved file's `part_of` to point to new parent index
 #[wasm_bindgen]
 pub fn move_entry(from_path: &str, to_path: &str) -> Result<String, JsValue> {
     with_fs_mut(|fs| {
-        let app = DiaryxApp::new(fs);
-
-        // Validate paths
+        let ws = Workspace::new(fs);
         let from = PathBuf::from(from_path);
         let to = PathBuf::from(to_path);
 
-        if from == to {
-            return Ok(to_path.to_string());
-        }
-
-        // Capture old parent/index and filenames before moving
-        let old_parent = from
-            .parent()
-            .ok_or_else(|| JsValue::from_str("No parent directory for source path"))?
-            .to_path_buf();
-        let old_index_path = old_parent.join("index.md");
-        let old_file_name = from
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| JsValue::from_str("Invalid source file name"))?
-            .to_string();
-
-        let new_parent = to
-            .parent()
-            .ok_or_else(|| JsValue::from_str("No parent directory for destination path"))?
-            .to_path_buf();
-        let new_index_path = new_parent.join("index.md");
-        let new_file_name = to
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| JsValue::from_str("Invalid destination file name"))?
-            .to_string();
-
-        // Move/rename the file itself (this also creates destination dirs if FS implementation supports it)
-        fs.move_file(&from, &to)
+        ws.move_entry(&from, &to)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
-
-        // Update old parent index: remove old_file_name from contents (if index exists)
-        if fs.exists(&old_index_path) {
-            let old_index_str = old_index_path.to_string_lossy().to_string();
-            remove_from_index_contents(&app, &old_index_str, &old_file_name)?;
-        }
-
-        // Update new parent index: add new_file_name to contents (if index exists)
-        if fs.exists(&new_index_path) {
-            let new_index_str = new_index_path.to_string_lossy().to_string();
-            add_to_index_contents(&app, &new_index_str, &new_file_name)?;
-
-            // Update moved entry's part_of to point to the new parent index, relative to the entry location.
-            let rel_part_of = relative_path_from_file_to_target(&to, &new_index_path);
-            app.set_frontmatter_property(
-                to_path,
-                "part_of",
-                serde_yaml::Value::String(rel_part_of),
-            )
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        }
 
         Ok(to_path.to_string())
     })
 }
 
-/// Remove `entry` from `index_path` frontmatter `contents` sequence (if present).
-/// Uses the core implementation from `DiaryxApp::remove_from_index_contents`.
-fn remove_from_index_contents(
-    app: &DiaryxApp<&InMemoryFileSystem>,
-    index_path: &str,
-    entry: &str,
-) -> Result<(), JsValue> {
-    app.remove_from_index_contents(std::path::Path::new(index_path), entry)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    Ok(())
-}
 
 // ============================================================================
 // Frontmatter Operations

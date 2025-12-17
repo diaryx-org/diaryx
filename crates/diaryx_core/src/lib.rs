@@ -25,8 +25,9 @@ pub mod publish;
 /// Search (query frontmatter or search content)
 pub mod search;
 
-/// Template (parse/use templates for new files)
 pub mod template;
+/// Validate (check workspace link integrity)
+pub mod validate;
 
 /// Path utilities for relative path calculations
 pub mod path_utils;

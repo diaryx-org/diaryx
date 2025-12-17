@@ -15,6 +15,9 @@ export type {
   TemplateInfo,
   SearchMatch,
   FileSearchResult,
+  ValidationResult,
+  ValidationError,
+  ValidationWarning,
 } from "./interface";
 
 export { BackendError, isTauri, isBrowser } from "./interface";

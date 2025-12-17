@@ -390,6 +390,16 @@ export class WasmBackend implements Backend {
   }
 
   // --------------------------------------------------------------------------
+  // Validation
+  // --------------------------------------------------------------------------
+
+  async validateWorkspace(workspacePath?: string): Promise<import("./interface").ValidationResult> {
+    const wasm = this.requireWasm();
+    const path = workspacePath ?? this.config?.default_workspace ?? "workspace";
+    return wasm.validate_workspace(path);
+  }
+
+  // --------------------------------------------------------------------------
   // Persistence
   // --------------------------------------------------------------------------
 

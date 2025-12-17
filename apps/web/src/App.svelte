@@ -9,6 +9,7 @@
     type TreeNode,
     type EntryData,
     type SearchResults,
+    type ValidationResult,
   } from "./lib/backend";
   import LeftSidebar from "./lib/LeftSidebar.svelte";
   import RightSidebar from "./lib/RightSidebar.svelte";
@@ -35,6 +36,7 @@
   let expandedNodes = $state(new Set<string>());
   let editorRef: any = $state(null);
   let showNewEntryModal = $state(false);
+  let validationResult: ValidationResult | null = $state(null);
 
   // Sidebar states - collapsed by default on mobile
   let leftSidebarCollapsed = $state(true);
@@ -65,6 +67,9 @@
       if (tree) {
         expandedNodes.add(tree.path);
       }
+
+      // Run initial validation
+      await runValidation();
     } catch (e) {
       console.error("[App] Initialization error:", e);
       error = e instanceof Error ? e.message : String(e);
@@ -209,6 +214,37 @@
     }
   }
 
+  // Run workspace validation
+  async function runValidation() {
+    if (!backend) return;
+    try {
+      validationResult = await backend.validateWorkspace();
+    } catch (e) {
+      console.error("[App] Validation error:", e);
+    }
+  }
+
+  // Handle drag-drop: attach entry to new parent
+  async function handleMoveEntry(entryPath: string, newParentPath: string) {
+    if (!backend) return;
+    if (entryPath === newParentPath) return; // Can't attach to self
+    
+    console.log(`[Drag-Drop] entryPath="${entryPath}" -> newParentPath="${newParentPath}"`);
+    
+    try {
+      // Attach the entry to the new parent
+      // This will:
+      // - Add entry to newParent's `contents`
+      // - Set entry's `part_of` to point to newParent
+      await backend.attachEntryToParent(entryPath, newParentPath);
+      await persistNow();
+      tree = await backend.getWorkspaceTree();
+      await runValidation();
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
   function exportEntry() {
     if (!currentEntry) return;
 
@@ -287,6 +323,7 @@
     {searchResults}
     {isSearching}
     {expandedNodes}
+    {validationResult}
     collapsed={leftSidebarCollapsed}
     onOpenEntry={openEntry}
     onSearch={handleSearch}
@@ -294,6 +331,7 @@
     onToggleNode={toggleNode}
     onNewEntry={handleNewEntry}
     onToggleCollapse={toggleLeftSidebar}
+    onMoveEntry={handleMoveEntry}
   />
 
   <!-- Main Content Area -->

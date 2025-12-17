@@ -194,6 +194,99 @@ pub fn create_workspace(path: &str, name: &str) -> Result<(), JsValue> {
 }
 
 // ============================================================================
+// Validation Operations
+// ============================================================================
+
+/// Validation error returned to JavaScript
+#[derive(Debug, Serialize)]
+#[serde(tag = "type")]
+pub enum JsValidationError {
+    BrokenPartOf { file: String, target: String },
+    BrokenContentsRef { index: String, target: String },
+}
+
+impl From<diaryx_core::validate::ValidationError> for JsValidationError {
+    fn from(err: diaryx_core::validate::ValidationError) -> Self {
+        use diaryx_core::validate::ValidationError;
+        match err {
+            ValidationError::BrokenPartOf { file, target } => JsValidationError::BrokenPartOf {
+                file: file.to_string_lossy().to_string(),
+                target,
+            },
+            ValidationError::BrokenContentsRef { index, target } => {
+                JsValidationError::BrokenContentsRef {
+                    index: index.to_string_lossy().to_string(),
+                    target,
+                }
+            }
+        }
+    }
+}
+
+/// Validation warning returned to JavaScript
+#[derive(Debug, Serialize)]
+#[serde(tag = "type")]
+pub enum JsValidationWarning {
+    OrphanFile { file: String },
+    CircularReference { files: Vec<String> },
+}
+
+impl From<diaryx_core::validate::ValidationWarning> for JsValidationWarning {
+    fn from(warn: diaryx_core::validate::ValidationWarning) -> Self {
+        use diaryx_core::validate::ValidationWarning;
+        match warn {
+            ValidationWarning::OrphanFile { file } => JsValidationWarning::OrphanFile {
+                file: file.to_string_lossy().to_string(),
+            },
+            ValidationWarning::CircularReference { files } => JsValidationWarning::CircularReference {
+                files: files.iter().map(|p| p.to_string_lossy().to_string()).collect(),
+            },
+        }
+    }
+}
+
+/// Validation result returned to JavaScript
+#[derive(Debug, Serialize)]
+pub struct JsValidationResult {
+    pub errors: Vec<JsValidationError>,
+    pub warnings: Vec<JsValidationWarning>,
+    pub files_checked: usize,
+}
+
+/// Validate workspace links (contents and part_of references).
+#[wasm_bindgen]
+pub fn validate_workspace(workspace_path: &str) -> Result<JsValue, JsValue> {
+    use diaryx_core::validate::Validator;
+
+    with_fs(|fs| {
+        let validator = Validator::new(fs);
+        let root_path = PathBuf::from(workspace_path);
+
+        // Find the root index
+        let ws = Workspace::new(fs);
+        let root_index = ws
+            .find_root_index_in_dir(&root_path)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?
+            .or_else(|| ws.find_any_index_in_dir(&root_path).ok().flatten())
+            .ok_or_else(|| {
+                JsValue::from_str(&format!("No workspace found at '{}'", workspace_path))
+            })?;
+
+        let result = validator
+            .validate_workspace(&root_index)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+        let js_result = JsValidationResult {
+            errors: result.errors.into_iter().map(JsValidationError::from).collect(),
+            warnings: result.warnings.into_iter().map(JsValidationWarning::from).collect(),
+            files_checked: result.files_checked,
+        };
+
+        Ok(serde_wasm_bindgen::to_value(&js_result)?)
+    })
+}
+
+// ============================================================================
 // Entry Operations
 // ============================================================================
 
@@ -353,7 +446,7 @@ pub fn create_entry(path: &str, options: JsValue) -> Result<String, JsValue> {
     })
 }
 
-/// Helper to add an entry to its parent index's contents array
+/// Helper to add an entry to its parent index's contents array and set part_of
 fn add_to_parent_index(fs: &InMemoryFileSystem, entry_path: &str) -> Result<(), JsValue> {
     let path = PathBuf::from(entry_path);
     let file_name = path
@@ -408,6 +501,21 @@ fn add_to_parent_index(fs: &InMemoryFileSystem, entry_path: &str) -> Result<(), 
             &index_path_str,
             "contents",
             serde_yaml::Value::Sequence(yaml_contents),
+        )
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    }
+
+    // Set part_of on the entry to point back to the parent index (bidirectional link)
+    // Only set if the entry doesn't already have a part_of
+    let entry_frontmatter = app
+        .get_all_frontmatter(entry_path)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+    if !entry_frontmatter.contains_key("part_of") {
+        app.set_frontmatter_property(
+            entry_path,
+            "part_of",
+            serde_yaml::Value::String("index.md".to_string()),
         )
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     }

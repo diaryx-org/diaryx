@@ -60,8 +60,13 @@ Search frontmatter or content separately:
 
 ```rust
 use diaryx_core::export::{ExportOptions, ExportPlan, Exporter};
+use diaryx_core::fs::RealFileSystem;
+use std::path::Path;
 
 fn main() {
+  let workspace_root = Path::new("./workspace");
+  let audience = "public";
+  let destination = Path::new("./export");
   let fs = RealFileSystem;
   let exporter = Exporter::new(fs);
   let plan = match exporter.plan_export(&workspace_root, audience, destination) {

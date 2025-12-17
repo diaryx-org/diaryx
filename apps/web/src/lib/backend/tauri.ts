@@ -12,6 +12,7 @@ import type {
   SearchOptions,
   CreateEntryOptions,
   TemplateInfo,
+  ValidationResult,
 } from "./interface";
 
 interface MoveEntryRequest {
@@ -467,6 +468,20 @@ export class TauriBackend implements Backend {
   async deleteTemplate(name: string): Promise<void> {
     try {
       await this.getInvoke()("delete_template", { name });
+    } catch (e) {
+      handleError(e);
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Validation
+  // --------------------------------------------------------------------------
+
+  async validateWorkspace(workspacePath?: string): Promise<ValidationResult> {
+    try {
+      return await this.getInvoke()<ValidationResult>("validate_workspace", {
+        workspacePath,
+      });
     } catch (e) {
       handleError(e);
     }

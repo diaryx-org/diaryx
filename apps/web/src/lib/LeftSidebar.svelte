@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { TreeNode, SearchResults, EntryData } from "./backend";
+  import type { TreeNode, SearchResults, EntryData, ValidationResult } from "./backend";
   import { Button } from "$lib/components/ui/button";
   import {
     Plus,
@@ -10,6 +10,7 @@
     Folder,
     Loader2,
     PanelLeftClose,
+    AlertCircle,
   } from "@lucide/svelte";
 
   interface Props {
@@ -21,6 +22,7 @@
     searchResults: SearchResults | null;
     isSearching: boolean;
     expandedNodes: Set<string>;
+    validationResult: ValidationResult | null;
     collapsed: boolean;
     onOpenEntry: (path: string) => void;
     onSearch: () => void;
@@ -28,6 +30,7 @@
     onToggleNode: (path: string) => void;
     onNewEntry: () => void;
     onToggleCollapse: () => void;
+    onMoveEntry: (fromPath: string, toParentPath: string) => void;
   }
 
   let {
@@ -39,6 +42,7 @@
     searchResults,
     isSearching,
     expandedNodes,
+    validationResult,
     collapsed,
     onOpenEntry,
     onSearch,
@@ -46,7 +50,12 @@
     onToggleNode,
     onNewEntry,
     onToggleCollapse,
+    onMoveEntry,
   }: Props = $props();
+
+  // Drag state
+  let draggedPath: string | null = $state(null);
+  let dropTargetPath: string | null = $state(null);
 
   function getFileName(path: string): string {
     return path.split("/").pop()?.replace(".md", "") ?? path;
@@ -66,6 +75,51 @@
     if (window.innerWidth < 768) {
       onToggleCollapse();
     }
+  }
+
+  // Drag handlers
+  function handleDragStart(e: DragEvent, path: string) {
+    e.stopPropagation(); // Prevent parent nodes from overwriting draggedPath
+    draggedPath = path;
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", path);
+    }
+  }
+
+  function handleDragOver(e: DragEvent, path: string) {
+    e.preventDefault();
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = "move";
+    }
+    dropTargetPath = path;
+  }
+
+  function handleDragLeave() {
+    dropTargetPath = null;
+  }
+
+  function handleDrop(e: DragEvent, targetPath: string) {
+    e.preventDefault();
+    e.stopPropagation(); // Prevent bubbling to parent tree nodes
+    if (draggedPath && draggedPath !== targetPath) {
+      onMoveEntry(draggedPath, targetPath);
+    }
+    draggedPath = null;
+    dropTargetPath = null;
+  }
+
+  function handleDragEnd() {
+    draggedPath = null;
+    dropTargetPath = null;
+  }
+
+  // Check if a file has validation errors
+  function hasValidationError(path: string): boolean {
+    if (!validationResult) return false;
+    return validationResult.errors.some(
+      (err) => err.file === path || err.index === path
+    );
   }
 </script>
 
@@ -200,10 +254,19 @@
 </aside>
 
 {#snippet treeNode(node: TreeNode, depth: number)}
-  <div class="select-none">
+  <div
+    class="select-none"
+    draggable="true"
+    ondragstart={(e) => handleDragStart(e, node.path)}
+    ondragend={handleDragEnd}
+  >
     <div
-      class="group flex items-center gap-1 rounded-md hover:bg-sidebar-accent transition-colors"
+      class="group flex items-center gap-1 rounded-md hover:bg-sidebar-accent transition-colors
+        {dropTargetPath === node.path ? 'bg-primary/20 ring-2 ring-primary' : ''}"
       style="padding-left: {depth * 12}px"
+      ondragover={(e) => handleDragOver(e, node.path)}
+      ondragleave={handleDragLeave}
+      ondrop={(e) => handleDrop(e, node.path)}
     >
       {#if node.children.length > 0}
         <button
@@ -240,7 +303,12 @@
         {:else}
           <FileText class="size-4 shrink-0 text-muted-foreground" />
         {/if}
-        <span class="truncate">{node.name.replace(".md", "")}</span>
+        <span class="truncate flex-1">{node.name.replace(".md", "")}</span>
+        {#if hasValidationError(node.path)}
+          <span title="Broken reference">
+            <AlertCircle class="size-4 shrink-0 text-destructive" />
+          </span>
+        {/if}
       </button>
     </div>
 
@@ -253,3 +321,4 @@
     {/if}
   </div>
 {/snippet}
+

@@ -44,6 +44,26 @@ export interface SearchResults {
   files_searched: number;
 }
 
+// Validation types
+export interface ValidationError {
+  type: 'BrokenPartOf' | 'BrokenContentsRef';
+  file?: string;  // For BrokenPartOf
+  index?: string; // For BrokenContentsRef
+  target: string;
+}
+
+export interface ValidationWarning {
+  type: 'OrphanFile' | 'CircularReference';
+  file?: string;   // For OrphanFile
+  files?: string[]; // For CircularReference
+}
+
+export interface ValidationResult {
+  errors: ValidationError[];
+  warnings: ValidationWarning[];
+  files_checked: number;
+}
+
 export interface SearchOptions {
   workspacePath?: string;
   searchFrontmatter?: boolean;
@@ -242,6 +262,16 @@ export interface Backend {
    * @param name Template name.
    */
   deleteTemplate(name: string): Promise<void>;
+
+  // --------------------------------------------------------------------------
+  // Validation
+  // --------------------------------------------------------------------------
+
+  /**
+   * Validate workspace links (contents and part_of references).
+   * @param workspacePath Optional path to workspace. Uses default if not provided.
+   */
+  validateWorkspace(workspacePath?: string): Promise<ValidationResult>;
 
   // --------------------------------------------------------------------------
   // Persistence (WASM-specific, no-op for Tauri)

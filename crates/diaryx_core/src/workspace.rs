@@ -726,8 +726,8 @@ impl<FS: FileSystem> Workspace<FS> {
                     }
 
                     let child_str = child_file.to_string_lossy();
-                    if let Ok(fm) = app.get_all_frontmatter(&child_str) {
-                        if let Some(Value::String(old_part_of)) = fm.get("part_of") {
+                    if let Ok(fm) = app.get_all_frontmatter(&child_str)
+                        && let Some(Value::String(old_part_of)) = fm.get("part_of") {
                             // Check if it points to the old filename
                             if old_part_of == &old_file_name {
                                 let _ = app.set_frontmatter_property(
@@ -737,7 +737,6 @@ impl<FS: FileSystem> Workspace<FS> {
                                 );
                             }
                         }
-                    }
                 }
             }
 
@@ -991,15 +990,14 @@ impl<FS: FileSystem> Workspace<FS> {
 
         // Adjust part_of path if it exists (remove ../ prefix since we're one level shallower)
         let frontmatter = app.get_all_frontmatter(&new_leaf_str)?;
-        if let Some(Value::String(old_part_of)) = frontmatter.get("part_of") {
-            if let Some(new_part_of) = old_part_of.strip_prefix("../") {
+        if let Some(Value::String(old_part_of)) = frontmatter.get("part_of")
+            && let Some(new_part_of) = old_part_of.strip_prefix("../") {
                 app.set_frontmatter_property(
                     &new_leaf_str,
                     "part_of",
                     Value::String(new_part_of.to_string()),
                 )?;
             }
-        }
 
         // Update parent index if there is one (change reference from dir/{name}.md to dir.md)
         if let Ok(Some(parent_index)) = self.find_any_index_in_dir(grandparent) {

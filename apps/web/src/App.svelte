@@ -245,6 +245,45 @@
     }
   }
 
+  // Handle frontmatter property changes
+  async function handlePropertyChange(key: string, value: unknown) {
+    if (!backend || !currentEntry) return;
+    try {
+      await backend.setFrontmatterProperty(currentEntry.path, key, value);
+      await persistNow();
+      // Update local state
+      currentEntry = { ...currentEntry, frontmatter: { ...currentEntry.frontmatter, [key]: value } };
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function handlePropertyRemove(key: string) {
+    if (!backend || !currentEntry) return;
+    try {
+      await backend.removeFrontmatterProperty(currentEntry.path, key);
+      await persistNow();
+      // Update local state
+      const newFrontmatter = { ...currentEntry.frontmatter };
+      delete newFrontmatter[key];
+      currentEntry = { ...currentEntry, frontmatter: newFrontmatter };
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function handlePropertyAdd(key: string, value: unknown) {
+    if (!backend || !currentEntry) return;
+    try {
+      await backend.setFrontmatterProperty(currentEntry.path, key, value);
+      await persistNow();
+      // Update local state
+      currentEntry = { ...currentEntry, frontmatter: { ...currentEntry.frontmatter, [key]: value } };
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
   function exportEntry() {
     if (!currentEntry) return;
 
@@ -486,5 +525,8 @@
     entry={currentEntry}
     collapsed={rightSidebarCollapsed}
     onToggleCollapse={toggleRightSidebar}
+    onPropertyChange={handlePropertyChange}
+    onPropertyRemove={handlePropertyRemove}
+    onPropertyAdd={handlePropertyAdd}
   />
 </div>

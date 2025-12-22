@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { EntryData } from "./backend";
   import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
   import {
     Calendar,
     Clock,
@@ -12,15 +13,37 @@
     ToggleLeft,
     Type,
     PanelRightClose,
+    Plus,
+    X,
+    Check,
   } from "@lucide/svelte";
 
   interface Props {
     entry: EntryData | null;
     collapsed: boolean;
     onToggleCollapse: () => void;
+    onPropertyChange?: (key: string, value: unknown) => void;
+    onPropertyRemove?: (key: string) => void;
+    onPropertyAdd?: (key: string, value: unknown) => void;
   }
 
-  let { entry, collapsed, onToggleCollapse }: Props = $props();
+  let {
+    entry,
+    collapsed,
+    onToggleCollapse,
+    onPropertyChange,
+    onPropertyRemove,
+    onPropertyAdd,
+  }: Props = $props();
+
+  // State for adding new properties
+  let showAddProperty = $state(false);
+  let newPropertyKey = $state("");
+  let newPropertyValue = $state("");
+
+  // State for adding new array items
+  let addingArrayItemKey = $state<string | null>(null);
+  let newArrayItem = $state("");
 
   // Get an icon for a frontmatter key
   function getIcon(key: string) {
@@ -34,40 +57,17 @@
     return Hash;
   }
 
-  // Format a value for display
-  function formatValue(value: unknown): string {
-    if (value === null || value === undefined) return "—";
-    if (typeof value === "boolean") return value ? "Yes" : "No";
-    if (typeof value === "string") {
-      // Try to format as date if it looks like an ISO date
-      if (/^\d{4}-\d{2}-\d{2}/.test(value)) {
-        try {
-          const date = new Date(value);
-          return date.toLocaleDateString(undefined, {
-            year: "numeric",
-            month: "short",
-            day: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-          });
-        } catch {
-          return value;
-        }
-      }
-      return value;
-    }
-    if (Array.isArray(value)) {
-      return value.join(", ");
-    }
-    if (typeof value === "object") {
-      return JSON.stringify(value, null, 2);
-    }
-    return String(value);
-  }
-
   // Check if a value is an array
   function isArray(value: unknown): value is unknown[] {
     return Array.isArray(value);
+  }
+
+  // Check if a value looks like a date
+  function isDateValue(key: string, value: unknown): boolean {
+    if (typeof value !== "string") return false;
+    const lowerKey = key.toLowerCase();
+    const dateKeys = ["created", "updated", "date", "modified"];
+    return dateKeys.includes(lowerKey) || /^\d{4}-\d{2}-\d{2}/.test(value);
   }
 
   // Get frontmatter entries sorted with common fields first
@@ -99,6 +99,88 @@
   // Format a key for display (convert snake_case to Title Case)
   function formatKey(key: string): string {
     return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+
+  // Handle string property change
+  function handleStringChange(key: string, event: Event) {
+    const target = event.target as HTMLInputElement;
+    onPropertyChange?.(key, target.value);
+  }
+
+  // Handle boolean toggle
+  function handleBooleanToggle(key: string, currentValue: boolean) {
+    onPropertyChange?.(key, !currentValue);
+  }
+
+  // Handle array item removal
+  function handleArrayItemRemove(key: string, index: number) {
+    if (!entry) return;
+    const currentArray = entry.frontmatter[key] as unknown[];
+    const newArray = [...currentArray];
+    newArray.splice(index, 1);
+    onPropertyChange?.(key, newArray);
+  }
+
+  // Handle adding new array item
+  function handleAddArrayItem(key: string) {
+    if (!entry || !newArrayItem.trim()) return;
+    const currentArray = (entry.frontmatter[key] as unknown[]) || [];
+    const newArray = [...currentArray, newArrayItem.trim()];
+    onPropertyChange?.(key, newArray);
+    newArrayItem = "";
+    addingArrayItemKey = null;
+  }
+
+  // Handle adding new property
+  function handleAddProperty() {
+    if (!newPropertyKey.trim()) return;
+    
+    // Try to parse as JSON for complex values, otherwise use as string
+    let value: unknown = newPropertyValue;
+    try {
+      value = JSON.parse(newPropertyValue);
+    } catch {
+      // Keep as string
+    }
+    
+    onPropertyAdd?.(newPropertyKey.trim(), value);
+    newPropertyKey = "";
+    newPropertyValue = "";
+    showAddProperty = false;
+  }
+
+  // Handle key press in inputs
+  function handleKeyPress(event: KeyboardEvent, callback: () => void) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      callback();
+    }
+    if (event.key === "Escape") {
+      showAddProperty = false;
+      addingArrayItemKey = null;
+      newArrayItem = "";
+    }
+  }
+
+  // Format date for datetime-local input
+  function formatDateForInput(value: string): string {
+    try {
+      const date = new Date(value);
+      // Format as YYYY-MM-DDTHH:mm
+      return date.toISOString().slice(0, 16);
+    } catch {
+      return value;
+    }
+  }
+
+  // Parse datetime-local input back to ISO string
+  function parseDateFromInput(value: string): string {
+    try {
+      const date = new Date(value);
+      return date.toISOString();
+    } catch {
+      return value;
+    }
   }
 </script>
 
@@ -140,26 +222,91 @@
         <div class="p-3 space-y-3">
           {#each getSortedFrontmatter(entry.frontmatter) as [key, value]}
             {@const Icon = getIcon(key)}
-            <div class="space-y-1">
+            <div class="space-y-1 group">
               <div
-                class="flex items-center gap-2 text-xs text-muted-foreground"
+                class="flex items-center justify-between text-xs text-muted-foreground"
               >
-                <Icon class="size-3.5" />
-                <span class="font-medium">{formatKey(key)}</span>
+                <div class="flex items-center gap-2">
+                  <Icon class="size-3.5" />
+                  <span class="font-medium">{formatKey(key)}</span>
+                </div>
+                <!-- Delete button -->
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class="size-5 opacity-0 group-hover:opacity-100 transition-opacity"
+                  onclick={() => onPropertyRemove?.(key)}
+                  aria-label="Remove property"
+                >
+                  <X class="size-3" />
+                </Button>
               </div>
               <div class="pl-5.5">
                 {#if isArray(value)}
-                  <div class="flex flex-wrap gap-1">
-                    {#each value as item}
-                      <span
-                        class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-secondary text-secondary-foreground"
+                  <!-- Array editor -->
+                  <div class="space-y-1">
+                    <div class="flex flex-wrap gap-1">
+                      {#each value as item, index}
+                        <span
+                          class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-secondary text-secondary-foreground group/tag"
+                        >
+                          {item}
+                          <button
+                            type="button"
+                            class="opacity-0 group-hover/tag:opacity-100 hover:text-destructive transition-opacity"
+                            onclick={() => handleArrayItemRemove(key, index)}
+                            aria-label="Remove item"
+                          >
+                            <X class="size-3" />
+                          </button>
+                        </span>
+                      {/each}
+                    </div>
+                    {#if addingArrayItemKey === key}
+                      <div class="flex items-center gap-1 mt-1">
+                        <Input
+                          type="text"
+                          bind:value={newArrayItem}
+                          class="h-7 text-xs"
+                          placeholder="New item..."
+                          onkeydown={(e) => handleKeyPress(e, () => handleAddArrayItem(key))}
+                        />
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          class="size-6"
+                          onclick={() => handleAddArrayItem(key)}
+                        >
+                          <Check class="size-3" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          class="size-6"
+                          onclick={() => { addingArrayItemKey = null; newArrayItem = ""; }}
+                        >
+                          <X class="size-3" />
+                        </Button>
+                      </div>
+                    {:else}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        class="h-6 text-xs px-2 mt-1"
+                        onclick={() => addingArrayItemKey = key}
                       >
-                        {formatValue(item)}
-                      </span>
-                    {/each}
+                        <Plus class="size-3 mr-1" />
+                        Add
+                      </Button>
+                    {/if}
                   </div>
                 {:else if typeof value === "boolean"}
-                  <div class="flex items-center gap-1.5">
+                  <!-- Boolean toggle -->
+                  <button
+                    type="button"
+                    class="flex items-center gap-1.5 cursor-pointer hover:opacity-80 transition-opacity"
+                    onclick={() => handleBooleanToggle(key, value)}
+                  >
                     <ToggleLeft
                       class="size-4 {value
                         ? 'text-primary'
@@ -168,11 +315,32 @@
                     <span class="text-sm text-foreground"
                       >{value ? "Yes" : "No"}</span
                     >
-                  </div>
+                  </button>
+                {:else if isDateValue(key, value)}
+                  <!-- Date input -->
+                  <Input
+                    type="datetime-local"
+                    value={formatDateForInput(String(value))}
+                    class="h-8 text-sm"
+                    onchange={(e) => {
+                      const target = e.target as HTMLInputElement;
+                      onPropertyChange?.(key, parseDateFromInput(target.value));
+                    }}
+                  />
                 {:else}
-                  <p class="text-sm text-foreground wrap-break-word">
-                    {formatValue(value)}
-                  </p>
+                  <!-- String input -->
+                  <Input
+                    type="text"
+                    value={String(value ?? "")}
+                    class="h-8 text-sm"
+                    onblur={(e) => handleStringChange(key, e)}
+                    onkeydown={(e) => {
+                      if (e.key === "Enter") {
+                        handleStringChange(key, e);
+                        (e.target as HTMLInputElement).blur();
+                      }
+                    }}
+                  />
                 {/if}
               </div>
             </div>
@@ -185,10 +353,61 @@
           <FileText class="size-8 text-muted-foreground mb-2" />
           <p class="text-sm text-muted-foreground">No properties</p>
           <p class="text-xs text-muted-foreground mt-1">
-            This entry has no frontmatter
+            Add frontmatter properties below
           </p>
         </div>
       {/if}
+
+      <!-- Add Property Section -->
+      <div class="p-3 border-t border-sidebar-border">
+        {#if showAddProperty}
+          <div class="space-y-2">
+            <Input
+              type="text"
+              bind:value={newPropertyKey}
+              class="h-8 text-sm"
+              placeholder="Property name..."
+              onkeydown={(e) => handleKeyPress(e, handleAddProperty)}
+            />
+            <Input
+              type="text"
+              bind:value={newPropertyValue}
+              class="h-8 text-sm"
+              placeholder="Value..."
+              onkeydown={(e) => handleKeyPress(e, handleAddProperty)}
+            />
+            <div class="flex gap-2">
+              <Button
+                variant="default"
+                size="sm"
+                class="flex-1 h-7 text-xs"
+                onclick={handleAddProperty}
+              >
+                <Check class="size-3 mr-1" />
+                Add
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                class="h-7 text-xs"
+                onclick={() => { showAddProperty = false; newPropertyKey = ""; newPropertyValue = ""; }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        {:else}
+          <Button
+            variant="outline"
+            size="sm"
+            class="w-full h-8 text-xs"
+            onclick={() => showAddProperty = true}
+          >
+            <Plus class="size-3 mr-1" />
+            Add Property
+          </Button>
+        {/if}
+      </div>
     {:else}
       <div
         class="flex flex-col items-center justify-center py-8 px-4 text-center"

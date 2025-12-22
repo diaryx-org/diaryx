@@ -553,13 +553,19 @@ pub fn attach_entry_to_parent(entry_path: &str, parent_index_path: &str) -> Resu
     })
 }
 
-/// Delete an entry.
+/// Delete an entry while updating workspace references.
+///
+/// Uses core `Workspace::delete_entry` which:
+/// - Fails if the entry has children (non-empty contents)
+/// - Removes the entry from parent's `contents`
+/// - Deletes the file
 #[wasm_bindgen]
 pub fn delete_entry(path: &str) -> Result<(), JsValue> {
-    use diaryx_core::fs::FileSystem;
-
     with_fs_mut(|fs| {
-        fs.delete_file(std::path::Path::new(path))
+        let ws = Workspace::new(fs);
+        let path_buf = PathBuf::from(path);
+
+        ws.delete_entry(&path_buf)
             .map_err(|e| JsValue::from_str(&e.to_string()))
     })
 }

@@ -779,6 +779,103 @@ impl<FS: FileSystem> Workspace<FS> {
         }
     }
 
+    /// Delete an entry while updating workspace index references.
+    ///
+    /// This method:
+    /// - Fails if the entry is an index with non-empty `contents` (has children)
+    /// - Removes the entry from parent's `contents` (if parent index exists)
+    /// - Deletes the file
+    ///
+    /// For index files with directories, only the file is deleted (not the directory).
+    pub fn delete_entry(&self, path: &Path) -> Result<()> {
+        use crate::entry::DiaryxApp;
+
+        // Check if file exists
+        if !self.fs.exists(path) {
+            return Err(DiaryxError::FileRead {
+                path: path.to_path_buf(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "File does not exist",
+                ),
+            });
+        }
+
+        // If it's an index file, check that contents is empty
+        if let Ok(index) = self.parse_index(path)
+            && index.frontmatter.is_index() {
+            if !index.frontmatter.contents_list().is_empty() {
+                return Err(DiaryxError::InvalidPath {
+                    path: path.to_path_buf(),
+                    message: "Cannot delete: entry has children. Delete children first."
+                        .to_string(),
+                });
+            }
+        }
+
+        // Get filename for updating parent's contents
+        let filename = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| DiaryxError::InvalidPath {
+                path: path.to_path_buf(),
+                message: "Invalid file name".to_string(),
+            })?
+            .to_string();
+
+        // Get parent directory
+        let parent = path.parent().ok_or_else(|| DiaryxError::InvalidPath {
+            path: path.to_path_buf(),
+            message: "No parent directory".to_string(),
+        })?;
+
+        // Check if this is an index file (we need to handle reference differently)
+        let is_index = self.is_index_file(path);
+
+        // Delete the file
+        self.fs
+            .delete_file(path)
+            .map_err(|e| DiaryxError::FileWrite {
+                path: path.to_path_buf(),
+                source: e,
+            })?;
+
+        // Remove from parent's contents if there's a parent index
+        if is_index {
+            // For index files, the grandparent's contents has the reference
+            if let Some(grandparent) = parent.parent() {
+                if let Ok(Some(grandparent_index)) = self.find_any_index_in_dir(grandparent) {
+                    let app = DiaryxApp::new(&self.fs);
+                    let dir_name = parent
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("");
+                    // Try to remove various possible reference formats
+                    let _ = app.remove_from_index_contents(
+                        &grandparent_index,
+                        &format!("{}/", dir_name),
+                    );
+                    let _ = app.remove_from_index_contents(
+                        &grandparent_index,
+                        &format!("{}/{}", dir_name, filename),
+                    );
+                    let _ = app.remove_from_index_contents(
+                        &grandparent_index,
+                        &format!("{}/index.md", dir_name),
+                    );
+                }
+            }
+        } else {
+            // For leaf files, parent's contents has the reference
+            if let Ok(Some(parent_index)) = self.find_any_index_in_dir(parent) {
+                let app = DiaryxApp::new(&self.fs);
+                let _ = app.remove_from_index_contents(&parent_index, &filename);
+            }
+        }
+
+        Ok(())
+    }
+
     /// Generate a unique filename for a new child entry in the given directory.
     ///
     /// Returns filenames like "new-entry.md", "new-entry-1.md", "new-entry-2.md", etc.

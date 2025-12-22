@@ -299,10 +299,19 @@
         if (currentDir !== newDir) {
           // Try rename FIRST, before updating frontmatter
           try {
-            const newPath = await backend.renameEntry(currentEntry.path, newFilename);
+            const oldPath = currentEntry.path;
+            const newPath = await backend.renameEntry(oldPath, newFilename);
             // Rename succeeded, now update title in frontmatter (at new path)
             await backend.setFrontmatterProperty(newPath, key, value);
             await persistNow();
+            
+            // Transfer expanded state from old path to new path
+            if (expandedNodes.has(oldPath)) {
+              expandedNodes.delete(oldPath);
+              expandedNodes.add(newPath);
+              expandedNodes = expandedNodes; // trigger reactivity
+            }
+            
             // Update current entry path and refresh tree
             currentEntry = { ...currentEntry, path: newPath, frontmatter: { ...currentEntry.frontmatter, [key]: value } };
             tree = await backend.getWorkspaceTree();

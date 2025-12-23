@@ -561,20 +561,30 @@ impl<FS: FileSystem> DiaryxApp<FS> {
 
     /// Find the workspace root index relative to a directory.
     fn find_workspace_root_relative(&self, from_dir: &Path) -> Option<String> {
-        // Look for README.md in parent directory (workspace root)
+        // Look for any index file in parent directory (workspace root)
         let parent = from_dir.parent()?;
-        let readme_path = parent.join("README.md");
-
-        if self.fs.exists(&readme_path) {
-            // Check if it's actually an index (has contents property)
-            let readme_str = readme_path.to_string_lossy();
-            if let Ok(Some(_)) = self.get_frontmatter_property(&readme_str, "contents") {
-                return Some("../README.md".to_string());
+        
+        // Try common index file patterns
+        let candidates = [
+            // New naming convention: {dirname}.md
+            parent.file_name().and_then(|n| n.to_str()).map(|name| format!("{}.md", name)),
+            // Legacy README.md
+            Some("README.md".to_string()),
+            // Legacy index.md
+            Some("index.md".to_string()),
+        ];
+        
+        for candidate in candidates.iter().flatten() {
+            let index_path = parent.join(candidate);
+            if self.fs.exists(&index_path) {
+                // Check if it's actually an index (has contents property)
+                let index_str = index_path.to_string_lossy();
+                if let Ok(Some(_)) = self.get_frontmatter_property(&index_str, "contents") {
+                    return Some(format!("../{}", candidate));
+                }
             }
-            // Even without contents, if it exists we can link to it
-            return Some("../README.md".to_string());
         }
-
+        
         None
     }
 

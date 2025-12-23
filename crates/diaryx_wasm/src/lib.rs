@@ -1386,6 +1386,147 @@ pub fn export_to_memory(root_path: &str, audience: &str) -> Result<JsValue, JsVa
     })
 }
 
+/// Export files to memory as HTML (converts markdown to HTML).
+/// Returns array of {path, content} with .html extensions for zip creation in JS.
+#[wasm_bindgen]
+pub fn export_to_html(root_path: &str, audience: &str) -> Result<JsValue, JsValue> {
+    use comrak::{markdown_to_html, Options};
+    use std::collections::HashSet;
+
+    with_fs(|fs| {
+        #[derive(serde::Serialize)]
+        struct ExportedFile {
+            path: String,
+            content: String,
+        }
+
+        fn convert_md_to_html(markdown: &str) -> String {
+            let mut options = Options::default();
+            options.extension.strikethrough = true;
+            options.extension.table = true;
+            options.extension.autolink = true;
+            options.extension.tasklist = true;
+            options.render.r#unsafe = true;
+            
+            let html_body = markdown_to_html(markdown, &options);
+            
+            // Wrap in a minimal HTML document
+            format!(r#"<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 0 auto; padding: 2rem; line-height: 1.6; }}
+        pre {{ background: #f4f4f4; padding: 1rem; overflow-x: auto; }}
+        code {{ background: #f4f4f4; padding: 0.2rem 0.4rem; }}
+        img {{ max-width: 100%; }}
+        table {{ border-collapse: collapse; width: 100%; }}
+        th, td {{ border: 1px solid #ddd; padding: 0.5rem; text-align: left; }}
+    </style>
+</head>
+<body>
+{}
+</body>
+</html>"#, html_body)
+        }
+
+        // Special case: "*" means export all without audience filtering
+        if audience == "*" {
+            let ws = Workspace::new(fs);
+            let mut files: Vec<ExportedFile> = Vec::new();
+            let root = Path::new(root_path);
+            let root_dir = root.parent().unwrap_or(root);
+            
+            fn collect_all<FS: FileSystem>(
+                ws: &Workspace<FS>,
+                path: &Path,
+                root_dir: &Path,
+                files: &mut Vec<ExportedFile>,
+                visited: &mut HashSet<PathBuf>,
+                convert_fn: &dyn Fn(&str) -> String,
+            ) {
+                if visited.contains(path) {
+                    return;
+                }
+                visited.insert(path.to_path_buf());
+                
+                if let Ok(index) = ws.parse_index(path) {
+                    let relative_path = pathdiff::diff_paths(path, root_dir)
+                        .unwrap_or_else(|| path.to_path_buf());
+                    
+                    if let Ok(content) = ws.fs_ref().read_to_string(path) {
+                        // Extract body (without frontmatter)
+                        let body = extract_body(&content);
+                        let html = convert_fn(&body);
+                        
+                        // Change extension to .html
+                        let html_path = relative_path
+                            .to_string_lossy()
+                            .replace(".md", ".html");
+                        
+                        files.push(ExportedFile {
+                            path: html_path,
+                            content: html,
+                        });
+                    }
+                    
+                    if index.frontmatter.is_index() {
+                        for child_rel in index.frontmatter.contents_list() {
+                            let child_path = index.resolve_path(child_rel);
+                            if ws.fs_ref().exists(&child_path) {
+                                collect_all(ws, &child_path, root_dir, files, visited, convert_fn);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            let mut visited = HashSet::new();
+            collect_all(&ws, root, root_dir, &mut files, &mut visited, &convert_md_to_html);
+            
+            return serde_wasm_bindgen::to_value(&files)
+                .map_err(|e| JsValue::from_str(&e.to_string()));
+        }
+
+        // Normal audience-filtered export
+        use diaryx_core::export::Exporter;
+        let exporter = Exporter::new(fs);
+        
+        let plan = exporter
+            .plan_export(
+                Path::new(root_path),
+                audience,
+                Path::new("/export"),
+            )
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        
+        let mut files: Vec<ExportedFile> = Vec::new();
+        
+        for export_file in &plan.included {
+            let content = fs.read_to_string(&export_file.source_path)
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            
+            // Extract body and convert to HTML
+            let body = extract_body(&content);
+            let html = convert_md_to_html(&body);
+            
+            // Change extension to .html
+            let html_path = export_file.relative_path
+                .to_string_lossy()
+                .replace(".md", ".html");
+            
+            files.push(ExportedFile {
+                path: html_path,
+                content: html,
+            });
+        }
+        
+        serde_wasm_bindgen::to_value(&files)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    })
+}
+
 /// Helper to remove audience property from content
 fn remove_audience_from_content(content: &str) -> String {
     if !content.starts_with("---\n") && !content.starts_with("---\r\n") {

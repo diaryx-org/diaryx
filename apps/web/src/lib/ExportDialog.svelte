@@ -1,6 +1,7 @@
 <script lang="ts">
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
+  import Checkbox from "$lib/components/ui/checkbox/checkbox.svelte";
   import NativeSelect from "$lib/components/ui/native-select/native-select.svelte";
   import type { Backend, ExportPlan, ExportedFile } from "./backend";
   import {
@@ -33,6 +34,7 @@
   let isExporting = $state(false);
   let error: string | null = $state(null);
   let expandedNodes = $state(new Set<string>());
+  let exportAsHtml = $state(false);
 
   // Load audiences when dialog opens
   $effect(() => {
@@ -87,7 +89,9 @@
     error = null;
     try {
       const audience = selectedAudience === "all" ? "*" : selectedAudience;
-      const files = await backend.exportToMemory(rootPath, audience);
+      const files = exportAsHtml 
+        ? await backend.exportToHtml(rootPath, audience)
+        : await backend.exportToMemory(rootPath, audience);
       await downloadAsZip(files);
       open = false;
     } catch (e) {
@@ -185,6 +189,12 @@
             <option value={audience}>{audience}</option>
           {/each}
         </NativeSelect>
+      </div>
+
+      <!-- Format Checkbox -->
+      <div class="flex items-center gap-2">
+        <Checkbox id="export-html" bind:checked={exportAsHtml} />
+        <label for="export-html" class="text-sm cursor-pointer">Convert to HTML</label>
       </div>
 
       <!-- Preview Tree -->

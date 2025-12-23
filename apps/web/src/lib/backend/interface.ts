@@ -286,6 +286,14 @@ export interface Backend {
    */
   exportToMemory(rootPath: string, audience: string): Promise<ExportedFile[]>;
 
+  /**
+   * Export files as HTML (converts markdown to HTML).
+   * @param rootPath Path to the entry to export from.
+   * @param audience Target audience to filter by.
+   * @returns Array of HTML files with path and content.
+   */
+  exportToHtml(rootPath: string, audience: string): Promise<ExportedFile[]>;
+
   // --------------------------------------------------------------------------
   // Frontmatter
   // --------------------------------------------------------------------------

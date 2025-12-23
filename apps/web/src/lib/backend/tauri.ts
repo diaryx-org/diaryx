@@ -460,6 +460,13 @@ export class TauriBackend implements Backend {
     );
   }
 
+  async exportToHtml(_rootPath: string, _audience: string): Promise<import("./interface").ExportedFile[]> {
+    throw new BackendError(
+      "exportToHtml not yet implemented for Tauri backend",
+      "NotImplemented",
+    );
+  }
+
   // --------------------------------------------------------------------------
   // Frontmatter
   // --------------------------------------------------------------------------

@@ -364,6 +364,11 @@ export class WasmBackend implements Backend {
     return wasm.export_to_memory(rootPath, audience);
   }
 
+  async exportToHtml(rootPath: string, audience: string): Promise<import("./interface").ExportedFile[]> {
+    const wasm = this.requireWasm();
+    return wasm.export_to_html(rootPath, audience);
+  }
+
   // --------------------------------------------------------------------------
   // Frontmatter
   // --------------------------------------------------------------------------

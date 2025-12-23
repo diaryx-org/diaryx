@@ -8,12 +8,13 @@
     type Backend,
     type TreeNode,
     type EntryData,
-    type SearchResults,
     type ValidationResult,
   } from "./lib/backend";
   import LeftSidebar from "./lib/LeftSidebar.svelte";
   import RightSidebar from "./lib/RightSidebar.svelte";
   import NewEntryModal from "./lib/NewEntryModal.svelte";
+  import CommandPalette from "./lib/CommandPalette.svelte";
+  import SettingsDialog from "./lib/SettingsDialog.svelte";
   import { Button } from "$lib/components/ui/button";
   import { Save, Download, PanelLeft, PanelRight, Menu } from "@lucide/svelte";
 
@@ -30,9 +31,6 @@
   let isDirty = $state(false);
   let isLoading = $state(true);
   let error: string | null = $state(null);
-  let searchQuery = $state("");
-  let searchResults: SearchResults | null = $state(null);
-  let isSearching = $state(false);
   let expandedNodes = $state(new Set<string>());
   let editorRef: any = $state(null);
   let showNewEntryModal = $state(false);
@@ -42,6 +40,10 @@
   // Sidebar states - collapsed by default on mobile
   let leftSidebarCollapsed = $state(true);
   let rightSidebarCollapsed = $state(true);
+  
+  // Modal states
+  let showCommandPalette = $state(false);
+  let showSettingsDialog = $state(false);
 
   // Check if we're on desktop and expand sidebars by default
   onMount(async () => {
@@ -135,28 +137,6 @@
     isDirty = true;
   }
 
-  // Search
-  async function handleSearch() {
-    if (!backend || !searchQuery.trim()) {
-      searchResults = null;
-      return;
-    }
-
-    try {
-      isSearching = true;
-      searchResults = await backend.searchWorkspace(searchQuery);
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-    } finally {
-      isSearching = false;
-    }
-  }
-
-  function clearSearch() {
-    searchQuery = "";
-    searchResults = null;
-  }
-
   // Toggle node expansion
   function toggleNode(path: string) {
     if (expandedNodes.has(path)) {
@@ -182,12 +162,17 @@
       event.preventDefault();
       save();
     }
+    // Command palette with Cmd/Ctrl + K
+    if ((event.metaKey || event.ctrlKey) && event.key === "k") {
+      event.preventDefault();
+      showCommandPalette = true;
+    }
     // Toggle left sidebar with Cmd/Ctrl + B
     if ((event.metaKey || event.ctrlKey) && event.key === "b") {
       event.preventDefault();
       toggleLeftSidebar();
     }
-    // Toggle right sidebar with Cmd/Ctrl + I (for Info)
+    // Toggle right sidebar with Cmd/Ctrl + Shift + I (for Info)
     if (
       (event.metaKey || event.ctrlKey) &&
       event.shiftKey &&
@@ -222,6 +207,17 @@
       error = e instanceof Error ? e.message : String(e);
     } finally {
       showNewEntryModal = false;
+    }
+  }
+
+  async function handleDailyEntry() {
+    if (!backend) return;
+    try {
+      const path = await backend.ensureDailyEntry();
+      tree = await backend.getWorkspaceTree();
+      await openEntry(path);
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
     }
   }
 
@@ -441,6 +437,20 @@
   />
 {/if}
 
+<!-- Command Palette -->
+<CommandPalette
+  bind:open={showCommandPalette}
+  {tree}
+  {backend}
+  onOpenEntry={openEntry}
+  onNewEntry={() => showNewEntryModal = true}
+  onDailyEntry={handleDailyEntry}
+  onSettings={() => showSettingsDialog = true}
+/>
+
+<!-- Settings Dialog -->
+<SettingsDialog bind:open={showSettingsDialog} />
+
 <div class="flex h-screen bg-background overflow-hidden">
   <!-- Left Sidebar -->
   <LeftSidebar
@@ -448,15 +458,10 @@
     {currentEntry}
     {isLoading}
     {error}
-    bind:searchQuery
-    {searchResults}
-    {isSearching}
     {expandedNodes}
     {validationResult}
     collapsed={leftSidebarCollapsed}
     onOpenEntry={openEntry}
-    onSearch={handleSearch}
-    onClearSearch={clearSearch}
     onToggleNode={toggleNode}
     onToggleCollapse={toggleLeftSidebar}
     onMoveEntry={handleMoveEntry}

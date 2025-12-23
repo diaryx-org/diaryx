@@ -2,6 +2,7 @@
 name = "diaryx_wasm"
 version.workspace = true
 edition.workspace = true
+repository.workspace = true
 description = "WebAssembly bindings for Diaryx core functionality"
 license-file.workspace = true
 publish = false

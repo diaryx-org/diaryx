@@ -241,6 +241,12 @@ export interface Backend {
    */
   renameEntry(path: string, newFilename: string): Promise<string>;
 
+  /**
+   * Ensure today's daily entry exists, creating it if necessary.
+   * @returns The path to today's daily entry.
+   */
+  ensureDailyEntry(): Promise<string>;
+
   // --------------------------------------------------------------------------
   // Frontmatter
   // --------------------------------------------------------------------------

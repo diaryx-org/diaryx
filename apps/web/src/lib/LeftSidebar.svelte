@@ -1,10 +1,8 @@
 <script lang="ts">
-  import type { TreeNode, SearchResults, EntryData, ValidationResult } from "./backend";
+  import type { TreeNode, EntryData, ValidationResult } from "./backend";
   import { Button } from "$lib/components/ui/button";
   import * as ContextMenu from "$lib/components/ui/context-menu";
   import {
-    Search,
-    X,
     ChevronRight,
     FileText,
     Folder,
@@ -21,15 +19,10 @@
     currentEntry: EntryData | null;
     isLoading: boolean;
     error: string | null;
-    searchQuery: string;
-    searchResults: SearchResults | null;
-    isSearching: boolean;
     expandedNodes: Set<string>;
     validationResult: ValidationResult | null;
     collapsed: boolean;
     onOpenEntry: (path: string) => void;
-    onSearch: () => void;
-    onClearSearch: () => void;
     onToggleNode: (path: string) => void;
     onToggleCollapse: () => void;
     onMoveEntry: (fromPath: string, toParentPath: string) => void;
@@ -42,15 +35,10 @@
     currentEntry,
     isLoading,
     error,
-    searchQuery = $bindable(),
-    searchResults,
-    isSearching,
     expandedNodes,
     validationResult,
     collapsed,
     onOpenEntry,
-    onSearch,
-    onClearSearch,
     onToggleNode,
     onToggleCollapse,
     onMoveEntry,
@@ -61,18 +49,6 @@
   // Drag state
   let draggedPath: string | null = $state(null);
   let dropTargetPath: string | null = $state(null);
-
-  function getFileName(path: string): string {
-    return path.split("/").pop()?.replace(".md", "") ?? path;
-  }
-
-  function handleSearchKeydown(e: KeyboardEvent) {
-    if (e.key === "Enter") {
-      onSearch();
-    } else if (e.key === "Escape") {
-      onClearSearch();
-    }
-  }
 
   function handleEntryClick(path: string) {
     onOpenEntry(path);
@@ -173,66 +149,9 @@
     </Button>
   </div>
 
-  <!-- Search -->
-  <div class="px-3 pb-3 shrink-0">
-    <div class="relative flex items-center">
-      <input
-        type="text"
-        class="w-full h-9 pl-9 pr-9 rounded-md border border-input bg-background text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50"
-        placeholder="Search entries..."
-        bind:value={searchQuery}
-        onkeydown={handleSearchKeydown}
-      />
-      {#if isSearching}
-        <Loader2
-          class="absolute left-3 size-4 text-muted-foreground pointer-events-none animate-spin"
-        />
-      {:else}
-        <Search
-          class="absolute left-3 size-4 text-muted-foreground pointer-events-none"
-        />
-      {/if}
-      {#if searchQuery}
-        <button
-          type="button"
-          class="absolute right-2 p-1 rounded-sm hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-          onclick={onClearSearch}
-          aria-label="Clear search"
-        >
-          <X class="size-3" />
-        </button>
-      {/if}
-    </div>
-  </div>
-
   <!-- Content Area -->
   <div class="flex-1 overflow-y-auto px-3 pb-3">
-    {#if searchResults}
-      <!-- Search Results -->
-      <div class="space-y-1">
-        <div class="flex items-center justify-between px-2 py-1">
-          <span class="text-xs text-muted-foreground">
-            {searchResults.files.length} result{searchResults.files.length !== 1
-              ? "s"
-              : ""}
-          </span>
-        </div>
-        {#each searchResults.files as result}
-          <button
-            class="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-left hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors {currentEntry?.path ===
-            result.path
-              ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-              : ''}"
-            onclick={() => handleEntryClick(result.path)}
-          >
-            <FileText class="size-4 shrink-0 text-muted-foreground" />
-            <span class="truncate"
-              >{result.title ?? getFileName(result.path)}</span
-            >
-          </button>
-        {/each}
-      </div>
-    {:else if isLoading}
+    {#if isLoading}
       <!-- Loading State -->
       <div class="flex items-center justify-center py-8">
         <Loader2 class="size-6 animate-spin text-muted-foreground" />

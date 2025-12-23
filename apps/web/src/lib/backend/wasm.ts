@@ -340,6 +340,11 @@ export class WasmBackend implements Backend {
     return wasm.rename_entry(path, newFilename);
   }
 
+  async ensureDailyEntry(): Promise<string> {
+    const wasm = this.requireWasm();
+    return wasm.ensure_daily_entry();
+  }
+
   // --------------------------------------------------------------------------
   // Frontmatter
   // --------------------------------------------------------------------------

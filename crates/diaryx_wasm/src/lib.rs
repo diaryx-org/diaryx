@@ -739,6 +739,39 @@ pub fn rename_entry(path: &str, new_filename: &str) -> Result<String, JsValue> {
     })
 }
 
+/// Ensure today's daily entry exists, creating it if necessary.
+///
+/// Returns the path to today's daily entry.
+/// Creates entries in the "Daily" folder within the workspace root,
+/// and automatically connects daily_index.md to the workspace root via part_of/contents.
+#[wasm_bindgen]
+pub fn ensure_daily_entry() -> Result<String, JsValue> {
+    use chrono::Local;
+    use diaryx_core::config::Config;
+    use std::path::PathBuf;
+
+    with_fs_mut(|fs| {
+        let app = DiaryxApp::new(fs);
+        let today = Local::now().date_naive();
+        
+        // Use config with "Daily" folder so entries go to workspace/Daily/
+        // This also triggers automatic part_of/contents linking to root
+        let config = Config::with_options(
+            PathBuf::from("workspace"),
+            Some("Daily".to_string()),  // daily_entry_folder
+            None,                        // editor
+            None,                        // default_template
+            None,                        // daily_template
+        );
+
+        let path = app
+            .ensure_dated_entry(&today, &config)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+        Ok(path.to_string_lossy().to_string())
+    })
+}
+
 // ============================================================================
 // Frontmatter Operations
 // ============================================================================

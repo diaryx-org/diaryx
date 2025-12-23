@@ -427,6 +427,14 @@ export class TauriBackend implements Backend {
     );
   }
 
+  async ensureDailyEntry(): Promise<string> {
+    // TODO: Implement Tauri command for ensure_daily_entry
+    throw new BackendError(
+      "ensureDailyEntry not yet implemented for Tauri backend",
+      "NotImplemented",
+    );
+  }
+
   // --------------------------------------------------------------------------
   // Frontmatter
   // --------------------------------------------------------------------------

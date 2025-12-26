@@ -623,20 +623,18 @@ impl FileSystem for InMemoryFileSystem {
 
         // Check text files
         for path in files.keys() {
-            if let Some(parent) = path.parent() {
-                if parent == normalized {
+            if let Some(parent) = path.parent()
+                && parent == normalized {
                     result.push(path.clone());
                 }
-            }
         }
 
         // Check binary files
         for path in binary_files.keys() {
-            if let Some(parent) = path.parent() {
-                if parent == normalized {
+            if let Some(parent) = path.parent()
+                && parent == normalized {
                     result.push(path.clone());
                 }
-            }
         }
 
         Ok(result)

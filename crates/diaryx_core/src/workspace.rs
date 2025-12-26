@@ -817,15 +817,13 @@ impl<FS: FileSystem> Workspace<FS> {
         // If it's an index file, check that contents is empty
         if let Ok(index) = self.parse_index(path)
             && index.frontmatter.is_index()
-        {
-            if !index.frontmatter.contents_list().is_empty() {
+            && !index.frontmatter.contents_list().is_empty() {
                 return Err(DiaryxError::InvalidPath {
                     path: path.to_path_buf(),
                     message: "Cannot delete: entry has children. Delete children first."
                         .to_string(),
                 });
             }
-        }
 
         // Get filename for updating parent's contents
         let filename = path
@@ -857,8 +855,8 @@ impl<FS: FileSystem> Workspace<FS> {
         // Remove from parent's contents if there's a parent index
         if is_index {
             // For index files, the grandparent's contents has the reference
-            if let Some(grandparent) = parent.parent() {
-                if let Ok(Some(grandparent_index)) = self.find_any_index_in_dir(grandparent) {
+            if let Some(grandparent) = parent.parent()
+                && let Ok(Some(grandparent_index)) = self.find_any_index_in_dir(grandparent) {
                     let app = DiaryxApp::new(&self.fs);
                     let dir_name = parent.file_name().and_then(|n| n.to_str()).unwrap_or("");
                     // Try to remove various possible reference formats
@@ -873,7 +871,6 @@ impl<FS: FileSystem> Workspace<FS> {
                         &format!("{}/index.md", dir_name),
                     );
                 }
-            }
         } else {
             // For leaf files, parent's contents has the reference
             if let Ok(Some(parent_index)) = self.find_any_index_in_dir(parent) {
@@ -1131,7 +1128,7 @@ impl<FS: FileSystem> Workspace<FS> {
     ///
     /// Returns the new path to the entry after any moves.
     pub fn attach_and_move_entry_to_parent(&self, entry: &Path, parent: &Path) -> Result<PathBuf> {
-        use crate::entry::DiaryxApp;
+        
 
         // Validate entry exists
         if !self.fs.exists(entry) {
@@ -1167,7 +1164,7 @@ impl<FS: FileSystem> Workspace<FS> {
             .to_string();
 
         // Check if entry is already in parent directory
-        let entry_in_parent_dir = entry.parent().map_or(false, |ep| ep == parent_dir);
+        let entry_in_parent_dir = entry.parent() == Some(parent_dir);
 
         // Move entry if not already in parent directory
         let final_entry = if !entry_in_parent_dir {
@@ -1303,8 +1300,7 @@ impl<FS: FileSystem> Workspace<FS> {
     fn title_from_filename(&self, filename: &str) -> String {
         filename
             .trim_end_matches(".md")
-            .replace('-', " ")
-            .replace('_', " ")
+            .replace(['-', '_'], " ")
             .split_whitespace()
             .map(|word| {
                 let mut chars = word.chars();

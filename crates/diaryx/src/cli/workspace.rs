@@ -219,6 +219,10 @@ fn handle_validate(
                 ValidationWarning::CircularReference { files } => {
                     println!("  ⚠ Circular reference involving: {:?}", files);
                 }
+                ValidationWarning::UnlinkedEntry { path, is_dir } => {
+                    let icon = if *is_dir { "📁" } else { "📄" };
+                    println!("  {} Unlinked: {}", icon, path.display());
+                }
             }
         }
     }

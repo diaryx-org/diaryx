@@ -24,6 +24,7 @@
     expandedNodes: Set<string>;
     validationResult: ValidationResult | null;
     collapsed: boolean;
+    showUnlinkedFiles: boolean;
     onOpenEntry: (path: string) => void;
     onToggleNode: (path: string) => void;
     onToggleCollapse: () => void;
@@ -50,7 +51,28 @@
     onDeleteEntry,
     onExport,
     onAddAttachment,
+    showUnlinkedFiles,
   }: Props = $props();
+  
+  // Extract unlinked entries (files/directories not in hierarchy) from validation result
+  let unlinkedPaths = $derived(() => {
+    const paths = new Set<string>();
+    if (validationResult?.warnings) {
+      for (const warning of validationResult.warnings) {
+        if (warning.type === 'UnlinkedEntry' && warning.path) {
+          paths.add(warning.path);
+        }
+      }
+    }
+    return paths;
+  });
+  
+  // Check if a path is unlinked
+  function isUnlinked(path: string): boolean {
+     return unlinkedPaths().has(path);
+  }
+  
+
 
   // Drag state
   let draggedPath: string | null = $state(null);
@@ -174,6 +196,8 @@
       <div class="space-y-0.5" role="tree" aria-label="Workspace entries">
         {@render treeNode(tree, 0)}
       </div>
+      
+
     {:else}
       <!-- Empty State -->
       <div class="flex flex-col items-center justify-center py-8 text-center">
@@ -246,6 +270,11 @@
             {#if hasValidationError(node.path)}
               <span title="Broken reference">
                 <AlertCircle class="size-4 shrink-0 text-destructive" />
+              </span>
+            {/if}
+            {#if isUnlinked(node.path)}
+               <span title="Unlinked file (not in hierarchy)">
+                <AlertCircle class="size-4 shrink-0 text-amber-500" />
               </span>
             {/if}
           </button>

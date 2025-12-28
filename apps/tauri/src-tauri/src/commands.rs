@@ -12,6 +12,7 @@ use diaryx_core::{
     error::SerializableError,
     fs::{FileSystem, RealFileSystem},
     search::{SearchQuery, SearchResults, Searcher},
+    validate::{ValidationResult, Validator},
     workspace::{TreeNode, Workspace},
 };
 use serde::{Deserialize, Serialize};
@@ -418,6 +419,106 @@ pub fn get_workspace_tree<R: Runtime>(
     Ok(tree)
 }
 
+/// Get the filesystem tree structure (for "Show All Files" mode)
+/// Unlike get_workspace_tree, this scans actual filesystem rather than following contents/part_of
+#[tauri::command]
+pub fn get_filesystem_tree<R: Runtime>(
+    app: AppHandle<R>,
+    workspace_path: Option<String>,
+    show_hidden: Option<bool>,
+) -> Result<TreeNode, SerializableError> {
+    log::info!(
+        "[get_filesystem_tree] Called with workspace_path: {:?}, show_hidden: {:?}",
+        workspace_path,
+        show_hidden
+    );
+
+    let paths = get_platform_paths(&app)?;
+
+    // Determine workspace root
+    let root_path = match workspace_path {
+        Some(ref p) => PathBuf::from(p),
+        None => {
+            // Load config to get default workspace
+            let config = Config::load_from(&RealFileSystem, &paths.config_path)
+                .map_err(|e| e.to_serializable())?;
+            PathBuf::from(&config.default_workspace)
+        }
+    };
+
+    log::info!("[get_filesystem_tree] Using root path: {:?}", root_path);
+
+    // Build filesystem tree
+    let ws = Workspace::new(RealFileSystem);
+    let tree = ws
+        .build_filesystem_tree(&root_path, show_hidden.unwrap_or(false))
+        .map_err(|e| {
+            log::error!("[get_filesystem_tree] Error building tree: {:?}", e);
+            e.to_serializable()
+        })?;
+
+    log::info!(
+        "[get_filesystem_tree] Tree built successfully: name={}",
+        tree.name
+    );
+    Ok(tree)
+}
+
+/// Validate workspace links and find unlinked entries
+#[tauri::command]
+pub fn validate_workspace<R: Runtime>(
+    app: AppHandle<R>,
+    workspace_path: Option<String>,
+) -> Result<ValidationResult, SerializableError> {
+    log::info!(
+        "[validate_workspace] Called with workspace_path: {:?}",
+        workspace_path
+    );
+
+    let paths = get_platform_paths(&app)?;
+
+    // Determine workspace root
+    let root_path = match workspace_path {
+        Some(ref p) => PathBuf::from(p),
+        None => {
+            // Load config to get default workspace
+            let config = Config::load_from(&RealFileSystem, &paths.config_path)
+                .map_err(|e| e.to_serializable())?;
+            PathBuf::from(&config.default_workspace)
+        }
+    };
+
+    log::info!("[validate_workspace] Using root path: {:?}", root_path);
+
+    // Find the index file in the workspace directory
+    let ws = Workspace::new(RealFileSystem);
+    let index_path = ws
+        .find_any_index_in_dir(&root_path)
+        .map_err(|e| e.to_serializable())?
+        .ok_or_else(|| {
+            diaryx_core::error::DiaryxError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("No index file found in workspace: {:?}", root_path),
+            ))
+            .to_serializable()
+        })?;
+
+    // Run validation
+    let validator = Validator::new(RealFileSystem);
+    let result = validator
+        .validate_workspace(&index_path)
+        .map_err(|e| e.to_serializable())?;
+
+    log::info!(
+        "[validate_workspace] Validation complete: {} errors, {} warnings, {} files checked",
+        result.errors.len(),
+        result.warnings.len(),
+        result.files_checked
+    );
+
+    Ok(result)
+}
+
 /// Get an entry's content and metadata
 #[tauri::command]
 pub fn get_entry(path: String) -> Result<EntryData, SerializableError> {
@@ -629,7 +730,7 @@ pub struct AttachEntryToParentRequest {
 /// Move/rename an entry, keeping parent index `contents` and entry `part_of` consistent.
 #[tauri::command]
 pub fn move_entry(request: MoveEntryRequest) -> Result<PathBuf, SerializableError> {
-    let app = DiaryxApp::new(RealFileSystem);
+    use diaryx_core::workspace::Workspace;
 
     let from = PathBuf::from(&request.from_path);
     let to = PathBuf::from(&request.to_path);
@@ -638,63 +739,11 @@ pub fn move_entry(request: MoveEntryRequest) -> Result<PathBuf, SerializableErro
         return Ok(to);
     }
 
-    // Compute old/new parent indexes and file names before moving
-    let old_parent = from.parent().ok_or_else(|| SerializableError {
-        kind: "InvalidPath".to_string(),
-        message: "No parent directory for source path".to_string(),
-        path: Some(from.clone()),
-    })?;
-    let old_index = old_parent.join("index.md");
-    let old_file_name =
-        from.file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| SerializableError {
-                kind: "InvalidPath".to_string(),
-                message: "Invalid source file name".to_string(),
-                path: Some(from.clone()),
-            })?;
-
-    let new_parent = to.parent().ok_or_else(|| SerializableError {
-        kind: "InvalidPath".to_string(),
-        message: "No parent directory for destination path".to_string(),
-        path: Some(to.clone()),
-    })?;
-    let new_index = new_parent.join("index.md");
-    let new_file_name =
-        to.file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| SerializableError {
-                kind: "InvalidPath".to_string(),
-                message: "Invalid destination file name".to_string(),
-                path: Some(to.clone()),
-            })?;
-
-    // Move file
-    RealFileSystem
-        .move_file(&from, &to)
-        .map_err(|e| SerializableError {
-            kind: "FileMoveError".to_string(),
-            message: format!(
-                "Failed to move entry '{}' -> '{}': {}",
-                request.from_path, request.to_path, e
-            ),
-            path: Some(from.clone()),
-        })?;
-
-    // Update old parent index contents (if it exists)
-    if RealFileSystem.exists(&old_index) {
-        remove_from_index_contents(&app, &old_index, old_file_name)?;
-    }
-
-    // Update new parent index contents + part_of (if it exists)
-    if RealFileSystem.exists(&new_index) {
-        add_to_index_contents(&app, &new_index, new_file_name)?;
-
-        let rel_part_of = relative_path_from_entry_to_target(&to, &new_index);
-        let to_str = request.to_path.clone();
-        app.set_frontmatter_property(&to_str, "part_of", serde_yaml::Value::String(rel_part_of))
-            .map_err(|e| e.to_serializable())?;
-    }
+    // Use shared Workspace::move_entry which correctly finds parent index files
+    // using find_any_index_in_dir (handles both index.md and {dirname}.md naming)
+    let ws = Workspace::new(RealFileSystem);
+    ws.move_entry(&from, &to)
+        .map_err(|e| e.to_serializable())?;
 
     Ok(to)
 }

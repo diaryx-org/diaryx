@@ -468,6 +468,102 @@ impl<FS: FileSystem> Workspace<FS> {
         })
     }
 
+    /// Build a tree structure from the actual filesystem (for "Show All Files" mode)
+    /// Unlike build_tree, this scans directories for actual files rather than following contents references
+    pub fn build_filesystem_tree(
+        &self,
+        root_dir: &Path,
+        show_hidden: bool,
+    ) -> Result<TreeNode> {
+        self.build_filesystem_tree_recursive(root_dir, show_hidden)
+    }
+
+    fn build_filesystem_tree_recursive(
+        &self,
+        dir: &Path,
+        show_hidden: bool,
+    ) -> Result<TreeNode> {
+        // Get directory name for display
+        let dir_name = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| dir.to_string_lossy().to_string());
+
+        // Try to find an index file in this directory to get title/description
+        let (name, description, index_path) = if let Ok(Some(index)) = self.find_any_index_in_dir(dir) {
+            if let Ok(parsed) = self.parse_index(&index) {
+                let title = parsed.frontmatter.title.unwrap_or_else(|| dir_name.clone());
+                (title, parsed.frontmatter.description, Some(index))
+            } else {
+                (dir_name.clone(), None, Some(index))
+            }
+        } else {
+            (dir_name.clone(), None, None)
+        };
+
+        // The path to use - if there's an index, use it; otherwise use the directory
+        let node_path = index_path.unwrap_or_else(|| dir.to_path_buf());
+
+        // List all entries in this directory
+        let mut children = Vec::new();
+        if let Ok(entries) = self.fs.list_files(dir) {
+            let mut entries: Vec<_> = entries.into_iter().collect();
+            entries.sort(); // Sort alphabetically
+
+            for entry in entries {
+                let file_name = entry
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+
+                // Skip hidden files unless show_hidden is true
+                if !show_hidden && file_name.starts_with('.') {
+                    continue;
+                }
+
+                if self.fs.is_dir(&entry) {
+                    // Recurse into subdirectory
+                    if let Ok(child_tree) = self.build_filesystem_tree_recursive(&entry, show_hidden) {
+                        children.push(child_tree);
+                    }
+                } else {
+                    // It's a file - skip index files (already represented by parent dir)
+                    if self.is_index_file(&entry) {
+                        continue;
+                    }
+
+                    // Get title from frontmatter if it's a markdown file
+                    let (file_title, file_desc) = if entry.extension().is_some_and(|e| e == "md") {
+                        if let Ok(parsed) = self.parse_index(&entry) {
+                            (
+                                parsed.frontmatter.title.unwrap_or(file_name.clone()),
+                                parsed.frontmatter.description,
+                            )
+                        } else {
+                            (file_name.clone(), None)
+                        }
+                    } else {
+                        (file_name.clone(), None)
+                    };
+
+                    children.push(TreeNode {
+                        name: file_title,
+                        description: file_desc,
+                        path: entry,
+                        children: Vec::new(),
+                    });
+                }
+            }
+        }
+
+        Ok(TreeNode {
+            name,
+            description,
+            path: node_path,
+            children,
+        })
+    }
+
     /// Format tree for display (like the `tree` command)
     pub fn format_tree(&self, node: &TreeNode, prefix: &str) -> String {
         let mut result = String::new();

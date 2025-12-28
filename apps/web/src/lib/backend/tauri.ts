@@ -269,6 +269,27 @@ export class TauriBackend implements Backend {
     }
   }
 
+  async getFilesystemTree(
+    workspacePath?: string,
+    showHidden?: boolean,
+  ): Promise<TreeNode> {
+    try {
+      console.log("[TauriBackend] getFilesystemTree called with:", {
+        workspacePath,
+        showHidden,
+      });
+      const result = await this.getInvoke()<TreeNode>("get_filesystem_tree", {
+        workspacePath,
+        showHidden,
+      });
+      console.log("[TauriBackend] getFilesystemTree result:", result);
+      return result;
+    } catch (e) {
+      console.error("[TauriBackend] getFilesystemTree error:", e);
+      handleError(e);
+    }
+  }
+
   async createWorkspace(path?: string, name?: string): Promise<string> {
     try {
       // Use platform-appropriate default path if not provided

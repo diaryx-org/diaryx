@@ -49,6 +49,10 @@
   let showExportDialog = $state(false);
   let exportPath = $state("");
   
+  // Display settings - persisted to localStorage
+  let showUnlinkedFiles = $state(true);
+  let showHiddenFiles = $state(false);
+  
   // Attachment state
   let pendingAttachmentPath = $state("");
   let attachmentError: string | null = $state(null);
@@ -149,6 +153,12 @@
     
     return result;
   }
+  
+  // Persist display setting to localStorage when changed
+  $effect(() => {
+    localStorage.setItem('diaryx-show-unlinked-files', String(showUnlinkedFiles));
+    localStorage.setItem('diaryx-show-hidden-files', String(showHiddenFiles));
+  });
 
   // Check if we're on desktop and expand sidebars by default
   onMount(async () => {
@@ -156,6 +166,12 @@
     if (window.innerWidth >= 768) {
       leftSidebarCollapsed = false;
       rightSidebarCollapsed = false;
+    }
+    
+    // Restore display settings from localStorage
+    const savedShowUnlinked = localStorage.getItem('diaryx-show-unlinked-files');
+    if (savedShowUnlinked !== null) {
+      showUnlinkedFiles = savedShowUnlinked === 'true';
     }
 
     try {
@@ -169,7 +185,7 @@
       // Start auto-persist for WASM backend (no-op for Tauri)
       startAutoPersist(5000);
 
-      tree = await backend.getWorkspaceTree();
+      await refreshTree();
 
       // Expand root by default
       if (tree) {
@@ -329,7 +345,7 @@
     try {
       const newPath = await backend.createChildEntry(parentPath);
       await persistNow();
-      tree = await backend.getWorkspaceTree();
+      await refreshTree();
       await openEntry(newPath);
       await runValidation();
     } catch (e) {
@@ -341,7 +357,7 @@
     if (!backend) return;
     try {
       const newPath = await backend.createEntry(path, { title });
-      tree = await backend.getWorkspaceTree();
+      await refreshTree();
       await openEntry(newPath);
       await runValidation();
     } catch (e) {
@@ -355,7 +371,7 @@
     if (!backend) return;
     try {
       const path = await backend.ensureDailyEntry();
-      tree = await backend.getWorkspaceTree();
+      await refreshTree();
       await openEntry(path);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -381,7 +397,7 @@
       
       // Try to refresh the tree - this might fail if workspace state is temporarily inconsistent
       try {
-        tree = await backend.getWorkspaceTree();
+        await refreshTree();
         await runValidation();
       } catch (refreshError) {
         console.warn("[App] Error refreshing tree after delete:", refreshError);
@@ -389,7 +405,7 @@
         setTimeout(async () => {
           try {
             if (backend) {
-              tree = await backend.getWorkspaceTree();
+              await refreshTree();
               await runValidation();
             }
           } catch (e) {
@@ -407,8 +423,26 @@
     if (!backend) return;
     try {
       validationResult = await backend.validateWorkspace();
+      console.log("[App] Validation result:", validationResult);
+      console.log("[App] Warnings:", validationResult?.warnings);
     } catch (e) {
       console.error("[App] Validation error:", e);
+    }
+  }
+
+  // Refresh the tree using the appropriate method based on showUnlinkedFiles setting
+  async function refreshTree() {
+    if (!backend) return;
+    try {
+      if (showUnlinkedFiles) {
+        // "Show All Files" mode - use filesystem tree
+        tree = await backend.getFilesystemTree(undefined, showHiddenFiles);
+      } else {
+        // Normal mode - use hierarchy tree
+        tree = await backend.getWorkspaceTree();
+      }
+    } catch (e) {
+      console.error("[App] Error refreshing tree:", e);
     }
   }
 
@@ -567,7 +601,7 @@
       // - Set entry's `part_of` to point to newParent
       await backend.attachEntryToParent(entryPath, newParentPath);
       await persistNow();
-      tree = await backend.getWorkspaceTree();
+      await refreshTree();
       await runValidation();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -610,7 +644,7 @@
             
             // Update current entry path and refresh tree
             currentEntry = { ...currentEntry, path: newPath, frontmatter: { ...currentEntry.frontmatter, [key]: value } };
-            tree = await backend.getWorkspaceTree();
+            await refreshTree();
             titleError = null; // Clear any previous error
           } catch (renameError) {
             // Rename failed (e.g., target exists), show user-friendly error near title input
@@ -754,7 +788,7 @@
 />
 
 <!-- Settings Dialog -->
-<SettingsDialog bind:open={showSettingsDialog} />
+<SettingsDialog bind:open={showSettingsDialog} bind:showUnlinkedFiles bind:showHiddenFiles />
 
 <!-- Export Dialog -->
 <ExportDialog
@@ -776,6 +810,7 @@
     {error}
     {expandedNodes}
     {validationResult}
+    {showUnlinkedFiles}
     collapsed={leftSidebarCollapsed}
     onOpenEntry={openEntry}
     onToggleNode={toggleNode}

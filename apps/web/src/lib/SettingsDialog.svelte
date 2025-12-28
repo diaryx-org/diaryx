@@ -1,14 +1,18 @@
 <script lang="ts">
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
-  import { Settings, Info } from "@lucide/svelte";
+  import { Switch } from "$lib/components/ui/switch";
+  import { Label } from "$lib/components/ui/label";
+  import { Settings, Info, Eye } from "@lucide/svelte";
   import { getBackend } from "./backend";
 
   interface Props {
     open: boolean;
+    showUnlinkedFiles: boolean;
+    showHiddenFiles?: boolean;
   }
 
-  let { open = $bindable() }: Props = $props();
+  let { open = $bindable(), showUnlinkedFiles = $bindable(), showHiddenFiles = $bindable(false) }: Props = $props();
   
   // Config info state
   let config: Record<string, unknown> | null = $state(null);
@@ -57,6 +61,34 @@
     </Dialog.Header>
     
     <div class="py-4 space-y-4">
+      <!-- Display Settings -->
+      <div class="space-y-3">
+        <h3 class="font-medium flex items-center gap-2">
+          <Eye class="size-4" />
+          Display
+        </h3>
+        
+        <div class="flex items-center justify-between gap-4 px-1">
+          <Label for="show-unlinked" class="text-sm cursor-pointer flex flex-col gap-0.5">
+            <span>Show all files</span>
+            <span class="font-normal text-xs text-muted-foreground">
+              Switch to a filesystem view to see files not linked in hierarchy.
+            </span>
+          </Label>
+          <Switch id="show-unlinked" bind:checked={showUnlinkedFiles} />
+        </div>
+
+        <div class="flex items-center justify-between gap-4 px-1">
+          <Label for="show-hidden" class="text-sm cursor-pointer flex flex-col gap-0.5">
+            <span>Show hidden files</span>
+            <span class="font-normal text-xs text-muted-foreground">
+              Show files starting with dot (.git, .DS_Store) in filesystem view.
+            </span>
+          </Label>
+          <Switch id="show-hidden" bind:checked={showHiddenFiles} disabled={!showUnlinkedFiles} />
+        </div>
+      </div>
+
       {#if loadError}
         <div class="text-destructive text-sm p-2 bg-destructive/10 rounded">
           Error loading config: {loadError}
@@ -97,15 +129,9 @@
         </div>
       {/if}
       
-      {#if !config && !appPaths && !loadError}
-        <p class="text-muted-foreground text-center">Loading config...</p>
-      {/if}
+      <div class="flex justify-end pt-2">
+        <Button variant="outline" onclick={() => open = false}>Close</Button>
+      </div>
     </div>
-    
-    <Dialog.Footer>
-      <Button variant="outline" onclick={() => open = false}>
-        Close
-      </Button>
-    </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

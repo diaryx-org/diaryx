@@ -41,3 +41,7 @@ Questions:
 ### Undo/redo
 
 I would like `diaryx undo` and `diaryx redo` commands to undo/redo any command that was previously done, because it is easy to make mistakes.
+
+## Encryption
+
+Ideally hot-swappable similar to backup backends. Maybe Cryptomater?

@@ -53,9 +53,11 @@ export interface ValidationError {
 }
 
 export interface ValidationWarning {
-  type: 'OrphanFile' | 'CircularReference';
+  type: 'OrphanFile' | 'CircularReference' | 'UnlinkedEntry';
   file?: string;   // For OrphanFile
   files?: string[]; // For CircularReference
+  path?: string;    // For UnlinkedEntry
+  is_dir?: boolean; // For UnlinkedEntry
 }
 
 export interface ValidationResult {
@@ -153,6 +155,13 @@ export interface Backend {
    * @param depth Optional maximum depth to traverse.
    */
   getWorkspaceTree(workspacePath?: string, depth?: number): Promise<TreeNode>;
+
+  /**
+   * Get the filesystem tree (for "Show All Files" mode).
+   * @param workspacePath Optional path to the workspace directory.
+   * @param showHidden Whether to include hidden files (.git, .DS_Store, etc).
+   */
+  getFilesystemTree(workspacePath?: string, showHidden?: boolean): Promise<TreeNode>;
 
   /**
    * Create a new workspace at the given path.

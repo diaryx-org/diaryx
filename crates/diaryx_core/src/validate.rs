@@ -14,6 +14,7 @@ use crate::workspace::Workspace;
 
 /// A validation error indicating a broken reference.
 #[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type")]
 pub enum ValidationError {
     /// A file's `part_of` points to a non-existent file.
     BrokenPartOf {
@@ -33,11 +34,20 @@ pub enum ValidationError {
 
 /// A validation warning indicating a potential issue.
 #[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type")]
 pub enum ValidationWarning {
     /// A file exists but is not referenced by any index's contents.
     OrphanFile {
         /// The orphan file path
         file: PathBuf,
+    },
+    /// A file or directory exists but is not in the contents hierarchy.
+    /// Used for "List All Files" mode to show all filesystem entries.
+    UnlinkedEntry {
+        /// The entry path
+        path: PathBuf,
+        /// Whether this is a directory
+        is_dir: bool,
     },
     /// Circular reference detected in workspace hierarchy.
     CircularReference {
@@ -87,12 +97,71 @@ impl<FS: FileSystem> Validator<FS> {
     /// Checks:
     /// - All `contents` references point to existing files
     /// - All `part_of` references point to existing files
-    /// - Detects orphan files in the same directory
+    /// - Detects unlinked files/directories (not reachable via contents references)
     pub fn validate_workspace(&self, root_path: &Path) -> Result<ValidationResult> {
         let mut result = ValidationResult::default();
         let mut visited = HashSet::new();
 
         self.validate_recursive(root_path, &mut result, &mut visited)?;
+
+        // Find unlinked entries: files/dirs in workspace not visited during traversal
+        // Only scan immediate directory (non-recursive) for performance
+        let workspace_root = root_path.parent().unwrap_or(Path::new("."));
+        if let Ok(all_entries) = self.ws.fs_ref().list_files(workspace_root) {
+            // Normalize visited paths for comparison
+            let visited_normalized: HashSet<PathBuf> = visited
+                .iter()
+                .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()))
+                .collect();
+
+            // Directories to skip (common build/dependency directories)
+            let skip_dirs = [
+                "node_modules",
+                "target",
+                ".git",
+                ".svn",
+                "dist",
+                "build",
+                "__pycache__",
+                ".next",
+                ".nuxt",
+                "vendor",
+                ".cargo",
+            ];
+
+            for entry in all_entries {
+                // Skip entries in common non-workspace directories
+                let should_skip = entry.components().any(|c| {
+                    if let std::path::Component::Normal(name) = c {
+                        skip_dirs.iter().any(|&d| name == std::ffi::OsStr::new(d))
+                    } else {
+                        false
+                    }
+                });
+
+                if should_skip {
+                    continue;
+                }
+
+                let entry_canonical = entry.canonicalize().unwrap_or_else(|_| entry.clone());
+                if !visited_normalized.contains(&entry_canonical) {
+                    let is_dir = self.ws.fs_ref().is_dir(&entry);
+                    
+                    // Report as OrphanFile if it's an .md file (for backwards compat)
+                    if entry.extension().is_some_and(|ext| ext == "md") {
+                        result.warnings.push(ValidationWarning::OrphanFile { 
+                            file: entry.clone() 
+                        });
+                    }
+                    
+                    // Always report as UnlinkedEntry for "List All Files" mode
+                    result.warnings.push(ValidationWarning::UnlinkedEntry { 
+                        path: entry,
+                        is_dir,
+                    });
+                }
+            }
+        }
 
         Ok(result)
     }

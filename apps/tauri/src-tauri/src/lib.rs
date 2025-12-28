@@ -30,6 +30,8 @@ pub fn run() {
             commands::save_config,
             // Workspace
             commands::get_workspace_tree,
+            commands::get_filesystem_tree,
+            commands::validate_workspace,
             // Entries
             commands::get_entry,
             commands::save_entry,

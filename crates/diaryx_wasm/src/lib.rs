@@ -265,6 +265,7 @@ impl From<diaryx_core::validate::ValidationError> for JsValidationError {
 pub enum JsValidationWarning {
     OrphanFile { file: String },
     CircularReference { files: Vec<String> },
+    UnlinkedEntry { path: String, is_dir: bool },
 }
 
 impl From<diaryx_core::validate::ValidationWarning> for JsValidationWarning {
@@ -282,6 +283,10 @@ impl From<diaryx_core::validate::ValidationWarning> for JsValidationWarning {
                         .collect(),
                 }
             }
+            ValidationWarning::UnlinkedEntry { path, is_dir } => JsValidationWarning::UnlinkedEntry {
+                path: path.to_string_lossy().to_string(),
+                is_dir,
+            },
         }
     }
 }

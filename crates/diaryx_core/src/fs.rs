@@ -58,6 +58,42 @@ pub trait FileSystem {
         // Default: return empty
         Ok(vec![])
     }
+
+    /// Recursively list all markdown files in a directory and its subdirectories
+    fn list_md_files_recursive(&self, dir: &Path) -> Result<Vec<PathBuf>> {
+        let mut all_files = self.list_md_files(dir)?;
+        
+        // Get subdirectories and recurse
+        if let Ok(entries) = self.list_files(dir) {
+            for entry in entries {
+                if self.is_dir(&entry) {
+                    if let Ok(subdir_files) = self.list_md_files_recursive(&entry) {
+                        all_files.extend(subdir_files);
+                    }
+                }
+            }
+        }
+        
+        Ok(all_files)
+    }
+
+    /// Recursively list ALL files and directories in a directory
+    fn list_all_files_recursive(&self, dir: &Path) -> Result<Vec<PathBuf>> {
+        let mut all_entries = Vec::new();
+        
+        if let Ok(entries) = self.list_files(dir) {
+            for entry in entries {
+                all_entries.push(entry.clone());
+                if self.is_dir(&entry) {
+                    if let Ok(subdir_entries) = self.list_all_files_recursive(&entry) {
+                        all_entries.extend(subdir_entries);
+                    }
+                }
+            }
+        }
+        
+        Ok(all_entries)
+    }
 }
 
 // Blanket implementation for references to FileSystem
@@ -190,6 +226,17 @@ impl FileSystem for RealFileSystem {
 
     fn is_dir(&self, path: &Path) -> bool {
         path.is_dir()
+    }
+
+    fn list_files(&self, dir: &Path) -> Result<Vec<PathBuf>> {
+        let mut files = Vec::new();
+        if dir.is_dir() {
+            for entry in fs::read_dir(dir)? {
+                let entry = entry?;
+                files.push(entry.path());
+            }
+        }
+        Ok(files)
     }
 }
 
@@ -618,6 +665,7 @@ impl FileSystem for InMemoryFileSystem {
         let normalized = Self::normalize_path(dir);
         let files = self.files.read().unwrap();
         let binary_files = self.binary_files.read().unwrap();
+        let dirs = self.directories.read().unwrap();
 
         let mut result = Vec::new();
 
@@ -634,6 +682,16 @@ impl FileSystem for InMemoryFileSystem {
         for path in binary_files.keys() {
             if let Some(parent) = path.parent()
                 && parent == normalized
+            {
+                result.push(path.clone());
+            }
+        }
+
+        // Check subdirectories
+        for path in dirs.iter() {
+            if let Some(parent) = path.parent()
+                && parent == normalized
+                && path != &normalized
             {
                 result.push(path.clone());
             }

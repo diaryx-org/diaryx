@@ -812,6 +812,7 @@ dependencies = [
  "pathdiff",
  "serde",
  "serde_yaml",
+ "tempfile",
  "thiserror 2.0.17",
  "toml 0.9.8",
 ]

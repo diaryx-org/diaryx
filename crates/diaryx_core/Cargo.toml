@@ -43,3 +43,6 @@ default = []
 [package.metadata.release]
 # This crate should be published to crates.io
 publish = true
+
+[dev-dependencies]
+tempfile = "3"

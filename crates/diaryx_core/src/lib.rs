@@ -4,6 +4,9 @@
 /// Configuration options
 pub mod config;
 
+/// Backup system for persisting workspace data
+pub mod backup;
+
 /// Date parsing
 pub mod date;
 

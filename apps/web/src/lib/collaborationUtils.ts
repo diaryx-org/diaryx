@@ -3,6 +3,13 @@
  *
  * Manages Y.Doc instances, Hocuspocus provider connections,
  * offline persistence, and markdown synchronization.
+ *
+ * Room naming convention:
+ * - Workspace CRDT: "{workspaceId}:workspace" (handled by workspaceCrdt.ts)
+ * - File body CRDTs: "{workspaceId}:doc:{path}" or "doc:{path}" for local
+ *
+ * This module handles file body CRDTs (TipTap editor content).
+ * For workspace hierarchy sync, see workspaceCrdt.ts.
  */
 
 import * as Y from "yjs";
@@ -22,6 +29,7 @@ const sessions = new Map<string, CollaborationSession>();
 
 // Default configuration
 let serverUrl = "ws://localhost:1234";
+let currentWorkspaceId: string | null = null;
 const SAVE_DEBOUNCE_MS = 5000; // 5 seconds debounce for markdown saves
 
 /**
@@ -29,6 +37,49 @@ const SAVE_DEBOUNCE_MS = 5000; // 5 seconds debounce for markdown saves
  */
 export function setCollaborationServer(url: string): void {
   serverUrl = url;
+}
+
+/**
+ * Get the current collaboration server URL.
+ */
+export function getCollaborationServer(): string {
+  return serverUrl;
+}
+
+/**
+ * Set the current workspace ID for room naming.
+ * This prefixes all room names with "{workspaceId}:doc:" for multi-tenant scenarios.
+ * Set to null to disable prefixing (local-only mode).
+ */
+export function setWorkspaceId(workspaceId: string | null): void {
+  currentWorkspaceId = workspaceId;
+}
+
+/**
+ * Get the current workspace ID.
+ */
+export function getWorkspaceId(): string | null {
+  return currentWorkspaceId;
+}
+
+/**
+ * Generate the room name for a document path.
+ * If workspaceId is set, returns "{workspaceId}:doc:{path}"
+ * Otherwise returns "doc:{path}"
+ */
+export function getDocumentRoomName(documentPath: string): string {
+  const prefix = currentWorkspaceId ? `${currentWorkspaceId}:` : "";
+  return `${prefix}doc:${documentPath}`;
+}
+
+/**
+ * Extract the document path from a room name.
+ * Reverses getDocumentRoomName().
+ */
+export function getDocumentPathFromRoom(roomName: string): string | null {
+  // Match either "{workspaceId}:doc:{path}" or "doc:{path}"
+  const match = roomName.match(/^(?:[^:]+:)?doc:(.+)$/);
+  return match ? match[1] : null;
 }
 
 /**
@@ -121,19 +172,20 @@ export function getCollaborativeDocument(
 
   // Create Hocuspocus provider for real-time sync
   const userInfo = getUserInfo();
+  const roomName = getDocumentRoomName(documentPath);
   const provider = new HocuspocusProvider({
     url: serverUrl,
-    name: documentPath,
+    name: roomName,
     document: ydoc,
     onConnect: () => {
-      console.log(`[Y.js] Connected to ${documentPath}`);
+      console.log(`[Y.js] Connected to ${roomName} (path: ${documentPath})`);
     },
     onDisconnect: () => {
-      console.log(`[Y.js] Disconnected from ${documentPath}`);
+      console.log(`[Y.js] Disconnected from ${roomName}`);
     },
     onSynced: ({ state }) => {
       console.log(
-        `[Y.js] Synced ${documentPath}`,
+        `[Y.js] Synced ${roomName}`,
         state ? "with server" : "from cache",
       );
     },
@@ -290,4 +342,18 @@ export function forceSave(documentPath: string): void {
   }
   // The actual save is handled by the Editor's onchange callback
   console.log(`[Y.js] Force save triggered for ${documentPath}`);
+}
+
+/**
+ * Get all active session paths.
+ */
+export function getActiveSessions(): string[] {
+  return Array.from(sessions.keys());
+}
+
+/**
+ * Get session count.
+ */
+export function getSessionCount(): number {
+  return sessions.size;
 }

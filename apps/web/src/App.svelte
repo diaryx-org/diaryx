@@ -13,7 +13,26 @@
   import {
     getCollaborativeDocument,
     disconnectDocument,
+    setWorkspaceId,
   } from "./lib/collaborationUtils";
+  import {
+    initWorkspace,
+    disconnectWorkspace,
+    getFileMetadata,
+    updateFileMetadata,
+    deleteFile as crdtDeleteFile,
+    addToContents,
+    removeFromContents,
+    moveFile as crdtMoveFile,
+    renameFile as crdtRenameFile,
+    addAttachment as crdtAddAttachment,
+    removeAttachment as crdtRemoveAttachment,
+    syncFromBackend,
+    garbageCollect,
+    getWorkspaceStats,
+    type FileMetadata,
+    type BinaryRef,
+  } from "./lib/workspaceCrdt";
   import type { Doc as YDoc } from "yjs";
   import type { HocuspocusProvider } from "@hocuspocus/provider";
   import LeftSidebar from "./lib/LeftSidebar.svelte";
@@ -60,6 +79,40 @@
   let currentProvider: HocuspocusProvider | null = $state(null);
   let currentCollaborationPath: string | null = $state(null); // Track absolute path for cleanup
   let collaborationEnabled = $state(true); // Toggle for enabling/disabling collaboration
+
+  // Workspace CRDT state
+  let workspaceCrdtInitialized = $state(false);
+  let workspaceId: string | null = $state(null);
+
+  // Collaboration server URL (null for local-only mode)
+  const collaborationServerUrl: string | null =
+    typeof import.meta !== "undefined" &&
+    (import.meta as any).env?.VITE_COLLAB_SERVER
+      ? (import.meta as any).env.VITE_COLLAB_SERVER
+      : "ws://localhost:1234";
+
+  // Set VITE_DISABLE_WORKSPACE_CRDT=true to disable workspace CRDT for debugging
+  // This keeps per-file collaboration working but disables the workspace-level sync
+  const workspaceCrdtDisabled: boolean =
+    typeof import.meta !== "undefined" &&
+    (import.meta as any).env?.VITE_DISABLE_WORKSPACE_CRDT === "true";
+
+  // Workspace ID from environment (for multi-device sync without chicken-and-egg problem)
+  // Set VITE_WORKSPACE_ID to the same value on all devices to ensure they sync
+  const envWorkspaceId: string | null =
+    typeof import.meta !== "undefined" &&
+    (import.meta as any).env?.VITE_WORKSPACE_ID
+      ? (import.meta as any).env.VITE_WORKSPACE_ID
+      : null;
+
+  // Generate a UUID for workspace identification
+  function generateUUID(): string {
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+      const r = (Math.random() * 16) | 0;
+      const v = c === "x" ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+  }
 
   // Display settings - initialized from localStorage if available
   let showUnlinkedFiles = $state(
@@ -209,6 +262,15 @@
       // Start auto-persist for WASM backend (no-op for Tauri)
       startAutoPersist(5000);
 
+      // Initialize workspace CRDT (unless disabled for debugging)
+      if (!workspaceCrdtDisabled) {
+        await initializeWorkspaceCrdt();
+      } else {
+        console.log(
+          "[App] Workspace CRDT disabled via VITE_DISABLE_WORKSPACE_CRDT",
+        );
+      }
+
       await refreshTree();
 
       // Expand root by default
@@ -252,7 +314,200 @@
     persistNow();
     // Cleanup blob URLs
     revokeBlobUrls();
+    // Disconnect workspace CRDT (keeps local state for quick reconnect)
+    disconnectWorkspace();
   });
+
+  // Initialize the workspace CRDT
+  async function initializeWorkspaceCrdt() {
+    if (!backend) return;
+
+    try {
+      // Workspace ID priority:
+      // 1. Environment variable VITE_WORKSPACE_ID (best for multi-device, avoids bootstrap issue)
+      // 2. workspace_id from root index frontmatter (syncs via CRDT)
+      // 3. null (no prefix - uses simple room names like "doc:path/to/file.md")
+      let sharedWorkspaceId: string | null = envWorkspaceId;
+
+      if (sharedWorkspaceId) {
+        console.log(
+          "[App] Using workspace_id from environment:",
+          sharedWorkspaceId,
+        );
+      } else {
+        // Try to get/create workspace_id from root index frontmatter
+        try {
+          const rootTree = await backend.getWorkspaceTree();
+          if (rootTree?.path) {
+            const rootFrontmatter = await backend.getFrontmatter(rootTree.path);
+            sharedWorkspaceId =
+              (rootFrontmatter.workspace_id as string) ?? null;
+
+            // If no workspace_id exists, generate one and save it
+            if (!sharedWorkspaceId) {
+              sharedWorkspaceId = generateUUID();
+              await backend.setFrontmatterProperty(
+                rootTree.path,
+                "workspace_id",
+                sharedWorkspaceId,
+              );
+              await persistNow();
+              console.log(
+                "[App] Generated new workspace_id:",
+                sharedWorkspaceId,
+              );
+            } else {
+              console.log(
+                "[App] Using workspace_id from index:",
+                sharedWorkspaceId,
+              );
+            }
+          }
+        } catch (e) {
+          console.warn("[App] Could not get/set workspace_id from index:", e);
+          // Fall back to null - will use simple room names without workspace prefix
+          console.log("[App] Using no workspace_id prefix (simple room names)");
+        }
+      }
+
+      workspaceId = sharedWorkspaceId;
+
+      // Set workspace ID for per-file document room naming
+      // If null, rooms will be "doc:{path}" instead of "{id}:doc:{path}"
+      setWorkspaceId(workspaceId);
+
+      // Initialize workspace CRDT
+      await initWorkspace({
+        workspaceId: workspaceId ?? undefined,
+        serverUrl: collaborationEnabled ? collaborationServerUrl : null,
+        onFilesChange: (files) => {
+          console.log("[App] Workspace CRDT files changed:", files.size);
+          // NOTE: We intentionally do NOT rebuild the tree from CRDT here.
+          // The tree continues to come from the backend to avoid sync issues.
+          // The CRDT is used only for syncing metadata between clients.
+          // In the future, we can enable CRDT-driven tree once the sync is more robust.
+        },
+        onConnectionChange: (connected) => {
+          console.log(
+            "[App] Workspace CRDT connection:",
+            connected ? "online" : "offline",
+          );
+        },
+      });
+
+      workspaceCrdtInitialized = true;
+
+      // Sync existing files from backend into CRDT
+      await syncFromBackend(backend);
+
+      // Garbage collect old deleted files (older than 7 days)
+      const purged = garbageCollect(7 * 24 * 60 * 60 * 1000);
+      if (purged > 0) {
+        console.log(
+          `[App] Garbage collected ${purged} old deleted files from CRDT`,
+        );
+      }
+
+      const stats = getWorkspaceStats();
+      console.log(
+        `[App] Workspace CRDT initialized: ${stats.activeFiles} files, ${stats.totalAttachments} attachments`,
+      );
+    } catch (e) {
+      console.error("[App] Failed to initialize workspace CRDT:", e);
+      // Continue without CRDT - fall back to backend-only mode
+      workspaceCrdtInitialized = false;
+    }
+  }
+
+  // Update CRDT when a file's metadata changes
+  function updateCrdtFileMetadata(
+    path: string,
+    frontmatter: Record<string, unknown>,
+  ) {
+    if (!workspaceCrdtInitialized) return;
+
+    try {
+      updateFileMetadata(path, {
+        title: (frontmatter.title as string) ?? null,
+        partOf: (frontmatter.part_of as string) ?? null,
+        contents: frontmatter.contents
+          ? (frontmatter.contents as string[])
+          : null,
+        audience: (frontmatter.audience as string[]) ?? null,
+        description: (frontmatter.description as string) ?? null,
+        extra: Object.fromEntries(
+          Object.entries(frontmatter).filter(
+            ([key]) =>
+              ![
+                "title",
+                "part_of",
+                "contents",
+                "attachments",
+                "audience",
+                "description",
+              ].includes(key),
+          ),
+        ),
+      });
+    } catch (e) {
+      console.error("[App] Failed to update CRDT metadata:", e);
+      // Don't throw - CRDT errors should not break the app
+    }
+  }
+
+  // Add a new file to CRDT
+  function addFileToCrdt(
+    path: string,
+    frontmatter: Record<string, unknown>,
+    parentPath: string | null,
+  ) {
+    if (!workspaceCrdtInitialized) return;
+
+    try {
+      const metadata: FileMetadata = {
+        title: (frontmatter.title as string) ?? null,
+        partOf: parentPath ?? (frontmatter.part_of as string) ?? null,
+        contents: frontmatter.contents
+          ? (frontmatter.contents as string[])
+          : null,
+        attachments: ((frontmatter.attachments as string[]) ?? []).map((p) => ({
+          path: p,
+          source: "local",
+          hash: "",
+          mimeType: "",
+          size: 0,
+          deleted: false,
+        })),
+        deleted: false,
+        audience: (frontmatter.audience as string[]) ?? null,
+        description: (frontmatter.description as string) ?? null,
+        extra: Object.fromEntries(
+          Object.entries(frontmatter).filter(
+            ([key]) =>
+              ![
+                "title",
+                "part_of",
+                "contents",
+                "attachments",
+                "audience",
+                "description",
+              ].includes(key),
+          ),
+        ),
+        modifiedAt: Date.now(),
+      };
+
+      updateFileMetadata(path, metadata);
+
+      // Add to parent's contents if parent exists
+      if (parentPath) {
+        addToContents(parentPath, path);
+      }
+    } catch (e) {
+      console.error("[App] Failed to add file to CRDT:", e);
+      // Don't throw - CRDT errors should not break the app
+    }
+  }
 
   // Open an entry
   async function openEntry(path: string) {
@@ -443,6 +698,11 @@
     try {
       const newPath = await backend.createChildEntry(parentPath);
       await persistNow();
+
+      // Update CRDT with new file
+      const entry = await backend.getEntry(newPath);
+      addFileToCrdt(newPath, entry.frontmatter, parentPath);
+
       await refreshTree();
       await openEntry(newPath);
       await runValidation();
@@ -455,6 +715,11 @@
     if (!backend) return;
     try {
       const newPath = await backend.createEntry(path, { title });
+
+      // Update CRDT with new file
+      const entry = await backend.getEntry(newPath);
+      addFileToCrdt(newPath, entry.frontmatter, null);
+
       await refreshTree();
       await openEntry(newPath);
       await runValidation();
@@ -484,8 +749,23 @@
     if (!confirm) return;
 
     try {
+      // Get metadata before deleting to know the parent
+      const metadata = getFileMetadata(path);
+
       await backend.deleteEntry(path);
       await persistNow();
+
+      // Update CRDT - mark as deleted and remove from parent
+      if (workspaceCrdtInitialized) {
+        try {
+          crdtDeleteFile(path);
+          if (metadata?.partOf) {
+            removeFromContents(metadata.partOf, path);
+          }
+        } catch (e) {
+          console.error("[App] Failed to update CRDT on delete:", e);
+        }
+      }
 
       // If we deleted the currently open entry, clear it
       if (currentEntry?.path === path) {
@@ -568,6 +848,7 @@
     try {
       // Convert file to base64
       const dataBase64 = await fileToBase64(file);
+      const entryPath = pendingAttachmentPath;
 
       // Upload attachment
       const attachmentPath = await backend.uploadAttachment(
@@ -576,6 +857,23 @@
         dataBase64,
       );
       await persistNow();
+
+      // Update CRDT with new attachment
+      if (workspaceCrdtInitialized) {
+        try {
+          const attachmentRef: BinaryRef = {
+            path: attachmentPath,
+            source: "local",
+            hash: "", // Could compute hash here if needed
+            mimeType: file.type,
+            size: file.size,
+            deleted: false,
+          };
+          crdtAddAttachment(entryPath, attachmentRef);
+        } catch (e) {
+          console.error("[App] Failed to add attachment to CRDT:", e);
+        }
+      }
 
       // Refresh the entry if it's currently open
       if (currentEntry?.path === pendingAttachmentPath) {
@@ -644,15 +942,31 @@
     }
 
     try {
-      // Convert file to base64
+      const entryPath = currentEntry.path;
       const dataBase64 = await fileToBase64(file);
-
-      // Upload attachment
       const attachmentPath = await backend.uploadAttachment(
         currentEntry.path,
         file.name,
         dataBase64,
       );
+
+      // Update CRDT with new attachment
+      if (workspaceCrdtInitialized) {
+        try {
+          const attachmentRef: BinaryRef = {
+            path: attachmentPath,
+            source: "local",
+            hash: "",
+            mimeType: file.type,
+            size: file.size,
+            deleted: false,
+          };
+          crdtAddAttachment(entryPath, attachmentRef);
+        } catch (e) {
+          console.error("[App] Failed to add attachment to CRDT:", e);
+        }
+      }
+
       await persistNow();
 
       // Refresh the entry to update attachments list
@@ -691,8 +1005,19 @@
     if (!backend || !currentEntry) return;
 
     try {
+      const entryPath = currentEntry.path;
       await backend.deleteAttachment(currentEntry.path, attachmentPath);
       await persistNow();
+
+      // Update CRDT
+      if (workspaceCrdtInitialized) {
+        try {
+          crdtRemoveAttachment(entryPath, attachmentPath);
+        } catch (e) {
+          console.error("[App] Failed to remove attachment from CRDT:", e);
+        }
+      }
+
       // Refresh current entry to update attachments list
       currentEntry = await backend.getEntry(currentEntry.path);
       attachmentError = null;
@@ -711,12 +1036,26 @@
     );
 
     try {
+      // Get old parent before moving
+      const metadata = getFileMetadata(entryPath);
+      const oldParentPath = metadata?.partOf ?? null;
+
       // Attach the entry to the new parent
       // This will:
       // - Add entry to newParent's `contents`
       // - Set entry's `part_of` to point to newParent
       await backend.attachEntryToParent(entryPath, newParentPath);
       await persistNow();
+
+      // Update CRDT
+      if (workspaceCrdtInitialized) {
+        try {
+          crdtMoveFile(entryPath, oldParentPath, newParentPath);
+        } catch (e) {
+          console.error("[App] Failed to move file in CRDT:", e);
+        }
+      }
+
       await refreshTree();
       await runValidation();
     } catch (e) {
@@ -728,6 +1067,7 @@
   async function handlePropertyChange(key: string, value: unknown) {
     if (!backend || !currentEntry) return;
     try {
+      const path = currentEntry.path;
       // Special handling for title: need to check rename first
       if (key === "title" && typeof value === "string" && value.trim()) {
         const newFilename = backend.slugifyTitle(value);
@@ -756,6 +1096,19 @@
               expandedNodes.delete(oldPath);
               expandedNodes.add(newPath);
               expandedNodes = expandedNodes; // trigger reactivity
+            }
+
+            // Update CRDT with rename
+            if (workspaceCrdtInitialized) {
+              try {
+                crdtRenameFile(oldPath, newPath);
+                updateCrdtFileMetadata(newPath, {
+                  ...currentEntry.frontmatter,
+                  [key]: value,
+                });
+              } catch (e) {
+                console.error("[App] Failed to rename file in CRDT:", e);
+              }
             }
 
             // Update current entry path and refresh tree
@@ -791,6 +1144,9 @@
             ...currentEntry,
             frontmatter: { ...currentEntry.frontmatter, [key]: value },
           };
+
+          // Update CRDT
+          updateCrdtFileMetadata(path, currentEntry.frontmatter);
           titleError = null;
         }
       } else {
@@ -801,6 +1157,9 @@
           ...currentEntry,
           frontmatter: { ...currentEntry.frontmatter, [key]: value },
         };
+
+        // Update CRDT
+        updateCrdtFileMetadata(path, currentEntry.frontmatter);
       }
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -810,12 +1169,16 @@
   async function handlePropertyRemove(key: string) {
     if (!backend || !currentEntry) return;
     try {
+      const path = currentEntry.path;
       await backend.removeFrontmatterProperty(currentEntry.path, key);
       await persistNow();
       // Update local state
       const newFrontmatter = { ...currentEntry.frontmatter };
       delete newFrontmatter[key];
       currentEntry = { ...currentEntry, frontmatter: newFrontmatter };
+
+      // Update CRDT
+      updateCrdtFileMetadata(path, newFrontmatter);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }
@@ -824,6 +1187,7 @@
   async function handlePropertyAdd(key: string, value: unknown) {
     if (!backend || !currentEntry) return;
     try {
+      const path = currentEntry.path;
       await backend.setFrontmatterProperty(currentEntry.path, key, value);
       await persistNow();
       // Update local state
@@ -831,6 +1195,9 @@
         ...currentEntry,
         frontmatter: { ...currentEntry.frontmatter, [key]: value },
       };
+
+      // Update CRDT
+      updateCrdtFileMetadata(path, currentEntry.frontmatter);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }

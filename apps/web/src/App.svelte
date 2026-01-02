@@ -130,10 +130,10 @@
     // Check if frontmatter already exists by looking for any existing properties
     // If frontmatter exists (even empty), the file already has frontmatter delimiters
     const frontmatter = await backend.getFrontmatter(indexPath);
-    
+
     // If frontmatter has properties, it definitely exists - nothing to do
     if (Object.keys(frontmatter).length > 0) return;
-    
+
     // Check if the file physically has frontmatter by looking at raw content
     // We need to use getEntry and check if frontmatter is not empty, or use a raw read
     const entry = await backend.getEntry(indexPath);
@@ -143,7 +143,7 @@
     // it should have frontmatter. The issue is when a file has no frontmatter at all.
     // We can detect this by checking if title exists (our backend always sets title).
     // If no title and no other frontmatter keys, the file likely has no frontmatter block.
-    
+
     // For safety, if frontmatter is empty, re-save to ensure frontmatter is created
     // The save_content function in core preserves frontmatter and creates it if missing
     await backend.saveEntry(indexPath, body);
@@ -1458,6 +1458,7 @@
     onOpenEntry={openEntry}
     onToggleNode={toggleNode}
     onToggleCollapse={toggleLeftSidebar}
+    onOpenSettings={() => (showSettingsDialog = true)}
     onMoveEntry={handleMoveEntry}
     onCreateChildEntry={handleCreateChildEntry}
     onDeleteEntry={handleDeleteEntry}

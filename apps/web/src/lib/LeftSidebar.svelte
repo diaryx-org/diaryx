@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { TreeNode, EntryData, ValidationResult } from "./backend";
   import { Button } from "$lib/components/ui/button";
+
   import * as ContextMenu from "$lib/components/ui/context-menu";
   import {
     ChevronRight,
@@ -14,6 +15,7 @@
     Clipboard,
     Download,
     Paperclip,
+    Settings,
   } from "@lucide/svelte";
 
   interface Props {
@@ -28,6 +30,7 @@
     onOpenEntry: (path: string) => void;
     onToggleNode: (path: string) => void;
     onToggleCollapse: () => void;
+    onOpenSettings: () => void;
     onMoveEntry: (fromPath: string, toParentPath: string) => void;
     onCreateChildEntry: (parentPath: string) => void;
     onDeleteEntry: (path: string) => void;
@@ -46,33 +49,31 @@
     onOpenEntry,
     onToggleNode,
     onToggleCollapse,
+    onOpenSettings,
     onMoveEntry,
     onCreateChildEntry,
     onDeleteEntry,
     onExport,
     onAddAttachment,
-    showUnlinkedFiles,
   }: Props = $props();
-  
+
   // Extract unlinked entries (files/directories not in hierarchy) from validation result
   let unlinkedPaths = $derived(() => {
     const paths = new Set<string>();
     if (validationResult?.warnings) {
       for (const warning of validationResult.warnings) {
-        if (warning.type === 'UnlinkedEntry' && warning.path) {
+        if (warning.type === "UnlinkedEntry" && warning.path) {
           paths.add(warning.path);
         }
       }
     }
     return paths;
   });
-  
+
   // Check if a path is unlinked
   function isUnlinked(path: string): boolean {
-     return unlinkedPaths().has(path);
+    return unlinkedPaths().has(path);
   }
-  
-
 
   // Drag state
   let draggedPath: string | null = $state(null);
@@ -127,7 +128,7 @@
   function hasValidationError(path: string): boolean {
     if (!validationResult) return false;
     return validationResult.errors.some(
-      (err) => err.file === path || err.index === path
+      (err) => err.file === path || err.index === path,
     );
   }
 
@@ -166,15 +167,26 @@
     >
       Diaryx
     </a>
-    <Button
-      variant="ghost"
-      size="icon"
-      onclick={onToggleCollapse}
-      class="size-8"
-      aria-label="Collapse sidebar"
-    >
-      <PanelLeftClose class="size-4" />
-    </Button>
+    <div class="flex items-center gap-1">
+      <Button
+        variant="ghost"
+        size="icon"
+        onclick={onOpenSettings}
+        class="size-8"
+        aria-label="Open settings"
+      >
+        <Settings class="size-4" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        onclick={onToggleCollapse}
+        class="size-8"
+        aria-label="Collapse sidebar"
+      >
+        <PanelLeftClose class="size-4" />
+      </Button>
+    </div>
   </div>
 
   <!-- Content Area -->
@@ -196,8 +208,6 @@
       <div class="space-y-0.5" role="tree" aria-label="Workspace entries">
         {@render treeNode(tree, 0)}
       </div>
-      
-
     {:else}
       <!-- Empty State -->
       <div class="flex flex-col items-center justify-center py-8 text-center">
@@ -216,7 +226,9 @@
         role="treeitem"
         tabindex={0}
         aria-selected={currentEntry?.path === node.path}
-        aria-expanded={node.children.length > 0 ? expandedNodes.has(node.path) : undefined}
+        aria-expanded={node.children.length > 0
+          ? expandedNodes.has(node.path)
+          : undefined}
         aria-level={depth + 1}
         draggable="true"
         ondragstart={(e) => handleDragStart(e, node.path)}
@@ -224,7 +236,9 @@
       >
         <div
           class="group flex items-center gap-1 rounded-md hover:bg-sidebar-accent transition-colors
-            {dropTargetPath === node.path ? 'bg-primary/20 ring-2 ring-primary' : ''}"
+            {dropTargetPath === node.path
+            ? 'bg-primary/20 ring-2 ring-primary'
+            : ''}"
           style="padding-left: {depth * 12}px"
           role="presentation"
           ondragover={(e) => handleDragOver(e, node.path)}
@@ -273,7 +287,7 @@
               </span>
             {/if}
             {#if isUnlinked(node.path)}
-               <span title="Unlinked file (not in hierarchy)">
+              <span title="Unlinked file (not in hierarchy)">
                 <AlertCircle class="size-4 shrink-0 text-amber-500" />
               </span>
             {/if}
@@ -308,11 +322,13 @@
         Add Attachment...
       </ContextMenu.Item>
       <ContextMenu.Separator />
-      <ContextMenu.Item variant="destructive" onclick={() => onDeleteEntry(node.path)}>
+      <ContextMenu.Item
+        variant="destructive"
+        onclick={() => onDeleteEntry(node.path)}
+      >
         <Trash2 class="size-4 mr-2" />
         Delete
       </ContextMenu.Item>
     </ContextMenu.Content>
   </ContextMenu.Root>
 {/snippet}
-

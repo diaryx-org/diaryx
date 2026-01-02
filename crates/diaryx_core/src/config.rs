@@ -81,7 +81,7 @@ impl Config {
 
     /// Load config from a specific path using a FileSystem
     pub fn load_from<FS: FileSystem>(fs: &FS, path: &std::path::Path) -> Result<Self> {
-        let contents = fs::read_to_string(path).map_err(|e| DiaryxError::FileRead {
+        let contents = FS::read_to_string(fs, path).map_err(|e| DiaryxError::FileRead {
             path: path.to_path_buf(),
             source: e,
         })?;
@@ -118,9 +118,6 @@ impl Config {
 // ============================================================================
 
 #[cfg(not(target_arch = "wasm32"))]
-use std::fs;
-
-#[cfg(not(target_arch = "wasm32"))]
 impl Default for Config {
     fn default() -> Self {
         let default_base = dirs::home_dir()
@@ -151,7 +148,7 @@ impl Config {
         if let Some(path) = Self::config_path()
             && path.exists()
         {
-            let contents = fs::read_to_string(&path)?;
+            let contents = std::fs::read_to_string(&path)?;
             let config: Config = toml::from_str(&contents)?;
             return Ok(config);
         }
@@ -167,11 +164,11 @@ impl Config {
 
         // Create config directory if it doesn't exist
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent)?;
         }
 
         let contents = toml::to_string_pretty(self)?;
-        fs::write(&path, contents)?;
+        std::fs::write(&path, contents)?;
 
         Ok(())
     }

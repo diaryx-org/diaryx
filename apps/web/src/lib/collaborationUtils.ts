@@ -156,6 +156,12 @@ export function getCollaborativeDocument(
     if (options?.onMarkdownSave) {
       existing.onMarkdownSave = options.onMarkdownSave;
     }
+
+    // If we previously disconnected this doc (e.g. during a doc switch),
+    // ensure we reconnect when it is opened again.
+    console.log(`[Y.js] Reconnecting cached session ${documentPath}`);
+    existing.provider.connect();
+
     return { ydoc: existing.ydoc, provider: existing.provider };
   }
 

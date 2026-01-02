@@ -114,6 +114,42 @@
     });
   }
 
+  /**
+   * WASM backend may create a workspace root file without YAML frontmatter (e.g. just "# My Workspace").
+   * Our frontmatter getter returns `{}` in that case, and writing a frontmatter property can succeed
+   * but appears "missing" until the file is reconstructed with actual frontmatter delimiters.
+   *
+   * This helper ensures the workspace root index always has a frontmatter header so `workspace_id`
+   * (and other metadata) can be stored and read consistently.
+   */
+  async function ensureWorkspaceRootHasFrontmatter(
+    indexPath: string,
+  ): Promise<void> {
+    if (!backend) return;
+
+    // Check if frontmatter already exists by looking for any existing properties
+    // If frontmatter exists (even empty), the file already has frontmatter delimiters
+    const frontmatter = await backend.getFrontmatter(indexPath);
+    
+    // If frontmatter has properties, it definitely exists - nothing to do
+    if (Object.keys(frontmatter).length > 0) return;
+    
+    // Check if the file physically has frontmatter by looking at raw content
+    // We need to use getEntry and check if frontmatter is not empty, or use a raw read
+    const entry = await backend.getEntry(indexPath);
+    const body = entry?.content ?? "";
+
+    // If getFrontmatter() returned {} but the file was created by our backend,
+    // it should have frontmatter. The issue is when a file has no frontmatter at all.
+    // We can detect this by checking if title exists (our backend always sets title).
+    // If no title and no other frontmatter keys, the file likely has no frontmatter block.
+    
+    // For safety, if frontmatter is empty, re-save to ensure frontmatter is created
+    // The save_content function in core preserves frontmatter and creates it if missing
+    await backend.saveEntry(indexPath, body);
+    await persistNow();
+  }
+
   // Display settings - initialized from localStorage if available
   let showUnlinkedFiles = $state(
     typeof window !== "undefined"
@@ -325,7 +361,7 @@
     try {
       // Workspace ID priority:
       // 1. Environment variable VITE_WORKSPACE_ID (best for multi-device, avoids bootstrap issue)
-      // 2. workspace_id from root index frontmatter (syncs via CRDT)
+      // 2. workspace_id from root index frontmatter (should persist in the workspace index)
       // 3. null (no prefix - uses simple room names like "doc:path/to/file.md")
       let sharedWorkspaceId: string | null = envWorkspaceId;
 
@@ -338,24 +374,124 @@
         // Try to get/create workspace_id from root index frontmatter
         try {
           const rootTree = await backend.getWorkspaceTree();
+          console.log("[App] Workspace tree root path:", rootTree?.path);
+
           if (rootTree?.path) {
+            // =========================================================================
+            // Startup debug probe:
+            // Compare the raw entry content + entry.frontmatter vs getFrontmatter() for
+            // the exact same path to diagnose mismatches in WASM mode.
+            // =========================================================================
+            try {
+              const rootEntryProbe = await backend.getEntry(rootTree.path);
+              const probeContent = rootEntryProbe?.content ?? "";
+              const probeHead = probeContent.slice(0, 600);
+
+              console.log("[App] Root entry probe path:", rootEntryProbe?.path);
+              console.log(
+                "[App] Root entry probe frontmatter keys:",
+                Object.keys(rootEntryProbe?.frontmatter ?? {}),
+              );
+              console.log(
+                "[App] Root entry probe workspace_id (from getEntry.frontmatter):",
+                (rootEntryProbe?.frontmatter as any)?.workspace_id,
+              );
+              console.log(
+                "[App] Root entry probe content head (first 600 chars):",
+                probeHead,
+              );
+              console.log(
+                "[App] Root entry probe starts with frontmatter delimiter:",
+                probeHead.startsWith("---"),
+              );
+              console.log(
+                "[App] Root entry probe contains closing frontmatter delimiter:",
+                probeHead.includes("\n---"),
+              );
+
+              const rootFrontmatterProbe = await backend.getFrontmatter(
+                rootTree.path,
+              );
+              console.log(
+                "[App] Root getFrontmatter() keys:",
+                Object.keys(rootFrontmatterProbe ?? {}),
+              );
+              console.log(
+                "[App] Root getFrontmatter() workspace_id:",
+                (rootFrontmatterProbe as any)?.workspace_id,
+              );
+            } catch (e) {
+              console.warn("[App] Root entry/frontmatter probe failed:", e);
+            }
+
+            // Ensure the root index has an actual frontmatter block so workspace_id can persist.
+            // Without this, getFrontmatter() returns {} and workspace_id reads as undefined.
+            try {
+              await ensureWorkspaceRootHasFrontmatter(rootTree.path);
+            } catch (e) {
+              console.warn(
+                "[App] Failed to ensure root frontmatter exists (continuing):",
+                e,
+              );
+            }
+
             const rootFrontmatter = await backend.getFrontmatter(rootTree.path);
+            console.log(
+              "[App] Root frontmatter keys:",
+              Object.keys(rootFrontmatter ?? {}),
+            );
+            console.log(
+              "[App] Root workspace_id (raw):",
+              (rootFrontmatter as any)?.workspace_id,
+            );
+
             sharedWorkspaceId =
               (rootFrontmatter.workspace_id as string) ?? null;
 
             // If no workspace_id exists, generate one and save it
             if (!sharedWorkspaceId) {
               sharedWorkspaceId = generateUUID();
+              console.log(
+                "[App] workspace_id missing in index; generating:",
+                sharedWorkspaceId,
+              );
+
               await backend.setFrontmatterProperty(
                 rootTree.path,
                 "workspace_id",
                 sharedWorkspaceId,
               );
-              await persistNow();
+
               console.log(
-                "[App] Generated new workspace_id:",
+                "[App] Wrote workspace_id to index, persisting...",
                 sharedWorkspaceId,
               );
+
+              await persistNow();
+
+              // Re-read to confirm it actually persisted (especially important in WASM mode)
+              const verifyFrontmatter = await backend.getFrontmatter(
+                rootTree.path,
+              );
+              console.log(
+                "[App] Verified workspace_id after write:",
+                (verifyFrontmatter as any)?.workspace_id,
+              );
+
+              // Also re-read raw content to confirm it actually wrote frontmatter into the file.
+              try {
+                const rootEntryAfter = await backend.getEntry(rootTree.path);
+                const afterHead = (rootEntryAfter?.content ?? "").slice(0, 600);
+                console.log(
+                  "[App] Root entry content head after write (first 600 chars):",
+                  afterHead,
+                );
+              } catch (e) {
+                console.warn(
+                  "[App] Failed to read root entry content after write for debugging:",
+                  e,
+                );
+              }
             } else {
               console.log(
                 "[App] Using workspace_id from index:",

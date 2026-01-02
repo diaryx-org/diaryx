@@ -38,6 +38,102 @@ function normalizeIndexPathToWorkspaceRoot(
 }
 
 // ============================================================================
+// Zip import helpers (browser-only)
+// ============================================================================
+
+function isProbablyTextFile(path: string): boolean {
+  const lower = path.toLowerCase();
+  if (
+    lower.endsWith(".md") ||
+    lower.endsWith(".markdown") ||
+    lower.endsWith(".txt") ||
+    lower.endsWith(".toml") ||
+    lower.endsWith(".json") ||
+    lower.endsWith(".yaml") ||
+    lower.endsWith(".yml") ||
+    lower.endsWith(".csv") ||
+    lower.endsWith(".ts") ||
+    lower.endsWith(".js") ||
+    lower.endsWith(".css") ||
+    lower.endsWith(".html")
+  )
+    return true;
+
+  if (
+    lower.includes("/_attachments/") ||
+    lower.includes("\\_attachments\\") ||
+    lower.includes("/attachments/") ||
+    lower.includes("\\attachments\\")
+  )
+    return false;
+
+  return false;
+}
+
+function normalizeZipPath(path: string): string {
+  // Zip entries always use forward slashes, but normalize just in case.
+  return path.replace(/^\.\/+/, "").replace(/\\/g, "/");
+}
+
+async function importZipEntriesViaJszip(
+  file: File,
+  onProgress?: (bytesUploaded: number, totalBytes: number) => void,
+): Promise<{
+  textEntries: [string, string][];
+  binaryEntries: { path: string; data: number[] }[];
+}> {
+  // Dynamic import so this only loads in the browser when needed.
+  const { default: JSZip } = await import("jszip");
+
+  const totalBytes = file.size;
+  onProgress?.(0, totalBytes);
+
+  const zip = await JSZip.loadAsync(file);
+
+  const textEntries: [string, string][] = [];
+  const binaryEntries: { path: string; data: number[] }[] = [];
+
+  // Iterate deterministically for stable behavior
+  const names = Object.keys(zip.files).sort((a, b) => a.localeCompare(b));
+
+  let processedBytesEstimate = 0;
+
+  for (const name of names) {
+    const entry = zip.files[name];
+    if (!entry || entry.dir) continue;
+
+    const normalized = normalizeZipPath(name);
+    if (!normalized) continue;
+
+    // Best-effort progress: JSZip doesn't expose compressed sizes uniformly.
+    // We increment by 1 per file and also by uncompressed byte length once read.
+    // This keeps the UI moving without pretending to be exact.
+    processedBytesEstimate += 1;
+    if (onProgress && processedBytesEstimate % 50 === 0) {
+      onProgress(Math.min(processedBytesEstimate, totalBytes), totalBytes);
+    }
+
+    if (isProbablyTextFile(normalized)) {
+      const content = await entry.async("string");
+      textEntries.push([normalized, content]);
+      processedBytesEstimate += content.length;
+    } else {
+      const data = await entry.async("uint8array");
+      binaryEntries.push({ path: normalized, data: Array.from(data) });
+      processedBytesEstimate += data.byteLength;
+    }
+
+    if (onProgress && processedBytesEstimate % (2 * 1024 * 1024) < 64 * 1024) {
+      onProgress(Math.min(processedBytesEstimate, totalBytes), totalBytes);
+    }
+  }
+
+  onProgress?.(totalBytes, totalBytes);
+
+  return { textEntries, binaryEntries };
+}
+
+// ============================================================================
 // IndexedDB Storage (for persisting the in-memory filesystem)
 // ============================================================================
 
@@ -165,14 +261,16 @@ class IndexedDBStorage {
     });
   }
 
-  async saveBinaryFiles(entries: { path: string; data: number[] }[]): Promise<void> {
+  async saveBinaryFiles(
+    entries: { path: string; data: number[] }[],
+  ): Promise<void> {
     if (!this.db) throw new Error("Database not initialized");
 
     return new Promise((resolve, reject) => {
       const transaction = this.db!.transaction(STORE_BINARY_FILES, "readwrite");
       const store = transaction.objectStore(STORE_BINARY_FILES);
 
-      // Clear existing and save new ones 
+      // Clear existing and save new ones
       store.clear();
       const now = Date.now();
       for (const { path, data } of entries) {
@@ -180,7 +278,8 @@ class IndexedDBStorage {
       }
 
       transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(new Error("Failed to save binary files"));
+      transaction.onerror = () =>
+        reject(new Error("Failed to save binary files"));
     });
   }
 }
@@ -215,6 +314,17 @@ export class WasmBackend implements Backend {
   private wasm: WasmModule | null = null;
   private ready = false;
 
+  // Typed WASM class instances
+  private _workspace: InstanceType<WasmModule["DiaryxWorkspace"]> | null = null;
+  private _entry: InstanceType<WasmModule["DiaryxEntry"]> | null = null;
+  private _frontmatter: InstanceType<WasmModule["DiaryxFrontmatter"]> | null = null;
+  private _search: InstanceType<WasmModule["DiaryxSearch"]> | null = null;
+  private _template: InstanceType<WasmModule["DiaryxTemplate"]> | null = null;
+  private _validation: InstanceType<WasmModule["DiaryxValidation"]> | null = null;
+  private _export: InstanceType<WasmModule["DiaryxExport"]> | null = null;
+  private _attachment: InstanceType<WasmModule["DiaryxAttachment"]> | null = null;
+  private _filesystem: InstanceType<WasmModule["DiaryxFilesystem"]> | null = null;
+
   async init(): Promise<void> {
     if (this.ready) return;
 
@@ -223,14 +333,27 @@ export class WasmBackend implements Backend {
     // Load WASM module
     this.wasm = await loadWasm();
 
+    // Initialize typed class instances
+    this._workspace = new this.wasm.DiaryxWorkspace();
+    this._entry = new this.wasm.DiaryxEntry();
+    this._frontmatter = new this.wasm.DiaryxFrontmatter();
+    this._search = new this.wasm.DiaryxSearch();
+    this._template = new this.wasm.DiaryxTemplate();
+    this._validation = new this.wasm.DiaryxValidation();
+    this._export = new this.wasm.DiaryxExport();
+    this._attachment = new this.wasm.DiaryxAttachment();
+    this._filesystem = new this.wasm.DiaryxFilesystem();
+
     // Open IndexedDB
     await this.storage.open();
 
     // Load text files from IndexedDB into WASM's in-memory filesystem
     const files = await this.storage.loadAllFiles();
     const entries: [string, string][] = files.map((f) => [f.path, f.content]);
-    this.wasm.load_files(entries);
-    console.log(`[WasmBackend] Loaded ${files.length} text files from IndexedDB`);
+    this._filesystem.load_files(entries);
+    console.log(
+      `[WasmBackend] Loaded ${files.length} text files from IndexedDB`,
+    );
 
     // Load binary files (attachments) from IndexedDB
     try {
@@ -241,7 +364,9 @@ export class WasmBackend implements Backend {
           data: Array.from(f.data),
         }));
         this.wasm.load_binary_files(binaryEntries);
-        console.log(`[WasmBackend] Loaded ${binaryFiles.length} binary files from IndexedDB`);
+        console.log(
+          `[WasmBackend] Loaded ${binaryFiles.length} binary files from IndexedDB`,
+        );
       }
     } catch (e) {
       // Binary store might not exist in older databases
@@ -257,7 +382,7 @@ export class WasmBackend implements Backend {
       await this.storage.saveConfig(this.config);
 
       // Create default workspace
-      this.wasm.create_workspace("workspace", "My Workspace");
+      this._workspace.create("workspace", "My Workspace");
       await this.persist();
     }
 
@@ -277,6 +402,51 @@ export class WasmBackend implements Backend {
       );
     }
     return this.wasm;
+  }
+
+  private get workspace() {
+    if (!this._workspace) throw new BackendError("Not initialized", "NotInitialized");
+    return this._workspace;
+  }
+
+  private get entry() {
+    if (!this._entry) throw new BackendError("Not initialized", "NotInitialized");
+    return this._entry;
+  }
+
+  private get frontmatter() {
+    if (!this._frontmatter) throw new BackendError("Not initialized", "NotInitialized");
+    return this._frontmatter;
+  }
+
+  private get search() {
+    if (!this._search) throw new BackendError("Not initialized", "NotInitialized");
+    return this._search;
+  }
+
+  private get template() {
+    if (!this._template) throw new BackendError("Not initialized", "NotInitialized");
+    return this._template;
+  }
+
+  private get validation() {
+    if (!this._validation) throw new BackendError("Not initialized", "NotInitialized");
+    return this._validation;
+  }
+
+  private get exportApi() {
+    if (!this._export) throw new BackendError("Not initialized", "NotInitialized");
+    return this._export;
+  }
+
+  private get attachment() {
+    if (!this._attachment) throw new BackendError("Not initialized", "NotInitialized");
+    return this._attachment;
+  }
+
+  private get filesystem() {
+    if (!this._filesystem) throw new BackendError("Not initialized", "NotInitialized");
+    return this._filesystem;
   }
 
   // --------------------------------------------------------------------------
@@ -303,16 +473,14 @@ export class WasmBackend implements Backend {
     workspacePath?: string,
     depth?: number,
   ): Promise<TreeNode> {
-    const wasm = this.requireWasm();
     const path = workspacePath ?? this.config?.default_workspace ?? "workspace";
-    return wasm.get_workspace_tree(path, depth ?? null);
+    return this.workspace.get_tree(path, depth ?? null);
   }
 
   async createWorkspace(path?: string, name?: string): Promise<string> {
-    const wasm = this.requireWasm();
     const workspacePath = path ?? "workspace";
     const workspaceName = name ?? "My Workspace";
-    wasm.create_workspace(workspacePath, workspaceName);
+    this.workspace.create(workspacePath, workspaceName);
     return workspacePath;
   }
 
@@ -320,9 +488,8 @@ export class WasmBackend implements Backend {
     workspacePath?: string,
     showHidden?: boolean,
   ): Promise<TreeNode> {
-    const wasm = this.requireWasm();
     const path = workspacePath ?? this.config?.default_workspace ?? "workspace";
-    return wasm.get_filesystem_tree(path, showHidden ?? false);
+    return this.workspace.get_filesystem_tree(path, showHidden ?? false);
   }
 
   // --------------------------------------------------------------------------
@@ -330,47 +497,38 @@ export class WasmBackend implements Backend {
   // --------------------------------------------------------------------------
 
   async getEntry(path: string): Promise<EntryData> {
-    const wasm = this.requireWasm();
-    return wasm.get_entry(path);
+    return this.entry.get(path);
   }
 
   async saveEntry(path: string, content: string): Promise<void> {
-    const wasm = this.requireWasm();
-    wasm.save_entry(path, content);
+    this.entry.save(path, content);
   }
 
   async createEntry(
     path: string,
     options?: CreateEntryOptions,
   ): Promise<string> {
-    const wasm = this.requireWasm();
-
     const workspaceRoot = this.config?.default_workspace ?? "workspace";
     const normalizedPath = normalizeEntryPathToWorkspaceRoot(
       path,
       workspaceRoot,
     );
-
-    return wasm.create_entry(normalizedPath, options ?? null);
+    return this.entry.create(normalizedPath, options ?? null);
   }
 
   async deleteEntry(path: string): Promise<void> {
-    const wasm = this.requireWasm();
-    wasm.delete_entry(path);
+    this.entry.delete(path);
   }
 
   async moveEntry(fromPath: string, toPath: string): Promise<string> {
-    const wasm = this.requireWasm();
-    return wasm.move_entry(fromPath, toPath);
+    return this.entry.move_entry(fromPath, toPath);
   }
 
   async attachEntryToParent(
     entryPath: string,
     parentIndexPath: string,
   ): Promise<string> {
-    const wasm = this.requireWasm();
     const workspaceRoot = this.config?.default_workspace ?? "workspace";
-
     const normalizedEntryPath = normalizeEntryPathToWorkspaceRoot(
       entryPath,
       workspaceRoot,
@@ -379,23 +537,22 @@ export class WasmBackend implements Backend {
       parentIndexPath,
       workspaceRoot,
     );
-
-    return wasm.attach_entry_to_parent(normalizedEntryPath, normalizedParentIndexPath) as unknown as string;
+    return this.entry.attach_to_parent(
+      normalizedEntryPath,
+      normalizedParentIndexPath,
+    );
   }
 
   async convertToIndex(path: string): Promise<string> {
-    const wasm = this.requireWasm();
-    return wasm.convert_to_index(path);
+    return this.entry.convert_to_index(path);
   }
 
   async convertToLeaf(path: string): Promise<string> {
-    const wasm = this.requireWasm();
-    return wasm.convert_to_leaf(path);
+    return this.entry.convert_to_leaf(path);
   }
 
   async createChildEntry(parentPath: string): Promise<string> {
-    const wasm = this.requireWasm();
-    return wasm.create_child_entry(parentPath);
+    return this.entry.create_child(parentPath);
   }
 
   slugifyTitle(title: string): string {
@@ -404,13 +561,11 @@ export class WasmBackend implements Backend {
   }
 
   async renameEntry(path: string, newFilename: string): Promise<string> {
-    const wasm = this.requireWasm();
-    return wasm.rename_entry(path, newFilename);
+    return this.entry.rename(path, newFilename);
   }
 
   async ensureDailyEntry(): Promise<string> {
-    const wasm = this.requireWasm();
-    return wasm.ensure_daily_entry();
+    return this.entry.ensure_daily();
   }
 
   // --------------------------------------------------------------------------
@@ -418,28 +573,35 @@ export class WasmBackend implements Backend {
   // --------------------------------------------------------------------------
 
   async getAvailableAudiences(rootPath: string): Promise<string[]> {
-    const wasm = this.requireWasm();
-    return wasm.get_available_audiences(rootPath);
+    return this.exportApi.get_audiences(rootPath);
   }
 
-  async planExport(rootPath: string, audience: string): Promise<import("./interface").ExportPlan> {
-    const wasm = this.requireWasm();
-    return wasm.plan_export(rootPath, audience);
+  async planExport(
+    rootPath: string,
+    audience: string,
+  ): Promise<import("./interface").ExportPlan> {
+    return this.exportApi.plan(rootPath, audience);
   }
 
-  async exportToMemory(rootPath: string, audience: string): Promise<import("./interface").ExportedFile[]> {
-    const wasm = this.requireWasm();
-    return wasm.export_to_memory(rootPath, audience);
+  async exportToMemory(
+    rootPath: string,
+    audience: string,
+  ): Promise<import("./interface").ExportedFile[]> {
+    return this.exportApi.to_memory(rootPath, audience);
   }
 
-  async exportToHtml(rootPath: string, audience: string): Promise<import("./interface").ExportedFile[]> {
-    const wasm = this.requireWasm();
-    return wasm.export_to_html(rootPath, audience);
+  async exportToHtml(
+    rootPath: string,
+    audience: string,
+  ): Promise<import("./interface").ExportedFile[]> {
+    return this.exportApi.to_html(rootPath, audience);
   }
 
-  async exportBinaryAttachments(rootPath: string, audience: string): Promise<import("./interface").BinaryExportFile[]> {
-    const wasm = this.requireWasm();
-    return wasm.export_binary_attachments(rootPath, audience);
+  async exportBinaryAttachments(
+    rootPath: string,
+    audience: string,
+  ): Promise<import("./interface").BinaryExportFile[]> {
+    return this.exportApi.binary_attachments(rootPath, audience);
   }
 
   // --------------------------------------------------------------------------
@@ -447,28 +609,33 @@ export class WasmBackend implements Backend {
   // --------------------------------------------------------------------------
 
   async getAttachments(entryPath: string): Promise<string[]> {
-    const wasm = this.requireWasm();
-    return wasm.get_attachments(entryPath);
+    return this.attachment.list(entryPath);
   }
 
-  async uploadAttachment(entryPath: string, filename: string, dataBase64: string): Promise<string> {
-    const wasm = this.requireWasm();
-    return wasm.upload_attachment(entryPath, filename, dataBase64);
+  async uploadAttachment(
+    entryPath: string,
+    filename: string,
+    dataBase64: string,
+  ): Promise<string> {
+    return this.attachment.upload(entryPath, filename, dataBase64);
   }
 
-  async deleteAttachment(entryPath: string, attachmentPath: string): Promise<void> {
-    const wasm = this.requireWasm();
-    return wasm.delete_attachment(entryPath, attachmentPath);
+  async deleteAttachment(
+    entryPath: string,
+    attachmentPath: string,
+  ): Promise<void> {
+    return this.attachment.delete(entryPath, attachmentPath);
   }
 
   async getStorageUsage(): Promise<import("./interface").StorageInfo> {
-    const wasm = this.requireWasm();
-    return wasm.get_storage_usage();
+    return this.attachment.get_storage_usage();
   }
 
-  async getAttachmentData(entryPath: string, attachmentPath: string): Promise<Uint8Array> {
-    const wasm = this.requireWasm();
-    return wasm.read_attachment_data(entryPath, attachmentPath);
+  async getAttachmentData(
+    entryPath: string,
+    attachmentPath: string,
+  ): Promise<Uint8Array> {
+    return this.attachment.read_data(entryPath, attachmentPath);
   }
 
   // --------------------------------------------------------------------------
@@ -476,8 +643,7 @@ export class WasmBackend implements Backend {
   // --------------------------------------------------------------------------
 
   async getFrontmatter(path: string): Promise<Record<string, unknown>> {
-    const wasm = this.requireWasm();
-    return wasm.get_frontmatter(path);
+    return this.frontmatter.get_all(path);
   }
 
   async setFrontmatterProperty(
@@ -485,13 +651,11 @@ export class WasmBackend implements Backend {
     key: string,
     value: unknown,
   ): Promise<void> {
-    const wasm = this.requireWasm();
-    wasm.set_frontmatter_property(path, key, value);
+    this.frontmatter.set_property(path, key, value);
   }
 
   async removeFrontmatterProperty(path: string, key: string): Promise<void> {
-    const wasm = this.requireWasm();
-    wasm.remove_frontmatter_property(path, key);
+    this.frontmatter.remove_property(path, key);
   }
 
   // --------------------------------------------------------------------------
@@ -502,8 +666,6 @@ export class WasmBackend implements Backend {
     pattern: string,
     options?: SearchOptions,
   ): Promise<SearchResults> {
-    const wasm = this.requireWasm();
-
     const wasmOptions = options
       ? {
           workspace_path:
@@ -514,7 +676,7 @@ export class WasmBackend implements Backend {
         }
       : { workspace_path: this.config?.default_workspace };
 
-    return wasm.search_workspace(pattern, wasmOptions);
+    return this.search.search(pattern, wasmOptions);
   }
 
   // --------------------------------------------------------------------------
@@ -522,18 +684,15 @@ export class WasmBackend implements Backend {
   // --------------------------------------------------------------------------
 
   async listTemplates(): Promise<TemplateInfo[]> {
-    const wasm = this.requireWasm();
-    return wasm.list_templates(this.config?.default_workspace ?? null);
+    return this.template.list(this.config?.default_workspace ?? null);
   }
 
   async getTemplate(name: string): Promise<string> {
-    const wasm = this.requireWasm();
-    return wasm.get_template(name, this.config?.default_workspace ?? null);
+    return this.template.get(name, this.config?.default_workspace ?? null);
   }
 
   async saveTemplate(name: string, content: string): Promise<void> {
-    const wasm = this.requireWasm();
-    wasm.save_template(
+    this.template.save(
       name,
       content,
       this.config?.default_workspace ?? "workspace",
@@ -541,18 +700,89 @@ export class WasmBackend implements Backend {
   }
 
   async deleteTemplate(name: string): Promise<void> {
-    const wasm = this.requireWasm();
-    wasm.delete_template(name, this.config?.default_workspace ?? "workspace");
+    this.template.delete(name, this.config?.default_workspace ?? "workspace");
   }
 
   // --------------------------------------------------------------------------
   // Validation
   // --------------------------------------------------------------------------
 
-  async validateWorkspace(workspacePath?: string): Promise<import("./interface").ValidationResult> {
-    const wasm = this.requireWasm();
+  async validateWorkspace(
+    workspacePath?: string,
+  ): Promise<import("./interface").ValidationResult> {
     const path = workspacePath ?? this.config?.default_workspace ?? "workspace";
-    return wasm.validate_workspace(path);
+    return this.validation.validate(path);
+  }
+
+  // --------------------------------------------------------------------------
+  // Import
+  // --------------------------------------------------------------------------
+
+  async importFromZip(
+    file: File,
+    workspacePath?: string,
+    onProgress?: (bytesUploaded: number, totalBytes: number) => void,
+  ): Promise<import("./interface").ImportResult> {
+    const totalBytes = file.size;
+    const targetRoot = (
+      workspacePath ||
+      this.config?.default_workspace ||
+      "workspace"
+    ).replace(/\/+$/, "");
+
+    try {
+      console.log(
+        `[WasmBackend] Importing zip ${(totalBytes / 1024 / 1024).toFixed(2)} MB into ${targetRoot}`,
+      );
+
+      const { textEntries, binaryEntries } = await importZipEntriesViaJszip(
+        file,
+        onProgress,
+      );
+
+      // Prefix all extracted paths into the target workspace root.
+      // Note: this assumes the zip contains a workspace folder structure (README.md etc).
+      // If the zip already includes a top-level "workspace/" folder, this will nest it;
+      // that’s acceptable for now and can be improved later with a smarter root-stripper.
+      const prefixedText: [string, string][] = textEntries.map(([p, c]) => [
+        `${targetRoot}/${p}`,
+        c,
+      ]);
+      const prefixedBinary: { path: string; data: number[] }[] =
+        binaryEntries.map((e) => ({
+          path: `${targetRoot}/${e.path}`,
+          data: e.data,
+        }));
+
+      // Load into the WASM in-memory filesystem
+      if (prefixedText.length > 0) {
+        this.filesystem.load_files(prefixedText);
+      }
+      if (prefixedBinary.length > 0) {
+        this.wasm!.load_binary_files(prefixedBinary);
+      }
+
+      // Persist to IndexedDB so it survives refresh
+      await this.persist();
+
+      console.log(
+        `[WasmBackend] Import complete: ${prefixedText.length} text files, ${prefixedBinary.length} binaries`,
+      );
+
+      return {
+        success: true,
+        files_imported: prefixedText.length + prefixedBinary.length,
+        error: undefined,
+      };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      console.error("[WasmBackend] Import failed:", message);
+      return {
+        success: false,
+        files_imported: 0,
+        error: message,
+      };
+    }
   }
 
   // --------------------------------------------------------------------------
@@ -560,10 +790,8 @@ export class WasmBackend implements Backend {
   // --------------------------------------------------------------------------
 
   async persist(): Promise<void> {
-    const wasm = this.requireWasm();
-
     // Export all text files from WASM's in-memory filesystem
-    const entries: [string, string][] = wasm.export_files();
+    const entries: [string, string][] = this.filesystem.export_files();
 
     if (entries.length > 0) {
       console.log(`[WasmBackend] Persisting ${entries.length} text files...`);
@@ -572,9 +800,12 @@ export class WasmBackend implements Backend {
 
     // Export all binary files (attachments)
     try {
-      const binaryEntries: { path: string; data: number[] }[] = wasm.export_binary_files();
+      const binaryEntries: { path: string; data: number[] }[] =
+        this.filesystem.export_binary_files();
       if (binaryEntries.length > 0) {
-        console.log(`[WasmBackend] Persisting ${binaryEntries.length} binary files...`);
+        console.log(
+          `[WasmBackend] Persisting ${binaryEntries.length} binary files...`,
+        );
         await this.storage.saveBinaryFiles(binaryEntries);
       }
     } catch (e) {

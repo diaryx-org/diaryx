@@ -2146,13 +2146,15 @@ pub async fn import_from_zip(
 
         // Create parent directories if they don't exist
         if let Some(parent) = file_path.parent()
-            && !parent.as_os_str().is_empty() && !parent.exists() {
-                std::fs::create_dir_all(parent).map_err(|e| SerializableError {
-                    kind: "ImportError".to_string(),
-                    message: format!("Failed to create directory: {}", e),
-                    path: Some(parent.to_path_buf()),
-                })?;
-            }
+            && !parent.as_os_str().is_empty()
+            && !parent.exists()
+        {
+            std::fs::create_dir_all(parent).map_err(|e| SerializableError {
+                kind: "ImportError".to_string(),
+                message: format!("Failed to create directory: {}", e),
+                path: Some(parent.to_path_buf()),
+            })?;
+        }
 
         // Read file contents
         let mut contents = Vec::new();
@@ -2335,13 +2337,15 @@ pub async fn pick_and_import_zip<R: Runtime>(
 
         // Create parent directories if they don't exist
         if let Some(parent) = file_path.parent()
-            && !parent.as_os_str().is_empty() && !parent.exists() {
-                std::fs::create_dir_all(parent).map_err(|e| SerializableError {
-                    kind: "ImportError".to_string(),
-                    message: format!("Failed to create directory: {}", e),
-                    path: Some(parent.to_path_buf()),
-                })?;
-            }
+            && !parent.as_os_str().is_empty()
+            && !parent.exists()
+        {
+            std::fs::create_dir_all(parent).map_err(|e| SerializableError {
+                kind: "ImportError".to_string(),
+                message: format!("Failed to create directory: {}", e),
+                path: Some(parent.to_path_buf()),
+            })?;
+        }
 
         let mut contents = Vec::new();
         file.read_to_end(&mut contents)
@@ -2487,13 +2491,15 @@ pub async fn import_from_zip_data(
 
         // Create parent directories if they don't exist
         if let Some(parent) = file_path.parent()
-            && !parent.as_os_str().is_empty() && !parent.exists() {
-                std::fs::create_dir_all(parent).map_err(|e| SerializableError {
-                    kind: "ImportError".to_string(),
-                    message: format!("Failed to create directory: {}", e),
-                    path: Some(parent.to_path_buf()),
-                })?;
-            }
+            && !parent.as_os_str().is_empty()
+            && !parent.exists()
+        {
+            std::fs::create_dir_all(parent).map_err(|e| SerializableError {
+                kind: "ImportError".to_string(),
+                message: format!("Failed to create directory: {}", e),
+                path: Some(parent.to_path_buf()),
+            })?;
+        }
 
         let mut contents = Vec::new();
         file.read_to_end(&mut contents)
@@ -2736,34 +2742,35 @@ pub async fn finish_import_upload(
         // Create parent directories, deleting any files that conflict
         // (backup is authoritative, so if zip has a directory, it replaces any file)
         if let Some(parent) = file_path.parent()
-            && !parent.as_os_str().is_empty() {
-                let mut current = workspace.clone();
-                for component in std::path::Path::new(&file_name)
-                    .parent()
-                    .unwrap_or(std::path::Path::new(""))
-                    .components()
-                {
-                    current = current.join(component);
+            && !parent.as_os_str().is_empty()
+        {
+            let mut current = workspace.clone();
+            for component in std::path::Path::new(&file_name)
+                .parent()
+                .unwrap_or(std::path::Path::new(""))
+                .components()
+            {
+                current = current.join(component);
 
-                    if current.exists() && current.is_file() {
-                        // Delete file that's blocking directory creation
-                        std::fs::remove_file(&current).map_err(|e| SerializableError {
-                            kind: "ImportError".to_string(),
-                            message: format!("Failed to remove conflicting file: {}", e),
-                            path: Some(current.clone()),
-                        })?;
-                        log::info!("[Import] Removed conflicting file: {:?}", current);
-                    }
+                if current.exists() && current.is_file() {
+                    // Delete file that's blocking directory creation
+                    std::fs::remove_file(&current).map_err(|e| SerializableError {
+                        kind: "ImportError".to_string(),
+                        message: format!("Failed to remove conflicting file: {}", e),
+                        path: Some(current.clone()),
+                    })?;
+                    log::info!("[Import] Removed conflicting file: {:?}", current);
+                }
 
-                    if !current.exists() {
-                        std::fs::create_dir(&current).map_err(|e| SerializableError {
-                            kind: "ImportError".to_string(),
-                            message: format!("Failed to create directory: {}", e),
-                            path: Some(current.clone()),
-                        })?;
-                    }
+                if !current.exists() {
+                    std::fs::create_dir(&current).map_err(|e| SerializableError {
+                        kind: "ImportError".to_string(),
+                        message: format!("Failed to create directory: {}", e),
+                        path: Some(current.clone()),
+                    })?;
                 }
             }
+        }
 
         let mut contents = Vec::new();
         file.read_to_end(&mut contents)

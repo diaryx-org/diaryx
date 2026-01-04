@@ -38,20 +38,28 @@ use serde::{Deserialize, Serialize};
 pub enum CloudProvider {
     /// Amazon S3 or S3-compatible storage
     S3 {
+        /// name of bucket
         bucket: String,
+        /// region of bucket
         region: String,
         #[serde(default)]
+        /// optional prefix for bucket files
         prefix: Option<String>,
         #[serde(default)]
+        /// site where bucket is
         endpoint: Option<String>, // For S3-compatible (MinIO, etc.)
     },
     /// Google Drive
     GoogleDrive {
         #[serde(default)]
+        /// optional name of folder
         folder_id: Option<String>,
     },
     /// WebDAV (Nextcloud, ownCloud, etc.)
-    WebDAV { url: String },
+    WebDAV {
+        /// url of webdav
+        url: String,
+    },
 }
 
 /// Configuration for a cloud backup target.
@@ -471,12 +479,13 @@ impl BackupTarget for LocalDriveTarget {
 
             // Ensure parent directory exists
             if let Some(parent) = dest_path.parent()
-                && let Err(e) = std_fs::create_dir_all(parent) {
-                    return BackupResult::failure(format!(
-                        "Failed to create directory {:?}: {}",
-                        parent, e
-                    ));
-                }
+                && let Err(e) = std_fs::create_dir_all(parent)
+            {
+                return BackupResult::failure(format!(
+                    "Failed to create directory {:?}: {}",
+                    parent, e
+                ));
+            }
 
             // Copy file content
             let content = match fs.read_to_string(&file_path) {

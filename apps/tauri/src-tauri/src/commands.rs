@@ -2097,7 +2097,7 @@ pub async fn import_from_zip(
 
     let total_files = archive.len();
     let mut files_imported = 0;
-    let mut files_skipped = 0;
+    let files_skipped = 0;
 
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).map_err(|e| SerializableError {
@@ -2145,15 +2145,14 @@ pub async fn import_from_zip(
         let file_path = workspace.join(&file_name);
 
         // Create parent directories if they don't exist
-        if let Some(parent) = file_path.parent() {
-            if !parent.as_os_str().is_empty() && !parent.exists() {
+        if let Some(parent) = file_path.parent()
+            && !parent.as_os_str().is_empty() && !parent.exists() {
                 std::fs::create_dir_all(parent).map_err(|e| SerializableError {
                     kind: "ImportError".to_string(),
                     message: format!("Failed to create directory: {}", e),
                     path: Some(parent.to_path_buf()),
                 })?;
             }
-        }
 
         // Read file contents
         let mut contents = Vec::new();
@@ -2289,7 +2288,7 @@ pub async fn pick_and_import_zip<R: Runtime>(
 
     let total_files = archive.len();
     let mut files_imported = 0;
-    let mut files_skipped = 0;
+    let files_skipped = 0;
 
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).map_err(|e| SerializableError {
@@ -2335,15 +2334,14 @@ pub async fn pick_and_import_zip<R: Runtime>(
         let file_path = workspace.join(&file_name);
 
         // Create parent directories if they don't exist
-        if let Some(parent) = file_path.parent() {
-            if !parent.as_os_str().is_empty() && !parent.exists() {
+        if let Some(parent) = file_path.parent()
+            && !parent.as_os_str().is_empty() && !parent.exists() {
                 std::fs::create_dir_all(parent).map_err(|e| SerializableError {
                     kind: "ImportError".to_string(),
                     message: format!("Failed to create directory: {}", e),
                     path: Some(parent.to_path_buf()),
                 })?;
             }
-        }
 
         let mut contents = Vec::new();
         file.read_to_end(&mut contents)
@@ -2488,15 +2486,14 @@ pub async fn import_from_zip_data(
         let file_path = workspace.join(&file_name);
 
         // Create parent directories if they don't exist
-        if let Some(parent) = file_path.parent() {
-            if !parent.as_os_str().is_empty() && !parent.exists() {
+        if let Some(parent) = file_path.parent()
+            && !parent.as_os_str().is_empty() && !parent.exists() {
                 std::fs::create_dir_all(parent).map_err(|e| SerializableError {
                     kind: "ImportError".to_string(),
                     message: format!("Failed to create directory: {}", e),
                     path: Some(parent.to_path_buf()),
                 })?;
             }
-        }
 
         let mut contents = Vec::new();
         file.read_to_end(&mut contents)
@@ -2738,8 +2735,8 @@ pub async fn finish_import_upload(
 
         // Create parent directories, deleting any files that conflict
         // (backup is authoritative, so if zip has a directory, it replaces any file)
-        if let Some(parent) = file_path.parent() {
-            if !parent.as_os_str().is_empty() {
+        if let Some(parent) = file_path.parent()
+            && !parent.as_os_str().is_empty() {
                 let mut current = workspace.clone();
                 for component in std::path::Path::new(&file_name)
                     .parent()
@@ -2767,7 +2764,6 @@ pub async fn finish_import_upload(
                     }
                 }
             }
-        }
 
         let mut contents = Vec::new();
         file.read_to_end(&mut contents)

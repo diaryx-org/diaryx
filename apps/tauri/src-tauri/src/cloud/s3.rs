@@ -49,7 +49,7 @@ impl S3Target {
 
         // Build S3 client
         let client = runtime.block_on(async {
-            let mut config_builder = aws_config::defaults(BehaviorVersion::latest())
+            let config_builder = aws_config::defaults(BehaviorVersion::latest())
                 .region(aws_sdk_s3::config::Region::new(region))
                 .credentials_provider(aws_sdk_s3::config::Credentials::new(
                     &access_key,
@@ -397,11 +397,10 @@ impl BackupTarget for S3Target {
             let file_path = workspace_path.join(file.name());
 
             // Create parent directories
-            if let Some(parent) = file_path.parent() {
-                if let Err(e) = fs.create_dir_all(parent) {
+            if let Some(parent) = file_path.parent()
+                && let Err(e) = fs.create_dir_all(parent) {
                     return BackupResult::failure(format!("Failed to create dir: {}", e));
                 }
-            }
 
             // Read file contents
             let mut contents = Vec::new();

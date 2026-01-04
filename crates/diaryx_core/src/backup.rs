@@ -470,14 +470,13 @@ impl BackupTarget for LocalDriveTarget {
             let dest_path = self.backup_path.join(relative);
 
             // Ensure parent directory exists
-            if let Some(parent) = dest_path.parent() {
-                if let Err(e) = std_fs::create_dir_all(parent) {
+            if let Some(parent) = dest_path.parent()
+                && let Err(e) = std_fs::create_dir_all(parent) {
                     return BackupResult::failure(format!(
                         "Failed to create directory {:?}: {}",
                         parent, e
                     ));
                 }
-            }
 
             // Copy file content
             let content = match fs.read_to_string(&file_path) {

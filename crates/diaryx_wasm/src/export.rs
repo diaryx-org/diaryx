@@ -440,8 +440,8 @@ impl DiaryxExport {
 
                         if let Ok(files) = ws.fs_ref().list_files(&attachments_dir) {
                             for file_path in files {
-                                if !ws.fs_ref().is_dir(&file_path) {
-                                    if let Ok(data) = ws.fs_ref().read_binary(&file_path) {
+                                if !ws.fs_ref().is_dir(&file_path)
+                                    && let Ok(data) = ws.fs_ref().read_binary(&file_path) {
                                         let relative_path =
                                             pathdiff::diff_paths(&file_path, root_dir)
                                                 .unwrap_or_else(|| file_path.clone());
@@ -451,7 +451,6 @@ impl DiaryxExport {
                                             data,
                                         });
                                     }
-                                }
                             }
                         }
                     }

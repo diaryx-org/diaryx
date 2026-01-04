@@ -80,11 +80,10 @@ pub trait FileSystem: Send + Sync {
         // Get subdirectories and recurse
         if let Ok(entries) = self.list_files(dir) {
             for entry in entries {
-                if self.is_dir(&entry) {
-                    if let Ok(subdir_files) = self.list_md_files_recursive(&entry) {
+                if self.is_dir(&entry)
+                    && let Ok(subdir_files) = self.list_md_files_recursive(&entry) {
                         all_files.extend(subdir_files);
                     }
-                }
             }
         }
 
@@ -98,11 +97,10 @@ pub trait FileSystem: Send + Sync {
         if let Ok(entries) = self.list_files(dir) {
             for entry in entries {
                 all_entries.push(entry.clone());
-                if self.is_dir(&entry) {
-                    if let Ok(subdir_entries) = self.list_all_files_recursive(&entry) {
+                if self.is_dir(&entry)
+                    && let Ok(subdir_entries) = self.list_all_files_recursive(&entry) {
                         all_entries.extend(subdir_entries);
                     }
-                }
             }
         }
 

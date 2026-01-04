@@ -76,7 +76,7 @@ pub trait FileSystem: Send + Sync {
     /// Recursively list all markdown files in a directory and its subdirectories
     fn list_md_files_recursive(&self, dir: &Path) -> Result<Vec<PathBuf>> {
         let mut all_files = self.list_md_files(dir)?;
-        
+
         // Get subdirectories and recurse
         if let Ok(entries) = self.list_files(dir) {
             for entry in entries {
@@ -87,14 +87,14 @@ pub trait FileSystem: Send + Sync {
                 }
             }
         }
-        
+
         Ok(all_files)
     }
 
     /// Recursively list ALL files and directories in a directory
     fn list_all_files_recursive(&self, dir: &Path) -> Result<Vec<PathBuf>> {
         let mut all_entries = Vec::new();
-        
+
         if let Ok(entries) = self.list_files(dir) {
             for entry in entries {
                 all_entries.push(entry.clone());
@@ -105,7 +105,7 @@ pub trait FileSystem: Send + Sync {
                 }
             }
         }
-        
+
         Ok(all_entries)
     }
 }

@@ -26,8 +26,8 @@ use indexmap::IndexMap;
 use serde_yaml::Value;
 
 use crate::error::{DiaryxError, Result};
-use crate::fs::FileSystem;
 use crate::frontmatter;
+use crate::fs::FileSystem;
 
 /// The main Diaryx instance.
 ///
@@ -138,7 +138,7 @@ impl<'a, FS: FileSystem> EntryOps<'a, FS> {
             Ok(c) => c,
             Err(_) => return Ok(()), // File doesn't exist, nothing to remove
         };
-        
+
         let mut parsed = match frontmatter::parse(&content) {
             Ok(p) => p,
             Err(DiaryxError::NoFrontmatter(_)) => return Ok(()),
@@ -186,7 +186,7 @@ impl<'a, FS: FileSystem> EntryOps<'a, FS> {
     pub fn append_content(&self, path: &str, content: &str) -> Result<()> {
         let raw = self.read_raw_or_empty(path)?;
         let mut parsed = frontmatter::parse_or_empty(&raw)?;
-        
+
         parsed.body = if parsed.body.is_empty() {
             content.to_string()
         } else if parsed.body.ends_with('\n') {
@@ -194,7 +194,7 @@ impl<'a, FS: FileSystem> EntryOps<'a, FS> {
         } else {
             format!("{}\n{}", parsed.body, content)
         };
-        
+
         self.write_parsed(path, &parsed)
     }
 
@@ -203,10 +203,13 @@ impl<'a, FS: FileSystem> EntryOps<'a, FS> {
     /// Read the raw file content (including frontmatter).
     pub fn read_raw(&self, path: &str) -> Result<String> {
         let path_buf = PathBuf::from(path);
-        self.diaryx.fs.read_to_string(Path::new(path)).map_err(|e| DiaryxError::FileRead {
-            path: path_buf,
-            source: e,
-        })
+        self.diaryx
+            .fs
+            .read_to_string(Path::new(path))
+            .map_err(|e| DiaryxError::FileRead {
+                path: path_buf,
+                source: e,
+            })
     }
 
     /// Read the raw file content, returning empty string if file doesn't exist.
@@ -224,10 +227,13 @@ impl<'a, FS: FileSystem> EntryOps<'a, FS> {
     /// Write a parsed file back to disk.
     fn write_parsed(&self, path: &str, parsed: &frontmatter::ParsedFile) -> Result<()> {
         let content = frontmatter::serialize(&parsed.frontmatter, &parsed.body)?;
-        self.diaryx.fs.write_file(Path::new(path), &content).map_err(|e| DiaryxError::FileWrite {
-            path: PathBuf::from(path),
-            source: e,
-        })
+        self.diaryx
+            .fs
+            .write_file(Path::new(path), &content)
+            .map_err(|e| DiaryxError::FileWrite {
+                path: PathBuf::from(path),
+                source: e,
+            })
     }
 
     // -------------------- Attachment Methods --------------------
@@ -243,7 +249,8 @@ impl<'a, FS: FileSystem> EntryOps<'a, FS> {
         let content = self.read_raw_or_empty(path)?;
         let mut parsed = frontmatter::parse_or_empty(&content)?;
 
-        let attachments = parsed.frontmatter
+        let attachments = parsed
+            .frontmatter
             .entry("attachments".to_string())
             .or_insert(Value::Sequence(vec![]));
 
@@ -392,18 +399,21 @@ mod tests {
 
     #[test]
     fn test_entry_get_set_content() {
-        let fs = MockFileSystem::new()
-            .with_file("test.md", "---\ntitle: Test\n---\n\nOriginal content");
-        
+        let fs =
+            MockFileSystem::new().with_file("test.md", "---\ntitle: Test\n---\n\nOriginal content");
+
         let diaryx = Diaryx::new(fs);
-        
+
         // Get content
         let content = diaryx.entry().get_content("test.md").unwrap();
         assert_eq!(content.trim(), "Original content");
-        
+
         // Set content
-        diaryx.entry().set_content("test.md", "\nNew content").unwrap();
-        
+        diaryx
+            .entry()
+            .set_content("test.md", "\nNew content")
+            .unwrap();
+
         let content = diaryx.entry().get_content("test.md").unwrap();
         assert_eq!(content.trim(), "New content");
     }
@@ -412,9 +422,9 @@ mod tests {
     fn test_entry_get_frontmatter() {
         let fs = MockFileSystem::new()
             .with_file("test.md", "---\ntitle: My Title\nauthor: John\n---\n\nBody");
-        
+
         let diaryx = Diaryx::new(fs);
-        
+
         let fm = diaryx.entry().get_frontmatter("test.md").unwrap();
         assert_eq!(fm.get("title").unwrap().as_str().unwrap(), "My Title");
         assert_eq!(fm.get("author").unwrap().as_str().unwrap(), "John");
@@ -422,13 +432,15 @@ mod tests {
 
     #[test]
     fn test_entry_set_frontmatter_property() {
-        let fs = MockFileSystem::new()
-            .with_file("test.md", "---\ntitle: Original\n---\n\nBody");
-        
+        let fs = MockFileSystem::new().with_file("test.md", "---\ntitle: Original\n---\n\nBody");
+
         let diaryx = Diaryx::new(fs);
-        
-        diaryx.entry().set_frontmatter_property("test.md", "title", Value::String("Updated".to_string())).unwrap();
-        
+
+        diaryx
+            .entry()
+            .set_frontmatter_property("test.md", "title", Value::String("Updated".to_string()))
+            .unwrap();
+
         let fm = diaryx.entry().get_frontmatter("test.md").unwrap();
         assert_eq!(fm.get("title").unwrap().as_str().unwrap(), "Updated");
     }

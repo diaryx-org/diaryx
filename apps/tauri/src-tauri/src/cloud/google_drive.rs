@@ -7,8 +7,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Runtime;
-use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
+use zip::write::SimpleFileOptions;
 
 /// Google Drive cloud backup target.
 pub struct GoogleDriveTarget {
@@ -20,7 +20,7 @@ pub struct GoogleDriveTarget {
 
 impl GoogleDriveTarget {
     /// Create a new Google Drive backup target.
-    /// 
+    ///
     /// # Arguments
     /// * `config` - The cloud backup configuration
     /// * `access_token` - OAuth2 access token from the auth plugin
@@ -30,9 +30,8 @@ impl GoogleDriveTarget {
         access_token: String,
         folder_id: Option<String>,
     ) -> Result<Self, String> {
-        let runtime = Arc::new(
-            Runtime::new().map_err(|e| format!("Failed to create tokio runtime: {}", e))?
-        );
+        let runtime =
+            Arc::new(Runtime::new().map_err(|e| format!("Failed to create tokio runtime: {}", e))?);
 
         Ok(Self {
             config,
@@ -66,12 +65,11 @@ impl GoogleDriveTarget {
                 .compression_level(Some(6));
 
             // Get all files recursively
-            let entries = fs.list_all_files_recursive(workspace_path)
+            let entries = fs
+                .list_all_files_recursive(workspace_path)
                 .map_err(|e| format!("Failed to list files: {}", e))?;
 
-            let files: Vec<_> = entries.into_iter()
-                .filter(|p| !fs.is_dir(p))
-                .collect();
+            let files: Vec<_> = entries.into_iter().filter(|p| !fs.is_dir(p)).collect();
 
             let total_files = files.len();
             for (i, file_path) in files.iter().enumerate() {
@@ -96,7 +94,10 @@ impl GoogleDriveTarget {
                 } else if let Ok(text) = fs.read_to_string(file_path) {
                     text.into_bytes()
                 } else {
-                    log::warn!("[Google Drive] Skipping file: {}. Could not read as text or binary.", file_path.display());
+                    log::warn!(
+                        "[Google Drive] Skipping file: {}. Could not read as text or binary.",
+                        file_path.display()
+                    );
                     continue;
                 };
 
@@ -112,14 +113,10 @@ impl GoogleDriveTarget {
     }
 
     /// Upload a file to Google Drive.
-    /// 
+    ///
     /// Uses the Files: create API with multipart upload.
     /// https://developers.google.com/drive/api/v3/reference/files/create
-    async fn upload_to_drive(
-        &self,
-        filename: &str,
-        data: Vec<u8>,
-    ) -> Result<String, String> {
+    async fn upload_to_drive(&self, filename: &str, data: Vec<u8>) -> Result<String, String> {
         let client = reqwest::Client::new();
 
         // Build metadata
@@ -157,7 +154,9 @@ impl GoogleDriveTarget {
             .map_err(|e| format!("Failed to upload to Drive: {}", e))?;
 
         if response.status().is_success() {
-            let result: serde_json::Value = response.json().await
+            let result: serde_json::Value = response
+                .json()
+                .await
                 .map_err(|e| format!("Failed to parse response: {}", e))?;
             let file_id = result["id"].as_str().unwrap_or("unknown").to_string();
             log::info!("[Google Drive] Upload complete! File ID: {}", file_id);
@@ -182,16 +181,20 @@ impl GoogleDriveTarget {
         on_progress("preparing", 0, 0, 5);
 
         // Create zip archive
-        let zip_data = match self.create_zip_archive_with_progress(fs, workspace_path, |current, total, percent| {
-            on_progress("zipping", current, total, percent);
-        }) {
+        let zip_data = match self.create_zip_archive_with_progress(
+            fs,
+            workspace_path,
+            |current, total, percent| {
+                on_progress("zipping", current, total, percent);
+            },
+        ) {
             Ok(data) => data,
             Err(e) => return BackupResult::failure(e),
         };
 
         let zip_size_mb = zip_data.len() as f64 / (1024.0 * 1024.0);
         log::info!("[Google Drive] Zip size: {:.2} MB", zip_size_mb);
-        
+
         on_progress("zipping", 1, 1, 80);
 
         let filename = self.backup_filename();

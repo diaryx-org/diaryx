@@ -24,7 +24,7 @@ pub fn run() {
         .plugin(
             tauri_plugin_stronghold::Builder::new(|password| {
                 // Use argon2 for password hashing
-                use argon2::{hash_raw, Config, Variant, Version};
+                use argon2::{Config, Variant, Version, hash_raw};
                 let config = Config {
                     lanes: 4,
                     mem_cost: 10_000,
@@ -109,4 +109,3 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
-

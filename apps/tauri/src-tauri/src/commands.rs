@@ -764,8 +764,7 @@ pub fn move_entry(request: MoveEntryRequest) -> Result<PathBuf, SerializableErro
     // Use shared Workspace::move_entry which correctly finds parent index files
     // using find_any_index_in_dir (handles both index.md and {dirname}.md naming)
     let ws = Workspace::new(RealFileSystem);
-    ws.move_entry(&from, &to)
-        .map_err(|e| e.to_serializable())?;
+    ws.move_entry(&from, &to).map_err(|e| e.to_serializable())?;
 
     Ok(to)
 }
@@ -1736,7 +1735,11 @@ pub fn list_backup_targets<R: Runtime>(
     let mut manager = BackupManager::new();
     manager.add_target(Box::new(target));
 
-    Ok(manager.target_names().into_iter().map(String::from).collect())
+    Ok(manager
+        .target_names()
+        .into_iter()
+        .map(String::from)
+        .collect())
 }
 
 // ============================================================================
@@ -1764,11 +1767,9 @@ pub struct S3ConfigRequest {
 
 /// Test S3 connection
 #[tauri::command]
-pub fn test_s3_connection(
-    config: S3ConfigRequest,
-) -> Result<bool, SerializableError> {
-    use diaryx_core::backup::{BackupTarget, CloudBackupConfig, CloudProvider};
+pub fn test_s3_connection(config: S3ConfigRequest) -> Result<bool, SerializableError> {
     use crate::cloud::S3Target;
+    use diaryx_core::backup::{BackupTarget, CloudBackupConfig, CloudProvider};
 
     let cloud_config = CloudBackupConfig {
         id: "test".to_string(),
@@ -1782,11 +1783,13 @@ pub fn test_s3_connection(
         enabled: true,
     };
 
-    let target = S3Target::new(cloud_config, config.access_key, config.secret_key)
-        .map_err(|e| SerializableError {
-            kind: "S3ConfigError".to_string(),
-            message: e,
-            path: None,
+    let target =
+        S3Target::new(cloud_config, config.access_key, config.secret_key).map_err(|e| {
+            SerializableError {
+                kind: "S3ConfigError".to_string(),
+                message: e,
+                path: None,
+            }
         })?;
 
     Ok(target.is_available())
@@ -1799,23 +1802,23 @@ pub async fn backup_to_s3<R: Runtime>(
     workspace_path: Option<String>,
     config: S3ConfigRequest,
 ) -> Result<BackupStatus, SerializableError> {
-    use diaryx_core::backup::{BackupTarget, CloudBackupConfig, CloudProvider};
     use crate::cloud::S3Target;
+    use diaryx_core::backup::{BackupTarget, CloudBackupConfig, CloudProvider};
     use tokio::sync::mpsc;
 
     let paths = get_platform_paths(&app)?;
     let workspace = workspace_path
         .map(PathBuf::from)
         .unwrap_or(paths.default_workspace);
-    
+
     let config_name = config.name.clone();
-    
+
     // Create a channel to send progress from the background thread
     let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<BackupProgressEvent>();
-    
+
     // Clone app for the event emission task
     let app_clone = app.clone();
-    
+
     // Spawn a task to forward progress events to the frontend
     let event_task = tauri::async_runtime::spawn(async move {
         while let Some(event) = progress_rx.recv().await {
@@ -1824,60 +1827,64 @@ pub async fn backup_to_s3<R: Runtime>(
     });
 
     // Run backup in a blocking thread to not freeze the UI
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let fs = RealFileSystem;
-        
-        // Emit preparing stage
-        let _ = progress_tx.send(BackupProgressEvent {
-            stage: "preparing".to_string(),
-            percent: 5,
-            message: Some("Preparing backup...".to_string()),
-        });
-        
-        let cloud_config = CloudBackupConfig {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: config.name.clone(),
-            provider: CloudProvider::S3 {
-                bucket: config.bucket,
-                region: config.region,
-                prefix: config.prefix,
-                endpoint: config.endpoint,
-            },
-            enabled: true,
-        };
+    let result =
+        tauri::async_runtime::spawn_blocking(move || {
+            let fs = RealFileSystem;
 
-        let target = S3Target::new(cloud_config, config.access_key, config.secret_key)
-            .map_err(|e| SerializableError {
-                kind: "S3ConfigError".to_string(),
-                message: e,
-                path: None,
-            })?;
-
-        // Use backup_with_progress to get per-file progress callbacks
-        let result = target.backup_with_progress(&fs, &workspace, |stage, current, total, percent| {
-            let message = match stage {
-                "preparing" => Some("Preparing backup...".to_string()),
-                "zipping" => Some(format!("Zipping files: {}/{}", current, total)),
-                "uploading" => Some("Uploading to S3...".to_string()),
-                "complete" => Some("Backup complete!".to_string()),
-                "error" => Some("Backup failed".to_string()),
-                _ => None,
-            };
-            
+            // Emit preparing stage
             let _ = progress_tx.send(BackupProgressEvent {
-                stage: stage.to_string(),
-                percent,
-                message,
+                stage: "preparing".to_string(),
+                percent: 5,
+                message: Some("Preparing backup...".to_string()),
             });
-        });
-        
-        Ok::<_, SerializableError>(result)
-    }).await.map_err(|e| SerializableError {
-        kind: "SpawnError".to_string(),
-        message: e.to_string(),
-        path: None,
-    })??;
-    
+
+            let cloud_config = CloudBackupConfig {
+                id: uuid::Uuid::new_v4().to_string(),
+                name: config.name.clone(),
+                provider: CloudProvider::S3 {
+                    bucket: config.bucket,
+                    region: config.region,
+                    prefix: config.prefix,
+                    endpoint: config.endpoint,
+                },
+                enabled: true,
+            };
+
+            let target = S3Target::new(cloud_config, config.access_key, config.secret_key)
+                .map_err(|e| SerializableError {
+                    kind: "S3ConfigError".to_string(),
+                    message: e,
+                    path: None,
+                })?;
+
+            // Use backup_with_progress to get per-file progress callbacks
+            let result =
+                target.backup_with_progress(&fs, &workspace, |stage, current, total, percent| {
+                    let message = match stage {
+                        "preparing" => Some("Preparing backup...".to_string()),
+                        "zipping" => Some(format!("Zipping files: {}/{}", current, total)),
+                        "uploading" => Some("Uploading to S3...".to_string()),
+                        "complete" => Some("Backup complete!".to_string()),
+                        "error" => Some("Backup failed".to_string()),
+                        _ => None,
+                    };
+
+                    let _ = progress_tx.send(BackupProgressEvent {
+                        stage: stage.to_string(),
+                        percent,
+                        message,
+                    });
+                });
+
+            Ok::<_, SerializableError>(result)
+        })
+        .await
+        .map_err(|e| SerializableError {
+            kind: "SpawnError".to_string(),
+            message: e.to_string(),
+            path: None,
+        })??;
+
     // Wait for event task to finish
     let _ = event_task.await;
 
@@ -1896,8 +1903,8 @@ pub fn restore_from_s3<R: Runtime>(
     workspace_path: Option<String>,
     config: S3ConfigRequest,
 ) -> Result<BackupStatus, SerializableError> {
-    use diaryx_core::backup::{BackupTarget, CloudBackupConfig, CloudProvider};
     use crate::cloud::S3Target;
+    use diaryx_core::backup::{BackupTarget, CloudBackupConfig, CloudProvider};
 
     let paths = get_platform_paths(&app)?;
     let workspace = workspace_path
@@ -1917,11 +1924,13 @@ pub fn restore_from_s3<R: Runtime>(
         enabled: true,
     };
 
-    let target = S3Target::new(cloud_config, config.access_key, config.secret_key)
-        .map_err(|e| SerializableError {
-            kind: "S3ConfigError".to_string(),
-            message: e,
-            path: None,
+    let target =
+        S3Target::new(cloud_config, config.access_key, config.secret_key).map_err(|e| {
+            SerializableError {
+                kind: "S3ConfigError".to_string(),
+                message: e,
+                path: None,
+            }
         })?;
 
     let result = target.restore(&fs, &workspace);
@@ -1949,25 +1958,25 @@ pub async fn backup_to_google_drive<R: Runtime>(
     workspace_path: Option<String>,
     config: GoogleDriveConfigRequest,
 ) -> Result<BackupStatus, SerializableError> {
-    use diaryx_core::backup::{CloudBackupConfig, CloudProvider};
     use crate::cloud::GoogleDriveTarget;
+    use diaryx_core::backup::{CloudBackupConfig, CloudProvider};
     use tokio::sync::mpsc;
 
     let paths = get_platform_paths(&app)?;
     let workspace = workspace_path
         .map(PathBuf::from)
         .unwrap_or(paths.default_workspace);
-    
+
     let config_name = config.name.clone();
     let access_token = config.access_token.clone();
     let folder_id = config.folder_id.clone();
-    
+
     // Create a channel to send progress from the background thread
     let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<BackupProgressEvent>();
-    
+
     // Clone app for the event emission task
     let app_clone = app.clone();
-    
+
     // Spawn a task to forward progress events to the frontend
     let event_task = tauri::async_runtime::spawn(async move {
         while let Some(event) = progress_rx.recv().await {
@@ -1978,14 +1987,14 @@ pub async fn backup_to_google_drive<R: Runtime>(
     // Run backup in a blocking thread
     let result = tauri::async_runtime::spawn_blocking(move || {
         let fs = RealFileSystem;
-        
+
         // Emit preparing stage
         let _ = progress_tx.send(BackupProgressEvent {
             stage: "preparing".to_string(),
             percent: 5,
             message: Some("Preparing backup...".to_string()),
         });
-        
+
         let cloud_config = CloudBackupConfig {
             id: uuid::Uuid::new_v4().to_string(),
             name: config.name.clone(),
@@ -1995,38 +2004,43 @@ pub async fn backup_to_google_drive<R: Runtime>(
             enabled: true,
         };
 
-        let target = GoogleDriveTarget::new(cloud_config, access_token, folder_id)
-            .map_err(|e| SerializableError {
-                kind: "GoogleDriveConfigError".to_string(),
-                message: e,
-                path: None,
+        let target =
+            GoogleDriveTarget::new(cloud_config, access_token, folder_id).map_err(|e| {
+                SerializableError {
+                    kind: "GoogleDriveConfigError".to_string(),
+                    message: e,
+                    path: None,
+                }
             })?;
 
         // Use backup_with_progress for progress callbacks
-        let result = target.backup_with_progress(&fs, &workspace, |stage, current, total, percent| {
-            let message = match stage {
-                "preparing" => Some("Preparing backup...".to_string()),
-                "zipping" => Some(format!("Zipping files: {}/{}", current, total)),
-                "uploading" => Some("Uploading to Google Drive...".to_string()),
-                "complete" => Some("Backup complete!".to_string()),
-                "error" => Some("Backup failed".to_string()),
-                _ => None,
-            };
-            
-            let _ = progress_tx.send(BackupProgressEvent {
-                stage: stage.to_string(),
-                percent,
-                message,
+        let result =
+            target.backup_with_progress(&fs, &workspace, |stage, current, total, percent| {
+                let message = match stage {
+                    "preparing" => Some("Preparing backup...".to_string()),
+                    "zipping" => Some(format!("Zipping files: {}/{}", current, total)),
+                    "uploading" => Some("Uploading to Google Drive...".to_string()),
+                    "complete" => Some("Backup complete!".to_string()),
+                    "error" => Some("Backup failed".to_string()),
+                    _ => None,
+                };
+
+                let _ = progress_tx.send(BackupProgressEvent {
+                    stage: stage.to_string(),
+                    percent,
+                    message,
+                });
             });
-        });
-        
+
         Ok::<_, SerializableError>(result)
-    }).await.map_err(|e| SerializableError {
+    })
+    .await
+    .map_err(|e| SerializableError {
         kind: "SpawnError".to_string(),
         message: e.to_string(),
         path: None,
     })??;
-    
+
     // Wait for event task to finish
     let _ = event_task.await;
 
@@ -2045,9 +2059,9 @@ pub async fn import_from_zip(
     workspace_path: Option<String>,
 ) -> Result<ImportResult, SerializableError> {
     use std::io::Read;
-    
+
     let fs = RealFileSystem;
-    
+
     // Get workspace path
     let workspace = match workspace_path {
         Some(p) => PathBuf::from(p),
@@ -2057,73 +2071,79 @@ pub async fn import_from_zip(
             if config.default_workspace.as_os_str().is_empty() {
                 return Err(SerializableError {
                     kind: "ImportError".to_string(),
-                    message: "No workspace specified and no default workspace configured".to_string(),
+                    message: "No workspace specified and no default workspace configured"
+                        .to_string(),
                     path: None,
                 });
             }
             config.default_workspace
         }
     };
-    
+
     log::info!("[Import] Importing from {} to {:?}", zip_path, workspace);
-    
+
     // Open zip file
     let zip_file = std::fs::File::open(&zip_path).map_err(|e| SerializableError {
         kind: "ImportError".to_string(),
         message: format!("Failed to open zip file: {}", e),
         path: Some(PathBuf::from(&zip_path)),
     })?;
-    
+
     let mut archive = zip::ZipArchive::new(zip_file).map_err(|e| SerializableError {
         kind: "ImportError".to_string(),
         message: format!("Failed to read zip archive: {}", e),
         path: Some(PathBuf::from(&zip_path)),
     })?;
-    
+
     let total_files = archive.len();
     let mut files_imported = 0;
     let mut files_skipped = 0;
-    
+
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).map_err(|e| SerializableError {
             kind: "ImportError".to_string(),
             message: format!("Failed to read zip entry: {}", e),
             path: None,
         })?;
-        
+
         // Skip directories
         if file.is_dir() {
             continue;
         }
-        
+
         let file_name = file.name().to_string();
-        
+
         // Skip files that shouldn't be imported
         let should_skip = file_name.split('/').any(|part| {
             part.starts_with('.')  // Hidden files/dirs
             || part == "Thumbs.db" || part == "desktop.ini"
         });
-        
+
         if should_skip {
             continue;
         }
-        
+
         // Only import markdown files and attachments
         let is_markdown = file_name.ends_with(".md");
-        let is_in_attachments = file_name.contains("/attachments/") || file_name.contains("/assets/");
+        let is_in_attachments =
+            file_name.contains("/attachments/") || file_name.contains("/assets/");
         let is_common_attachment = {
             let lower = file_name.to_lowercase();
-            lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".jpeg") 
-            || lower.ends_with(".gif") || lower.ends_with(".svg") || lower.ends_with(".pdf")
-            || lower.ends_with(".webp")
+            lower.ends_with(".png")
+                || lower.ends_with(".jpg")
+                || lower.ends_with(".jpeg")
+                || lower.ends_with(".gif")
+                || lower.ends_with(".svg")
+                || lower.ends_with(".pdf")
+                || lower.ends_with(".webp")
         };
-        
+
         if !is_markdown && !is_in_attachments && !is_common_attachment {
             continue;
         }
-        
+
         let file_path = workspace.join(&file_name);
-        
+
         // Create parent directories if they don't exist
         if let Some(parent) = file_path.parent() {
             if !parent.as_os_str().is_empty() && !parent.exists() {
@@ -2134,32 +2154,42 @@ pub async fn import_from_zip(
                 })?;
             }
         }
-        
+
         // Read file contents
         let mut contents = Vec::new();
-        file.read_to_end(&mut contents).map_err(|e| SerializableError {
-            kind: "ImportError".to_string(),
-            message: format!("Failed to read file from zip: {}", e),
-            path: Some(file_path.clone()),
-        })?;
-        
+        file.read_to_end(&mut contents)
+            .map_err(|e| SerializableError {
+                kind: "ImportError".to_string(),
+                message: format!("Failed to read file from zip: {}", e),
+                path: Some(file_path.clone()),
+            })?;
+
         // Write to filesystem
-        fs.write_binary(&file_path, &contents).map_err(|e| SerializableError {
-            kind: "ImportError".to_string(),
-            message: format!("Failed to write file: {}", e),
-            path: Some(file_path.clone()),
-        })?;
-        
+        fs.write_binary(&file_path, &contents)
+            .map_err(|e| SerializableError {
+                kind: "ImportError".to_string(),
+                message: format!("Failed to write file: {}", e),
+                path: Some(file_path.clone()),
+            })?;
+
         files_imported += 1;
-        
+
         // Log progress every 100 files
         if files_imported % 100 == 0 {
-            log::info!("[Import] Progress: {}/{} files", files_imported, total_files);
+            log::info!(
+                "[Import] Progress: {}/{} files",
+                files_imported,
+                total_files
+            );
         }
     }
-    
-    log::info!("[Import] Complete: {} files imported, {} skipped", files_imported, files_skipped);
-    
+
+    log::info!(
+        "[Import] Complete: {} files imported, {} skipped",
+        files_imported,
+        files_skipped
+    );
+
     Ok(ImportResult {
         success: true,
         files_imported,
@@ -2191,9 +2221,9 @@ pub async fn pick_and_import_zip<R: Runtime>(
 ) -> Result<ImportResult, SerializableError> {
     use std::io::Read;
     use tauri_plugin_dialog::DialogExt;
-    
+
     let fs = RealFileSystem;
-    
+
     // Get workspace path
     let workspace = match workspace_path {
         Some(p) => PathBuf::from(p),
@@ -2209,15 +2239,16 @@ pub async fn pick_and_import_zip<R: Runtime>(
             config.default_workspace
         }
     };
-    
+
     // Use blocking_pick_file with application/zip MIME type filter for iOS
     // The MIME type should help iOS choose document picker over photo picker
-    let file_path = app.dialog()
+    let file_path = app
+        .dialog()
         .file()
         .add_filter("Zip Archive", &["zip", "application/zip"])
         .set_title("Select Backup Zip to Import")
         .blocking_pick_file();
-    
+
     let selected_path = match file_path {
         Some(path) => path.into_path().map_err(|e| SerializableError {
             kind: "ImportError".to_string(),
@@ -2236,64 +2267,73 @@ pub async fn pick_and_import_zip<R: Runtime>(
             });
         }
     };
-    
-    log::info!("[Import] Importing from {:?} to {:?}", selected_path, workspace);
-    
+
+    log::info!(
+        "[Import] Importing from {:?} to {:?}",
+        selected_path,
+        workspace
+    );
+
     // Open zip file
     let zip_file = std::fs::File::open(&selected_path).map_err(|e| SerializableError {
         kind: "ImportError".to_string(),
         message: format!("Failed to open zip file: {}", e),
         path: Some(selected_path.clone()),
     })?;
-    
+
     let mut archive = zip::ZipArchive::new(zip_file).map_err(|e| SerializableError {
         kind: "ImportError".to_string(),
         message: format!("Failed to read zip archive: {}", e),
         path: Some(selected_path.clone()),
     })?;
-    
+
     let total_files = archive.len();
     let mut files_imported = 0;
     let mut files_skipped = 0;
-    
+
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).map_err(|e| SerializableError {
             kind: "ImportError".to_string(),
             message: format!("Failed to read zip entry: {}", e),
             path: None,
         })?;
-        
+
         if file.is_dir() {
             continue;
         }
-        
+
         let file_name = file.name().to_string();
-        
+
         // Skip files that shouldn't be imported
-        let should_skip = file_name.split('/').any(|part| {
-            part.starts_with('.') || part == "Thumbs.db" || part == "desktop.ini"
-        });
-        
+        let should_skip = file_name
+            .split('/')
+            .any(|part| part.starts_with('.') || part == "Thumbs.db" || part == "desktop.ini");
+
         if should_skip {
             continue;
         }
-        
+
         // Only import markdown files and attachments
         let is_markdown = file_name.ends_with(".md");
-        let is_in_attachments = file_name.contains("/attachments/") || file_name.contains("/assets/");
+        let is_in_attachments =
+            file_name.contains("/attachments/") || file_name.contains("/assets/");
         let is_common_attachment = {
             let lower = file_name.to_lowercase();
-            lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".jpeg") 
-            || lower.ends_with(".gif") || lower.ends_with(".svg") || lower.ends_with(".pdf")
-            || lower.ends_with(".webp")
+            lower.ends_with(".png")
+                || lower.ends_with(".jpg")
+                || lower.ends_with(".jpeg")
+                || lower.ends_with(".gif")
+                || lower.ends_with(".svg")
+                || lower.ends_with(".pdf")
+                || lower.ends_with(".webp")
         };
-        
+
         if !is_markdown && !is_in_attachments && !is_common_attachment {
             continue;
         }
-        
+
         let file_path = workspace.join(&file_name);
-        
+
         // Create parent directories if they don't exist
         if let Some(parent) = file_path.parent() {
             if !parent.as_os_str().is_empty() && !parent.exists() {
@@ -2304,29 +2344,39 @@ pub async fn pick_and_import_zip<R: Runtime>(
                 })?;
             }
         }
-        
+
         let mut contents = Vec::new();
-        file.read_to_end(&mut contents).map_err(|e| SerializableError {
-            kind: "ImportError".to_string(),
-            message: format!("Failed to read file from zip: {}", e),
-            path: Some(file_path.clone()),
-        })?;
-        
-        fs.write_binary(&file_path, &contents).map_err(|e| SerializableError {
-            kind: "ImportError".to_string(),
-            message: format!("Failed to write file: {}", e),
-            path: Some(file_path.clone()),
-        })?;
-        
+        file.read_to_end(&mut contents)
+            .map_err(|e| SerializableError {
+                kind: "ImportError".to_string(),
+                message: format!("Failed to read file from zip: {}", e),
+                path: Some(file_path.clone()),
+            })?;
+
+        fs.write_binary(&file_path, &contents)
+            .map_err(|e| SerializableError {
+                kind: "ImportError".to_string(),
+                message: format!("Failed to write file: {}", e),
+                path: Some(file_path.clone()),
+            })?;
+
         files_imported += 1;
-        
+
         if files_imported % 100 == 0 {
-            log::info!("[Import] Progress: {}/{} files", files_imported, total_files);
+            log::info!(
+                "[Import] Progress: {}/{} files",
+                files_imported,
+                total_files
+            );
         }
     }
-    
-    log::info!("[Import] Complete: {} files imported, {} skipped", files_imported, files_skipped);
-    
+
+    log::info!(
+        "[Import] Complete: {} files imported, {} skipped",
+        files_imported,
+        files_skipped
+    );
+
     Ok(ImportResult {
         success: true,
         files_imported,
@@ -2344,11 +2394,11 @@ pub async fn import_from_zip_data(
     zip_data: String,
     workspace_path: Option<String>,
 ) -> Result<ImportResult, SerializableError> {
-    use std::io::{Cursor, Read};
     use base64::Engine;
-    
+    use std::io::{Cursor, Read};
+
     let fs = RealFileSystem;
-    
+
     // Get workspace path
     let workspace = match workspace_path {
         Some(p) => PathBuf::from(p),
@@ -2364,9 +2414,13 @@ pub async fn import_from_zip_data(
             config.default_workspace
         }
     };
-    
-    log::info!("[Import] Importing from base64 data ({} chars) to {:?}", zip_data.len(), workspace);
-    
+
+    log::info!(
+        "[Import] Importing from base64 data ({} chars) to {:?}",
+        zip_data.len(),
+        workspace
+    );
+
     // Decode base64
     let zip_bytes = base64::engine::general_purpose::STANDARD
         .decode(&zip_data)
@@ -2375,9 +2429,9 @@ pub async fn import_from_zip_data(
             message: format!("Failed to decode base64: {}", e),
             path: None,
         })?;
-    
+
     log::info!("[Import] Decoded {} bytes of zip data", zip_bytes.len());
-    
+
     // Create zip archive from bytes
     let cursor = Cursor::new(zip_bytes);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| SerializableError {
@@ -2385,49 +2439,54 @@ pub async fn import_from_zip_data(
         message: format!("Failed to read zip archive: {}", e),
         path: None,
     })?;
-    
+
     let total_files = archive.len();
     let mut files_imported = 0;
     let files_skipped = 0;
-    
+
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).map_err(|e| SerializableError {
             kind: "ImportError".to_string(),
             message: format!("Failed to read zip entry: {}", e),
             path: None,
         })?;
-        
+
         if file.is_dir() {
             continue;
         }
-        
+
         let file_name = file.name().to_string();
-        
+
         // Skip files that shouldn't be imported
-        let should_skip = file_name.split('/').any(|part| {
-            part.starts_with('.') || part == "Thumbs.db" || part == "desktop.ini"
-        });
-        
+        let should_skip = file_name
+            .split('/')
+            .any(|part| part.starts_with('.') || part == "Thumbs.db" || part == "desktop.ini");
+
         if should_skip {
             continue;
         }
-        
+
         // Only import markdown files and attachments
         let is_markdown = file_name.ends_with(".md");
-        let is_in_attachments = file_name.contains("/attachments/") || file_name.contains("/assets/");
+        let is_in_attachments =
+            file_name.contains("/attachments/") || file_name.contains("/assets/");
         let is_common_attachment = {
             let lower = file_name.to_lowercase();
-            lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".jpeg") 
-            || lower.ends_with(".gif") || lower.ends_with(".svg") || lower.ends_with(".pdf")
-            || lower.ends_with(".webp")
+            lower.ends_with(".png")
+                || lower.ends_with(".jpg")
+                || lower.ends_with(".jpeg")
+                || lower.ends_with(".gif")
+                || lower.ends_with(".svg")
+                || lower.ends_with(".pdf")
+                || lower.ends_with(".webp")
         };
-        
+
         if !is_markdown && !is_in_attachments && !is_common_attachment {
             continue;
         }
-        
+
         let file_path = workspace.join(&file_name);
-        
+
         // Create parent directories if they don't exist
         if let Some(parent) = file_path.parent() {
             if !parent.as_os_str().is_empty() && !parent.exists() {
@@ -2438,29 +2497,39 @@ pub async fn import_from_zip_data(
                 })?;
             }
         }
-        
+
         let mut contents = Vec::new();
-        file.read_to_end(&mut contents).map_err(|e| SerializableError {
-            kind: "ImportError".to_string(),
-            message: format!("Failed to read file from zip: {}", e),
-            path: Some(file_path.clone()),
-        })?;
-        
-        fs.write_binary(&file_path, &contents).map_err(|e| SerializableError {
-            kind: "ImportError".to_string(),
-            message: format!("Failed to write file: {}", e),
-            path: Some(file_path.clone()),
-        })?;
-        
+        file.read_to_end(&mut contents)
+            .map_err(|e| SerializableError {
+                kind: "ImportError".to_string(),
+                message: format!("Failed to read file from zip: {}", e),
+                path: Some(file_path.clone()),
+            })?;
+
+        fs.write_binary(&file_path, &contents)
+            .map_err(|e| SerializableError {
+                kind: "ImportError".to_string(),
+                message: format!("Failed to write file: {}", e),
+                path: Some(file_path.clone()),
+            })?;
+
         files_imported += 1;
-        
+
         if files_imported % 100 == 0 {
-            log::info!("[Import] Progress: {}/{} files", files_imported, total_files);
+            log::info!(
+                "[Import] Progress: {}/{} files",
+                files_imported,
+                total_files
+            );
         }
     }
-    
-    log::info!("[Import] Complete: {} files imported, {} skipped", files_imported, files_skipped);
-    
+
+    log::info!(
+        "[Import] Complete: {} files imported, {} skipped",
+        files_imported,
+        files_skipped
+    );
+
     Ok(ImportResult {
         success: true,
         files_imported,
@@ -2475,11 +2544,11 @@ pub async fn import_from_zip_data(
 // Chunked Import Commands - for large files that can't fit in memory
 // ============================================================================
 
-use std::sync::Mutex;
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 /// Global storage for in-progress uploads
-static UPLOAD_SESSIONS: std::sync::LazyLock<Mutex<HashMap<String, std::fs::File>>> = 
+static UPLOAD_SESSIONS: std::sync::LazyLock<Mutex<HashMap<String, std::fs::File>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Start a chunked upload session
@@ -2487,21 +2556,28 @@ static UPLOAD_SESSIONS: std::sync::LazyLock<Mutex<HashMap<String, std::fs::File>
 #[tauri::command]
 pub async fn start_import_upload() -> Result<String, SerializableError> {
     use uuid::Uuid;
-    
+
     let session_id = Uuid::new_v4().to_string();
     let temp_dir = std::env::temp_dir();
     let temp_path = temp_dir.join(format!("diaryx_import_{}.zip", &session_id));
-    
-    log::info!("[Import] Starting chunked upload session: {} -> {:?}", session_id, temp_path);
-    
+
+    log::info!(
+        "[Import] Starting chunked upload session: {} -> {:?}",
+        session_id,
+        temp_path
+    );
+
     let file = std::fs::File::create(&temp_path).map_err(|e| SerializableError {
         kind: "ImportError".to_string(),
         message: format!("Failed to create temp file: {}", e),
         path: Some(temp_path),
     })?;
-    
-    UPLOAD_SESSIONS.lock().unwrap().insert(session_id.clone(), file);
-    
+
+    UPLOAD_SESSIONS
+        .lock()
+        .unwrap()
+        .insert(session_id.clone(), file);
+
     Ok(session_id)
 }
 
@@ -2511,9 +2587,9 @@ pub async fn append_import_chunk(
     session_id: String,
     chunk: String,
 ) -> Result<usize, SerializableError> {
-    use std::io::Write;
     use base64::Engine;
-    
+    use std::io::Write;
+
     // Decode base64 chunk
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(&chunk)
@@ -2522,23 +2598,25 @@ pub async fn append_import_chunk(
             message: format!("Failed to decode chunk: {}", e),
             path: None,
         })?;
-    
+
     let bytes_len = bytes.len();
-    
+
     // Write to temp file
     let mut sessions = UPLOAD_SESSIONS.lock().unwrap();
-    let file = sessions.get_mut(&session_id).ok_or_else(|| SerializableError {
-        kind: "ImportError".to_string(),
-        message: format!("Upload session not found: {}", session_id),
-        path: None,
-    })?;
-    
+    let file = sessions
+        .get_mut(&session_id)
+        .ok_or_else(|| SerializableError {
+            kind: "ImportError".to_string(),
+            message: format!("Upload session not found: {}", session_id),
+            path: None,
+        })?;
+
     file.write_all(&bytes).map_err(|e| SerializableError {
         kind: "ImportError".to_string(),
         message: format!("Failed to write chunk: {}", e),
         path: None,
     })?;
-    
+
     Ok(bytes_len)
 }
 
@@ -2549,9 +2627,9 @@ pub async fn finish_import_upload(
     workspace_path: Option<String>,
 ) -> Result<ImportResult, SerializableError> {
     use std::io::Read;
-    
+
     let fs = RealFileSystem;
-    
+
     // Get workspace path
     let workspace = match workspace_path {
         Some(p) => PathBuf::from(p),
@@ -2567,46 +2645,50 @@ pub async fn finish_import_upload(
             config.default_workspace
         }
     };
-    
+
     // Close the file and remove from sessions
     let temp_path = {
         let mut sessions = UPLOAD_SESSIONS.lock().unwrap();
         sessions.remove(&session_id);
         std::env::temp_dir().join(format!("diaryx_import_{}.zip", &session_id))
     };
-    
-    log::info!("[Import] Finishing chunked upload: {} -> {:?}", session_id, temp_path);
-    
+
+    log::info!(
+        "[Import] Finishing chunked upload: {} -> {:?}",
+        session_id,
+        temp_path
+    );
+
     // Open the completed temp file
     let zip_file = std::fs::File::open(&temp_path).map_err(|e| SerializableError {
         kind: "ImportError".to_string(),
         message: format!("Failed to open temp file: {}", e),
         path: Some(temp_path.clone()),
     })?;
-    
+
     let mut archive = zip::ZipArchive::new(zip_file).map_err(|e| SerializableError {
         kind: "ImportError".to_string(),
         message: format!("Failed to read zip archive: {}", e),
         path: Some(temp_path.clone()),
     })?;
-    
+
     let total_files = archive.len();
     let mut files_imported = 0;
     let files_skipped = 0;
-    
+
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).map_err(|e| SerializableError {
             kind: "ImportError".to_string(),
             message: format!("Failed to read zip entry: {}", e),
             path: None,
         })?;
-        
+
         if file.is_dir() {
             continue;
         }
-        
+
         let file_name = file.name().to_string();
-        
+
         // Skip files that shouldn't be imported:
         // - Hidden files and directories (starting with .)
         // - macOS metadata files (.DS_Store)
@@ -2617,42 +2699,55 @@ pub async fn finish_import_upload(
             || part == ".DS_Store"
             || part == ".git"
             || part == "Thumbs.db"  // Windows
-            || part == "desktop.ini"  // Windows
+            || part == "desktop.ini" // Windows
         });
-        
+
         if should_skip {
             log::debug!("[Import] Skipping system file: {}", file_name);
             continue;
         }
-        
+
         // For non-markdown files, only import if they're in an attachments directory
         // or are common attachment types
         let is_markdown = file_name.ends_with(".md");
-        let is_in_attachments = file_name.contains("/attachments/") || file_name.contains("/assets/");
+        let is_in_attachments =
+            file_name.contains("/attachments/") || file_name.contains("/assets/");
         let is_common_attachment = {
             let lower = file_name.to_lowercase();
-            lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".jpeg") 
-            || lower.ends_with(".gif") || lower.ends_with(".svg") || lower.ends_with(".pdf")
-            || lower.ends_with(".webp")
+            lower.ends_with(".png")
+                || lower.ends_with(".jpg")
+                || lower.ends_with(".jpeg")
+                || lower.ends_with(".gif")
+                || lower.ends_with(".svg")
+                || lower.ends_with(".pdf")
+                || lower.ends_with(".webp")
         };
-        
+
         if !is_markdown && !is_in_attachments && !is_common_attachment {
             log::debug!("[Import] Skipping non-workspace file: {}", file_name);
             continue;
         }
-        
+
         let file_path = workspace.join(&file_name);
-        
-        log::info!("[Import] Processing zip entry: {} -> {:?}", file_name, file_path);
-        
+
+        log::info!(
+            "[Import] Processing zip entry: {} -> {:?}",
+            file_name,
+            file_path
+        );
+
         // Create parent directories, deleting any files that conflict
         // (backup is authoritative, so if zip has a directory, it replaces any file)
         if let Some(parent) = file_path.parent() {
             if !parent.as_os_str().is_empty() {
                 let mut current = workspace.clone();
-                for component in std::path::Path::new(&file_name).parent().unwrap_or(std::path::Path::new("")).components() {
+                for component in std::path::Path::new(&file_name)
+                    .parent()
+                    .unwrap_or(std::path::Path::new(""))
+                    .components()
+                {
                     current = current.join(component);
-                    
+
                     if current.exists() && current.is_file() {
                         // Delete file that's blocking directory creation
                         std::fs::remove_file(&current).map_err(|e| SerializableError {
@@ -2662,7 +2757,7 @@ pub async fn finish_import_upload(
                         })?;
                         log::info!("[Import] Removed conflicting file: {:?}", current);
                     }
-                    
+
                     if !current.exists() {
                         std::fs::create_dir(&current).map_err(|e| SerializableError {
                             kind: "ImportError".to_string(),
@@ -2673,34 +2768,44 @@ pub async fn finish_import_upload(
                 }
             }
         }
-        
+
         let mut contents = Vec::new();
-        file.read_to_end(&mut contents).map_err(|e| SerializableError {
-            kind: "ImportError".to_string(),
-            message: format!("Failed to read file from zip: {}", e),
-            path: Some(file_path.clone()),
-        })?;
-        
-        fs.write_binary(&file_path, &contents).map_err(|e| SerializableError {
-            kind: "ImportError".to_string(),
-            message: format!("Failed to write file: {}", e),
-            path: Some(file_path.clone()),
-        })?;
-        
+        file.read_to_end(&mut contents)
+            .map_err(|e| SerializableError {
+                kind: "ImportError".to_string(),
+                message: format!("Failed to read file from zip: {}", e),
+                path: Some(file_path.clone()),
+            })?;
+
+        fs.write_binary(&file_path, &contents)
+            .map_err(|e| SerializableError {
+                kind: "ImportError".to_string(),
+                message: format!("Failed to write file: {}", e),
+                path: Some(file_path.clone()),
+            })?;
+
         files_imported += 1;
-        
+
         if files_imported % 100 == 0 {
-            log::info!("[Import] Progress: {}/{} files", files_imported, total_files);
+            log::info!(
+                "[Import] Progress: {}/{} files",
+                files_imported,
+                total_files
+            );
         }
     }
-    
+
     // Clean up temp file
     if let Err(e) = std::fs::remove_file(&temp_path) {
         log::warn!("[Import] Failed to clean up temp file: {}", e);
     }
-    
-    log::info!("[Import] Complete: {} files imported, {} skipped", files_imported, files_skipped);
-    
+
+    log::info!(
+        "[Import] Complete: {} files imported, {} skipped",
+        files_imported,
+        files_skipped
+    );
+
     Ok(ImportResult {
         success: true,
         files_imported,

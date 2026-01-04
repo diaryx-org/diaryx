@@ -64,10 +64,12 @@ impl From<diaryx_core::validate::ValidationWarning> for JsValidationWarning {
                         .collect(),
                 }
             }
-            ValidationWarning::UnlinkedEntry { path, is_dir } => JsValidationWarning::UnlinkedEntry {
-                path: path.to_string_lossy().to_string(),
-                is_dir,
-            },
+            ValidationWarning::UnlinkedEntry { path, is_dir } => {
+                JsValidationWarning::UnlinkedEntry {
+                    path: path.to_string_lossy().to_string(),
+                    is_dir,
+                }
+            }
         }
     }
 }

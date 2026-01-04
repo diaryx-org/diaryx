@@ -78,17 +78,11 @@ mod sync_integration_tests {
     #[test]
     fn test_two_documents_sync() {
         // Create two documents with same initial content
-        let mut doc1 = DocumentSync::new(
-            PathBuf::from("test.md"),
-            "# Original Content".to_string(),
-        )
-        .unwrap();
+        let mut doc1 =
+            DocumentSync::new(PathBuf::from("test.md"), "# Original Content".to_string()).unwrap();
 
-        let mut doc2 = DocumentSync::new(
-            PathBuf::from("test.md"),
-            "# Original Content".to_string(),
-        )
-        .unwrap();
+        let mut doc2 =
+            DocumentSync::new(PathBuf::from("test.md"), "# Original Content".to_string()).unwrap();
 
         // Update doc1
         doc1.update_content("# Updated by Doc1".to_string())
@@ -118,17 +112,9 @@ mod sync_integration_tests {
     #[test]
     fn test_concurrent_edits_converge() {
         // Create two documents
-        let mut doc1 = DocumentSync::new(
-            PathBuf::from("test.md"),
-            "# Start".to_string(),
-        )
-        .unwrap();
+        let mut doc1 = DocumentSync::new(PathBuf::from("test.md"), "# Start".to_string()).unwrap();
 
-        let mut doc2 = DocumentSync::new(
-            PathBuf::from("test.md"),
-            "# Start".to_string(),
-        )
-        .unwrap();
+        let mut doc2 = DocumentSync::new(PathBuf::from("test.md"), "# Start".to_string()).unwrap();
 
         // Both make concurrent edits
         doc1.update_content("# Updated by A".to_string()).unwrap();

@@ -146,16 +146,16 @@ impl<FS: FileSystem> Validator<FS> {
                 let entry_canonical = entry.canonicalize().unwrap_or_else(|_| entry.clone());
                 if !visited_normalized.contains(&entry_canonical) {
                     let is_dir = self.ws.fs_ref().is_dir(&entry);
-                    
+
                     // Report as OrphanFile if it's an .md file (for backwards compat)
                     if entry.extension().is_some_and(|ext| ext == "md") {
-                        result.warnings.push(ValidationWarning::OrphanFile { 
-                            file: entry.clone() 
+                        result.warnings.push(ValidationWarning::OrphanFile {
+                            file: entry.clone(),
                         });
                     }
-                    
+
                     // Always report as UnlinkedEntry for "List All Files" mode
-                    result.warnings.push(ValidationWarning::UnlinkedEntry { 
+                    result.warnings.push(ValidationWarning::UnlinkedEntry {
                         path: entry,
                         is_dir,
                     });

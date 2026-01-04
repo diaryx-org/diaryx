@@ -135,8 +135,8 @@ impl DiaryxExport {
                     visited.insert(path.to_path_buf());
 
                     if let Ok(index) = ws.parse_index(path) {
-                        let relative_path =
-                            pathdiff::diff_paths(path, root_dir).unwrap_or_else(|| path.to_path_buf());
+                        let relative_path = pathdiff::diff_paths(path, root_dir)
+                            .unwrap_or_else(|| path.to_path_buf());
 
                         included.push(IncludedFileJs {
                             path: path.to_string_lossy().to_string(),
@@ -219,8 +219,8 @@ impl DiaryxExport {
                     visited.insert(path.to_path_buf());
 
                     if let Ok(index) = ws.parse_index(path) {
-                        let relative_path =
-                            pathdiff::diff_paths(path, root_dir).unwrap_or_else(|| path.to_path_buf());
+                        let relative_path = pathdiff::diff_paths(path, root_dir)
+                            .unwrap_or_else(|| path.to_path_buf());
 
                         if let Ok(content) = ws.fs_ref().read_to_string(path) {
                             let processed = remove_audience_from_content(&content);
@@ -333,8 +333,8 @@ impl DiaryxExport {
                     visited.insert(path.to_path_buf());
 
                     if let Ok(index) = ws.parse_index(path) {
-                        let relative_path =
-                            pathdiff::diff_paths(path, root_dir).unwrap_or_else(|| path.to_path_buf());
+                        let relative_path = pathdiff::diff_paths(path, root_dir)
+                            .unwrap_or_else(|| path.to_path_buf());
 
                         if let Ok(content) = ws.fs_ref().read_to_string(path) {
                             let body = extract_body(&content);
@@ -351,7 +351,14 @@ impl DiaryxExport {
                             for child_rel in index.frontmatter.contents_list() {
                                 let child_path = index.resolve_path(child_rel);
                                 if ws.fs_ref().exists(&child_path) {
-                                    collect_all(ws, &child_path, root_dir, files, visited, convert_fn);
+                                    collect_all(
+                                        ws,
+                                        &child_path,
+                                        root_dir,
+                                        files,
+                                        visited,
+                                        convert_fn,
+                                    );
                                 }
                             }
                         }
@@ -359,7 +366,14 @@ impl DiaryxExport {
                 }
 
                 let mut visited = HashSet::new();
-                collect_all(&ws, root, root_dir, &mut files, &mut visited, &convert_md_to_html);
+                collect_all(
+                    &ws,
+                    root,
+                    root_dir,
+                    &mut files,
+                    &mut visited,
+                    &convert_md_to_html,
+                );
 
                 return serde_wasm_bindgen::to_value(&files).js_err();
             }
@@ -428,8 +442,9 @@ impl DiaryxExport {
                             for file_path in files {
                                 if !ws.fs_ref().is_dir(&file_path) {
                                     if let Ok(data) = ws.fs_ref().read_binary(&file_path) {
-                                        let relative_path = pathdiff::diff_paths(&file_path, root_dir)
-                                            .unwrap_or_else(|| file_path.clone());
+                                        let relative_path =
+                                            pathdiff::diff_paths(&file_path, root_dir)
+                                                .unwrap_or_else(|| file_path.clone());
 
                                         binary_files.push(BinaryExportFile {
                                             path: relative_path.to_string_lossy().to_string(),

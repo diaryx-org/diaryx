@@ -51,9 +51,7 @@ pub enum CloudProvider {
         folder_id: Option<String>,
     },
     /// WebDAV (Nextcloud, ownCloud, etc.)
-    WebDAV {
-        url: String,
-    },
+    WebDAV { url: String },
 }
 
 /// Configuration for a cloud backup target.
@@ -501,7 +499,7 @@ impl BackupTarget for LocalDriveTarget {
                             return BackupResult::failure(format!(
                                 "Failed to read file {:?}: {}",
                                 file_path, e
-                            ))
+                            ));
                         }
                     }
                 }
@@ -541,8 +539,7 @@ impl BackupTarget for LocalDriveTarget {
                 .map_err(|e| format!("Failed to read directory {:?}: {}", dir, e))?;
 
             for entry in entries {
-                let entry =
-                    entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+                let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
                 let path = entry.path();
 
                 if path.is_dir() {
@@ -555,8 +552,9 @@ impl BackupTarget for LocalDriveTarget {
 
                     // Ensure parent directory exists in target filesystem
                     if let Some(parent) = dest_path.parent() {
-                        fs.create_dir_all(parent)
-                            .map_err(|e| format!("Failed to create directory {:?}: {}", parent, e))?;
+                        fs.create_dir_all(parent).map_err(|e| {
+                            format!("Failed to create directory {:?}: {}", parent, e)
+                        })?;
                     }
 
                     // Read and write file
@@ -683,8 +681,10 @@ mod tests {
         let fs = InMemoryFileSystem::new();
         let workspace = PathBuf::from("/workspace");
         fs.create_dir_all(&workspace).unwrap();
-        fs.write_file(&workspace.join("test.md"), "# Hello World").unwrap();
-        fs.write_file(&workspace.join("subdir/nested.md"), "Nested content").unwrap();
+        fs.write_file(&workspace.join("test.md"), "# Hello World")
+            .unwrap();
+        fs.write_file(&workspace.join("subdir/nested.md"), "Nested content")
+            .unwrap();
 
         // Create backup target pointing to temp directory
         let backup_dir = tempdir().unwrap();
@@ -702,16 +702,22 @@ mod tests {
         // Create a fresh filesystem and restore into it
         let fs2 = InMemoryFileSystem::new();
         fs2.create_dir_all(&workspace).unwrap();
-        
+
         let restore_result = target.restore(&fs2, &workspace);
-        assert!(restore_result.success, "Restore failed: {:?}", restore_result.error);
+        assert!(
+            restore_result.success,
+            "Restore failed: {:?}",
+            restore_result.error
+        );
         assert_eq!(restore_result.files_processed, 2);
 
         // Verify restored content
         let content = fs2.read_to_string(&workspace.join("test.md")).unwrap();
         assert_eq!(content, "# Hello World");
-        
-        let nested = fs2.read_to_string(&workspace.join("subdir/nested.md")).unwrap();
+
+        let nested = fs2
+            .read_to_string(&workspace.join("subdir/nested.md"))
+            .unwrap();
         assert_eq!(nested, "Nested content");
     }
 }

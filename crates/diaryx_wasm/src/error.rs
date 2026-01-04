@@ -18,7 +18,7 @@ impl<T, E: std::fmt::Display> IntoJsResult<T> for Result<T, E> {
 pub trait IntoJsOption<T> {
     /// Convert to a Result with JsValue error using the provided message.
     fn js_ok_or(self, msg: &str) -> Result<T, JsValue>;
-    
+
     /// Convert to a Result with JsValue error using a formatted message.
     fn js_ok_or_else<F: FnOnce() -> String>(self, f: F) -> Result<T, JsValue>;
 }
@@ -27,7 +27,7 @@ impl<T> IntoJsOption<T> for Option<T> {
     fn js_ok_or(self, msg: &str) -> Result<T, JsValue> {
         self.ok_or_else(|| JsValue::from_str(msg))
     }
-    
+
     fn js_ok_or_else<F: FnOnce() -> String>(self, f: F) -> Result<T, JsValue> {
         self.ok_or_else(|| JsValue::from_str(&f()))
     }

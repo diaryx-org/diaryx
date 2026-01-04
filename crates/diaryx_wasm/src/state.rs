@@ -17,7 +17,7 @@ where
 }
 
 /// Execute a closure with access to the global filesystem.
-/// 
+///
 /// Note: Uses immutable borrow because `InMemoryFileSystem` uses internal
 /// mutability (`RefCell<HashMap>`). The `FileSystem` trait is implemented
 /// for `&InMemoryFileSystem`, not `&mut InMemoryFileSystem`.
@@ -29,7 +29,7 @@ where
 }
 
 /// Replace the entire filesystem with a new one.
-/// 
+///
 /// Use this for operations that need to replace the whole filesystem
 /// (e.g., loading from backup, initial load).
 pub fn replace_fs(new_fs: InMemoryFileSystem) {

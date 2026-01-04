@@ -3,9 +3,9 @@
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
-use diaryx_core::entry::DiaryxApp;
 use crate::error::IntoJsResult;
 use crate::state::{with_fs, with_fs_mut};
+use diaryx_core::entry::DiaryxApp;
 
 // ============================================================================
 // DiaryxFrontmatter Class
@@ -51,8 +51,7 @@ impl DiaryxFrontmatter {
             let app = DiaryxApp::new(fs);
 
             let json_value: serde_json::Value = serde_wasm_bindgen::from_value(value).js_err()?;
-            let yaml_value: serde_yaml::Value =
-                serde_json::from_value(json_value).js_err()?;
+            let yaml_value: serde_yaml::Value = serde_json::from_value(json_value).js_err()?;
 
             app.set_frontmatter_property(path, key, yaml_value).js_err()
         })
@@ -92,8 +91,10 @@ pub fn parse_frontmatter(content: &str) -> Result<JsValue, JsValue> {
     let yaml_str = match end_idx {
         Some(idx) => &rest[..idx],
         None => {
-            return serde_wasm_bindgen::to_value(&serde_json::Map::<String, serde_json::Value>::new())
-                .js_err();
+            return serde_wasm_bindgen::to_value(
+                &serde_json::Map::<String, serde_json::Value>::new(),
+            )
+            .js_err();
         }
     };
 

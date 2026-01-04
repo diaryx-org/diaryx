@@ -72,8 +72,6 @@ pub fn init() {
 // Legacy API (for backwards compatibility)
 // ============================================================================
 
-
-
 /// Load files into the in-memory filesystem.
 #[wasm_bindgen]
 pub fn load_files(entries: JsValue) -> Result<(), JsValue> {

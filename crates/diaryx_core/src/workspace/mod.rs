@@ -12,7 +12,7 @@
 mod types;
 
 // Re-export types for backwards compatibility
-pub use types::{format_tree_node, IndexFile, IndexFrontmatter, TreeNode};
+pub use types::{IndexFile, IndexFrontmatter, TreeNode, format_tree_node};
 
 use std::path::{Path, PathBuf};
 
@@ -353,19 +353,11 @@ impl<FS: FileSystem> Workspace<FS> {
 
     /// Build a tree structure from the actual filesystem (for "Show All Files" mode)
     /// Unlike build_tree, this scans directories for actual files rather than following contents references
-    pub fn build_filesystem_tree(
-        &self,
-        root_dir: &Path,
-        show_hidden: bool,
-    ) -> Result<TreeNode> {
+    pub fn build_filesystem_tree(&self, root_dir: &Path, show_hidden: bool) -> Result<TreeNode> {
         self.build_filesystem_tree_recursive(root_dir, show_hidden)
     }
 
-    fn build_filesystem_tree_recursive(
-        &self,
-        dir: &Path,
-        show_hidden: bool,
-    ) -> Result<TreeNode> {
+    fn build_filesystem_tree_recursive(&self, dir: &Path, show_hidden: bool) -> Result<TreeNode> {
         // Get directory name for display
         let dir_name = dir
             .file_name()
@@ -373,16 +365,17 @@ impl<FS: FileSystem> Workspace<FS> {
             .unwrap_or_else(|| dir.to_string_lossy().to_string());
 
         // Try to find an index file in this directory to get title/description
-        let (name, description, index_path) = if let Ok(Some(index)) = self.find_any_index_in_dir(dir) {
-            if let Ok(parsed) = self.parse_index(&index) {
-                let title = parsed.frontmatter.title.unwrap_or_else(|| dir_name.clone());
-                (title, parsed.frontmatter.description, Some(index))
+        let (name, description, index_path) =
+            if let Ok(Some(index)) = self.find_any_index_in_dir(dir) {
+                if let Ok(parsed) = self.parse_index(&index) {
+                    let title = parsed.frontmatter.title.unwrap_or_else(|| dir_name.clone());
+                    (title, parsed.frontmatter.description, Some(index))
+                } else {
+                    (dir_name.clone(), None, Some(index))
+                }
             } else {
-                (dir_name.clone(), None, Some(index))
-            }
-        } else {
-            (dir_name.clone(), None, None)
-        };
+                (dir_name.clone(), None, None)
+            };
 
         // The path to use - if there's an index, use it; otherwise use the directory
         let node_path = index_path.unwrap_or_else(|| dir.to_path_buf());
@@ -406,7 +399,9 @@ impl<FS: FileSystem> Workspace<FS> {
 
                 if self.fs.is_dir(&entry) {
                     // Recurse into subdirectory
-                    if let Ok(child_tree) = self.build_filesystem_tree_recursive(&entry, show_hidden) {
+                    if let Ok(child_tree) =
+                        self.build_filesystem_tree_recursive(&entry, show_hidden)
+                    {
                         children.push(child_tree);
                     }
                 } else {
@@ -814,7 +809,7 @@ impl<FS: FileSystem> Workspace<FS> {
                 for file in files {
                     let file_name = file.file_name().unwrap_or_default();
                     let new_path = new_dir_path.join(file_name);
-                    
+
                     // If this is the index file itself, use the new filename
                     if file == path {
                         self.fs.move_file(&file, &new_file_path)?;
@@ -831,11 +826,11 @@ impl<FS: FileSystem> Workspace<FS> {
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or_default();
-                
+
                 // Calculate relative paths for old and new entries
                 let old_rel = format!("{}/{}.md", old_dir_name, old_dir_name);
                 let new_rel = format!("{}/{}", new_dir_name, new_filename);
-                
+
                 let _ = app.remove_from_index_contents(&grandparent_index, &old_rel);
                 let _ = app.add_to_index_contents(&grandparent_index, &new_rel);
             }
@@ -912,13 +907,13 @@ impl<FS: FileSystem> Workspace<FS> {
             message: "File has no parent directory".to_string(),
         })?;
 
-        let file_stem = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .ok_or_else(|| DiaryxError::InvalidPath {
-                path: path.to_path_buf(),
-                message: "Invalid file name".to_string(),
-            })?;
+        let file_stem =
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .ok_or_else(|| DiaryxError::InvalidPath {
+                    path: path.to_path_buf(),
+                    message: "Invalid file name".to_string(),
+                })?;
 
         let old_filename = path
             .file_name()
@@ -1043,7 +1038,7 @@ impl<FS: FileSystem> Workspace<FS> {
     pub fn attach_and_move_entry_to_parent(&self, entry: &Path, parent: &Path) -> Result<PathBuf> {
         // Check if parent needs to be converted to index
         let parent_is_index = self.is_index_file(parent);
-        
+
         let effective_parent = if parent_is_index {
             parent.to_path_buf()
         } else {
@@ -1060,13 +1055,14 @@ impl<FS: FileSystem> Workspace<FS> {
             })?;
 
         // Get entry filename
-        let entry_filename = entry
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| DiaryxError::InvalidPath {
-                path: entry.to_path_buf(),
-                message: "Invalid entry filename".to_string(),
-            })?;
+        let entry_filename =
+            entry
+                .file_name()
+                .and_then(|n| n.to_str())
+                .ok_or_else(|| DiaryxError::InvalidPath {
+                    path: entry.to_path_buf(),
+                    message: "Invalid entry filename".to_string(),
+                })?;
 
         // Calculate new path for entry
         let new_entry_path = parent_dir.join(entry_filename);

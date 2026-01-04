@@ -3,7 +3,9 @@
 use aws_config::BehaviorVersion;
 use aws_sdk_s3::Client;
 use aws_smithy_types::byte_stream::ByteStream;
-use diaryx_core::backup::{BackupResult, BackupTarget, CloudBackupConfig, CloudProvider, FailurePolicy};
+use diaryx_core::backup::{
+    BackupResult, BackupTarget, CloudBackupConfig, CloudProvider, FailurePolicy,
+};
 use diaryx_core::fs::FileSystem;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -11,8 +13,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
-use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
+use zip::write::SimpleFileOptions;
 
 /// S3 cloud backup target.
 pub struct S3Target {
@@ -32,40 +34,38 @@ impl S3Target {
     ) -> Result<Self, String> {
         // Validate config is S3
         let (bucket, region, endpoint) = match &config.provider {
-            CloudProvider::S3 { bucket, region, endpoint, .. } => {
-                (bucket.clone(), region.clone(), endpoint.clone())
-            }
+            CloudProvider::S3 {
+                bucket,
+                region,
+                endpoint,
+                ..
+            } => (bucket.clone(), region.clone(), endpoint.clone()),
             _ => return Err("Config must be S3 provider".to_string()),
         };
 
         // Create tokio runtime for async operations
-        let runtime = Arc::new(
-            Runtime::new().map_err(|e| format!("Failed to create runtime: {}", e))?
-        );
+        let runtime =
+            Arc::new(Runtime::new().map_err(|e| format!("Failed to create runtime: {}", e))?);
 
         // Build S3 client
         let client = runtime.block_on(async {
             let mut config_builder = aws_config::defaults(BehaviorVersion::latest())
                 .region(aws_sdk_s3::config::Region::new(region))
-                .credentials_provider(
-                    aws_sdk_s3::config::Credentials::new(
-                        &access_key,
-                        &secret_key,
-                        None,
-                        None,
-                        "diaryx",
-                    )
-                );
+                .credentials_provider(aws_sdk_s3::config::Credentials::new(
+                    &access_key,
+                    &secret_key,
+                    None,
+                    None,
+                    "diaryx",
+                ));
 
             let sdk_config = config_builder.load().await;
-            
+
             let mut s3_config_builder = aws_sdk_s3::config::Builder::from(&sdk_config);
-            
+
             // Use custom endpoint if provided (for MinIO, etc.)
             if let Some(ep) = endpoint {
-                s3_config_builder = s3_config_builder
-                    .endpoint_url(&ep)
-                    .force_path_style(true);
+                s3_config_builder = s3_config_builder.endpoint_url(&ep).force_path_style(true);
             }
 
             Client::from_conf(s3_config_builder.build())
@@ -86,12 +86,16 @@ impl S3Target {
             CloudProvider::S3 { prefix, .. } => prefix.clone().unwrap_or_default(),
             _ => String::new(),
         };
-        
+
         let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
         if prefix.is_empty() {
             format!("diaryx_backup_{}.zip", timestamp)
         } else {
-            format!("{}/diaryx_backup_{}.zip", prefix.trim_end_matches('/'), timestamp)
+            format!(
+                "{}/diaryx_backup_{}.zip",
+                prefix.trim_end_matches('/'),
+                timestamp
+            )
         }
     }
 
@@ -106,55 +110,60 @@ impl S3Target {
     /// Create a zip archive of the workspace with progress callback.
     /// The callback receives (current_file, total_files, percent) for each file added.
     fn create_zip_archive_with_progress<F>(
-        &self, 
-        fs: &dyn FileSystem, 
+        &self,
+        fs: &dyn FileSystem,
         workspace_path: &Path,
-        mut on_progress: F
-    ) -> Result<Vec<u8>, String> 
-    where F: FnMut(usize, usize, u8)
+        mut on_progress: F,
+    ) -> Result<Vec<u8>, String>
+    where
+        F: FnMut(usize, usize, u8),
     {
-        log::info!("[S3 Backup] Creating zip from workspace: {:?}", workspace_path);
-        
+        log::info!(
+            "[S3 Backup] Creating zip from workspace: {:?}",
+            workspace_path
+        );
+
         let mut buffer = Vec::new();
         {
             let mut zip = ZipWriter::new(std::io::Cursor::new(&mut buffer));
-            let options = SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated);
+            let options =
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
             // Get all files recursively
-            let files = fs.list_all_files_recursive(workspace_path)
+            let files = fs
+                .list_all_files_recursive(workspace_path)
                 .map_err(|e| format!("Failed to list files: {}", e))?;
 
             // Filter out directories upfront
-            let files: Vec<_> = files.into_iter()
-                .filter(|p| !fs.is_dir(p))
-                .collect();
+            let files: Vec<_> = files.into_iter().filter(|p| !fs.is_dir(p)).collect();
 
             let total_files = files.len();
             log::info!("[S3 Backup] Found {} files to backup", total_files);
 
             let mut files_added = 0;
-            
+
             for (i, file_path) in files.iter().enumerate() {
-                let relative_path = file_path
-                    .strip_prefix(workspace_path)
-                    .unwrap_or(file_path);
-                
+                let relative_path = file_path.strip_prefix(workspace_path).unwrap_or(file_path);
+
                 let path_str = relative_path.to_string_lossy().to_string();
-                
+
                 // Calculate percent (10-80 range for zipping, leaving room for upload)
                 let percent = 10 + ((i * 70) / total_files.max(1)) as u8;
-                
+
                 // Emit progress every 100 files to avoid overwhelming
                 if i % 100 == 0 {
                     on_progress(i, total_files, percent);
                 }
-                
+
                 // Progress logging every 500 files
                 if i % 500 == 0 && i > 0 {
-                    log::info!("[S3 Backup] Progress: {}/{} files processed", i, total_files);
+                    log::info!(
+                        "[S3 Backup] Progress: {}/{} files processed",
+                        i,
+                        total_files
+                    );
                 }
-                
+
                 // Try to read as text first, then binary
                 if let Ok(content) = fs.read_to_string(file_path) {
                     zip.start_file(&path_str, options)
@@ -176,38 +185,47 @@ impl S3Target {
             // Final progress for zip complete
             on_progress(total_files, total_files, 80);
             log::info!("[S3 Backup] Zip complete: {} files added", files_added);
-            zip.finish().map_err(|e| format!("Failed to finish zip: {}", e))?;
+            zip.finish()
+                .map_err(|e| format!("Failed to finish zip: {}", e))?;
         }
-        
+
         Ok(buffer)
     }
 
     /// Backup workspace to S3 with progress callback.
     /// Callback receives: (stage: &str, current: usize, total: usize, percent: u8)
     pub fn backup_with_progress<F>(
-        &self, 
-        fs: &dyn FileSystem, 
+        &self,
+        fs: &dyn FileSystem,
         workspace_path: &Path,
-        mut on_progress: F
+        mut on_progress: F,
     ) -> BackupResult
-    where F: FnMut(&str, usize, usize, u8)
+    where
+        F: FnMut(&str, usize, usize, u8),
     {
         // Emit preparing stage
         on_progress("preparing", 0, 0, 5);
-        
+
         // Create zip archive with progress
-        let zip_data = match self.create_zip_archive_with_progress(fs, workspace_path, |current, total, percent| {
-            on_progress("zipping", current, total, percent);
-        }) {
+        let zip_data = match self.create_zip_archive_with_progress(
+            fs,
+            workspace_path,
+            |current, total, percent| {
+                on_progress("zipping", current, total, percent);
+            },
+        ) {
             Ok(data) => data,
             Err(e) => return BackupResult::failure(e),
         };
 
         let zip_size_mb = zip_data.len() as f64 / (1024.0 * 1024.0);
         log::info!("[S3 Backup] Zip size: {:.2} MB", zip_size_mb);
-        
+
         if zip_size_mb > 500.0 {
-            log::warn!("[S3 Backup] Zip is very large ({:.2} MB), upload may take a while", zip_size_mb);
+            log::warn!(
+                "[S3 Backup] Zip is very large ({:.2} MB), upload may take a while",
+                zip_size_mb
+            );
         }
 
         let key = self.backup_key();
@@ -218,28 +236,28 @@ impl S3Target {
         // Emit upload stage start
         on_progress("uploading", 0, zip_len, 85);
         log::info!("[S3 Backup] Starting upload to s3://{}/{}", bucket, key);
-        
+
         // Create a progress channel for upload progress
         let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<u8>();
-        
+
         // Create a retryable body that emits progress as data is consumed
         let zip_data_clone = zip_data.clone();
         let body = aws_smithy_types::body::SdkBody::retryable(move || {
             use aws_smithy_types::body::SdkBody;
-            
+
             let data = zip_data_clone.clone();
             let tx = progress_tx.clone();
             let total = data.len();
-            
+
             // For simplicity, we emit progress based on the fact the body was created
             // Real chunked progress would require implementing http_body::Body
             let _ = tx.send(90); // Midway through upload
-            
+
             SdkBody::from(data)
         });
-        
+
         let byte_stream = ByteStream::new(body);
-        
+
         let upload_result = self.runtime.block_on(async {
             // Process progress updates in parallel
             let progress_handler = tokio::spawn(async move {
@@ -248,7 +266,7 @@ impl S3Target {
                     // Real progress would be emitted to on_progress
                 }
             });
-            
+
             let upload_future = client
                 .put_object()
                 .bucket(&bucket)
@@ -256,12 +274,13 @@ impl S3Target {
                 .content_length(zip_len as i64)
                 .body(byte_stream)
                 .send();
-            
-            let result = tokio::time::timeout(std::time::Duration::from_secs(300), upload_future).await;
-            
+
+            let result =
+                tokio::time::timeout(std::time::Duration::from_secs(300), upload_future).await;
+
             // Stop progress handler
             drop(progress_handler);
-            
+
             result
         });
 
@@ -343,7 +362,10 @@ impl BackupTarget for S3Target {
                 .await
                 .map_err(|e| format!("Failed to download: {}", e))?;
 
-            let body = get_result.body.collect().await
+            let body = get_result
+                .body
+                .collect()
+                .await
                 .map_err(|e| format!("Failed to read body: {}", e))?;
 
             Ok::<_, String>(body.into_bytes().to_vec())
@@ -373,7 +395,7 @@ impl BackupTarget for S3Target {
             }
 
             let file_path = workspace_path.join(file.name());
-            
+
             // Create parent directories
             if let Some(parent) = file_path.parent() {
                 if let Err(e) = fs.create_dir_all(parent) {
@@ -402,9 +424,8 @@ impl BackupTarget for S3Target {
         let bucket = self.bucket().to_string();
         let client = self.client.clone();
 
-        self.runtime.block_on(async {
-            client.head_bucket().bucket(&bucket).send().await.is_ok()
-        })
+        self.runtime
+            .block_on(async { client.head_bucket().bucket(&bucket).send().await.is_ok() })
     }
 
     fn get_last_sync(&self) -> Option<std::time::SystemTime> {

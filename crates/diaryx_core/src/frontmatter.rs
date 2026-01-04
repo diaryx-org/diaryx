@@ -201,7 +201,10 @@ mod tests {
     fn test_parse_valid_frontmatter() {
         let content = "---\ntitle: Test\n---\n\nBody content";
         let parsed = parse(content).unwrap();
-        assert_eq!(parsed.frontmatter.get("title").unwrap().as_str().unwrap(), "Test");
+        assert_eq!(
+            parsed.frontmatter.get("title").unwrap().as_str().unwrap(),
+            "Test"
+        );
         assert_eq!(parsed.body.trim(), "Body content");
     }
 

@@ -156,8 +156,8 @@ impl DiaryxWorkspace {
                 })
             }
 
-            let tree = build_tree(fs, &root_path, show_hidden)
-                .map_err(|e| JsValue::from_str(&e))?;
+            let tree =
+                build_tree(fs, &root_path, show_hidden).map_err(|e| JsValue::from_str(&e))?;
 
             serde_wasm_bindgen::to_value(&tree).js_err()
         })

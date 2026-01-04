@@ -7,7 +7,7 @@ use wasm_bindgen::prelude::*;
 use crate::error::IntoJsResult;
 use crate::state::{with_fs, with_fs_mut};
 
-// ============================================================================  
+// ============================================================================
 // Types
 // ============================================================================
 
@@ -151,7 +151,9 @@ impl DiaryxFilesystem {
         let backup: BackupData = serde_wasm_bindgen::from_value(data).js_err()?;
 
         use crate::state::replace_fs;
-        replace_fs(InMemoryFileSystem::load_from_entries(backup.text_files.clone()));
+        replace_fs(InMemoryFileSystem::load_from_entries(
+            backup.text_files.clone(),
+        ));
 
         let binary_entries: Vec<(String, Vec<u8>)> = backup
             .binary_files

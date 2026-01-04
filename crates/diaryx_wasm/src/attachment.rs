@@ -98,7 +98,8 @@ impl DiaryxAttachment {
     pub fn delete(&self, entry_path: &str, attachment_path: &str) -> Result<(), JsValue> {
         with_fs_mut(|fs| {
             let app = DiaryxApp::new(fs);
-            app.remove_attachment(entry_path, attachment_path).js_err()?;
+            app.remove_attachment(entry_path, attachment_path)
+                .js_err()?;
 
             let entry_dir = Path::new(entry_path).parent().unwrap_or(Path::new("."));
             let full_path = entry_dir.join(attachment_path);

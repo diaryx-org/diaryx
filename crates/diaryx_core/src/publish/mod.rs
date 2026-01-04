@@ -5,7 +5,7 @@
 mod types;
 
 // Re-export types for backwards compatibility
-pub use types::{NavLink, PublishedPage, PublishOptions, PublishResult};
+pub use types::{NavLink, PublishOptions, PublishResult, PublishedPage};
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -316,8 +316,6 @@ impl<FS: FileSystem + Clone> Publisher<FS> {
             .collect::<Vec<_>>()
             .join(" ")
     }
-
-
 
     /// Convert markdown to HTML using comrak
     #[cfg(feature = "markdown")]

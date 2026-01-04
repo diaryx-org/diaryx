@@ -1,3 +1,16 @@
+//! Entry operations module.
+//!
+//! This module provides functionality for working with individual entries:
+//! - Frontmatter manipulation (get, set, remove properties)
+//! - Content operations (get, set, append, prepend)
+//! - Attachment management
+//! - Daily entry creation with index hierarchy
+
+mod helpers;
+
+// Re-export helper functions
+pub use helpers::{prettify_filename, slugify, slugify_title};
+
 use crate::config::Config;
 use crate::date::{date_to_path, parse_date};
 use crate::error::{DiaryxError, Result};
@@ -849,47 +862,6 @@ impl<FS: FileSystem> DiaryxApp<FS> {
             date.format("%Y"),
             date.format("%B").to_string().to_lowercase()
         )
-    }
-}
-
-/// Convert a filename to a prettier title.
-/// e.g., "my-note" -> "My Note", "some_file" -> "Some File"
-pub fn prettify_filename(filename: &str) -> String {
-    filename
-        .replace(['-', '_'], " ")
-        .split_whitespace()
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(first) => first.to_uppercase().chain(chars).collect(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Convert a title to a kebab-case filename.
-/// e.g., "My Cool Entry" -> "my-cool-entry.md"
-/// Handles unicode, special characters, and multiple spaces.
-pub fn slugify_title(title: &str) -> String {
-    let slug: String = title
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect();
-
-    // Split on dashes and filter empty parts, then rejoin
-    let cleaned: String = slug
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-");
-
-    if cleaned.is_empty() {
-        "untitled.md".to_string()
-    } else {
-        format!("{}.md", cleaned)
     }
 }
 

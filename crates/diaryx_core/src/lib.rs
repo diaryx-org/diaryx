@@ -10,9 +10,6 @@ pub mod config;
 /// Backup system for persisting workspace data
 pub mod backup;
 
-/// Date parsing
-pub mod date;
-
 /// Entry docs
 pub mod entry;
 
@@ -40,15 +37,16 @@ pub mod template;
 /// Validate (check workspace link integrity)
 pub mod validate;
 
-/// Path utilities for relative path calculations
-pub mod path_utils;
+/// Utility functions (date parsing, path calculations)
+pub mod utils;
 
 /// Workspace (specify a directory to work in)
 pub mod workspace;
 
-/// Live sync (CRDT-based synchronization)
-#[cfg(feature = "live-sync")]
-pub mod sync_crdt;
+// Re-exports for backwards compatibility
+pub use utils::date;
+pub use utils::path as path_utils;
 
 #[cfg(test)]
 pub mod test_utils;
+

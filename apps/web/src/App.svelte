@@ -1567,6 +1567,7 @@
         {#if Editor}
           {#key `${currentCollaborationPath ?? currentEntry.path}:${collaborationEnabled ? "collab" : "local"}`}
             <Editor
+              debugMenus={false}
               bind:this={editorRef}
               content={displayContent}
               onchange={handleContentChange}

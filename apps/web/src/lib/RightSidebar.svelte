@@ -173,7 +173,7 @@
   // Handle adding new property
   function handleAddProperty() {
     if (!newPropertyKey.trim()) return;
-    
+
     // Try to parse as JSON for complex values, otherwise use as string
     let value: unknown = newPropertyValue;
     try {
@@ -181,7 +181,7 @@
     } catch {
       // Keep as string
     }
-    
+
     onPropertyAdd?.(newPropertyKey.trim(), value);
     newPropertyKey = "";
     newPropertyValue = "";
@@ -306,9 +306,10 @@
                         <Input
                           type="text"
                           bind:value={newArrayItem}
-                          class="h-7 text-xs"
+                          class="h-7 text-base md:text-xs"
                           placeholder="New item..."
-                          onkeydown={(e) => handleKeyPress(e, () => handleAddArrayItem(key))}
+                          onkeydown={(e) =>
+                            handleKeyPress(e, () => handleAddArrayItem(key))}
                         />
                         <Button
                           variant="ghost"
@@ -322,7 +323,10 @@
                           variant="ghost"
                           size="icon"
                           class="size-6"
-                          onclick={() => { addingArrayItemKey = null; newArrayItem = ""; }}
+                          onclick={() => {
+                            addingArrayItemKey = null;
+                            newArrayItem = "";
+                          }}
                         >
                           <X class="size-3" />
                         </Button>
@@ -332,7 +336,7 @@
                         variant="ghost"
                         size="sm"
                         class="h-6 text-xs px-2 mt-1"
-                        onclick={() => addingArrayItemKey = key}
+                        onclick={() => (addingArrayItemKey = key)}
                       >
                         <Plus class="size-3 mr-1" />
                         Add
@@ -360,7 +364,7 @@
                   <Input
                     type="datetime-local"
                     value={formatDateForInput(String(value))}
-                    class="h-8 text-sm"
+                    class="h-8 text-base md:text-sm"
                     onchange={(e) => {
                       const target = e.target as HTMLInputElement;
                       onPropertyChange?.(key, parseDateFromInput(target.value));
@@ -371,10 +375,13 @@
                   <Input
                     type="text"
                     value={String(value ?? "")}
-                    class="h-8 text-sm {key.toLowerCase() === 'title' && titleError ? 'border-destructive' : ''}"
+                    class="h-8 text-base md:text-sm {key.toLowerCase() ===
+                      'title' && titleError
+                      ? 'border-destructive'
+                      : ''}"
                     onblur={(e) => handleStringChange(key, e)}
                     onfocus={() => {
-                      if (key.toLowerCase() === 'title') onTitleErrorClear?.();
+                      if (key.toLowerCase() === "title") onTitleErrorClear?.();
                     }}
                     onkeydown={(e) => {
                       if (e.key === "Enter") {
@@ -383,7 +390,7 @@
                       }
                     }}
                   />
-                  {#if key.toLowerCase() === 'title' && titleError}
+                  {#if key.toLowerCase() === "title" && titleError}
                     <Alert.Root variant="destructive" class="mt-2 py-2">
                       <AlertCircle class="size-4" />
                       <Alert.Description class="text-xs">
@@ -415,14 +422,14 @@
             <Input
               type="text"
               bind:value={newPropertyKey}
-              class="h-8 text-sm"
+              class="h-8 text-base md:text-sm"
               placeholder="Property name..."
               onkeydown={(e) => handleKeyPress(e, handleAddProperty)}
             />
             <Input
               type="text"
               bind:value={newPropertyValue}
-              class="h-8 text-sm"
+              class="h-8 text-base md:text-sm"
               placeholder="Value..."
               onkeydown={(e) => handleKeyPress(e, handleAddProperty)}
             />
@@ -440,7 +447,11 @@
                 variant="ghost"
                 size="sm"
                 class="h-7 text-xs"
-                onclick={() => { showAddProperty = false; newPropertyKey = ""; newPropertyValue = ""; }}
+                onclick={() => {
+                  showAddProperty = false;
+                  newPropertyKey = "";
+                  newPropertyValue = "";
+                }}
               >
                 Cancel
               </Button>
@@ -451,7 +462,7 @@
             variant="outline"
             size="sm"
             class="w-full h-8 text-xs"
-            onclick={() => showAddProperty = true}
+            onclick={() => (showAddProperty = true)}
           >
             <Plus class="size-3 mr-1" />
             Add Property
@@ -480,8 +491,13 @@
         {#if getAttachments().length > 0}
           <div class="space-y-1 mb-2">
             {#each getAttachments() as attachment}
-              <div class="flex items-center justify-between gap-2 px-2 py-1 rounded-md bg-secondary/50 group">
-                <span class="text-xs text-foreground truncate" title={attachment}>
+              <div
+                class="flex items-center justify-between gap-2 px-2 py-1 rounded-md bg-secondary/50 group"
+              >
+                <span
+                  class="text-xs text-foreground truncate"
+                  title={attachment}
+                >
                   {getFilename(attachment)}
                 </span>
                 <Button

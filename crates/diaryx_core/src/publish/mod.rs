@@ -2,67 +2,20 @@
 //!
 //! Converts workspace markdown files to HTML for sharing.
 
+mod types;
+
+// Re-export types for backwards compatibility
+pub use types::{NavLink, PublishedPage, PublishOptions, PublishResult};
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
-
+use crate::entry::slugify;
 use crate::error::{DiaryxError, Result};
 use crate::export::{ExportPlan, Exporter};
+use crate::frontmatter;
 use crate::fs::FileSystem;
 use crate::workspace::Workspace;
-
-/// Options for publishing
-#[derive(Debug, Default, Clone, Serialize)]
-pub struct PublishOptions {
-    /// Output as a single HTML file instead of multiple files
-    pub single_file: bool,
-    /// Site title (defaults to workspace title)
-    pub title: Option<String>,
-    /// Include audience filtering
-    pub audience: Option<String>,
-    /// Overwrite existing destination
-    pub force: bool,
-}
-
-/// A navigation link
-#[derive(Debug, Clone, Serialize)]
-pub struct NavLink {
-    /// Link href (relative path or anchor)
-    pub href: String,
-    /// Display title
-    pub title: String,
-}
-
-/// A processed file ready for publishing
-#[derive(Debug, Clone, Serialize)]
-pub struct PublishedPage {
-    /// Original source path
-    pub source_path: PathBuf,
-    /// Destination filename (e.g., "index.html" or "my-entry.html")
-    pub dest_filename: String,
-    /// Page title
-    pub title: String,
-    /// HTML content (body only, no wrapper)
-    pub html_body: String,
-    /// Original markdown body
-    pub markdown_body: String,
-    /// Navigation links to children (from contents property)
-    pub contents_links: Vec<NavLink>,
-    /// Navigation link to parent (from part_of property)
-    pub parent_link: Option<NavLink>,
-    /// Whether this is the root index
-    pub is_root: bool,
-}
-
-/// Result of publishing operation
-#[derive(Debug, Serialize)]
-pub struct PublishResult {
-    /// Pages that were published
-    pub pages: Vec<PublishedPage>,
-    /// Total files processed
-    pub files_processed: usize,
-}
 
 /// Publisher for converting workspace to HTML
 pub struct Publisher<FS: FileSystem + Clone> {
@@ -234,9 +187,9 @@ impl<FS: FileSystem + Clone> Publisher<FS> {
             }
         };
 
-        let (frontmatter, body) = self.parse_frontmatter(&content);
-        let title = self
-            .extract_property(&frontmatter, "title")
+        let parsed = frontmatter::parse_or_empty(&content)?;
+        let title = frontmatter::get_string(&parsed.frontmatter, "title")
+            .map(String::from)
             .unwrap_or_else(|| {
                 path.file_stem()
                     .and_then(|s| s.to_str())
@@ -250,110 +203,34 @@ impl<FS: FileSystem + Clone> Publisher<FS> {
             .unwrap_or_else(|| self.path_to_html_filename(path));
 
         // Build contents links
-        let contents_links = self.build_contents_links(&frontmatter, path, path_to_filename);
+        let contents_links = self.build_contents_links(&parsed.frontmatter, path, path_to_filename);
 
         // Build parent link
-        let parent_link = self.build_parent_link(&frontmatter, path, path_to_filename);
+        let parent_link = self.build_parent_link(&parsed.frontmatter, path, path_to_filename);
 
         // Convert markdown to HTML
-        let html_body = self.markdown_to_html(&body);
+        let html_body = self.markdown_to_html(&parsed.body);
 
         Ok(Some(PublishedPage {
             source_path: path.to_path_buf(),
             dest_filename,
             title,
             html_body,
-            markdown_body: body,
+            markdown_body: parsed.body,
             contents_links,
             parent_link,
             is_root,
         }))
     }
 
-    /// Parse frontmatter from content
-    fn parse_frontmatter(&self, content: &str) -> (String, String) {
-        if !content.starts_with("---\n") && !content.starts_with("---\r\n") {
-            return (String::new(), content.to_string());
-        }
-
-        let rest = &content[4..];
-        let end_idx = rest.find("\n---\n").or_else(|| rest.find("\n---\r\n"));
-
-        match end_idx {
-            Some(idx) => {
-                let frontmatter = rest[..idx].to_string();
-                let body = rest[idx + 5..].to_string();
-                (frontmatter, body)
-            }
-            None => (String::new(), content.to_string()),
-        }
-    }
-
-    /// Extract a property from frontmatter
-    fn extract_property(&self, frontmatter: &str, key: &str) -> Option<String> {
-        let prefix = format!("{}:", key);
-        for line in frontmatter.lines() {
-            let trimmed = line.trim();
-            if let Some(rest) = trimmed.strip_prefix(&prefix) {
-                let value = rest.trim().trim_matches('"').trim_matches('\'');
-                if !value.is_empty() {
-                    return Some(value.to_string());
-                }
-            }
-        }
-        None
-    }
-
-    /// Extract array property from frontmatter (e.g., contents)
-    fn extract_array_property(&self, frontmatter: &str, key: &str) -> Vec<String> {
-        let mut result = Vec::new();
-        let mut in_property = false;
-        let prefix = format!("{}:", key);
-
-        for line in frontmatter.lines() {
-            let trimmed = line.trim();
-
-            if trimmed.starts_with(&prefix) {
-                in_property = true;
-                // Check for inline array: contents: [a.md, b.md]
-                let value_part = trimmed[prefix.len()..].trim();
-                if value_part.starts_with('[') && value_part.ends_with(']') {
-                    let inner = &value_part[1..value_part.len() - 1];
-                    for item in inner.split(',') {
-                        let item = item.trim().trim_matches('"').trim_matches('\'');
-                        if !item.is_empty() {
-                            result.push(item.to_string());
-                        }
-                    }
-                    return result;
-                }
-                continue;
-            }
-
-            if in_property {
-                if let Some(stripped) = trimmed.strip_prefix('-') {
-                    let item = stripped.trim().trim_matches('"').trim_matches('\'');
-                    if !item.is_empty() {
-                        result.push(item.to_string());
-                    }
-                } else if !trimmed.is_empty() && !trimmed.starts_with('#') {
-                    // Hit another property
-                    break;
-                }
-            }
-        }
-
-        result
-    }
-
     /// Build navigation links from contents property
     fn build_contents_links(
         &self,
-        frontmatter: &str,
+        fm: &indexmap::IndexMap<String, serde_yaml::Value>,
         current_path: &Path,
         path_to_filename: &HashMap<PathBuf, String>,
     ) -> Vec<NavLink> {
-        let contents = self.extract_array_property(frontmatter, "contents");
+        let contents = frontmatter::get_string_array(fm, "contents");
         let current_dir = current_path.parent();
 
         contents
@@ -382,16 +259,16 @@ impl<FS: FileSystem + Clone> Publisher<FS> {
     /// Build parent navigation link from part_of property
     fn build_parent_link(
         &self,
-        frontmatter: &str,
+        fm: &indexmap::IndexMap<String, serde_yaml::Value>,
         current_path: &Path,
         path_to_filename: &HashMap<PathBuf, String>,
     ) -> Option<NavLink> {
-        let part_of = self.extract_property(frontmatter, "part_of")?;
+        let part_of = frontmatter::get_string(fm, "part_of")?;
         let current_dir = current_path.parent();
 
         let parent_path = current_dir
-            .map(|d| d.join(&part_of))
-            .unwrap_or_else(|| PathBuf::from(&part_of));
+            .map(|d| d.join(part_of))
+            .unwrap_or_else(|| PathBuf::from(part_of));
 
         let href = path_to_filename
             .get(&parent_path)
@@ -400,7 +277,7 @@ impl<FS: FileSystem + Clone> Publisher<FS> {
 
         let title = self
             .get_title_from_file(&parent_path)
-            .unwrap_or_else(|| self.filename_to_title(&part_of));
+            .unwrap_or_else(|| self.filename_to_title(part_of));
 
         Some(NavLink { href, title })
     }
@@ -408,15 +285,15 @@ impl<FS: FileSystem + Clone> Publisher<FS> {
     /// Get title from a file's frontmatter
     fn get_title_from_file(&self, path: &Path) -> Option<String> {
         let content = self.fs.read_to_string(path).ok()?;
-        let (frontmatter, _) = self.parse_frontmatter(&content);
-        self.extract_property(&frontmatter, "title")
+        let parsed = frontmatter::parse_or_empty(&content).ok()?;
+        frontmatter::get_string(&parsed.frontmatter, "title").map(String::from)
     }
 
     /// Convert a path to an HTML filename
     fn path_to_html_filename(&self, path: &Path) -> String {
         let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("page");
 
-        format!("{}.html", self.slugify(stem))
+        format!("{}.html", slugify(stem))
     }
 
     /// Convert a filename to a display title
@@ -440,17 +317,7 @@ impl<FS: FileSystem + Clone> Publisher<FS> {
             .join(" ")
     }
 
-    /// Slugify a string for use in URLs
-    fn slugify(&self, s: &str) -> String {
-        s.to_lowercase()
-            .chars()
-            .map(|c| if c.is_alphanumeric() { c } else { '-' })
-            .collect::<String>()
-            .split('-')
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>()
-            .join("-")
-    }
+
 
     /// Convert markdown to HTML using comrak
     #[cfg(feature = "markdown")]
@@ -681,7 +548,7 @@ impl<FS: FileSystem + Clone> Publisher<FS> {
 
     /// Convert a title to an anchor ID
     fn title_to_anchor(&self, title: &str) -> String {
-        self.slugify(title)
+        slugify(title)
     }
 
     /// Get the CSS stylesheet

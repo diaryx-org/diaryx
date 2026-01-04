@@ -11,27 +11,22 @@
   import Highlight from "@tiptap/extension-highlight";
   import Typography from "@tiptap/extension-typography";
   import Image from "@tiptap/extension-image";
+  // FloatingMenu extension for block formatting
+  import FloatingMenu from "@tiptap/extension-floating-menu";
   // Y.js collaboration
   import Collaboration from "@tiptap/extension-collaboration";
   import CollaborationCursor from "@tiptap/extension-collaboration-caret";
   import type * as Y from "yjs";
   import type { HocuspocusProvider } from "@hocuspocus/provider";
-  import {
-    Bold,
-    Italic,
-    Strikethrough,
-    Code,
-    Heading1,
-    Heading2,
-    Heading3,
-    List,
-    ListOrdered,
-    CheckSquare,
-    Quote,
-    Braces,
-    Link as LinkIcon,
-    ImageIcon,
-  } from "@lucide/svelte";
+
+  // Mobile detection
+  import { getMobileState } from "./hooks/useMobile.svelte";
+
+  // InlineToolbar for inline formatting (Bold, Italic, etc.)
+  import InlineToolbar from "./components/InlineToolbar.svelte";
+
+  // FloatingMenu for block formatting (headings, lists, etc.)
+  import FloatingMenuComponent from "./components/FloatingMenuComponent.svelte";
 
   interface Props {
     content?: string;
@@ -47,6 +42,8 @@
     provider?: HocuspocusProvider;
     userName?: string;
     userColor?: string;
+    // Debug mode for menus (logs shouldShow decisions to console)
+    debugMenus?: boolean;
   }
 
   let {
@@ -60,11 +57,18 @@
     provider,
     userName = "Anonymous",
     userColor = "#958DF1",
+    debugMenus = false,
   }: Props = $props();
 
   let element: HTMLDivElement;
   let editor: Editor | null = $state(null);
+
+  // FloatingMenu element ref - must exist before editor creation
+  let floatingMenuElement: HTMLDivElement | undefined = $state();
   let isUpdatingContent = false; // Flag to skip onchange during programmatic updates
+
+  // Mobile state for responsive behavior
+  const mobileState = getMobileState();
 
   // Collaboration gating:
   // We show local markdown content first, then enable Collaboration after provider has synced once.
@@ -135,6 +139,16 @@
   function createEditor() {
     destroyEditor();
 
+    // In non-readonly mode, require FloatingMenu element
+    if (!readonly && !floatingMenuElement) {
+      if (debugMenus) {
+        console.log(
+          "[Editor] FloatingMenu element not ready, deferring editor creation",
+        );
+      }
+      return;
+    }
+
     // Build extensions array
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const extensions: any[] = [
@@ -176,6 +190,71 @@
         },
       }),
     ];
+
+    // Add FloatingMenu extension (for block formatting on empty lines)
+    if (!readonly) {
+      extensions.push(
+        FloatingMenu.configure({
+          element: floatingMenuElement,
+          appendTo: () => document.body,
+          options: {
+            strategy: "fixed",
+            placement: "left-start",
+            offset: 10,
+            flip: {
+              fallbackPlacements: ["right-start", "left", "right"],
+            },
+            shift: {
+              padding: 8,
+            },
+          },
+          shouldShow: ({ editor: ed, view, state }) => {
+            const { selection } = state;
+            const { empty } = selection;
+            const anchor = selection.$anchor;
+
+            if (debugMenus) {
+              console.log("[FloatingMenu] shouldShow check", {
+                empty,
+                editable: ed.isEditable,
+                hasFocus: view.hasFocus(),
+                parentType: anchor.parent.type.name,
+                contentSize: anchor.parent.content.size,
+              });
+            }
+
+            // Must be editable
+            if (!ed.isEditable) return false;
+
+            // Must be an empty selection (cursor, not a range)
+            if (!empty) return false;
+
+            // Only show on empty paragraph lines
+            const isEmptyParagraph =
+              anchor.parent.type.name === "paragraph" &&
+              anchor.parent.content.size === 0;
+            if (!isEmptyParagraph) return false;
+
+            // Don't show in code blocks
+            if (ed.isActive("codeBlock")) return false;
+
+            // Don't show in lists
+            if (
+              ed.isActive("bulletList") ||
+              ed.isActive("orderedList") ||
+              ed.isActive("taskList")
+            ) {
+              return false;
+            }
+
+            if (debugMenus) {
+              console.log("[FloatingMenu] shouldShow: true");
+            }
+            return true;
+          },
+        }),
+      );
+    }
 
     // Only enable Collaboration after provider has reported initial sync.
     // Until then, show the local markdown `content` in a regular editor.
@@ -262,11 +341,67 @@
     collabReady = false;
     hookProviderSyncedOnce();
 
-    createEditor();
-    lastCollabKey = ydoc ? "yjs" : "local";
-    lastReadonly = readonly;
-    lastPlaceholder = placeholder;
-    lastCollabReady = collabReady;
+    // Don't create editor here - let the $effect handle it once menu elements are ready
+    // This ensures BubbleMenu and FloatingMenu extensions have elements to bind to
+  });
+
+  // Track if we've done initial editor creation
+  let editorInitialized = $state(false);
+
+  // Wait for menu elements to be available before creating editor
+  // This effect runs when bubbleMenuElement or floatingMenuElement change
+  $effect(() => {
+    // Explicitly track the element refs so Svelte knows to re-run when they change
+    const hasEditorElement = !!element;
+    const hasFloatingMenu = !!floatingMenuElement;
+    const isReadonly = readonly;
+
+    if (debugMenus) {
+      console.log("[Editor] Init effect check", {
+        hasEditorElement,
+        hasFloatingMenu,
+        isReadonly,
+        editorInitialized,
+      });
+    }
+
+    // In readonly mode, we don't need menu elements
+    if (isReadonly) {
+      if (!editorInitialized && hasEditorElement) {
+        if (debugMenus) {
+          console.log("[Editor] Creating editor (readonly mode)");
+        }
+        createEditor();
+        editorInitialized = true;
+        lastCollabKey = ydoc ? "yjs" : "local";
+        lastReadonly = readonly;
+        lastPlaceholder = placeholder;
+        lastCollabReady = collabReady;
+      }
+      return;
+    }
+
+    // In edit mode, wait for FloatingMenu element
+    if (!editorInitialized && hasEditorElement && hasFloatingMenu) {
+      if (debugMenus) {
+        console.log("[Editor] Menu elements ready, creating editor", {
+          floatingMenuElement,
+        });
+      }
+      createEditor();
+      editorInitialized = true;
+      lastCollabKey = ydoc ? "yjs" : "local";
+      lastReadonly = readonly;
+      lastPlaceholder = placeholder;
+      lastCollabReady = collabReady;
+    }
+  });
+
+  // Reset editorInitialized when readonly changes so the effect can re-run
+  $effect(() => {
+    if (lastReadonly !== null && lastReadonly !== readonly) {
+      editorInitialized = false;
+    }
   });
 
   onDestroy(() => {
@@ -278,16 +413,14 @@
   //   OR when collabReady flips after initial provider sync.
   $effect(() => {
     if (!element) return;
+    // Skip if we haven't done initial creation yet
+    if (!editorInitialized) return;
 
     // Keep the sync hook current when switching providers/docs.
     hookProviderSyncedOnce();
 
     const collabKey = ydoc ? "yjs" : "local";
     const needsRebuild =
-      lastCollabKey === null ||
-      lastReadonly === null ||
-      lastPlaceholder === null ||
-      lastCollabReady === null ||
       collabKey !== lastCollabKey ||
       readonly !== lastReadonly ||
       placeholder !== lastPlaceholder ||
@@ -317,269 +450,25 @@
       }, 0);
     }
   });
-
-  // Toolbar button handlers
-  function toggleBold() {
-    editor?.chain().focus().toggleBold().run();
-  }
-
-  function toggleItalic() {
-    editor?.chain().focus().toggleItalic().run();
-  }
-
-  function toggleStrike() {
-    editor?.chain().focus().toggleStrike().run();
-  }
-
-  function toggleCode() {
-    editor?.chain().focus().toggleCode().run();
-  }
-
-  function toggleHeading(level: 1 | 2 | 3) {
-    editor?.chain().focus().toggleHeading({ level }).run();
-  }
-
-  function toggleBulletList() {
-    editor?.chain().focus().toggleBulletList().run();
-  }
-
-  function toggleOrderedList() {
-    editor?.chain().focus().toggleOrderedList().run();
-  }
-
-  function toggleTaskList() {
-    editor?.chain().focus().toggleTaskList().run();
-  }
-
-  function toggleBlockquote() {
-    editor?.chain().focus().toggleBlockquote().run();
-  }
-
-  function toggleCodeBlock() {
-    editor?.chain().focus().toggleCodeBlock().run();
-  }
-
-  function setLink() {
-    const url = window.prompt("Enter URL");
-    if (url) {
-      editor
-        ?.chain()
-        .focus()
-        .extendMarkRange("link")
-        .setLink({ href: url })
-        .run();
-    }
-  }
-
-  function unsetLink() {
-    editor?.chain().focus().unsetLink().run();
-  }
-
-  function isActive(name: string, attrs?: Record<string, unknown>) {
-    return editor?.isActive(name, attrs) ?? false;
-  }
 </script>
 
+<!--
+  Container:
+  - On desktop: bordered, rounded container
+  - On mobile: edge-to-edge, no border/rounding for maximum writing space
+-->
 <div
-  class="flex flex-col h-full border border-border rounded-lg overflow-hidden bg-card"
+  class="relative flex flex-col h-full overflow-hidden bg-card
+         md:border md:border-border md:rounded-lg"
 >
-  {#if !readonly}
-    <div
-      class="flex flex-wrap items-center gap-1 px-2 py-1.5 border-b border-border bg-muted/50"
-    >
-      <!-- Headings -->
-      <div class="flex items-center gap-0.5">
-        <button
-          type="button"
-          class="p-1.5 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground {isActive(
-            'heading',
-            { level: 1 },
-          )
-            ? 'bg-accent text-accent-foreground'
-            : 'text-muted-foreground'}"
-          onclick={() => toggleHeading(1)}
-          title="Heading 1"
-        >
-          <Heading1 class="size-4" />
-        </button>
-        <button
-          type="button"
-          class="p-1.5 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground {isActive(
-            'heading',
-            { level: 2 },
-          )
-            ? 'bg-accent text-accent-foreground'
-            : 'text-muted-foreground'}"
-          onclick={() => toggleHeading(2)}
-          title="Heading 2"
-        >
-          <Heading2 class="size-4" />
-        </button>
-        <button
-          type="button"
-          class="p-1.5 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground {isActive(
-            'heading',
-            { level: 3 },
-          )
-            ? 'bg-accent text-accent-foreground'
-            : 'text-muted-foreground'}"
-          onclick={() => toggleHeading(3)}
-          title="Heading 3"
-        >
-          <Heading3 class="size-4" />
-        </button>
-      </div>
-
-      <div class="w-px h-5 bg-border mx-1"></div>
-
-      <!-- Text formatting -->
-      <div class="flex items-center gap-0.5">
-        <button
-          type="button"
-          class="p-1.5 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground {isActive(
-            'bold',
-          )
-            ? 'bg-accent text-accent-foreground'
-            : 'text-muted-foreground'}"
-          onclick={toggleBold}
-          title="Bold (Ctrl+B)"
-        >
-          <Bold class="size-4" />
-        </button>
-        <button
-          type="button"
-          class="p-1.5 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground {isActive(
-            'italic',
-          )
-            ? 'bg-accent text-accent-foreground'
-            : 'text-muted-foreground'}"
-          onclick={toggleItalic}
-          title="Italic (Ctrl+I)"
-        >
-          <Italic class="size-4" />
-        </button>
-        <button
-          type="button"
-          class="p-1.5 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground {isActive(
-            'strike',
-          )
-            ? 'bg-accent text-accent-foreground'
-            : 'text-muted-foreground'}"
-          onclick={toggleStrike}
-          title="Strikethrough"
-        >
-          <Strikethrough class="size-4" />
-        </button>
-        <button
-          type="button"
-          class="p-1.5 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground {isActive(
-            'code',
-          )
-            ? 'bg-accent text-accent-foreground'
-            : 'text-muted-foreground'}"
-          onclick={toggleCode}
-          title="Inline Code"
-        >
-          <Code class="size-4" />
-        </button>
-      </div>
-
-      <div class="w-px h-5 bg-border mx-1"></div>
-
-      <!-- Lists -->
-      <div class="flex items-center gap-0.5">
-        <button
-          type="button"
-          class="p-1.5 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground {isActive(
-            'bulletList',
-          )
-            ? 'bg-accent text-accent-foreground'
-            : 'text-muted-foreground'}"
-          onclick={toggleBulletList}
-          title="Bullet List"
-        >
-          <List class="size-4" />
-        </button>
-        <button
-          type="button"
-          class="p-1.5 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground {isActive(
-            'orderedList',
-          )
-            ? 'bg-accent text-accent-foreground'
-            : 'text-muted-foreground'}"
-          onclick={toggleOrderedList}
-          title="Numbered List"
-        >
-          <ListOrdered class="size-4" />
-        </button>
-        <button
-          type="button"
-          class="p-1.5 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground {isActive(
-            'taskList',
-          )
-            ? 'bg-accent text-accent-foreground'
-            : 'text-muted-foreground'}"
-          onclick={toggleTaskList}
-          title="Task List"
-        >
-          <CheckSquare class="size-4" />
-        </button>
-      </div>
-
-      <div class="w-px h-5 bg-border mx-1"></div>
-
-      <!-- Blocks -->
-      <div class="flex items-center gap-0.5">
-        <button
-          type="button"
-          class="p-1.5 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground {isActive(
-            'blockquote',
-          )
-            ? 'bg-accent text-accent-foreground'
-            : 'text-muted-foreground'}"
-          onclick={toggleBlockquote}
-          title="Quote"
-        >
-          <Quote class="size-4" />
-        </button>
-        <button
-          type="button"
-          class="p-1.5 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground {isActive(
-            'codeBlock',
-          )
-            ? 'bg-accent text-accent-foreground'
-            : 'text-muted-foreground'}"
-          onclick={toggleCodeBlock}
-          title="Code Block"
-        >
-          <Braces class="size-4" />
-        </button>
-        <button
-          type="button"
-          class="p-1.5 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground {isActive(
-            'link',
-          )
-            ? 'bg-accent text-accent-foreground'
-            : 'text-muted-foreground'}"
-          onclick={isActive("link") ? unsetLink : setLink}
-          title="Link"
-        >
-          <LinkIcon class="size-4" />
-        </button>
-        <button
-          type="button"
-          class="p-1.5 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground text-muted-foreground"
-          onclick={() => onInsertImage?.()}
-          title="Insert Image"
-        >
-          <ImageIcon class="size-4" />
-        </button>
-      </div>
-    </div>
+  <!-- Desktop inline toolbar: fixed at top, hidden on mobile -->
+  {#if !readonly && !mobileState.isMobile}
+    <InlineToolbar {editor} position="top" />
   {/if}
 
+  <!-- Editor content area -->
   <div
-    class="flex-1 overflow-y-auto p-4"
+    class="relative flex-1 overflow-y-auto px-4 py-3 md:p-4"
     bind:this={element}
     role="application"
     ondragover={(e) => {
@@ -603,6 +492,26 @@
     }}
   ></div>
 </div>
+
+<!-- Mobile inline toolbar: appears above virtual keyboard when keyboard is visible -->
+{#if !readonly && mobileState.isMobile && mobileState.keyboardVisible}
+  <InlineToolbar
+    {editor}
+    position="bottom"
+    bottomOffset={mobileState.keyboardHeight}
+    showDone={true}
+  />
+{/if}
+
+<!-- FloatingMenu for block formatting (appears on empty lines) -->
+<!-- Element must exist before editor creation for extension to bind to it -->
+{#if !readonly}
+  <FloatingMenuComponent
+    {editor}
+    {onInsertImage}
+    bind:element={floatingMenuElement}
+  />
+{/if}
 
 <style global>
   :global(.editor-content) {
@@ -766,5 +675,25 @@
     top: -1.4em;
     user-select: none;
     white-space: nowrap;
+  }
+
+  /* Mobile-specific styles */
+  @media (max-width: 767px) {
+    :global(.editor-content) {
+      /* Slightly larger touch targets on mobile */
+      font-size: 16px; /* Prevents iOS zoom on focus */
+    }
+
+    :global(.editor-content h1) {
+      font-size: 1.75em;
+    }
+
+    :global(.editor-content h2) {
+      font-size: 1.35em;
+    }
+
+    :global(.editor-content h3) {
+      font-size: 1.15em;
+    }
   }
 </style>

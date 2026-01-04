@@ -744,7 +744,7 @@
                 >
                 <select
                   id="backup-provider"
-                  class="w-full px-3 py-2 text-sm border rounded bg-background"
+                  class="w-full px-3 py-2 text-base md:text-sm border rounded bg-background"
                   onchange={(e) =>
                     selectProvider(
                       (e.target as HTMLSelectElement).value as BackupProvider,
@@ -779,7 +779,7 @@
                       type="text"
                       bind:value={s3Config.bucket}
                       placeholder="my-backup-bucket"
-                      class="w-full px-2 py-1 text-sm border rounded bg-background"
+                      class="w-full px-2 py-1 text-base md:text-sm border rounded bg-background"
                     />
                   </div>
                   <div class="space-y-1">
@@ -789,7 +789,7 @@
                       type="text"
                       bind:value={s3Config.region}
                       placeholder="us-east-1"
-                      class="w-full px-2 py-1 text-sm border rounded bg-background"
+                      class="w-full px-2 py-1 text-base md:text-sm border rounded bg-background"
                     />
                   </div>
                 </div>
@@ -802,7 +802,7 @@
                     type="text"
                     bind:value={s3Config.prefix}
                     placeholder="backups/diaryx"
-                    class="w-full px-2 py-1 text-sm border rounded bg-background"
+                    class="w-full px-2 py-1 text-base md:text-sm border rounded bg-background"
                   />
                 </div>
                 <div class="space-y-1">
@@ -814,7 +814,7 @@
                     type="text"
                     bind:value={s3Config.endpoint}
                     placeholder="https://minio.example.com"
-                    class="w-full px-2 py-1 text-sm border rounded bg-background"
+                    class="w-full px-2 py-1 text-base md:text-sm border rounded bg-background"
                   />
                 </div>
                 <div class="grid grid-cols-2 gap-2">
@@ -827,7 +827,7 @@
                       type="password"
                       bind:value={s3Config.access_key}
                       placeholder="AKIA..."
-                      class="w-full px-2 py-1 text-sm border rounded bg-background"
+                      class="w-full px-2 py-1 text-base md:text-sm border rounded bg-background"
                     />
                   </div>
                   <div class="space-y-1">
@@ -839,7 +839,7 @@
                       type="password"
                       bind:value={s3Config.secret_key}
                       placeholder="••••••••"
-                      class="w-full px-2 py-1 text-sm border rounded bg-background"
+                      class="w-full px-2 py-1 text-base md:text-sm border rounded bg-background"
                     />
                   </div>
                 </div>
@@ -985,7 +985,7 @@
                         type="text"
                         bind:value={gdConfig.folder_id}
                         placeholder="Leave blank for root"
-                        class="w-full px-2 py-1 text-sm border rounded bg-background"
+                        class="w-full px-2 py-1 text-base md:text-sm border rounded bg-background"
                       />
                     </div>
 

@@ -2,6 +2,45 @@
 
 @import "tw-animate-css";
 
+/* iOS and mobile safe area support */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  .safe-area-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+/* Prevent iOS bounce scroll and ensure proper height calculation */
+html,
+body,
+#app {
+  height: 100%;
+  overflow: hidden;
+  /* Prevent overscroll/bounce effects */
+  overscroll-behavior: none;
+  /* Prevent text size adjustment on orientation change */
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  font-family:
+    "Inter",
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+}
+
+/* Use dynamic viewport height for better mobile support */
+@supports (height: 100dvh) {
+  html,
+  body,
+  #app {
+    height: 100dvh;
+    max-height: 100dvh;
+  }
+}
+
 @custom-variant dark (&:is(.dark *));
 
 :root {

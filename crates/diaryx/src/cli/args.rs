@@ -599,17 +599,6 @@ pub enum WorkspaceCommands {
         dry_run: bool,
     },
 
-    /// Find orphan files (markdown files not in the workspace hierarchy)
-    Orphans {
-        /// Directory to search for orphans (default: current directory)
-        #[arg(short, long)]
-        dir: Option<PathBuf>,
-
-        /// Search recursively in subdirectories
-        #[arg(short, long)]
-        recursive: bool,
-    },
-
     /// Add an existing file as a child of a parent index
     /// Updates both the parent's `contents` and the child's `part_of`
     /// If only one argument is provided, uses the local index as parent
@@ -689,6 +678,17 @@ pub enum WorkspaceCommands {
 
     /// Validate workspace links (check part_of and contents references)
     Validate {
+        /// File or directory path to validate (validates entire workspace if not specified)
+        path: Option<String>,
+
+        /// Automatically fix issues (remove broken references, add unlisted files)
+        #[arg(short, long)]
+        fix: bool,
+
+        /// Search recursively when validating a directory
+        #[arg(short, long)]
+        recursive: bool,
+
         /// Show verbose output with file paths
         #[arg(short, long)]
         verbose: bool,

@@ -1047,6 +1047,60 @@
     }
   }
 
+  // Quick fix: Remove broken part_of reference from a file
+  async function handleRemoveBrokenPartOf(filePath: string) {
+    if (!backend) return;
+    try {
+      await backend.removeFrontmatterProperty(filePath, "part_of");
+      await persistNow();
+      await runValidation();
+      // Refresh current entry if it's the fixed file
+      if (currentEntry?.path === filePath) {
+        currentEntry = await backend.getEntry(filePath);
+      }
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  // Quick fix: Remove broken entry from an index's contents
+  async function handleRemoveBrokenContentsRef(indexPath: string, target: string) {
+    if (!backend) return;
+    try {
+      // Get current contents
+      const entry = await backend.getEntry(indexPath);
+      const contents = entry.frontmatter?.contents;
+      if (Array.isArray(contents)) {
+        // Filter out the broken target
+        const newContents = contents.filter((item: string) => item !== target);
+        await backend.setFrontmatterProperty(indexPath, "contents", newContents);
+        await persistNow();
+        await refreshTree();
+        await runValidation();
+        // Refresh current entry if it's the fixed file
+        if (currentEntry?.path === indexPath) {
+          currentEntry = await backend.getEntry(indexPath);
+        }
+      }
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  // Quick fix: Attach an unlinked entry to the workspace root
+  async function handleAttachUnlinkedEntry(entryPath: string) {
+    if (!backend || !tree) return;
+    try {
+      // Attach to the workspace root (tree.path is the root index)
+      await backend.attachEntryToParent(entryPath, tree.path);
+      await persistNow();
+      await refreshTree();
+      await runValidation();
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
   // Refresh the tree using the appropriate method based on showUnlinkedFiles setting
   async function refreshTree() {
     if (!backend) return;
@@ -1655,6 +1709,9 @@
       showExportDialog = true;
     }}
     onAddAttachment={handleAddAttachment}
+    onRemoveBrokenPartOf={handleRemoveBrokenPartOf}
+    onRemoveBrokenContentsRef={handleRemoveBrokenContentsRef}
+    onAttachUnlinkedEntry={handleAttachUnlinkedEntry}
   />
 
   <!-- Hidden file input for attachments -->

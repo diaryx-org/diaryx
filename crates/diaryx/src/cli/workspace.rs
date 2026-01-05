@@ -1,8 +1,8 @@
 //! Workspace command handlers
 
 use diaryx_core::config::Config;
-use diaryx_core::entry::{DiaryxApp, prettify_filename};
-use diaryx_core::fs::RealFileSystem;
+use diaryx_core::entry::{DiaryxApp, prettify_filename, slugify};
+use diaryx_core::fs::{FileSystem, RealFileSystem};
 use diaryx_core::template::TemplateContext;
 use diaryx_core::workspace::Workspace;
 use serde_yaml::Value;
@@ -131,12 +131,8 @@ pub fn handle_workspace_command(
             }
         }
 
-        WorkspaceCommands::Orphans { dir, recursive } => {
-            handle_orphans(ws, &current_dir, dir, recursive);
-        }
-
-        WorkspaceCommands::Validate { verbose } => {
-            handle_validate(workspace_override, ws, &config, &current_dir, verbose);
+        WorkspaceCommands::Validate { path, fix, recursive, verbose } => {
+            handle_validate(workspace_override, ws, &config, &current_dir, path, fix, recursive, verbose);
         }
     }
 }
@@ -148,11 +144,85 @@ fn handle_validate(
     ws: &Workspace<RealFileSystem>,
     config: &Option<Config>,
     current_dir: &Path,
+    file_path: Option<String>,
+    fix: bool,
+    recursive: bool,
     verbose: bool,
 ) {
+    use diaryx_core::entry::DiaryxApp;
     use diaryx_core::fs::RealFileSystem as CoreRealFileSystem;
-    use diaryx_core::validate::{ValidationError, ValidationWarning, Validator};
+    use diaryx_core::validate::{ValidationError, ValidationWarning, ValidationResult, Validator};
 
+    let validator = Validator::new(CoreRealFileSystem);
+    let app = DiaryxApp::new(CoreRealFileSystem);
+
+    // If a specific path is provided, validate it (file or directory)
+    if let Some(ref path_str) = file_path {
+        let input_path = PathBuf::from(path_str);
+        let resolved_path = if input_path.is_absolute() {
+            input_path
+        } else {
+            current_dir.join(&input_path)
+        };
+
+        // Check if it's a directory
+        if resolved_path.is_dir() {
+            // Validate all markdown files in the directory
+            let files = if recursive {
+                collect_md_files_recursive(&resolved_path)
+            } else {
+                collect_md_files(&resolved_path)
+            };
+
+            if files.is_empty() {
+                println!("✓ No markdown files found in {}", resolved_path.display());
+                return;
+            }
+
+            if verbose {
+                println!("Validating {} file(s) in {}", files.len(), resolved_path.display());
+            }
+
+            let mut total_result = ValidationResult::default();
+
+            for file in &files {
+                match validator.validate_file(file) {
+                    Ok(result) => {
+                        total_result.files_checked += result.files_checked;
+                        total_result.errors.extend(result.errors);
+                        total_result.warnings.extend(result.warnings);
+                    }
+                    Err(e) => {
+                        if verbose {
+                            eprintln!("  ⚠ Error validating {}: {}", file.display(), e);
+                        }
+                    }
+                }
+            }
+
+            // Report and fix using the aggregated result
+            report_and_fix_validation(&app, &total_result, fix, &resolved_path, verbose);
+            return;
+        }
+
+        // Single file validation
+        if verbose {
+            println!("Validating file: {}", resolved_path.display());
+        }
+
+        let result = match validator.validate_file(&resolved_path) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("✗ Error validating file: {}", e);
+                return;
+            }
+        };
+
+        report_and_fix_validation(&app, &result, fix, &resolved_path, verbose);
+        return;
+    }
+
+    // Full workspace validation
     // Find workspace root
     let root_path = if let Some(override_path) = workspace_override {
         override_path.clone()
@@ -176,7 +246,6 @@ fn handle_validate(
         println!("Validating workspace: {}", root_path.display());
     }
 
-    let validator = Validator::new(CoreRealFileSystem);
     let result = match validator.validate_workspace(&root_path) {
         Ok(r) => r,
         Err(e) => {
@@ -193,16 +262,49 @@ fn handle_validate(
         return;
     }
 
-    // Report errors
+    let mut fixed_count = 0;
+
+    // Report and optionally fix errors
     if !result.errors.is_empty() {
         println!("Errors ({}):", result.errors.len());
         for err in &result.errors {
             match err {
                 ValidationError::BrokenPartOf { file, target } => {
-                    println!("  ✗ Broken part_of: {} -> {}", file.display(), target);
+                    if fix {
+                        let file_str = file.to_string_lossy();
+                        if app.remove_frontmatter_property(&file_str, "part_of").is_ok() {
+                            println!("  ✓ Fixed: Removed broken part_of '{}' from {}", target, file.display());
+                            fixed_count += 1;
+                        } else {
+                            println!("  ✗ Broken part_of: {} -> {} (failed to fix)", file.display(), target);
+                        }
+                    } else {
+                        println!("  ✗ Broken part_of: {} -> {}", file.display(), target);
+                    }
                 }
                 ValidationError::BrokenContentsRef { index, target } => {
-                    println!("  ✗ Broken contents ref: {} -> {}", index.display(), target);
+                    if fix {
+                        if fix_broken_contents_ref(&app, index, target) {
+                            println!("  ✓ Fixed: Removed broken contents ref '{}' from {}", target, index.display());
+                            fixed_count += 1;
+                        } else {
+                            println!("  ✗ Broken contents ref: {} -> {} (failed to fix)", index.display(), target);
+                        }
+                    } else {
+                        println!("  ✗ Broken contents ref: {} -> {}", index.display(), target);
+                    }
+                }
+                ValidationError::BrokenAttachment { file, attachment } => {
+                    if fix {
+                        if fix_broken_attachment(&app, file, attachment) {
+                            println!("  ✓ Fixed: Removed broken attachment '{}' from {}", attachment, file.display());
+                            fixed_count += 1;
+                        } else {
+                            println!("  ✗ Broken attachment: {} -> {} (failed to fix)", file.display(), attachment);
+                        }
+                    } else {
+                        println!("  ✗ Broken attachment: {} -> {}", file.display(), attachment);
+                    }
                 }
             }
         }
@@ -223,17 +325,445 @@ fn handle_validate(
                     let icon = if *is_dir { "📁" } else { "📄" };
                     println!("  {} Unlinked: {}", icon, path.display());
                 }
+                ValidationWarning::UnlistedFile { index, file } => {
+                    if fix {
+                        if add_file_to_contents(&app, index, file) {
+                            println!("  ✓ Fixed: Added '{}' to {}", file.display(), index.display());
+                            fixed_count += 1;
+                        } else {
+                            println!("  ⚠ Unlisted file: {} (failed to add)", file.display());
+                        }
+                    } else {
+                        println!("  ⚠ Unlisted file: {}", file.display());
+                    }
+                }
+                ValidationWarning::NonPortablePath { file, property, value, suggested } => {
+                    if fix {
+                        if fix_non_portable_path(&app, file, property, value, suggested) {
+                            println!("  ✓ Fixed: Normalized {} '{}' -> '{}' in {}", property, value, suggested, file.display());
+                            fixed_count += 1;
+                        } else {
+                            println!("  ⚠ Non-portable {}: '{}' (suggested: '{}') in {} (failed to fix)", property, value, suggested, file.display());
+                        }
+                    } else {
+                        println!("  ⚠ Non-portable {}: '{}' -> '{}' in {}", property, value, suggested, file.display());
+                    }
+                }
+                ValidationWarning::MultipleIndexes { directory, indexes } => {
+                    // Can't auto-fix - requires user decision
+                    println!("  ⚠ Multiple indexes in {}: {:?}", directory.display(), indexes.iter().map(|p| p.file_name().unwrap_or_default().to_string_lossy()).collect::<Vec<_>>());
+                }
+                ValidationWarning::OrphanBinaryFile { file, suggested_index } => {
+                    if fix {
+                        if let Some(index) = suggested_index {
+                            if add_file_to_attachments(&app, index, file) {
+                                println!("  ✓ Fixed: Added '{}' to attachments in {}", file.display(), index.display());
+                                fixed_count += 1;
+                            } else {
+                                println!("  ⚠ Orphan binary file: {} (failed to add to attachments)", file.display());
+                            }
+                        } else {
+                            println!("  ⚠ Orphan binary file: {} (no single index found)", file.display());
+                        }
+                    } else {
+                        println!("  ⚠ Orphan binary file: {}", file.display());
+                    }
+                }
+                ValidationWarning::MissingPartOf { file, suggested_index } => {
+                    if fix {
+                        let index_to_use = if let Some(idx) = suggested_index {
+                            Some(idx.clone())
+                        } else {
+                            // Check if directory has ANY index
+                            let dir = file.parent().unwrap_or(Path::new("."));
+                            let ws = Workspace::new(RealFileSystem);
+                            if let Ok(None) = ws.find_any_index_in_dir(dir) {
+                                // No index exists. Create one.
+                                create_new_index(&app, dir)
+                            } else {
+                                None
+                            }
+                        };
+
+                        if let Some(index) = index_to_use {
+                            if fix_missing_part_of(&app, file, &index) {
+                                println!("  ✓ Fixed: Set part_of to '{}' in {}", index.display(), file.display());
+                                fixed_count += 1;
+                            } else {
+                                println!("  ⚠ Missing part_of: {} (failed to fix)", file.display());
+                            }
+                        } else {
+                            println!("  ⚠ Missing part_of (orphan): {} (no single index found)", file.display());
+                        }
+                    } else {
+                        println!("  ⚠ Missing part_of (orphan): {}", file.display());
+                    }
+                }
             }
         }
     }
 
     println!();
-    println!(
-        "Summary: {} error(s), {} warning(s), {} files checked",
-        result.errors.len(),
-        result.warnings.len(),
-        result.files_checked
-    );
+    if fix && fixed_count > 0 {
+        println!(
+            "Summary: {} issue(s) fixed, {} files checked",
+            fixed_count,
+            result.files_checked
+        );
+    } else {
+        println!(
+            "Summary: {} error(s), {} warning(s), {} files checked",
+            result.errors.len(),
+            result.warnings.len(),
+            result.files_checked
+        );
+    }
+}
+
+/// Helper function to report validation results and optionally fix issues
+fn report_and_fix_validation(
+    app: &DiaryxApp<diaryx_core::fs::RealFileSystem>,
+    result: &diaryx_core::validate::ValidationResult,
+    fix: bool,
+    context_path: &Path,
+    verbose: bool,
+) {
+    use diaryx_core::validate::{ValidationError, ValidationWarning};
+
+    if result.is_ok() && result.warnings.is_empty() {
+        println!("✓ Validation passed: {} ({} file(s) checked)", context_path.display(), result.files_checked);
+        return;
+    }
+
+    let mut fixed_count = 0;
+
+    // Report and optionally fix errors
+    if !result.errors.is_empty() {
+        if verbose {
+            println!("Errors ({}):", result.errors.len());
+        }
+        for err in &result.errors {
+            match err {
+                ValidationError::BrokenPartOf { file, target } => {
+                    if fix {
+                        let file_str = file.to_string_lossy();
+                        if app.remove_frontmatter_property(&file_str, "part_of").is_ok() {
+                            println!("  ✓ Fixed: Removed broken part_of '{}' from {}", target, file.display());
+                            fixed_count += 1;
+                        } else {
+                            println!("  ✗ Broken part_of: {} -> {} (failed to fix)", file.display(), target);
+                        }
+                    } else {
+                        println!("  ✗ Broken part_of: {} -> {}", file.display(), target);
+                    }
+                }
+                ValidationError::BrokenContentsRef { index, target } => {
+                    if fix {
+                        if fix_broken_contents_ref(app, index, target) {
+                            println!("  ✓ Fixed: Removed broken contents ref '{}' from {}", target, index.display());
+                            fixed_count += 1;
+                        } else {
+                            println!("  ✗ Broken contents ref: {} -> {} (failed to fix)", index.display(), target);
+                        }
+                    } else {
+                        println!("  ✗ Broken contents ref: {} -> {}", index.display(), target);
+                    }
+                }
+                ValidationError::BrokenAttachment { file, attachment } => {
+                    if fix {
+                        if fix_broken_attachment(app, file, attachment) {
+                            println!("  ✓ Fixed: Removed broken attachment '{}' from {}", attachment, file.display());
+                            fixed_count += 1;
+                        } else {
+                            println!("  ✗ Broken attachment: {} -> {} (failed to fix)", file.display(), attachment);
+                        }
+                    } else {
+                        println!("  ✗ Broken attachment: {} -> {}", file.display(), attachment);
+                    }
+                }
+            }
+        }
+    }
+
+    // Report and optionally fix warnings
+    if !result.warnings.is_empty() {
+        if verbose {
+            println!("Warnings ({}):", result.warnings.len());
+        }
+        for warn in &result.warnings {
+            match warn {
+                ValidationWarning::UnlistedFile { index, file } => {
+                    if fix {
+                        if add_file_to_contents(app, index, file) {
+                            println!("  ✓ Fixed: Added '{}' to {}", file.display(), index.display());
+                            fixed_count += 1;
+                        } else {
+                            println!("  ⚠ Unlisted file: {} (failed to add)", file.display());
+                        }
+                    } else {
+                        println!("  ⚠ Unlisted file: {}", file.display());
+                    }
+                }
+                ValidationWarning::NonPortablePath { file, property, value, suggested } => {
+                    if fix {
+                        if fix_non_portable_path(app, file, property, value, suggested) {
+                            println!("  ✓ Fixed: Normalized {} '{}' -> '{}' in {}", property, value, suggested, file.display());
+                            fixed_count += 1;
+                        } else {
+                            println!("  ⚠ Non-portable {}: '{}' (suggested: '{}') in {} (failed to fix)", property, value, suggested, file.display());
+                        }
+                    } else {
+                        println!("  ⚠ Non-portable {}: '{}' -> '{}' in {}", property, value, suggested, file.display());
+                    }
+                }
+                ValidationWarning::OrphanFile { file } => {
+                    println!("  ⚠ Orphan file: {}", file.display());
+                }
+                ValidationWarning::CircularReference { files } => {
+                    println!("  ⚠ Circular reference involving: {:?}", files);
+                }
+                ValidationWarning::UnlinkedEntry { path, is_dir } => {
+                    let icon = if *is_dir { "📁" } else { "📄" };
+                    println!("  {} Unlinked: {}", icon, path.display());
+                }
+                ValidationWarning::MultipleIndexes { directory, indexes } => {
+                    println!("  ⚠ Multiple indexes in {}: {:?}", directory.display(), indexes.iter().map(|p| p.file_name().unwrap_or_default().to_string_lossy()).collect::<Vec<_>>());
+                }
+                ValidationWarning::OrphanBinaryFile { file, suggested_index } => {
+                    if fix {
+                        if let Some(index) = suggested_index {
+                            if add_file_to_attachments(app, index, file) {
+                                println!("  ✓ Fixed: Added '{}' to attachments in {}", file.display(), index.display());
+                                fixed_count += 1;
+                            } else {
+                                println!("  ⚠ Orphan binary file: {} (failed to add)", file.display());
+                            }
+                        } else {
+                            println!("  ⚠ Orphan binary file: {} (no single index found)", file.display());
+                        }
+                    } else {
+                        println!("  ⚠ Orphan binary file: {}", file.display());
+                    }
+                }
+                ValidationWarning::MissingPartOf { file, suggested_index } => {
+                    if fix {
+                        let index_to_use = if let Some(idx) = suggested_index {
+                            Some(idx.clone())
+                        } else {
+                            // Check if directory has ANY index
+                            let dir = file.parent().unwrap_or(Path::new("."));
+                            let ws = Workspace::new(RealFileSystem);
+                            if let Ok(None) = ws.find_any_index_in_dir(dir) {
+                                // No index exists. Create one.
+                                create_new_index(&app, dir)
+                            } else {
+                                None
+                            }
+                        };
+
+                        if let Some(index) = index_to_use {
+                            if fix_missing_part_of(&app, file, &index) {
+                                println!("  ✓ Fixed: Set part_of to '{}' in {}", index.display(), file.display());
+                                fixed_count += 1;
+                            } else {
+                                println!("  ⚠ Missing part_of: {} (failed to fix)", file.display());
+                            }
+                        } else {
+                            println!("  ⚠ Missing part_of (orphan): {} (no single index found)", file.display());
+                        }
+                    } else {
+                        println!("  ⚠ Missing part_of (orphan): {}", file.display());
+                    }
+                }
+            }
+        }
+    }
+
+    println!();
+    if fix && fixed_count > 0 {
+        println!(
+            "Summary: {} issue(s) fixed, {} file(s) checked",
+            fixed_count,
+            result.files_checked
+        );
+    } else {
+        println!(
+            "Summary: {} error(s), {} warning(s), {} file(s) checked",
+            result.errors.len(),
+            result.warnings.len(),
+            result.files_checked
+        );
+    }
+}
+
+/// Fix a broken contents reference by removing it from the index's contents list
+fn fix_broken_contents_ref(
+    app: &DiaryxApp<diaryx_core::fs::RealFileSystem>,
+    index: &Path,
+    target: &str,
+) -> bool {
+    let index_str = index.to_string_lossy();
+    if let Ok(Some(Value::Sequence(items))) = app.get_frontmatter_property(&index_str, "contents") {
+        let filtered: Vec<Value> = items
+            .into_iter()
+            .filter(|item| {
+                if let Value::String(s) = item {
+                    s != target
+                } else {
+                    true
+                }
+            })
+            .collect();
+        app.set_frontmatter_property(&index_str, "contents", Value::Sequence(filtered))
+            .is_ok()
+    } else {
+        false
+    }
+}
+
+/// Add a file to an index's contents list
+fn add_file_to_contents(
+    app: &DiaryxApp<diaryx_core::fs::RealFileSystem>,
+    index: &Path,
+    file: &Path,
+) -> bool {
+    let index_str = index.to_string_lossy();
+
+    // Get relative path from index to file using the utility function
+    let file_rel = calculate_relative_path(index, file);
+
+    match app.get_frontmatter_property(&index_str, "contents") {
+        Ok(Some(Value::Sequence(mut items))) => {
+            items.push(Value::String(file_rel));
+            app.set_frontmatter_property(&index_str, "contents", Value::Sequence(items))
+                .is_ok()
+        }
+        Ok(None) => {
+            // No contents yet, create it
+            app.set_frontmatter_property(
+                &index_str,
+                "contents",
+                Value::Sequence(vec![Value::String(file_rel)]),
+            )
+            .is_ok()
+        }
+        _ => false,
+    }
+}
+
+/// Fix a non-portable path by replacing it with the normalized version
+fn fix_non_portable_path(
+    app: &DiaryxApp<diaryx_core::fs::RealFileSystem>,
+    file: &Path,
+    property: &str,
+    old_value: &str,
+    new_value: &str,
+) -> bool {
+    let file_str = file.to_string_lossy();
+
+    match property {
+        "part_of" => {
+            // Simply replace the part_of value
+            app.set_frontmatter_property(&file_str, "part_of", Value::String(new_value.to_string()))
+                .is_ok()
+        }
+        "contents" => {
+            // Get the contents list and replace the old value with new value
+            if let Ok(Some(Value::Sequence(items))) = app.get_frontmatter_property(&file_str, "contents") {
+                let updated: Vec<Value> = items
+                    .into_iter()
+                    .map(|item| {
+                        if let Value::String(ref s) = item {
+                            if s == old_value {
+                                return Value::String(new_value.to_string());
+                            }
+                        }
+                        item
+                    })
+                    .collect();
+                app.set_frontmatter_property(&file_str, "contents", Value::Sequence(updated))
+                    .is_ok()
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Fix a broken attachment by removing it from the file's attachments list
+fn fix_broken_attachment(
+    app: &DiaryxApp<diaryx_core::fs::RealFileSystem>,
+    file: &Path,
+    attachment: &str,
+) -> bool {
+    let file_str = file.to_string_lossy();
+    if let Ok(Some(Value::Sequence(items))) = app.get_frontmatter_property(&file_str, "attachments") {
+        let filtered: Vec<Value> = items
+            .into_iter()
+            .filter(|item| {
+                if let Value::String(s) = item {
+                    s != attachment
+                } else {
+                    true
+                }
+            })
+            .collect();
+        if filtered.is_empty() {
+            // Remove empty attachments array
+            app.remove_frontmatter_property(&file_str, "attachments").is_ok()
+        } else {
+            app.set_frontmatter_property(&file_str, "attachments", Value::Sequence(filtered))
+                .is_ok()
+        }
+    } else {
+        false
+    }
+}
+
+/// Add a binary file to an index's attachments list
+fn add_file_to_attachments(
+    app: &DiaryxApp<diaryx_core::fs::RealFileSystem>,
+    index: &Path,
+    file: &Path,
+) -> bool {
+    let index_str = index.to_string_lossy();
+
+    // Get relative path from index to file
+    let file_rel = calculate_relative_path(index, file);
+
+    match app.get_frontmatter_property(&index_str, "attachments") {
+        Ok(Some(Value::Sequence(mut items))) => {
+            items.push(Value::String(file_rel));
+            app.set_frontmatter_property(&index_str, "attachments", Value::Sequence(items))
+                .is_ok()
+        }
+        Ok(None) => {
+            // No attachments yet, create it
+            app.set_frontmatter_property(
+                &index_str,
+                "attachments",
+                Value::Sequence(vec![Value::String(file_rel)]),
+            )
+            .is_ok()
+        }
+        _ => false,
+    }
+}
+
+/// Fix a missing part_of by setting it to point to the suggested index
+fn fix_missing_part_of(
+    app: &DiaryxApp<diaryx_core::fs::RealFileSystem>,
+    file: &Path,
+    index: &Path,
+) -> bool {
+    let file_str = file.to_string_lossy();
+
+    // Get relative path from file to index
+    let index_rel = calculate_relative_path(file, index);
+
+    app.set_frontmatter_property(&file_str, "part_of", Value::String(index_rel))
+        .is_ok()
 }
 
 /// Handle the 'workspace mv' command
@@ -495,77 +1025,6 @@ fn set_new_index_as_parent(
     }
 }
 
-/// Handle the 'workspace orphans' command
-/// Finds markdown files not connected to the workspace hierarchy
-fn handle_orphans(
-    ws: &Workspace<RealFileSystem>,
-    current_dir: &Path,
-    dir: Option<PathBuf>,
-    recursive: bool,
-) {
-    let search_dir = dir.unwrap_or_else(|| current_dir.to_path_buf());
-
-    // Find the local index to get workspace files
-    let index_path = match ws.find_any_index_in_dir(&search_dir) {
-        Ok(Some(path)) => path,
-        Ok(None) => {
-            eprintln!("✗ No index file found in '{}'", search_dir.display());
-            return;
-        }
-        Err(e) => {
-            eprintln!("✗ Error finding index: {}", e);
-            return;
-        }
-    };
-
-    // Collect all files in the workspace hierarchy
-    let workspace_files: std::collections::HashSet<PathBuf> =
-        match ws.collect_workspace_files(&index_path) {
-            Ok(files) => files
-                .into_iter()
-                .filter_map(|p| p.canonicalize().ok())
-                .collect(),
-            Err(e) => {
-                eprintln!("✗ Error collecting workspace files: {}", e);
-                return;
-            }
-        };
-
-    // Find all markdown files in the directory
-    let all_md_files = if recursive {
-        collect_md_files_recursive(&search_dir)
-    } else {
-        collect_md_files(&search_dir)
-    };
-
-    // Find orphans (files not in workspace hierarchy)
-    let mut orphans: Vec<PathBuf> = all_md_files
-        .into_iter()
-        .filter(|p| {
-            if let Ok(canonical) = p.canonicalize() {
-                !workspace_files.contains(&canonical)
-            } else {
-                true // Include files we can't canonicalize
-            }
-        })
-        .collect();
-
-    orphans.sort();
-
-    if orphans.is_empty() {
-        println!("✓ No orphan files found");
-    } else {
-        println!("Found {} orphan file(s):", orphans.len());
-        for orphan in &orphans {
-            // Try to show relative path
-            if let Ok(relative) = orphan.strip_prefix(&search_dir) {
-                println!("  {}", relative.display());
-            } else {
-                println!("  {}", orphan.display());
-            }
-        }
-    }
-}
 
 /// Collect markdown files in a directory (non-recursive)
 fn collect_md_files(dir: &Path) -> Vec<PathBuf> {
@@ -1924,4 +2383,40 @@ fn handle_remove(
         return;
     }
     println!("✓ Removed part_of from '{}'", child_path.display());
+}
+
+/// Create a new index file in the given directory if none exists.
+/// Returns the path to the created index.
+fn create_new_index(app: &DiaryxApp<RealFileSystem>, dir: &Path) -> Option<PathBuf> {
+    // 1. Determine name
+    let dir_name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("index");
+    let safe_name = slugify(dir_name);
+    let index_name = format!("{}.md", safe_name);
+    let index_path = dir.join(&index_name);
+
+    // 2. Check existence using a local FS instance (since app.fs is private)
+    let fs = RealFileSystem;
+    if fs.exists(&index_path) {
+        return Some(index_path);
+    }
+
+    // 3. Create file with basic frontmatter
+    let title = prettify_filename(dir_name);
+    let path_str = index_path.to_string_lossy();
+
+    // Create title
+    if let Err(e) = app.set_frontmatter_property(&path_str, "title", Value::String(title.clone())) {
+        eprintln!("Error creating index: {}", e);
+        return None;
+    }
+    // Create contents
+    if let Err(e) = app.set_frontmatter_property(&path_str, "contents", Value::Sequence(vec![])) {
+        eprintln!("Error initializing index contents: {}", e);
+        return None;
+    }
+    // Add title header
+    let _ = app.set_content(&path_str, &format!("# {}", title));
+
+    println!("  ✓ Created new index: {}", index_path.display());
+    Some(index_path)
 }

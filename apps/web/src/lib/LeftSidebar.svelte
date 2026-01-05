@@ -1,8 +1,9 @@
 <script lang="ts">
-  import type { TreeNode, EntryData, ValidationResult } from "./backend";
+  import type { TreeNode, EntryData, ValidationResult, ValidationError } from "./backend";
   import { Button } from "$lib/components/ui/button";
 
   import * as ContextMenu from "$lib/components/ui/context-menu";
+  import * as Popover from "$lib/components/ui/popover";
   import {
     ChevronRight,
     FileText,
@@ -16,6 +17,7 @@
     Download,
     Paperclip,
     Settings,
+    Wrench,
   } from "@lucide/svelte";
 
   interface Props {
@@ -36,6 +38,9 @@
     onDeleteEntry: (path: string) => void;
     onExport: (path: string) => void;
     onAddAttachment: (entryPath: string) => void;
+    onRemoveBrokenPartOf?: (filePath: string) => void;
+    onRemoveBrokenContentsRef?: (indexPath: string, target: string) => void;
+    onAttachUnlinkedEntry?: (entryPath: string) => void;
   }
 
   let {
@@ -55,6 +60,9 @@
     onDeleteEntry,
     onExport,
     onAddAttachment,
+    onRemoveBrokenPartOf,
+    onRemoveBrokenContentsRef,
+    onAttachUnlinkedEntry,
   }: Props = $props();
 
   // Extract unlinked entries (files/directories not in hierarchy) from validation result
@@ -131,6 +139,27 @@
       (err) => err.file === path || err.index === path,
     );
   }
+
+  // Get validation errors for a specific path
+  function getValidationErrors(path: string): ValidationError[] {
+    if (!validationResult) return [];
+    return validationResult.errors.filter(
+      (err) => err.file === path || err.index === path,
+    );
+  }
+
+  // Get human-readable description for a validation error
+  function getErrorDescription(error: ValidationError): string {
+    switch (error.type) {
+      case "BrokenPartOf":
+        return `This file's "part_of" references a file that doesn't exist`;
+      case "BrokenContentsRef":
+        return `This index's "contents" references a file that doesn't exist`;
+      default:
+        return "Unknown validation error";
+    }
+  }
+
 
   // Copy path to clipboard
   async function copyPathToClipboard(path: string) {
@@ -282,14 +311,98 @@
             {/if}
             <span class="truncate flex-1">{node.name.replace(".md", "")}</span>
             {#if hasValidationError(node.path)}
-              <span title="Broken reference">
-                <AlertCircle class="size-4 shrink-0 text-destructive" />
-              </span>
+              {@const errors = getValidationErrors(node.path)}
+              <Popover.Root>
+                <Popover.Trigger
+                  onclick={(e: MouseEvent) => e.stopPropagation()}
+                  class="shrink-0 focus:outline-none"
+                >
+                  <AlertCircle class="size-4 text-destructive hover:text-destructive/80 transition-colors" />
+                </Popover.Trigger>
+                <Popover.Content class="w-80 p-3" side="right" align="start">
+                  <div class="space-y-3">
+                    <div class="flex items-start gap-2">
+                      <AlertCircle class="size-4 text-destructive shrink-0 mt-0.5" />
+                      <div class="space-y-1">
+                        <p class="text-sm font-medium">Validation Error</p>
+                        {#each errors as error}
+                          <div class="text-sm text-muted-foreground">
+                            <p>{getErrorDescription(error)}</p>
+                            <p class="font-mono text-xs mt-1 truncate" title={error.target}>
+                              Target: {error.target}
+                            </p>
+                          </div>
+                          {#if error.type === "BrokenPartOf" && onRemoveBrokenPartOf}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              class="mt-2 gap-1.5"
+                              onclick={(e: MouseEvent) => {
+                                e.stopPropagation();
+                                if (error.file) onRemoveBrokenPartOf(error.file);
+                              }}
+                            >
+                              <Wrench class="size-3" />
+                              Remove broken reference
+                            </Button>
+                          {/if}
+                          {#if error.type === "BrokenContentsRef" && onRemoveBrokenContentsRef}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              class="mt-2 gap-1.5"
+                              onclick={(e: MouseEvent) => {
+                                e.stopPropagation();
+                                if (error.index) onRemoveBrokenContentsRef(error.index, error.target);
+                              }}
+                            >
+                              <Wrench class="size-3" />
+                              Remove from contents
+                            </Button>
+                          {/if}
+                        {/each}
+                      </div>
+                    </div>
+                  </div>
+                </Popover.Content>
+              </Popover.Root>
             {/if}
             {#if isUnlinked(node.path)}
-              <span title="Unlinked file (not in hierarchy)">
-                <AlertCircle class="size-4 shrink-0 text-amber-500" />
-              </span>
+              <Popover.Root>
+                <Popover.Trigger
+                  onclick={(e: MouseEvent) => e.stopPropagation()}
+                  class="shrink-0 focus:outline-none"
+                >
+                  <AlertCircle class="size-4 text-amber-500 hover:text-amber-400 transition-colors" />
+                </Popover.Trigger>
+                <Popover.Content class="w-72 p-3" side="right" align="start">
+                  <div class="space-y-3">
+                    <div class="flex items-start gap-2">
+                      <AlertCircle class="size-4 text-amber-500 shrink-0 mt-0.5" />
+                      <div class="space-y-1">
+                        <p class="text-sm font-medium">Unlinked Entry</p>
+                        <p class="text-sm text-muted-foreground">
+                          This entry is not part of the workspace hierarchy. Drag it onto a parent entry to link it.
+                        </p>
+                        {#if onAttachUnlinkedEntry}
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            class="mt-2 gap-1.5"
+                            onclick={(e: MouseEvent) => {
+                              e.stopPropagation();
+                              onAttachUnlinkedEntry(node.path);
+                            }}
+                          >
+                            <Wrench class="size-3" />
+                            Add to workspace root
+                          </Button>
+                        {/if}
+                      </div>
+                    </div>
+                  </div>
+                </Popover.Content>
+              </Popover.Root>
             {/if}
           </button>
         </div>

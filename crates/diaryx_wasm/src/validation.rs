@@ -18,18 +18,9 @@ use crate::state::with_fs;
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum JsValidationError {
-    BrokenPartOf {
-        file: String,
-        target: String,
-    },
-    BrokenContentsRef {
-        index: String,
-        target: String,
-    },
-    BrokenAttachment {
-        file: String,
-        attachment: String,
-    },
+    BrokenPartOf { file: String, target: String },
+    BrokenContentsRef { index: String, target: String },
+    BrokenAttachment { file: String, attachment: String },
 }
 
 impl From<diaryx_core::validate::ValidationError> for JsValidationError {
@@ -115,12 +106,10 @@ impl From<diaryx_core::validate::ValidationWarning> for JsValidationWarning {
                     is_dir,
                 }
             }
-            ValidationWarning::UnlistedFile { index, file } => {
-                JsValidationWarning::UnlistedFile {
-                    index: index.to_string_lossy().to_string(),
-                    file: file.to_string_lossy().to_string(),
-                }
-            }
+            ValidationWarning::UnlistedFile { index, file } => JsValidationWarning::UnlistedFile {
+                index: index.to_string_lossy().to_string(),
+                file: file.to_string_lossy().to_string(),
+            },
             ValidationWarning::NonPortablePath {
                 file,
                 property,

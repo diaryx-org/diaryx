@@ -132,8 +132,22 @@ pub fn handle_workspace_command(
             }
         }
 
-        WorkspaceCommands::Validate { path, fix, recursive, verbose } => {
-            handle_validate(workspace_override, ws, &config, &current_dir, path, fix, recursive, verbose);
+        WorkspaceCommands::Validate {
+            path,
+            fix,
+            recursive,
+            verbose,
+        } => {
+            handle_validate(
+                workspace_override,
+                ws,
+                &config,
+                &current_dir,
+                path,
+                fix,
+                recursive,
+                verbose,
+            );
         }
     }
 }
@@ -152,7 +166,9 @@ fn handle_validate(
 ) {
     use diaryx_core::entry::DiaryxApp;
     use diaryx_core::fs::RealFileSystem as CoreRealFileSystem;
-    use diaryx_core::validate::{ValidationError, ValidationWarning, ValidationResult, Validator, ValidationFixer};
+    use diaryx_core::validate::{
+        ValidationError, ValidationFixer, ValidationResult, ValidationWarning, Validator,
+    };
 
     let validator = Validator::new(CoreRealFileSystem);
     let fixer = ValidationFixer::new(CoreRealFileSystem);
@@ -182,7 +198,11 @@ fn handle_validate(
             }
 
             if verbose {
-                println!("Validating {} file(s) in {}", files.len(), resolved_path.display());
+                println!(
+                    "Validating {} file(s) in {}",
+                    files.len(),
+                    resolved_path.display()
+                );
             }
 
             let mut total_result = ValidationResult::default();
@@ -275,10 +295,18 @@ fn handle_validate(
                     if fix {
                         let result = fixer.fix_broken_part_of(file);
                         if result.success {
-                            println!("  ✓ Fixed: Removed broken part_of '{}' from {}", target, file.display());
+                            println!(
+                                "  ✓ Fixed: Removed broken part_of '{}' from {}",
+                                target,
+                                file.display()
+                            );
                             fixed_count += 1;
                         } else {
-                            println!("  ✗ Broken part_of: {} -> {} (failed to fix)", file.display(), target);
+                            println!(
+                                "  ✗ Broken part_of: {} -> {} (failed to fix)",
+                                file.display(),
+                                target
+                            );
                         }
                     } else {
                         println!("  ✗ Broken part_of: {} -> {}", file.display(), target);
@@ -288,10 +316,18 @@ fn handle_validate(
                     if fix {
                         let result = fixer.fix_broken_contents_ref(index, target);
                         if result.success {
-                            println!("  ✓ Fixed: Removed broken contents ref '{}' from {}", target, index.display());
+                            println!(
+                                "  ✓ Fixed: Removed broken contents ref '{}' from {}",
+                                target,
+                                index.display()
+                            );
                             fixed_count += 1;
                         } else {
-                            println!("  ✗ Broken contents ref: {} -> {} (failed to fix)", index.display(), target);
+                            println!(
+                                "  ✗ Broken contents ref: {} -> {} (failed to fix)",
+                                index.display(),
+                                target
+                            );
                         }
                     } else {
                         println!("  ✗ Broken contents ref: {} -> {}", index.display(), target);
@@ -301,13 +337,25 @@ fn handle_validate(
                     if fix {
                         let result = fixer.fix_broken_attachment(file, attachment);
                         if result.success {
-                            println!("  ✓ Fixed: Removed broken attachment '{}' from {}", attachment, file.display());
+                            println!(
+                                "  ✓ Fixed: Removed broken attachment '{}' from {}",
+                                attachment,
+                                file.display()
+                            );
                             fixed_count += 1;
                         } else {
-                            println!("  ✗ Broken attachment: {} -> {} (failed to fix)", file.display(), attachment);
+                            println!(
+                                "  ✗ Broken attachment: {} -> {} (failed to fix)",
+                                file.display(),
+                                attachment
+                            );
                         }
                     } else {
-                        println!("  ✗ Broken attachment: {} -> {}", file.display(), attachment);
+                        println!(
+                            "  ✗ Broken attachment: {} -> {}",
+                            file.display(),
+                            attachment
+                        );
                     }
                 }
             }
@@ -333,7 +381,11 @@ fn handle_validate(
                     if fix {
                         let result = fixer.fix_unlisted_file(index, file);
                         if result.success {
-                            println!("  ✓ Fixed: Added '{}' to {}", file.display(), index.display());
+                            println!(
+                                "  ✓ Fixed: Added '{}' to {}",
+                                file.display(),
+                                index.display()
+                            );
                             fixed_count += 1;
                         } else {
                             println!("  ⚠ Unlisted file: {} (failed to add)", file.display());
@@ -342,41 +394,87 @@ fn handle_validate(
                         println!("  ⚠ Unlisted file: {}", file.display());
                     }
                 }
-                ValidationWarning::NonPortablePath { file, property, value, suggested } => {
+                ValidationWarning::NonPortablePath {
+                    file,
+                    property,
+                    value,
+                    suggested,
+                } => {
                     if fix {
                         let result = fixer.fix_non_portable_path(file, property, value, suggested);
                         if result.success {
-                            println!("  ✓ Fixed: Normalized {} '{}' -> '{}' in {}", property, value, suggested, file.display());
+                            println!(
+                                "  ✓ Fixed: Normalized {} '{}' -> '{}' in {}",
+                                property,
+                                value,
+                                suggested,
+                                file.display()
+                            );
                             fixed_count += 1;
                         } else {
-                            println!("  ⚠ Non-portable {}: '{}' (suggested: '{}') in {} (failed to fix)", property, value, suggested, file.display());
+                            println!(
+                                "  ⚠ Non-portable {}: '{}' (suggested: '{}') in {} (failed to fix)",
+                                property,
+                                value,
+                                suggested,
+                                file.display()
+                            );
                         }
                     } else {
-                        println!("  ⚠ Non-portable {}: '{}' -> '{}' in {}", property, value, suggested, file.display());
+                        println!(
+                            "  ⚠ Non-portable {}: '{}' -> '{}' in {}",
+                            property,
+                            value,
+                            suggested,
+                            file.display()
+                        );
                     }
                 }
                 ValidationWarning::MultipleIndexes { directory, indexes } => {
                     // Can't auto-fix - requires user decision
-                    println!("  ⚠ Multiple indexes in {}: {:?}", directory.display(), indexes.iter().map(|p| p.file_name().unwrap_or_default().to_string_lossy()).collect::<Vec<_>>());
+                    println!(
+                        "  ⚠ Multiple indexes in {}: {:?}",
+                        directory.display(),
+                        indexes
+                            .iter()
+                            .map(|p| p.file_name().unwrap_or_default().to_string_lossy())
+                            .collect::<Vec<_>>()
+                    );
                 }
-                ValidationWarning::OrphanBinaryFile { file, suggested_index } => {
+                ValidationWarning::OrphanBinaryFile {
+                    file,
+                    suggested_index,
+                } => {
                     if fix {
                         if let Some(index) = suggested_index {
                             let result = fixer.fix_orphan_binary_file(index, file);
                             if result.success {
-                                println!("  ✓ Fixed: Added '{}' to attachments in {}", file.display(), index.display());
+                                println!(
+                                    "  ✓ Fixed: Added '{}' to attachments in {}",
+                                    file.display(),
+                                    index.display()
+                                );
                                 fixed_count += 1;
                             } else {
-                                println!("  ⚠ Orphan binary file: {} (failed to add to attachments)", file.display());
+                                println!(
+                                    "  ⚠ Orphan binary file: {} (failed to add to attachments)",
+                                    file.display()
+                                );
                             }
                         } else {
-                            println!("  ⚠ Orphan binary file: {} (no single index found)", file.display());
+                            println!(
+                                "  ⚠ Orphan binary file: {} (no single index found)",
+                                file.display()
+                            );
                         }
                     } else {
                         println!("  ⚠ Orphan binary file: {}", file.display());
                     }
                 }
-                ValidationWarning::MissingPartOf { file, suggested_index } => {
+                ValidationWarning::MissingPartOf {
+                    file,
+                    suggested_index,
+                } => {
                     if fix {
                         let index_to_use = if let Some(idx) = suggested_index {
                             Some(idx.clone())
@@ -395,13 +493,20 @@ fn handle_validate(
                         if let Some(index) = index_to_use {
                             let result = fixer.fix_missing_part_of(file, &index);
                             if result.success {
-                                println!("  ✓ Fixed: Set part_of to '{}' in {}", index.display(), file.display());
+                                println!(
+                                    "  ✓ Fixed: Set part_of to '{}' in {}",
+                                    index.display(),
+                                    file.display()
+                                );
                                 fixed_count += 1;
                             } else {
                                 println!("  ⚠ Missing part_of: {} (failed to fix)", file.display());
                             }
                         } else {
-                            println!("  ⚠ Missing part_of (orphan): {} (no single index found)", file.display());
+                            println!(
+                                "  ⚠ Missing part_of (orphan): {} (no single index found)",
+                                file.display()
+                            );
                         }
                     } else {
                         println!("  ⚠ Missing part_of (orphan): {}", file.display());
@@ -415,8 +520,7 @@ fn handle_validate(
     if fix && fixed_count > 0 {
         println!(
             "Summary: {} issue(s) fixed, {} files checked",
-            fixed_count,
-            result.files_checked
+            fixed_count, result.files_checked
         );
     } else {
         println!(
@@ -440,7 +544,11 @@ fn report_and_fix_validation(
     use diaryx_core::validate::{ValidationError, ValidationWarning};
 
     if result.is_ok() && result.warnings.is_empty() {
-        println!("✓ Validation passed: {} ({} file(s) checked)", context_path.display(), result.files_checked);
+        println!(
+            "✓ Validation passed: {} ({} file(s) checked)",
+            context_path.display(),
+            result.files_checked
+        );
         return;
     }
 
@@ -457,10 +565,18 @@ fn report_and_fix_validation(
                     if fix {
                         let fix_result = fixer.fix_broken_part_of(file);
                         if fix_result.success {
-                            println!("  ✓ Fixed: Removed broken part_of '{}' from {}", target, file.display());
+                            println!(
+                                "  ✓ Fixed: Removed broken part_of '{}' from {}",
+                                target,
+                                file.display()
+                            );
                             fixed_count += 1;
                         } else {
-                            println!("  ✗ Broken part_of: {} -> {} (failed to fix)", file.display(), target);
+                            println!(
+                                "  ✗ Broken part_of: {} -> {} (failed to fix)",
+                                file.display(),
+                                target
+                            );
                         }
                     } else {
                         println!("  ✗ Broken part_of: {} -> {}", file.display(), target);
@@ -470,10 +586,18 @@ fn report_and_fix_validation(
                     if fix {
                         let fix_result = fixer.fix_broken_contents_ref(index, target);
                         if fix_result.success {
-                            println!("  ✓ Fixed: Removed broken contents ref '{}' from {}", target, index.display());
+                            println!(
+                                "  ✓ Fixed: Removed broken contents ref '{}' from {}",
+                                target,
+                                index.display()
+                            );
                             fixed_count += 1;
                         } else {
-                            println!("  ✗ Broken contents ref: {} -> {} (failed to fix)", index.display(), target);
+                            println!(
+                                "  ✗ Broken contents ref: {} -> {} (failed to fix)",
+                                index.display(),
+                                target
+                            );
                         }
                     } else {
                         println!("  ✗ Broken contents ref: {} -> {}", index.display(), target);
@@ -483,13 +607,25 @@ fn report_and_fix_validation(
                     if fix {
                         let fix_result = fixer.fix_broken_attachment(file, attachment);
                         if fix_result.success {
-                            println!("  ✓ Fixed: Removed broken attachment '{}' from {}", attachment, file.display());
+                            println!(
+                                "  ✓ Fixed: Removed broken attachment '{}' from {}",
+                                attachment,
+                                file.display()
+                            );
                             fixed_count += 1;
                         } else {
-                            println!("  ✗ Broken attachment: {} -> {} (failed to fix)", file.display(), attachment);
+                            println!(
+                                "  ✗ Broken attachment: {} -> {} (failed to fix)",
+                                file.display(),
+                                attachment
+                            );
                         }
                     } else {
-                        println!("  ✗ Broken attachment: {} -> {}", file.display(), attachment);
+                        println!(
+                            "  ✗ Broken attachment: {} -> {}",
+                            file.display(),
+                            attachment
+                        );
                     }
                 }
             }
@@ -507,7 +643,11 @@ fn report_and_fix_validation(
                     if fix {
                         let fix_result = fixer.fix_unlisted_file(index, file);
                         if fix_result.success {
-                            println!("  ✓ Fixed: Added '{}' to {}", file.display(), index.display());
+                            println!(
+                                "  ✓ Fixed: Added '{}' to {}",
+                                file.display(),
+                                index.display()
+                            );
                             fixed_count += 1;
                         } else {
                             println!("  ⚠ Unlisted file: {} (failed to add)", file.display());
@@ -516,17 +656,41 @@ fn report_and_fix_validation(
                         println!("  ⚠ Unlisted file: {}", file.display());
                     }
                 }
-                ValidationWarning::NonPortablePath { file, property, value, suggested } => {
+                ValidationWarning::NonPortablePath {
+                    file,
+                    property,
+                    value,
+                    suggested,
+                } => {
                     if fix {
-                        let fix_result = fixer.fix_non_portable_path(file, property, value, suggested);
+                        let fix_result =
+                            fixer.fix_non_portable_path(file, property, value, suggested);
                         if fix_result.success {
-                            println!("  ✓ Fixed: Normalized {} '{}' -> '{}' in {}", property, value, suggested, file.display());
+                            println!(
+                                "  ✓ Fixed: Normalized {} '{}' -> '{}' in {}",
+                                property,
+                                value,
+                                suggested,
+                                file.display()
+                            );
                             fixed_count += 1;
                         } else {
-                            println!("  ⚠ Non-portable {}: '{}' (suggested: '{}') in {} (failed to fix)", property, value, suggested, file.display());
+                            println!(
+                                "  ⚠ Non-portable {}: '{}' (suggested: '{}') in {} (failed to fix)",
+                                property,
+                                value,
+                                suggested,
+                                file.display()
+                            );
                         }
                     } else {
-                        println!("  ⚠ Non-portable {}: '{}' -> '{}' in {}", property, value, suggested, file.display());
+                        println!(
+                            "  ⚠ Non-portable {}: '{}' -> '{}' in {}",
+                            property,
+                            value,
+                            suggested,
+                            file.display()
+                        );
                     }
                 }
                 ValidationWarning::OrphanFile { file } => {
@@ -540,26 +704,49 @@ fn report_and_fix_validation(
                     println!("  {} Unlinked: {}", icon, path.display());
                 }
                 ValidationWarning::MultipleIndexes { directory, indexes } => {
-                    println!("  ⚠ Multiple indexes in {}: {:?}", directory.display(), indexes.iter().map(|p| p.file_name().unwrap_or_default().to_string_lossy()).collect::<Vec<_>>());
+                    println!(
+                        "  ⚠ Multiple indexes in {}: {:?}",
+                        directory.display(),
+                        indexes
+                            .iter()
+                            .map(|p| p.file_name().unwrap_or_default().to_string_lossy())
+                            .collect::<Vec<_>>()
+                    );
                 }
-                ValidationWarning::OrphanBinaryFile { file, suggested_index } => {
+                ValidationWarning::OrphanBinaryFile {
+                    file,
+                    suggested_index,
+                } => {
                     if fix {
                         if let Some(index) = suggested_index {
                             let fix_result = fixer.fix_orphan_binary_file(index, file);
                             if fix_result.success {
-                                println!("  ✓ Fixed: Added '{}' to attachments in {}", file.display(), index.display());
+                                println!(
+                                    "  ✓ Fixed: Added '{}' to attachments in {}",
+                                    file.display(),
+                                    index.display()
+                                );
                                 fixed_count += 1;
                             } else {
-                                println!("  ⚠ Orphan binary file: {} (failed to add)", file.display());
+                                println!(
+                                    "  ⚠ Orphan binary file: {} (failed to add)",
+                                    file.display()
+                                );
                             }
                         } else {
-                            println!("  ⚠ Orphan binary file: {} (no single index found)", file.display());
+                            println!(
+                                "  ⚠ Orphan binary file: {} (no single index found)",
+                                file.display()
+                            );
                         }
                     } else {
                         println!("  ⚠ Orphan binary file: {}", file.display());
                     }
                 }
-                ValidationWarning::MissingPartOf { file, suggested_index } => {
+                ValidationWarning::MissingPartOf {
+                    file,
+                    suggested_index,
+                } => {
                     if fix {
                         let index_to_use = if let Some(idx) = suggested_index {
                             Some(idx.clone())
@@ -578,13 +765,20 @@ fn report_and_fix_validation(
                         if let Some(index) = index_to_use {
                             let fix_result = fixer.fix_missing_part_of(file, &index);
                             if fix_result.success {
-                                println!("  ✓ Fixed: Set part_of to '{}' in {}", index.display(), file.display());
+                                println!(
+                                    "  ✓ Fixed: Set part_of to '{}' in {}",
+                                    index.display(),
+                                    file.display()
+                                );
                                 fixed_count += 1;
                             } else {
                                 println!("  ⚠ Missing part_of: {} (failed to fix)", file.display());
                             }
                         } else {
-                            println!("  ⚠ Missing part_of (orphan): {} (no single index found)", file.display());
+                            println!(
+                                "  ⚠ Missing part_of (orphan): {} (no single index found)",
+                                file.display()
+                            );
                         }
                     } else {
                         println!("  ⚠ Missing part_of (orphan): {}", file.display());
@@ -598,8 +792,7 @@ fn report_and_fix_validation(
     if fix && fixed_count > 0 {
         println!(
             "Summary: {} issue(s) fixed, {} file(s) checked",
-            fixed_count,
-            result.files_checked
+            fixed_count, result.files_checked
         );
     } else {
         println!(
@@ -873,7 +1066,6 @@ fn set_new_index_as_parent(
         println!("✓ Set part_of in '{}'", file_path.display());
     }
 }
-
 
 /// Collect markdown files in a directory (non-recursive)
 fn collect_md_files(dir: &Path) -> Vec<PathBuf> {

@@ -282,9 +282,7 @@ impl<FS: FileSystem> Validator<FS> {
         let path = if file_path.is_absolute() {
             file_path.to_path_buf()
         } else {
-            std::env::current_dir()
-                .unwrap_or_default()
-                .join(file_path)
+            std::env::current_dir().unwrap_or_default().join(file_path)
         };
 
         // Canonicalize to remove . and .. components if possible
@@ -380,7 +378,9 @@ impl<FS: FileSystem> Validator<FS> {
                 }
 
                 // Check if attachment path is non-portable
-                if let Some(warning) = check_non_portable_path(&path, "attachments", attachment, dir) {
+                if let Some(warning) =
+                    check_non_portable_path(&path, "attachments", attachment, dir)
+                {
                     result.warnings.push(warning);
                 }
             }
@@ -389,10 +389,7 @@ impl<FS: FileSystem> Validator<FS> {
             // Only if this file has contents (is an index)
             if !contents_list.is_empty() || index.frontmatter.contents.is_some() {
                 if let Ok(entries) = std::fs::read_dir(dir) {
-                    let this_filename = path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("");
+                    let this_filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
                     // Collect all attachments referenced by this index
                     let referenced_attachments: HashSet<String> = index
@@ -425,7 +422,10 @@ impl<FS: FileSystem> Validator<FS> {
                                         }
                                         // Check if it's an index file (README.md, index.md, or *.index.md)
                                         let lower = fname.to_lowercase();
-                                        if lower == "readme.md" || lower == "index.md" || lower.ends_with(".index.md") {
+                                        if lower == "readme.md"
+                                            || lower == "index.md"
+                                            || lower.ends_with(".index.md")
+                                        {
                                             other_indexes.push(entry_path.clone());
                                         }
                                         // Check if this markdown file is in contents
@@ -441,11 +441,13 @@ impl<FS: FileSystem> Validator<FS> {
                                     // Binary file - check if it's referenced by attachments
                                     if let Some(fname) = filename {
                                         if !referenced_attachments.contains(fname) {
-                                            result.warnings.push(ValidationWarning::OrphanBinaryFile {
-                                                file: entry_path,
-                                                // We can suggest connecting to the current index
-                                                suggested_index: Some(path.clone()),
-                                            });
+                                            result.warnings.push(
+                                                ValidationWarning::OrphanBinaryFile {
+                                                    file: entry_path,
+                                                    // We can suggest connecting to the current index
+                                                    suggested_index: Some(path.clone()),
+                                                },
+                                            );
                                         }
                                     }
                                 }
@@ -507,7 +509,10 @@ fn check_non_portable_path(
 
     // Check for `.` or `..` components
     let has_dot_component = path.components().any(|c| {
-        matches!(c, std::path::Component::CurDir | std::path::Component::ParentDir)
+        matches!(
+            c,
+            std::path::Component::CurDir | std::path::Component::ParentDir
+        )
     });
 
     if has_dot_component {
@@ -648,10 +653,7 @@ impl<FS: FileSystem + Clone> ValidationFixer<FS> {
     pub fn fix_broken_part_of(&self, file: &Path) -> FixResult {
         let file_str = file.to_string_lossy();
         match self.app.remove_frontmatter_property(&file_str, "part_of") {
-            Ok(_) => FixResult::success(format!(
-                "Removed broken part_of from {}",
-                file.display()
-            )),
+            Ok(_) => FixResult::success(format!("Removed broken part_of from {}", file.display())),
             Err(e) => FixResult::failure(format!(
                 "Failed to remove part_of from {}: {}",
                 file.display(),
@@ -693,10 +695,7 @@ impl<FS: FileSystem + Clone> ValidationFixer<FS> {
                     )),
                 }
             }
-            _ => FixResult::failure(format!(
-                "Could not read contents from {}",
-                index.display()
-            )),
+            _ => FixResult::failure(format!("Could not read contents from {}", index.display())),
         }
     }
 
@@ -717,7 +716,8 @@ impl<FS: FileSystem + Clone> ValidationFixer<FS> {
                     .collect();
 
                 let result = if filtered.is_empty() {
-                    self.app.remove_frontmatter_property(&file_str, "attachments")
+                    self.app
+                        .remove_frontmatter_property(&file_str, "attachments")
                 } else {
                     self.app.set_frontmatter_property(
                         &file_str,
@@ -868,10 +868,7 @@ impl<FS: FileSystem + Clone> ValidationFixer<FS> {
                     )),
                 }
             }
-            _ => FixResult::failure(format!(
-                "Could not read contents from {}",
-                index.display()
-            )),
+            _ => FixResult::failure(format!("Could not read contents from {}", index.display())),
         }
     }
 
@@ -952,9 +949,7 @@ impl<FS: FileSystem + Clone> ValidationFixer<FS> {
     /// Fix a validation error.
     pub fn fix_error(&self, error: &ValidationError) -> FixResult {
         match error {
-            ValidationError::BrokenPartOf { file, target: _ } => {
-                self.fix_broken_part_of(file)
-            }
+            ValidationError::BrokenPartOf { file, target: _ } => self.fix_broken_part_of(file),
             ValidationError::BrokenContentsRef { index, target } => {
                 self.fix_broken_contents_ref(index, target)
             }
@@ -981,19 +976,15 @@ impl<FS: FileSystem + Clone> ValidationFixer<FS> {
             ValidationWarning::OrphanBinaryFile {
                 file,
                 suggested_index,
-            } => {
-                suggested_index
-                    .as_ref()
-                    .map(|index| self.fix_orphan_binary_file(index, file))
-            }
+            } => suggested_index
+                .as_ref()
+                .map(|index| self.fix_orphan_binary_file(index, file)),
             ValidationWarning::MissingPartOf {
                 file,
                 suggested_index,
-            } => {
-                suggested_index
-                    .as_ref()
-                    .map(|index| self.fix_missing_part_of(file, index))
-            }
+            } => suggested_index
+                .as_ref()
+                .map(|index| self.fix_missing_part_of(file, index)),
             // These cannot be auto-fixed
             ValidationWarning::OrphanFile { .. }
             | ValidationWarning::UnlinkedEntry { .. }

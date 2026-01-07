@@ -442,8 +442,18 @@
         collaborationEnabled,
         backend,
         {
-          onFilesChange: (files) => {
+          onFilesChange: async (files) => {
             console.log("[App] Workspace CRDT files changed:", files.size);
+            // Refresh tree to show updated metadata (titles, etc.)
+            await refreshTree();
+            // Reload current entry if it was updated to show new metadata
+            if (currentEntry && files.has(currentEntry.path)) {
+              try {
+                currentEntry = await backend.getEntry(currentEntry.path);
+              } catch {
+                // File might have been deleted
+              }
+            }
           },
           onConnectionChange: (connected) => {
             console.log("[App] Workspace CRDT connection:", connected ? "online" : "offline");
@@ -769,6 +779,9 @@
     if (!backend) return;
     try {
       const newPath = await backend.createEntry(path, { title });
+
+      // Persist to IndexedDB immediately so file survives refresh
+      await persistNow();
 
       // Update CRDT with new file
       const entry = await backend.getEntry(newPath);

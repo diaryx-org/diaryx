@@ -1,21 +1,14 @@
-/**
- * Workspace CRDT Service
- * 
- * Handles workspace-level CRDT synchronization including:
- * - File metadata synchronization
- * - Adding files and attachments to CRDT
- * - CRDT garbage collection
- */
-
 import type { Backend } from '$lib/backend';
 import { setWorkspaceId } from '$lib/collaborationUtils';
 import {
   initWorkspace,
   syncFromBackend,
+  syncToLocal,
   garbageCollect,
   getWorkspaceStats,
   updateFileMetadata,
   addToContents,
+  setInitializing,
   type FileMetadata,
   type BinaryRef,
 } from '$lib/workspaceCrdt';
@@ -75,8 +68,27 @@ export async function initializeWorkspaceCrdt(
       onRemoteFileSync: callbacks.onRemoteFileSync,
     });
 
-    // Sync existing files from backend into CRDT
-    await syncFromBackend(backend);
+    // Wait for server sync first (if connected) to get existing files
+    if (collaborationEnabled) {
+      const { waitForSync } = await import('$lib/workspaceCrdt');
+      const synced = await waitForSync(5000);
+      console.log(`[WorkspaceCrdtService] Server sync ${synced ? 'complete' : 'timed out'}`);
+      
+      // STEP 1: Sync CRDT → Local (create local files for any that exist in CRDT but not locally)
+      console.log('[WorkspaceCrdtService] Syncing CRDT to local...');
+      const { created, deleted } = await syncToLocal();
+      console.log(`[WorkspaceCrdtService] Synced CRDT to local: created ${created.length}, deleted ${deleted.length}`);
+    }
+
+    // STEP 2: Sync Local → CRDT (add local files that don't exist in CRDT yet)
+    // Use setInitializing to prevent race conditions with incoming remote changes
+    setInitializing(true);
+    try {
+      console.log('[WorkspaceCrdtService] Syncing local to CRDT...');
+      await syncFromBackend(backend);
+    } finally {
+      setInitializing(false);
+    }
 
     // Garbage collect old deleted files (older than 7 days)
     const purged = garbageCollect(7 * 24 * 60 * 60 * 1000);

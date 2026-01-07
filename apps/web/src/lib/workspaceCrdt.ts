@@ -133,6 +133,10 @@ let remoteFileSyncCallback: ((created: string[], deleted: string[]) => void) | n
 // Track paths currently being processed to avoid duplicate operations
 let pathsBeingProcessed = new Set<string>();
 
+// Flag to prevent remote sync handling during initial syncFromBackend
+// Set to true before syncing, false after. This prevents race conditions.
+let isInitializing = false;
+
 // ============================================================================
 // Configuration
 // ============================================================================
@@ -158,6 +162,19 @@ export function setWorkspaceServer(url: string | null): void {
  */
 export function getWorkspaceServer(): string | null {
   return defaultServerUrl;
+}
+
+/**
+ * Set the initializing flag to prevent remote sync handling during syncFromBackend.
+ * Call with true before syncing from backend, false after.
+ */
+export function setInitializing(initializing: boolean): void {
+  isInitializing = initializing;
+  if (initializing) {
+    console.log("[WorkspaceCRDT] Entering initialization mode - remote sync paused");
+  } else {
+    console.log("[WorkspaceCRDT] Exiting initialization mode - remote sync resumed");
+  }
 }
 
 // ============================================================================
@@ -240,8 +257,9 @@ export async function initWorkspace(
       },
       onSynced: () => {
         console.log(`[WorkspaceCRDT] Synced ${roomName}`);
-        // Trigger initial sync to local when first synced from server
-        handleInitialServerSync();
+        // NOTE: handleInitialServerSync is NOT called here automatically.
+        // The service should call syncToLocal() explicitly after waitForSync()
+        // to ensure proper ordering with syncFromBackend().
       },
     } as any);
   }
@@ -403,10 +421,13 @@ export function setFileMetadata(path: string, metadata: FileMetadata): void {
   }
 
   try {
-    workspaceSession.filesMap.set(path, {
-      ...metadata,
-      modifiedAt: Date.now(),
-    });
+    // Use LOCAL_ORIGIN transaction so observers can distinguish local vs remote changes
+    workspaceSession.ydoc.transact(() => {
+      workspaceSession!.filesMap.set(path, {
+        ...metadata,
+        modifiedAt: Date.now(),
+      });
+    }, LOCAL_ORIGIN);
     console.log(`[WorkspaceCRDT] Set metadata for ${path}`);
   } catch (e) {
     console.error(`[WorkspaceCRDT] Failed to set metadata for ${path}:`, e);
@@ -443,7 +464,10 @@ export function updateFileMetadata(
       ...updates,
     };
 
-    workspaceSession.filesMap.set(path, newMetadata);
+    // Use LOCAL_ORIGIN transaction so observers can distinguish local vs remote changes
+    workspaceSession.ydoc.transact(() => {
+      workspaceSession!.filesMap.set(path, newMetadata);
+    }, LOCAL_ORIGIN);
     console.log(
       `[WorkspaceCRDT] Updated metadata for ${path}`,
       Object.keys(updates),
@@ -476,7 +500,10 @@ export function restoreFile(path: string): void {
 export function purgeFile(path: string): void {
   if (!workspaceSession) return;
 
-  workspaceSession.filesMap.delete(path);
+  // Use LOCAL_ORIGIN transaction so observers can distinguish local vs remote changes
+  workspaceSession.ydoc.transact(() => {
+    workspaceSession!.filesMap.delete(path);
+  }, LOCAL_ORIGIN);
   console.log(`[WorkspaceCRDT] Purged ${path} from CRDT`);
 }
 
@@ -733,6 +760,8 @@ export async function syncFromBackend(
 
 /**
  * Recursively sync a tree node and its children.
+ * MERGE-ONLY: Only adds files that don't exist in CRDT yet.
+ * This prevents local state from overwriting newer remote data.
  */
 async function syncTreeNode(
   backend: {
@@ -749,47 +778,81 @@ async function syncTreeNode(
   if (!workspaceSession) return;
 
   try {
-    const frontmatter = await backend.getFrontmatter(node.path);
+    // Check if file already exists in CRDT
+    const existingMetadata = workspaceSession.filesMap.get(node.path);
+    
+    if (existingMetadata) {
+      // File already exists in CRDT - merge local contents into CRDT contents
+      // This ensures children added locally get into the CRDT
+      const localContents = node.children.length > 0 
+        ? node.children.map((c: any) => c.path) 
+        : [];
+      const crdtContents = existingMetadata.contents ?? [];
+      
+      // Merge local children into CRDT
+      const mergedContents = [...new Set([...crdtContents, ...localContents])].sort();
+      
+      if (mergedContents.length > crdtContents.length) {
+        console.log(`[WorkspaceCRDT] Merging local contents into CRDT for ${node.path}: ${crdtContents.length} -> ${mergedContents.length}`);
+        workspaceSession.ydoc.transact(() => {
+          workspaceSession!.filesMap.set(node.path, {
+            ...existingMetadata,
+            contents: mergedContents.length > 0 ? mergedContents : null,
+            modifiedAt: Date.now(),
+          });
+        }, LOCAL_ORIGIN);
+      } else {
+        console.log(`[WorkspaceCRDT] Skipping existing file (no new contents): ${node.path}`);
+      }
+    } else {
+      // File doesn't exist in CRDT - add it from local filesystem
+      const frontmatter = await backend.getFrontmatter(node.path);
 
-    const metadata: FileMetadata = {
-      title: (frontmatter.title as string) ?? node.name ?? null,
-      partOf: (frontmatter.part_of as string) ?? parentPath,
-      contents: frontmatter.contents
-        ? (frontmatter.contents as string[])
-        : node.children.length > 0
-          ? node.children.map((c: any) => c.path)
-          : null,
-      attachments: ((frontmatter.attachments as string[]) ?? []).map(
-        (path) => ({
-          path,
-          source: "local",
-          hash: "",
-          mimeType: "",
-          size: 0,
-          deleted: false,
-        }),
-      ),
-      deleted: false,
-      audience: (frontmatter.audience as string[]) ?? null,
-      description:
-        (frontmatter.description as string) ?? node.description ?? null,
-      extra: Object.fromEntries(
-        Object.entries(frontmatter).filter(
-          ([key]) =>
-            ![
-              "title",
-              "part_of",
-              "contents",
-              "attachments",
-              "audience",
-              "description",
-            ].includes(key),
+      const metadata: FileMetadata = {
+        title: (frontmatter.title as string) ?? node.name ?? null,
+        partOf: (frontmatter.part_of as string) ?? parentPath,
+        contents: frontmatter.contents
+          ? (frontmatter.contents as string[])
+          : node.children.length > 0
+            ? node.children.map((c: any) => c.path)
+            : null,
+        attachments: ((frontmatter.attachments as string[]) ?? []).map(
+          (path) => ({
+            path,
+            source: "local",
+            hash: "",
+            mimeType: "",
+            size: 0,
+            deleted: false,
+          }),
         ),
-      ),
-      modifiedAt: Date.now(),
-    };
+        deleted: false,
+        audience: (frontmatter.audience as string[]) ?? null,
+        description:
+          (frontmatter.description as string) ?? node.description ?? null,
+        extra: Object.fromEntries(
+          Object.entries(frontmatter).filter(
+            ([key]) =>
+              ![
+                "title",
+                "part_of",
+                "contents",
+                "attachments",
+                "audience",
+                "description",
+              ].includes(key),
+          ),
+        ),
+        modifiedAt: Date.now(),
+      };
 
-    workspaceSession.filesMap.set(node.path, metadata);
+      // Add to CRDT using LOCAL_ORIGIN transaction
+      workspaceSession.ydoc.transact(() => {
+        workspaceSession!.filesMap.set(node.path, metadata);
+      }, LOCAL_ORIGIN);
+      
+      console.log(`[WorkspaceCRDT] Added local file to CRDT: ${node.path}`);
+    }
 
     // Recursively sync children
     for (const child of node.children as any[]) {
@@ -933,120 +996,6 @@ function notifyFilesChangeDebounced(): void {
   }, FILES_CHANGE_DEBOUNCE_MS);
 }
 
-/**
- * Handle initial sync from server - create any files that exist in CRDT but not locally.
- * Uses batching and throttling to prevent overwhelming the browser.
- */
-async function handleInitialServerSync(): Promise<void> {
-  if (!workspaceSession?.backend) {
-    console.log("[WorkspaceCRDT] No backend available for file sync");
-    return;
-  }
-
-  const backend = workspaceSession.backend;
-  const filesMap = workspaceSession.filesMap;
-
-  // Skip initial sync if there are no files in the CRDT (nothing to sync)
-  if (filesMap.size === 0) {
-    console.log("[WorkspaceCRDT] No files in CRDT, skipping initial sync");
-    return;
-  }
-
-  // Check how many files need to be created - if too many, skip auto-sync
-  // to avoid overwhelming the browser. User can manually trigger sync.
-  let missingCount = 0;
-  const MAX_AUTO_SYNC_FILES = 50;
-
-  for (const [path, metadata] of filesMap.entries()) {
-    if (metadata.deleted) continue;
-    try {
-      await backend.getEntry(path);
-      // File exists
-    } catch {
-      missingCount++;
-      if (missingCount > MAX_AUTO_SYNC_FILES) {
-        console.log(
-          `[WorkspaceCRDT] Too many files to sync (>${MAX_AUTO_SYNC_FILES}), skipping auto-sync. ` +
-          `Use syncToLocal() to manually trigger sync.`
-        );
-        return;
-      }
-    }
-  }
-
-  if (missingCount === 0) {
-    console.log("[WorkspaceCRDT] All files already exist locally, no sync needed");
-    return;
-  }
-
-  console.log(`[WorkspaceCRDT] Starting initial server sync for ${missingCount} files...`);
-
-  const created: string[] = [];
-  const deleted: string[] = [];
-  const BATCH_SIZE = 5;
-  const BATCH_DELAY_MS = 100;
-
-  try {
-    // Collect files to process
-    const filesToProcess: Array<[string, FileMetadata]> = [];
-    for (const [path, metadata] of filesMap.entries()) {
-      if (pathsBeingProcessed.has(path)) continue;
-      filesToProcess.push([path, metadata]);
-    }
-
-    // Process in batches
-    for (let i = 0; i < filesToProcess.length; i += BATCH_SIZE) {
-      const batch = filesToProcess.slice(i, i + BATCH_SIZE);
-      
-      // Process batch concurrently
-      await Promise.all(
-        batch.map(async ([path, metadata]) => {
-          if (pathsBeingProcessed.has(path)) return;
-          pathsBeingProcessed.add(path);
-
-          try {
-            if (metadata.deleted) {
-              // File marked deleted in CRDT - try to delete locally
-              try {
-                await backend.deleteEntry(path);
-                deleted.push(path);
-              } catch {
-                // File might not exist locally, that's fine
-              }
-            } else {
-              // File exists in CRDT - check if it exists locally
-              try {
-                await backend.getEntry(path);
-                // File exists, no action needed
-              } catch {
-                // File doesn't exist locally, create it
-                await createLocalFile(backend, path, metadata);
-                created.push(path);
-              }
-            }
-          } finally {
-            pathsBeingProcessed.delete(path);
-          }
-        })
-      );
-
-      // Delay between batches to let browser breathe
-      if (i + BATCH_SIZE < filesToProcess.length) {
-        await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY_MS));
-      }
-    }
-
-    if (created.length > 0 || deleted.length > 0) {
-      console.log(
-        `[WorkspaceCRDT] Initial sync complete: created ${created.length}, deleted ${deleted.length} files`,
-      );
-      remoteFileSyncCallback?.(created, deleted);
-      workspaceSession.onRemoteFileSync?.(created, deleted);
-    }
-  } catch (e) {
-    console.error("[WorkspaceCRDT] Error in initial server sync:", e);
-  }
-}
 
 
 /**
@@ -1187,7 +1136,8 @@ function handleFilesMapChange(event: Y.YMapEvent<FileMetadata>): void {
         fileChangeCallback?.(key, metadata);
 
         // Handle remote file sync (create/delete actual files)
-        if (isRemote && workspaceSession?.backend && !pathsBeingProcessed.has(key)) {
+        // Skip during initialization to prevent race conditions with syncFromBackend
+        if (isRemote && !isInitializing && workspaceSession?.backend && !pathsBeingProcessed.has(key)) {
           handleRemoteFileChange(key, metadata);
         }
       } catch (e) {
@@ -1232,8 +1182,60 @@ async function handleRemoteFileChange(
       // File was created or updated remotely
       try {
         // Check if file exists locally
-        await backend.getEntry(path);
-        // File exists, metadata sync is handled separately
+        const existingEntry = await backend.getEntry(path);
+        
+        // File exists - sync metadata from CRDT to local frontmatter
+        // Only update if there are meaningful differences
+        const updates: Record<string, unknown> = {};
+        
+        if (metadata.title && metadata.title !== existingEntry.frontmatter?.title) {
+          updates.title = metadata.title;
+        }
+        if (metadata.partOf !== undefined && metadata.partOf !== existingEntry.frontmatter?.part_of) {
+          updates.part_of = metadata.partOf;
+        }
+        
+        // For contents array, MERGE instead of overwrite to preserve files added by either client
+        const localContents = (existingEntry.frontmatter?.contents as string[]) ?? [];
+        const remoteContents = metadata.contents ?? [];
+        
+        // Union of both arrays (preserves additions from both sides)
+        const mergedContents = [...new Set([...localContents, ...remoteContents])].sort();
+        
+        if (JSON.stringify(mergedContents) !== JSON.stringify(localContents)) {
+          updates.contents = mergedContents;
+          
+          // Also update the CRDT with merged contents so other clients get the full list
+          if (JSON.stringify(mergedContents) !== JSON.stringify(remoteContents)) {
+            console.log(`[WorkspaceCRDT] Merging contents for ${path}: local=${localContents.length}, remote=${remoteContents.length}, merged=${mergedContents.length}`);
+            // Update CRDT with merged contents using LOCAL_ORIGIN
+            workspaceSession!.ydoc.transact(() => {
+              const current = workspaceSession!.filesMap.get(path);
+              if (current) {
+                workspaceSession!.filesMap.set(path, {
+                  ...current,
+                  contents: mergedContents,
+                  modifiedAt: Date.now(),
+                });
+              }
+            }, LOCAL_ORIGIN);
+          }
+        }
+        
+        if (metadata.audience && JSON.stringify(metadata.audience) !== JSON.stringify(existingEntry.frontmatter?.audience)) {
+          updates.audience = metadata.audience;
+        }
+        if (metadata.description && metadata.description !== existingEntry.frontmatter?.description) {
+          updates.description = metadata.description;
+        }
+        
+        // Apply updates if there are any
+        if (Object.keys(updates).length > 0) {
+          for (const [key, value] of Object.entries(updates)) {
+            await backend.setFrontmatterProperty(path, key, value);
+          }
+          console.log(`[WorkspaceCRDT] Synced remote metadata to local: ${path}`, Object.keys(updates));
+        }
       } catch {
         // File doesn't exist locally, create it
         await createLocalFile(backend, path, metadata);

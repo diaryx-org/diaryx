@@ -13,9 +13,12 @@ import type {
   CreateEntryOptions,
   TemplateInfo,
   ValidationResult,
+  BackendEventType,
+  BackendEventListener,
 } from "./interface";
 
 import { BackendError } from "./interface";
+import { BackendEventEmitter } from "./eventEmitter";
 
 function normalizeEntryPathToWorkspaceRoot(
   inputPath: string,
@@ -104,6 +107,7 @@ export class TauriBackend implements Backend {
   private ready = false;
   private invoke: InvokeFn | null = null;
   private appPaths: AppPaths | null = null;
+  private eventEmitter = new BackendEventEmitter();
 
   async init(): Promise<void> {
     // Step 1: Dynamically import Tauri API
@@ -224,6 +228,18 @@ export class TauriBackend implements Backend {
   }
 
   // --------------------------------------------------------------------------
+  // Events
+  // --------------------------------------------------------------------------
+
+  on(event: BackendEventType, listener: BackendEventListener): void {
+    this.eventEmitter.on(event, listener);
+  }
+
+  off(event: BackendEventType, listener: BackendEventListener): void {
+    this.eventEmitter.off(event, listener);
+  }
+
+  // --------------------------------------------------------------------------
   // Configuration
   // --------------------------------------------------------------------------
 
@@ -336,30 +352,83 @@ export class TauriBackend implements Backend {
         workspaceRoot,
       );
 
-      return await this.getInvoke()<string>("create_entry", {
+      const newPath = await this.getInvoke()<string>("create_entry", {
         path: normalizedPath,
         title: options?.title,
         partOf: options?.partOf,
         template: options?.template,
       });
+      
+      // Get frontmatter of new entry and emit event
+      const frontmatter = await this.getFrontmatter(newPath);
+      const parentPath = (frontmatter.part_of as string) ?? undefined;
+      this.eventEmitter.emit({
+        type: 'file:created',
+        path: newPath,
+        frontmatter,
+        parentPath,
+      });
+      
+      return newPath;
     } catch (e) {
       handleError(e);
     }
   }
 
   async deleteEntry(path: string): Promise<void> {
+    // Get parent before deleting
+    let parentPath: string | undefined;
+    try {
+      const frontmatter = await this.getFrontmatter(path);
+      parentPath = (frontmatter.part_of as string) ?? undefined;
+    } catch {
+      // Entry might not exist, continue with delete
+    }
+    
     try {
       await this.getInvoke()("delete_entry", { path });
+      
+      this.eventEmitter.emit({
+        type: 'file:deleted',
+        path,
+        parentPath,
+      });
     } catch (e) {
       handleError(e);
     }
   }
 
   async moveEntry(fromPath: string, toPath: string): Promise<string> {
+    // Get old parent before moving
+    let oldParent: string | undefined;
     try {
-      // Use snake_case keys to match Rust struct field names
+      const oldFrontmatter = await this.getFrontmatter(fromPath);
+      oldParent = (oldFrontmatter.part_of as string) ?? undefined;
+    } catch {
+      // Continue with move
+    }
+    
+    try {
       const request = { from_path: fromPath, to_path: toPath };
-      return await this.getInvoke()<string>("move_entry", { request });
+      const result = await this.getInvoke()<string>("move_entry", { request });
+      
+      // Get new parent after moving
+      let newParent: string | undefined;
+      try {
+        const newFrontmatter = await this.getFrontmatter(result);
+        newParent = (newFrontmatter.part_of as string) ?? undefined;
+      } catch {
+        // Continue without new parent info
+      }
+      
+      this.eventEmitter.emit({
+        type: 'file:moved',
+        path: result,
+        oldParent,
+        newParent,
+      });
+      
+      return result;
     } catch (e) {
       handleError(e);
     }
@@ -369,26 +438,45 @@ export class TauriBackend implements Backend {
     entryPath: string,
     parentIndexPath: string,
   ): Promise<string> {
+    const config = await this.getConfig();
+    const workspaceRoot = config?.default_workspace ?? "workspace";
+
+    const normalizedEntryPath = normalizeEntryPathToWorkspaceRoot(
+      entryPath,
+      workspaceRoot,
+    );
+    const normalizedParentIndexPath = normalizeEntryPathToWorkspaceRoot(
+      parentIndexPath,
+      workspaceRoot,
+    );
+    
+    // Get old parent before moving
+    let oldParent: string | undefined;
     try {
-      const config = await this.getConfig();
-      const workspaceRoot = config?.default_workspace ?? "workspace";
+      const oldFrontmatter = await this.getFrontmatter(normalizedEntryPath);
+      oldParent = (oldFrontmatter.part_of as string) ?? undefined;
+    } catch {
+      // Continue with attach
+    }
 
-      const normalizedEntryPath = normalizeEntryPathToWorkspaceRoot(
-        entryPath,
-        workspaceRoot,
-      );
-      const normalizedParentIndexPath = normalizeEntryPathToWorkspaceRoot(
-        parentIndexPath,
-        workspaceRoot,
-      );
-
+    try {
       // Use snake_case keys to match Rust struct field names
-      return await this.getInvoke()<string>("attach_entry_to_parent", {
+      const result = await this.getInvoke()<string>("attach_entry_to_parent", {
         request: {
           entry_path: normalizedEntryPath,
           parent_index_path: normalizedParentIndexPath,
         },
       });
+      
+      // Emit file:moved event
+      this.eventEmitter.emit({
+        type: 'file:moved',
+        path: normalizedEntryPath,
+        oldParent,
+        newParent: normalizedParentIndexPath,
+      });
+      
+      return result;
     } catch (e) {
       handleError(e);
     }
@@ -430,7 +518,15 @@ export class TauriBackend implements Backend {
 
   async renameEntry(path: string, newFilename: string): Promise<string> {
     try {
-      return await this.getInvoke()("rename_entry", { path, newFilename });
+      const newPath = await this.getInvoke()<string>("rename_entry", { path, newFilename });
+      
+      this.eventEmitter.emit({
+        type: 'file:renamed',
+        oldPath: path,
+        newPath,
+      });
+      
+      return newPath;
     } catch (e) {
       handleError(e);
     }
@@ -590,6 +686,9 @@ export class TauriBackend implements Backend {
   ): Promise<void> {
     try {
       await this.getInvoke()("set_frontmatter_property", { path, key, value });
+      // Note: We do NOT emit metadata:changed here to avoid infinite loops
+      // when sync operations update frontmatter. The CRDT already knows about
+      // these changes and will propagate them appropriately.
     } catch (e) {
       handleError(e);
     }
@@ -598,6 +697,7 @@ export class TauriBackend implements Backend {
   async removeFrontmatterProperty(path: string, key: string): Promise<void> {
     try {
       await this.getInvoke()("remove_frontmatter_property", { path, key });
+      // Note: Same as above - no event emission to prevent loops
     } catch (e) {
       handleError(e);
     }

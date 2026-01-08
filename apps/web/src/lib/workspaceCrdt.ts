@@ -18,7 +18,7 @@
 import * as Y from "yjs";
 import { HocuspocusProvider } from "@hocuspocus/provider";
 import { IndexeddbPersistence } from "y-indexeddb";
-import type { Backend } from "./backend/interface";
+import type { Backend, BackendEvent } from "./backend/interface";
 
 // Origin marker for local changes (to distinguish from remote)
 const LOCAL_ORIGIN = "local";
@@ -104,6 +104,8 @@ export interface WorkspaceInitOptions {
   onConnectionChange?: (connected: boolean) => void;
   /** Callback when remote sync creates/deletes files locally */
   onRemoteFileSync?: (created: string[], deleted: string[]) => void;
+  /** Callback when server sync completes (for background delta sync) */
+  onServerSynced?: () => Promise<void>;
 }
 
 // ============================================================================
@@ -115,6 +117,11 @@ let connectionChangeCallback: ((connected: boolean) => void) | null = null;
 let fileChangeCallback:
   | ((path: string, metadata: FileMetadata | null) => void)
   | null = null;
+let serverSyncedCallback: (() => Promise<void>) | null = null;
+
+// IndexedDB sync tracking
+let indexedDBSynced = false;
+let indexedDBSyncResolvers: (() => void)[] = [];
 
 // Default server URL (can be overridden) - load from localStorage
 const SYNC_SERVER_KEY = "diaryx-sync-server";
@@ -210,12 +217,18 @@ export async function initWorkspace(
     onFileChange,
     onConnectionChange,
     onRemoteFileSync,
+    onServerSynced,
   } = options;
 
   // Store callbacks
   connectionChangeCallback = onConnectionChange ?? null;
   fileChangeCallback = onFileChange ?? null;
   remoteFileSyncCallback = onRemoteFileSync ?? null;
+  serverSyncedCallback = onServerSynced ?? null;
+  
+  // Reset IndexedDB sync state
+  indexedDBSynced = false;
+  indexedDBSyncResolvers = [];
 
   // Create Y.Doc
   const ydoc = new Y.Doc();
@@ -236,6 +249,11 @@ export async function initWorkspace(
     console.log(
       `[WorkspaceCRDT] IndexedDB synced for workspace ${workspaceId}`,
     );
+    
+    // Mark as synced and resolve any pending waiters
+    indexedDBSynced = true;
+    indexedDBSyncResolvers.forEach(resolve => resolve());
+    indexedDBSyncResolvers = [];
   });
 
   // Create Hocuspocus provider if server URL is provided
@@ -256,10 +274,15 @@ export async function initWorkspace(
         connectionChangeCallback?.(false);
       },
       onSynced: () => {
-        console.log(`[WorkspaceCRDT] Synced ${roomName}`);
-        // NOTE: handleInitialServerSync is NOT called here automatically.
-        // The service should call syncToLocal() explicitly after waitForSync()
-        // to ensure proper ordering with syncFromBackend().
+        console.log(`[WorkspaceCRDT] Server synced ${roomName}`);
+        
+        // Call serverSyncedCallback for background delta sync
+        // This allows the service to run syncToLocal() in the background
+        if (serverSyncedCallback) {
+          serverSyncedCallback().catch(e => {
+            console.error('[WorkspaceCRDT] Error in serverSyncedCallback:', e);
+          });
+        }
       },
     } as any);
   }
@@ -293,9 +316,171 @@ export async function initWorkspace(
     }
   });
 
+  // Set up backend event subscriptions for automatic CRDT updates
+  if (backend) {
+    setupBackendEventSubscriptions(backend);
+  }
+
   console.log(`[WorkspaceCRDT] Initialized workspace ${workspaceId}`);
 
   return { ydoc, filesMap };
+}
+
+/**
+ * Set up subscriptions to backend events for automatic CRDT updates.
+ * This is the core of the event-driven architecture - backend operations
+ * automatically trigger CRDT updates without manual intervention.
+ */
+function setupBackendEventSubscriptions(backend: Backend): void {
+  /**
+   * Compute relative path from parent's directory to child file.
+   * This matches how the Rust backend stores paths in contents arrays.
+   * Example: parentPath="workspace/README.md", childPath="workspace/test.md" -> "test.md"
+   */
+  const getRelativePathForContents = (parentPath: string, childPath: string): string => {
+    // Get parent directory (remove filename from parent path)
+    const parentDir = parentPath.substring(0, parentPath.lastIndexOf('/') + 1);
+    
+    // If child path starts with parent directory, return relative portion
+    if (childPath.startsWith(parentDir)) {
+      return childPath.substring(parentDir.length);
+    }
+    
+    // Fallback: just return the filename
+    const lastSlash = childPath.lastIndexOf('/');
+    return lastSlash >= 0 ? childPath.substring(lastSlash + 1) : childPath;
+  };
+
+  // Handler for file created events
+  const handleEvent = (event: BackendEvent) => {
+    if (!workspaceSession) return;
+    
+    switch (event.type) {
+      case 'file:created': {
+        console.log(`[WorkspaceCRDT] Event: file:created ${event.path}`);
+        
+        // Build metadata from frontmatter
+        const metadata: FileMetadata = {
+          title: (event.frontmatter.title as string) ?? null,
+          partOf: (event.frontmatter.part_of as string) ?? null,
+          contents: (event.frontmatter.contents as string[]) ?? null,
+          attachments: [], // Will be populated later if needed
+          deleted: false,
+          audience: (event.frontmatter.audience as string[]) ?? null,
+          description: (event.frontmatter.description as string) ?? null,
+          extra: {},
+          modifiedAt: Date.now(),
+        };
+        
+        // Add to CRDT
+        setFileMetadata(event.path, metadata);
+        
+        // Update parent's contents if we have a parent
+        // Note: contents should store relative paths from parent directory
+        if (event.parentPath) {
+          const relativePath = getRelativePathForContents(event.parentPath, event.path);
+          addToContents(event.parentPath, relativePath);
+        }
+        break;
+      }
+      
+      case 'file:deleted': {
+        console.log(`[WorkspaceCRDT] Event: file:deleted ${event.path}`);
+        
+        // Mark as deleted in CRDT
+        deleteFile(event.path);
+        
+        // Remove from parent's contents
+        // Note: contents stores relative paths, so we need to compute what was stored
+        if (event.parentPath) {
+          const relativePath = getRelativePathForContents(event.parentPath, event.path);
+          removeFromContents(event.parentPath, relativePath);
+        }
+        break;
+      }
+      
+      case 'file:moved': {
+        console.log(`[WorkspaceCRDT] Event: file:moved ${event.path}`);
+        
+        // Update partOf in the file's metadata
+        if (event.newParent) {
+          updateFileMetadata(event.path, { partOf: event.newParent });
+        }
+        
+        // Remove from old parent's contents
+        if (event.oldParent) {
+          const oldRelativePath = getRelativePathForContents(event.oldParent, event.path);
+          removeFromContents(event.oldParent, oldRelativePath);
+        }
+        
+        // Add to new parent's contents
+        if (event.newParent) {
+          const newRelativePath = getRelativePathForContents(event.newParent, event.path);
+          addToContents(event.newParent, newRelativePath);
+        }
+        break;
+      }
+      
+      case 'file:renamed': {
+        console.log(`[WorkspaceCRDT] Event: file:renamed ${event.oldPath} -> ${event.newPath}`);
+        
+        // Get the old metadata
+        const oldMetadata = workspaceSession.filesMap.get(event.oldPath);
+        if (oldMetadata) {
+          // Create new entry with same metadata
+          setFileMetadata(event.newPath, {
+            ...oldMetadata,
+            modifiedAt: Date.now(),
+          });
+          
+          // Remove old entry
+          purgeFile(event.oldPath);
+          
+          // Update parent's contents to reference new path
+          if (oldMetadata.partOf) {
+            const oldRelative = getRelativePathForContents(oldMetadata.partOf, event.oldPath);
+            const newRelative = getRelativePathForContents(oldMetadata.partOf, event.newPath);
+            removeFromContents(oldMetadata.partOf, oldRelative);
+            addToContents(oldMetadata.partOf, newRelative);
+          }
+        }
+        break;
+      }
+      
+      case 'metadata:changed': {
+        console.log(`[WorkspaceCRDT] Event: metadata:changed ${event.path}`);
+        
+        // Convert frontmatter to CRDT metadata format and update
+        const fm = event.frontmatter;
+        const updates: Partial<FileMetadata> = {
+          title: (fm.title as string) ?? null,
+          partOf: (fm.part_of as string) ?? null,
+          contents: (fm.contents as string[]) ?? null,
+          audience: (fm.audience as string[]) ?? null,
+          description: (fm.description as string) ?? null,
+          modifiedAt: Date.now(),
+        };
+        updateFileMetadata(event.path, updates);
+        break;
+      }
+      
+      case 'contents:changed': {
+        console.log(`[WorkspaceCRDT] Event: contents:changed ${event.path}`);
+        updateFileMetadata(event.path, { contents: event.contents });
+        break;
+      }
+    }
+  };
+  
+  // Subscribe to all event types
+  backend.on('file:created', handleEvent);
+  backend.on('file:deleted', handleEvent);
+  backend.on('file:moved', handleEvent);
+  backend.on('file:renamed', handleEvent);
+  backend.on('metadata:changed', handleEvent);
+  backend.on('contents:changed', handleEvent);
+  
+  console.log('[WorkspaceCRDT] Subscribed to backend events');
 }
 
 /**
@@ -1171,8 +1356,20 @@ async function handleRemoteFileChange(
     if (metadata === null || metadata.deleted) {
       // File was deleted remotely
       try {
+        // First, get the partOf before deletion to know the parent
+        // Use the previous metadata if available (before it was marked deleted)
+        const previousMetadata = workspaceSession!.filesMap.get(path);
+        const parentPath = previousMetadata?.partOf ?? metadata?.partOf;
+        
         await backend.deleteEntry(path);
         console.log(`[WorkspaceCRDT] Deleted local file from remote: ${path}`);
+        
+        // Remove from parent's contents if we know the parent
+        if (parentPath) {
+          removeFromContents(parentPath, path);
+          console.log(`[WorkspaceCRDT] Removed ${path} from parent ${parentPath} contents`);
+        }
+        
         remoteFileSyncCallback?.([], [path]);
         workspaceSession.onRemoteFileSync?.([], [path]);
       } catch {
@@ -1260,6 +1457,23 @@ function handleFilesDeepChange(_events: Y.YEvent<any>[]): void {
 // ============================================================================
 // Utilities
 // ============================================================================
+
+/**
+ * Wait for IndexedDB persistence to sync (load local data).
+ * This is fast if data is already cached locally (typically instant).
+ * Returns immediately if already synced.
+ */
+export function waitForIndexedDBSync(): Promise<void> {
+  return new Promise((resolve) => {
+    if (indexedDBSynced) {
+      resolve();
+      return;
+    }
+    
+    // Add to pending resolvers - will be called when persistence syncs
+    indexedDBSyncResolvers.push(resolve);
+  });
+}
 
 /**
  * Wait for the workspace to sync with the server.

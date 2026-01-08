@@ -160,6 +160,71 @@ export interface ImportResult {
 }
 
 // ============================================================================
+// Backend Events
+// ============================================================================
+
+/**
+ * Events emitted by Backend operations.
+ * Subscribe to these to automatically update CRDT state.
+ */
+export type BackendEventType =
+  | 'file:created'
+  | 'file:deleted'
+  | 'file:renamed'
+  | 'file:moved'
+  | 'metadata:changed'
+  | 'contents:changed';
+
+export interface FileCreatedEvent {
+  type: 'file:created';
+  path: string;
+  frontmatter: Record<string, unknown>;
+  parentPath?: string;
+}
+
+export interface FileDeletedEvent {
+  type: 'file:deleted';
+  path: string;
+  parentPath?: string;
+}
+
+export interface FileRenamedEvent {
+  type: 'file:renamed';
+  oldPath: string;
+  newPath: string;
+}
+
+export interface FileMovedEvent {
+  type: 'file:moved';
+  path: string;
+  oldParent?: string;
+  newParent?: string;
+}
+
+export interface MetadataChangedEvent {
+  type: 'metadata:changed';
+  path: string;
+  frontmatter: Record<string, unknown>;
+}
+
+export interface ContentsChangedEvent {
+  type: 'contents:changed';
+  path: string;
+  contents: string[];
+}
+
+export type BackendEvent =
+  | FileCreatedEvent
+  | FileDeletedEvent
+  | FileRenamedEvent
+  | FileMovedEvent
+  | MetadataChangedEvent
+  | ContentsChangedEvent;
+
+export type BackendEventListener = (event: BackendEvent) => void;
+
+
+// ============================================================================
 // Backend Interface
 // ============================================================================
 
@@ -181,6 +246,21 @@ export interface Backend {
    * Check if the backend is ready to use.
    */
   isReady(): boolean;
+
+  // --------------------------------------------------------------------------
+  // Events
+  // --------------------------------------------------------------------------
+
+  /**
+   * Subscribe to backend events.
+   * Use this to automatically update CRDT state when files change.
+   */
+  on(event: BackendEventType, listener: BackendEventListener): void;
+
+  /**
+   * Unsubscribe from backend events.
+   */
+  off(event: BackendEventType, listener: BackendEventListener): void;
 
   // --------------------------------------------------------------------------
   // Configuration

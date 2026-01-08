@@ -9,8 +9,11 @@ import type {
   SearchOptions,
   CreateEntryOptions,
   TemplateInfo,
+  BackendEventType,
+  BackendEventListener,
 } from "./interface";
 import { BackendError } from "./interface";
+import { BackendEventEmitter } from "./eventEmitter";
 
 function normalizeEntryPathToWorkspaceRoot(
   inputPath: string,
@@ -313,6 +316,7 @@ export class WasmBackend implements Backend {
   private config: Config | null = null;
   private wasm: WasmModule | null = null;
   private ready = false;
+  private eventEmitter = new BackendEventEmitter();
 
   // Typed WASM class instances
   private _workspace: InstanceType<WasmModule["DiaryxWorkspace"]> | null = null;
@@ -463,6 +467,18 @@ export class WasmBackend implements Backend {
   }
 
   // --------------------------------------------------------------------------
+  // Events
+  // --------------------------------------------------------------------------
+
+  on(event: BackendEventType, listener: BackendEventListener): void {
+    this.eventEmitter.on(event, listener);
+  }
+
+  off(event: BackendEventType, listener: BackendEventListener): void {
+    this.eventEmitter.off(event, listener);
+  }
+
+  // --------------------------------------------------------------------------
   // Configuration
   // --------------------------------------------------------------------------
 
@@ -526,15 +542,69 @@ export class WasmBackend implements Backend {
       path,
       workspaceRoot,
     );
-    return this.entry.create(normalizedPath, options ?? null);
+    const newPath = this.entry.create(normalizedPath, options ?? null);
+    
+    // Get frontmatter of new entry and emit event
+    const frontmatter = await this.getFrontmatter(newPath);
+    const parentPath = (frontmatter.part_of as string) ?? undefined;
+    this.eventEmitter.emit({
+      type: 'file:created',
+      path: newPath,
+      frontmatter,
+      parentPath,
+    });
+    
+    return newPath;
   }
 
   async deleteEntry(path: string): Promise<void> {
+    // Get parent before deleting
+    let parentPath: string | undefined;
+    try {
+      const frontmatter = await this.getFrontmatter(path);
+      parentPath = (frontmatter.part_of as string) ?? undefined;
+    } catch {
+      // Entry might not exist, continue with delete
+    }
+    
     this.entry.delete(path);
+    
+    this.eventEmitter.emit({
+      type: 'file:deleted',
+      path,
+      parentPath,
+    });
   }
 
   async moveEntry(fromPath: string, toPath: string): Promise<string> {
-    return this.entry.move_entry(fromPath, toPath);
+    // Get old parent before moving
+    let oldParent: string | undefined;
+    try {
+      const oldFrontmatter = await this.getFrontmatter(fromPath);
+      oldParent = (oldFrontmatter.part_of as string) ?? undefined;
+    } catch {
+      // Continue with move
+    }
+    
+    const result = this.entry.move_entry(fromPath, toPath);
+    
+    // Get new parent after moving
+    let newParent: string | undefined;
+    try {
+      const newFrontmatter = await this.getFrontmatter(result);
+      newParent = (newFrontmatter.part_of as string) ?? undefined;
+    } catch {
+      // Continue without new parent info
+    }
+    
+    this.eventEmitter.emit({
+      type: 'file:moved',
+      path: result,
+      oldParent,
+      newParent,
+    });
+    
+    return result;
   }
 
   async attachEntryToParent(
@@ -550,10 +620,30 @@ export class WasmBackend implements Backend {
       parentIndexPath,
       workspaceRoot,
     );
-    return this.entry.attach_to_parent(
+    
+    // Get old parent before moving
+    let oldParent: string | undefined;
+    try {
+      const oldFrontmatter = await this.getFrontmatter(normalizedEntryPath);
+      oldParent = (oldFrontmatter.part_of as string) ?? undefined;
+    } catch {
+      // Continue with attach
+    }
+    
+    const result = this.entry.attach_to_parent(
       normalizedEntryPath,
       normalizedParentIndexPath,
     );
+    
+    // Emit file:moved event
+    this.eventEmitter.emit({
+      type: 'file:moved',
+      path: normalizedEntryPath,
+      oldParent,
+      newParent: normalizedParentIndexPath,
+    });
+    
+    return result;
   }
 
   async convertToIndex(path: string): Promise<string> {
@@ -574,7 +664,15 @@ export class WasmBackend implements Backend {
   }
 
   async renameEntry(path: string, newFilename: string): Promise<string> {
-    return this.entry.rename(path, newFilename);
+    const newPath = this.entry.rename(path, newFilename);
+    
+    this.eventEmitter.emit({
+      type: 'file:renamed',
+      oldPath: path,
+      newPath,
+    });
+    
+    return newPath;
   }
 
   async ensureDailyEntry(): Promise<string> {
@@ -665,10 +763,14 @@ export class WasmBackend implements Backend {
     value: unknown,
   ): Promise<void> {
     this.frontmatter.set_property(path, key, value);
+    // Note: We do NOT emit metadata:changed here to avoid infinite loops
+    // when sync operations update frontmatter. The CRDT already knows about
+    // these changes and will propagate them appropriately.
   }
 
   async removeFrontmatterProperty(path: string, key: string): Promise<void> {
     this.frontmatter.remove_property(path, key);
+    // Note: Same as above - no event emission to prevent loops
   }
 
   // --------------------------------------------------------------------------

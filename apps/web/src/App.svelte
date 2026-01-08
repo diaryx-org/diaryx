@@ -18,13 +18,6 @@
     disconnectWorkspace,
     reconnectWorkspace,
     destroyWorkspace,
-    getFileMetadata,
-    deleteFile as crdtDeleteFile,
-    removeFromContents,
-    moveFile as crdtMoveFile,
-    renameFile as crdtRenameFile,
-    addAttachment as crdtAddAttachment,
-    removeAttachment as crdtRemoveAttachment,
     setWorkspaceServer,
   } from "./lib/workspaceCrdt";
   // Note: YDoc and HocuspocusProvider types are now handled by collaborationStore
@@ -57,7 +50,6 @@
     initializeWorkspaceCrdt,
     updateCrdtFileMetadata,
     addFileToCrdt,
-    createAttachmentRef,
   } from "./models/services";
 
   // Dynamically import Editor to avoid SSR issues
@@ -511,7 +503,30 @@
         // Setup Y.js collaboration for this document
         // Destroy the previous collaboration session to prevent stale data from corrupting other clients.
         // We use destroyDocument with a delay to let TipTap plugins finish tearing down.
-        if (currentCollaborationPath) {
+        // IMPORTANT: Skip destruction if we're re-opening the same file (e.g., from remote sync callback)
+        
+        // Calculate what the new collaboration path will be
+        let workspaceDir = tree?.path || "";
+        if (workspaceDir.endsWith("/"))
+          workspaceDir = workspaceDir.slice(0, -1);
+        if (
+          workspaceDir.endsWith("README.md") ||
+          workspaceDir.endsWith("index.md")
+        ) {
+          workspaceDir = workspaceDir.substring(
+            0,
+            workspaceDir.lastIndexOf("/"),
+          );
+        }
+        let newRelativePath = currentEntry.path;
+        if (workspaceDir && currentEntry.path.startsWith(workspaceDir)) {
+          newRelativePath = currentEntry.path.substring(
+            workspaceDir.length + 1,
+          );
+        }
+        
+        // Only destroy previous session if switching to a different file
+        if (currentCollaborationPath && currentCollaborationPath !== newRelativePath) {
           const pathToDestroy = currentCollaborationPath;
           collaborationStore.clearCollaborationSession();
           await tick();
@@ -531,44 +546,19 @@
         // Connect to collaboration for this entry only if enabled.
         // If not enabled, Editor will render the plain markdown `content` immediately.
         if (collaborationEnabled) {
-          // Use RELATIVE path within workspace so desktop and iOS match
           try {
-            // Get workspace directory from tree path
-            // We want the root folder so we can create relative paths like "Utility/doc.md"
-            let workspaceDir = tree?.path || "";
-            // Handle case where tree.path might be the index file or have trailing slash
-            if (workspaceDir.endsWith("/"))
-              workspaceDir = workspaceDir.slice(0, -1);
-            if (
-              workspaceDir.endsWith("README.md") ||
-              workspaceDir.endsWith("index.md")
-            ) {
-              workspaceDir = workspaceDir.substring(
-                0,
-                workspaceDir.lastIndexOf("/"),
-              );
-            }
-
-            // Calculate relative path within workspace
-            let relativePath = currentEntry.path;
-            if (workspaceDir && currentEntry.path.startsWith(workspaceDir)) {
-              relativePath = currentEntry.path.substring(
-                workspaceDir.length + 1,
-              ); // +1 for the /
-            }
-
             console.log(
               "[App] Collaboration room:",
-              relativePath,
+              newRelativePath,
               "(from",
               currentEntry.path,
               ")",
             );
 
-            const { ydoc, provider } = getCollaborativeDocument(relativePath, {
+            const { ydoc, provider } = getCollaborativeDocument(newRelativePath, {
               initialContent: currentEntry.content, // Seed Y.Doc with content on first create
             });
-            collaborationStore.setCollaborationSession(ydoc, provider, relativePath);
+            collaborationStore.setCollaborationSession(ydoc, provider, newRelativePath);
           } catch (e) {
             console.warn("[App] Failed to setup collaboration:", e);
             collaborationStore.clearCollaborationSession();
@@ -816,23 +806,11 @@
     if (!confirm) return;
 
     try {
-      // Get metadata before deleting to know the parent
-      const metadata = getFileMetadata(path);
-
       await backend.deleteEntry(path);
       await persistNow();
 
-      // Update CRDT - mark as deleted and remove from parent
-      if (workspaceCrdtInitialized) {
-        try {
-          crdtDeleteFile(path);
-          if (metadata?.partOf) {
-            removeFromContents(metadata.partOf, path);
-          }
-        } catch (e) {
-          console.error("[App] Failed to update CRDT on delete:", e);
-        }
-      }
+      // CRDT is now automatically updated via backend event subscription
+      // (file:deleted event triggers crdtDeleteFile and removeFromContents)
 
       // If we deleted the currently open entry, clear it
       if (currentEntry?.path === path) {
@@ -969,7 +947,6 @@
     try {
       // Convert file to base64
       const dataBase64 = await fileToBase64(file);
-      const entryPath = pendingAttachmentPath;
 
       // Upload attachment
       const attachmentPath = await backend.uploadAttachment(
@@ -979,15 +956,7 @@
       );
       await persistNow();
 
-      // Update CRDT with new attachment
-      if (workspaceCrdtInitialized) {
-        try {
-          const attachmentRef = createAttachmentRef(attachmentPath, file);
-          crdtAddAttachment(entryPath, attachmentRef);
-        } catch (e) {
-          console.error("[App] Failed to add attachment to CRDT:", e);
-        }
-      }
+      // Attachments are synced as part of file metadata via CRDT events
 
       // Refresh the entry if it's currently open
       if (currentEntry?.path === pendingAttachmentPath) {
@@ -1056,7 +1025,6 @@
     }
 
     try {
-      const entryPath = currentEntry.path;
       const dataBase64 = await fileToBase64(file);
       const attachmentPath = await backend.uploadAttachment(
         currentEntry.path,
@@ -1064,15 +1032,7 @@
         dataBase64,
       );
 
-      // Update CRDT with new attachment
-      if (workspaceCrdtInitialized) {
-        try {
-          const attachmentRef = createAttachmentRef(attachmentPath, file);
-          crdtAddAttachment(entryPath, attachmentRef);
-        } catch (e) {
-          console.error("[App] Failed to add attachment to CRDT:", e);
-        }
-      }
+      // Attachments are synced as part of file metadata via CRDT events
 
       await persistNow();
 
@@ -1112,18 +1072,10 @@
     if (!backend || !currentEntry) return;
 
     try {
-      const entryPath = currentEntry.path;
       await backend.deleteAttachment(currentEntry.path, attachmentPath);
       await persistNow();
 
-      // Update CRDT
-      if (workspaceCrdtInitialized) {
-        try {
-          crdtRemoveAttachment(entryPath, attachmentPath);
-        } catch (e) {
-          console.error("[App] Failed to remove attachment from CRDT:", e);
-        }
-      }
+      // Attachments are synced as part of file metadata via CRDT events
 
       // Refresh current entry to update attachments list
       currentEntry = await backend.getEntry(currentEntry.path);
@@ -1143,10 +1095,6 @@
     );
 
     try {
-      // Get old parent before moving
-      const metadata = getFileMetadata(entryPath);
-      const oldParentPath = metadata?.partOf ?? null;
-
       // Attach the entry to the new parent
       // This will:
       // - Add entry to newParent's `contents`
@@ -1154,14 +1102,8 @@
       await backend.attachEntryToParent(entryPath, newParentPath);
       await persistNow();
 
-      // Update CRDT
-      if (workspaceCrdtInitialized) {
-        try {
-          crdtMoveFile(entryPath, oldParentPath, newParentPath);
-        } catch (e) {
-          console.error("[App] Failed to move file in CRDT:", e);
-        }
-      }
+      // CRDT is now automatically updated via backend event subscription
+      // (file:moved event triggers CRDT updates)
 
       await refreshTree();
       await runValidation();
@@ -1205,18 +1147,8 @@
               expandedNodes = expandedNodes; // trigger reactivity
             }
 
-            // Update CRDT with rename
-            if (workspaceCrdtInitialized) {
-              try {
-                crdtRenameFile(oldPath, newPath);
-                updateCrdtFileMetadata(newPath, {
-                  ...currentEntry.frontmatter,
-                  [key]: value,
-                });
-              } catch (e) {
-                console.error("[App] Failed to rename file in CRDT:", e);
-              }
-            }
+            // CRDT is now automatically updated via backend event subscription
+            // (file:renamed event triggers CRDT updates)
 
             // Update current entry path and refresh tree
             currentEntry = {

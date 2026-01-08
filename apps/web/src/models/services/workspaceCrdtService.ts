@@ -9,6 +9,7 @@ import {
   updateFileMetadata,
   addToContents,
   setInitializing,
+  waitForIndexedDBSync,
   type FileMetadata,
   type BinaryRef,
 } from '$lib/workspaceCrdt';
@@ -58,7 +59,10 @@ export async function initializeWorkspaceCrdt(
     // Set workspace ID for per-file document room naming
     setWorkspaceId(workspaceId);
 
-    // Initialize workspace CRDT
+    // Track if this is the first server sync (for syncToLocal)
+    let hasRunSyncToLocal = false;
+
+    // Initialize workspace CRDT with background server sync callback
     await initWorkspace({
       workspaceId: workspaceId ?? undefined,
       serverUrl: collaborationEnabled ? serverUrl : null,
@@ -66,21 +70,29 @@ export async function initializeWorkspaceCrdt(
       onFilesChange: callbacks.onFilesChange,
       onConnectionChange: callbacks.onConnectionChange,
       onRemoteFileSync: callbacks.onRemoteFileSync,
+      // This callback runs when server sync completes (in background)
+      onServerSynced: async () => {
+        // Only run syncToLocal once per session
+        if (hasRunSyncToLocal) return;
+        hasRunSyncToLocal = true;
+        
+        console.log('[WorkspaceCrdtService] Background server sync complete, running syncToLocal...');
+        try {
+          const { created, deleted } = await syncToLocal();
+          if (created.length > 0 || deleted.length > 0) {
+            console.log(`[WorkspaceCrdtService] Background syncToLocal: created ${created.length}, deleted ${deleted.length}`);
+          }
+        } catch (e) {
+          console.error('[WorkspaceCrdtService] Background syncToLocal failed:', e);
+        }
+      },
     });
 
-    // Wait for server sync first (if connected) to get existing files
-    if (collaborationEnabled) {
-      const { waitForSync } = await import('$lib/workspaceCrdt');
-      const synced = await waitForSync(5000);
-      console.log(`[WorkspaceCrdtService] Server sync ${synced ? 'complete' : 'timed out'}`);
-      
-      // STEP 1: Sync CRDT → Local (create local files for any that exist in CRDT but not locally)
-      console.log('[WorkspaceCrdtService] Syncing CRDT to local...');
-      const { created, deleted } = await syncToLocal();
-      console.log(`[WorkspaceCrdtService] Synced CRDT to local: created ${created.length}, deleted ${deleted.length}`);
-    }
+    // STEP 1: Wait for LOCAL IndexedDB sync (instant if data cached)
+    await waitForIndexedDBSync();
+    console.log('[WorkspaceCrdtService] Local IndexedDB synced');
 
-    // STEP 2: Sync Local → CRDT (add local files that don't exist in CRDT yet)
+    // STEP 2: Sync Local → CRDT (user can start working immediately!)
     // Use setInitializing to prevent race conditions with incoming remote changes
     setInitializing(true);
     try {
@@ -89,6 +101,10 @@ export async function initializeWorkspaceCrdt(
     } finally {
       setInitializing(false);
     }
+
+    // STEP 3: Server sync happens in background via HocuspocusProvider
+    // When it completes, onServerSynced callback runs syncToLocal()
+    // (no blocking waitForSync!)
 
     // Garbage collect old deleted files (older than 7 days)
     const purged = garbageCollect(7 * 24 * 60 * 60 * 1000);

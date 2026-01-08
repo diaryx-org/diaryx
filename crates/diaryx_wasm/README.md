@@ -21,17 +21,18 @@ wasm-pack build --target web --out-dir ../../apps/web/src/lib/wasm
 
 The crate provides typed class-based APIs that wrap `diaryx_core` functionality:
 
-| Class               | Purpose                              |
-| ------------------- | ------------------------------------ |
-| `DiaryxWorkspace`   | Workspace tree operations            |
-| `DiaryxEntry`       | Entry CRUD operations                |
-| `DiaryxFrontmatter` | Frontmatter manipulation             |
-| `DiaryxSearch`      | Workspace search                     |
-| `DiaryxTemplate`    | Template management                  |
-| `DiaryxValidation`  | Link integrity validation and fixing |
-| `DiaryxExport`      | Export with audience filtering       |
-| `DiaryxAttachment`  | Attachment upload/download           |
-| `DiaryxFilesystem`  | Low-level filesystem operations      |
+| Class                    | Purpose                                   |
+| ------------------------ | ----------------------------------------- |
+| `DiaryxWorkspace`        | Workspace tree operations                 |
+| `DiaryxEntry`            | Entry CRUD operations                     |
+| `DiaryxFrontmatter`      | Frontmatter manipulation                  |
+| `DiaryxSearch`           | Workspace search                          |
+| `DiaryxTemplate`         | Template management                       |
+| `DiaryxValidation`       | Link integrity validation and fixing      |
+| `DiaryxExport`           | Export with audience filtering            |
+| `DiaryxAttachment`       | Attachment upload/download                |
+| `DiaryxFilesystem`       | Low-level filesystem operations (sync)    |
+| `DiaryxAsyncFilesystem`  | Async filesystem operations with Promises |
 
 ### In-Memory Filesystem
 
@@ -106,6 +107,64 @@ import {
 const result = validate_workspace("workspace");
 const fixSummary = fix_all_validation_issues(result);
 ```
+
+### DiaryxAsyncFilesystem
+
+Async filesystem operations that return JavaScript Promises. This is useful for consistent async/await patterns in JavaScript and future integration with truly async storage (e.g., IndexedDB).
+
+```javascript
+import init, { DiaryxAsyncFilesystem } from "./wasm/diaryx_wasm.js";
+
+await init();
+const asyncFs = new DiaryxAsyncFilesystem();
+
+// All methods return Promises
+const content = await asyncFs.read_file("workspace/README.md");
+await asyncFs.write_file("workspace/new.md", "# New File");
+const exists = await asyncFs.file_exists("workspace/new.md");
+
+// Directory operations
+await asyncFs.create_dir_all("workspace/notes/2024");
+const isDir = await asyncFs.is_dir("workspace/notes");
+
+// List files
+const mdFiles = await asyncFs.list_md_files("workspace");
+console.log(`Found ${mdFiles.count} markdown files:`, mdFiles.files);
+
+// Recursive listing
+const allMd = await asyncFs.list_md_files_recursive("workspace");
+const allFiles = await asyncFs.list_all_files_recursive("workspace");
+
+// Binary file operations
+const data = await asyncFs.read_binary("workspace/image.png");
+await asyncFs.write_binary("workspace/copy.png", data);
+
+// Bulk operations for IndexedDB sync
+const backupData = await asyncFs.get_backup_data();
+// ... persist to IndexedDB ...
+await asyncFs.restore_from_backup(backupData);
+
+// Load/export files
+await asyncFs.load_files([
+  ["workspace/README.md", "# Hello"],
+  ["workspace/notes.md", "# Notes"],
+]);
+const entries = await asyncFs.export_files();
+
+// Clear filesystem
+await asyncFs.clear();
+```
+
+#### Async vs Sync Filesystem
+
+- `DiaryxFilesystem` - Synchronous methods, returns values directly
+- `DiaryxAsyncFilesystem` - All methods return Promises
+
+While the underlying `InMemoryFileSystem` is synchronous, `DiaryxAsyncFilesystem` provides a Promise-based API that:
+
+1. Enables consistent async/await patterns in JavaScript
+2. Allows for future integration with truly async operations
+3. Works well with JavaScript's event loop
 
 ## Error Handling
 

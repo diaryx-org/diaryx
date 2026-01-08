@@ -21,6 +21,7 @@
 //!
 //! All methods return `Result<T, JsValue>` for JavaScript interop.
 
+mod async_filesystem;
 mod attachment;
 mod entry;
 mod error;
@@ -35,6 +36,7 @@ mod validation;
 mod workspace;
 
 // Re-export classes
+pub use async_filesystem::DiaryxAsyncFilesystem;
 pub use attachment::DiaryxAttachment;
 pub use entry::DiaryxEntry;
 pub use export::DiaryxExport;

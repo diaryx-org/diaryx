@@ -30,9 +30,10 @@ diaryx_core
     ├── export.rs (Like backup, but filtering by "audience" trait)
     ├── frontmatter.rs (Operations to read and manipulate frontmatter in markdown files)
     ├── fs (Filesystem abstraction)
-    │   ├── memory.rs (In-memory filesystem, used by WASM/web client)
-    │   ├── mod.rs
-    │   └── native.rs (Actual filesystem [std::fs] used by Tauri/CLI)
+    │   ├── async_fs.rs (Async filesystem trait and SyncToAsyncFs adapter)
+    │   ├── memory.rs (In-memory filesystem, used by WASM/web client)
+    │   ├── mod.rs
+    │   └── native.rs (Actual filesystem [std::fs] used by Tauri/CLI)
     ├── lib.rs
     ├── publish (Uses comrak to export to HTML)
     │   ├── mod.rs
@@ -223,3 +224,74 @@ fixer.fix_missing_part_of(Path::new("./orphan.md"), Path::new("./index.md"));
 ## Configuration
 
 ## Filesystem abstraction
+
+The `fs` module provides filesystem abstraction through two traits: `FileSystem` (synchronous) and `AsyncFileSystem` (asynchronous).
+
+### FileSystem trait
+
+The synchronous `FileSystem` trait is used by most of the library and supports different implementations:
+
+- `RealFileSystem` - Native filesystem using `std::fs` (not available on WASM)
+- `InMemoryFileSystem` - In-memory implementation, useful for WASM and testing
+
+```rust,no_run
+use diaryx_core::fs::{FileSystem, InMemoryFileSystem};
+use std::path::Path;
+
+// Create an in-memory filesystem
+let fs = InMemoryFileSystem::new();
+
+// Write a file
+fs.write_file(Path::new("workspace/README.md"), "# Hello").unwrap();
+
+// Read it back
+let content = fs.read_to_string(Path::new("workspace/README.md")).unwrap();
+assert_eq!(content, "# Hello");
+
+// Check if file exists
+assert!(fs.exists(Path::new("workspace/README.md")));
+
+// List markdown files
+let files = fs.list_md_files(Path::new("workspace")).unwrap();
+```
+
+### AsyncFileSystem trait
+
+The `AsyncFileSystem` trait provides async versions of all `FileSystem` methods, useful for:
+
+- WASM environments where JavaScript APIs (like IndexedDB) are async
+- Native code using async runtimes like tokio
+- Code that needs to await filesystem operations
+
+```rust,ignore
+use diaryx_core::fs::{AsyncFileSystem, InMemoryFileSystem, SyncToAsyncFs};
+use std::path::Path;
+
+// Wrap a sync filesystem to use with async code
+let sync_fs = InMemoryFileSystem::new();
+let async_fs = SyncToAsyncFs::new(sync_fs);
+
+// Use in async context
+async {
+    async_fs.write_file(Path::new("test.md"), "# Async!").await.unwrap();
+    let content = async_fs.read_to_string(Path::new("test.md")).await.unwrap();
+    let exists = async_fs.exists(Path::new("test.md")).await;
+};
+```
+
+### SyncToAsyncFs adapter
+
+The `SyncToAsyncFs` struct wraps any synchronous `FileSystem` implementation to provide an `AsyncFileSystem` interface. Since the underlying operations are synchronous, the async methods complete immediately:
+
+```rust,ignore
+use diaryx_core::fs::{InMemoryFileSystem, SyncToAsyncFs};
+
+let sync_fs = InMemoryFileSystem::new();
+let async_fs = SyncToAsyncFs::new(sync_fs);
+
+// Access the inner sync filesystem if needed
+let inner = async_fs.inner();
+
+// Or unwrap it
+let recovered = async_fs.into_inner();
+```

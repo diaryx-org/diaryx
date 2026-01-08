@@ -2,11 +2,15 @@
 //!
 //! This module provides the `FileSystem` trait for abstracting filesystem operations,
 //! allowing different implementations for native and WASM targets.
+//!
+//! For async operations, see the `AsyncFileSystem` trait and `SyncToAsyncFs` adapter.
 
+mod async_fs;
 mod memory;
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
 
+pub use async_fs::{AsyncFileSystem, BoxFuture, SyncToAsyncFs};
 pub use memory::InMemoryFileSystem;
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::RealFileSystem;

@@ -109,14 +109,15 @@ export class WorkerBackendNew implements Backend {
   }
 
   slugifyTitle(title: string): string {
-    return title
+    const slug = title
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-|-$/g, '');
+    return slug ? `${slug}.md` : 'untitled.md';
   }
 
   attachEntryToParent = (entry: string, parent: string): Promise<string> =>
-    this.remote!.call('attachEntryToParent', [entry, parent]) as Promise<string>;
+    this.remote!.call('attachToParent', [entry, parent]) as Promise<string>;
   
   convertToIndex = (path: string): Promise<string> =>
     this.remote!.call('convertToIndex', [path]) as Promise<string>;
@@ -146,7 +147,7 @@ export class WorkerBackendNew implements Backend {
     this.remote!.call('exportBinaryAttachments', [rootPath, audience]) as Promise<any>;
 
   getAttachments = (entryPath: string): Promise<string[]> =>
-    this.remote!.call('getAttachments', [entryPath]) as Promise<string[]>;
+    this.remote!.call('listAttachments', [entryPath]) as Promise<string[]>;
   
   uploadAttachment = (entryPath: string, filename: string, dataBase64: string): Promise<string> =>
     this.remote!.call('uploadAttachment', [entryPath, filename, dataBase64]) as Promise<string>;
@@ -164,16 +165,16 @@ export class WorkerBackendNew implements Backend {
     this.remote!.call('removeFrontmatterProperty', [path, key]) as Promise<void>;
 
   listTemplates = (): Promise<any> =>
-    this.remote!.call('listTemplates', []) as Promise<any>;
+    this.remote!.call('listTemplates', ['workspace']) as Promise<any>;
   
   getTemplate = (name: string): Promise<string> =>
-    this.remote!.call('getTemplate', [name]) as Promise<string>;
+    this.remote!.call('getTemplate', [name, 'workspace']) as Promise<string>;
   
   saveTemplate = (name: string, content: string): Promise<void> =>
-    this.remote!.call('saveTemplate', [name, content]) as Promise<void>;
+    this.remote!.call('saveTemplate', [name, content, 'workspace']) as Promise<void>;
   
   deleteTemplate = (name: string): Promise<void> =>
-    this.remote!.call('deleteTemplate', [name]) as Promise<void>;
+    this.remote!.call('deleteTemplate', [name, 'workspace']) as Promise<void>;
 
   validateFile = (filePath: string): Promise<any> =>
     this.remote!.call('validateFile', [filePath]) as Promise<any>;

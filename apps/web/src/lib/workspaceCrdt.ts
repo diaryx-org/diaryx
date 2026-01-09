@@ -742,6 +742,26 @@ export function setPartOf(childPath: string, parentPath: string | null): void {
 }
 
 /**
+ * Compute relative path from parent index's directory to child file.
+ * This matches how the Rust backend stores paths in contents arrays.
+ * Example: parentPath="workspace/README.md", childPath="workspace/test.md" -> "test.md"
+ * Example: parentPath="workspace/Daily/index.md", childPath="workspace/Daily/2026/index.md" -> "2026/index.md"
+ */
+function getRelativePathForContents(parentPath: string, childPath: string): string {
+  // Get parent directory (remove filename from parent path)
+  const parentDir = parentPath.substring(0, parentPath.lastIndexOf('/') + 1);
+  
+  // If child path starts with parent directory, return relative portion
+  if (childPath.startsWith(parentDir)) {
+    return childPath.substring(parentDir.length);
+  }
+  
+  // Fallback: just return the filename
+  const lastSlash = childPath.lastIndexOf('/');
+  return lastSlash >= 0 ? childPath.substring(lastSlash + 1) : childPath;
+}
+
+/**
  * Move a file to a new parent.
  * Updates both the old parent's contents and new parent's contents,
  * as well as the file's part_of.
@@ -753,14 +773,16 @@ export function moveFile(
 ): void {
   if (!workspaceSession) return;
 
-  // Remove from old parent
+  // Remove from old parent (need to compute what relative path would have been)
   if (oldParentPath) {
-    removeFromContents(oldParentPath, filePath);
+    const oldRelativePath = getRelativePathForContents(oldParentPath, filePath);
+    removeFromContents(oldParentPath, oldRelativePath);
   }
 
-  // Add to new parent
+  // Add to new parent (compute relative path)
   if (newParentPath) {
-    addToContents(newParentPath, filePath);
+    const newRelativePath = getRelativePathForContents(newParentPath, filePath);
+    addToContents(newParentPath, newRelativePath);
   }
 
   // Update file's part_of
@@ -794,8 +816,11 @@ export function renameFile(oldPath: string, newPath: string): void {
   if (metadata.partOf) {
     const parent = workspaceSession.filesMap.get(metadata.partOf);
     if (parent?.contents) {
+      // Contents are stored as relative paths, so compute relative paths for comparison
+      const oldRelative = getRelativePathForContents(metadata.partOf, oldPath);
+      const newRelative = getRelativePathForContents(metadata.partOf, newPath);
       const newContents = parent.contents
-        .map((c) => (c === oldPath ? newPath : c))
+        .map((c) => (c === oldRelative ? newRelative : c))
         .sort();
       updateFileMetadata(metadata.partOf, { contents: newContents });
     }
@@ -969,8 +994,19 @@ async function syncTreeNode(
     if (existingMetadata) {
       // File already exists in CRDT - merge local contents into CRDT contents
       // This ensures children added locally get into the CRDT
+      // Note: contents should be RELATIVE paths (e.g., "2026/index.md"), not full paths
       const localContents = node.children.length > 0 
-        ? node.children.map((c: any) => c.path) 
+        ? node.children.map((c: any) => {
+            // Extract relative path from full path
+            // e.g., "workspace/Daily/2026/index.md" -> "2026/index.md" (relative to "workspace/Daily")
+            const childPath = c.path as string;
+            const nodeDir = node.path.substring(0, node.path.lastIndexOf('/'));
+            if (childPath.startsWith(nodeDir + '/')) {
+              return childPath.substring(nodeDir.length + 1);
+            }
+            // Fallback: just use the filename
+            return childPath.split('/').pop()!;
+          })
         : [];
       const crdtContents = existingMetadata.contents ?? [];
       
@@ -996,10 +1032,21 @@ async function syncTreeNode(
       const metadata: FileMetadata = {
         title: (frontmatter.title as string) ?? node.name ?? null,
         partOf: (frontmatter.part_of as string) ?? parentPath,
+        // Use frontmatter contents directly (they're already relative paths)
+        // For tree children, compute relative paths from this node's directory
         contents: frontmatter.contents
           ? (frontmatter.contents as string[])
           : node.children.length > 0
-            ? node.children.map((c: any) => c.path)
+            ? node.children.map((c: any) => {
+                // Extract relative path from full path
+                const childPath = c.path as string;
+                const nodeDir = node.path.substring(0, node.path.lastIndexOf('/'));
+                if (childPath.startsWith(nodeDir + '/')) {
+                  return childPath.substring(nodeDir.length + 1);
+                }
+                // Fallback: just use the filename
+                return childPath.split('/').pop()!;
+              })
             : null,
         attachments: ((frontmatter.attachments as string[]) ?? []).map(
           (path) => ({
@@ -1069,7 +1116,8 @@ export function metadataToFrontmatter(
   }
 
   if (metadata.contents && metadata.contents.length > 0) {
-    frontmatter.contents = metadata.contents;
+    // Convert absolute paths to relative filenames for frontmatter
+    frontmatter.contents = metadata.contents.map((p) => p.split("/").pop()!);
   }
 
   if (metadata.audience && metadata.audience.length > 0) {

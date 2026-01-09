@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from "svelte";
+  import * as yaml from "js-yaml";
   import {
     getBackend,
     type EntryData,
@@ -125,6 +126,15 @@
     });
   }
 
+  // Helper to handle mixed frontmatter types (Map from WASM vs Object from JSON/Tauri)
+  function normalizeFrontmatter(frontmatter: any): Record<string, any> {
+    if (!frontmatter) return {};
+    if (frontmatter instanceof Map) {
+      return Object.fromEntries(frontmatter.entries());
+    }
+    return frontmatter;
+  }
+
   /**
    * WASM backend may create a workspace root file without YAML frontmatter (e.g. just "# My Workspace").
    * Our frontmatter getter returns `{}` in that case, and writing a frontmatter property can succeed
@@ -140,7 +150,8 @@
 
     // Check if frontmatter already exists by looking for any existing properties
     // If frontmatter exists (even empty), the file already has frontmatter delimiters
-    const frontmatter = await backend.getFrontmatter(indexPath);
+    const rawFrontmatter = await backend.getFrontmatter(indexPath);
+    const frontmatter = normalizeFrontmatter(rawFrontmatter);
 
     // If frontmatter has properties, it definitely exists - nothing to do
     if (Object.keys(frontmatter).length > 0) return;
@@ -193,7 +204,7 @@
         setCollaborationServer(savedServerUrl);
         setWorkspaceServer(savedServerUrl);
         // Auto-enable collaboration if we have a saved server
-        collaborationStore.setEnabled(true);
+        // collaborationStore.setEnabled(true); // DISABLED BY DEFAULT per user request
       }
     }
 
@@ -263,7 +274,8 @@
   });
 
   // Initialize the workspace CRDT
-  async function setupWorkspaceCrdt() {
+  // Initialize the workspace CRDT
+  async function setupWorkspaceCrdt(retryCount = 0) {
     if (!backend) return;
 
     try {
@@ -320,13 +332,14 @@
               const rootFrontmatterProbe = await backend.getFrontmatter(
                 rootTree.path,
               );
+              const probedFm = normalizeFrontmatter(rootFrontmatterProbe);
               console.log(
                 "[App] Root getFrontmatter() keys:",
-                Object.keys(rootFrontmatterProbe ?? {}),
+                Object.keys(probedFm ?? {}),
               );
               console.log(
                 "[App] Root getFrontmatter() workspace_id:",
-                (rootFrontmatterProbe as any)?.workspace_id,
+                probedFm?.workspace_id,
               );
             } catch (e) {
               console.warn("[App] Root entry/frontmatter probe failed:", e);
@@ -343,14 +356,15 @@
               );
             }
 
-            const rootFrontmatter = await backend.getFrontmatter(rootTree.path);
+            const rawRootFm = await backend.getFrontmatter(rootTree.path);
+            const rootFrontmatter = normalizeFrontmatter(rawRootFm);
             console.log(
               "[App] Root frontmatter keys:",
               Object.keys(rootFrontmatter ?? {}),
             );
             console.log(
               "[App] Root workspace_id (raw):",
-              (rootFrontmatter as any)?.workspace_id,
+              rootFrontmatter?.workspace_id,
             );
 
             sharedWorkspaceId =
@@ -381,7 +395,7 @@
               );
               console.log(
                 "[App] Verified workspace_id after write:",
-                (verifyFrontmatter as any)?.workspace_id,
+                normalizeFrontmatter(verifyFrontmatter)?.workspace_id,
               );
 
               // Also re-read raw content to confirm it actually wrote frontmatter into the file.
@@ -407,13 +421,28 @@
           }
         } catch (e) {
           const errStr = e instanceof Error ? e.message : String(e);
-          if (errStr.includes("No workspace found")) {
+          if (
+            errStr.includes("No workspace found") ||
+            errStr.includes("NotFoundError") ||
+            errStr.includes("The object can not be found here")
+          ) {
             console.log("[App] Default workspace missing, creating...");
             try {
               await backend.createWorkspace("workspace", "My Journal");
               // Recursively try again to setup workspace_id and CRDT
               return await setupWorkspaceCrdt();
             } catch (createErr) {
+              const createErrStr = String(createErr);
+              if (createErrStr.includes("Workspace already exists")) {
+                 if (retryCount >= 3) {
+                    console.error("[App] Max retries reached for workspace setup. Stopping to prevent infinite loop.");
+                    uiStore.setError("Failed to initialize workspace: Unrecoverable error.");
+                    return;
+                 }
+                 console.log(`[App] Workspace existed but wasn't found initially. Retrying setup (attempt ${retryCount + 1})...`);
+                 await new Promise((resolve) => setTimeout(resolve, 500));
+                 return await setupWorkspaceCrdt(retryCount + 1);
+              }
               console.error(
                 "[App] Failed to create default workspace:",
                 createErr,
@@ -447,7 +476,9 @@
             // Reload current entry if it was updated to show new metadata
             if (currentEntry && files.has(currentEntry.path)) {
               try {
-                currentEntry = await backend.getEntry(currentEntry.path);
+                const entry = await backend.getEntry(currentEntry.path);
+                entry.frontmatter = normalizeFrontmatter(entry.frontmatter);
+                currentEntry = entry;
               } catch {
                 // File might have been deleted
               }
@@ -488,7 +519,11 @@
       // Cleanup previous blob URLs
       revokeBlobUrls();
 
-      currentEntry = await backend.getEntry(path);
+      const entry = await backend.getEntry(path);
+      // Normalize frontmatter to Object
+      entry.frontmatter = normalizeFrontmatter(entry.frontmatter);
+      currentEntry = entry;
+      
       titleError = null; // Clear any title error when switching files
       console.log("[App] Loaded entry:", currentEntry);
       console.log("[App] Frontmatter:", currentEntry?.frontmatter);
@@ -595,7 +630,22 @@
       const markdown = reverseBlobUrlsToAttachmentPaths(
         markdownWithBlobUrls || "",
       );
-      await backend.saveEntry(currentEntry.path, markdown);
+
+      // Reconstruct file with frontmatter
+      let contentToSave = markdown;
+      if (currentEntry.frontmatter) {
+        try {
+          // Dump frontmatter to YAML string
+          // Only include valid keys to avoid clutter (ignore nulls if desired, but here we dump all)
+          const frontmatterYaml = yaml.dump(currentEntry.frontmatter);
+          contentToSave = `---\n${frontmatterYaml}---\n\n${markdown}`;
+        } catch (fmErr) {
+          console.error("[App] Failed to serialize frontmatter:", fmErr);
+          // Fallback to just markdown if serialization fails, though this risks data loss
+        }
+      }
+
+      await backend.saveEntry(currentEntry.path, contentToSave);
       entryStore.markClean();
     } catch (e) {
       uiStore.setError(e instanceof Error ? e.message : String(e));
@@ -956,7 +1006,9 @@
 
       // Refresh the entry if it's currently open
       if (currentEntry?.path === pendingAttachmentPath) {
-        currentEntry = await backend.getEntry(pendingAttachmentPath);
+        const entry = await backend.getEntry(pendingAttachmentPath);
+        entry.frontmatter = normalizeFrontmatter(entry.frontmatter);
+        currentEntry = entry;
 
         // If it's an image, also insert it into the editor at cursor
         if (file.type.startsWith("image/") && editorRef) {
@@ -1031,7 +1083,9 @@
       // Attachments are synced as part of file metadata via CRDT events
 
       // Refresh the entry to update attachments list
-      currentEntry = await backend.getEntry(currentEntry.path);
+      const entry = await backend.getEntry(currentEntry.path);
+      entry.frontmatter = normalizeFrontmatter(entry.frontmatter);
+      currentEntry = entry;
 
       // Get the binary data back and create blob URL
       const data = await backend.getAttachmentData(
@@ -1071,7 +1125,9 @@
       // Attachments are synced as part of file metadata via CRDT events
 
       // Refresh current entry to update attachments list
-      currentEntry = await backend.getEntry(currentEntry.path);
+      const entry = await backend.getEntry(currentEntry.path);
+      entry.frontmatter = normalizeFrontmatter(entry.frontmatter);
+      currentEntry = entry;
       attachmentError = null;
     } catch (e) {
       attachmentError = e instanceof Error ? e.message : String(e);
@@ -1288,7 +1344,8 @@
 
   function getEntryTitle(entry: EntryData): string {
     // Prioritize frontmatter.title for live updates, fall back to cached title
-    const frontmatterTitle = entry.frontmatter?.title as string | undefined;
+    const fm = normalizeFrontmatter(entry.frontmatter);
+    const frontmatterTitle = fm?.title as string | undefined;
     return (
       frontmatterTitle ??
       entry.title ??

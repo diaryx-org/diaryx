@@ -124,11 +124,7 @@ const workerApi = {
   },
   
   async renameEntry(path: string, newFilename: string): Promise<string> {
-    // Compute new path from old path + new filename
-    const parts = path.split('/');
-    parts[parts.length - 1] = newFilename;
-    const newPath = parts.join('/');
-    return getBackend().moveEntry(path, newPath);
+    return getBackend().renameEntry(path, newFilename);
   },
 
   // =========================================================================

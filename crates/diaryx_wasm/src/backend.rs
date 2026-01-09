@@ -293,8 +293,15 @@ impl DiaryxBackend {
             let ws = Workspace::new(&*fs);
             let root_path = PathBuf::from(&workspace_path);
 
-            let root_index = ws.find_root_index_in_dir(&root_path).await
-                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            // If root_path is a directory, don't try to use it as an index file directly
+            // This prevents "workspace" (directory) from being returned as the root index path
+            // if parse_index somehow succeeds or if we fall through incorrectly.
+            let root_index = if ws.fs_ref().is_dir(&root_path).await {
+                None
+            } else {
+                 ws.find_root_index_in_dir(&root_path).await
+                    .map_err(|e| JsValue::from_str(&e.to_string()))?
+            };
 
             let root_index = match root_index {
                 Some(idx) => idx,
@@ -414,7 +421,9 @@ impl DiaryxBackend {
             let parsed = frontmatter::parse_or_empty(&content)
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
-            let frontmatter_js = serde_wasm_bindgen::to_value(&parsed.frontmatter)
+            // Serialize frontmatter as Object (default is Map for IndexMap)
+            let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+            let frontmatter_js = parsed.frontmatter.serialize(&serializer)
                 .unwrap_or(JsValue::NULL);
 
             // Return as JS object
@@ -523,7 +532,8 @@ impl DiaryxBackend {
             let parsed = frontmatter::parse_or_empty(&content)
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
-            serde_wasm_bindgen::to_value(&parsed.frontmatter).js_err()
+            let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+            parsed.frontmatter.serialize(&serializer).js_err()
         })
     }
 
@@ -773,29 +783,114 @@ impl DiaryxBackend {
             let today = Local::now().date_naive();
             let year = today.format("%Y").to_string();
             let month = today.format("%m").to_string();
+            let month_name = today.format("%B").to_string();
             let day_filename = today.format("%Y-%m-%d").to_string();
             
+            // Path components
+            let workspace_path = PathBuf::from("workspace");
+            let daily_base = workspace_path.join("Daily");
+            let year_dir = daily_base.join(&year);
+            let month_dir = year_dir.join(&month);
+            
             // Create directory structure: workspace/Daily/YYYY/MM/
-            let daily_dir = PathBuf::from("workspace").join("Daily").join(&year).join(&month);
-            fs.create_dir_all(&daily_dir).await
+            fs.create_dir_all(&month_dir).await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             
-            let daily_path = daily_dir.join(format!("{}.md", day_filename));
+            // Ensure Daily index exists
+            let daily_index_path = daily_base.join("index.md");
+            if !fs.exists(&daily_index_path).await {
+                let content = "---\ntitle: \"Daily\"\npart_of: \"../index.md\"\ncontents: []\n---\n\n# Daily\n";
+                fs.write_file(&daily_index_path, content).await
+                    .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            }
             
-            // Check if it exists
+            // Ensure year index exists
+            let year_index_path = year_dir.join("index.md");
+            if !fs.exists(&year_index_path).await {
+                let content = format!(
+                    "---\ntitle: \"{}\"\npart_of: \"../index.md\"\ncontents: []\n---\n\n# {}\n",
+                    year, year
+                );
+                fs.write_file(&year_index_path, &content).await
+                    .map_err(|e| JsValue::from_str(&e.to_string()))?;
+                
+                // Add year index to Daily index contents
+                Self::add_to_contents(&*fs, &daily_index_path, &format!("{}/index.md", year)).await?;
+            }
+            
+            // Ensure month index exists
+            let month_index_path = month_dir.join("index.md");
+            let month_title = format!("{} {}", month_name, year);
+            if !fs.exists(&month_index_path).await {
+                let content = format!(
+                    "---\ntitle: \"{}\"\npart_of: \"../index.md\"\ncontents: []\n---\n\n# {}\n",
+                    month_title, month_title
+                );
+                fs.write_file(&month_index_path, &content).await
+                    .map_err(|e| JsValue::from_str(&e.to_string()))?;
+                
+                // Add month index to year index contents
+                Self::add_to_contents(&*fs, &year_index_path, &format!("{}/index.md", month)).await?;
+            }
+            
+            // Create the daily entry
+            let daily_path = month_dir.join(format!("{}.md", day_filename));
+            
             if !fs.exists(&daily_path).await {
                 let title = today.format("%B %d, %Y").to_string();
                 let content = format!(
-                    "---\ntitle: \"{}\"\ncreated: \"{}\"\n---\n\n",
+                    "---\ntitle: \"{}\"\ncreated: \"{}\"\npart_of: \"index.md\"\n---\n\n",
                     title,
                     chrono::Utc::now().to_rfc3339()
                 );
                 fs.write_file(&daily_path, &content).await
                     .map_err(|e| JsValue::from_str(&e.to_string()))?;
+                
+                // Add to month index contents
+                Self::add_to_contents(&*fs, &month_index_path, &format!("{}.md", day_filename)).await?;
             }
             
             Ok(JsValue::from_str(&daily_path.to_string_lossy()))
         })
+    }
+    
+    /// Helper to add an entry to an index's contents list.
+    async fn add_to_contents(fs: &StorageBackend, index_path: &Path, entry: &str) -> Result<(), JsValue> {
+        if !fs.exists(index_path).await {
+            return Ok(());
+        }
+        
+        let index_content = fs.read_to_string(index_path).await
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        
+        if let Ok(mut parsed) = frontmatter::parse_or_empty(&index_content) {
+            let contents = parsed.frontmatter
+                .get("contents")
+                .and_then(|v| v.as_sequence())
+                .cloned()
+                .unwrap_or_default();
+            
+            // Check if already in contents
+            let already_exists = contents.iter().any(|v| {
+                v.as_str().map(|s| s == entry).unwrap_or(false)
+            });
+            
+            if !already_exists {
+                let mut new_contents = contents;
+                new_contents.push(serde_yaml::Value::String(entry.to_string()));
+                parsed.frontmatter.insert(
+                    "contents".to_string(),
+                    serde_yaml::Value::Sequence(new_contents)
+                );
+                
+                let new_index_content = frontmatter::serialize(&parsed.frontmatter, &parsed.body)
+                    .map_err(|e| JsValue::from_str(&e.to_string()))?;
+                fs.write_file(index_path, &new_index_content).await
+                    .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            }
+        }
+        
+        Ok(())
     }
 
     /// Convert a title to a kebab-case filename.

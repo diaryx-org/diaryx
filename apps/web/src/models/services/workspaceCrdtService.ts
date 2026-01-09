@@ -153,7 +153,17 @@ export function updateCrdtFileMetadata(
     updateFileMetadata(path, {
       title: (frontmatter.title as string) ?? null,
       partOf: (frontmatter.part_of as string) ?? null,
-      contents: frontmatter.contents ? (frontmatter.contents as string[]) : null,
+      contents: frontmatter.contents
+        ? (frontmatter.contents as string[]).map((c) =>
+            // If path refers to a file that has children, we need to know its parent?
+            // Actually, updateCrdtFileMetadata is called on a specific path.
+            // If we are updating 'workspace/index.md', contents 'foo.md' becomes 'workspace/foo.md'
+            // We can derive parent path from 'path'.
+            path.includes("/")
+              ? `${path.substring(0, path.lastIndexOf("/"))}/${c}`
+              : c,
+          )
+        : null,
       audience: (frontmatter.audience as string[]) ?? null,
       description: (frontmatter.description as string) ?? null,
       extra: Object.fromEntries(
@@ -182,7 +192,28 @@ export function addFileToCrdt(
     const metadata: FileMetadata = {
       title: (frontmatter.title as string) ?? null,
       partOf: parentPath ?? (frontmatter.part_of as string) ?? null,
-      contents: frontmatter.contents ? (frontmatter.contents as string[]) : null,
+      contents: frontmatter.contents
+        ? (frontmatter.contents as string[]).map((c) =>
+            // Resolve relative path against parentPath (if parent exists) or just use logic similar to above
+            // If parentPath is provided (e.g. 'workspace'), then 'file.md' -> 'workspace/file.md'
+            // But if addFileToCrdt is called for root, parentPath is null/undefined?
+            // Wait, addFileToCrdt is usually called with a specific path.
+            // If the file is 'workspace/index.md' (which is a directory representation?),
+            // then contents are children of 'workspace'.
+            // Actually, 'workspace/index.md' contents are siblings of 'index.md' inside 'workspace'.
+            // So resolving relative to parentPath is correct for children of a folder.
+            // BUT, if this file IS the parent, then contents are its children.
+            // The path passed here is the file's path.
+            // If path is 'workspace/index.md', its contents are in 'workspace/'.
+            // So we should use the directory containing this file as the base.
+            // EXCEPT for index files, where contents are nominally children of the directory.
+            // It's ambiguous without context.
+            // Let's assume standard behavior: contents are relative to the file's directory.
+            path.includes("/")
+              ? `${path.substring(0, path.lastIndexOf("/"))}/${c}`
+              : c,
+          )
+        : null,
       attachments: ((frontmatter.attachments as string[]) ?? []).map((p) => ({
         path: p,
         source: 'local' as const,
@@ -207,7 +238,16 @@ export function addFileToCrdt(
 
     // Add to parent's contents if parent exists
     if (parentPath) {
-      addToContents(parentPath, path);
+      // Calculate relative path (just the filename if inside parent dir, or fully relative)
+      // Mirror logic from workspaceCrdt.ts getRelativePathForContents
+      let relativePath = path;
+      if (path.startsWith(parentPath + '/')) {
+        relativePath = path.substring(parentPath.length + 1);
+      } else {
+        const lastSlash = path.lastIndexOf('/');
+        relativePath = lastSlash >= 0 ? path.substring(lastSlash + 1) : path;
+      }
+      addToContents(parentPath, relativePath);
     }
   } catch (e) {
     console.error('[WorkspaceCrdtService] Failed to add file:', e);

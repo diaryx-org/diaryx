@@ -302,7 +302,7 @@
       </div>
 
       <!-- Excluded count -->
-      {#if exportPlan && exportPlan.excluded.length > 0}
+      {#if exportPlan && exportPlan.excluded?.length > 0}
         <div class="text-xs text-muted-foreground">
           {exportPlan.excluded.length} file(s) excluded based on audience settings.
         </div>

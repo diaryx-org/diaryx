@@ -19,7 +19,7 @@ let backend: any | null = null;
 /**
  * Initialize the backend and set up event forwarding.
  */
-async function init(_port: MessagePort, storageType: StorageType): Promise<void> {
+async function init(_port: MessagePort, storageType: StorageType, directoryHandle?: FileSystemDirectoryHandle): Promise<void> {
   // _port unused for now, as events are not yet fully implemented in this worker wrapper
   // or are handled via side channels? 
   // The original code had: _eventPort = port;
@@ -31,11 +31,25 @@ async function init(_port: MessagePort, storageType: StorageType): Promise<void>
   // Create backend with specified storage type
   if (storageType === 'opfs') {
     backend = await wasm.DiaryxBackend.createOpfs();
+  } else if (storageType === 'filesystem-access') {
+    if (!directoryHandle) {
+      throw new Error('Directory handle required for filesystem-access storage type');
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    backend = (wasm.DiaryxBackend as any).createFromDirectoryHandle(directoryHandle);
   } else {
     backend = await wasm.DiaryxBackend.createIndexedDb();
   }
   
   console.log('[WasmWorker] DiaryxBackend initialized with storage:', storageType);
+}
+
+/**
+ * Initialize the backend with a File System Access API directory handle.
+ * This is called when the user selects "Local Folder" storage.
+ */
+async function initWithDirectoryHandle(_port: MessagePort, directoryHandle: FileSystemDirectoryHandle): Promise<void> {
+  return init(_port, 'filesystem-access', directoryHandle);
 }
 
 /**
@@ -53,6 +67,7 @@ function getBackend(): any {
  */
 const workerApi = {
   init,
+  initWithDirectoryHandle,
   
   isReady(): boolean {
     return backend !== null;

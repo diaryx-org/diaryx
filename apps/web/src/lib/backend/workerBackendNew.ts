@@ -43,7 +43,43 @@ export class WorkerBackendNew implements Backend {
     // Initialize the backend with storage type
     const storageType = getStorageType();
     console.log(`[WorkerBackendNew] Initializing with storage: ${storageType}`);
-    await this.remote.init(Comlink.transfer(port2, [port2]), storageType);
+    
+    if (storageType === 'filesystem-access') {
+      // For FSA, we need to get or request the directory handle
+      const { getStoredFileSystemHandle, storeFileSystemHandle } = await import('./storageType');
+      let handle = await getStoredFileSystemHandle();
+      
+      if (!handle) {
+        // No stored handle - prompt user to select a folder
+        // Note: showDirectoryPicker requires user gesture, so this will fail if not triggered by user action
+        try {
+          handle = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
+          await storeFileSystemHandle(handle!);
+        } catch (e) {
+          console.error('[WorkerBackendNew] Failed to get directory handle:', e);
+          throw new Error('Failed to open local folder. Please try again from Settings.');
+        }
+      } else {
+        // Verify we still have permission
+        // Note: queryPermission/requestPermission are not in TypeScript's lib types yet
+        const permission = await (handle as any).queryPermission({ mode: 'readwrite' });
+        if (permission !== 'granted') {
+          try {
+            const newPermission = await (handle as any).requestPermission({ mode: 'readwrite' });
+            if (newPermission !== 'granted') {
+              throw new Error('Permission denied');
+            }
+          } catch (e) {
+            console.error('[WorkerBackendNew] Permission denied for directory:', e);
+            throw new Error('Permission denied for local folder. Please reselect in Settings.');
+          }
+        }
+      }
+      
+      await this.remote.initWithDirectoryHandle(Comlink.transfer(port2, [port2]), handle!);
+    } else {
+      await this.remote.init(Comlink.transfer(port2, [port2]), storageType);
+    }
     
     this._ready = true;
     console.log('[WorkerBackendNew] Ready');

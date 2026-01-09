@@ -36,6 +36,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 
 use crate::error::IntoJsResult;
+use crate::fsa_fs::FsaFileSystem;
 use crate::indexeddb_fs::IndexedDbFileSystem;
 use crate::opfs_fs::OpfsFileSystem;
 
@@ -91,6 +92,8 @@ pub struct JsSearchMatch {
 enum StorageBackend {
     Opfs(OpfsFileSystem),
     IndexedDb(IndexedDbFileSystem),
+    /// File System Access API - user-selected directory on their real filesystem
+    Fsa(FsaFileSystem),
 }
 
 impl Clone for StorageBackend {
@@ -98,6 +101,7 @@ impl Clone for StorageBackend {
         match self {
             StorageBackend::Opfs(fs) => StorageBackend::Opfs(fs.clone()),
             StorageBackend::IndexedDb(fs) => StorageBackend::IndexedDb(fs.clone()),
+            StorageBackend::Fsa(fs) => StorageBackend::Fsa(fs.clone()),
         }
     }
 }
@@ -108,6 +112,7 @@ impl AsyncFileSystem for StorageBackend {
         match self {
             StorageBackend::Opfs(fs) => fs.read_to_string(path),
             StorageBackend::IndexedDb(fs) => fs.read_to_string(path),
+            StorageBackend::Fsa(fs) => fs.read_to_string(path),
         }
     }
 
@@ -115,6 +120,7 @@ impl AsyncFileSystem for StorageBackend {
         match self {
             StorageBackend::Opfs(fs) => fs.write_file(path, content),
             StorageBackend::IndexedDb(fs) => fs.write_file(path, content),
+            StorageBackend::Fsa(fs) => fs.write_file(path, content),
         }
     }
 
@@ -122,6 +128,7 @@ impl AsyncFileSystem for StorageBackend {
         match self {
             StorageBackend::Opfs(fs) => fs.create_new(path, content),
             StorageBackend::IndexedDb(fs) => fs.create_new(path, content),
+            StorageBackend::Fsa(fs) => fs.create_new(path, content),
         }
     }
 
@@ -129,6 +136,7 @@ impl AsyncFileSystem for StorageBackend {
         match self {
             StorageBackend::Opfs(fs) => fs.delete_file(path),
             StorageBackend::IndexedDb(fs) => fs.delete_file(path),
+            StorageBackend::Fsa(fs) => fs.delete_file(path),
         }
     }
 
@@ -136,6 +144,7 @@ impl AsyncFileSystem for StorageBackend {
         match self {
             StorageBackend::Opfs(fs) => fs.list_md_files(dir),
             StorageBackend::IndexedDb(fs) => fs.list_md_files(dir),
+            StorageBackend::Fsa(fs) => fs.list_md_files(dir),
         }
     }
 
@@ -143,6 +152,7 @@ impl AsyncFileSystem for StorageBackend {
         match self {
             StorageBackend::Opfs(fs) => fs.exists(path),
             StorageBackend::IndexedDb(fs) => fs.exists(path),
+            StorageBackend::Fsa(fs) => fs.exists(path),
         }
     }
 
@@ -150,6 +160,7 @@ impl AsyncFileSystem for StorageBackend {
         match self {
             StorageBackend::Opfs(fs) => fs.create_dir_all(path),
             StorageBackend::IndexedDb(fs) => fs.create_dir_all(path),
+            StorageBackend::Fsa(fs) => fs.create_dir_all(path),
         }
     }
 
@@ -157,6 +168,7 @@ impl AsyncFileSystem for StorageBackend {
         match self {
             StorageBackend::Opfs(fs) => fs.is_dir(path),
             StorageBackend::IndexedDb(fs) => fs.is_dir(path),
+            StorageBackend::Fsa(fs) => fs.is_dir(path),
         }
     }
 
@@ -164,6 +176,7 @@ impl AsyncFileSystem for StorageBackend {
         match self {
             StorageBackend::Opfs(fs) => fs.move_file(from, to),
             StorageBackend::IndexedDb(fs) => fs.move_file(from, to),
+            StorageBackend::Fsa(fs) => fs.move_file(from, to),
         }
     }
 
@@ -171,6 +184,7 @@ impl AsyncFileSystem for StorageBackend {
         match self {
             StorageBackend::Opfs(fs) => fs.read_binary(path),
             StorageBackend::IndexedDb(fs) => fs.read_binary(path),
+            StorageBackend::Fsa(fs) => fs.read_binary(path),
         }
     }
 
@@ -178,6 +192,7 @@ impl AsyncFileSystem for StorageBackend {
         match self {
             StorageBackend::Opfs(fs) => fs.write_binary(path, content),
             StorageBackend::IndexedDb(fs) => fs.write_binary(path, content),
+            StorageBackend::Fsa(fs) => fs.write_binary(path, content),
         }
     }
 
@@ -185,6 +200,7 @@ impl AsyncFileSystem for StorageBackend {
         match self {
             StorageBackend::Opfs(fs) => fs.list_files(dir),
             StorageBackend::IndexedDb(fs) => fs.list_files(dir),
+            StorageBackend::Fsa(fs) => fs.list_files(dir),
         }
     }
 }
@@ -229,6 +245,32 @@ impl DiaryxBackend {
             "indexeddb" | "indexed_db" => Self::create_indexed_db().await,
             _ => Err(JsValue::from_str(&format!("Unknown storage type: {}", storage_type))),
         }
+    }
+
+    /// Create a new DiaryxBackend from a user-selected directory handle.
+    ///
+    /// This uses the File System Access API to read/write files directly
+    /// on the user's filesystem. The handle must be obtained from
+    /// `window.showDirectoryPicker()` in JavaScript.
+    ///
+    /// ## Browser Support
+    /// - Chrome/Edge: ✅ Supported
+    /// - Firefox: ❌ Not supported
+    /// - Safari: ❌ Not supported
+    ///
+    /// ## Example
+    /// ```javascript
+    /// // User must trigger this via a gesture (click/keypress)
+    /// const dirHandle = await window.showDirectoryPicker();
+    /// const backend = await DiaryxBackend.createFromDirectoryHandle(dirHandle);
+    /// ```
+    #[wasm_bindgen(js_name = "createFromDirectoryHandle")]
+    pub fn create_from_directory_handle(
+        handle: web_sys::FileSystemDirectoryHandle
+    ) -> std::result::Result<DiaryxBackend, JsValue> {
+        let fsa = FsaFileSystem::from_handle(handle);
+        let fs = Rc::new(StorageBackend::Fsa(fsa));
+        Ok(Self { fs })
     }
 
     // ========================================================================

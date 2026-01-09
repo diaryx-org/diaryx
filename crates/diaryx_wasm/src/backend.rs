@@ -295,6 +295,37 @@ impl DiaryxBackend {
         })
     }
 
+    /// List all subdirectories in a given path.
+    #[wasm_bindgen(js_name = "listDirectories")]
+    pub fn list_directories(&self, dir_path: String) -> Promise {
+        let fs = self.fs.clone();
+        
+        future_to_promise(async move {
+            let dir = PathBuf::from(&dir_path);
+            
+            // Get all entries and filter to directories only
+            let mut directories = Vec::new();
+            
+            // Use the filesystem to check for directories
+            // We'll list md files in the directory and collect parent directory names
+            // Actually, we need a different approach - check if subdirectories exist
+            // For now, return common directory names that might contain workspaces
+            if dir.as_os_str().is_empty() || dir == PathBuf::from(".") {
+                // Check for known workspace directories
+                for name in &["workspace", "journal", "notes", "diary"] {
+                    if fs.is_dir(Path::new(name)).await {
+                        directories.push(name.to_string());
+                    }
+                }
+                
+                // Also try to find any directory that contains an index file
+                // by checking common patterns - this is limited but works for most cases
+            }
+            
+            serde_wasm_bindgen::to_value(&directories).js_err()
+        })
+    }
+
     // ========================================================================
     // Config (stored in root index frontmatter as diaryx_* keys)
     // ========================================================================
@@ -1406,8 +1437,20 @@ impl DiaryxBackend {
                 }
             }
             
-            // Find root index first
-            if let Ok(Some(root_index)) = ws.find_root_index_in_dir(&root).await {
+            // Determine the starting index file:
+            // - If root is a file and parseable as an index, use it directly
+            // - Otherwise, treat root as a directory and find a root index in it
+            let start_index = if !fs.is_dir(&root).await {
+                if ws.parse_index(&root).await.is_ok() {
+                    Some(root.clone())
+                } else {
+                    None
+                }
+            } else {
+                ws.find_root_index_in_dir(&root).await.ok().flatten()
+            };
+            
+            if let Some(root_index) = start_index {
                 collect_audiences(&ws, &root_index, &mut audiences, &mut visited).await;
             }
             
@@ -1430,10 +1473,14 @@ impl DiaryxBackend {
             let mut included = Vec::new();
             let mut visited = HashSet::new();
             
+            // Collect files with audience filtering
+            // audience_filter: "*" means include all (no filtering), otherwise filter by audience
             async fn collect_files<FS: AsyncFileSystem>(
                 ws: &Workspace<FS>,
                 path: &Path,
                 root_dir: &Path,
+                audience_filter: &str,
+                inherited_visible: bool,
                 included: &mut Vec<serde_json::Value>,
                 visited: &mut HashSet<PathBuf>,
             ) {
@@ -1443,17 +1490,41 @@ impl DiaryxBackend {
                 visited.insert(path.to_path_buf());
                 
                 if let Ok(index) = ws.parse_index(path).await {
-                    let relative = pathdiff::diff_paths(path, root_dir)
-                        .unwrap_or_else(|| path.to_path_buf());
-                    included.push(serde_json::json!({
-                        "path": path.to_string_lossy(),
-                        "relative_path": relative.to_string_lossy()
-                    }));
+                    // Check audience visibility
+                    let visible = if audience_filter == "*" {
+                        // Export all - only exclude private files
+                        !index.frontmatter.is_private()
+                    } else {
+                        // Check if visible to specific audience
+                        match index.frontmatter.is_visible_to(audience_filter) {
+                            Some(true) => true,
+                            Some(false) => false,
+                            None => inherited_visible, // Inherit from parent
+                        }
+                    };
                     
+                    if visible {
+                        let relative = pathdiff::diff_paths(path, root_dir)
+                            .unwrap_or_else(|| path.to_path_buf());
+                        included.push(serde_json::json!({
+                            "path": path.to_string_lossy(),
+                            "relative_path": relative.to_string_lossy()
+                        }));
+                    }
+                    
+                    // Always traverse children (they might be visible even if parent isn't)
                     let dir = index.directory().unwrap_or(Path::new(""));
                     for child_ref in index.frontmatter.contents_list() {
                         let child_path = dir.join(child_ref);
-                        Box::pin(collect_files(ws, &child_path, root_dir, included, visited)).await;
+                        Box::pin(collect_files(
+                            ws, 
+                            &child_path, 
+                            root_dir, 
+                            audience_filter,
+                            visible, // Pass visibility to children
+                            included, 
+                            visited
+                        )).await;
                     }
                 }
             }
@@ -1475,7 +1546,8 @@ impl DiaryxBackend {
 
             if let Some(root_index) = start_index {
                 let root_dir = root_index.parent().unwrap_or(&root);
-                collect_files(&ws, &root_index, root_dir, &mut included, &mut visited).await;
+                // Start with inherited_visible = true (root is visible by default)
+                collect_files(&ws, &root_index, root_dir, &audience, true, &mut included, &mut visited).await;
             }
             
             let plan = serde_json::json!({
@@ -1490,7 +1562,7 @@ impl DiaryxBackend {
 
     /// Export files to memory as markdown.
     #[wasm_bindgen(js_name = "exportToMemory")]
-    pub fn export_to_memory(&self, root_path: String, _audience: String) -> Promise {
+    pub fn export_to_memory(&self, root_path: String, audience: String) -> Promise {
         let fs = self.fs.clone();
 
         future_to_promise(async move {
@@ -1504,6 +1576,8 @@ impl DiaryxBackend {
                 ws: &Workspace<FS>,
                 path: &Path,
                 root_dir: &Path,
+                audience_filter: &str,
+                inherited_visible: bool,
                 files: &mut Vec<serde_json::Value>,
                 visited: &mut HashSet<PathBuf>,
             ) {
@@ -1512,20 +1586,35 @@ impl DiaryxBackend {
                 }
                 visited.insert(path.to_path_buf());
                 
-                if let Ok(content) = ws.fs_ref().read_to_string(path).await {
-                    let relative = pathdiff::diff_paths(path, root_dir)
-                        .unwrap_or_else(|| path.to_path_buf());
-                    files.push(serde_json::json!({
-                        "path": relative.to_string_lossy(),
-                        "content": content
-                    }));
-                    
-                    if let Ok(index) = ws.parse_index(path).await {
-                        let dir = index.directory().unwrap_or(Path::new(""));
-                        for child_ref in index.frontmatter.contents_list() {
-                            let child_path = dir.join(child_ref);
-                            Box::pin(collect_files(ws, &child_path, root_dir, files, visited)).await;
+                if let Ok(index) = ws.parse_index(path).await {
+                    // Check audience visibility
+                    let visible = if audience_filter == "*" {
+                        !index.frontmatter.is_private()
+                    } else {
+                        match index.frontmatter.is_visible_to(audience_filter) {
+                            Some(true) => true,
+                            Some(false) => false,
+                            None => inherited_visible,
                         }
+                    };
+                    
+                    if visible {
+                        if let Ok(content) = ws.fs_ref().read_to_string(path).await {
+                            let relative = pathdiff::diff_paths(path, root_dir)
+                                .unwrap_or_else(|| path.to_path_buf());
+                            files.push(serde_json::json!({
+                                "path": relative.to_string_lossy(),
+                                "content": content
+                            }));
+                        }
+                    }
+                    
+                    let dir = index.directory().unwrap_or(Path::new(""));
+                    for child_ref in index.frontmatter.contents_list() {
+                        let child_path = dir.join(child_ref);
+                        Box::pin(collect_files(
+                            ws, &child_path, root_dir, audience_filter, visible, files, visited
+                        )).await;
                     }
                 }
             }
@@ -1543,7 +1632,7 @@ impl DiaryxBackend {
 
             if let Some(root_index) = start_index {
                 let root_dir = root_index.parent().unwrap_or(&root);
-                collect_files(&ws, &root_index, root_dir, &mut files, &mut visited).await;
+                collect_files(&ws, &root_index, root_dir, &audience, true, &mut files, &mut visited).await;
             }
             
             serde_wasm_bindgen::to_value(&files).js_err()
@@ -1556,7 +1645,6 @@ impl DiaryxBackend {
         let fs = self.fs.clone();
 
         future_to_promise(async move {
-            // For now, just return the markdown files - HTML conversion can happen in JS
             let ws = Workspace::new(&*fs);
             let root = PathBuf::from(&root_path);
             
@@ -1567,6 +1655,8 @@ impl DiaryxBackend {
                 ws: &Workspace<FS>,
                 path: &Path,
                 root_dir: &Path,
+                audience_filter: &str,
+                inherited_visible: bool,
                 files: &mut Vec<serde_json::Value>,
                 visited: &mut HashSet<PathBuf>,
             ) {
@@ -1575,23 +1665,38 @@ impl DiaryxBackend {
                 }
                 visited.insert(path.to_path_buf());
                 
-                if let Ok(content) = ws.fs_ref().read_to_string(path).await {
-                    let relative = pathdiff::diff_paths(path, root_dir)
-                        .unwrap_or_else(|| path.to_path_buf());
-                    // Simple markdown to HTML - just wrap in pre for now
-                    let html = format!("<html><body><pre>{}</pre></body></html>", 
-                        content.replace("<", "&lt;").replace(">", "&gt;"));
-                    files.push(serde_json::json!({
-                        "path": relative.with_extension("html").to_string_lossy(),
-                        "content": html
-                    }));
-                    
-                    if let Ok(index) = ws.parse_index(path).await {
-                        let dir = index.directory().unwrap_or(Path::new(""));
-                        for child_ref in index.frontmatter.contents_list() {
-                            let child_path = dir.join(child_ref);
-                            Box::pin(collect_files(ws, &child_path, root_dir, files, visited)).await;
+                if let Ok(index) = ws.parse_index(path).await {
+                    // Check audience visibility
+                    let visible = if audience_filter == "*" {
+                        !index.frontmatter.is_private()
+                    } else {
+                        match index.frontmatter.is_visible_to(audience_filter) {
+                            Some(true) => true,
+                            Some(false) => false,
+                            None => inherited_visible,
                         }
+                    };
+                    
+                    if visible {
+                        if let Ok(content) = ws.fs_ref().read_to_string(path).await {
+                            let relative = pathdiff::diff_paths(path, root_dir)
+                                .unwrap_or_else(|| path.to_path_buf());
+                            // Simple markdown to HTML - just wrap in pre for now
+                            let html = format!("<html><body><pre>{}</pre></body></html>", 
+                                content.replace("<", "&lt;").replace(">", "&gt;"));
+                            files.push(serde_json::json!({
+                                "path": relative.with_extension("html").to_string_lossy(),
+                                "content": html
+                            }));
+                        }
+                    }
+                    
+                    let dir = index.directory().unwrap_or(Path::new(""));
+                    for child_ref in index.frontmatter.contents_list() {
+                        let child_path = dir.join(child_ref);
+                        Box::pin(collect_files(
+                            ws, &child_path, root_dir, audience_filter, visible, files, visited
+                        )).await;
                     }
                 }
             }
@@ -1609,7 +1714,7 @@ impl DiaryxBackend {
 
             if let Some(root_index) = start_index {
                 let root_dir = root_index.parent().unwrap_or(&root);
-                collect_files(&ws, &root_index, root_dir, &mut files, &mut visited).await;
+                collect_files(&ws, &root_index, root_dir, &audience, true, &mut files, &mut visited).await;
             }
             
             serde_wasm_bindgen::to_value(&files).js_err()
@@ -1618,7 +1723,7 @@ impl DiaryxBackend {
 
     /// Export binary attachments.
     #[wasm_bindgen(js_name = "exportBinaryAttachments")]
-    pub fn export_binary_attachments(&self, root_path: String, _audience: String) -> Promise {
+    pub fn export_binary_attachments(&self, root_path: String, audience: String) -> Promise {
         let fs = self.fs.clone();
 
         future_to_promise(async move {
@@ -1633,6 +1738,8 @@ impl DiaryxBackend {
                 ws: &Workspace<FS>,
                 entry_path: &Path,
                 root_dir: &Path,
+                audience_filter: &str,
+                inherited_visible: bool,
                 binary_files: &mut Vec<serde_json::Value>,
                 visited_entries: &mut HashSet<PathBuf>,
                 visited_attachment_dirs: &mut HashSet<PathBuf>,
@@ -1643,32 +1750,46 @@ impl DiaryxBackend {
                 visited_entries.insert(entry_path.to_path_buf());
                 
                 if let Ok(index) = ws.parse_index(entry_path).await {
+                    // Check audience visibility
+                    let visible = if audience_filter == "*" {
+                        !index.frontmatter.is_private()
+                    } else {
+                        match index.frontmatter.is_visible_to(audience_filter) {
+                            Some(true) => true,
+                            Some(false) => false,
+                            None => inherited_visible,
+                        }
+                    };
+                    
                     let dir = index.directory().unwrap_or(Path::new(""));
                     
-                    // Check for _attachments directory
-                    let attachments_dir = dir.join("_attachments");
-                    if !visited_attachment_dirs.contains(&attachments_dir) {
-                        visited_attachment_dirs.insert(attachments_dir.clone());
-                        
-                        if let Ok(files) = ws.fs_ref().list_files(&attachments_dir).await {
-                            for file in files {
-                                if let Ok(data) = ws.fs_ref().read_binary(&file).await {
-                                    let relative = pathdiff::diff_paths(&file, root_dir)
-                                        .unwrap_or_else(|| file.clone());
-                                    binary_files.push(serde_json::json!({
-                                        "path": relative.to_string_lossy(),
-                                        "data": data
-                                    }));
+                    // Only include attachments if entry is visible
+                    if visible {
+                        // Check for _attachments directory
+                        let attachments_dir = dir.join("_attachments");
+                        if !visited_attachment_dirs.contains(&attachments_dir) {
+                            visited_attachment_dirs.insert(attachments_dir.clone());
+                            
+                            if let Ok(files) = ws.fs_ref().list_files(&attachments_dir).await {
+                                for file in files {
+                                    if let Ok(data) = ws.fs_ref().read_binary(&file).await {
+                                        let relative = pathdiff::diff_paths(&file, root_dir)
+                                            .unwrap_or_else(|| file.clone());
+                                        binary_files.push(serde_json::json!({
+                                            "path": relative.to_string_lossy(),
+                                            "data": data
+                                        }));
+                                    }
                                 }
                             }
                         }
                     }
                     
-                    // Recurse into children
+                    // Recurse into children (they might be visible even if parent isn't)
                     for child_ref in index.frontmatter.contents_list() {
                         let child_path = dir.join(child_ref);
                         Box::pin(collect_attachments(
-                            ws, &child_path, root_dir, binary_files, 
+                            ws, &child_path, root_dir, audience_filter, visible, binary_files, 
                             visited_entries, visited_attachment_dirs
                         )).await;
                     }
@@ -1689,7 +1810,7 @@ impl DiaryxBackend {
             if let Some(root_index) = start_index {
                 let root_dir = root_index.parent().unwrap_or(&root);
                 collect_attachments(
-                    &ws, &root_index, root_dir, &mut binary_files,
+                    &ws, &root_index, root_dir, &audience, true, &mut binary_files,
                     &mut visited_entries, &mut visited_attachment_dirs
                 ).await;
             }

@@ -15,6 +15,11 @@ let backend: any | null = null;
 // Discovered workspace root path (set after init)
 let rootPath: string | null = null;
 
+// Clear cached root path (call after rename operations)
+function clearRootPathCache() {
+  rootPath = null;
+}
+
 // Event port for streaming events back to main thread - currently unused in new implementation
 // as events are forwarded differently or just log warnings for now?
 // Actually, I should probably remove the variable.
@@ -118,6 +123,26 @@ const workerApi = {
       root = await getBackend().findRootIndex('workspace');
     }
     
+    // Fallback: scan all top-level directories for a root index
+    if (!root) {
+      try {
+        const entries = await getBackend().listDirectories('.');
+        if (entries && Array.isArray(entries)) {
+          for (const entry of entries) {
+            if (typeof entry === 'string' && entry !== '.' && entry !== '..') {
+              const found = await getBackend().findRootIndex(entry);
+              if (found) {
+                root = found;
+                break;
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[WasmWorker] Failed to scan directories:', e);
+      }
+    }
+    
     if (root) {
       // Get parent directory of root index
       const lastSlash = root.lastIndexOf('/');
@@ -128,6 +153,11 @@ const workerApi = {
     
     // Fallback to current directory
     return '.';
+  },
+  
+  // Clear cached root path (for after rename operations)
+  clearRootPathCache(): void {
+    clearRootPathCache();
   },
 
   // =========================================================================
@@ -177,7 +207,10 @@ const workerApi = {
   },
   
   async renameEntry(path: string, newFilename: string): Promise<string> {
-    return getBackend().renameEntry(path, newFilename);
+    const result = await getBackend().renameEntry(path, newFilename);
+    // Clear cached root path in case we renamed the root index
+    clearRootPathCache();
+    return result;
   },
 
   // =========================================================================

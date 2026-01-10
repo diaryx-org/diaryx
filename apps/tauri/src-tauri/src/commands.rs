@@ -10,7 +10,7 @@ use diaryx_core::{
     config::Config,
     entry::DiaryxApp,
     error::SerializableError,
-    fs::{FileSystem, RealFileSystem, SyncToAsyncFs},
+    fs::{AsyncFileSystem, FileSystem, RealFileSystem, SyncToAsyncFs},
     search::{SearchQuery, SearchResults, Searcher},
     validate::{FixResult, ValidationFixer, ValidationResult, Validator},
     workspace::{TreeNode, Workspace},
@@ -254,7 +254,7 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
             "[initialize_app] Loading existing config from {:?}",
             paths.config_path
         );
-        Config::load_from(&RealFileSystem, &paths.config_path).unwrap_or_else(|e| {
+        Config::load_from(&SyncToAsyncFs::new(RealFileSystem), &paths.config_path).await.unwrap_or_else(|e| {
             log::warn!(
                 "[initialize_app] Failed to load config, creating new: {:?}",
                 e
@@ -269,7 +269,8 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
     // Save config (ensures parent directories exist)
     log::info!("[initialize_app] Saving config to {:?}", paths.config_path);
     config
-        .save_to(&RealFileSystem, &paths.config_path)
+        .save_to(&SyncToAsyncFs::new(RealFileSystem), &paths.config_path)
+        .await
         .map_err(|e| {
             log::error!("[initialize_app] Failed to save config: {:?}", e);
             e.to_serializable()
@@ -281,7 +282,7 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
 
 /// Create a new workspace at the specified path
 #[tauri::command]
-pub fn create_workspace<R: Runtime>(
+pub async fn create_workspace<R: Runtime>(
     app: AppHandle<R>,
     path: Option<String>,
     name: Option<String>,
@@ -305,8 +306,9 @@ pub fn create_workspace<R: Runtime>(
     }
 
     // Initialize the workspace
-    let ws = Workspace::new(RealFileSystem);
+    let ws = Workspace::new(SyncToAsyncFs::new(RealFileSystem));
     ws.init_workspace(&workspace_path, Some(workspace_name), None)
+        .await
         .map_err(|e| e.to_serializable())?;
 
     Ok(workspace_path)
@@ -314,7 +316,7 @@ pub fn create_workspace<R: Runtime>(
 
 /// Get the current configuration (platform-aware)
 #[tauri::command]
-pub fn get_config<R: Runtime>(app: AppHandle<R>) -> Result<Config, SerializableError> {
+pub async fn get_config<R: Runtime>(app: AppHandle<R>) -> Result<Config, SerializableError> {
     let paths = get_platform_paths(&app)?;
 
     // On mobile, always return config with current app data directory paths
@@ -324,7 +326,7 @@ pub fn get_config<R: Runtime>(app: AppHandle<R>) -> Result<Config, SerializableE
     }
 
     if paths.config_path.exists() {
-        Config::load_from(&RealFileSystem, &paths.config_path).map_err(|e| e.to_serializable())
+        Config::load_from(&SyncToAsyncFs::new(RealFileSystem), &paths.config_path).await.map_err(|e| e.to_serializable())
     } else {
         // Return default config with platform-appropriate paths
         Ok(Config::new(paths.default_workspace))
@@ -333,10 +335,11 @@ pub fn get_config<R: Runtime>(app: AppHandle<R>) -> Result<Config, SerializableE
 
 /// Save the configuration (platform-aware)
 #[tauri::command]
-pub fn save_config<R: Runtime>(app: AppHandle<R>, config: Config) -> Result<(), SerializableError> {
+pub async fn save_config<R: Runtime>(app: AppHandle<R>, config: Config) -> Result<(), SerializableError> {
     let paths = get_platform_paths(&app)?;
     config
-        .save_to(&RealFileSystem, &paths.config_path)
+        .save_to(&SyncToAsyncFs::new(RealFileSystem), &paths.config_path)
+        .await
         .map_err(|e| e.to_serializable())
 }
 
@@ -380,7 +383,8 @@ pub async fn get_workspace_tree<R: Runtime>(
         _ => {
             // Desktop: Try to load config, fall back to default workspace
             let resolved = if paths.config_path.exists() {
-                Config::load_from(&RealFileSystem, &paths.config_path)
+                Config::load_from(&SyncToAsyncFs::new(RealFileSystem), &paths.config_path)
+                    .await
                     .map(|c| c.default_workspace)
                     .unwrap_or(paths.default_workspace.clone())
             } else {
@@ -464,7 +468,8 @@ pub async fn get_filesystem_tree<R: Runtime>(
         Some(ref p) => PathBuf::from(p),
         None => {
             // Load config to get default workspace
-            let config = Config::load_from(&RealFileSystem, &paths.config_path)
+            let config = Config::load_from(&SyncToAsyncFs::new(RealFileSystem), &paths.config_path)
+                .await
                 .map_err(|e| e.to_serializable())?;
             PathBuf::from(&config.default_workspace)
         }
@@ -507,7 +512,8 @@ pub async fn validate_workspace<R: Runtime>(
         Some(ref p) => PathBuf::from(p),
         None => {
             // Load config to get default workspace
-            let config = Config::load_from(&RealFileSystem, &paths.config_path)
+            let config = Config::load_from(&SyncToAsyncFs::new(RealFileSystem), &paths.config_path)
+                .await
                 .map_err(|e| e.to_serializable())?;
             PathBuf::from(&config.default_workspace)
         }
@@ -732,13 +738,14 @@ pub async fn fix_all_validation_issues(
 
 /// Get an entry's content and metadata
 #[tauri::command]
-pub fn get_entry(path: String) -> Result<EntryData, SerializableError> {
-    let app = DiaryxApp::new(RealFileSystem);
+pub async fn get_entry(path: String) -> Result<EntryData, SerializableError> {
+    let app = DiaryxApp::new(SyncToAsyncFs::new(RealFileSystem));
     let path_buf = PathBuf::from(&path);
 
     // Get frontmatter
     let frontmatter = app
         .get_all_frontmatter(&path)
+        .await
         .map_err(|e| e.to_serializable())?;
 
     // Convert to JSON-compatible map
@@ -756,7 +763,7 @@ pub fn get_entry(path: String) -> Result<EntryData, SerializableError> {
         .map(|s| s.to_string());
 
     // Get content
-    let content = app.get_content(&path).map_err(|e| e.to_serializable())?;
+    let content = app.get_content(&path).await.map_err(|e| e.to_serializable())?;
 
     Ok(EntryData {
         path: path_buf,
@@ -768,9 +775,10 @@ pub fn get_entry(path: String) -> Result<EntryData, SerializableError> {
 
 /// Save an entry's content and update the 'updated' timestamp
 #[tauri::command]
-pub fn save_entry(request: SaveEntryRequest) -> Result<(), SerializableError> {
-    let app = DiaryxApp::new(RealFileSystem);
+pub async fn save_entry(request: SaveEntryRequest) -> Result<(), SerializableError> {
+    let app = DiaryxApp::new(SyncToAsyncFs::new(RealFileSystem));
     app.save_content(&request.path, &request.content)
+        .await
         .map_err(|e| e.to_serializable())
 }
 
@@ -795,7 +803,8 @@ pub async fn search_workspace<R: Runtime>(
         _ if paths.is_mobile => paths.default_workspace.clone(),
         _ => {
             if paths.config_path.exists() {
-                Config::load_from(&RealFileSystem, &paths.config_path)
+                Config::load_from(&SyncToAsyncFs::new(RealFileSystem), &paths.config_path)
+                    .await
                     .map(|c| c.default_workspace)
                     .unwrap_or(paths.default_workspace.clone())
             } else {
@@ -834,12 +843,12 @@ pub async fn search_workspace<R: Runtime>(
 
 /// Create a new entry
 #[tauri::command]
-pub fn create_entry(
+pub async fn create_entry(
     path: String,
     title: Option<String>,
     part_of: Option<String>,
 ) -> Result<PathBuf, SerializableError> {
-    let app = DiaryxApp::new(RealFileSystem);
+    let app = DiaryxApp::new(SyncToAsyncFs::new(RealFileSystem));
     let path_buf = PathBuf::from(&path);
 
     // Create entry with basic frontmatter
@@ -851,15 +860,17 @@ pub fn create_entry(
             .to_string()
     });
 
-    app.create_entry(&path).map_err(|e| e.to_serializable())?;
+    app.create_entry(&path).await.map_err(|e| e.to_serializable())?;
 
     // Set title
     app.set_frontmatter_property(&path, "title", serde_yaml::Value::String(entry_title))
+        .await
         .map_err(|e| e.to_serializable())?;
 
     // Set part_of if provided
     if let Some(parent) = part_of {
         app.set_frontmatter_property(&path, "part_of", serde_yaml::Value::String(parent))
+            .await
             .map_err(|e| e.to_serializable())?;
     }
 
@@ -868,13 +879,14 @@ pub fn create_entry(
 
 /// Get frontmatter for an entry
 #[tauri::command]
-pub fn get_frontmatter(
+pub async fn get_frontmatter(
     path: String,
 ) -> Result<serde_json::Map<String, JsonValue>, SerializableError> {
-    let app = DiaryxApp::new(RealFileSystem);
+    let app = DiaryxApp::new(SyncToAsyncFs::new(RealFileSystem));
 
     let frontmatter = app
         .get_all_frontmatter(&path)
+        .await
         .map_err(|e| e.to_serializable())?;
 
     let mut json_frontmatter = serde_json::Map::new();
@@ -889,12 +901,12 @@ pub fn get_frontmatter(
 
 /// Set a frontmatter property
 #[tauri::command]
-pub fn set_frontmatter_property(
+pub async fn set_frontmatter_property(
     path: String,
     key: String,
     value: JsonValue,
 ) -> Result<(), SerializableError> {
-    let app = DiaryxApp::new(RealFileSystem);
+    let app = DiaryxApp::new(SyncToAsyncFs::new(RealFileSystem));
 
     // Convert JSON value to YAML value
     let yaml_value: serde_yaml::Value =
@@ -905,22 +917,25 @@ pub fn set_frontmatter_property(
         })?;
 
     app.set_frontmatter_property(&path, &key, yaml_value)
+        .await
         .map_err(|e| e.to_serializable())
 }
 
 /// Remove a frontmatter property
 #[tauri::command]
-pub fn remove_frontmatter_property(path: String, key: String) -> Result<(), SerializableError> {
-    let app = DiaryxApp::new(RealFileSystem);
+pub async fn remove_frontmatter_property(path: String, key: String) -> Result<(), SerializableError> {
+    let app = DiaryxApp::new(SyncToAsyncFs::new(RealFileSystem));
     app.remove_frontmatter_property(&path, &key)
+        .await
         .map_err(|e| e.to_serializable())
 }
 
 /// Delete an entry
 #[tauri::command]
-pub fn delete_entry(path: String) -> Result<(), SerializableError> {
-    RealFileSystem
+pub async fn delete_entry(path: String) -> Result<(), SerializableError> {
+    SyncToAsyncFs::new(RealFileSystem)
         .delete_file(Path::new(&path))
+        .await
         .map_err(|e| SerializableError {
             kind: "FileDeleteError".to_string(),
             message: format!("Failed to delete entry '{}': {}", path, e),
@@ -942,7 +957,7 @@ pub struct AttachEntryToParentRequest {
 
 /// Move/rename an entry, keeping parent index `contents` and entry `part_of` consistent.
 #[tauri::command]
-pub fn move_entry(request: MoveEntryRequest) -> Result<PathBuf, SerializableError> {
+pub async fn move_entry(request: MoveEntryRequest) -> Result<PathBuf, SerializableError> {
     use diaryx_core::workspace::Workspace;
 
     let from = PathBuf::from(&request.from_path);
@@ -954,14 +969,14 @@ pub fn move_entry(request: MoveEntryRequest) -> Result<PathBuf, SerializableErro
 
     // Use shared Workspace::move_entry which correctly finds parent index files
     // using find_any_index_in_dir (handles both index.md and {dirname}.md naming)
-    let ws = Workspace::new(RealFileSystem);
-    ws.move_entry(&from, &to).map_err(|e| e.to_serializable())?;
+    let ws = Workspace::new(SyncToAsyncFs::new(RealFileSystem));
+    ws.move_entry(&from, &to).await.map_err(|e| e.to_serializable())?;
 
     Ok(to)
 }
 
-fn add_to_index_contents(
-    app: &DiaryxApp<RealFileSystem>,
+async fn add_to_index_contents<FS: AsyncFileSystem>(
+    app: &DiaryxApp<FS>,
     index_path: &Path,
     entry: &str,
 ) -> Result<(), SerializableError> {
@@ -969,6 +984,7 @@ fn add_to_index_contents(
 
     let frontmatter = app
         .get_all_frontmatter(&index_str)
+        .await
         .map_err(|e| e.to_serializable())?;
 
     let mut contents: Vec<String> = frontmatter
@@ -1000,14 +1016,15 @@ fn add_to_index_contents(
             "contents",
             serde_yaml::Value::Sequence(yaml_contents),
         )
+        .await
         .map_err(|e| e.to_serializable())?;
     }
 
     Ok(())
 }
 
-fn remove_from_index_contents(
-    app: &DiaryxApp<RealFileSystem>,
+async fn remove_from_index_contents<FS: AsyncFileSystem>(
+    app: &DiaryxApp<FS>,
     index_path: &Path,
     entry: &str,
 ) -> Result<(), SerializableError> {
@@ -1015,6 +1032,7 @@ fn remove_from_index_contents(
 
     let frontmatter = app
         .get_all_frontmatter(&index_str)
+        .await
         .map_err(|e| e.to_serializable())?;
 
     let mut contents: Vec<String> = frontmatter
@@ -1048,6 +1066,7 @@ fn remove_from_index_contents(
             "contents",
             serde_yaml::Value::Sequence(yaml_contents),
         )
+        .await
         .map_err(|e| e.to_serializable())?;
     }
 
@@ -1087,8 +1106,8 @@ fn relative_path_from_entry_to_target(entry_path: &Path, target_path: &Path) -> 
 }
 
 /// Add `entry` to `index_path` frontmatter `contents` sequence (if not already present).
-fn add_to_index_contents_tauri(
-    app: &DiaryxApp<RealFileSystem>,
+async fn add_to_index_contents_tauri<FS: AsyncFileSystem>(
+    app: &DiaryxApp<FS>,
     index_path: &Path,
     entry: &str,
 ) -> Result<(), SerializableError> {
@@ -1096,6 +1115,7 @@ fn add_to_index_contents_tauri(
 
     let frontmatter = app
         .get_all_frontmatter(&index_str)
+        .await
         .map_err(|e| e.to_serializable())?;
 
     let mut contents: Vec<String> = frontmatter
@@ -1127,6 +1147,7 @@ fn add_to_index_contents_tauri(
             "contents",
             serde_yaml::Value::Sequence(yaml_contents),
         )
+        .await
         .map_err(|e| e.to_serializable())?;
     }
 
@@ -1142,15 +1163,16 @@ fn add_to_index_contents_tauri(
 ///
 /// Returns the new path to the entry after any moves.
 #[tauri::command]
-pub fn attach_entry_to_parent(
+pub async fn attach_entry_to_parent(
     request: AttachEntryToParentRequest,
 ) -> Result<PathBuf, SerializableError> {
-    let ws = Workspace::new(RealFileSystem);
+    let ws = Workspace::new(SyncToAsyncFs::new(RealFileSystem));
 
     let entry = PathBuf::from(&request.entry_path);
     let parent = PathBuf::from(&request.parent_index_path);
 
     ws.attach_and_move_entry_to_parent(&entry, &parent)
+        .await
         .map_err(|e| e.to_serializable())
 }
 
@@ -1160,11 +1182,12 @@ pub fn attach_entry_to_parent(
 
 /// Get attachments list from an entry's frontmatter
 #[tauri::command]
-pub fn get_attachments(entry_path: String) -> Result<Vec<String>, SerializableError> {
-    let app = DiaryxApp::new(RealFileSystem);
+pub async fn get_attachments(entry_path: String) -> Result<Vec<String>, SerializableError> {
+    let app = DiaryxApp::new(SyncToAsyncFs::new(RealFileSystem));
 
     let frontmatter = app
         .get_all_frontmatter(&entry_path)
+        .await
         .map_err(|e| e.to_serializable())?;
 
     let attachments: Vec<String> = frontmatter
@@ -1187,7 +1210,7 @@ pub fn get_attachments(entry_path: String) -> Result<Vec<String>, SerializableEr
 
 /// Upload an attachment file (base64 encoded) to the entry's _attachments folder
 #[tauri::command]
-pub fn upload_attachment(
+pub async fn upload_attachment(
     entry_path: String,
     filename: String,
     data_base64: String,
@@ -1226,8 +1249,9 @@ pub fn upload_attachment(
 
     // Add to frontmatter attachments
     let attachment_rel_path = format!("_attachments/{}", filename);
-    let app = DiaryxApp::new(RealFileSystem);
+    let app = DiaryxApp::new(SyncToAsyncFs::new(RealFileSystem));
     app.add_attachment(&entry_path, &attachment_rel_path)
+        .await
         .map_err(|e| e.to_serializable())?;
 
     Ok(attachment_rel_path)
@@ -1235,7 +1259,7 @@ pub fn upload_attachment(
 
 /// Delete an attachment file and remove from entry's frontmatter
 #[tauri::command]
-pub fn delete_attachment(
+pub async fn delete_attachment(
     entry_path: String,
     attachment_path: String,
 ) -> Result<(), SerializableError> {
@@ -1253,8 +1277,9 @@ pub fn delete_attachment(
     }
 
     // Remove from frontmatter
-    let app = DiaryxApp::new(RealFileSystem);
+    let app = DiaryxApp::new(SyncToAsyncFs::new(RealFileSystem));
     app.remove_attachment(&entry_path, &attachment_path)
+        .await
         .map_err(|e| e.to_serializable())?;
 
     Ok(())
@@ -1287,11 +1312,20 @@ pub struct StorageInfo {
 
 /// Get storage usage for the workspace
 #[tauri::command]
-pub fn get_storage_usage<R: Runtime>(app: AppHandle<R>) -> Result<StorageInfo, SerializableError> {
+pub async fn get_storage_usage<R: Runtime>(app: AppHandle<R>) -> Result<StorageInfo, SerializableError> {
     let paths = get_platform_paths(&app)?;
 
+    // Load config to get actual workspace path
+    let config = if paths.config_path.exists() {
+        Config::load_from(&SyncToAsyncFs::new(RealFileSystem), &paths.config_path)
+            .await
+            .unwrap_or_else(|_| Config::new(paths.default_workspace.clone()))
+    } else {
+        Config::new(paths.default_workspace.clone())
+    };
+
     // Calculate used space in workspace
-    let used = calculate_dir_size(&paths.default_workspace);
+    let used = calculate_dir_size(&config.default_workspace);
 
     // For total, use a reasonable default (can't easily get disk space on mobile)
     // On desktop, this could be enhanced to get actual disk space
@@ -1335,13 +1369,14 @@ fn calculate_dir_size(path: &Path) -> u64 {
 
 /// Convert a leaf entry to an index by adding empty `contents` property
 #[tauri::command]
-pub fn convert_to_index(path: String) -> Result<PathBuf, SerializableError> {
-    let app = DiaryxApp::new(RealFileSystem);
+pub async fn convert_to_index(path: String) -> Result<PathBuf, SerializableError> {
+    let app = DiaryxApp::new(SyncToAsyncFs::new(RealFileSystem));
     let path_buf = PathBuf::from(&path);
 
     // Check if already has contents
     let frontmatter = app
         .get_all_frontmatter(&path)
+        .await
         .map_err(|e| e.to_serializable())?;
 
     if frontmatter.contains_key("contents") {
@@ -1351,6 +1386,7 @@ pub fn convert_to_index(path: String) -> Result<PathBuf, SerializableError> {
 
     // Add empty contents array
     app.set_frontmatter_property(&path, "contents", serde_yaml::Value::Sequence(vec![]))
+        .await
         .map_err(|e| e.to_serializable())?;
 
     Ok(path_buf)
@@ -1358,12 +1394,13 @@ pub fn convert_to_index(path: String) -> Result<PathBuf, SerializableError> {
 
 /// Convert an index entry to a leaf by removing `contents` property
 #[tauri::command]
-pub fn convert_to_leaf(path: String) -> Result<PathBuf, SerializableError> {
-    let app = DiaryxApp::new(RealFileSystem);
+pub async fn convert_to_leaf(path: String) -> Result<PathBuf, SerializableError> {
+    let app = DiaryxApp::new(SyncToAsyncFs::new(RealFileSystem));
     let path_buf = PathBuf::from(&path);
 
     // Remove contents property if it exists
     app.remove_frontmatter_property(&path, "contents")
+        .await
         .map_err(|e| e.to_serializable())?;
 
     Ok(path_buf)
@@ -1379,20 +1416,21 @@ pub fn convert_to_leaf(path: String) -> Result<PathBuf, SerializableError> {
 ///
 /// Returns the path to the newly created entry.
 #[tauri::command]
-pub fn create_child_entry(
+pub async fn create_child_entry(
     parent_path: String,
     title: Option<String>,
 ) -> Result<PathBuf, SerializableError> {
-    let ws = Workspace::new(RealFileSystem);
+    let ws = Workspace::new(SyncToAsyncFs::new(RealFileSystem));
     let parent = PathBuf::from(&parent_path);
 
     ws.create_child_entry(&parent, title.as_deref())
+        .await
         .map_err(|e| e.to_serializable())
 }
 
 /// Rename an entry file while updating references
 #[tauri::command]
-pub fn rename_entry(path: String, new_filename: String) -> Result<PathBuf, SerializableError> {
+pub async fn rename_entry(path: String, new_filename: String) -> Result<PathBuf, SerializableError> {
     let from = PathBuf::from(&path);
     let parent_dir = from.parent().unwrap_or_else(|| Path::new("."));
     let to = parent_dir.join(&new_filename);
@@ -1407,17 +1445,18 @@ pub fn rename_entry(path: String, new_filename: String) -> Result<PathBuf, Seria
         to_path: to.to_string_lossy().to_string(),
     };
 
-    move_entry(request)
+    move_entry(request).await
 }
 
 /// Ensure today's daily entry exists, creating if needed
 #[tauri::command]
-pub fn ensure_daily_entry<R: Runtime>(app: AppHandle<R>) -> Result<PathBuf, SerializableError> {
+pub async fn ensure_daily_entry<R: Runtime>(app: AppHandle<R>) -> Result<PathBuf, SerializableError> {
     use chrono::Local;
 
     let paths = get_platform_paths(&app)?;
     let config = if paths.config_path.exists() && !paths.is_mobile {
-        Config::load_from(&RealFileSystem, &paths.config_path)
+        Config::load_from(&SyncToAsyncFs::new(RealFileSystem), &paths.config_path)
+            .await
             .unwrap_or_else(|_| Config::new(paths.default_workspace.clone()))
     } else {
         Config::new(paths.default_workspace.clone())
@@ -1428,7 +1467,7 @@ pub fn ensure_daily_entry<R: Runtime>(app: AppHandle<R>) -> Result<PathBuf, Seri
         .daily_entry_folder
         .clone()
         .unwrap_or_else(|| "Daily".to_string());
-    let daily_dir = paths.default_workspace.join(&daily_folder);
+    let daily_dir = config.default_workspace.join(&daily_folder);
 
     // Create daily directory if needed
     if !daily_dir.exists() {
@@ -1439,29 +1478,113 @@ pub fn ensure_daily_entry<R: Runtime>(app: AppHandle<R>) -> Result<PathBuf, Seri
         })?;
     }
 
-    // Generate today's filename
-    let today = Local::now();
-    let filename = format!("{}.md", today.format("%Y-%m-%d"));
-    let entry_path = daily_dir.join(&filename);
+    // Generate today's filename using consistent core logic (YYYY/MM/YYYY-MM-DD.md)
+    let today = Local::now().date_naive();
+    let entry_path = diaryx_core::utils::date::date_to_path(&daily_dir, &today);
+    
+    // Initialize Workspace for index operations
+    let ws = Workspace::new(SyncToAsyncFs::new(RealFileSystem));
 
-    // If file exists, return it
-    if entry_path.exists() {
-        return Ok(entry_path);
+    // Ensure Daily folder exists
+    if !daily_dir.exists() {
+        std::fs::create_dir_all(&daily_dir).map_err(|e| SerializableError {
+            kind: "IoError".to_string(),
+            message: format!("Failed to create daily folder: {}", e),
+            path: Some(daily_dir.clone()),
+        })?;
     }
 
-    // Create new daily entry
-    let entry_path_str = entry_path.to_string_lossy().to_string();
-    let diary_app = DiaryxApp::new(RealFileSystem);
+    // 1. Ensure Daily index exists (if we can find one, or create one if completely missing logic is desired? 
+    // For now, let's try to find it. If not found, we might skip linking Year to Daily to avoid unexpected file creation at root, 
+    // unless strictly required. But usually we want at least the years linked.)
+    // Actually, let's just proceed to creating Year/Month structure and check parent at each step using ws.find_any_index_in_dir
+    
+    let mut current_dir = daily_dir.clone();
+    let default_path = PathBuf::from("");
+    let relative_path = entry_path.strip_prefix(&daily_dir).unwrap_or(&default_path);
+    let components: Vec<_> = relative_path.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect();
 
-    diary_app
-        .create_entry(&entry_path_str)
-        .map_err(|e| e.to_serializable())?;
+    // components e.g. ["2026", "01", "2026-01-09.md"]
 
-    // Set title to today's date
-    let title = today.format("%B %d, %Y").to_string(); // e.g., "December 24, 2024"
-    diary_app
-        .set_frontmatter_property(&entry_path_str, "title", serde_yaml::Value::String(title))
-        .map_err(|e| e.to_serializable())?;
+    if components.len() > 1 {
+        // Iterate: e.g. Year ("2026"), Month ("01")
+        for (i, component) in components.iter().take(components.len() - 1).enumerate() {
+            let next_dir = current_dir.join(component);
+            
+            // Create directory if missing
+            if !next_dir.exists() {
+                std::fs::create_dir_all(&next_dir).map_err(|e| SerializableError {
+                    kind: "IoError".to_string(),
+                    message: format!("Failed to create folder {}: {}", next_dir.display(), e),
+                    path: Some(next_dir.clone()),
+                })?;
+            }
+
+            // Define proper index path: dir/dir.md
+            let index_filename = format!("{}.md", component);
+            let index_path = next_dir.join(&index_filename);
+
+            // Create index file if missing
+            if !index_path.exists() {
+                // We initially write it with empty part_of, then update it below
+                let content = format!("---\ntitle: {}\ncontents: []\n---\n", component);
+                std::fs::write(&index_path, content).map_err(|e| SerializableError {
+                    kind: "IoError".to_string(),
+                    message: format!("Failed to write index file {}: {}", index_path.display(), e),
+                    path: Some(index_path.clone()),
+                })?;
+            }
+
+            // NOW: clean up linking.
+            // 1. Add this new/existing index to its parent's contents
+            // Parent is `current_dir`. Find index for `current_dir`.
+            if let Ok(Some(parent_index)) = ws.find_any_index_in_dir(&current_dir).await {
+                // Add `component/component.md` to parent index
+                let rel_link = format!("{}/{}", component, index_filename);
+                let _ = ws.add_to_index_contents(&parent_index, &rel_link).await;
+                
+                // Update this index's part_of to point to parent_index
+                 use diaryx_core::path_utils::relative_path_from_file_to_target;
+                 let rel_part_of = relative_path_from_file_to_target(&index_path, &parent_index);
+                 let _ = ws.set_frontmatter_property(&index_path, "part_of", serde_yaml::Value::String(rel_part_of)).await;
+            }
+
+            current_dir = next_dir;
+        }
+    }
+
+    // Finally create/ensure the entry itself
+    if !entry_path.exists() {
+        let entry_path_str = entry_path.to_string_lossy().to_string();
+        let diary_app = DiaryxApp::new(SyncToAsyncFs::new(RealFileSystem));
+
+        diary_app
+            .create_entry(&entry_path_str)
+            .await
+            .map_err(|e| e.to_serializable())?;
+
+        // Set title to today's date
+        let title_fmt = today.format("%B %d, %Y").to_string(); // e.g., "December 24, 2024"
+        diary_app
+            .set_frontmatter_property(&entry_path_str, "title", serde_yaml::Value::String(title_fmt))
+            .await
+            .map_err(|e| e.to_serializable())?;
+    }
+    
+    // Link entry to its parent (Month)
+    // Parent dir is `current_dir` (which should be the month dir now)
+    if let Ok(Some(parent_index)) = ws.find_any_index_in_dir(&current_dir).await {
+         let filename = entry_path.file_name().unwrap().to_str().unwrap();
+         
+         // Add entry to parent contents
+         let _ = ws.add_to_index_contents(&parent_index, filename).await;
+
+         // Update entry part_of
+         use diaryx_core::path_utils::relative_path_from_file_to_target;
+         let rel_part_of = relative_path_from_file_to_target(&entry_path, &parent_index);
+         let diary_app = DiaryxApp::new(SyncToAsyncFs::new(RealFileSystem));
+         let _ = diary_app.set_frontmatter_property(entry_path.to_str().unwrap(), "part_of", serde_yaml::Value::String(rel_part_of)).await;
+    }
 
     Ok(entry_path)
 }
@@ -1850,7 +1973,7 @@ pub struct BackupProgressEvent {
 
 /// Backup workspace to all configured targets
 #[tauri::command]
-pub fn backup_workspace<R: Runtime>(
+pub async fn backup_workspace<R: Runtime>(
     app: AppHandle<R>,
     workspace_path: Option<String>,
 ) -> Result<Vec<BackupStatus>, SerializableError> {
@@ -1869,7 +1992,7 @@ pub fn backup_workspace<R: Runtime>(
     manager.add_target(Box::new(target));
 
     // Run backup
-    let results = manager.backup_all(&RealFileSystem, &workspace);
+    let results = manager.backup_all(&SyncToAsyncFs::new(RealFileSystem), &workspace).await;
 
     Ok(results
         .into_iter()
@@ -1885,7 +2008,7 @@ pub fn backup_workspace<R: Runtime>(
 
 /// Restore workspace from a backup target
 #[tauri::command]
-pub fn restore_workspace<R: Runtime>(
+pub async fn restore_workspace<R: Runtime>(
     app: AppHandle<R>,
     workspace_path: Option<String>,
     _target_name: Option<String>, // For future use with multiple targets
@@ -1905,7 +2028,7 @@ pub fn restore_workspace<R: Runtime>(
     manager.add_target(Box::new(target));
 
     // Restore from primary
-    match manager.restore_from_primary(&RealFileSystem, &workspace) {
+    match manager.restore_from_primary(&SyncToAsyncFs::new(RealFileSystem), &workspace).await {
         Some(result) => Ok(BackupStatus {
             target_name: manager.primary_name().unwrap_or("Unknown").to_string(),
             success: result.success,
@@ -2096,8 +2219,9 @@ pub async fn backup_to_s3<R: Runtime>(
 }
 
 /// Restore workspace from S3
+/// Restore workspace from S3
 #[tauri::command]
-pub fn restore_from_s3<R: Runtime>(
+pub async fn restore_from_s3<R: Runtime>(
     app: AppHandle<R>,
     workspace_path: Option<String>,
     config: S3ConfigRequest,
@@ -2109,7 +2233,7 @@ pub fn restore_from_s3<R: Runtime>(
     let workspace = workspace_path
         .map(PathBuf::from)
         .unwrap_or(paths.default_workspace);
-    let fs = RealFileSystem;
+    let fs = SyncToAsyncFs::new(RealFileSystem);
 
     let cloud_config = CloudBackupConfig {
         id: "restore".to_string(),
@@ -2132,7 +2256,7 @@ pub fn restore_from_s3<R: Runtime>(
             }
         })?;
 
-    let result = target.restore(&fs, &workspace);
+    let result = target.restore(&fs, &workspace).await;
 
     Ok(BackupStatus {
         target_name: config.name,

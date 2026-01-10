@@ -11,18 +11,15 @@ part_of: README.md
 
 # Roadmap
 
-## v0.7.0
+## v0.8.0
+
+###
 
 ### Improved Sync/Backup
 
 ### Cross-platform import
 
 Import from Obsidian (add all part_of/contents properties + index files)
-
-### Links between files
-
-Click to seamlessly navigate to other files
-Currently tries to open path in domain (treats like literal link)
 
 ## Future considerations
 

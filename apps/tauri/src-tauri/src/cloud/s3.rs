@@ -6,7 +6,7 @@ use aws_smithy_types::byte_stream::ByteStream;
 use diaryx_core::backup::{
     BackupResult, BackupTarget, CloudBackupConfig, CloudProvider, FailurePolicy,
 };
-use diaryx_core::fs::FileSystem;
+use diaryx_core::fs::{AsyncFileSystem, BoxFuture, FileSystem, RealFileSystem};
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Arc;
@@ -317,107 +317,120 @@ impl BackupTarget for S3Target {
         FailurePolicy::Retry(3)
     }
 
-    fn backup(&self, fs: &dyn FileSystem, workspace_path: &Path) -> BackupResult {
-        // Use backup_with_progress with a no-op callback for trait compatibility
-        self.backup_with_progress(fs, workspace_path, |_, _, _, _| {})
+    fn backup<'a>(
+        &'a self,
+        _fs: &'a dyn AsyncFileSystem,
+        workspace_path: &'a Path,
+    ) -> BoxFuture<'a, BackupResult> {
+        // Note: This implementation uses RealFileSystem internally since the S3
+        // backup uses blocking I/O for zip creation.
+        Box::pin(async move {
+            self.backup_with_progress(&RealFileSystem, workspace_path, |_, _, _, _| {})
+        })
     }
 
-    fn restore(&self, fs: &dyn FileSystem, workspace_path: &Path) -> BackupResult {
-        // Find latest backup
-        let bucket = self.bucket().to_string();
-        let prefix = match &self.config.provider {
-            CloudProvider::S3 { prefix, .. } => prefix.clone().unwrap_or_default(),
-            _ => String::new(),
-        };
-
-        let client = self.client.clone();
-
-        let result = self.runtime.block_on(async {
-            // List objects to find latest
-            let list_result = client
-                .list_objects_v2()
-                .bucket(&bucket)
-                .prefix(&prefix)
-                .send()
-                .await
-                .map_err(|e| format!("Failed to list objects: {}", e))?;
-
-            let objects = list_result.contents();
-            let latest = objects
-                .iter()
-                .filter(|o| o.key().map(|k| k.ends_with(".zip")).unwrap_or(false))
-                .max_by_key(|o| o.last_modified());
-
-            let key = match latest {
-                Some(obj) => obj.key().ok_or("No key")?.to_string(),
-                None => return Err("No backups found".to_string()),
+    fn restore<'a>(
+        &'a self,
+        _fs: &'a dyn AsyncFileSystem,
+        workspace_path: &'a Path,
+    ) -> BoxFuture<'a, BackupResult> {
+        Box::pin(async move {
+            // Find latest backup
+            let bucket = self.bucket().to_string();
+            let prefix = match &self.config.provider {
+                CloudProvider::S3 { prefix, .. } => prefix.clone().unwrap_or_default(),
+                _ => String::new(),
             };
 
-            // Download the backup
-            let get_result = client
-                .get_object()
-                .bucket(&bucket)
-                .key(&key)
-                .send()
-                .await
-                .map_err(|e| format!("Failed to download: {}", e))?;
+            let client = self.client.clone();
 
-            let body = get_result
-                .body
-                .collect()
-                .await
-                .map_err(|e| format!("Failed to read body: {}", e))?;
+            let result = self.runtime.block_on(async {
+                // List objects to find latest
+                let list_result = client
+                    .list_objects_v2()
+                    .bucket(&bucket)
+                    .prefix(&prefix)
+                    .send()
+                    .await
+                    .map_err(|e| format!("Failed to list objects: {}", e))?;
 
-            Ok::<_, String>(body.into_bytes().to_vec())
-        });
+                let objects = list_result.contents();
+                let latest = objects
+                    .iter()
+                    .filter(|o| o.key().map(|k| k.ends_with(".zip")).unwrap_or(false))
+                    .max_by_key(|o| o.last_modified());
 
-        let zip_data = match result {
-            Ok(data) => data,
-            Err(e) => return BackupResult::failure(format!("S3 download failed: {}", e)),
-        };
+                let key = match latest {
+                    Some(obj) => obj.key().ok_or("No key")?.to_string(),
+                    None => return Err("No backups found".to_string()),
+                };
 
-        // Extract zip to workspace
-        let cursor = std::io::Cursor::new(zip_data);
-        let mut archive = match zip::ZipArchive::new(cursor) {
-            Ok(a) => a,
-            Err(e) => return BackupResult::failure(format!("Failed to open zip: {}", e)),
-        };
+                // Download the backup
+                let get_result = client
+                    .get_object()
+                    .bucket(&bucket)
+                    .key(&key)
+                    .send()
+                    .await
+                    .map_err(|e| format!("Failed to download: {}", e))?;
 
-        let mut files_restored = 0;
-        for i in 0..archive.len() {
-            let mut file = match archive.by_index(i) {
-                Ok(f) => f,
-                Err(e) => return BackupResult::failure(format!("Failed to read zip entry: {}", e)),
+                let body = get_result
+                    .body
+                    .collect()
+                    .await
+                    .map_err(|e| format!("Failed to read body: {}", e))?;
+
+                Ok::<_, String>(body.into_bytes().to_vec())
+            });
+
+            let zip_data = match result {
+                Ok(data) => data,
+                Err(e) => return BackupResult::failure(format!("S3 download failed: {}", e)),
             };
 
-            if file.is_dir() {
-                continue;
+            // Extract zip to workspace
+            let cursor = std::io::Cursor::new(zip_data);
+            let mut archive = match zip::ZipArchive::new(cursor) {
+                Ok(a) => a,
+                Err(e) => return BackupResult::failure(format!("Failed to open zip: {}", e)),
+            };
+
+            let mut files_restored = 0;
+            for i in 0..archive.len() {
+                let mut file = match archive.by_index(i) {
+                    Ok(f) => f,
+                    Err(e) => return BackupResult::failure(format!("Failed to read zip entry: {}", e)),
+                };
+
+                if file.is_dir() {
+                    continue;
+                }
+
+                let file_path = workspace_path.join(file.name());
+
+                // Create parent directories using std::fs since we're in a sync context
+                if let Some(parent) = file_path.parent() {
+                    if let Err(e) = std::fs::create_dir_all(parent) {
+                        return BackupResult::failure(format!("Failed to create dir: {}", e));
+                    }
+                }
+
+                // Read file contents
+                let mut contents = Vec::new();
+                if let Err(e) = file.read_to_end(&mut contents) {
+                    return BackupResult::failure(format!("Failed to read file: {}", e));
+                }
+
+                // Write to filesystem using std::fs
+                if let Err(e) = std::fs::write(&file_path, &contents) {
+                    return BackupResult::failure(format!("Failed to write file: {}", e));
+                }
+
+                files_restored += 1;
             }
 
-            let file_path = workspace_path.join(file.name());
-
-            // Create parent directories
-            if let Some(parent) = file_path.parent()
-                && let Err(e) = fs.create_dir_all(parent)
-            {
-                return BackupResult::failure(format!("Failed to create dir: {}", e));
-            }
-
-            // Read file contents
-            let mut contents = Vec::new();
-            if let Err(e) = file.read_to_end(&mut contents) {
-                return BackupResult::failure(format!("Failed to read file: {}", e));
-            }
-
-            // Write to filesystem
-            if let Err(e) = fs.write_binary(&file_path, &contents) {
-                return BackupResult::failure(format!("Failed to write file: {}", e));
-            }
-
-            files_restored += 1;
-        }
-
-        BackupResult::success(files_restored)
+            BackupResult::success(files_restored)
+        })
     }
 
     fn is_available(&self) -> bool {

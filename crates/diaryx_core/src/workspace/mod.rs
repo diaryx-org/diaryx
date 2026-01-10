@@ -567,7 +567,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
     }
 
     /// Set a frontmatter property in a file
-    async fn set_frontmatter_property(&self, path: &Path, key: &str, value: Value) -> Result<()> {
+    pub async fn set_frontmatter_property(&self, path: &Path, key: &str, value: Value) -> Result<()> {
         let content = match self.fs.read_to_string(path).await {
             Ok(c) => c,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -664,7 +664,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
     }
 
     /// Add an entry to an index's contents list
-    async fn add_to_index_contents(&self, index_path: &Path, entry: &str) -> Result<bool> {
+    pub async fn add_to_index_contents(&self, index_path: &Path, entry: &str) -> Result<bool> {
         // Normalize the entry path (strip leading ./)
         let normalized_entry = Self::normalize_contents_path(entry);
 

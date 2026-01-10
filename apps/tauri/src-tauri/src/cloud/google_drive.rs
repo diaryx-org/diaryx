@@ -1,7 +1,7 @@
 //! Google Drive cloud backup target implementation.
 
 use diaryx_core::backup::{BackupResult, BackupTarget, CloudBackupConfig, FailurePolicy};
-use diaryx_core::fs::FileSystem;
+use diaryx_core::fs::{AsyncFileSystem, BoxFuture, FileSystem, RealFileSystem};
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
@@ -20,11 +20,6 @@ pub struct GoogleDriveTarget {
 
 impl GoogleDriveTarget {
     /// Create a new Google Drive backup target.
-    ///
-    /// # Arguments
-    /// * `config` - The cloud backup configuration
-    /// * `access_token` - OAuth2 access token from the auth plugin
-    /// * `folder_id` - Optional folder ID to upload to (root if None)
     pub fn new(
         config: CloudBackupConfig,
         access_token: String,
@@ -41,13 +36,11 @@ impl GoogleDriveTarget {
         })
     }
 
-    /// Generate backup filename with timestamp.
     fn backup_filename(&self) -> String {
         let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
         format!("diaryx_backup_{}.zip", timestamp)
     }
 
-    /// Create a zip archive of the workspace with progress callback.
     fn create_zip_archive_with_progress<F>(
         &self,
         fs: &dyn FileSystem,
@@ -64,7 +57,6 @@ impl GoogleDriveTarget {
                 .compression_method(zip::CompressionMethod::Deflated)
                 .compression_level(Some(6));
 
-            // Get all files recursively
             let entries = fs
                 .list_all_files_recursive(workspace_path)
                 .map_err(|e| format!("Failed to list files: {}", e))?;
@@ -79,7 +71,6 @@ impl GoogleDriveTarget {
                     .to_string_lossy()
                     .to_string();
 
-                // Calculate percent (10-80 range for zipping)
                 let percent = 10 + ((i * 70) / total_files.max(1)) as u8;
                 if i % 100 == 0 {
                     on_progress(i, total_files, percent);
@@ -88,14 +79,13 @@ impl GoogleDriveTarget {
                 zip.start_file(&relative_path, options)
                     .map_err(|e| format!("Failed to start file in zip: {}", e))?;
 
-                // Read file content
                 let content = if let Ok(binary) = fs.read_binary(file_path) {
                     binary
                 } else if let Ok(text) = fs.read_to_string(file_path) {
                     text.into_bytes()
                 } else {
                     log::warn!(
-                        "[Google Drive] Skipping file: {}. Could not read as text or binary.",
+                        "[Google Drive] Skipping file: {}. Could not read.",
                         file_path.display()
                     );
                     continue;
@@ -112,26 +102,18 @@ impl GoogleDriveTarget {
         Ok(buffer)
     }
 
-    /// Upload a file to Google Drive.
-    ///
-    /// Uses the Files: create API with multipart upload.
-    /// https://developers.google.com/drive/api/v3/reference/files/create
     async fn upload_to_drive(&self, filename: &str, data: Vec<u8>) -> Result<String, String> {
         let client = reqwest::Client::new();
 
-        // Build metadata
         let mut metadata = serde_json::json!({
             "name": filename,
             "mimeType": "application/zip"
         });
 
-        // Add parent folder if specified
         if let Some(ref folder_id) = self.folder_id {
             metadata["parents"] = serde_json::json!([folder_id]);
         }
 
-        // Use multipart upload for simplicity
-        // For larger files, we'd use resumable upload
         let metadata_part = reqwest::multipart::Part::text(metadata.to_string())
             .mime_str("application/json")
             .map_err(|e| format!("Failed to create metadata part: {}", e))?;
@@ -168,7 +150,6 @@ impl GoogleDriveTarget {
         }
     }
 
-    /// Backup with progress callback.
     pub fn backup_with_progress<F>(
         &self,
         fs: &dyn FileSystem,
@@ -180,7 +161,6 @@ impl GoogleDriveTarget {
     {
         on_progress("preparing", 0, 0, 5);
 
-        // Create zip archive
         let zip_data = match self.create_zip_archive_with_progress(
             fs,
             workspace_path,
@@ -200,7 +180,6 @@ impl GoogleDriveTarget {
         let filename = self.backup_filename();
         on_progress("uploading", 0, 1, 85);
 
-        // Upload to Drive
         let result = self.runtime.block_on(async {
             tokio::time::timeout(
                 Duration::from_secs(300),
@@ -228,7 +207,6 @@ impl GoogleDriveTarget {
 
 impl BackupTarget for GoogleDriveTarget {
     fn is_available(&self) -> bool {
-        // Assume available if we have an access token
         !self.access_token.is_empty()
     }
 
@@ -237,18 +215,30 @@ impl BackupTarget for GoogleDriveTarget {
     }
 
     fn frequency(&self) -> Duration {
-        Duration::from_secs(3600) // 1 hour
+        Duration::from_secs(3600)
     }
 
     fn failure_policy(&self) -> FailurePolicy {
         FailurePolicy::Retry(3)
     }
 
-    fn backup(&self, fs: &dyn FileSystem, workspace_path: &Path) -> BackupResult {
-        self.backup_with_progress(fs, workspace_path, |_, _, _, _| {})
+    fn backup<'a>(
+        &'a self,
+        _fs: &'a dyn AsyncFileSystem,
+        workspace_path: &'a Path,
+    ) -> BoxFuture<'a, BackupResult> {
+        Box::pin(async move {
+            self.backup_with_progress(&RealFileSystem, workspace_path, |_, _, _, _| {})
+        })
     }
 
-    fn restore(&self, _fs: &dyn FileSystem, _workspace_path: &Path) -> BackupResult {
-        BackupResult::failure("Google Drive restore not yet implemented")
+    fn restore<'a>(
+        &'a self,
+        _fs: &'a dyn AsyncFileSystem,
+        _workspace_path: &'a Path,
+    ) -> BoxFuture<'a, BackupResult> {
+        Box::pin(async move {
+            BackupResult::failure("Google Drive restore not yet implemented")
+        })
     }
 }

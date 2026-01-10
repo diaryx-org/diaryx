@@ -36,8 +36,12 @@
     entryStore, 
     uiStore, 
     collaborationStore, 
-    workspaceStore 
+    workspaceStore,
+    getThemeStore
   } from "./models/stores";
+
+  // Initialize theme store immediately
+  getThemeStore();
   
   // Import services
   import {

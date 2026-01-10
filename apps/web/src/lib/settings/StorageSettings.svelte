@@ -17,6 +17,7 @@
     getStorageTypeDescription,
     type StorageType,
   } from "$lib/backend/storageType";
+  import { isTauri } from "$lib/backend/interface";
 
   // Current and selected storage type
   let currentType = $state(getStorageType());
@@ -66,41 +67,63 @@
 
   <!-- Storage Options -->
   <div class="space-y-2 px-1">
-    {#each storageOptions as option}
-      {@const isSupported = isStorageTypeSupported(option.type)}
-      {@const isSelected = selectedType === option.type}
-      {@const isCurrent = currentType === option.type}
-      
+    {#if isTauri()}
       <button
         type="button"
-        class="w-full flex items-start gap-3 p-3 rounded-lg border text-left transition-colors
-          {isSelected ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'}
-          {!isSupported ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}"
-        disabled={!isSupported}
-        onclick={() => handleSelect(option.type)}
+        class="w-full flex items-start gap-3 p-3 rounded-lg border text-left transition-colors border-border opacity-50 cursor-not-allowed"
+        disabled={true}
       >
         <div class="mt-0.5">
-          <option.icon class="size-5 {isSelected ? 'text-primary' : 'text-muted-foreground'}" />
+          <FolderOpen class="size-5 text-muted-foreground" />
         </div>
         <div class="flex-1 min-w-0">
           <div class="flex items-center gap-2">
-            <span class="font-medium text-sm">{getStorageTypeName(option.type)}</span>
-            {#if isCurrent}
-              <span class="text-xs text-primary bg-primary/10 px-1.5 py-0.5 rounded">Current</span>
-            {/if}
-            {#if !isSupported}
-              <span class="text-xs text-muted-foreground">(Not supported)</span>
-            {/if}
+            <span class="font-medium text-sm">Local Storage</span>
+            <span class="text-xs text-primary bg-primary/10 px-1.5 py-0.5 rounded">Active</span>
           </div>
           <p class="text-xs text-muted-foreground mt-0.5">
-            {getStorageTypeDescription(option.type)}
+            Files are stored directly on your device when using the desktop app.
           </p>
         </div>
-        {#if isSelected && isSupported}
-          <Check class="size-4 text-primary mt-0.5" />
-        {/if}
+        <Check class="size-4 text-primary mt-0.5" />
       </button>
-    {/each}
+    {:else}
+      {#each storageOptions as option}
+        {@const isSupported = isStorageTypeSupported(option.type)}
+        {@const isSelected = selectedType === option.type}
+        {@const isCurrent = currentType === option.type}
+        
+        <button
+          type="button"
+          class="w-full flex items-start gap-3 p-3 rounded-lg border text-left transition-colors
+            {isSelected ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'}
+            {!isSupported ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}"
+          disabled={!isSupported}
+          onclick={() => handleSelect(option.type)}
+        >
+          <div class="mt-0.5">
+            <option.icon class="size-5 {isSelected ? 'text-primary' : 'text-muted-foreground'}" />
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2">
+              <span class="font-medium text-sm">{getStorageTypeName(option.type)}</span>
+              {#if isCurrent}
+                <span class="text-xs text-primary bg-primary/10 px-1.5 py-0.5 rounded">Current</span>
+              {/if}
+              {#if !isSupported}
+                <span class="text-xs text-muted-foreground">(Not supported)</span>
+              {/if}
+            </div>
+            <p class="text-xs text-muted-foreground mt-0.5">
+              {getStorageTypeDescription(option.type)}
+            </p>
+          </div>
+          {#if isSelected && isSupported}
+            <Check class="size-4 text-primary mt-0.5" />
+          {/if}
+        </button>
+      {/each}
+    {/if}
   </div>
 
   <!-- Change Confirmation -->

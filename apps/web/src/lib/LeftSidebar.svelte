@@ -101,16 +101,27 @@
     draggedPath = path;
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/plain", path);
+      e.dataTransfer.setData("application/vnd.diaryx.path", path);
     }
   }
 
   function handleDragOver(e: DragEvent, path: string) {
-    e.preventDefault();
-    if (e.dataTransfer) {
-      e.dataTransfer.dropEffect = "move";
+    // If we have an internal drag in progress, allow dropping
+    if (draggedPath) {
+      e.preventDefault();
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = "move";
+      }
+      dropTargetPath = path;
+      return;
     }
-    dropTargetPath = path;
+
+    // Also allow if it matches our custom MIME type (for robustness if state is lost)
+    if (e.dataTransfer && e.dataTransfer.types.includes("application/vnd.diaryx.path")) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      dropTargetPath = path;
+    }
   }
 
   function handleDragLeave() {

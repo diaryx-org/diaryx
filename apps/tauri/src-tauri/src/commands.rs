@@ -8,12 +8,14 @@ use std::path::{Path, PathBuf};
 
 use diaryx_core::{
     config::Config,
+    diaryx::Diaryx,
     entry::DiaryxApp,
     error::SerializableError,
     fs::{AsyncFileSystem, FileSystem, RealFileSystem, SyncToAsyncFs},
     search::{SearchQuery, SearchResults, Searcher},
     validate::{FixResult, ValidationFixer, ValidationResult, Validator},
     workspace::{TreeNode, Workspace},
+    Command, Response,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -48,6 +50,61 @@ pub struct AppPaths {
     pub config_path: PathBuf,
     /// Whether this is a mobile platform (iOS/Android)
     pub is_mobile: bool,
+}
+
+// ============================================================================
+// Unified Command API
+// ============================================================================
+
+/// Execute a command using the unified command pattern.
+/// 
+/// This is the primary API for all diaryx operations, replacing the many
+/// individual commands with a single entry point.
+///
+/// ## Example from TypeScript:
+/// ```typescript
+/// const command = { type: 'GetEntry', params: { path: 'workspace/notes.md' } };
+/// const response = await invoke('execute', { commandJson: JSON.stringify(command) });
+/// const result = JSON.parse(response);
+/// ```
+#[tauri::command]
+pub async fn execute(command_json: String) -> Result<String, SerializableError> {
+    log::info!("[execute] Received command");
+    log::debug!("[execute] Command JSON: {}", command_json);
+    
+    // Parse the command from JSON
+    let cmd: Command = serde_json::from_str(&command_json).map_err(|e| {
+        log::error!("[execute] Failed to parse command: {}", e);
+        SerializableError {
+            kind: "ParseError".to_string(),
+            message: format!("Failed to parse command JSON: {}", e),
+            path: None,
+        }
+    })?;
+    
+    log::info!("[execute] Parsed command type: {:?}", std::mem::discriminant(&cmd));
+    
+    // Create a Diaryx instance with the real filesystem
+    let diaryx = Diaryx::new(SyncToAsyncFs::new(RealFileSystem));
+    
+    // Execute the command
+    let response = diaryx.execute(cmd).await.map_err(|e| {
+        log::error!("[execute] Command execution failed: {:?}", e);
+        e.to_serializable()
+    })?;
+    
+    // Serialize the response to JSON
+    let response_json = serde_json::to_string(&response).map_err(|e| {
+        log::error!("[execute] Failed to serialize response: {}", e);
+        SerializableError {
+            kind: "SerializeError".to_string(),
+            message: format!("Failed to serialize response: {}", e),
+            path: None,
+        }
+    })?;
+    
+    log::info!("[execute] Command executed successfully");
+    Ok(response_json)
 }
 
 /// Get platform-appropriate paths for the app

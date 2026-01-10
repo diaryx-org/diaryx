@@ -240,16 +240,17 @@ export class TauriBackend implements Backend {
   }
 
   // --------------------------------------------------------------------------
-  // Unified Command API (Phase 3 - TODO: implement via Tauri IPC)
+  // Unified Command API
   // --------------------------------------------------------------------------
 
   async execute(command: import("./interface").Command): Promise<import("./interface").Response> {
-    // TODO: Implement in Phase 3 by calling a unified Tauri IPC command
-    // For now, throw to indicate this method is not yet implemented
-    throw new BackendError(
-      `execute() not yet implemented for TauriBackend. Command type: ${command.type}`,
-      "NotImplemented"
-    );
+    try {
+      const commandJson = JSON.stringify(command);
+      const responseJson = await this.getInvoke()<string>("execute", { commandJson });
+      return JSON.parse(responseJson) as import("./interface").Response;
+    } catch (e) {
+      handleError(e);
+    }
   }
 
   // --------------------------------------------------------------------------

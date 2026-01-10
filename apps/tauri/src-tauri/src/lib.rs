@@ -45,6 +45,8 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_google_auth::init())
         .invoke_handler(tauri::generate_handler![
+            // Unified Command API (new)
+            commands::execute,
             // App initialization (iOS-compatible)
             commands::initialize_app,
             commands::get_app_paths,

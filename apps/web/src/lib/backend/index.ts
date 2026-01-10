@@ -2,6 +2,7 @@
 
 import type { Backend } from "./interface";
 import { isTauri, isBrowser } from "./interface";
+import { createApi, type Api } from "./api";
 
 // Re-export types and utilities
 export type {
@@ -25,6 +26,9 @@ export type {
 } from "./interface";
 
 export { BackendError, isTauri, isBrowser } from "./interface";
+
+// Re-export API wrapper
+export { createApi, type Api } from "./api";
 
 // ============================================================================
 // Singleton Backend Instance
@@ -131,6 +135,44 @@ export function getBackendSync(): Backend {
     );
   }
   return backendInstance;
+}
+
+// ============================================================================
+// API Wrapper Access
+// ============================================================================
+
+let apiInstance: Api | null = null;
+
+/**
+ * Get the typed API wrapper, initializing if necessary.
+ * This is the recommended way to interact with the backend.
+ * 
+ * Usage:
+ * ```ts
+ * const api = await getApi();
+ * const entry = await api.getEntry('workspace/notes.md');
+ * ```
+ */
+export async function getApi(): Promise<Api> {
+  if (apiInstance) {
+    return apiInstance;
+  }
+  const backend = await getBackend();
+  apiInstance = createApi(backend);
+  return apiInstance;
+}
+
+/**
+ * Get the API wrapper synchronously.
+ * Throws if the backend hasn't been initialized yet.
+ */
+export function getApiSync(): Api {
+  if (apiInstance) {
+    return apiInstance;
+  }
+  const backend = getBackendSync();
+  apiInstance = createApi(backend);
+  return apiInstance;
 }
 
 // ============================================================================

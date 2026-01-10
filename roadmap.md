@@ -3,7 +3,7 @@ title: Roadmap
 description: The plan for future Diaryx features
 author: adammharris
 created: 2025-12-05T12:06:55-07:00
-updated: 2026-01-048T16:26:14-07:00
+updated: 2026-01-098T22:42:14-07:00
 audience:
   - public
 part_of: README.md
@@ -13,7 +13,7 @@ part_of: README.md
 
 ## v0.8.0
 
-###
+### Template support for web frontend
 
 ### Improved Sync/Backup
 
@@ -21,7 +21,11 @@ part_of: README.md
 
 Import from Obsidian (add all part_of/contents properties + index files)
 
-## Future considerations
+## Other considerations
+
+### Refactor for Backend interface in diaryx_wasm
+
+How much to integrate into diaryx_core?
 
 ### Better documentation
 

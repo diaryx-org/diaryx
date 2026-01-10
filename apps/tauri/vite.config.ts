@@ -52,4 +52,7 @@ export default defineConfig({
       $lib: resolve(__dirname, "../web/src/lib"),
     },
   },
+  worker: {
+    format: 'es',
+  },
 });

@@ -411,11 +411,10 @@ impl BackupTarget for S3Target {
                 let file_path = workspace_path.join(file.name());
 
                 // Create parent directories using std::fs since we're in a sync context
-                if let Some(parent) = file_path.parent() {
-                    if let Err(e) = std::fs::create_dir_all(parent) {
+                if let Some(parent) = file_path.parent()
+                    && let Err(e) = std::fs::create_dir_all(parent) {
                         return BackupResult::failure(format!("Failed to create dir: {}", e));
                     }
-                }
 
                 // Read file contents
                 let mut contents = Vec::new();

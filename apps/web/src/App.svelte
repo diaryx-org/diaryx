@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from "svelte";
-  import { getBackend } from "./lib/backend";
+  import { getBackend, type TreeNode } from "./lib/backend";
   import { createApi, type Api } from "./lib/backend/api";
   import type { JsonValue } from "./lib/backend/generated/serde_json/JsonValue";
   import {
@@ -381,12 +381,13 @@
       // Note: initializeWorkspaceCrdt needs both backend (for events) and api (for data operations)
       workspaceCrdtInitialized = await initializeWorkspaceCrdt(
         workspaceId,
+        workspacePath,
         collaborationServerUrl,
         collaborationEnabled,
         backend,
         api,
         {
-          onFilesChange: async (files) => {
+          onFilesChange: async (files: Map<string, any>) => {
             console.log("[App] Workspace CRDT files changed:", files.size);
             // Refresh tree to show updated metadata (titles, etc.)
             await refreshTree();
@@ -401,11 +402,11 @@
               }
             }
           },
-          onConnectionChange: (connected) => {
+          onConnectionChange: (connected: boolean) => {
             console.log("[App] Workspace CRDT connection:", connected ? "online" : "offline");
             collaborationStore.setConnected(connected);
           },
-          onRemoteFileSync: async (created, deleted) => {
+          onRemoteFileSync: async (created: string[], deleted: string[]) => {
             console.log(`[App] Remote file sync: created ${created.length}, deleted ${deleted.length}`);
             if (created.length > 0 || deleted.length > 0) {
               await refreshTree();
@@ -865,6 +866,9 @@
     }
   }
 
+  // Depth limit for initial tree loading (lazy loading)
+  const TREE_INITIAL_DEPTH = 2;
+
   // Refresh the tree using the appropriate method based on showUnlinkedFiles setting
   async function refreshTree() {
     if (!api || !backend) return;
@@ -873,21 +877,46 @@
       const workspaceDir = backend.getWorkspacePath().replace(/\/index\.md$/, '').replace(/\/README\.md$/, '');
 
       if (showUnlinkedFiles) {
-        // "Show All Files" mode - use filesystem tree
-        workspaceStore.setTree(await api.getFilesystemTree(workspaceDir, showHiddenFiles));
+        // "Show All Files" mode - use filesystem tree with depth limit
+        workspaceStore.setTree(await api.getFilesystemTree(workspaceDir, showHiddenFiles, TREE_INITIAL_DEPTH));
       } else {
-        // Normal mode - find the actual root index and use hierarchy tree
+        // Normal mode - find the actual root index and use hierarchy tree with depth limit
         try {
           const rootIndexPath = await api.findRootIndex(workspaceDir);
-          workspaceStore.setTree(await api.getWorkspaceTree(rootIndexPath));
+          workspaceStore.setTree(await api.getWorkspaceTree(rootIndexPath, TREE_INITIAL_DEPTH));
         } catch (e) {
           console.warn("[App] Could not find root index for tree:", e);
           // Fall back to filesystem tree if no root index found
-          workspaceStore.setTree(await api.getFilesystemTree(workspaceDir, showHiddenFiles));
+          workspaceStore.setTree(await api.getFilesystemTree(workspaceDir, showHiddenFiles, TREE_INITIAL_DEPTH));
         }
       }
     } catch (e) {
       console.error("[App] Error refreshing tree:", e);
+    }
+  }
+
+  // Load children for a node (lazy loading when user expands)
+  async function loadNodeChildren(nodePath: string) {
+    if (!api) return;
+    try {
+      let subtree: TreeNode;
+
+      if (showUnlinkedFiles) {
+        // Filesystem tree mode - need directory path
+        // If nodePath ends with .md, it's an index file - use parent directory
+        const dirPath = nodePath.endsWith('.md')
+          ? nodePath.substring(0, nodePath.lastIndexOf('/'))
+          : nodePath;
+        subtree = await api.getFilesystemTree(dirPath, showHiddenFiles, TREE_INITIAL_DEPTH);
+      } else {
+        // Workspace tree mode - use index file path directly
+        subtree = await api.getWorkspaceTree(nodePath, TREE_INITIAL_DEPTH);
+      }
+
+      // Merge into existing tree
+      workspaceStore.updateSubtree(nodePath, subtree);
+    } catch (e) {
+      console.error("[App] Error loading children for", nodePath, e);
     }
   }
 
@@ -1447,6 +1476,7 @@
       await refreshTree();
       await runValidation();
     }}
+    onLoadChildren={loadNodeChildren}
   />
 
   <!-- Hidden file input for attachments -->

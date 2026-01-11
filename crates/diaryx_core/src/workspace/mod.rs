@@ -381,7 +381,18 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         root_dir: &Path,
         show_hidden: bool,
     ) -> Result<TreeNode> {
-        self.build_filesystem_tree_recursive(root_dir, show_hidden)
+        self.build_filesystem_tree_with_depth(root_dir, show_hidden, None)
+            .await
+    }
+
+    /// Build a filesystem tree with optional depth limiting for lazy loading
+    pub async fn build_filesystem_tree_with_depth(
+        &self,
+        root_dir: &Path,
+        show_hidden: bool,
+        max_depth: Option<usize>,
+    ) -> Result<TreeNode> {
+        self.build_filesystem_tree_recursive(root_dir, show_hidden, max_depth)
             .await
     }
 
@@ -389,6 +400,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         &self,
         dir: &Path,
         show_hidden: bool,
+        max_depth: Option<usize>,
     ) -> Result<TreeNode> {
         // Get directory name for display
         let dir_name = dir
@@ -412,56 +424,81 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         // The path to use - if there's an index, use it; otherwise use the directory
         let node_path = index_path.unwrap_or_else(|| dir.to_path_buf());
 
+        // Check if we've hit depth limit
+        let at_depth_limit = max_depth.map(|d| d == 0).unwrap_or(false);
+
         // List all entries in this directory
         let mut children = Vec::new();
         if let Ok(entries) = self.fs.list_files(dir).await {
             let mut entries: Vec<_> = entries.into_iter().collect();
             entries.sort(); // Sort alphabetically
 
-            for entry in entries {
-                let file_name = entry
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
+            // Filter out hidden files first to get accurate count
+            let entries: Vec<_> = entries
+                .into_iter()
+                .filter(|entry| {
+                    let file_name = entry
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    show_hidden || !file_name.starts_with('.')
+                })
+                .collect();
 
-                // Skip hidden files unless show_hidden is true
-                if !show_hidden && file_name.starts_with('.') {
-                    continue;
-                }
+            // If at depth limit, show truncation indicator
+            if at_depth_limit && !entries.is_empty() {
+                children.push(TreeNode {
+                    name: format!("... ({} more)", entries.len()),
+                    description: None,
+                    path: node_path.clone(),
+                    children: Vec::new(),
+                });
+            } else {
+                let next_depth = max_depth.map(|d| d.saturating_sub(1));
 
-                if self.fs.is_dir(&entry).await {
-                    // Recurse into subdirectory
-                    if let Ok(child_tree) =
-                        Box::pin(self.build_filesystem_tree_recursive(&entry, show_hidden)).await
-                    {
-                        children.push(child_tree);
-                    }
-                } else {
-                    // It's a file - skip index files (already represented by parent dir)
-                    if self.is_index_file(&entry).await {
-                        continue;
-                    }
+                for entry in entries {
+                    let file_name = entry
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
 
-                    // Get title from frontmatter if it's a markdown file
-                    let (file_title, file_desc) = if entry.extension().is_some_and(|e| e == "md") {
-                        if let Ok(parsed) = self.parse_index(&entry).await {
-                            (
-                                parsed.frontmatter.title.unwrap_or(file_name.clone()),
-                                parsed.frontmatter.description,
-                            )
-                        } else {
-                            (file_name.clone(), None)
+                    if self.fs.is_dir(&entry).await {
+                        // Recurse into subdirectory with decremented depth
+                        if let Ok(child_tree) = Box::pin(
+                            self.build_filesystem_tree_recursive(&entry, show_hidden, next_depth),
+                        )
+                        .await
+                        {
+                            children.push(child_tree);
                         }
                     } else {
-                        (file_name.clone(), None)
-                    };
+                        // It's a file - skip index files (already represented by parent dir)
+                        if self.is_index_file(&entry).await {
+                            continue;
+                        }
 
-                    children.push(TreeNode {
-                        name: file_title,
-                        description: file_desc,
-                        path: entry,
-                        children: Vec::new(),
-                    });
+                        // Get title from frontmatter if it's a markdown file
+                        let (file_title, file_desc) =
+                            if entry.extension().is_some_and(|e| e == "md") {
+                                if let Ok(parsed) = self.parse_index(&entry).await {
+                                    (
+                                        parsed.frontmatter.title.unwrap_or(file_name.clone()),
+                                        parsed.frontmatter.description,
+                                    )
+                                } else {
+                                    (file_name.clone(), None)
+                                }
+                            } else {
+                                (file_name.clone(), None)
+                            };
+
+                        children.push(TreeNode {
+                            name: file_title,
+                            description: file_desc,
+                            path: entry,
+                            children: Vec::new(),
+                        });
+                    }
                 }
             }
         }

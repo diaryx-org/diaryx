@@ -945,17 +945,17 @@ export function updateAttachmentSource(
  */
 export async function syncFromBackend(
   api: Api,
-  _rootPath?: string,
+  rootPath?: string,
 ): Promise<void> {
   if (!workspaceSession) {
     console.warn("[WorkspaceCRDT] Cannot sync: workspace not initialized");
     return;
   }
 
-  console.log("[WorkspaceCRDT] Syncing from API...");
+  console.log(`[WorkspaceCRDT] Syncing from API (root: ${rootPath || 'default'})...`);
 
   try {
-    const tree = await api.getWorkspaceTree();
+    const tree = await api.getWorkspaceTree(rootPath);
     await syncTreeNode(api, tree, null);
     console.log("[WorkspaceCRDT] Sync from API complete");
   } catch (error) {

@@ -89,7 +89,11 @@ path: string | null,
 /**
  * Whether to include hidden files.
  */
-show_hidden: boolean, } } | { "type": "CreateWorkspace", "params": { 
+show_hidden: boolean, 
+/**
+ * Optional maximum depth to traverse.
+ */
+depth: number | null, } } | { "type": "CreateWorkspace", "params": { 
 /**
  * Path where the workspace should be created.
  */

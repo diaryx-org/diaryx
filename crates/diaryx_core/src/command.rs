@@ -137,6 +137,8 @@ pub enum Command {
         /// Whether to include hidden files.
         #[serde(default)]
         show_hidden: bool,
+        /// Optional maximum depth to traverse.
+        depth: Option<u32>,
     },
 
     /// Create a new workspace.

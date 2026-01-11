@@ -47,6 +47,7 @@
     onRemoveBrokenContentsRef?: (indexPath: string, target: string) => void;
     onAttachUnlinkedEntry?: (entryPath: string) => void;
     onValidationFix?: () => void;
+    onLoadChildren?: (path: string) => Promise<void>;
   }
 
   let {
@@ -72,7 +73,37 @@
     onRemoveBrokenContentsRef,
     onAttachUnlinkedEntry,
     onValidationFix,
+    onLoadChildren,
   }: Props = $props();
+
+  // Track which nodes are currently loading children
+  let loadingNodes = $state(new Set<string>());
+
+  // Check if a node has unloaded children (placeholder "... (N more)" node)
+  function hasUnloadedChildren(node: TreeNode): boolean {
+    return node.children.some((child) => child.name.startsWith("... ("));
+  }
+
+  // Handle expand with lazy loading
+  async function handleToggleNode(path: string, node: TreeNode) {
+    // If node is being expanded and has unloaded children, load them first
+    if (!expandedNodes.has(path) && hasUnloadedChildren(node) && onLoadChildren) {
+      loadingNodes.add(path);
+      loadingNodes = new Set(loadingNodes);
+      try {
+        await onLoadChildren(path);
+      } finally {
+        loadingNodes.delete(path);
+        loadingNodes = new Set(loadingNodes);
+      }
+    }
+    onToggleNode(path);
+  }
+
+  // Check if a node is loading
+  function isNodeLoading(path: string): boolean {
+    return loadingNodes.has(path);
+  }
 
   // Extract unlinked entries (files/directories not in hierarchy) from validation result
   let unlinkedPaths = $derived(() => {
@@ -843,18 +874,23 @@
               class="p-1 rounded-sm hover:bg-sidebar-accent-foreground/10 transition-colors"
               onclick={(e) => {
                 e.stopPropagation();
-                onToggleNode(node.path);
+                handleToggleNode(node.path, node);
               }}
               aria-label="Toggle folder"
               tabindex={-1}
+              disabled={isNodeLoading(node.path)}
             >
-              <ChevronRight
-                class="size-4 text-muted-foreground transition-transform duration-200 {expandedNodes.has(
-                  node.path,
-                )
-                  ? 'rotate-90'
-                  : ''}"
-              />
+              {#if isNodeLoading(node.path)}
+                <Loader2 class="size-4 text-muted-foreground animate-spin" />
+              {:else}
+                <ChevronRight
+                  class="size-4 text-muted-foreground transition-transform duration-200 {expandedNodes.has(
+                    node.path,
+                  )
+                    ? 'rotate-90'
+                    : ''}"
+                />
+              {/if}
             </button>
           {:else}
             <span class="w-6"></span>
@@ -1049,7 +1085,7 @@
 
         {#if node.children.length > 0 && expandedNodes.has(node.path)}
           <div class="mt-0.5" role="group">
-            {#each node.children as child}
+            {#each node.children.filter(c => !c.name.startsWith('... (')) as child}
               {@render treeNode(child, depth + 1)}
             {/each}
           </div>

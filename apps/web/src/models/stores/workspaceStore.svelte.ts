@@ -60,6 +60,26 @@ export function getWorkspaceStore() {
     setTree(newTree: TreeNode | null) {
       tree = newTree;
     },
+
+    // Update a subtree (for lazy loading)
+    updateSubtree(nodePath: string, subtree: TreeNode) {
+      if (!tree) return;
+
+      // Find the node in the tree and replace its children
+      function findAndUpdate(node: TreeNode): boolean {
+        if (node.path === nodePath) {
+          node.children = subtree.children;
+          return true;
+        }
+        for (const child of node.children) {
+          if (findAndUpdate(child)) return true;
+        }
+        return false;
+      }
+
+      findAndUpdate(tree);
+      tree = { ...tree }; // Trigger reactivity
+    },
     
     // Node expansion
     toggleNode(path: string) {

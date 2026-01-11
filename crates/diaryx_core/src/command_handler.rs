@@ -102,10 +102,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 Ok(Response::Tree(tree))
             }
 
-            Command::GetFilesystemTree { path, show_hidden } => {
+            Command::GetFilesystemTree { path, show_hidden, depth } => {
                 let root_path = path.unwrap_or_else(|| "workspace".to_string());
                 let tree = self.workspace().inner()
-                    .build_filesystem_tree(Path::new(&root_path), show_hidden)
+                    .build_filesystem_tree_with_depth(
+                        Path::new(&root_path),
+                        show_hidden,
+                        depth.map(|d| d as usize),
+                    )
                     .await?;
                 Ok(Response::Tree(tree))
             }

@@ -172,9 +172,9 @@ impl<FS: AsyncFileSystem> Validator<FS> {
             .await?;
 
         // Find unlinked entries: files/dirs in workspace not visited during traversal
-        // Only scan immediate directory (non-recursive) for performance
+        // Scan recursively to find orphans in subdirectories
         let workspace_root = root_path.parent().unwrap_or(Path::new("."));
-        if let Ok(all_entries) = self.ws.fs_ref().list_files(workspace_root).await {
+        if let Ok(all_entries) = self.ws.fs_ref().list_all_files_recursive(workspace_root).await {
             // Normalize visited paths for comparison
             let visited_normalized: HashSet<PathBuf> = visited
                 .iter()

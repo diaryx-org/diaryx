@@ -146,10 +146,10 @@ export function createApi(backend: Backend) {
     },
 
     /** Get the filesystem tree (for "Show All Files" mode). */
-    async getFilesystemTree(path?: string, showHidden = false): Promise<TreeNode> {
+    async getFilesystemTree(path?: string, showHidden = false, depth?: number): Promise<TreeNode> {
       const response = await backend.execute({
         type: 'GetFilesystemTree',
-        params: { path: path ?? null, show_hidden: showHidden },
+        params: { path: path ?? null, show_hidden: showHidden, depth: depth ?? null },
       });
       return expectResponse(response, 'Tree').data;
     },

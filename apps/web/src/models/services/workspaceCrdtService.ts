@@ -52,6 +52,7 @@ let isInitialized = false;
  */
 export async function initializeWorkspaceCrdt(
   workspaceId: string | null,
+  workspacePath: string | null,
   serverUrl: string | null,
   collaborationEnabled: boolean,
   backend: Backend,
@@ -100,8 +101,8 @@ export async function initializeWorkspaceCrdt(
     // Use setInitializing to prevent race conditions with incoming remote changes
     setInitializing(true);
     try {
-      console.log('[WorkspaceCrdtService] Syncing local to CRDT...');
-      await syncFromBackend(api);
+      console.log(`[WorkspaceCrdtService] Syncing local to CRDT from ${workspacePath || 'default'}...`);
+      await syncFromBackend(api, workspacePath ?? undefined);
     } finally {
       setInitializing(false);
     }

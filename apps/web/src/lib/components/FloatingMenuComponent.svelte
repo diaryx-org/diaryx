@@ -249,7 +249,10 @@
 <style>
   .floating-menu {
     z-index: 20;
-    /* TipTap will handle the display/positioning */
+    /* Start hidden - TipTap's FloatingMenu extension will show it via inline
+       styles when shouldShow returns true. This prevents the flash of the
+       menu being visible before TipTap takes control. */
+    display: none;
   }
 
   .trigger-button {

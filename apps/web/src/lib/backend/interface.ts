@@ -28,15 +28,16 @@ export interface Config {
 
 export interface TreeNode {
   name: string;
-  description?: string;
+  description: string | null;
   path: string;
   children: TreeNode[];
 }
 
+// Note: For full type compatibility with generated types, use import type { EntryData } from './generated'
 export interface EntryData {
   path: string;
-  title?: string;
-  frontmatter: Record<string, unknown>;
+  title: string | null;
+  frontmatter: { [key: string]: unknown };
   content: string;
 }
 
@@ -49,7 +50,7 @@ export interface SearchMatch {
 
 export interface FileSearchResult {
   path: string;
-  title?: string;
+  title: string | null;
   matches: SearchMatch[];
 }
 
@@ -155,9 +156,9 @@ export interface SearchOptions {
 }
 
 export interface CreateEntryOptions {
-  title?: string;
-  partOf?: string;
-  template?: string;
+  title?: string | null;
+  partOf?: string | null;
+  template?: string | null;
 }
 
 export interface TemplateInfo {
@@ -247,6 +248,25 @@ export type BackendEventListener = (event: BackendEvent) => void;
  *
  * - TauriBackend: Uses Tauri IPC to communicate with the Rust backend
  * - WasmBackend: Uses WebAssembly module with InMemoryFileSystem + IndexedDB
+ *
+ * ## API: execute()
+ *
+ * All operations go through the `execute()` method with typed Command objects.
+ * Use the `api.ts` wrapper for ergonomic typed access.
+ *
+ * @example
+ * ```ts
+ * // Preferred: Use api wrapper
+ * import { createApi } from './api';
+ * const api = createApi(backend);
+ * const entry = await api.getEntry('workspace/notes.md');
+ *
+ * // Or use execute() directly
+ * const response = await backend.execute({
+ *   type: 'GetEntry',
+ *   params: { path: 'workspace/notes.md' }
+ * });
+ * ```
  */
 export interface Backend {
   /**
@@ -261,15 +281,35 @@ export interface Backend {
    */
   isReady(): boolean;
 
+  /**
+   * Get the default workspace path for this backend.
+   * For Tauri: Returns the path from config/platform (e.g., ~/diaryx)
+   * For WASM: Returns "workspace" (virtual path in IndexedDB/OPFS)
+   */
+  getWorkspacePath(): string;
+
+  /**
+   * Get the config for this backend (if available).
+   * For Tauri: Returns the config loaded from disk.
+   * For WASM: Returns null (config not applicable).
+   */
+  getConfig(): Config | null;
+
+  /**
+   * Get app paths (Tauri-specific, returns null for WASM).
+   * Includes data_dir, document_dir, default_workspace, config_path, is_mobile.
+   */
+  getAppPaths(): Record<string, string | boolean> | null;
+
   // --------------------------------------------------------------------------
-  // Unified Command API (new)
+  // Unified Command API
   // --------------------------------------------------------------------------
 
   /**
    * Execute a command and return the response.
    *
-   * This is the unified API that replaces individual method calls.
-   * All commands use a tagged union format with `type` and `params`.
+   * **This is the primary API.** All operations should use this method.
+   * The typed wrapper in `api.ts` provides ergonomic access to this method.
    *
    * @example
    * ```ts
@@ -300,401 +340,7 @@ export interface Backend {
   off(event: BackendEventType, listener: BackendEventListener): void;
 
   // --------------------------------------------------------------------------
-  // Configuration
-  // --------------------------------------------------------------------------
-
-  /**
-   * Get the current configuration.
-   */
-  getConfig(): Promise<Config>;
-
-  /**
-   * Update the configuration.
-   */
-  saveConfig(config: Config): Promise<void>;
-
-  // --------------------------------------------------------------------------
-  // Workspace
-  // --------------------------------------------------------------------------
-
-  /**
-   * Get the workspace tree structure.
-   * @param workspacePath Optional path to a specific workspace. Uses default if not provided.
-   * @param depth Optional maximum depth to traverse.
-   */
-  getWorkspaceTree(workspacePath?: string, depth?: number): Promise<TreeNode>;
-
-  /**
-   * Get the filesystem tree (for "Show All Files" mode).
-   * @param workspacePath Optional path to the workspace directory.
-   * @param showHidden Whether to include hidden files (.git, .DS_Store, etc).
-   */
-  getFilesystemTree(
-    workspacePath?: string,
-    showHidden?: boolean,
-  ): Promise<TreeNode>;
-
-  /**
-   * Create a new workspace at the given path.
-   * @param path Path where the workspace should be created. Uses platform default if not provided.
-   * @param name Name of the workspace. Defaults to "My Workspace".
-   * @returns The path to the created workspace.
-   */
-  createWorkspace(path?: string, name?: string): Promise<string>;
-
-  // --------------------------------------------------------------------------
-  // Entries
-  // --------------------------------------------------------------------------
-
-  /**
-   * Get an entry's content and metadata.
-   * @param path Path to the entry file.
-   */
-  getEntry(path: string): Promise<EntryData>;
-
-  /**
-   * Save an entry's content.
-   * @param path Path to the entry file.
-   * @param content New markdown content.
-   */
-  saveEntry(path: string, content: string): Promise<void>;
-
-  /**
-   * Create a new entry.
-   * @param path Path where the entry should be created.
-   * @param options Optional creation options (title, partOf, template).
-   * @returns The path to the created entry.
-   */
-  createEntry(path: string, options?: CreateEntryOptions): Promise<string>;
-
-  /**
-   * Delete an entry.
-   * @param path Path to the entry to delete.
-   */
-  deleteEntry(path: string): Promise<void>;
-
-  /**
-   * Move/rename an entry.
-   * Implementations should keep parent index `contents` and the entry's `part_of` metadata consistent.
-   * @param fromPath Existing path to the entry file.
-   * @param toPath New path for the entry file.
-   * @returns The destination path.
-   */
-  moveEntry(fromPath: string, toPath: string): Promise<string>;
-
-  /**
-   * Attach an existing entry to a parent index.
-   * This is equivalent to "workspace add": it adds the entry to the parent's `contents`
-   * and sets the entry's `part_of` to point back to the parent index (both as relative paths).
-   *
-   * @param entryPath Path to the entry to attach.
-   * @param parentIndexPath Path to the parent index file (or leaf to convert).
-   * @returns The new path to the entry after any moves.
-   */
-  attachEntryToParent(
-    entryPath: string,
-    parentIndexPath: string,
-  ): Promise<string>;
-
-  /**
-   * Convert a leaf file to an index file with a directory.
-   * Example: `journal/my-note.md` → `journal/my-note/index.md`
-   *
-   * @param path Path to the leaf file to convert.
-   * @returns The new path to the index file.
-   */
-  convertToIndex(path: string): Promise<string>;
-
-  /**
-   * Convert an empty index file back to a leaf file.
-   * Example: `journal/my-note/index.md` → `journal/my-note.md`
-   * Fails if the index has non-empty contents.
-   *
-   * @param path Path to the index file to convert.
-   * @returns The new path to the leaf file.
-   */
-  convertToLeaf(path: string): Promise<string>;
-
-  /**
-   * Create a new child entry under a parent.
-   * If the parent is a leaf file, it will be automatically converted to an index first.
-   * Generates a unique filename like "new-entry.md", "new-entry-1.md", etc.
-   *
-   * @param parentPath Path to the parent entry (can be leaf or index).
-   * @returns The path to the newly created child entry.
-   */
-  createChildEntry(parentPath: string): Promise<string>;
-
-  /**
-   * Convert a title to a kebab-case filename.
-   * Example: "My Cool Entry" → "my-cool-entry.md"
-   *
-   * @param title The title to convert.
-   * @returns The slugified filename.
-   */
-  slugifyTitle(title: string): string;
-
-  /**
-   * Rename an entry file by giving it a new filename.
-   * For leaf files: renames the file and updates parent `contents`.
-   * For index files: renames the containing directory and updates grandparent `contents`.
-   *
-   * @param path Path to the entry to rename.
-   * @param newFilename The new filename (e.g., "new-name.md").
-   * @returns The new path to the renamed file.
-   */
-  renameEntry(path: string, newFilename: string): Promise<string>;
-
-  /**
-   * Ensure today's daily entry exists, creating it if necessary.
-   * @returns The path to today's daily entry.
-   */
-  ensureDailyEntry(): Promise<string>;
-
-  // --------------------------------------------------------------------------
-  // Export
-  // --------------------------------------------------------------------------
-
-  /**
-   * Get all available audience tags from files in the workspace.
-   * @param rootPath Path to start scanning from.
-   * @returns Array of unique audience tag strings.
-   */
-  getAvailableAudiences(rootPath: string): Promise<string[]>;
-
-  /**
-   * Plan an export operation (preview what files would be included/excluded).
-   * @param rootPath Path to the entry to export from.
-   * @param audience Target audience to filter by.
-   * @returns Export plan with included and excluded files.
-   */
-  planExport(rootPath: string, audience: string): Promise<ExportPlan>;
-
-  /**
-   * Export files to memory for download.
-   * @param rootPath Path to the entry to export from.
-   * @param audience Target audience to filter by.
-   * @returns Array of files with path and content.
-   */
-  exportToMemory(rootPath: string, audience: string): Promise<ExportedFile[]>;
-
-  /**
-   * Export files as HTML (converts markdown to HTML).
-   * @param rootPath Path to the entry to export from.
-   * @param audience Target audience to filter by.
-   * @returns Array of HTML files with path and content.
-   */
-  exportToHtml(rootPath: string, audience: string): Promise<ExportedFile[]>;
-
-  /**
-   * Export binary attachment files.
-   * @param rootPath Path to the entry to export from.
-   * @param audience Target audience to filter by.
-   * @returns Array of binary files with path and data.
-   */
-  exportBinaryAttachments(
-    rootPath: string,
-    audience: string,
-  ): Promise<BinaryExportFile[]>;
-
-  // --------------------------------------------------------------------------
-  // Attachments
-  // --------------------------------------------------------------------------
-
-  /**
-   * Get the list of attachments for an entry.
-   * @param entryPath Path to the entry file.
-   * @returns Array of attachment relative paths.
-   */
-  getAttachments(entryPath: string): Promise<string[]>;
-
-  /**
-   * Upload an attachment file.
-   * @param entryPath Path to the entry file.
-   * @param filename Name of the attachment file.
-   * @param dataBase64 Base64 encoded file data.
-   * @returns The relative path where the attachment was stored.
-   */
-  uploadAttachment(
-    entryPath: string,
-    filename: string,
-    dataBase64: string,
-  ): Promise<string>;
-
-  /**
-   * Delete an attachment file.
-   * @param entryPath Path to the entry file.
-   * @param attachmentPath Relative path to the attachment.
-   */
-  deleteAttachment(entryPath: string, attachmentPath: string): Promise<void>;
-
-  /**
-   * Get storage usage information.
-   * @returns Storage usage stats including limits.
-   */
-  getStorageUsage(): Promise<StorageInfo>;
-
-  /**
-   * Get binary data for an attachment.
-   * @param entryPath Path to the entry file.
-   * @param attachmentPath Relative path to the attachment.
-   * @returns Uint8Array of the attachment data.
-   */
-  getAttachmentData(
-    entryPath: string,
-    attachmentPath: string,
-  ): Promise<Uint8Array>;
-
-  // --------------------------------------------------------------------------
-  // Frontmatter
-  // --------------------------------------------------------------------------
-
-  /**
-   * Get all frontmatter properties for an entry.
-   * @param path Path to the entry file.
-   */
-  getFrontmatter(path: string): Promise<Record<string, unknown>>;
-
-  /**
-   * Set a frontmatter property.
-   * @param path Path to the entry file.
-   * @param key Property key.
-   * @param value Property value.
-   */
-  setFrontmatterProperty(
-    path: string,
-    key: string,
-    value: unknown,
-  ): Promise<void>;
-
-  /**
-   * Remove a frontmatter property.
-   * @param path Path to the entry file.
-   * @param key Property key to remove.
-   */
-  removeFrontmatterProperty(path: string, key: string): Promise<void>;
-
-  // --------------------------------------------------------------------------
-  // Search
-  // --------------------------------------------------------------------------
-
-  /**
-   * Search the workspace for entries matching a pattern.
-   * @param pattern Search pattern (regex supported).
-   * @param options Search options.
-   */
-  searchWorkspace(
-    pattern: string,
-    options?: SearchOptions,
-  ): Promise<SearchResults>;
-
-  // --------------------------------------------------------------------------
-  // Templates
-  // --------------------------------------------------------------------------
-
-  /**
-   * List available templates.
-   */
-  listTemplates(): Promise<TemplateInfo[]>;
-
-  /**
-   * Get a template's content.
-   * @param name Template name.
-   */
-  getTemplate(name: string): Promise<string>;
-
-  /**
-   * Create or update a user template.
-   * @param name Template name.
-   * @param content Template content.
-   */
-  saveTemplate(name: string, content: string): Promise<void>;
-
-  /**
-   * Delete a user template.
-   * @param name Template name.
-   */
-  deleteTemplate(name: string): Promise<void>;
-
-  // --------------------------------------------------------------------------
-  // Validation
-  // --------------------------------------------------------------------------
-
-  /**
-   * Validate workspace links (contents and part_of references).
-   * @param workspacePath Optional path to workspace. Uses default if not provided.
-   */
-  validateWorkspace(workspacePath?: string): Promise<ValidationResult>;
-
-  /**
-   * Validate a single file's links.
-   * @param filePath Path to the file to validate.
-   */
-  validateFile(filePath: string): Promise<ValidationResult>;
-
-  /**
-   * Fix a broken part_of reference by removing it.
-   * @param filePath Path to the file with the broken reference.
-   */
-  fixBrokenPartOf(filePath: string): Promise<FixResult>;
-
-  /**
-   * Fix a broken contents reference by removing it from the index.
-   * @param indexPath Path to the index file.
-   * @param target The broken reference to remove.
-   */
-  fixBrokenContentsRef(indexPath: string, target: string): Promise<FixResult>;
-
-  /**
-   * Fix a broken attachment reference by removing it.
-   * @param filePath Path to the file with the broken attachment.
-   * @param attachment The broken attachment reference to remove.
-   */
-  fixBrokenAttachment(filePath: string, attachment: string): Promise<FixResult>;
-
-  /**
-   * Fix a non-portable path by normalizing it.
-   * @param filePath Path to the file containing the non-portable path.
-   * @param property The property name ('part_of', 'contents', or 'attachments').
-   * @param oldValue The current non-portable path value.
-   * @param newValue The normalized path value.
-   */
-  fixNonPortablePath(
-    filePath: string,
-    property: string,
-    oldValue: string,
-    newValue: string,
-  ): Promise<FixResult>;
-
-  /**
-   * Add an unlisted file to an index's contents.
-   * @param indexPath Path to the index file.
-   * @param filePath Path to the file to add.
-   */
-  fixUnlistedFile(indexPath: string, filePath: string): Promise<FixResult>;
-
-  /**
-   * Add an orphan binary file to an index's attachments.
-   * @param indexPath Path to the index file.
-   * @param filePath Path to the binary file to add.
-   */
-  fixOrphanBinaryFile(indexPath: string, filePath: string): Promise<FixResult>;
-
-  /**
-   * Fix a missing part_of by setting it to point to the given index.
-   * @param filePath Path to the file missing part_of.
-   * @param indexPath Path to the index file to reference.
-   */
-  fixMissingPartOf(filePath: string, indexPath: string): Promise<FixResult>;
-
-  /**
-   * Fix all errors and fixable warnings in a validation result.
-   * @param validationResult The validation result to fix.
-   */
-  fixAll(validationResult: ValidationResult): Promise<FixSummary>;
-
-  // --------------------------------------------------------------------------
-  // Persistence (WASM-specific, no-op for Tauri)
+  // Platform-specific methods
   // --------------------------------------------------------------------------
 
   /**
@@ -704,10 +350,6 @@ export interface Backend {
    */
   persist(): Promise<void>;
 
-  // --------------------------------------------------------------------------
-  // Import
-  // --------------------------------------------------------------------------
-
   /**
    * Import workspace from a zip file.
    * Handles large files by streaming in chunks.
@@ -715,6 +357,8 @@ export interface Backend {
    * @param workspacePath Optional workspace path to import into.
    * @param onProgress Optional callback for progress updates.
    * @returns Import result with success status and file count.
+   *
+   * Note: This requires the browser File API.
    */
   importFromZip(
     file: File,

@@ -7,6 +7,7 @@
   import { Button } from "$lib/components/ui/button";
   import { Save, Download, Loader2, Check, AlertCircle } from "@lucide/svelte";
   import { getBackend } from "../backend";
+  import { createApi } from "../backend/api";
   import type { BackupStatus } from "../backend/interface";
 
   interface Props {
@@ -64,12 +65,13 @@
     isExporting = true;
     try {
       const backend = await getBackend();
+      const api = createApi(backend);
 
       // Export all markdown files
-      const files = await backend.exportToMemory(workspacePath, "*");
+      const files = await api.exportToMemory(workspacePath, "*");
 
       // Export all binary attachments
-      const binaryFiles = await backend.exportBinaryAttachments(
+      const binaryFiles = await api.exportBinaryAttachments(
         workspacePath,
         "*",
       );

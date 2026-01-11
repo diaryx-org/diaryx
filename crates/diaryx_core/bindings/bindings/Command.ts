@@ -69,7 +69,11 @@ entry_path: string,
 /**
  * Path to the parent index file.
  */
-parent_path: string, } } | { "type": "EnsureDailyEntry" } | { "type": "GetWorkspaceTree", "params": { 
+parent_path: string, } } | { "type": "EnsureDailyEntry" } | { "type": "FindRootIndex", "params": { 
+/**
+ * Directory to search in.
+ */
+directory: string, } } | { "type": "GetWorkspaceTree", "params": { 
 /**
  * Optional path to a specific workspace.
  */

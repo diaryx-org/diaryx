@@ -127,6 +127,15 @@ export function createApi(backend: Backend) {
     // Workspace Operations
     // =========================================================================
 
+    /** Find the root index file in a directory. */
+    async findRootIndex(directory: string): Promise<string> {
+      const response = await backend.execute({
+        type: 'FindRootIndex',
+        params: { directory },
+      });
+      return expectResponse(response, 'String').data;
+    },
+
     /** Get the workspace tree structure. */
     async getWorkspaceTree(path?: string, depth?: number): Promise<TreeNode> {
       const response = await backend.execute({

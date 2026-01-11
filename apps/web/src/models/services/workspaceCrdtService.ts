@@ -1,4 +1,5 @@
 import type { Backend } from '$lib/backend';
+import type { Api } from '$lib/backend/api';
 import { setWorkspaceId } from '$lib/collaborationUtils';
 import {
   initWorkspace,
@@ -41,10 +42,11 @@ let isInitialized = false;
 
 /**
  * Initialize the workspace CRDT system.
- * 
+ *
  * @param workspaceId - Unique workspace identifier (null for simple room names)
  * @param serverUrl - Collaboration server URL (null for offline mode)
- * @param backend - Backend instance for syncing
+ * @param backend - Backend instance for event subscriptions
+ * @param api - API wrapper for data operations
  * @param callbacks - Event callbacks
  * @returns Whether initialization succeeded
  */
@@ -53,6 +55,7 @@ export async function initializeWorkspaceCrdt(
   serverUrl: string | null,
   collaborationEnabled: boolean,
   backend: Backend,
+  api: Api,
   callbacks: WorkspaceCrdtCallbacks,
 ): Promise<boolean> {
   try {
@@ -67,6 +70,7 @@ export async function initializeWorkspaceCrdt(
       workspaceId: workspaceId ?? undefined,
       serverUrl: collaborationEnabled ? serverUrl : null,
       backend: backend,
+      api: api,
       onFilesChange: callbacks.onFilesChange,
       onConnectionChange: callbacks.onConnectionChange,
       onRemoteFileSync: callbacks.onRemoteFileSync,
@@ -97,7 +101,7 @@ export async function initializeWorkspaceCrdt(
     setInitializing(true);
     try {
       console.log('[WorkspaceCrdtService] Syncing local to CRDT...');
-      await syncFromBackend(backend);
+      await syncFromBackend(api);
     } finally {
       setInitializing(false);
     }
@@ -153,16 +157,10 @@ export function updateCrdtFileMetadata(
     updateFileMetadata(path, {
       title: (frontmatter.title as string) ?? null,
       partOf: (frontmatter.part_of as string) ?? null,
+      // Keep contents as relative paths (as stored in frontmatter)
+      // The CRDT uses relative paths consistently - don't convert to full paths
       contents: frontmatter.contents
-        ? (frontmatter.contents as string[]).map((c) =>
-            // If path refers to a file that has children, we need to know its parent?
-            // Actually, updateCrdtFileMetadata is called on a specific path.
-            // If we are updating 'workspace/index.md', contents 'foo.md' becomes 'workspace/foo.md'
-            // We can derive parent path from 'path'.
-            path.includes("/")
-              ? `${path.substring(0, path.lastIndexOf("/"))}/${c}`
-              : c,
-          )
+        ? (frontmatter.contents as string[])
         : null,
       audience: (frontmatter.audience as string[]) ?? null,
       description: (frontmatter.description as string) ?? null,
@@ -192,27 +190,10 @@ export function addFileToCrdt(
     const metadata: FileMetadata = {
       title: (frontmatter.title as string) ?? null,
       partOf: parentPath ?? (frontmatter.part_of as string) ?? null,
+      // Keep contents as relative paths (as stored in frontmatter)
+      // The CRDT uses relative paths consistently - don't convert to full paths
       contents: frontmatter.contents
-        ? (frontmatter.contents as string[]).map((c) =>
-            // Resolve relative path against parentPath (if parent exists) or just use logic similar to above
-            // If parentPath is provided (e.g. 'workspace'), then 'file.md' -> 'workspace/file.md'
-            // But if addFileToCrdt is called for root, parentPath is null/undefined?
-            // Wait, addFileToCrdt is usually called with a specific path.
-            // If the file is 'workspace/index.md' (which is a directory representation?),
-            // then contents are children of 'workspace'.
-            // Actually, 'workspace/index.md' contents are siblings of 'index.md' inside 'workspace'.
-            // So resolving relative to parentPath is correct for children of a folder.
-            // BUT, if this file IS the parent, then contents are its children.
-            // The path passed here is the file's path.
-            // If path is 'workspace/index.md', its contents are in 'workspace/'.
-            // So we should use the directory containing this file as the base.
-            // EXCEPT for index files, where contents are nominally children of the directory.
-            // It's ambiguous without context.
-            // Let's assume standard behavior: contents are relative to the file's directory.
-            path.includes("/")
-              ? `${path.substring(0, path.lastIndexOf("/"))}/${c}`
-              : c,
-          )
+        ? (frontmatter.contents as string[])
         : null,
       attachments: ((frontmatter.attachments as string[]) ?? []).map((p) => ({
         path: p,

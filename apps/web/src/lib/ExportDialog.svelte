@@ -3,7 +3,8 @@
   import { Button } from "$lib/components/ui/button";
   import Checkbox from "$lib/components/ui/checkbox/checkbox.svelte";
   import NativeSelect from "$lib/components/ui/native-select/native-select.svelte";
-  import type { Backend, ExportPlan, ExportedFile } from "./backend";
+  import type { ExportPlan, ExportedFile } from "./backend";
+  import type { Api } from "./backend/api";
   import { toast } from "svelte-sonner";
   import {
     Download,
@@ -19,14 +20,14 @@
   interface Props {
     open: boolean;
     rootPath: string;
-    backend: Backend | null;
+    api: Api | null;
     onOpenChange: (open: boolean) => void;
   }
 
   let {
     open = $bindable(),
     rootPath,
-    backend,
+    api,
     onOpenChange,
   }: Props = $props();
 
@@ -42,22 +43,22 @@
 
   // Load audiences when dialog opens
   $effect(() => {
-    if (open && backend && rootPath) {
+    if (open && api && rootPath) {
       loadAudiences();
     }
   });
 
   // Update plan when audience changes
   $effect(() => {
-    if (open && backend && rootPath && selectedAudience) {
+    if (open && api && rootPath && selectedAudience) {
       loadExportPlan();
     }
   });
 
   async function loadAudiences() {
-    if (!backend) return;
+    if (!api) return;
     try {
-      audiences = await backend.getAvailableAudiences(rootPath);
+      audiences = await api.getAvailableAudiences(rootPath);
     } catch (e) {
       console.error("Failed to load audiences:", e);
       audiences = [];
@@ -80,29 +81,29 @@
   }
 
   async function loadExportPlan() {
-    if (!backend) return;
+    if (!api) return;
     isLoading = true;
     error = null;
     binaryFiles = [];
     try {
       // For "all" audience, we'll pass a special value
-      // The backend treats empty audience differently - for now use "all" which won't match any audience
+      // The api treats empty audience differently - for now use "all" which won't match any audience
       // This means no files are included. We need a different approach for "export all"
       const audience = selectedAudience === "all" ? "*" : selectedAudience;
       console.log("[ExportDialog] planExport called with rootPath:", rootPath, "audience:", audience);
       let rawPlan;
       if (selectedAudience === "all") {
         // For "all" export, we'll skip audience filtering by using a special marker
-        rawPlan = await backend.planExport(rootPath, "*");
+        rawPlan = await api.planExport(rootPath, "*");
       } else {
-        rawPlan = await backend.planExport(rootPath, selectedAudience);
+        rawPlan = await api.planExport(rootPath, selectedAudience);
       }
       // Normalize Map to plain object (WASM returns Maps)
       exportPlan = normalizeToObject(rawPlan);
       console.log("[ExportDialog] planExport returned:", exportPlan);
       
       // Also fetch binary attachments for preview
-      const rawAttachments = await backend.exportBinaryAttachments(rootPath, audience);
+      const rawAttachments = await api.exportBinaryAttachments(rootPath, audience);
       const attachments = normalizeToObject(rawAttachments) ?? [];
       binaryFiles = attachments.map((f: any) => ({ path: f.path }));
     } catch (e) {
@@ -115,21 +116,21 @@
   }
 
   async function handleExport() {
-    if (!backend || !exportPlan || !exportPlan.included || exportPlan.included.length === 0) return;
+    if (!api || !exportPlan || !exportPlan.included || exportPlan.included.length === 0) return;
     
     isExporting = true;
     error = null;
     try {
       const audience = selectedAudience === "all" ? "*" : selectedAudience;
       const rawFiles = exportAsHtml 
-        ? await backend.exportToHtml(rootPath, audience)
-        : await backend.exportToMemory(rootPath, audience);
+        ? await api.exportToHtml(rootPath, audience)
+        : await api.exportToMemory(rootPath, audience);
       
       // Normalize Maps to arrays (WASM returns Maps)
       const files = normalizeToObject(rawFiles) ?? [];
       
       // Also get binary attachments
-      const rawBinaryFiles = await backend.exportBinaryAttachments(rootPath, audience);
+      const rawBinaryFiles = await api.exportBinaryAttachments(rootPath, audience);
       const binaries = normalizeToObject(rawBinaryFiles) ?? [];
       
       await downloadAsZip(files, binaries);

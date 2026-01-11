@@ -45,74 +45,41 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_google_auth::init())
         .invoke_handler(tauri::generate_handler![
-            // Unified Command API (new)
+            // ============================================================
+            // UNIFIED COMMAND API - All operations go through execute()
+            // ============================================================
             commands::execute,
+
+            // ============================================================
+            // PLATFORM-SPECIFIC COMMANDS
+            // These cannot be moved to execute() as they require platform
+            // features (file dialogs, cloud auth, app paths, etc.)
+            // ============================================================
+
             // App initialization (iOS-compatible)
             commands::initialize_app,
             commands::get_app_paths,
-            commands::create_workspace,
-            // Configuration
-            commands::get_config,
-            commands::save_config,
-            // Workspace
-            commands::get_workspace_tree,
-            commands::get_filesystem_tree,
-            // Validation
-            commands::validate_workspace,
-            commands::validate_file,
-            commands::fix_broken_part_of,
-            commands::fix_broken_contents_ref,
-            commands::fix_broken_attachment,
-            commands::fix_non_portable_path,
-            commands::fix_unlisted_file,
-            commands::fix_orphan_binary_file,
-            commands::fix_missing_part_of,
-            commands::fix_all_validation_issues,
-            // Entries
-            commands::get_entry,
-            commands::save_entry,
-            commands::create_entry,
-            commands::delete_entry,
-            commands::move_entry,
-            commands::attach_entry_to_parent,
-            commands::convert_to_index,
-            commands::convert_to_leaf,
-            commands::create_child_entry,
-            commands::rename_entry,
-            commands::ensure_daily_entry,
-            // Search
-            commands::search_workspace,
-            // Frontmatter
-            commands::get_frontmatter,
-            commands::set_frontmatter_property,
-            commands::remove_frontmatter_property,
-            // Attachments
-            commands::get_attachments,
-            commands::upload_attachment,
-            commands::delete_attachment,
-            commands::get_attachment_data,
-            commands::get_storage_usage,
-            // Export
-            commands::get_available_audiences,
-            commands::plan_export,
-            commands::export_to_memory,
-            commands::export_to_html,
-            commands::export_binary_attachments,
-            // Backup
+            commands::pick_workspace_folder,
+
+            // Backup (local filesystem)
             commands::backup_workspace,
             commands::restore_workspace,
             commands::list_backup_targets,
+
             // Cloud Backup (S3)
             commands::test_s3_connection,
             commands::backup_to_s3,
             commands::restore_from_s3,
+
             // Cloud Backup (Google Drive)
             commands::get_google_auth_config,
             commands::backup_to_google_drive,
-            // Import
+
+            // Import (file picker dialogs)
             commands::import_from_zip,
             commands::pick_and_import_zip,
             commands::import_from_zip_data,
+
             // Chunked Import (for large files)
             commands::start_import_upload,
             commands::append_import_chunk,

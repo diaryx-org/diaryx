@@ -19,6 +19,7 @@ import * as Y from "yjs";
 import { HocuspocusProvider } from "@hocuspocus/provider";
 import { IndexeddbPersistence } from "y-indexeddb";
 import type { Backend, BackendEvent } from "./backend/interface";
+import type { Api } from "./backend/api";
 
 // Origin marker for local changes (to distinguish from remote)
 const LOCAL_ORIGIN = "local";
@@ -80,7 +81,10 @@ interface WorkspaceSession {
   provider: HocuspocusProvider | null;
   persistence: IndexeddbPersistence;
   filesMap: Y.Map<FileMetadata>;
+  /** Backend for event subscriptions only */
   backend: Backend | null;
+  /** API wrapper for data operations */
+  api: Api | null;
   onFilesChange?: (files: Map<string, FileMetadata>) => void;
   /** Callback when remote sync creates/deletes files */
   onRemoteFileSync?: (created: string[], deleted: string[]) => void;
@@ -94,8 +98,10 @@ export interface WorkspaceInitOptions {
   workspaceId?: string;
   /** Collaboration server URL (null to disable remote sync) */
   serverUrl?: string | null;
-  /** Backend instance for file operations */
+  /** Backend instance for event subscriptions */
   backend?: Backend | null;
+  /** API wrapper for data operations */
+  api?: Api | null;
   /** Callback when files map changes */
   onFilesChange?: (files: Map<string, FileMetadata>) => void;
   /** Callback when a specific file's metadata changes */
@@ -213,6 +219,7 @@ export async function initWorkspace(
     workspaceId = "default",
     serverUrl = defaultServerUrl,
     backend = null,
+    api = null,
     onFilesChange,
     onFileChange,
     onConnectionChange,
@@ -294,6 +301,7 @@ export async function initWorkspace(
     persistence,
     filesMap,
     backend,
+    api,
     onFilesChange,
     onRemoteFileSync,
   };
@@ -928,27 +936,15 @@ export function updateAttachmentSource(
 }
 
 // ============================================================================
-// Sync with Backend
+// Sync with API
 // ============================================================================
 
 /**
- * Populate the workspace CRDT from backend data.
+ * Populate the workspace CRDT from API data.
  * Call this after loading workspace from disk to sync CRDT state.
  */
 export async function syncFromBackend(
-  backend: {
-    getWorkspaceTree: () => Promise<{
-      name: string;
-      path: string;
-      description?: string;
-      children: unknown[];
-    }>;
-    getEntry: (path: string) => Promise<{
-      path: string;
-      frontmatter: Record<string, unknown>;
-    }>;
-    getFrontmatter: (path: string) => Promise<Record<string, unknown>>;
-  },
+  api: Api,
   _rootPath?: string,
 ): Promise<void> {
   if (!workspaceSession) {
@@ -956,14 +952,14 @@ export async function syncFromBackend(
     return;
   }
 
-  console.log("[WorkspaceCRDT] Syncing from backend...");
+  console.log("[WorkspaceCRDT] Syncing from API...");
 
   try {
-    const tree = await backend.getWorkspaceTree();
-    await syncTreeNode(backend, tree, null);
-    console.log("[WorkspaceCRDT] Sync from backend complete");
+    const tree = await api.getWorkspaceTree();
+    await syncTreeNode(api, tree, null);
+    console.log("[WorkspaceCRDT] Sync from API complete");
   } catch (error) {
-    console.error("[WorkspaceCRDT] Sync from backend failed:", error);
+    console.error("[WorkspaceCRDT] Sync from API failed:", error);
     throw error;
   }
 }
@@ -974,13 +970,11 @@ export async function syncFromBackend(
  * This prevents local state from overwriting newer remote data.
  */
 async function syncTreeNode(
-  backend: {
-    getFrontmatter: (path: string) => Promise<Record<string, unknown>>;
-  },
+  api: Api,
   node: {
     path: string;
     name: string;
-    description?: string;
+    description: string | null;
     children: unknown[];
   },
   parentPath: string | null,
@@ -990,12 +984,12 @@ async function syncTreeNode(
   try {
     // Check if file already exists in CRDT
     const existingMetadata = workspaceSession.filesMap.get(node.path);
-    
+
     if (existingMetadata) {
       // File already exists in CRDT - merge local contents into CRDT contents
       // This ensures children added locally get into the CRDT
       // Note: contents should be RELATIVE paths (e.g., "2026/index.md"), not full paths
-      const localContents = node.children.length > 0 
+      const localContents = node.children.length > 0
         ? node.children.map((c: any) => {
             // Extract relative path from full path
             // e.g., "workspace/Daily/2026/index.md" -> "2026/index.md" (relative to "workspace/Daily")
@@ -1009,10 +1003,10 @@ async function syncTreeNode(
           })
         : [];
       const crdtContents = existingMetadata.contents ?? [];
-      
+
       // Merge local children into CRDT
       const mergedContents = [...new Set([...crdtContents, ...localContents])].sort();
-      
+
       if (mergedContents.length > crdtContents.length) {
         console.log(`[WorkspaceCRDT] Merging local contents into CRDT for ${node.path}: ${crdtContents.length} -> ${mergedContents.length}`);
         workspaceSession.ydoc.transact(() => {
@@ -1027,7 +1021,7 @@ async function syncTreeNode(
       }
     } else {
       // File doesn't exist in CRDT - add it from local filesystem
-      const frontmatter = await backend.getFrontmatter(node.path);
+      const frontmatter = await api.getFrontmatter(node.path);
 
       const metadata: FileMetadata = {
         title: (frontmatter.title as string) ?? node.name ?? null,
@@ -1088,7 +1082,7 @@ async function syncTreeNode(
 
     // Recursively sync children
     for (const child of node.children as any[]) {
-      await syncTreeNode(backend, child, node.path);
+      await syncTreeNode(api, child, node.path);
     }
   } catch (error) {
     console.warn(`[WorkspaceCRDT] Failed to sync ${node.path}:`, error);
@@ -1235,15 +1229,15 @@ function notifyFilesChangeDebounced(): void {
  * Create a local file from CRDT metadata.
  */
 async function createLocalFile(
-  backend: Backend,
+  api: Api,
   path: string,
   metadata: FileMetadata,
 ): Promise<void> {
   try {
     // Create the entry with frontmatter from metadata
-    await backend.createEntry(path, {
+    await api.createEntry(path, {
       title: metadata.title ?? undefined,
-      partOf: metadata.partOf ?? undefined,
+      part_of: metadata.partOf ?? undefined,
     });
     console.log(`[WorkspaceCRDT] Created local file from remote: ${path}`);
   } catch (e) {
@@ -1261,8 +1255,8 @@ export async function syncToLocal(): Promise<{
   created: string[];
   deleted: string[];
 }> {
-  if (!workspaceSession?.backend) {
-    console.warn("[WorkspaceCRDT] Cannot sync to local: no backend");
+  if (!workspaceSession?.api) {
+    console.warn("[WorkspaceCRDT] Cannot sync to local: no api");
     return { created: [], deleted: [] };
   }
 
@@ -1271,7 +1265,7 @@ export async function syncToLocal(): Promise<{
     await waitForSync(10000);
   }
 
-  const backend = workspaceSession.backend;
+  const api = workspaceSession.api;
   const filesMap = workspaceSession.filesMap;
   const created: string[] = [];
   const deleted: string[] = [];
@@ -1291,7 +1285,7 @@ export async function syncToLocal(): Promise<{
     // Process in batches
     for (let i = 0; i < filesToProcess.length; i += BATCH_SIZE) {
       const batch = filesToProcess.slice(i, i + BATCH_SIZE);
-      
+
       await Promise.all(
         batch.map(async ([path, metadata]) => {
           if (pathsBeingProcessed.has(path)) return;
@@ -1301,7 +1295,7 @@ export async function syncToLocal(): Promise<{
             if (metadata.deleted) {
               // Delete local file if it exists
               try {
-                await backend.deleteEntry(path);
+                await api.deleteEntry(path);
                 deleted.push(path);
               } catch {
                 // File doesn't exist, nothing to delete
@@ -1309,11 +1303,11 @@ export async function syncToLocal(): Promise<{
             } else {
               // Create file if it doesn't exist
               try {
-                await backend.getEntry(path);
+                await api.getEntry(path);
                 // File exists locally
               } catch {
                 // File doesn't exist, create it
-                await createLocalFile(backend, path, metadata);
+                await createLocalFile(api, path, metadata);
                 created.push(path);
               }
             }
@@ -1395,9 +1389,9 @@ async function handleRemoteFileChange(
   path: string,
   metadata: FileMetadata | null,
 ): Promise<void> {
-  if (!workspaceSession?.backend) return;
+  if (!workspaceSession?.api) return;
 
-  const backend = workspaceSession.backend;
+  const api = workspaceSession.api;
   pathsBeingProcessed.add(path);
 
   try {
@@ -1408,16 +1402,16 @@ async function handleRemoteFileChange(
         // Use the previous metadata if available (before it was marked deleted)
         const previousMetadata = workspaceSession!.filesMap.get(path);
         const parentPath = previousMetadata?.partOf ?? metadata?.partOf;
-        
-        await backend.deleteEntry(path);
+
+        await api.deleteEntry(path);
         console.log(`[WorkspaceCRDT] Deleted local file from remote: ${path}`);
-        
+
         // Remove from parent's contents if we know the parent
         if (parentPath) {
           removeFromContents(parentPath, path);
           console.log(`[WorkspaceCRDT] Removed ${path} from parent ${parentPath} contents`);
         }
-        
+
         remoteFileSyncCallback?.([], [path]);
         workspaceSession.onRemoteFileSync?.([], [path]);
       } catch {
@@ -1427,29 +1421,29 @@ async function handleRemoteFileChange(
       // File was created or updated remotely
       try {
         // Check if file exists locally
-        const existingEntry = await backend.getEntry(path);
-        
+        const existingEntry = await api.getEntry(path);
+
         // File exists - sync metadata from CRDT to local frontmatter
         // Only update if there are meaningful differences
         const updates: Record<string, unknown> = {};
-        
+
         if (metadata.title && metadata.title !== existingEntry.frontmatter?.title) {
           updates.title = metadata.title;
         }
         if (metadata.partOf !== undefined && metadata.partOf !== existingEntry.frontmatter?.part_of) {
           updates.part_of = metadata.partOf;
         }
-        
+
         // For contents array, MERGE instead of overwrite to preserve files added by either client
         const localContents = (existingEntry.frontmatter?.contents as string[]) ?? [];
         const remoteContents = metadata.contents ?? [];
-        
+
         // Union of both arrays (preserves additions from both sides)
         const mergedContents = [...new Set([...localContents, ...remoteContents])].sort();
-        
+
         if (JSON.stringify(mergedContents) !== JSON.stringify(localContents)) {
           updates.contents = mergedContents;
-          
+
           // Also update the CRDT with merged contents so other clients get the full list
           if (JSON.stringify(mergedContents) !== JSON.stringify(remoteContents)) {
             console.log(`[WorkspaceCRDT] Merging contents for ${path}: local=${localContents.length}, remote=${remoteContents.length}, merged=${mergedContents.length}`);
@@ -1466,24 +1460,24 @@ async function handleRemoteFileChange(
             }, LOCAL_ORIGIN);
           }
         }
-        
+
         if (metadata.audience && JSON.stringify(metadata.audience) !== JSON.stringify(existingEntry.frontmatter?.audience)) {
           updates.audience = metadata.audience;
         }
         if (metadata.description && metadata.description !== existingEntry.frontmatter?.description) {
           updates.description = metadata.description;
         }
-        
+
         // Apply updates if there are any
         if (Object.keys(updates).length > 0) {
           for (const [key, value] of Object.entries(updates)) {
-            await backend.setFrontmatterProperty(path, key, value);
+            await api.setFrontmatterProperty(path, key, value as any);
           }
           console.log(`[WorkspaceCRDT] Synced remote metadata to local: ${path}`, Object.keys(updates));
         }
       } catch {
         // File doesn't exist locally, create it
-        await createLocalFile(backend, path, metadata);
+        await createLocalFile(api, path, metadata);
         remoteFileSyncCallback?.([path], []);
         workspaceSession.onRemoteFileSync?.([path], []);
       }

@@ -1,16 +1,19 @@
 <script lang="ts">
-  import type { TreeNode, EntryData, ValidationResult, ValidationError } from "./backend";
+  import type { TreeNode, EntryData, ValidationResult, ValidationError, ValidationWarning, Api } from "./backend";
   import { Button } from "$lib/components/ui/button";
+  import { toast } from "svelte-sonner";
 
   import * as ContextMenu from "$lib/components/ui/context-menu";
   import * as Popover from "$lib/components/ui/popover";
   import {
     ChevronRight,
+    ChevronDown,
     FileText,
     Folder,
     Loader2,
     PanelLeftClose,
     AlertCircle,
+    AlertTriangle,
     Plus,
     Trash2,
     Clipboard,
@@ -18,6 +21,7 @@
     Paperclip,
     Settings,
     Wrench,
+    Eye,
   } from "@lucide/svelte";
 
   interface Props {
@@ -29,6 +33,7 @@
     validationResult: ValidationResult | null;
     collapsed: boolean;
     showUnlinkedFiles: boolean;
+    api: Api | null;
     onOpenEntry: (path: string) => void;
     onToggleNode: (path: string) => void;
     onToggleCollapse: () => void;
@@ -41,6 +46,7 @@
     onRemoveBrokenPartOf?: (filePath: string) => void;
     onRemoveBrokenContentsRef?: (indexPath: string, target: string) => void;
     onAttachUnlinkedEntry?: (entryPath: string) => void;
+    onValidationFix?: () => void;
   }
 
   let {
@@ -51,6 +57,8 @@
     expandedNodes,
     validationResult,
     collapsed,
+    showUnlinkedFiles,
+    api,
     onOpenEntry,
     onToggleNode,
     onToggleCollapse,
@@ -63,6 +71,7 @@
     onRemoveBrokenPartOf,
     onRemoveBrokenContentsRef,
     onAttachUnlinkedEntry,
+    onValidationFix,
   }: Props = $props();
 
   // Extract unlinked entries (files/directories not in hierarchy) from validation result
@@ -81,6 +90,403 @@
   // Check if a path is unlinked
   function isUnlinked(path: string): boolean {
     return unlinkedPaths().has(path);
+  }
+
+  // =========================================================================
+  // Inherited Warnings - orphan file warnings bubble up to nearest index
+  // =========================================================================
+
+  // Orphan warning types that should inherit to parent indexes
+  const ORPHAN_WARNING_TYPES = ['OrphanFile', 'OrphanBinaryFile', 'MissingPartOf', 'UnlinkedEntry', 'UnlistedFile'];
+
+  // Build a map of directory path -> index file path from the tree
+  // Only includes actual index files (nodes with children), not leaf files
+  function buildTreeIndexMap(node: TreeNode, map: Map<string, string> = new Map(), isRoot: boolean = true): Map<string, string> {
+    // Only add to map if this is an index file:
+    // - Has children (meaning it has contents property with entries)
+    // - OR is the root node (root index is always valid even if empty)
+    if (node.children.length > 0 || isRoot) {
+      // Extract directory from the index path (e.g., "workspace/docs/README.md" -> "workspace/docs")
+      const lastSlash = node.path.lastIndexOf('/');
+      const dir = lastSlash >= 0 ? node.path.substring(0, lastSlash) : '';
+      map.set(dir, node.path);
+    }
+
+    for (const child of node.children) {
+      buildTreeIndexMap(child, map, false);
+    }
+    return map;
+  }
+
+  // Find the nearest index file in the tree for a given file path
+  function findNearestIndex(filePath: string, treeIndexMap: Map<string, string>): string | null {
+    // Get the file's directory
+    const lastSlash = filePath.lastIndexOf('/');
+    let dir = lastSlash >= 0 ? filePath.substring(0, lastSlash) : '';
+
+    // Walk up the directory tree
+    while (dir) {
+      if (treeIndexMap.has(dir)) {
+        return treeIndexMap.get(dir)!;
+      }
+      // Go up one level
+      const parentSlash = dir.lastIndexOf('/');
+      if (parentSlash < 0) break;
+      dir = dir.substring(0, parentSlash);
+    }
+
+    // Check root level
+    if (treeIndexMap.has('')) {
+      return treeIndexMap.get('')!;
+    }
+
+    return null;
+  }
+
+  // Extract file path from any warning type
+  function getWarningFilePath(warning: ValidationWarning): string | null {
+    switch (warning.type) {
+      case 'OrphanFile':
+      case 'OrphanBinaryFile':
+      case 'MissingPartOf':
+        return warning.file ?? null;
+      case 'UnlinkedEntry':
+        return warning.path ?? null;
+      case 'UnlistedFile':
+        return warning.file ?? null;
+      default:
+        return null;
+    }
+  }
+
+  // Get filename from path for display
+  function getFileName(path: string): string {
+    const lastSlash = path.lastIndexOf('/');
+    return lastSlash >= 0 ? path.substring(lastSlash + 1) : path;
+  }
+
+  // Get human-readable description for a warning
+  function getWarningDescription(warning: ValidationWarning): string {
+    switch (warning.type) {
+      case 'OrphanFile':
+        return 'Not in any index contents';
+      case 'OrphanBinaryFile':
+        return 'Binary file not attached';
+      case 'MissingPartOf':
+        return 'Missing part_of reference';
+      case 'UnlinkedEntry':
+        return (warning as { is_dir?: boolean }).is_dir ? 'Unlinked directory' : 'Unlinked file';
+      case 'UnlistedFile':
+        return 'Not listed in index';
+      case 'CircularReference':
+        return 'Circular reference detected';
+      case 'NonPortablePath':
+        return 'Non-portable path';
+      case 'MultipleIndexes':
+        return 'Multiple indexes in directory';
+      default:
+        return 'Validation warning';
+    }
+  }
+
+  // Computed tree index map for reuse
+  let treeIndexMap = $derived(() => {
+    if (!tree) return new Map<string, string>();
+    return buildTreeIndexMap(tree);
+  });
+
+  // Check if a warning is auto-fixable
+  function isWarningFixable(warning: ValidationWarning): boolean {
+    switch (warning.type) {
+      case 'OrphanBinaryFile':
+      case 'MissingPartOf':
+      case 'OrphanFile':
+        // These are fixable if the backend found a suggested_index
+        return !!(warning as { suggested_index?: string | null }).suggested_index;
+      case 'UnlinkedEntry': {
+        // Fixable if we have a suggested_index AND (it's a file OR it's a directory with an index_file)
+        const w = warning as { suggested_index?: string | null; is_dir?: boolean; index_file?: string | null };
+        if (!w.suggested_index) return false;
+        if (w.is_dir) {
+          // Directories need an index file inside to be linkable
+          return !!w.index_file;
+        }
+        return true;
+      }
+      case 'UnlistedFile':
+      case 'NonPortablePath':
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  // Check if a warning can be viewed (navigated to)
+  function isWarningViewable(warning: ValidationWarning): boolean {
+    const filePath = getWarningFilePath(warning);
+    // Can view if it's a markdown file (not binary, not directory)
+    if (!filePath) return false;
+    if (warning.type === 'UnlinkedEntry' && (warning as { is_dir?: boolean }).is_dir) {
+      return false; // Can't view directories
+    }
+    if (warning.type === 'OrphanBinaryFile') {
+      return false; // Can't view binary files in editor
+    }
+    return filePath.endsWith('.md');
+  }
+
+  // Derived state: map of index paths to their inherited warnings
+  // Only active when showUnlinkedFiles is OFF (hierarchy mode)
+  // When showUnlinkedFiles is ON, orphan files appear directly in the tree
+  let inheritedWarnings = $derived(() => {
+    const map = new Map<string, ValidationWarning[]>();
+
+    // Skip inherited warnings when showing all files - orphans are visible directly
+    if (!tree || !validationResult?.warnings || showUnlinkedFiles) {
+      return map;
+    }
+
+    // Build the tree index map once
+    const treeIndexMap = buildTreeIndexMap(tree);
+
+    // Process each orphan-type warning
+    for (const warning of validationResult.warnings) {
+      if (!ORPHAN_WARNING_TYPES.includes(warning.type)) continue;
+
+      // Extract the file path from the warning
+      const filePath = getWarningFilePath(warning);
+      if (!filePath) continue;
+
+      // Skip if this file is directly in the tree (will be shown as direct warning)
+      // This happens when showUnlinkedFiles is ON
+      if (treeIndexMap.has(filePath.substring(0, filePath.lastIndexOf('/')))) {
+        // Check if the file itself is the index (not inherited)
+        const dir = filePath.substring(0, filePath.lastIndexOf('/'));
+        if (treeIndexMap.get(dir) === filePath) continue;
+      }
+
+      // Find the nearest index in the tree
+      const nearestIndex = findNearestIndex(filePath, treeIndexMap);
+      if (!nearestIndex) continue;
+
+      // Don't inherit to self
+      if (nearestIndex === filePath) continue;
+
+      // Add to the map
+      if (!map.has(nearestIndex)) {
+        map.set(nearestIndex, []);
+      }
+      map.get(nearestIndex)!.push(warning);
+    }
+
+    return map;
+  });
+
+  // Check if an index has inherited warnings
+  function hasInheritedWarnings(path: string): boolean {
+    const warnings = inheritedWarnings().get(path);
+    return warnings !== undefined && warnings.length > 0;
+  }
+
+  // Get inherited warnings for an index
+  function getInheritedWarnings(path: string): ValidationWarning[] {
+    return inheritedWarnings().get(path) ?? [];
+  }
+
+  // =========================================================================
+  // Problems Panel State
+  // =========================================================================
+
+  let problemsPanelOpen = $state(true);
+  let isFixingAll = $state(false);
+
+  // Count total problems
+  let totalProblems = $derived(() => {
+    if (!validationResult) return 0;
+    return validationResult.errors.length + validationResult.warnings.length;
+  });
+
+  // Count fixable problems
+  let fixableCount = $derived(() => {
+    if (!validationResult) return 0;
+    let count = validationResult.errors.length; // All errors are fixable
+    for (const warning of validationResult.warnings) {
+      if (isWarningFixable(warning)) count++;
+    }
+    return count;
+  });
+
+  // Fix all fixable issues
+  async function handleFixAll() {
+    if (!api || !validationResult || isFixingAll) return;
+
+    isFixingAll = true;
+    try {
+      // Cast to any to avoid type mismatch between interface and generated types
+      const result = await api.fixAll(validationResult as any);
+      const fixed = result.total_fixed;
+      const failed = result.total_failed;
+
+      if (fixed > 0 && failed === 0) {
+        toast.success(`Fixed ${fixed} issue${fixed > 1 ? 's' : ''}`);
+      } else if (fixed > 0 && failed > 0) {
+        toast.warning(`Fixed ${fixed} issue${fixed > 1 ? 's' : ''}, ${failed} failed`);
+      } else if (failed > 0) {
+        toast.error(`Failed to fix ${failed} issue${failed > 1 ? 's' : ''}`);
+      }
+
+      onValidationFix?.();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to fix issues');
+    } finally {
+      isFixingAll = false;
+    }
+  }
+
+  // Fix individual warning
+  async function handleFixWarning(warning: ValidationWarning) {
+    if (!api) return;
+
+    try {
+      let result;
+      switch (warning.type) {
+        case 'OrphanBinaryFile': {
+          const w = warning as { file: string; suggested_index?: string | null };
+          if (w.suggested_index) {
+            result = await api.fixOrphanBinaryFile(w.suggested_index, w.file);
+          }
+          break;
+        }
+        case 'MissingPartOf': {
+          const w = warning as { file: string; suggested_index?: string | null };
+          if (w.suggested_index) {
+            result = await api.fixMissingPartOf(w.file, w.suggested_index);
+          }
+          break;
+        }
+        case 'UnlistedFile': {
+          const w = warning as { index: string; file: string };
+          result = await api.fixUnlistedFile(w.index, w.file);
+          break;
+        }
+        case 'NonPortablePath': {
+          const w = warning as { file: string; property: string; value: string; suggested: string };
+          result = await api.fixNonPortablePath(w.file, w.property, w.value, w.suggested);
+          break;
+        }
+        case 'OrphanFile': {
+          // Use the backend's suggested_index
+          const w = warning as { file: string; suggested_index: string | null };
+          if (w.suggested_index) {
+            result = await api.fixUnlistedFile(w.suggested_index, w.file);
+          } else {
+            toast.error('No parent index found to add this file to');
+            return;
+          }
+          break;
+        }
+        case 'UnlinkedEntry': {
+          // Use the backend's suggested_index and index_file for directories
+          const w = warning as { path: string; is_dir: boolean; suggested_index: string | null; index_file: string | null };
+          if (!w.suggested_index) {
+            toast.error('No parent index found to add this entry to');
+            return;
+          }
+          if (w.is_dir) {
+            // For directories, link the index file inside
+            if (w.index_file) {
+              result = await api.fixUnlistedFile(w.suggested_index, w.index_file);
+            } else {
+              toast.error('Cannot link directory without an index file. Create an index.md or README.md first.');
+              return;
+            }
+          } else {
+            // For files, link directly
+            result = await api.fixUnlistedFile(w.suggested_index, w.path);
+          }
+          break;
+        }
+      }
+
+      if (result?.success) {
+        toast.success(result.message);
+        onValidationFix?.();
+      } else if (result) {
+        toast.error(result.message);
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to fix issue');
+    }
+  }
+
+  // Navigate to a file from a warning
+  function handleViewWarning(warning: ValidationWarning) {
+    const filePath = getWarningFilePath(warning);
+    if (filePath && filePath.endsWith('.md')) {
+      onOpenEntry(filePath);
+    }
+  }
+
+  // Extract file path from any error type
+  function getErrorFilePath(error: ValidationError): string | null {
+    switch (error.type) {
+      case 'BrokenPartOf':
+      case 'BrokenAttachment':
+        return error.file ?? null;
+      case 'BrokenContentsRef':
+        return error.index ?? null;
+      default:
+        return null;
+    }
+  }
+
+  // Check if an error can be viewed
+  function isErrorViewable(error: ValidationError): boolean {
+    const filePath = getErrorFilePath(error);
+    return filePath !== null && filePath.endsWith('.md');
+  }
+
+  // Navigate to a file from an error
+  function handleViewError(error: ValidationError) {
+    const filePath = getErrorFilePath(error);
+    if (filePath && filePath.endsWith('.md')) {
+      onOpenEntry(filePath);
+    }
+  }
+
+  // Fix individual error
+  async function handleFixError(error: ValidationError) {
+    if (!api) return;
+
+    try {
+      let result;
+      switch (error.type) {
+        case 'BrokenPartOf':
+          if (error.file) {
+            result = await api.fixBrokenPartOf(error.file);
+          }
+          break;
+        case 'BrokenContentsRef':
+          if (error.index && error.target) {
+            result = await api.fixBrokenContentsRef(error.index, error.target);
+          }
+          break;
+        case 'BrokenAttachment':
+          if (error.file && error.attachment) {
+            result = await api.fixBrokenAttachment(error.file, error.attachment);
+          }
+          break;
+      }
+
+      if (result?.success) {
+        toast.success(result.message);
+        onValidationFix?.();
+      } else if (result) {
+        toast.error(result.message);
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to fix issue');
+    }
   }
 
   // Drag state
@@ -266,6 +672,142 @@
       </div>
     {/if}
   </div>
+
+  <!-- Problems Panel -->
+  {#if totalProblems() > 0}
+    <div class="border-t border-sidebar-border shrink-0">
+      <button
+        type="button"
+        class="w-full flex items-center justify-between px-4 py-2 hover:bg-sidebar-accent transition-colors"
+        onclick={() => problemsPanelOpen = !problemsPanelOpen}
+      >
+        <div class="flex items-center gap-2">
+          {#if problemsPanelOpen}
+            <ChevronDown class="size-4 text-muted-foreground" />
+          {:else}
+            <ChevronRight class="size-4 text-muted-foreground" />
+          {/if}
+          <span class="text-sm font-medium">Problems</span>
+          <span class="text-xs px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-600 dark:text-amber-400">
+            {totalProblems()}
+          </span>
+        </div>
+      </button>
+      {#if problemsPanelOpen}
+        <div class="px-3 pb-3 max-h-64 overflow-y-auto space-y-2">
+          <!-- Errors -->
+          {#if validationResult && validationResult.errors.length > 0}
+            <div class="space-y-1">
+              <p class="text-xs font-medium text-destructive px-1">
+                Errors ({validationResult.errors.length})
+              </p>
+              {#each validationResult.errors as error}
+                <div class="text-xs p-2 bg-destructive/10 rounded flex items-start justify-between gap-2">
+                  <div class="min-w-0 flex-1">
+                    <span class="font-mono truncate block" title={error.file ?? error.index ?? ''}>
+                      {getFileName(error.file ?? error.index ?? '')}
+                    </span>
+                    <span class="text-muted-foreground">
+                      {getErrorDescription(error)}
+                    </span>
+                  </div>
+                  <div class="flex gap-0.5 shrink-0">
+                    {#if isErrorViewable(error)}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        class="h-6 px-1.5"
+                        title="View file"
+                        onclick={() => handleViewError(error)}
+                      >
+                        <Eye class="size-3" />
+                      </Button>
+                    {/if}
+                    {#if api}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        class="h-6 px-1.5"
+                        title="Fix issue"
+                        onclick={() => handleFixError(error)}
+                      >
+                        <Wrench class="size-3" />
+                      </Button>
+                    {/if}
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {/if}
+
+          <!-- Warnings -->
+          {#if validationResult && validationResult.warnings.length > 0}
+            <div class="space-y-1">
+              <p class="text-xs font-medium text-amber-600 dark:text-amber-400 px-1">
+                Warnings ({validationResult.warnings.length})
+              </p>
+              {#each validationResult.warnings as warning}
+                {@const filePath = getWarningFilePath(warning)}
+                <div class="text-xs p-2 bg-amber-500/10 rounded flex items-start justify-between gap-2">
+                  <div class="min-w-0 flex-1">
+                    <span class="font-mono truncate block" title={filePath ?? ''}>
+                      {filePath ? getFileName(filePath) : 'Unknown'}
+                    </span>
+                    <span class="text-muted-foreground">
+                      {getWarningDescription(warning)}
+                    </span>
+                  </div>
+                  <div class="flex gap-0.5 shrink-0">
+                    {#if isWarningViewable(warning)}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        class="h-6 px-1.5"
+                        title="View file"
+                        onclick={() => handleViewWarning(warning)}
+                      >
+                        <Eye class="size-3" />
+                      </Button>
+                    {/if}
+                    {#if isWarningFixable(warning) && api}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        class="h-6 px-1.5"
+                        title="Fix issue"
+                        onclick={() => handleFixWarning(warning)}
+                      >
+                        <Wrench class="size-3" />
+                      </Button>
+                    {/if}
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {/if}
+
+          <!-- Fix All Button -->
+          {#if fixableCount() > 0 && api}
+            <Button
+              variant="outline"
+              size="sm"
+              class="w-full gap-1.5 mt-2"
+              onclick={handleFixAll}
+              disabled={isFixingAll}
+            >
+              {#if isFixingAll}
+                <Loader2 class="size-3 animate-spin" />
+                Fixing...
+              {:else}
+                <Wrench class="size-3" />
+                Fix All ({fixableCount()})
+              {/if}
+            </Button>
+          {/if}
+        </div>
+      {/if}
+    </div>
+  {/if}
 </aside>
 
 {#snippet treeNode(node: TreeNode, depth: number)}
@@ -419,6 +961,83 @@
                             Add to workspace root
                           </Button>
                         {/if}
+                      </div>
+                    </div>
+                  </div>
+                </Popover.Content>
+              </Popover.Root>
+            {/if}
+            {#if hasInheritedWarnings(node.path)}
+              {@const inherited = getInheritedWarnings(node.path)}
+              <Popover.Root>
+                <Popover.Trigger
+                  onclick={(e: MouseEvent) => e.stopPropagation()}
+                  class="shrink-0 focus:outline-none"
+                >
+                  <span class="relative inline-flex items-center">
+                    <AlertTriangle class="size-4 text-amber-500/70 hover:text-amber-500 transition-colors" />
+                    <span class="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] text-[9px] font-bold
+                      bg-amber-500 text-white rounded-full flex items-center justify-center px-0.5">
+                      {inherited.length}
+                    </span>
+                  </span>
+                </Popover.Trigger>
+                <Popover.Content class="w-80 p-3" side="right" align="start">
+                  <div class="space-y-3">
+                    <div class="flex items-start gap-2">
+                      <AlertTriangle class="size-4 text-amber-500 shrink-0 mt-0.5" />
+                      <div class="space-y-2">
+                        <p class="text-sm font-medium">
+                          {inherited.length} Issue{inherited.length > 1 ? 's' : ''} in Subtree
+                        </p>
+                        <p class="text-xs text-muted-foreground">
+                          Files in this folder have validation warnings.
+                        </p>
+                        <div class="max-h-48 overflow-y-auto space-y-1.5">
+                          {#each inherited as warning}
+                            {@const filePath = getWarningFilePath(warning)}
+                            <div class="text-xs p-2 bg-muted rounded flex items-start justify-between gap-2">
+                              <div class="min-w-0 flex-1">
+                                <span class="font-mono truncate block" title={filePath ?? ''}>
+                                  {filePath ? getFileName(filePath) : 'Unknown'}
+                                </span>
+                                <span class="text-muted-foreground">
+                                  {getWarningDescription(warning)}
+                                </span>
+                              </div>
+                              <div class="flex gap-0.5 shrink-0">
+                                {#if isWarningViewable(warning)}
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    class="h-6 px-1.5"
+                                    title="View file"
+                                    onclick={(e: MouseEvent) => {
+                                      e.stopPropagation();
+                                      handleViewWarning(warning);
+                                    }}
+                                  >
+                                    <Eye class="size-3" />
+                                  </Button>
+                                {/if}
+                                {#if isWarningFixable(warning) && api}
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    class="h-6 px-1.5"
+                                    title="Fix issue"
+                                    onclick={(e: MouseEvent) => {
+                                      e.stopPropagation();
+                                      handleFixWarning(warning);
+                                    }}
+                                  >
+                                    <Wrench class="size-3" />
+                                  </Button>
+                                {/if}
+                              </div>
+                            </div>
+                          {/each}
+                        </div>
                       </div>
                     </div>
                   </div>

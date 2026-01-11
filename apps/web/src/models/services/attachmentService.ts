@@ -1,11 +1,11 @@
 /**
  * Attachment Service
- * 
+ *
  * Manages blob URLs for displaying attachments in the editor.
  * Handles transforming file paths to blob URLs and back.
  */
 
-import type { Backend } from '$lib/backend';
+import type { Api } from '$lib/backend/api';
 
 // ============================================================================
 // State
@@ -50,18 +50,18 @@ export function revokeBlobUrls(): void {
 
 /**
  * Transform attachment paths in markdown content to blob URLs for display.
- * 
+ *
  * @param content - Markdown content with attachment paths
  * @param entryPath - Path to the current entry (for resolving relative paths)
- * @param backend - Backend instance for reading attachment data
+ * @param api - Api instance for reading attachment data
  * @returns Content with attachment paths replaced by blob URLs
  */
 export async function transformAttachmentPaths(
   content: string,
   entryPath: string,
-  backend: Backend | null,
+  api: Api | null,
 ): Promise<string> {
-  if (!backend) return content;
+  if (!api) return content;
 
   // Find all image references: ![alt](...) or ![alt](<...>) for paths with spaces
   const imageRegex = /!\[([^\]]*)\]\((?:<([^>]+)>|([^)]+))\)/g;
@@ -85,7 +85,7 @@ export async function transformAttachmentPaths(
 
     try {
       // Try to read the attachment data
-      const data = await backend.getAttachmentData(entryPath, imagePath);
+      const data = await api.getAttachmentData(entryPath, imagePath);
 
       // Create blob and URL
       const mimeType = getMimeType(imagePath);

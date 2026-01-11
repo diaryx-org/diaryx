@@ -1,0 +1,701 @@
+//! Command execution handler.
+//!
+//! This module contains the implementation of the `execute()` method for `Diaryx`.
+//! It handles all command types and returns appropriate responses.
+
+use std::path::{Path, PathBuf};
+
+use indexmap::IndexMap;
+use serde_yaml::Value;
+
+use crate::command::{Command, Response, EntryData};
+use crate::diaryx::{Diaryx, json_to_yaml, yaml_to_json};
+use crate::error::{DiaryxError, Result};
+use crate::frontmatter;
+use crate::fs::AsyncFileSystem;
+
+impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
+    /// Execute a command and return the response.
+    ///
+    /// This is the unified command interface that replaces individual method calls.
+    /// All commands are async and return a `Result<Response>`.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use diaryx_core::{Command, Response, Diaryx};
+    ///
+    /// let cmd = Command::GetEntry { path: "notes/hello.md".to_string() };
+    /// let response = diaryx.execute(cmd).await?;
+    ///
+    /// if let Response::Entry(entry) = response {
+    ///     println!("Title: {:?}", entry.title);
+    /// }
+    /// ```
+    pub async fn execute(&self, command: Command) -> Result<Response> {
+        match command {
+            // === Entry Operations ===
+            Command::GetEntry { path } => {
+                let content = self.entry().read_raw(&path).await?;
+                let parsed = frontmatter::parse_or_empty(&content)?;
+                let title = parsed.frontmatter.get("title")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+
+                // Convert serde_yaml::Value to serde_json::Value
+                let fm: IndexMap<String, serde_json::Value> = parsed.frontmatter
+                    .into_iter()
+                    .map(|(k, v)| (k, yaml_to_json(v)))
+                    .collect();
+
+                Ok(Response::Entry(EntryData {
+                    path: PathBuf::from(&path),
+                    title,
+                    frontmatter: fm,
+                    content: parsed.body,
+                }))
+            }
+
+            Command::SaveEntry { path, content } => {
+                self.entry().save_content(&path, &content).await?;
+                Ok(Response::Ok)
+            }
+
+            Command::GetFrontmatter { path } => {
+                let fm = self.entry().get_frontmatter(&path).await?;
+                let json_fm: IndexMap<String, serde_json::Value> = fm
+                    .into_iter()
+                    .map(|(k, v)| (k, yaml_to_json(v)))
+                    .collect();
+                Ok(Response::Frontmatter(json_fm))
+            }
+
+            Command::SetFrontmatterProperty { path, key, value } => {
+                let yaml_value = json_to_yaml(value);
+                self.entry().set_frontmatter_property(&path, &key, yaml_value).await?;
+                Ok(Response::Ok)
+            }
+
+            Command::RemoveFrontmatterProperty { path, key } => {
+                self.entry().remove_frontmatter_property(&path, &key).await?;
+                Ok(Response::Ok)
+            }
+
+            // === Workspace Operations ===
+            Command::FindRootIndex { directory } => {
+                let ws = self.workspace().inner();
+                match ws.find_root_index_in_dir(Path::new(&directory)).await? {
+                    Some(path) => Ok(Response::String(path.to_string_lossy().to_string())),
+                    None => Err(DiaryxError::WorkspaceNotFound(PathBuf::from(&directory))),
+                }
+            }
+
+            Command::GetWorkspaceTree { path, depth } => {
+                let root_path = path.unwrap_or_else(|| "workspace/index.md".to_string());
+                let tree = self.workspace().inner()
+                    .build_tree_with_depth(
+                        Path::new(&root_path),
+                        depth.map(|d| d as usize),
+                        &mut std::collections::HashSet::new(),
+                    )
+                    .await?;
+                Ok(Response::Tree(tree))
+            }
+
+            Command::GetFilesystemTree { path, show_hidden } => {
+                let root_path = path.unwrap_or_else(|| "workspace".to_string());
+                let tree = self.workspace().inner()
+                    .build_filesystem_tree(Path::new(&root_path), show_hidden)
+                    .await?;
+                Ok(Response::Tree(tree))
+            }
+
+            // === Validation Operations ===
+            Command::ValidateWorkspace { path } => {
+                let root_path = path.unwrap_or_else(|| "workspace/index.md".to_string());
+                let result = self.validate().validate_workspace(Path::new(&root_path)).await?;
+                Ok(Response::ValidationResult(result))
+            }
+
+            Command::ValidateFile { path } => {
+                let result = self.validate().validate_file(Path::new(&path)).await?;
+                Ok(Response::ValidationResult(result))
+            }
+
+            Command::FixBrokenPartOf { path } => {
+                let result = self.validate().fixer().fix_broken_part_of(Path::new(&path)).await;
+                Ok(Response::FixResult(result))
+            }
+
+            Command::FixBrokenContentsRef { index_path, target } => {
+                let result = self.validate().fixer()
+                    .fix_broken_contents_ref(Path::new(&index_path), &target)
+                    .await;
+                Ok(Response::FixResult(result))
+            }
+
+            // === Search Operations ===
+            Command::SearchWorkspace { pattern, options } => {
+                use crate::search::SearchQuery;
+
+                let query = if options.search_frontmatter {
+                    if let Some(prop) = options.property {
+                        SearchQuery::property(&pattern, prop)
+                    } else {
+                        SearchQuery::frontmatter(&pattern)
+                    }
+                } else {
+                    SearchQuery::content(&pattern)
+                }.case_sensitive(options.case_sensitive);
+
+                let workspace_path = options.workspace_path
+                    .unwrap_or_else(|| "workspace/index.md".to_string());
+                let results = self.search()
+                    .search_workspace(Path::new(&workspace_path), &query)
+                    .await?;
+                Ok(Response::SearchResults(results))
+            }
+
+            // === Export Operations ===
+            Command::PlanExport { root_path, audience } => {
+                let plan = self.export()
+                    .plan_export(
+                        Path::new(&root_path),
+                        &audience,
+                        Path::new("/tmp/export"),
+                    )
+                    .await?;
+                Ok(Response::ExportPlan(plan))
+            }
+
+            // === File System Operations ===
+            Command::FileExists { path } => {
+                let exists = self.fs().exists(Path::new(&path)).await;
+                Ok(Response::Bool(exists))
+            }
+
+            Command::ReadFile { path } => {
+                let content = self.entry().read_raw(&path).await?;
+                Ok(Response::String(content))
+            }
+
+            Command::WriteFile { path, content } => {
+                self.fs().write_file(Path::new(&path), &content).await
+                    .map_err(|e| DiaryxError::FileWrite {
+                        path: PathBuf::from(&path),
+                        source: e,
+                    })?;
+                Ok(Response::Ok)
+            }
+
+            Command::DeleteFile { path } => {
+                self.fs().delete_file(Path::new(&path)).await
+                    .map_err(|e| DiaryxError::FileWrite {
+                        path: PathBuf::from(&path),
+                        source: e,
+                    })?;
+                Ok(Response::Ok)
+            }
+
+            // === Attachment Operations ===
+            Command::GetAttachments { path } => {
+                let attachments = self.entry().get_attachments(&path).await?;
+                Ok(Response::Strings(attachments))
+            }
+
+            // === Entry Creation/Deletion Operations ===
+            Command::CreateEntry { path, options } => {
+                // Derive title from filename if not provided
+                let path_buf = PathBuf::from(&path);
+                let title = options.title.unwrap_or_else(|| {
+                    path_buf
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("Untitled")
+                        .to_string()
+                });
+
+                // Create the file with basic frontmatter
+                let content = format!("---\ntitle: {}\n---\n\n# {}\n\n", title, title);
+                self.fs().create_new(Path::new(&path), &content).await
+                    .map_err(|e| DiaryxError::FileWrite {
+                        path: path_buf.clone(),
+                        source: e,
+                    })?;
+
+                // Set part_of if provided
+                if let Some(parent) = options.part_of {
+                    self.entry()
+                        .set_frontmatter_property(&path, "part_of", Value::String(parent))
+                        .await?;
+                }
+
+                Ok(Response::String(path))
+            }
+
+            Command::DeleteEntry { path } => {
+                self.fs().delete_file(Path::new(&path)).await
+                    .map_err(|e| DiaryxError::FileWrite {
+                        path: PathBuf::from(&path),
+                        source: e,
+                    })?;
+                Ok(Response::Ok)
+            }
+
+            Command::MoveEntry { from, to } => {
+                if from == to {
+                    return Ok(Response::String(to));
+                }
+
+                // Use Workspace::move_entry which handles contents/part_of updates
+                let ws = self.workspace().inner();
+                ws.move_entry(Path::new(&from), Path::new(&to)).await?;
+                Ok(Response::String(to))
+            }
+
+            Command::RenameEntry { path, new_filename } => {
+                let from_path = PathBuf::from(&path);
+                let parent_dir = from_path.parent().unwrap_or_else(|| Path::new("."));
+                let to_path = parent_dir.join(&new_filename);
+
+                if from_path == to_path {
+                    return Ok(Response::String(to_path.to_string_lossy().to_string()));
+                }
+
+                // Use move_entry logic for consistency
+                let ws = self.workspace().inner();
+                ws.move_entry(&from_path, &to_path).await?;
+                Ok(Response::String(to_path.to_string_lossy().to_string()))
+            }
+
+            // === Hierarchy Operations ===
+            Command::ConvertToIndex { path } => {
+                let fm = self.entry().get_frontmatter(&path).await?;
+
+                // Check if already has contents
+                if fm.contains_key("contents") {
+                    return Ok(Response::String(path));
+                }
+
+                // Add empty contents array
+                self.entry()
+                    .set_frontmatter_property(&path, "contents", Value::Sequence(vec![]))
+                    .await?;
+                Ok(Response::String(path))
+            }
+
+            Command::ConvertToLeaf { path } => {
+                // Remove contents property if it exists
+                self.entry().remove_frontmatter_property(&path, "contents").await?;
+                Ok(Response::String(path))
+            }
+
+            Command::CreateChildEntry { parent_path } => {
+                let ws = self.workspace().inner();
+                let new_path = ws.create_child_entry(Path::new(&parent_path), None).await?;
+                Ok(Response::String(new_path.to_string_lossy().to_string()))
+            }
+
+            Command::AttachEntryToParent { entry_path, parent_path } => {
+                let ws = self.workspace().inner();
+                let new_path = ws.attach_and_move_entry_to_parent(
+                    Path::new(&entry_path),
+                    Path::new(&parent_path),
+                ).await?;
+                Ok(Response::String(new_path.to_string_lossy().to_string()))
+            }
+
+            Command::EnsureDailyEntry => {
+                // This requires config which we don't have access to in the core
+                // Return an error suggesting this should be handled at the Tauri level
+                Err(DiaryxError::Unsupported(
+                    "EnsureDailyEntry requires config which is platform-specific. Use Tauri command.".to_string()
+                ))
+            }
+
+            // === Workspace Operations ===
+            Command::CreateWorkspace { path, name } => {
+                let ws_path = path.unwrap_or_else(|| "workspace".to_string());
+                let ws_name = name.as_deref();
+                let ws = self.workspace().inner();
+                let readme_path = ws.init_workspace(Path::new(&ws_path), ws_name, None).await?;
+                Ok(Response::String(readme_path.to_string_lossy().to_string()))
+            }
+
+            // === Validation Fix Operations ===
+            Command::FixBrokenAttachment { path, attachment } => {
+                let result = self.validate().fixer()
+                    .fix_broken_attachment(Path::new(&path), &attachment)
+                    .await;
+                Ok(Response::FixResult(result))
+            }
+
+            Command::FixNonPortablePath { path, property, old_value, new_value } => {
+                let result = self.validate().fixer()
+                    .fix_non_portable_path(Path::new(&path), &property, &old_value, &new_value)
+                    .await;
+                Ok(Response::FixResult(result))
+            }
+
+            Command::FixUnlistedFile { index_path, file_path } => {
+                let result = self.validate().fixer()
+                    .fix_unlisted_file(Path::new(&index_path), Path::new(&file_path))
+                    .await;
+                Ok(Response::FixResult(result))
+            }
+
+            Command::FixOrphanBinaryFile { index_path, file_path } => {
+                let result = self.validate().fixer()
+                    .fix_orphan_binary_file(Path::new(&index_path), Path::new(&file_path))
+                    .await;
+                Ok(Response::FixResult(result))
+            }
+
+            Command::FixMissingPartOf { file_path, index_path } => {
+                let result = self.validate().fixer()
+                    .fix_missing_part_of(Path::new(&file_path), Path::new(&index_path))
+                    .await;
+                Ok(Response::FixResult(result))
+            }
+
+            Command::FixAll { validation_result } => {
+                let fixer = self.validate().fixer();
+                let (error_fixes, warning_fixes) = fixer.fix_all(&validation_result).await;
+
+                let total_fixed = error_fixes.iter().filter(|r| r.success).count()
+                    + warning_fixes.iter().filter(|r| r.success).count();
+                let total_failed = error_fixes.iter().filter(|r| !r.success).count()
+                    + warning_fixes.iter().filter(|r| !r.success).count();
+
+                Ok(Response::FixSummary(crate::command::FixSummary {
+                    error_fixes,
+                    warning_fixes,
+                    total_fixed,
+                    total_failed,
+                }))
+            }
+
+            // === Export Operations ===
+            Command::GetAvailableAudiences { root_path } => {
+                // Collect unique audience tags from workspace
+                let ws = self.workspace().inner();
+                let mut audiences = std::collections::HashSet::new();
+                let mut visited = std::collections::HashSet::new();
+
+                async fn collect_audiences<FS: AsyncFileSystem>(
+                    ws: &crate::workspace::Workspace<FS>,
+                    path: &Path,
+                    audiences: &mut std::collections::HashSet<String>,
+                    visited: &mut std::collections::HashSet<PathBuf>,
+                ) {
+                    if visited.contains(path) {
+                        return;
+                    }
+                    visited.insert(path.to_path_buf());
+
+                    if let Ok(index) = ws.parse_index(path).await {
+                        if let Some(file_audiences) = &index.frontmatter.audience {
+                            for a in file_audiences {
+                                if a.to_lowercase() != "private" {
+                                    audiences.insert(a.clone());
+                                }
+                            }
+                        }
+
+                        if index.frontmatter.is_index() {
+                            for child_rel in index.frontmatter.contents_list() {
+                                let child_path = index.resolve_path(child_rel);
+                                if ws.fs_ref().exists(&child_path).await {
+                                    Box::pin(collect_audiences(ws, &child_path, audiences, visited)).await;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                collect_audiences(&ws, Path::new(&root_path), &mut audiences, &mut visited).await;
+                let mut result: Vec<String> = audiences.into_iter().collect();
+                result.sort();
+                Ok(Response::Strings(result))
+            }
+
+            Command::ExportToMemory { root_path, audience } => {
+                // Plan the export first
+                let plan = self.export()
+                    .plan_export(
+                        Path::new(&root_path),
+                        &audience,
+                        Path::new("/tmp/export"),
+                    )
+                    .await?;
+
+                // Read each included file
+                let mut files = Vec::new();
+                for included in &plan.included {
+                    if let Ok(content) = self.fs().read_to_string(&included.source_path).await {
+                        files.push(crate::command::ExportedFile {
+                            path: included.relative_path.to_string_lossy().to_string(),
+                            content,
+                        });
+                    }
+                }
+                Ok(Response::ExportedFiles(files))
+            }
+
+            Command::ExportToHtml { root_path, audience } => {
+                // Plan the export first
+                let plan = self.export()
+                    .plan_export(
+                        Path::new(&root_path),
+                        &audience,
+                        Path::new("/tmp/export"),
+                    )
+                    .await?;
+
+                // Read each included file and convert path extension
+                let mut files = Vec::new();
+                for included in &plan.included {
+                    if let Ok(content) = self.fs().read_to_string(&included.source_path).await {
+                        let html_path = included.relative_path
+                            .to_string_lossy()
+                            .replace(".md", ".html");
+                        files.push(crate::command::ExportedFile {
+                            path: html_path,
+                            content, // TODO: Add markdown-to-HTML conversion
+                        });
+                    }
+                }
+                Ok(Response::ExportedFiles(files))
+            }
+
+            Command::ExportBinaryAttachments { root_path, audience: _ } => {
+                // Collect all binary attachments from workspace
+                let ws = self.workspace().inner();
+                let root_index = Path::new(&root_path);
+                let root_dir = root_index.parent().unwrap_or(root_index);
+
+                let mut attachments = Vec::new();
+                let mut visited = std::collections::HashSet::new();
+
+                async fn collect_attachments<FS: AsyncFileSystem>(
+                    ws: &crate::workspace::Workspace<FS>,
+                    path: &Path,
+                    root_dir: &Path,
+                    attachments: &mut Vec<crate::command::BinaryExportFile>,
+                    visited: &mut std::collections::HashSet<PathBuf>,
+                ) {
+                    if visited.contains(path) {
+                        return;
+                    }
+                    visited.insert(path.to_path_buf());
+
+                    if let Ok(index) = ws.parse_index(path).await {
+                        // Check for _attachments folder
+                        if let Some(entry_dir) = path.parent() {
+                            let attachments_dir = entry_dir.join("_attachments");
+                            if ws.fs_ref().is_dir(&attachments_dir).await {
+                                if let Ok(entries) = ws.fs_ref().list_files(&attachments_dir).await {
+                                    for entry_path in entries {
+                                        if !ws.fs_ref().is_dir(&entry_path).await {
+                                            if let Ok(data) = ws.fs_ref().read_binary(&entry_path).await {
+                                                let relative_path = pathdiff::diff_paths(&entry_path, root_dir)
+                                                    .unwrap_or_else(|| entry_path.clone());
+                                                attachments.push(crate::command::BinaryExportFile {
+                                                    path: relative_path.to_string_lossy().to_string(),
+                                                    data,
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Recurse into children
+                        if index.frontmatter.is_index() {
+                            for child_rel in index.frontmatter.contents_list() {
+                                let child_path = index.resolve_path(child_rel);
+                                if ws.fs_ref().exists(&child_path).await {
+                                    Box::pin(collect_attachments(
+                                        ws, &child_path, root_dir, attachments, visited,
+                                    )).await;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                collect_attachments(&ws, root_index, root_dir, &mut attachments, &mut visited).await;
+                Ok(Response::BinaryFiles(attachments))
+            }
+
+            // === Template Operations ===
+            Command::ListTemplates { workspace_path } => {
+                let templates_dir = PathBuf::from(
+                    workspace_path.as_deref().unwrap_or("workspace")
+                ).join("_templates");
+
+                let mut templates = Vec::new();
+
+                // Add built-in templates
+                templates.push(crate::command::TemplateInfo {
+                    name: "note".to_string(),
+                    path: None,
+                    source: "builtin".to_string(),
+                });
+                templates.push(crate::command::TemplateInfo {
+                    name: "daily".to_string(),
+                    path: None,
+                    source: "builtin".to_string(),
+                });
+
+                // Add workspace templates
+                if self.fs().is_dir(&templates_dir).await {
+                    if let Ok(files) = self.fs().list_files(&templates_dir).await {
+                        for file_path in files {
+                            if file_path.extension().is_some_and(|ext| ext == "md") {
+                                if let Some(name) = file_path.file_stem().and_then(|s| s.to_str()) {
+                                    templates.push(crate::command::TemplateInfo {
+                                        name: name.to_string(),
+                                        path: Some(file_path),
+                                        source: "workspace".to_string(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Ok(Response::Templates(templates))
+            }
+
+            Command::GetTemplate { name, workspace_path } => {
+                let templates_dir = PathBuf::from(
+                    workspace_path.as_deref().unwrap_or("workspace")
+                ).join("_templates");
+                let template_path = templates_dir.join(format!("{}.md", name));
+
+                // Check workspace templates first
+                if self.fs().exists(&template_path).await {
+                    let content = self.fs().read_to_string(&template_path).await
+                        .map_err(|e| DiaryxError::FileRead {
+                            path: template_path,
+                            source: e,
+                        })?;
+                    return Ok(Response::String(content));
+                }
+
+                // Return built-in template
+                let content = match name.as_str() {
+                    "note" => "---\ntitle: \"{{title}}\"\ncreated: \"{{date}}\"\n---\n\n",
+                    "daily" => "---\ntitle: \"{{title}}\"\ncreated: \"{{date}}\"\n---\n\n## Today\n\n",
+                    _ => return Err(DiaryxError::TemplateNotFound(name)),
+                };
+                Ok(Response::String(content.to_string()))
+            }
+
+            Command::SaveTemplate { name, content, workspace_path } => {
+                let templates_dir = PathBuf::from(&workspace_path).join("_templates");
+                self.fs().create_dir_all(&templates_dir).await?;
+
+                let template_path = templates_dir.join(format!("{}.md", name));
+                self.fs().write_file(&template_path, &content).await
+                    .map_err(|e| DiaryxError::FileWrite {
+                        path: template_path,
+                        source: e,
+                    })?;
+
+                Ok(Response::Ok)
+            }
+
+            Command::DeleteTemplate { name, workspace_path } => {
+                let template_path = PathBuf::from(&workspace_path)
+                    .join("_templates")
+                    .join(format!("{}.md", name));
+
+                self.fs().delete_file(&template_path).await
+                    .map_err(|e| DiaryxError::FileWrite {
+                        path: template_path,
+                        source: e,
+                    })?;
+
+                Ok(Response::Ok)
+            }
+
+            // === Attachment Operations ===
+            Command::UploadAttachment { entry_path, filename, data_base64 } => {
+                use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+                let entry = PathBuf::from(&entry_path);
+                let entry_dir = entry.parent().unwrap_or_else(|| Path::new("."));
+                let attachments_dir = entry_dir.join("_attachments");
+
+                // Create _attachments directory if needed
+                self.fs().create_dir_all(&attachments_dir).await?;
+
+                // Decode base64 data
+                let data = STANDARD.decode(&data_base64)
+                    .map_err(|e| DiaryxError::Unsupported(format!("Failed to decode base64: {}", e)))?;
+
+                // Write file
+                let dest_path = attachments_dir.join(&filename);
+                self.fs().write_binary(&dest_path, &data).await
+                    .map_err(|e| DiaryxError::FileWrite {
+                        path: dest_path.clone(),
+                        source: e,
+                    })?;
+
+                // Add to frontmatter attachments
+                let attachment_rel_path = format!("_attachments/{}", filename);
+                self.entry().add_attachment(&entry_path, &attachment_rel_path).await?;
+
+                Ok(Response::String(attachment_rel_path))
+            }
+
+            Command::DeleteAttachment { entry_path, attachment_path } => {
+                let entry = PathBuf::from(&entry_path);
+                let entry_dir = entry.parent().unwrap_or_else(|| Path::new("."));
+                let full_path = entry_dir.join(&attachment_path);
+
+                // Delete the file if it exists
+                if self.fs().exists(&full_path).await {
+                    self.fs().delete_file(&full_path).await
+                        .map_err(|e| DiaryxError::FileWrite {
+                            path: full_path,
+                            source: e,
+                        })?;
+                }
+
+                // Remove from frontmatter
+                self.entry().remove_attachment(&entry_path, &attachment_path).await?;
+
+                Ok(Response::Ok)
+            }
+
+            Command::GetAttachmentData { entry_path, attachment_path } => {
+                let entry = PathBuf::from(&entry_path);
+                let entry_dir = entry.parent().unwrap_or_else(|| Path::new("."));
+                let full_path = entry_dir.join(&attachment_path);
+
+                let data = self.fs().read_binary(&full_path).await
+                    .map_err(|e| DiaryxError::FileRead {
+                        path: full_path,
+                        source: e,
+                    })?;
+
+                Ok(Response::Bytes(data))
+            }
+
+            // === Storage Operations ===
+            Command::GetStorageUsage => {
+                // This requires knowledge of the workspace path which we don't have
+                // Return basic info - clients can calculate usage themselves
+                Ok(Response::StorageInfo(crate::command::StorageInfo {
+                    used: 0,
+                    limit: None,
+                    attachment_limit: None,
+                }))
+            }
+        }
+    }
+}

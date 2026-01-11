@@ -3,13 +3,15 @@
    * DebugInfo - App paths and config debug information
    *
    * Extracted from SettingsDialog for modularity.
+   * Uses the Backend interface to get config and app paths.
    */
   import { Info, Settings } from "@lucide/svelte";
-  import { getBackend } from "../backend";
+  import { getBackend, isTauri } from "../backend";
+  import type { Config } from "../backend/interface";
 
   // Config info state
-  let config: Record<string, unknown> | null = $state(null);
-  let appPaths: Record<string, string> | null = $state(null);
+  let config: Config | null = $state(null);
+  let appPaths: Record<string, string | boolean> | null = $state(null);
 
   // Load config on mount
   $effect(() => {
@@ -19,12 +21,11 @@
   async function loadConfig() {
     try {
       const backend = await getBackend();
-      if ("getInvoke" in backend) {
-        const invoke = (backend as any).getInvoke();
-        config = await invoke("get_config", {});
-        appPaths = await invoke("get_app_paths", {});
-      }
+      // Use the Backend interface methods
+      config = backend.getConfig();
+      appPaths = backend.getAppPaths();
     } catch (e) {
+      console.warn("[DebugInfo] Failed to load config:", e);
       config = null;
       appPaths = null;
     }

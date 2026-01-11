@@ -1,10 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from "svelte";
-  import * as yaml from "js-yaml";
-  import {
-    getBackend,
-    type EntryData,
-  } from "./lib/backend";
+  import { getBackend } from "./lib/backend";
+  import { createApi, type Api } from "./lib/backend/api";
+  import type { JsonValue } from "./lib/backend/generated/serde_json/JsonValue";
   import {
     getCollaborativeDocument,
     disconnectDocument,
@@ -90,6 +88,9 @@
   let backend = $derived(workspaceStore.backend);
   let showUnlinkedFiles = $derived(workspaceStore.showUnlinkedFiles);
   let showHiddenFiles = $derived(workspaceStore.showHiddenFiles);
+
+  // API wrapper - uses execute() internally for all operations
+  let api: Api | null = $derived(backend ? createApi(backend) : null);
   
   // Collaboration state - proxied from collaborationStore  
   let currentYDoc = $derived(collaborationStore.currentYDoc);
@@ -137,42 +138,6 @@
       return Object.fromEntries(frontmatter.entries());
     }
     return frontmatter;
-  }
-
-  /**
-   * WASM backend may create a workspace root file without YAML frontmatter (e.g. just "# My Workspace").
-   * Our frontmatter getter returns `{}` in that case, and writing a frontmatter property can succeed
-   * but appears "missing" until the file is reconstructed with actual frontmatter delimiters.
-   *
-   * This helper ensures the workspace root index always has a frontmatter header so `workspace_id`
-   * (and other metadata) can be stored and read consistently.
-   */
-  async function ensureWorkspaceRootHasFrontmatter(
-    indexPath: string,
-  ): Promise<void> {
-    if (!backend) return;
-
-    // Check if frontmatter already exists by looking for any existing properties
-    // If frontmatter exists (even empty), the file already has frontmatter delimiters
-    const rawFrontmatter = await backend.getFrontmatter(indexPath);
-    const frontmatter = normalizeFrontmatter(rawFrontmatter);
-
-    // If frontmatter has properties, it definitely exists - nothing to do
-    if (Object.keys(frontmatter).length > 0) return;
-
-    // Check if the file physically has frontmatter by looking at raw content
-    // We need to use getEntry and check if frontmatter is not empty, or use a raw read
-    const entry = await backend.getEntry(indexPath);
-    const body = entry?.content ?? "";
-
-    // If getFrontmatter() returned {} but the file was created by our backend,
-    // it should have frontmatter. The issue is when a file has no frontmatter at all.
-    // We can detect this by checking if title exists (our backend always sets title).
-    // If no title and no other frontmatter keys, the file likely has no frontmatter block.
-
-    // For safety, if frontmatter is empty, re-save to ensure frontmatter is created
-    // The save_content function in core preserves frontmatter and creates it if missing
-    await backend.saveEntry(indexPath, body);
   }
 
   // Attachment state
@@ -280,7 +245,7 @@
   // Initialize the workspace CRDT
   // Initialize the workspace CRDT
   async function setupWorkspaceCrdt(retryCount = 0) {
-    if (!backend) return;
+    if (!api || !backend) return;
 
     try {
       // Workspace ID priority:
@@ -288,6 +253,20 @@
       // 2. workspace_id from root index frontmatter (should persist in the workspace index)
       // 3. null (no prefix - uses simple room names like "doc:path/to/file.md")
       let sharedWorkspaceId: string | null = envWorkspaceId;
+
+      // Get the workspace directory from the backend, then find the actual root index
+      const workspaceDir = backend.getWorkspacePath().replace(/\/index\.md$/, '').replace(/\/README\.md$/, '');
+      console.log("[App] Workspace directory:", workspaceDir);
+
+      let workspacePath: string;
+      try {
+        workspacePath = await api.findRootIndex(workspaceDir);
+        console.log("[App] Found root index at:", workspacePath);
+      } catch (e) {
+        console.warn("[App] Could not find root index:", e);
+        // Fall back to default - will trigger workspace creation
+        workspacePath = `${workspaceDir}/index.md`;
+      }
 
       if (sharedWorkspaceId) {
         console.log(
@@ -297,79 +276,11 @@
       } else {
         // Try to get/create workspace_id from root index frontmatter
         try {
-          const rootTree = await backend.getWorkspaceTree();
+          const rootTree = await api.getWorkspaceTree(workspacePath);
           console.log("[App] Workspace tree root path:", rootTree?.path);
 
           if (rootTree?.path) {
-            // =========================================================================
-            // Startup debug probe:
-            // Compare the raw entry content + entry.frontmatter vs getFrontmatter() for
-            // the exact same path to diagnose mismatches in WASM mode.
-            // =========================================================================
-            try {
-              const rootEntryProbe = await backend.getEntry(rootTree.path);
-              const probeContent = rootEntryProbe?.content ?? "";
-              const probeHead = probeContent.slice(0, 600);
-
-              console.log("[App] Root entry probe path:", rootEntryProbe?.path);
-              console.log(
-                "[App] Root entry probe frontmatter keys:",
-                Object.keys(rootEntryProbe?.frontmatter ?? {}),
-              );
-              console.log(
-                "[App] Root entry probe workspace_id (from getEntry.frontmatter):",
-                (rootEntryProbe?.frontmatter as any)?.workspace_id,
-              );
-              console.log(
-                "[App] Root entry probe content head (first 600 chars):",
-                probeHead,
-              );
-              console.log(
-                "[App] Root entry probe starts with frontmatter delimiter:",
-                probeHead.startsWith("---"),
-              );
-              console.log(
-                "[App] Root entry probe contains closing frontmatter delimiter:",
-                probeHead.includes("\n---"),
-              );
-
-              const rootFrontmatterProbe = await backend.getFrontmatter(
-                rootTree.path,
-              );
-              const probedFm = normalizeFrontmatter(rootFrontmatterProbe);
-              console.log(
-                "[App] Root getFrontmatter() keys:",
-                Object.keys(probedFm ?? {}),
-              );
-              console.log(
-                "[App] Root getFrontmatter() workspace_id:",
-                probedFm?.workspace_id,
-              );
-            } catch (e) {
-              console.warn("[App] Root entry/frontmatter probe failed:", e);
-            }
-
-            // Ensure the root index has an actual frontmatter block so workspace_id can persist.
-            // Without this, getFrontmatter() returns {} and workspace_id reads as undefined.
-            try {
-              await ensureWorkspaceRootHasFrontmatter(rootTree.path);
-            } catch (e) {
-              console.warn(
-                "[App] Failed to ensure root frontmatter exists (continuing):",
-                e,
-              );
-            }
-
-            const rawRootFm = await backend.getFrontmatter(rootTree.path);
-            const rootFrontmatter = normalizeFrontmatter(rawRootFm);
-            console.log(
-              "[App] Root frontmatter keys:",
-              Object.keys(rootFrontmatter ?? {}),
-            );
-            console.log(
-              "[App] Root workspace_id (raw):",
-              rootFrontmatter?.workspace_id,
-            );
+            const rootFrontmatter = await api.getFrontmatter(rootTree.path);
 
             sharedWorkspaceId =
               (rootFrontmatter.workspace_id as string) ?? null;
@@ -382,7 +293,7 @@
                 sharedWorkspaceId,
               );
 
-              await backend.setFrontmatterProperty(
+              await api.setFrontmatterProperty(
                 rootTree.path,
                 "workspace_id",
                 sharedWorkspaceId,
@@ -394,7 +305,7 @@
               );
 
               // Re-read to confirm it actually persisted (especially important in WASM mode)
-              const verifyFrontmatter = await backend.getFrontmatter(
+              const verifyFrontmatter = await api.getFrontmatter(
                 rootTree.path,
               );
               console.log(
@@ -404,7 +315,7 @@
 
               // Also re-read raw content to confirm it actually wrote frontmatter into the file.
               try {
-                const rootEntryAfter = await backend.getEntry(rootTree.path);
+                const rootEntryAfter = await api.getEntry(rootTree.path);
                 const afterHead = (rootEntryAfter?.content ?? "").slice(0, 600);
                 console.log(
                   "[App] Root entry content head after write (first 600 chars):",
@@ -432,7 +343,7 @@
           ) {
             console.log("[App] Default workspace missing, creating...");
             try {
-              await backend.createWorkspace("workspace", "My Journal");
+              await api.createWorkspace("workspace", "My Journal");
               // Recursively try again to setup workspace_id and CRDT
               return await setupWorkspaceCrdt();
             } catch (createErr) {
@@ -467,20 +378,22 @@
       setWorkspaceId(workspaceId);
 
       // Initialize workspace CRDT using service
+      // Note: initializeWorkspaceCrdt needs both backend (for events) and api (for data operations)
       workspaceCrdtInitialized = await initializeWorkspaceCrdt(
         workspaceId,
         collaborationServerUrl,
         collaborationEnabled,
         backend,
+        api,
         {
           onFilesChange: async (files) => {
             console.log("[App] Workspace CRDT files changed:", files.size);
             // Refresh tree to show updated metadata (titles, etc.)
             await refreshTree();
             // Reload current entry if it was updated to show new metadata
-            if (currentEntry && files.has(currentEntry.path)) {
+            if (currentEntry && files.has(currentEntry.path) && api) {
               try {
-                const entry = await backend.getEntry(currentEntry.path);
+                const entry = await api.getEntry(currentEntry.path);
                 entry.frontmatter = normalizeFrontmatter(entry.frontmatter);
                 currentEntry = entry;
               } catch {
@@ -509,7 +422,7 @@
 
   // Open an entry
   async function openEntry(path: string) {
-    if (!backend) return;
+    if (!api || !backend) return;
 
     // Auto-save before switching documents
     if (isDirty) {
@@ -523,7 +436,7 @@
       // Cleanup previous blob URLs
       revokeBlobUrls();
 
-      const entry = await backend.getEntry(path);
+      const entry = await api.getEntry(path);
       // Normalize frontmatter to Object
       entry.frontmatter = normalizeFrontmatter(entry.frontmatter);
       currentEntry = entry;
@@ -541,7 +454,7 @@
         displayContent = await transformAttachmentPaths(
           currentEntry.content,
           currentEntry.path,
-          backend,
+          api,
         );
 
         // Setup Y.js collaboration for this document
@@ -624,7 +537,7 @@
 
   // Save current entry
   async function save() {
-    if (!backend || !currentEntry || !editorRef) return;
+    if (!api || !currentEntry || !editorRef) return;
     if (isSaving) return; // Prevent concurrent saves
 
     try {
@@ -635,21 +548,10 @@
         markdownWithBlobUrls || "",
       );
 
-      // Reconstruct file with frontmatter
-      let contentToSave = markdown;
-      if (currentEntry.frontmatter) {
-        try {
-          // Dump frontmatter to YAML string
-          // Only include valid keys to avoid clutter (ignore nulls if desired, but here we dump all)
-          const frontmatterYaml = yaml.dump(currentEntry.frontmatter);
-          contentToSave = `---\n${frontmatterYaml}---\n\n${markdown}`;
-        } catch (fmErr) {
-          console.error("[App] Failed to serialize frontmatter:", fmErr);
-          // Fallback to just markdown if serialization fails, though this risks data loss
-        }
-      }
-
-      await backend.saveEntry(currentEntry.path, contentToSave);
+      // Note: saveEntry expects only the body content, not frontmatter.
+      // Frontmatter is preserved by the backend's save_content() method.
+      // Frontmatter changes are saved separately via setFrontmatterProperty().
+      await api.saveEntry(currentEntry.path, markdown);
       entryStore.markClean();
     } catch (e) {
       uiStore.setError(e instanceof Error ? e.message : String(e));
@@ -805,12 +707,12 @@
   }
 
   async function handleCreateChildEntry(parentPath: string) {
-    if (!backend) return;
+    if (!api) return;
     try {
-      const newPath = await backend.createChildEntry(parentPath);
+      const newPath = await api.createChildEntry(parentPath);
 
       // Update CRDT with new file
-      const entry = await backend.getEntry(newPath);
+      const entry = await api.getEntry(newPath);
       addFileToCrdt(newPath, entry.frontmatter, parentPath);
 
       await refreshTree();
@@ -822,14 +724,14 @@
   }
 
   async function createNewEntry(path: string, title: string) {
-    if (!backend) return;
+    if (!api) return;
     try {
-      const newPath = await backend.createEntry(path, { title });
+      const newPath = await api.createEntry(path, { title });
 
       // Persist to IndexedDB immediately so file survives refresh
 
       // Update CRDT with new file
-      const entry = await backend.getEntry(newPath);
+      const entry = await api.getEntry(newPath);
       addFileToCrdt(newPath, entry.frontmatter, null);
 
       await refreshTree();
@@ -843,9 +745,9 @@
   }
 
   async function handleDailyEntry() {
-    if (!backend) return;
+    if (!api) return;
     try {
-      const path = await backend.ensureDailyEntry();
+      const path = await api.ensureDailyEntry();
       await refreshTree();
       await openEntry(path);
     } catch (e) {
@@ -854,14 +756,14 @@
   }
 
   async function handleDeleteEntry(path: string) {
-    if (!backend) return;
+    if (!api) return;
     const confirm = window.confirm(
       `Are you sure you want to delete "${path.split("/").pop()?.replace(".md", "")}"?`,
     );
     if (!confirm) return;
 
     try {
-      await backend.deleteEntry(path);
+      await api.deleteEntry(path);
 
       // CRDT is now automatically updated via backend event subscription
       // (file:deleted event triggers crdtDeleteFile and removeFromContents)
@@ -897,9 +799,14 @@
 
   // Run workspace validation
   async function runValidation() {
-    if (!backend) return;
+    if (!api || !backend) return;
     try {
-      workspaceStore.setValidationResult(await backend.validateWorkspace());
+      // Pass the actual workspace root path for validation
+      // tree?.path is the root index file path (e.g., "/Users/.../workspace/index.md")
+      // This is required for Tauri which uses absolute filesystem paths
+      // Fall back to backend.getWorkspacePath() if tree is not yet loaded
+      const rootPath = tree?.path ?? backend.getWorkspacePath();
+      workspaceStore.setValidationResult(await api.validateWorkspace(rootPath));
       console.log("[App] Validation result:", validationResult);
       console.log("[App] Warnings:", validationResult?.warnings);
     } catch (e) {
@@ -909,13 +816,13 @@
 
   // Quick fix: Remove broken part_of reference from a file
   async function handleRemoveBrokenPartOf(filePath: string) {
-    if (!backend) return;
+    if (!api) return;
     try {
-       await backend.removeFrontmatterProperty(filePath, "part_of");
+       await api.removeFrontmatterProperty(filePath, "part_of");
       await runValidation();
       // Refresh current entry if it's the fixed file
       if (currentEntry?.path === filePath) {
-        currentEntry = await backend.getEntry(filePath);
+        currentEntry = await api.getEntry(filePath);
       }
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -924,20 +831,20 @@
 
   // Quick fix: Remove broken entry from an index's contents
   async function handleRemoveBrokenContentsRef(indexPath: string, target: string) {
-    if (!backend) return;
+    if (!api) return;
     try {
       // Get current contents
-      const entry = await backend.getEntry(indexPath);
+      const entry = await api.getEntry(indexPath);
       const contents = entry.frontmatter?.contents;
       if (Array.isArray(contents)) {
         // Filter out the broken target
-        const newContents = contents.filter((item: string) => item !== target);
-         await backend.setFrontmatterProperty(indexPath, "contents", newContents);
+        const newContents = contents.filter((item) => item !== target);
+         await api.setFrontmatterProperty(indexPath, "contents", newContents);
         await refreshTree();
         await runValidation();
         // Refresh current entry if it's the fixed file
         if (currentEntry?.path === indexPath) {
-          currentEntry = await backend.getEntry(indexPath);
+          currentEntry = await api.getEntry(indexPath);
         }
       }
     } catch (e) {
@@ -947,10 +854,10 @@
 
   // Quick fix: Attach an unlinked entry to the workspace root
   async function handleAttachUnlinkedEntry(entryPath: string) {
-    if (!backend || !tree) return;
+    if (!api || !tree) return;
     try {
        // Attach to the workspace root (tree.path is the root index)
-      await backend.attachEntryToParent(entryPath, tree.path);
+      await api.attachEntryToParent(entryPath, tree.path);
       await refreshTree();
       await runValidation();
     } catch (e) {
@@ -960,14 +867,24 @@
 
   // Refresh the tree using the appropriate method based on showUnlinkedFiles setting
   async function refreshTree() {
-    if (!backend) return;
+    if (!api || !backend) return;
     try {
+      // Get the workspace directory from the backend
+      const workspaceDir = backend.getWorkspacePath().replace(/\/index\.md$/, '').replace(/\/README\.md$/, '');
+
       if (showUnlinkedFiles) {
         // "Show All Files" mode - use filesystem tree
-        workspaceStore.setTree(await backend.getFilesystemTree(undefined, showHiddenFiles));
+        workspaceStore.setTree(await api.getFilesystemTree(workspaceDir, showHiddenFiles));
       } else {
-        // Normal mode - use hierarchy tree
-        workspaceStore.setTree(await backend.getWorkspaceTree());
+        // Normal mode - find the actual root index and use hierarchy tree
+        try {
+          const rootIndexPath = await api.findRootIndex(workspaceDir);
+          workspaceStore.setTree(await api.getWorkspaceTree(rootIndexPath));
+        } catch (e) {
+          console.warn("[App] Could not find root index for tree:", e);
+          // Fall back to filesystem tree if no root index found
+          workspaceStore.setTree(await api.getFilesystemTree(workspaceDir, showHiddenFiles));
+        }
       }
     } catch (e) {
       console.error("[App] Error refreshing tree:", e);
@@ -985,7 +902,7 @@
   async function handleAttachmentFileSelect(event: Event) {
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
-    if (!file || !backend || !pendingAttachmentPath) return;
+    if (!file || !api || !pendingAttachmentPath) return;
 
     // Check size limit (5MB)
     const MAX_SIZE = 5 * 1024 * 1024;
@@ -1000,7 +917,7 @@
       const dataBase64 = await fileToBase64(file);
 
       // Upload attachment
-      const attachmentPath = await backend.uploadAttachment(
+      const attachmentPath = await api.uploadAttachment(
         pendingAttachmentPath,
         file.name,
         dataBase64,
@@ -1010,14 +927,14 @@
 
       // Refresh the entry if it's currently open
       if (currentEntry?.path === pendingAttachmentPath) {
-        const entry = await backend.getEntry(pendingAttachmentPath);
+        const entry = await api.getEntry(pendingAttachmentPath);
         entry.frontmatter = normalizeFrontmatter(entry.frontmatter);
         currentEntry = entry;
 
         // If it's an image, also insert it into the editor at cursor
         if (file.type.startsWith("image/") && editorRef) {
           // Get the binary data and create blob URL
-          const data = await backend.getAttachmentData(
+          const data = await api.getAttachmentData(
             currentEntry.path,
             attachmentPath,
           );
@@ -1067,7 +984,7 @@
   async function handleEditorFileDrop(
     file: File,
   ): Promise<{ blobUrl: string; attachmentPath: string } | null> {
-    if (!backend || !currentEntry) return null;
+    if (!api || !currentEntry) return null;
 
     // Check size limit (5MB)
     const MAX_SIZE = 5 * 1024 * 1024;
@@ -1078,7 +995,7 @@
 
     try {
       const dataBase64 = await fileToBase64(file);
-      const attachmentPath = await backend.uploadAttachment(
+      const attachmentPath = await api.uploadAttachment(
         currentEntry.path,
         file.name,
         dataBase64,
@@ -1087,12 +1004,12 @@
       // Attachments are synced as part of file metadata via CRDT events
 
       // Refresh the entry to update attachments list
-      const entry = await backend.getEntry(currentEntry.path);
+      const entry = await api.getEntry(currentEntry.path);
       entry.frontmatter = normalizeFrontmatter(entry.frontmatter);
       currentEntry = entry;
 
       // Get the binary data back and create blob URL
-      const data = await backend.getAttachmentData(
+      const data = await api.getAttachmentData(
         currentEntry.path,
         attachmentPath,
       );
@@ -1121,15 +1038,15 @@
 
   // Handle delete attachment from RightSidebar
   async function handleDeleteAttachment(attachmentPath: string) {
-    if (!backend || !currentEntry) return;
+    if (!api || !currentEntry) return;
 
     try {
-      await backend.deleteAttachment(currentEntry.path, attachmentPath);
+      await api.deleteAttachment(currentEntry.path, attachmentPath);
 
       // Attachments are synced as part of file metadata via CRDT events
 
       // Refresh current entry to update attachments list
-      const entry = await backend.getEntry(currentEntry.path);
+      const entry = await api.getEntry(currentEntry.path);
       entry.frontmatter = normalizeFrontmatter(entry.frontmatter);
       currentEntry = entry;
       attachmentError = null;
@@ -1140,7 +1057,7 @@
 
   // Handle drag-drop: attach entry to new parent
   async function handleMoveEntry(entryPath: string, newParentPath: string) {
-    if (!backend) return;
+    if (!api) return;
     if (entryPath === newParentPath) return; // Can't attach to self
 
     console.log(
@@ -1152,7 +1069,7 @@
       // This will:
       // - Add entry to newParent's `contents`
       // - Set entry's `part_of` to point to newParent
-      await backend.attachEntryToParent(entryPath, newParentPath);
+      await api.attachEntryToParent(entryPath, newParentPath);
 
       // CRDT is now automatically updated via backend event subscription
       // (file:moved event triggers CRDT updates)
@@ -1166,12 +1083,13 @@
 
   // Handle frontmatter property changes
   async function handlePropertyChange(key: string, value: unknown) {
-    if (!backend || !currentEntry) return;
+    if (!api || !currentEntry) return;
     try {
       const path = currentEntry.path;
       // Special handling for title: need to check rename first
       if (key === "title" && typeof value === "string" && value.trim()) {
-        const newFilename = backend.slugifyTitle(value);
+        // Use a simple slugify for title -> filename conversion
+        const newFilename = slugifyTitle(value);
         const currentFilename = currentEntry.path.split("/").pop() || "";
 
         // Only rename if the filename would actually change
@@ -1187,9 +1105,9 @@
           // Try rename FIRST, before updating frontmatter
           try {
             const oldPath = currentEntry.path;
-            const newPath = await backend.renameEntry(oldPath, newFilename);
+            const newPath = await api.renameEntry(oldPath, newFilename);
             // Rename succeeded, now update title in frontmatter (at new path)
-            await backend.setFrontmatterProperty(newPath, key, value);
+            await api.setFrontmatterProperty(newPath, key, value);
 
             // Transfer expanded state from old path to new path
             if (expandedNodes.has(oldPath)) {
@@ -1228,7 +1146,7 @@
           }
         } else {
           // No rename needed, just update title
-          await backend.setFrontmatterProperty(currentEntry.path, key, value);
+          await api.setFrontmatterProperty(currentEntry.path, key, value);
           currentEntry = {
             ...currentEntry,
             frontmatter: { ...currentEntry.frontmatter, [key]: value },
@@ -1237,13 +1155,13 @@
           // Update CRDT
           updateCrdtFileMetadata(path, currentEntry.frontmatter);
           titleError = null;
-          
+
           // Refresh tree to update title display
           await refreshTree();
         }
       } else {
         // Non-title properties: update normally
-        await backend.setFrontmatterProperty(currentEntry.path, key, value);
+        await api.setFrontmatterProperty(currentEntry.path, key, value as JsonValue);
         currentEntry = {
           ...currentEntry,
           frontmatter: { ...currentEntry.frontmatter, [key]: value },
@@ -1251,7 +1169,7 @@
 
         // Update CRDT
         updateCrdtFileMetadata(path, currentEntry.frontmatter);
-        
+
         // Refresh tree if contents or part_of changed (affects hierarchy)
         if (key === 'contents' || key === 'part_of') {
           await refreshTree();
@@ -1262,11 +1180,21 @@
     }
   }
 
+  // Helper function to convert title to kebab-case filename
+  function slugifyTitle(title: string): string {
+    return title
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, '')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '') + '.md';
+  }
+
   async function handlePropertyRemove(key: string) {
-    if (!backend || !currentEntry) return;
+    if (!api || !currentEntry) return;
     try {
       const path = currentEntry.path;
-      await backend.removeFrontmatterProperty(currentEntry.path, key);
+      await api.removeFrontmatterProperty(currentEntry.path, key);
       // Update local state
       const newFrontmatter = { ...currentEntry.frontmatter };
       delete newFrontmatter[key];
@@ -1280,10 +1208,10 @@
   }
 
   async function handlePropertyAdd(key: string, value: unknown) {
-    if (!backend || !currentEntry) return;
+    if (!api || !currentEntry) return;
     try {
       const path = currentEntry.path;
-      await backend.setFrontmatterProperty(currentEntry.path, key, value);
+      await api.setFrontmatterProperty(currentEntry.path, key, value as JsonValue);
       // Update local state
       currentEntry = {
         ...currentEntry,
@@ -1346,7 +1274,7 @@
     URL.revokeObjectURL(url);
   }
 
-  function getEntryTitle(entry: EntryData): string {
+  function getEntryTitle(entry: { path: string; title?: string | null; frontmatter?: Record<string, unknown> }): string {
     // Prioritize frontmatter.title for live updates, fall back to cached title
     const fm = normalizeFrontmatter(entry.frontmatter);
     const frontmatterTitle = fm?.title as string | undefined;
@@ -1410,9 +1338,9 @@
 
     // Try to open the entry
     try {
-      if (backend) {
+      if (api) {
         // Check if file exists by trying to get it
-        const entry = await backend.getEntry(targetPath);
+        const entry = await api.getEntry(targetPath);
         if (entry) {
           await openEntry(targetPath);
           return;
@@ -1424,11 +1352,11 @@
       const create = window.confirm(
         `"${fileName}" doesn't exist.\n\nWould you like to create it?`,
       );
-      if (create && backend) {
+      if (create && api) {
         try {
           // Create the file with basic frontmatter
           const title = fileName.replace(".md", "").replace(/-/g, " ");
-          await backend.createEntry(targetPath, { title });
+          await api.createEntry(targetPath, { title });
           await refreshTree();
           await openEntry(targetPath);
         } catch (e) {
@@ -1453,7 +1381,7 @@
 <CommandPalette
   bind:open={uiStore.showCommandPalette}
   {tree}
-  {backend}
+  {api}
   onOpenEntry={openEntry}
   onNewEntry={() => (showNewEntryModal = true)}
   onDailyEntry={handleDailyEntry}
@@ -1481,7 +1409,7 @@
 <ExportDialog
   bind:open={showExportDialog}
   rootPath={exportPath}
-  {backend}
+  {api}
   onOpenChange={(open) => (showExportDialog = open)}
 />
 
@@ -1498,6 +1426,7 @@
     {expandedNodes}
     {validationResult}
     {showUnlinkedFiles}
+    {api}
     collapsed={leftSidebarCollapsed}
     onOpenEntry={openEntry}
     onToggleNode={toggleNode}
@@ -1514,6 +1443,10 @@
     onRemoveBrokenPartOf={handleRemoveBrokenPartOf}
     onRemoveBrokenContentsRef={handleRemoveBrokenContentsRef}
     onAttachUnlinkedEntry={handleAttachUnlinkedEntry}
+    onValidationFix={async () => {
+      await refreshTree();
+      await runValidation();
+    }}
   />
 
   <!-- Hidden file input for attachments -->

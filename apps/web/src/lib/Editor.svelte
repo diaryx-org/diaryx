@@ -253,6 +253,17 @@
             shift: {
               padding: 8,
             },
+            // Manually control visibility to prevent flash on initial load
+            onShow: () => {
+              if (floatingMenuElement) {
+                floatingMenuElement.style.display = "block";
+              }
+            },
+            onHide: () => {
+              if (floatingMenuElement) {
+                floatingMenuElement.style.display = "none";
+              }
+            },
           },
           shouldShow: ({ editor: ed, view, state }) => {
             const { selection } = state;
@@ -271,6 +282,10 @@
 
             // Must be editable
             if (!ed.isEditable) return false;
+
+            // Must have focus - prevents menu from showing on initial load
+            // before user has interacted with the editor
+            if (!view.hasFocus()) return false;
 
             // Must be an empty selection (cursor, not a range)
             if (!empty) return false;

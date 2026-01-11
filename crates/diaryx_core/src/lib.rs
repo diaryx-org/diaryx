@@ -8,6 +8,9 @@ pub use command::{Command, Response};
 /// Unified Diaryx API - the main entry point
 pub mod diaryx;
 
+/// Command handler - execute() implementation for Diaryx
+mod command_handler;
+
 /// Configuration options
 pub mod config;
 

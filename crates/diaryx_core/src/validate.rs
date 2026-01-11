@@ -58,6 +58,8 @@ pub enum ValidationWarning {
     OrphanFile {
         /// The orphan file path
         file: PathBuf,
+        /// Suggested index to add this to (nearest parent index in hierarchy)
+        suggested_index: Option<PathBuf>,
     },
     /// A file or directory exists but is not in the contents hierarchy.
     /// Used for "List All Files" mode to show all filesystem entries.
@@ -66,6 +68,12 @@ pub enum ValidationWarning {
         path: PathBuf,
         /// Whether this is a directory
         is_dir: bool,
+        /// Suggested index to add this to (nearest parent index in hierarchy)
+        /// For directories, this points to the index file inside the directory if one exists
+        suggested_index: Option<PathBuf>,
+        /// For directories with an index file, this is the path to that index file
+        /// (which should be added to contents instead of the directory path)
+        index_file: Option<PathBuf>,
     },
     /// A markdown file exists in the directory but is not listed in the index's contents.
     UnlistedFile {
@@ -173,6 +181,34 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                 .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()))
                 .collect();
 
+            // Build a map of directory -> index file path from visited files
+            // This allows us to find the nearest parent index for orphan files
+            let mut dir_to_index: std::collections::HashMap<PathBuf, PathBuf> =
+                std::collections::HashMap::new();
+            for visited_path in &visited {
+                if visited_path.extension().is_some_and(|ext| ext == "md") {
+                    if let Some(parent) = visited_path.parent() {
+                        // Only add if this is likely an index file (has contents or is named index/README)
+                        // For simplicity, we add all visited markdown files and let the first one win
+                        dir_to_index
+                            .entry(parent.to_path_buf())
+                            .or_insert_with(|| visited_path.clone());
+                    }
+                }
+            }
+
+            // Helper to find nearest parent index for a given path
+            let find_nearest_index = |path: &Path| -> Option<PathBuf> {
+                let mut current = path.parent();
+                while let Some(dir) = current {
+                    if let Some(index) = dir_to_index.get(dir) {
+                        return Some(index.clone());
+                    }
+                    current = dir.parent();
+                }
+                None
+            };
+
             // Directories to skip (common build/dependency directories)
             let skip_dirs = [
                 "node_modules",
@@ -205,18 +241,29 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                 let entry_canonical = entry.canonicalize().unwrap_or_else(|_| entry.clone());
                 if !visited_normalized.contains(&entry_canonical) {
                     let is_dir = self.ws.fs_ref().is_dir(&entry).await;
+                    let suggested_index = find_nearest_index(&entry);
 
                     // Report as OrphanFile if it's an .md file (for backwards compat)
                     if entry.extension().is_some_and(|ext| ext == "md") {
                         result.warnings.push(ValidationWarning::OrphanFile {
                             file: entry.clone(),
+                            suggested_index: suggested_index.clone(),
                         });
                     }
+
+                    // For directories, check if they have an index file inside
+                    let index_file = if is_dir {
+                        self.ws.find_root_index_in_dir(&entry).await.ok().flatten()
+                    } else {
+                        None
+                    };
 
                     // Always report as UnlinkedEntry for "List All Files" mode
                     result.warnings.push(ValidationWarning::UnlinkedEntry {
                         path: entry,
                         is_dir,
+                        suggested_index,
+                        index_file,
                     });
                 }
             }
@@ -1134,10 +1181,42 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
                     None
                 }
             }
+            ValidationWarning::OrphanFile {
+                file,
+                suggested_index,
+            } => {
+                // Fix by adding the file to the nearest parent index's contents
+                if let Some(index) = suggested_index {
+                    Some(self.fix_unlisted_file(index, file).await)
+                } else {
+                    None
+                }
+            }
+            ValidationWarning::UnlinkedEntry {
+                path,
+                is_dir,
+                suggested_index,
+                index_file,
+            } => {
+                if let Some(index) = suggested_index {
+                    if *is_dir {
+                        // For directories, we need to link the index file inside, not the directory itself
+                        if let Some(dir_index) = index_file {
+                            Some(self.fix_unlisted_file(index, dir_index).await)
+                        } else {
+                            // Directory has no index file - can't auto-fix
+                            None
+                        }
+                    } else {
+                        // For files, add directly to contents
+                        Some(self.fix_unlisted_file(index, path).await)
+                    }
+                } else {
+                    None
+                }
+            }
             // These cannot be auto-fixed
-            ValidationWarning::OrphanFile { .. }
-            | ValidationWarning::UnlinkedEntry { .. }
-            | ValidationWarning::CircularReference { .. }
+            ValidationWarning::CircularReference { .. }
             | ValidationWarning::MultipleIndexes { .. } => None,
         }
     }

@@ -12,6 +12,7 @@ import type {
   BackendEventListener,
   Command,
   Response,
+  Config,
 } from './interface';
 import { BackendEventEmitter } from './eventEmitter';
 import type { WorkerApi } from './wasmWorkerNew';
@@ -89,6 +90,30 @@ export class WorkerBackendNew implements Backend {
 
   isReady(): boolean {
     return this._ready;
+  }
+
+  /**
+   * Get the workspace path.
+   * For WASM, this is always "workspace" (virtual path in OPFS/IndexedDB).
+   */
+  getWorkspacePath(): string {
+    return "workspace/index.md";
+  }
+
+  /**
+   * Get config (not applicable for WASM - config is Tauri-specific).
+   */
+  getConfig(): Config | null {
+    return {
+      default_workspace: "workspace",
+    };
+  }
+
+  /**
+   * Get app paths (Tauri-specific, returns null for WASM).
+   */
+  getAppPaths(): Record<string, string | boolean> | null {
+    return null;
   }
 
   // Event subscription

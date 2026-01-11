@@ -115,6 +115,13 @@ pub enum Command {
     EnsureDailyEntry,
 
     // === Workspace Operations ===
+    /// Find the root index file in a directory.
+    /// Returns the path to the root index (a file with `contents` but no `part_of`).
+    FindRootIndex {
+        /// Directory to search in.
+        directory: String,
+    },
+
     /// Get the workspace tree structure.
     GetWorkspaceTree {
         /// Optional path to a specific workspace.

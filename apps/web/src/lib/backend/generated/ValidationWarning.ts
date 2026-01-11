@@ -7,7 +7,11 @@ export type ValidationWarning = { "type": "OrphanFile",
 /**
  * The orphan file path
  */
-file: string, } | { "type": "UnlinkedEntry", 
+file: string, 
+/**
+ * Suggested index to add this to (nearest parent index in hierarchy)
+ */
+suggested_index: string | null, } | { "type": "UnlinkedEntry", 
 /**
  * The entry path
  */
@@ -15,7 +19,17 @@ path: string,
 /**
  * Whether this is a directory
  */
-is_dir: boolean, } | { "type": "UnlistedFile", 
+is_dir: boolean, 
+/**
+ * Suggested index to add this to (nearest parent index in hierarchy)
+ * For directories, this points to the index file inside the directory if one exists
+ */
+suggested_index: string | null, 
+/**
+ * For directories with an index file, this is the path to that index file
+ * (which should be added to contents instead of the directory path)
+ */
+index_file: string | null, } | { "type": "UnlistedFile", 
 /**
  * The index file that should contain this file
  */

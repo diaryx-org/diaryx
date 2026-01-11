@@ -3,21 +3,33 @@
 //! This module provides a single entry point for all workspace operations,
 //! working directly with native storage backends (no InMemoryFileSystem).
 //!
-//! ## Usage from JavaScript
+//! ## Preferred API: `execute()` / `executeJs()`
+//!
+//! The recommended way to use this backend is through the unified command API:
 //!
 //! ```javascript
 //! import { DiaryxBackend } from './wasm/diaryx_wasm.js';
 //!
-//! // Create backend with OPFS storage
 //! const backend = await DiaryxBackend.createOpfs();
 //!
-//! // Or with IndexedDB fallback
-//! const backend = await DiaryxBackend.createIndexedDb();
+//! // Use execute() with Command objects
+//! const response = await backend.execute(JSON.stringify({
+//!   type: 'GetEntry',
+//!   params: { path: 'workspace/journal/2024-01-08.md' }
+//! }));
 //!
-//! // All operations are async
-//! const tree = await backend.getTree('workspace');
-//! const entry = await backend.getEntry('workspace/journal/2024-01-08.md');
+//! // Or executeJs() with JavaScript objects directly
+//! const response = await backend.executeJs({
+//!   type: 'GetWorkspaceTree',
+//!   params: { path: 'workspace/index.md' }
+//! });
 //! ```
+//!
+//! ## Legacy API (deprecated)
+//!
+//! Individual methods like `getTree()`, `getEntry()`, etc. are still available
+//! for backwards compatibility but will be removed in a future version.
+//! Please migrate to `execute()` or `executeJs()`.
 
 use std::collections::HashSet;
 use std::io::Result as IoResult;

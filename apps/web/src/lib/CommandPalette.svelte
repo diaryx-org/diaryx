@@ -1,6 +1,7 @@
 <script lang="ts">
   import * as Command from "$lib/components/ui/command";
-  import type { TreeNode, SearchResults, Backend } from "./backend";
+  import type { TreeNode, SearchResults } from "./backend";
+  import type { Api } from "./backend/api";
   import {
     Search,
     CalendarDays,
@@ -14,7 +15,7 @@
   interface Props {
     open: boolean;
     tree: TreeNode | null;
-    backend: Backend | null;
+    api: Api | null;
     onOpenEntry: (path: string) => void;
     onNewEntry: () => void;
     onDailyEntry: () => void;
@@ -26,7 +27,7 @@
   let {
     open = $bindable(),
     tree,
-    backend,
+    api,
     onOpenEntry,
     onNewEntry,
     onDailyEntry,
@@ -56,11 +57,11 @@
 
   $effect(() => {
     // Debounced search
-    if (searchValue.trim() && backend) {
+    if (searchValue.trim() && api) {
       if (searchTimeout) clearTimeout(searchTimeout);
       searchTimeout = setTimeout(async () => {
         try {
-          searchResults = await backend.searchWorkspace(searchValue);
+          searchResults = await api.searchWorkspace(searchValue);
         } catch (e) {
           console.error("Search failed:", e);
           searchResults = null;

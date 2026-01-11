@@ -11,6 +11,7 @@ keywords = ["diary", "journal", "markdown", "frontmatter"]
 categories = ["text-processing"]
 
 [dependencies]
+base64 = "0.22"
 chrono.workspace = true
 chrono-english = "0.1"
 indexmap.workspace = true

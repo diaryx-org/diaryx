@@ -35,7 +35,7 @@ use crate::fs::AsyncFileSystem;
 // ============================================================================
 
 /// Convert a serde_yaml::Value to serde_json::Value
-fn yaml_to_json(yaml: Value) -> serde_json::Value {
+pub(crate) fn yaml_to_json(yaml: Value) -> serde_json::Value {
     match yaml {
         Value::Null => serde_json::Value::Null,
         Value::Bool(b) => serde_json::Value::Bool(b),
@@ -70,7 +70,7 @@ fn yaml_to_json(yaml: Value) -> serde_json::Value {
 }
 
 /// Convert a serde_json::Value to serde_yaml::Value
-fn json_to_yaml(json: serde_json::Value) -> Value {
+pub(crate) fn json_to_yaml(json: serde_json::Value) -> Value {
     match json {
         serde_json::Value::Null => Value::Null,
         serde_json::Value::Bool(b) => Value::Bool(b),
@@ -157,230 +157,9 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         ValidateOps { diaryx: self }
     }
 
-    /// Execute a command and return the response.
-    ///
-    /// This is the unified command interface that replaces individual method calls.
-    /// All commands are async and return a `Result<Response>`.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// use diaryx_core::{Command, Response, Diaryx};
-    ///
-    /// let cmd = Command::GetEntry { path: "notes/hello.md".to_string() };
-    /// let response = diaryx.execute(cmd).await?;
-    ///
-    /// if let Response::Entry(entry) = response {
-    ///     println!("Title: {:?}", entry.title);
-    /// }
-    /// ```
-    pub async fn execute(&self, command: crate::command::Command) -> Result<crate::command::Response> {
-        use crate::command::{Command, Response, EntryData};
-        use std::path::Path as StdPath;
-
-        match command {
-            // === Entry Operations ===
-            Command::GetEntry { path } => {
-                let content = self.entry().read_raw(&path).await?;
-                let parsed = frontmatter::parse_or_empty(&content)?;
-                let title = parsed.frontmatter.get("title")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                
-                // Convert serde_yaml::Value to serde_json::Value
-                let fm: IndexMap<String, serde_json::Value> = parsed.frontmatter
-                    .into_iter()
-                    .map(|(k, v)| (k, yaml_to_json(v)))
-                    .collect();
-                
-                Ok(Response::Entry(EntryData {
-                    path: PathBuf::from(&path),
-                    title,
-                    frontmatter: fm,
-                    content: parsed.body,
-                }))
-            }
-
-            Command::SaveEntry { path, content } => {
-                self.entry().save_content(&path, &content).await?;
-                Ok(Response::Ok)
-            }
-
-            Command::GetFrontmatter { path } => {
-                let fm = self.entry().get_frontmatter(&path).await?;
-                let json_fm: IndexMap<String, serde_json::Value> = fm
-                    .into_iter()
-                    .map(|(k, v)| (k, yaml_to_json(v)))
-                    .collect();
-                Ok(Response::Frontmatter(json_fm))
-            }
-
-            Command::SetFrontmatterProperty { path, key, value } => {
-                let yaml_value = json_to_yaml(value);
-                self.entry().set_frontmatter_property(&path, &key, yaml_value).await?;
-                Ok(Response::Ok)
-            }
-
-            Command::RemoveFrontmatterProperty { path, key } => {
-                self.entry().remove_frontmatter_property(&path, &key).await?;
-                Ok(Response::Ok)
-            }
-
-            // === Workspace Operations ===
-            Command::GetWorkspaceTree { path, depth } => {
-                let root_path = path.unwrap_or_else(|| "workspace/index.md".to_string());
-                let tree = self.workspace().inner()
-                    .build_tree_with_depth(
-                        StdPath::new(&root_path),
-                        depth.map(|d| d as usize),
-                        &mut std::collections::HashSet::new(),
-                    )
-                    .await?;
-                Ok(Response::Tree(tree))
-            }
-
-            Command::GetFilesystemTree { path, show_hidden } => {
-                let root_path = path.unwrap_or_else(|| "workspace".to_string());
-                let tree = self.workspace().inner()
-                    .build_filesystem_tree(StdPath::new(&root_path), show_hidden)
-                    .await?;
-                Ok(Response::Tree(tree))
-            }
-
-            // === Validation Operations ===
-            Command::ValidateWorkspace { path } => {
-                let root_path = path.unwrap_or_else(|| "workspace/index.md".to_string());
-                let result = self.validate().validate_workspace(StdPath::new(&root_path)).await?;
-                Ok(Response::ValidationResult(result))
-            }
-
-            Command::ValidateFile { path } => {
-                let result = self.validate().validate_file(StdPath::new(&path)).await?;
-                Ok(Response::ValidationResult(result))
-            }
-
-            Command::FixBrokenPartOf { path } => {
-                let result = self.validate().fixer().fix_broken_part_of(StdPath::new(&path)).await;
-                Ok(Response::FixResult(result))
-            }
-
-            Command::FixBrokenContentsRef { index_path, target } => {
-                let result = self.validate().fixer()
-                    .fix_broken_contents_ref(StdPath::new(&index_path), &target)
-                    .await;
-                Ok(Response::FixResult(result))
-            }
-
-            // === Search Operations ===
-            Command::SearchWorkspace { pattern, options } => {
-                use crate::search::SearchQuery;
-                
-                let query = if options.search_frontmatter {
-                    if let Some(prop) = options.property {
-                        SearchQuery::property(&pattern, prop)
-                    } else {
-                        SearchQuery::frontmatter(&pattern)
-                    }
-                } else {
-                    SearchQuery::content(&pattern)
-                }.case_sensitive(options.case_sensitive);
-                
-                let workspace_path = options.workspace_path
-                    .unwrap_or_else(|| "workspace/index.md".to_string());
-                let results = self.search()
-                    .search_workspace(StdPath::new(&workspace_path), &query)
-                    .await?;
-                Ok(Response::SearchResults(results))
-            }
-
-            // === Export Operations ===
-            Command::PlanExport { root_path, audience } => {
-                let plan = self.export()
-                    .plan_export(
-                        StdPath::new(&root_path),
-                        &audience,
-                        StdPath::new("/tmp/export"),
-                    )
-                    .await?;
-                Ok(Response::ExportPlan(plan))
-            }
-
-            Command::GetAvailableAudiences { root_path: _ } => {
-                // TODO: Implement audience collection
-                Ok(Response::Strings(vec![]))
-            }
-
-            // === File System Operations ===
-            Command::FileExists { path } => {
-                let exists = self.fs.exists(StdPath::new(&path)).await;
-                Ok(Response::Bool(exists))
-            }
-
-            Command::ReadFile { path } => {
-                let content = self.entry().read_raw(&path).await?;
-                Ok(Response::String(content))
-            }
-
-            Command::WriteFile { path, content } => {
-                self.fs.write_file(StdPath::new(&path), &content).await
-                    .map_err(|e| DiaryxError::FileWrite {
-                        path: PathBuf::from(&path),
-                        source: e,
-                    })?;
-                Ok(Response::Ok)
-            }
-
-            Command::DeleteFile { path } => {
-                self.fs.delete_file(StdPath::new(&path)).await
-                    .map_err(|e| DiaryxError::FileWrite {
-                        path: PathBuf::from(&path),
-                        source: e,
-                    })?;
-                Ok(Response::Ok)
-            }
-
-            // === Attachment Operations ===
-            Command::GetAttachments { path } => {
-                let attachments = self.entry().get_attachments(&path).await?;
-                Ok(Response::Strings(attachments))
-            }
-
-            // === Remaining commands - to be implemented ===
-            Command::CreateEntry { .. } |
-            Command::DeleteEntry { .. } |
-            Command::MoveEntry { .. } |
-            Command::RenameEntry { .. } |
-            Command::ConvertToIndex { .. } |
-            Command::ConvertToLeaf { .. } |
-            Command::CreateChildEntry { .. } |
-            Command::AttachEntryToParent { .. } |
-            Command::EnsureDailyEntry |
-            Command::CreateWorkspace { .. } |
-            Command::FixBrokenAttachment { .. } |
-            Command::FixNonPortablePath { .. } |
-            Command::FixUnlistedFile { .. } |
-            Command::FixOrphanBinaryFile { .. } |
-            Command::FixMissingPartOf { .. } |
-            Command::FixAll { .. } |
-            Command::ExportToMemory { .. } |
-            Command::ExportToHtml { .. } |
-            Command::ExportBinaryAttachments { .. } |
-            Command::ListTemplates { .. } |
-            Command::GetTemplate { .. } |
-            Command::SaveTemplate { .. } |
-            Command::DeleteTemplate { .. } |
-            Command::UploadAttachment { .. } |
-            Command::DeleteAttachment { .. } |
-            Command::GetAttachmentData { .. } |
-            Command::GetStorageUsage => {
-                Err(DiaryxError::Unsupported(format!(
-                    "Command not yet implemented: {:?}",
-                    std::any::type_name_of_val(&command)
-                )))
-            }
-        }
-    }
+    // execute() is implemented in command_handler.rs
 }
+
 
 // ============================================================================
 // Entry Operations

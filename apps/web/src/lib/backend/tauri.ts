@@ -1,49 +1,22 @@
 // Tauri backend implementation - uses Tauri IPC to communicate with Rust backend
 // NOTE: We use dynamic imports for @tauri-apps/api to avoid load-time failures
 // when this module is bundled but running in a non-Tauri environment.
-// Tauri backend implementation - wrapper around Tauri invoke commands
 
 import type {
   Backend,
-  Config,
-  TreeNode,
-  EntryData,
-  SearchResults,
-  SearchOptions,
-  CreateEntryOptions,
-  TemplateInfo,
-  ValidationResult,
   BackendEventType,
   BackendEventListener,
+  Command,
+  Response,
+  Config,
 } from "./interface";
 
 import { BackendError } from "./interface";
 import { BackendEventEmitter } from "./eventEmitter";
 
-function normalizeEntryPathToWorkspaceRoot(
-  inputPath: string,
-  workspaceRoot: string,
-): string {
-  const raw = inputPath.trim();
-
-  // If the user only typed a filename (no folder), treat it as relative to the
-  // configured workspace root folder so it appears in the workspace tree.
-  if (!raw.includes("/")) {
-    const root = (workspaceRoot || "workspace").replace(/\/+$/, "");
-    return `${root}/${raw}`;
-  }
-
-  return raw;
-}
-
 // ============================================================================
-// Internal Types (matching Rust backend structures)
+// Internal Types
 // ============================================================================
-
-interface SaveEntryRequest {
-  path: string;
-  content: string;
-}
 
 /** App paths returned by the Rust backend */
 interface AppPaths {
@@ -54,6 +27,12 @@ interface AppPaths {
   is_mobile: boolean;
 }
 
+interface ImportResult {
+  success: boolean;
+  files_imported: number;
+  error?: string;
+}
+
 // Type for the invoke function from Tauri
 type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -61,8 +40,21 @@ type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 // Helper Functions
 // ============================================================================
 
+// Error kinds that are expected during normal operation (e.g., validation checking broken refs)
+const EXPECTED_ERROR_KINDS = new Set(["FileRead", "NotFound", "FileNotFound", "IoError"]);
+
 function handleError(error: unknown): never {
-  console.error("[TauriBackend] Command error (raw):", error);
+  // Extract error kind to determine log level
+  let errorKind: string | undefined;
+  if (typeof error === "object" && error !== null) {
+    const err = error as Record<string, unknown>;
+    errorKind = typeof err.kind === "string" ? err.kind : undefined;
+  }
+
+  // Only log unexpected errors to avoid spam from expected validation errors
+  if (!errorKind || !EXPECTED_ERROR_KINDS.has(errorKind)) {
+    console.error("[TauriBackend] Command error (raw):", error);
+  }
 
   if (typeof error === "string") {
     throw new BackendError(error, "CommandError");
@@ -107,6 +99,7 @@ export class TauriBackend implements Backend {
   private ready = false;
   private invoke: InvokeFn | null = null;
   private appPaths: AppPaths | null = null;
+  private config: Config | null = null;
   private eventEmitter = new BackendEventEmitter();
 
   async init(): Promise<void> {
@@ -133,19 +126,9 @@ export class TauriBackend implements Backend {
     try {
       const result = await this.invoke<AppPaths>("initialize_app");
       console.log("[TauriBackend] Step 2 complete: initialize_app returned");
-      console.log("[TauriBackend] Raw result type:", typeof result);
-      console.log(
-        "[TauriBackend] Raw result:",
-        JSON.stringify(result, null, 2),
-      );
       this.appPaths = result;
     } catch (e) {
       console.error("[TauriBackend] Step 2 failed: initialize_app error:", e);
-      console.error("[TauriBackend] Error type:", typeof e);
-      console.error(
-        "[TauriBackend] Error stringified:",
-        JSON.stringify(e, null, 2),
-      );
       throw new BackendError(
         `Failed to initialize app: ${this.formatError(e)}`,
         "InitializeAppError",
@@ -155,17 +138,12 @@ export class TauriBackend implements Backend {
     // Step 3: Validate the result
     console.log("[TauriBackend] Step 3: Validating result...");
     if (!this.appPaths) {
-      console.error("[TauriBackend] Step 3 failed: appPaths is null/undefined");
       throw new BackendError(
         "initialize_app returned null/undefined",
         "InvalidResult",
       );
     }
     if (typeof this.appPaths.default_workspace !== "string") {
-      console.error(
-        "[TauriBackend] Step 3 failed: default_workspace is not a string:",
-        this.appPaths.default_workspace,
-      );
       throw new BackendError(
         `Invalid default_workspace: ${typeof this.appPaths.default_workspace}`,
         "InvalidResult",
@@ -173,6 +151,12 @@ export class TauriBackend implements Backend {
     }
     console.log("[TauriBackend] Step 3 complete: Result validated");
     console.log("[TauriBackend] App paths:", this.appPaths);
+
+    // Create config object from appPaths (no separate command needed)
+    // The workspace path is already resolved by initialize_app
+    this.config = {
+      default_workspace: this.appPaths.default_workspace,
+    };
 
     this.ready = true;
     console.log("[TauriBackend] Initialization complete!");
@@ -207,9 +191,38 @@ export class TauriBackend implements Backend {
   }
 
   /**
+   * Get the workspace path from config, falling back to platform default.
+   * This is the path to the workspace index file (e.g., ~/diaryx/index.md).
+   */
+  getWorkspacePath(): string {
+    // Use config's default_workspace if available
+    if (this.config?.default_workspace) {
+      // Append /index.md if it's a directory path
+      const ws = this.config.default_workspace;
+      if (!ws.endsWith('.md')) {
+        return `${ws}/index.md`;
+      }
+      return ws;
+    }
+    // Fall back to app paths
+    if (this.appPaths?.default_workspace) {
+      return `${this.appPaths.default_workspace}/index.md`;
+    }
+    // Last resort fallback
+    return "workspace/index.md";
+  }
+
+  /**
+   * Get the config loaded from disk.
+   */
+  getConfig(): import("./interface").Config | null {
+    return this.config;
+  }
+
+  /**
    * Get the app paths (useful for debugging or displaying to user)
    */
-  getAppPaths(): AppPaths | null {
+  getAppPaths(): Record<string, string | boolean> | null {
     return this.appPaths;
   }
 
@@ -218,13 +231,6 @@ export class TauriBackend implements Backend {
    */
   isMobile(): boolean {
     return this.appPaths?.is_mobile ?? false;
-  }
-
-  /**
-   * Get the default workspace path for the current platform
-   */
-  getDefaultWorkspacePath(): string | null {
-    return this.appPaths?.default_workspace ?? null;
   }
 
   // --------------------------------------------------------------------------
@@ -243,675 +249,18 @@ export class TauriBackend implements Backend {
   // Unified Command API
   // --------------------------------------------------------------------------
 
-  async execute(command: import("./interface").Command): Promise<import("./interface").Response> {
+  async execute(command: Command): Promise<Response> {
     try {
       const commandJson = JSON.stringify(command);
       const responseJson = await this.getInvoke()<string>("execute", { commandJson });
-      return JSON.parse(responseJson) as import("./interface").Response;
+      return JSON.parse(responseJson) as Response;
     } catch (e) {
       handleError(e);
     }
   }
 
   // --------------------------------------------------------------------------
-  // Configuration
-  // --------------------------------------------------------------------------
-
-  async getConfig(): Promise<Config> {
-    try {
-      return await this.getInvoke()<Config>("get_config");
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async saveConfig(config: Config): Promise<void> {
-    try {
-      await this.getInvoke()("save_config", { config });
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  // --------------------------------------------------------------------------
-  // Workspace
-  // --------------------------------------------------------------------------
-
-  async getWorkspaceTree(
-    workspacePath?: string,
-    depth?: number,
-  ): Promise<TreeNode> {
-    try {
-      console.log("[TauriBackend] getWorkspaceTree called with:", {
-        workspacePath,
-        depth,
-        appPaths: this.appPaths,
-      });
-      const result = await this.getInvoke()<TreeNode>("get_workspace_tree", {
-        workspacePath,
-        depth,
-      });
-      console.log("[TauriBackend] getWorkspaceTree result:", result);
-      return result;
-    } catch (e) {
-      console.error("[TauriBackend] getWorkspaceTree error:", e);
-      handleError(e);
-    }
-  }
-
-  async getFilesystemTree(
-    workspacePath?: string,
-    showHidden?: boolean,
-  ): Promise<TreeNode> {
-    try {
-      console.log("[TauriBackend] getFilesystemTree called with:", {
-        workspacePath,
-        showHidden,
-      });
-      const result = await this.getInvoke()<TreeNode>("get_filesystem_tree", {
-        workspacePath,
-        showHidden,
-      });
-      console.log("[TauriBackend] getFilesystemTree result:", result);
-      return result;
-    } catch (e) {
-      console.error("[TauriBackend] getFilesystemTree error:", e);
-      handleError(e);
-    }
-  }
-
-  async createWorkspace(path?: string, name?: string): Promise<string> {
-    try {
-      // Use platform-appropriate default path if not provided
-      const result = await this.getInvoke()<string>("create_workspace", {
-        path,
-        name,
-      });
-      return result;
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  // --------------------------------------------------------------------------
-  // Entries
-  // --------------------------------------------------------------------------
-
-  async getEntry(path: string): Promise<EntryData> {
-    try {
-      return await this.getInvoke()<EntryData>("get_entry", { path });
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async saveEntry(path: string, content: string): Promise<void> {
-    try {
-      const request: SaveEntryRequest = { path, content };
-      await this.getInvoke()("save_entry", { request });
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async createEntry(
-    path: string,
-    options?: CreateEntryOptions,
-  ): Promise<string> {
-    try {
-      const config = await this.getConfig();
-      const workspaceRoot = config?.default_workspace ?? "workspace";
-      const normalizedPath = normalizeEntryPathToWorkspaceRoot(
-        path,
-        workspaceRoot,
-      );
-
-      const newPath = await this.getInvoke()<string>("create_entry", {
-        path: normalizedPath,
-        title: options?.title,
-        partOf: options?.partOf,
-        template: options?.template,
-      });
-      
-      // Get frontmatter of new entry and emit event
-      const frontmatter = await this.getFrontmatter(newPath);
-      const parentPath = (frontmatter.part_of as string) ?? undefined;
-      this.eventEmitter.emit({
-        type: 'file:created',
-        path: newPath,
-        frontmatter,
-        parentPath,
-      });
-      
-      return newPath;
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async deleteEntry(path: string): Promise<void> {
-    // Get parent before deleting
-    let parentPath: string | undefined;
-    try {
-      const frontmatter = await this.getFrontmatter(path);
-      parentPath = (frontmatter.part_of as string) ?? undefined;
-    } catch {
-      // Entry might not exist, continue with delete
-    }
-    
-    try {
-      await this.getInvoke()("delete_entry", { path });
-      
-      this.eventEmitter.emit({
-        type: 'file:deleted',
-        path,
-        parentPath,
-      });
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async moveEntry(fromPath: string, toPath: string): Promise<string> {
-    // Get old parent before moving
-    let oldParent: string | undefined;
-    try {
-      const oldFrontmatter = await this.getFrontmatter(fromPath);
-      oldParent = (oldFrontmatter.part_of as string) ?? undefined;
-    } catch {
-      // Continue with move
-    }
-    
-    try {
-      const request = { from_path: fromPath, to_path: toPath };
-      const result = await this.getInvoke()<string>("move_entry", { request });
-      
-      // Get new parent after moving
-      let newParent: string | undefined;
-      try {
-        const newFrontmatter = await this.getFrontmatter(result);
-        newParent = (newFrontmatter.part_of as string) ?? undefined;
-      } catch {
-        // Continue without new parent info
-      }
-      
-      this.eventEmitter.emit({
-        type: 'file:moved',
-        path: result,
-        oldParent,
-        newParent,
-      });
-      
-      return result;
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async attachEntryToParent(
-    entryPath: string,
-    parentIndexPath: string,
-  ): Promise<string> {
-    const config = await this.getConfig();
-    const workspaceRoot = config?.default_workspace ?? "workspace";
-
-    const normalizedEntryPath = normalizeEntryPathToWorkspaceRoot(
-      entryPath,
-      workspaceRoot,
-    );
-    const normalizedParentIndexPath = normalizeEntryPathToWorkspaceRoot(
-      parentIndexPath,
-      workspaceRoot,
-    );
-    
-    // Get old parent before moving
-    let oldParent: string | undefined;
-    try {
-      const oldFrontmatter = await this.getFrontmatter(normalizedEntryPath);
-      oldParent = (oldFrontmatter.part_of as string) ?? undefined;
-    } catch {
-      // Continue with attach
-    }
-
-    try {
-      // Use snake_case keys to match Rust struct field names
-      const result = await this.getInvoke()<string>("attach_entry_to_parent", {
-        request: {
-          entry_path: normalizedEntryPath,
-          parent_index_path: normalizedParentIndexPath,
-        },
-      });
-      
-      // Emit file:moved event
-      this.eventEmitter.emit({
-        type: 'file:moved',
-        path: normalizedEntryPath,
-        oldParent,
-        newParent: normalizedParentIndexPath,
-      });
-      
-      return result;
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async convertToIndex(path: string): Promise<string> {
-    try {
-      return await this.getInvoke()("convert_to_index", { path });
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async convertToLeaf(path: string): Promise<string> {
-    try {
-      return await this.getInvoke()("convert_to_leaf", { path });
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async createChildEntry(parentPath: string): Promise<string> {
-    try {
-      return await this.getInvoke()("create_child_entry", { parentPath });
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  slugifyTitle(title: string): string {
-    // Simple fallback implementation for Tauri
-    const slug = title
-      .toLowerCase()
-      .replace(/[^a-z0-9]/g, "-")
-      .replace(/-+/g, "-")
-      .replace(/^-|-$/g, "");
-    return slug ? `${slug}.md` : "untitled.md";
-  }
-
-  async renameEntry(path: string, newFilename: string): Promise<string> {
-    try {
-      const newPath = await this.getInvoke()<string>("rename_entry", { path, newFilename });
-      
-      this.eventEmitter.emit({
-        type: 'file:renamed',
-        oldPath: path,
-        newPath,
-      });
-      
-      return newPath;
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async ensureDailyEntry(): Promise<string> {
-    try {
-      return await this.getInvoke()("ensure_daily_entry", {});
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  // --------------------------------------------------------------------------
-  // Export
-  // --------------------------------------------------------------------------
-
-  async getAvailableAudiences(rootPath: string): Promise<string[]> {
-    try {
-      return await this.getInvoke()("get_available_audiences", { rootPath });
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async planExport(
-    rootPath: string,
-    audience: string,
-  ): Promise<import("./interface").ExportPlan> {
-    try {
-      return await this.getInvoke()("plan_export", { rootPath, audience });
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async exportToMemory(
-    rootPath: string,
-    audience: string,
-  ): Promise<import("./interface").ExportedFile[]> {
-    try {
-      return await this.getInvoke()("export_to_memory", { rootPath, audience });
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async exportToHtml(
-    rootPath: string,
-    audience: string,
-  ): Promise<import("./interface").ExportedFile[]> {
-    try {
-      return await this.getInvoke()("export_to_html", { rootPath, audience });
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async exportBinaryAttachments(
-    rootPath: string,
-    audience: string,
-  ): Promise<import("./interface").BinaryExportFile[]> {
-    try {
-      return await this.getInvoke()("export_binary_attachments", {
-        rootPath,
-        audience,
-      });
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  // --------------------------------------------------------------------------
-  // Attachments
-  // --------------------------------------------------------------------------
-
-  async getAttachments(entryPath: string): Promise<string[]> {
-    try {
-      return await this.getInvoke()("get_attachments", { entryPath });
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async uploadAttachment(
-    entryPath: string,
-    filename: string,
-    dataBase64: string,
-  ): Promise<string> {
-    try {
-      return await this.getInvoke()("upload_attachment", {
-        entryPath,
-        filename,
-        dataBase64,
-      });
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async deleteAttachment(
-    entryPath: string,
-    attachmentPath: string,
-  ): Promise<void> {
-    try {
-      await this.getInvoke()("delete_attachment", {
-        entryPath,
-        attachmentPath,
-      });
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async getStorageUsage(): Promise<import("./interface").StorageInfo> {
-    try {
-      return await this.getInvoke()("get_storage_usage", {});
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async getAttachmentData(
-    entryPath: string,
-    attachmentPath: string,
-  ): Promise<Uint8Array> {
-    try {
-      const data: number[] = await this.getInvoke()("get_attachment_data", {
-        entryPath,
-        attachmentPath,
-      });
-      return new Uint8Array(data);
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  // --------------------------------------------------------------------------
-  // Frontmatter
-  // --------------------------------------------------------------------------
-
-  async getFrontmatter(path: string): Promise<Record<string, unknown>> {
-    try {
-      return await this.getInvoke()<Record<string, unknown>>(
-        "get_frontmatter",
-        { path },
-      );
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async setFrontmatterProperty(
-    path: string,
-    key: string,
-    value: unknown,
-  ): Promise<void> {
-    try {
-      await this.getInvoke()("set_frontmatter_property", { path, key, value });
-      // Note: We do NOT emit metadata:changed here to avoid infinite loops
-      // when sync operations update frontmatter. The CRDT already knows about
-      // these changes and will propagate them appropriately.
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async removeFrontmatterProperty(path: string, key: string): Promise<void> {
-    try {
-      await this.getInvoke()("remove_frontmatter_property", { path, key });
-      // Note: Same as above - no event emission to prevent loops
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  // --------------------------------------------------------------------------
-  // Search
-  // --------------------------------------------------------------------------
-
-  async searchWorkspace(
-    pattern: string,
-    options?: SearchOptions,
-  ): Promise<SearchResults> {
-    try {
-      return await this.getInvoke()<SearchResults>("search_workspace", {
-        pattern,
-        workspacePath: options?.workspacePath,
-        searchFrontmatter: options?.searchFrontmatter,
-        property: options?.property,
-        caseSensitive: options?.caseSensitive,
-      });
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  // --------------------------------------------------------------------------
-  // Templates
-  // --------------------------------------------------------------------------
-
-  async listTemplates(): Promise<TemplateInfo[]> {
-    try {
-      return await this.getInvoke()<TemplateInfo[]>("list_templates");
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async getTemplate(name: string): Promise<string> {
-    try {
-      return await this.getInvoke()<string>("get_template", { name });
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async saveTemplate(name: string, content: string): Promise<void> {
-    try {
-      await this.getInvoke()("save_template", { name, content });
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async deleteTemplate(name: string): Promise<void> {
-    try {
-      await this.getInvoke()("delete_template", { name });
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  // --------------------------------------------------------------------------
-  // Validation
-  // --------------------------------------------------------------------------
-
-  async validateWorkspace(workspacePath?: string): Promise<ValidationResult> {
-    try {
-      return await this.getInvoke()<ValidationResult>("validate_workspace", {
-        workspacePath,
-      });
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async validateFile(filePath: string): Promise<ValidationResult> {
-    try {
-      return await this.getInvoke()<ValidationResult>("validate_file", {
-        filePath,
-      });
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async fixBrokenPartOf(
-    filePath: string,
-  ): Promise<import("./interface").FixResult> {
-    try {
-      return await this.getInvoke()<import("./interface").FixResult>(
-        "fix_broken_part_of",
-        { filePath },
-      );
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async fixBrokenContentsRef(
-    indexPath: string,
-    target: string,
-  ): Promise<import("./interface").FixResult> {
-    try {
-      return await this.getInvoke()<import("./interface").FixResult>(
-        "fix_broken_contents_ref",
-        { indexPath, target },
-      );
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async fixBrokenAttachment(
-    filePath: string,
-    attachment: string,
-  ): Promise<import("./interface").FixResult> {
-    try {
-      return await this.getInvoke()<import("./interface").FixResult>(
-        "fix_broken_attachment",
-        { filePath, attachment },
-      );
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async fixNonPortablePath(
-    filePath: string,
-    property: string,
-    oldValue: string,
-    newValue: string,
-  ): Promise<import("./interface").FixResult> {
-    try {
-      return await this.getInvoke()<import("./interface").FixResult>(
-        "fix_non_portable_path",
-        { filePath, property, oldValue, newValue },
-      );
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async fixUnlistedFile(
-    indexPath: string,
-    filePath: string,
-  ): Promise<import("./interface").FixResult> {
-    try {
-      return await this.getInvoke()<import("./interface").FixResult>(
-        "fix_unlisted_file",
-        { indexPath, filePath },
-      );
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async fixOrphanBinaryFile(
-    indexPath: string,
-    filePath: string,
-  ): Promise<import("./interface").FixResult> {
-    try {
-      return await this.getInvoke()<import("./interface").FixResult>(
-        "fix_orphan_binary_file",
-        { indexPath, filePath },
-      );
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async fixMissingPartOf(
-    filePath: string,
-    indexPath: string,
-  ): Promise<import("./interface").FixResult> {
-    try {
-      return await this.getInvoke()<import("./interface").FixResult>(
-        "fix_missing_part_of",
-        { filePath, indexPath },
-      );
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  async fixAll(
-    validationResult: ValidationResult,
-  ): Promise<import("./interface").FixSummary> {
-    try {
-      return await this.getInvoke()<import("./interface").FixSummary>(
-        "fix_all_validation_issues",
-        { validationResult },
-      );
-    } catch (e) {
-      handleError(e);
-    }
-  }
-
-  // --------------------------------------------------------------------------
-  // Persistence
+  // Persistence (no-op for Tauri - changes are written directly to disk)
   // --------------------------------------------------------------------------
 
   async persist(): Promise<void> {
@@ -919,14 +268,14 @@ export class TauriBackend implements Backend {
   }
 
   // --------------------------------------------------------------------------
-  // Import
+  // Import (platform-specific - requires File API and chunked upload)
   // --------------------------------------------------------------------------
 
   async importFromZip(
     file: File,
     workspacePath?: string,
     onProgress?: (bytesUploaded: number, totalBytes: number) => void,
-  ): Promise<import("./interface").ImportResult> {
+  ): Promise<ImportResult> {
     const invoke = this.getInvoke();
     const totalBytes = file.size;
 

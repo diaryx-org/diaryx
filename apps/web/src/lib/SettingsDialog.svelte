@@ -10,6 +10,7 @@
 
   // Import modular settings components
   import DisplaySettings from "./settings/DisplaySettings.svelte";
+  import WorkspaceSettings from "./settings/WorkspaceSettings.svelte";
   import StorageSettings from "./settings/StorageSettings.svelte";
   import SyncSettings from "./settings/SyncSettings.svelte";
   import BackupSettings from "./settings/BackupSettings.svelte";
@@ -58,6 +59,9 @@
         bind:showUnlinkedFiles
         bind:showHiddenFiles
       />
+
+      <!-- Workspace Settings -->
+      <WorkspaceSettings />
 
       <!-- Storage Settings -->
       <StorageSettings />

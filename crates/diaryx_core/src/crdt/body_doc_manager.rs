@@ -1,0 +1,395 @@
+//! Manager for multiple per-file body documents.
+//!
+//! This module provides `BodyDocManager`, which coordinates multiple `BodyDoc`
+//! instances for a workspace. It handles loading, caching, and lifecycle
+//! management of document CRDTs.
+
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+
+use super::body_doc::BodyDoc;
+use super::storage::{CrdtStorage, StorageResult};
+use super::types::UpdateOrigin;
+
+/// Manager for multiple body document CRDTs.
+///
+/// The manager provides:
+/// - Lazy loading of documents on first access
+/// - Caching of loaded documents
+/// - Batch operations across documents
+/// - Coordination with workspace CRDT
+///
+/// # Example
+///
+/// ```ignore
+/// use diaryx_core::crdt::{BodyDocManager, MemoryStorage};
+/// use std::sync::Arc;
+///
+/// let storage = Arc::new(MemoryStorage::new());
+/// let manager = BodyDocManager::new(storage);
+///
+/// // Get or create a document
+/// let doc = manager.get_or_create("notes/hello.md");
+/// doc.set_body("# Hello World");
+///
+/// // Save all modified documents
+/// manager.save_all().unwrap();
+/// ```
+pub struct BodyDocManager {
+    storage: Arc<dyn CrdtStorage>,
+    docs: RwLock<HashMap<String, Arc<BodyDoc>>>,
+}
+
+impl BodyDocManager {
+    /// Create a new body document manager.
+    pub fn new(storage: Arc<dyn CrdtStorage>) -> Self {
+        Self {
+            storage,
+            docs: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Get a document by name, loading from storage if necessary.
+    ///
+    /// Returns None if the document doesn't exist in storage.
+    pub fn get(&self, doc_name: &str) -> Option<Arc<BodyDoc>> {
+        // Check cache first
+        {
+            let docs = self.docs.read().unwrap();
+            if let Some(doc) = docs.get(doc_name) {
+                return Some(Arc::clone(doc));
+            }
+        }
+
+        // Check if document exists in storage before loading
+        match self.storage.load_doc(doc_name) {
+            Ok(Some(_)) => {
+                // Document exists, load it
+                match BodyDoc::load(Arc::clone(&self.storage), doc_name.to_string()) {
+                    Ok(doc) => {
+                        let doc = Arc::new(doc);
+                        let mut docs = self.docs.write().unwrap();
+                        docs.insert(doc_name.to_string(), Arc::clone(&doc));
+                        Some(doc)
+                    }
+                    Err(_) => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Get a document by name, creating it if it doesn't exist.
+    pub fn get_or_create(&self, doc_name: &str) -> Arc<BodyDoc> {
+        // Check cache first
+        {
+            let docs = self.docs.read().unwrap();
+            if let Some(doc) = docs.get(doc_name) {
+                return Arc::clone(doc);
+            }
+        }
+
+        // Try to load, or create new
+        let doc = match BodyDoc::load(Arc::clone(&self.storage), doc_name.to_string()) {
+            Ok(doc) => Arc::new(doc),
+            Err(_) => Arc::new(BodyDoc::new(
+                Arc::clone(&self.storage),
+                doc_name.to_string(),
+            )),
+        };
+
+        let mut docs = self.docs.write().unwrap();
+        docs.insert(doc_name.to_string(), Arc::clone(&doc));
+        doc
+    }
+
+    /// Create a new document, replacing any existing one.
+    pub fn create(&self, doc_name: &str) -> Arc<BodyDoc> {
+        let doc = Arc::new(BodyDoc::new(
+            Arc::clone(&self.storage),
+            doc_name.to_string(),
+        ));
+
+        let mut docs = self.docs.write().unwrap();
+        docs.insert(doc_name.to_string(), Arc::clone(&doc));
+        doc
+    }
+
+    /// Check if a document is loaded in the cache.
+    pub fn is_loaded(&self, doc_name: &str) -> bool {
+        let docs = self.docs.read().unwrap();
+        docs.contains_key(doc_name)
+    }
+
+    /// Remove a document from the cache.
+    ///
+    /// This doesn't delete the document from storage, just unloads it from memory.
+    pub fn unload(&self, doc_name: &str) -> Option<Arc<BodyDoc>> {
+        let mut docs = self.docs.write().unwrap();
+        docs.remove(doc_name)
+    }
+
+    /// Get all loaded document names.
+    pub fn loaded_docs(&self) -> Vec<String> {
+        let docs = self.docs.read().unwrap();
+        docs.keys().cloned().collect()
+    }
+
+    /// Save all loaded documents to storage.
+    pub fn save_all(&self) -> StorageResult<()> {
+        let docs = self.docs.read().unwrap();
+        for doc in docs.values() {
+            doc.save()?;
+        }
+        Ok(())
+    }
+
+    /// Save a specific document to storage.
+    pub fn save(&self, doc_name: &str) -> StorageResult<bool> {
+        let docs = self.docs.read().unwrap();
+        if let Some(doc) = docs.get(doc_name) {
+            doc.save()?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Apply a remote update to a document.
+    ///
+    /// Creates the document if it doesn't exist.
+    pub fn apply_update(
+        &self,
+        doc_name: &str,
+        update: &[u8],
+        origin: UpdateOrigin,
+    ) -> StorageResult<Option<i64>> {
+        let doc = self.get_or_create(doc_name);
+        doc.apply_update(update, origin)
+    }
+
+    /// Get the sync state (state vector) for a document.
+    pub fn get_sync_state(&self, doc_name: &str) -> Option<Vec<u8>> {
+        self.get(doc_name).map(|doc| doc.encode_state_vector())
+    }
+
+    /// Get the full state as an update for a document.
+    pub fn get_full_state(&self, doc_name: &str) -> Option<Vec<u8>> {
+        self.get(doc_name).map(|doc| doc.encode_state_as_update())
+    }
+
+    /// Get the diff between a document's current state and a remote state vector.
+    pub fn get_diff(&self, doc_name: &str, remote_state_vector: &[u8]) -> StorageResult<Vec<u8>> {
+        let doc = self.get_or_create(doc_name);
+        doc.encode_diff(remote_state_vector)
+    }
+
+    /// Get the number of loaded documents.
+    pub fn loaded_count(&self) -> usize {
+        let docs = self.docs.read().unwrap();
+        docs.len()
+    }
+
+    /// Clear all documents from the cache.
+    pub fn clear(&self) {
+        let mut docs = self.docs.write().unwrap();
+        docs.clear();
+    }
+}
+
+impl std::fmt::Debug for BodyDocManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let docs = self.docs.read().unwrap();
+        f.debug_struct("BodyDocManager")
+            .field("loaded_docs", &docs.keys().collect::<Vec<_>>())
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crdt::MemoryStorage;
+
+    fn create_manager() -> BodyDocManager {
+        let storage = Arc::new(MemoryStorage::new());
+        BodyDocManager::new(storage)
+    }
+
+    #[test]
+    fn test_get_or_create_new_doc() {
+        let manager = create_manager();
+
+        let doc = manager.get_or_create("test.md");
+        assert_eq!(doc.doc_name(), "test.md");
+        assert_eq!(doc.get_body(), "");
+    }
+
+    #[test]
+    fn test_get_returns_cached_doc() {
+        let manager = create_manager();
+
+        let doc1 = manager.get_or_create("test.md");
+        doc1.set_body("Hello");
+
+        let doc2 = manager.get("test.md").unwrap();
+        assert_eq!(doc2.get_body(), "Hello");
+
+        // Should be the same Arc
+        assert!(Arc::ptr_eq(&doc1, &doc2));
+    }
+
+    #[test]
+    fn test_get_nonexistent_returns_none() {
+        let manager = create_manager();
+        assert!(manager.get("nonexistent.md").is_none());
+    }
+
+    #[test]
+    fn test_create_replaces_existing() {
+        let manager = create_manager();
+
+        let doc1 = manager.get_or_create("test.md");
+        doc1.set_body("Original");
+
+        let doc2 = manager.create("test.md");
+        assert_eq!(doc2.get_body(), "");
+        assert!(!Arc::ptr_eq(&doc1, &doc2));
+    }
+
+    #[test]
+    fn test_is_loaded() {
+        let manager = create_manager();
+
+        assert!(!manager.is_loaded("test.md"));
+        manager.get_or_create("test.md");
+        assert!(manager.is_loaded("test.md"));
+    }
+
+    #[test]
+    fn test_unload() {
+        let manager = create_manager();
+
+        manager.get_or_create("test.md");
+        assert!(manager.is_loaded("test.md"));
+
+        manager.unload("test.md");
+        assert!(!manager.is_loaded("test.md"));
+    }
+
+    #[test]
+    fn test_loaded_docs() {
+        let manager = create_manager();
+
+        manager.get_or_create("doc1.md");
+        manager.get_or_create("doc2.md");
+        manager.get_or_create("doc3.md");
+
+        let loaded = manager.loaded_docs();
+        assert_eq!(loaded.len(), 3);
+        assert!(loaded.contains(&"doc1.md".to_string()));
+        assert!(loaded.contains(&"doc2.md".to_string()));
+        assert!(loaded.contains(&"doc3.md".to_string()));
+    }
+
+    #[test]
+    fn test_save_and_reload() {
+        let storage: Arc<dyn CrdtStorage> = Arc::new(MemoryStorage::new());
+        let manager = BodyDocManager::new(Arc::clone(&storage));
+
+        // Create and populate a document
+        let doc = manager.get_or_create("test.md");
+        doc.set_body("Persistent content");
+        manager.save_all().unwrap();
+
+        // Clear cache and reload
+        manager.clear();
+        assert!(!manager.is_loaded("test.md"));
+
+        let reloaded = manager.get("test.md").unwrap();
+        assert_eq!(reloaded.get_body(), "Persistent content");
+    }
+
+    #[test]
+    fn test_apply_update_creates_doc() {
+        let storage: Arc<dyn CrdtStorage> = Arc::new(MemoryStorage::new());
+
+        // Create a source document with content
+        let source_doc = BodyDoc::new(Arc::clone(&storage), "source.md".to_string());
+        source_doc.set_body("Synced content");
+        let update = source_doc.encode_state_as_update();
+
+        // Apply to manager (creates new doc)
+        let manager = BodyDocManager::new(Arc::clone(&storage));
+        manager
+            .apply_update("target.md", &update, UpdateOrigin::Remote)
+            .unwrap();
+
+        let target = manager.get("target.md").unwrap();
+        assert_eq!(target.get_body(), "Synced content");
+    }
+
+    #[test]
+    fn test_loaded_count() {
+        let manager = create_manager();
+
+        assert_eq!(manager.loaded_count(), 0);
+
+        manager.get_or_create("doc1.md");
+        assert_eq!(manager.loaded_count(), 1);
+
+        manager.get_or_create("doc2.md");
+        assert_eq!(manager.loaded_count(), 2);
+
+        manager.unload("doc1.md");
+        assert_eq!(manager.loaded_count(), 1);
+    }
+
+    #[test]
+    fn test_clear() {
+        let manager = create_manager();
+
+        manager.get_or_create("doc1.md");
+        manager.get_or_create("doc2.md");
+        assert_eq!(manager.loaded_count(), 2);
+
+        manager.clear();
+        assert_eq!(manager.loaded_count(), 0);
+    }
+
+    #[test]
+    fn test_get_sync_state() {
+        let manager = create_manager();
+
+        // Non-existent doc returns None
+        assert!(manager.get_sync_state("nonexistent.md").is_none());
+
+        // Existing doc returns state vector
+        manager.get_or_create("test.md");
+        let state = manager.get_sync_state("test.md");
+        assert!(state.is_some());
+    }
+
+    #[test]
+    fn test_sync_between_managers() {
+        let storage1 = Arc::new(MemoryStorage::new());
+        let storage2 = Arc::new(MemoryStorage::new());
+
+        let manager1 = BodyDocManager::new(storage1);
+        let manager2 = BodyDocManager::new(storage2);
+
+        // Edit on manager1
+        let doc1 = manager1.get_or_create("shared.md");
+        doc1.set_body("Hello from manager1");
+
+        // Sync to manager2
+        let update = manager1.get_full_state("shared.md").unwrap();
+        manager2
+            .apply_update("shared.md", &update, UpdateOrigin::Remote)
+            .unwrap();
+
+        // Verify sync
+        let doc2 = manager2.get("shared.md").unwrap();
+        assert_eq!(doc2.get_body(), "Hello from manager1");
+    }
+}

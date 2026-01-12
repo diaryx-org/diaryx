@@ -1080,6 +1080,106 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 crdt.save()?;
                 Ok(Response::Ok)
             }
+
+            // ==================== Body Document Commands ====================
+            #[cfg(feature = "crdt")]
+            Command::GetBodyContent { doc_name } => {
+                let crdt = self.crdt().ok_or_else(|| {
+                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
+                })?;
+                match crdt.get_body_content(&doc_name) {
+                    Some(content) => Ok(Response::String(content)),
+                    None => Ok(Response::String(String::new())),
+                }
+            }
+
+            #[cfg(feature = "crdt")]
+            Command::SetBodyContent { doc_name, content } => {
+                let crdt = self.crdt().ok_or_else(|| {
+                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
+                })?;
+                crdt.set_body_content(&doc_name, &content);
+                Ok(Response::Ok)
+            }
+
+            #[cfg(feature = "crdt")]
+            Command::GetBodySyncState { doc_name } => {
+                let crdt = self.crdt().ok_or_else(|| {
+                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
+                })?;
+                match crdt.get_body_sync_state(&doc_name) {
+                    Some(state) => Ok(Response::Binary(state)),
+                    None => Ok(Response::Binary(Vec::new())),
+                }
+            }
+
+            #[cfg(feature = "crdt")]
+            Command::GetBodyFullState { doc_name } => {
+                let crdt = self.crdt().ok_or_else(|| {
+                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
+                })?;
+                match crdt.get_body_full_state(&doc_name) {
+                    Some(state) => Ok(Response::Binary(state)),
+                    None => Ok(Response::Binary(Vec::new())),
+                }
+            }
+
+            #[cfg(feature = "crdt")]
+            Command::ApplyBodyUpdate { doc_name, update } => {
+                let crdt = self.crdt().ok_or_else(|| {
+                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
+                })?;
+                let update_id =
+                    crdt.apply_body_update(&doc_name, &update, crate::crdt::UpdateOrigin::Remote)?;
+                Ok(Response::UpdateId(update_id))
+            }
+
+            #[cfg(feature = "crdt")]
+            Command::GetBodyMissingUpdates {
+                doc_name,
+                remote_state_vector,
+            } => {
+                let crdt = self.crdt().ok_or_else(|| {
+                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
+                })?;
+                let diff = crdt.get_body_missing_updates(&doc_name, &remote_state_vector)?;
+                Ok(Response::Binary(diff))
+            }
+
+            #[cfg(feature = "crdt")]
+            Command::SaveBodyDoc { doc_name } => {
+                let crdt = self.crdt().ok_or_else(|| {
+                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
+                })?;
+                crdt.save_body_doc(&doc_name)?;
+                Ok(Response::Ok)
+            }
+
+            #[cfg(feature = "crdt")]
+            Command::SaveAllBodyDocs => {
+                let crdt = self.crdt().ok_or_else(|| {
+                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
+                })?;
+                crdt.save_all_body_docs()?;
+                Ok(Response::Ok)
+            }
+
+            #[cfg(feature = "crdt")]
+            Command::ListLoadedBodyDocs => {
+                let crdt = self.crdt().ok_or_else(|| {
+                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
+                })?;
+                Ok(Response::Strings(crdt.loaded_body_docs()))
+            }
+
+            #[cfg(feature = "crdt")]
+            Command::UnloadBodyDoc { doc_name } => {
+                let crdt = self.crdt().ok_or_else(|| {
+                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
+                })?;
+                crdt.unload_body_doc(&doc_name);
+                Ok(Response::Ok)
+            }
         }
     }
 }

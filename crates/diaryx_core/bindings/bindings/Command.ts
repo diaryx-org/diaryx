@@ -417,4 +417,48 @@ include_deleted: boolean, } } | { "type": "SaveCrdtState", "params": {
 /**
  * Document name.
  */
+doc_name: string, } } | { "type": "GetBodyContent", "params": { 
+/**
+ * Document name (file path).
+ */
+doc_name: string, } } | { "type": "SetBodyContent", "params": { 
+/**
+ * Document name (file path).
+ */
+doc_name: string, 
+/**
+ * New content.
+ */
+content: string, } } | { "type": "GetBodySyncState", "params": { 
+/**
+ * Document name (file path).
+ */
+doc_name: string, } } | { "type": "GetBodyFullState", "params": { 
+/**
+ * Document name (file path).
+ */
+doc_name: string, } } | { "type": "ApplyBodyUpdate", "params": { 
+/**
+ * Document name (file path).
+ */
+doc_name: string, 
+/**
+ * Binary update data.
+ */
+update: Array<number>, } } | { "type": "GetBodyMissingUpdates", "params": { 
+/**
+ * Document name (file path).
+ */
+doc_name: string, 
+/**
+ * Remote state vector.
+ */
+remote_state_vector: Array<number>, } } | { "type": "SaveBodyDoc", "params": { 
+/**
+ * Document name (file path).
+ */
+doc_name: string, } } | { "type": "SaveAllBodyDocs" } | { "type": "ListLoadedBodyDocs" } | { "type": "UnloadBodyDoc", "params": { 
+/**
+ * Document name (file path).
+ */
 doc_name: string, } };

@@ -508,6 +508,77 @@ pub enum Command {
         /// Document name.
         doc_name: String,
     },
+
+    // ==================== Body Document Commands ====================
+    /// Get body content from a document CRDT.
+    #[cfg(feature = "crdt")]
+    GetBodyContent {
+        /// Document name (file path).
+        doc_name: String,
+    },
+
+    /// Set body content in a document CRDT.
+    #[cfg(feature = "crdt")]
+    SetBodyContent {
+        /// Document name (file path).
+        doc_name: String,
+        /// New content.
+        content: String,
+    },
+
+    /// Get sync state (state vector) for a body document.
+    #[cfg(feature = "crdt")]
+    GetBodySyncState {
+        /// Document name (file path).
+        doc_name: String,
+    },
+
+    /// Get full state of a body document as an update.
+    #[cfg(feature = "crdt")]
+    GetBodyFullState {
+        /// Document name (file path).
+        doc_name: String,
+    },
+
+    /// Apply an update to a body document.
+    #[cfg(feature = "crdt")]
+    ApplyBodyUpdate {
+        /// Document name (file path).
+        doc_name: String,
+        /// Binary update data.
+        update: Vec<u8>,
+    },
+
+    /// Get updates needed by a remote peer for a body document.
+    #[cfg(feature = "crdt")]
+    GetBodyMissingUpdates {
+        /// Document name (file path).
+        doc_name: String,
+        /// Remote state vector.
+        remote_state_vector: Vec<u8>,
+    },
+
+    /// Save a body document to storage.
+    #[cfg(feature = "crdt")]
+    SaveBodyDoc {
+        /// Document name (file path).
+        doc_name: String,
+    },
+
+    /// Save all body documents to storage.
+    #[cfg(feature = "crdt")]
+    SaveAllBodyDocs,
+
+    /// Get list of loaded body documents.
+    #[cfg(feature = "crdt")]
+    ListLoadedBodyDocs,
+
+    /// Unload a body document from memory.
+    #[cfg(feature = "crdt")]
+    UnloadBodyDoc {
+        /// Document name (file path).
+        doc_name: String,
+    },
 }
 
 // ============================================================================

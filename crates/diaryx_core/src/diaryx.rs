@@ -33,7 +33,7 @@ use crate::frontmatter;
 use crate::fs::AsyncFileSystem;
 
 #[cfg(feature = "crdt")]
-use crate::crdt::{CrdtStorage, WorkspaceCrdt};
+use crate::crdt::{BodyDocManager, CrdtStorage, WorkspaceCrdt};
 
 // ============================================================================
 // Value Conversion Helpers
@@ -112,6 +112,9 @@ pub struct Diaryx<FS: AsyncFileSystem> {
     /// CRDT workspace document (optional, requires `crdt` feature).
     #[cfg(feature = "crdt")]
     workspace_crdt: Option<WorkspaceCrdt>,
+    /// CRDT body document manager (optional, requires `crdt` feature).
+    #[cfg(feature = "crdt")]
+    body_doc_manager: Option<BodyDocManager>,
 }
 
 impl<FS: AsyncFileSystem> Diaryx<FS> {
@@ -121,6 +124,8 @@ impl<FS: AsyncFileSystem> Diaryx<FS> {
             fs,
             #[cfg(feature = "crdt")]
             workspace_crdt: None,
+            #[cfg(feature = "crdt")]
+            body_doc_manager: None,
         }
     }
 
@@ -131,7 +136,8 @@ impl<FS: AsyncFileSystem> Diaryx<FS> {
     pub fn with_crdt(fs: FS, storage: Arc<dyn CrdtStorage>) -> Self {
         Self {
             fs,
-            workspace_crdt: Some(WorkspaceCrdt::new(storage)),
+            workspace_crdt: Some(WorkspaceCrdt::new(Arc::clone(&storage))),
+            body_doc_manager: Some(BodyDocManager::new(storage)),
         }
     }
 
@@ -141,10 +147,11 @@ impl<FS: AsyncFileSystem> Diaryx<FS> {
     /// If no existing state is found, creates a new empty workspace CRDT.
     #[cfg(feature = "crdt")]
     pub fn with_crdt_load(fs: FS, storage: Arc<dyn CrdtStorage>) -> Result<Self> {
-        let workspace_crdt = WorkspaceCrdt::load(storage)?;
+        let workspace_crdt = WorkspaceCrdt::load(Arc::clone(&storage))?;
         Ok(Self {
             fs,
             workspace_crdt: Some(workspace_crdt),
+            body_doc_manager: Some(BodyDocManager::new(storage)),
         })
     }
 
@@ -174,16 +181,20 @@ impl<FS: AsyncFileSystem> Diaryx<FS> {
     /// Returns `None` if CRDT support is not enabled.
     #[cfg(feature = "crdt")]
     pub fn crdt(&self) -> Option<CrdtOps<'_, FS>> {
-        self.workspace_crdt.as_ref().map(|crdt| CrdtOps {
-            _diaryx: self,
-            crdt,
-        })
+        match (&self.workspace_crdt, &self.body_doc_manager) {
+            (Some(crdt), Some(body_docs)) => Some(CrdtOps {
+                _diaryx: self,
+                crdt,
+                body_docs,
+            }),
+            _ => None,
+        }
     }
 
     /// Check if CRDT support is enabled for this instance.
     #[cfg(feature = "crdt")]
     pub fn has_crdt(&self) -> bool {
-        self.workspace_crdt.is_some()
+        self.workspace_crdt.is_some() && self.body_doc_manager.is_some()
     }
 }
 
@@ -603,6 +614,7 @@ impl<'a, FS: AsyncFileSystem + Clone> ValidateOps<'a, FS> {
 pub struct CrdtOps<'a, FS: AsyncFileSystem> {
     _diaryx: &'a Diaryx<FS>,
     crdt: &'a WorkspaceCrdt,
+    body_docs: &'a BodyDocManager,
 }
 
 #[cfg(feature = "crdt")]
@@ -674,6 +686,82 @@ impl<'a, FS: AsyncFileSystem> CrdtOps<'a, FS> {
     /// Get the number of files in the CRDT.
     pub fn file_count(&self) -> usize {
         self.crdt.file_count()
+    }
+
+    // ==================== Body Document Operations ====================
+
+    /// Get or create a body document for a file.
+    ///
+    /// Returns an Arc to the BodyDoc for the specified file path.
+    pub fn get_or_create_body_doc(&self, doc_name: &str) -> std::sync::Arc<crate::crdt::BodyDoc> {
+        self.body_docs.get_or_create(doc_name)
+    }
+
+    /// Get a body document if it exists.
+    ///
+    /// Returns None if the document doesn't exist in storage.
+    pub fn get_body_doc(&self, doc_name: &str) -> Option<std::sync::Arc<crate::crdt::BodyDoc>> {
+        self.body_docs.get(doc_name)
+    }
+
+    /// Get the body content of a file from CRDT.
+    pub fn get_body_content(&self, doc_name: &str) -> Option<String> {
+        self.body_docs.get(doc_name).map(|doc| doc.get_body())
+    }
+
+    /// Set the body content of a file in CRDT.
+    pub fn set_body_content(&self, doc_name: &str, content: &str) {
+        let doc = self.body_docs.get_or_create(doc_name);
+        doc.set_body(content);
+    }
+
+    /// Get body document state vector for sync.
+    pub fn get_body_sync_state(&self, doc_name: &str) -> Option<Vec<u8>> {
+        self.body_docs.get_sync_state(doc_name)
+    }
+
+    /// Get body document full state as update.
+    pub fn get_body_full_state(&self, doc_name: &str) -> Option<Vec<u8>> {
+        self.body_docs.get_full_state(doc_name)
+    }
+
+    /// Apply an update to a body document.
+    pub fn apply_body_update(
+        &self,
+        doc_name: &str,
+        update: &[u8],
+        origin: crate::crdt::UpdateOrigin,
+    ) -> Result<Option<i64>> {
+        self.body_docs.apply_update(doc_name, update, origin)
+    }
+
+    /// Get missing updates for a body document (diff from remote state vector).
+    pub fn get_body_missing_updates(
+        &self,
+        doc_name: &str,
+        remote_state_vector: &[u8],
+    ) -> Result<Vec<u8>> {
+        self.body_docs.get_diff(doc_name, remote_state_vector)
+    }
+
+    /// Save a specific body document to storage.
+    pub fn save_body_doc(&self, doc_name: &str) -> Result<bool> {
+        self.body_docs.save(doc_name)
+    }
+
+    /// Save all body documents to storage.
+    pub fn save_all_body_docs(&self) -> Result<()> {
+        self.body_docs.save_all()
+    }
+
+    /// Get all loaded body document names.
+    pub fn loaded_body_docs(&self) -> Vec<String> {
+        self.body_docs.loaded_docs()
+    }
+
+    /// Unload a body document from memory.
+    pub fn unload_body_doc(&self, doc_name: &str) {
+        self.body_docs.unload(doc_name);
     }
 }
 

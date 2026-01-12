@@ -42,6 +42,8 @@
 //! )?;
 //! ```
 
+mod body_doc;
+mod body_doc_manager;
 mod memory_storage;
 #[cfg(not(target_arch = "wasm32"))]
 mod sqlite_storage;
@@ -49,6 +51,8 @@ mod storage;
 mod types;
 mod workspace_doc;
 
+pub use body_doc::BodyDoc;
+pub use body_doc_manager::BodyDocManager;
 pub use memory_storage::MemoryStorage;
 #[cfg(not(target_arch = "wasm32"))]
 pub use sqlite_storage::SqliteStorage;

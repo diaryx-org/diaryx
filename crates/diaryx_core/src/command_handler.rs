@@ -480,17 +480,16 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                                 && !ws.fs_ref().is_dir(&file_path).await
                             {
                                 // Try to parse and check if it has contents (is an index)
-                                if let Ok(index) = ws.parse_index(&file_path).await {
-                                    if index.frontmatter.is_index() {
+                                if let Ok(index) = ws.parse_index(&file_path).await
+                                    && index.frontmatter.is_index() {
                                         parents.push(file_path.to_string_lossy().to_string());
                                     }
-                                }
                             }
                         }
                     }
 
                     // Stop if we've reached or passed the workspace root
-                    if current == root_dir || current.starts_with(root_dir) == false {
+                    if current == root_dir || !current.starts_with(root_dir) {
                         break;
                     }
 
@@ -642,12 +641,12 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         // Check for _attachments folder
                         if let Some(entry_dir) = path.parent() {
                             let attachments_dir = entry_dir.join("_attachments");
-                            if ws.fs_ref().is_dir(&attachments_dir).await {
-                                if let Ok(entries) = ws.fs_ref().list_files(&attachments_dir).await
+                            if ws.fs_ref().is_dir(&attachments_dir).await
+                                && let Ok(entries) = ws.fs_ref().list_files(&attachments_dir).await
                                 {
                                     for entry_path in entries {
-                                        if !ws.fs_ref().is_dir(&entry_path).await {
-                                            if let Ok(data) =
+                                        if !ws.fs_ref().is_dir(&entry_path).await
+                                            && let Ok(data) =
                                                 ws.fs_ref().read_binary(&entry_path).await
                                             {
                                                 let relative_path =
@@ -662,10 +661,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                                                     },
                                                 );
                                             }
-                                        }
                                     }
                                 }
-                            }
                         }
 
                         // Recurse into children
@@ -712,21 +709,19 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 });
 
                 // Add workspace templates
-                if self.fs().is_dir(&templates_dir).await {
-                    if let Ok(files) = self.fs().list_files(&templates_dir).await {
+                if self.fs().is_dir(&templates_dir).await
+                    && let Ok(files) = self.fs().list_files(&templates_dir).await {
                         for file_path in files {
-                            if file_path.extension().is_some_and(|ext| ext == "md") {
-                                if let Some(name) = file_path.file_stem().and_then(|s| s.to_str()) {
+                            if file_path.extension().is_some_and(|ext| ext == "md")
+                                && let Some(name) = file_path.file_stem().and_then(|s| s.to_str()) {
                                     templates.push(crate::command::TemplateInfo {
                                         name: name.to_string(),
                                         path: Some(file_path),
                                         source: "workspace".to_string(),
                                     });
                                 }
-                            }
                         }
                     }
-                }
 
                 Ok(Response::Templates(templates))
             }

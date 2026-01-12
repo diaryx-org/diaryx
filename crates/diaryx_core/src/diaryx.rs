@@ -59,9 +59,7 @@ pub(crate) fn yaml_to_json(yaml: Value) -> serde_json::Value {
         Value::Mapping(map) => {
             let obj: serde_json::Map<String, serde_json::Value> = map
                 .into_iter()
-                .filter_map(|(k, v)| {
-                    k.as_str().map(|s| (s.to_string(), yaml_to_json(v)))
-                })
+                .filter_map(|(k, v)| k.as_str().map(|s| (s.to_string(), yaml_to_json(v))))
                 .collect();
             serde_json::Value::Object(obj)
         }
@@ -159,7 +157,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
     // execute() is implemented in command_handler.rs
 }
-
 
 // ============================================================================
 // Entry Operations

@@ -49,7 +49,6 @@ pub fn run() {
             // UNIFIED COMMAND API - All operations go through execute()
             // ============================================================
             commands::execute,
-
             // ============================================================
             // PLATFORM-SPECIFIC COMMANDS
             // These cannot be moved to execute() as they require platform
@@ -60,26 +59,21 @@ pub fn run() {
             commands::initialize_app,
             commands::get_app_paths,
             commands::pick_workspace_folder,
-
             // Backup (local filesystem)
             commands::backup_workspace,
             commands::restore_workspace,
             commands::list_backup_targets,
-
             // Cloud Backup (S3)
             commands::test_s3_connection,
             commands::backup_to_s3,
             commands::restore_from_s3,
-
             // Cloud Backup (Google Drive)
             commands::get_google_auth_config,
             commands::backup_to_google_drive,
-
             // Import (file picker dialogs)
             commands::import_from_zip,
             commands::pick_and_import_zip,
             commands::import_from_zip_data,
-
             // Chunked Import (for large files)
             commands::start_import_upload,
             commands::append_import_chunk,

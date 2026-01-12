@@ -14,12 +14,12 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use diaryx_core::{
+    Command,
     config::Config,
     diaryx::Diaryx,
     error::SerializableError,
     fs::{FileSystem, RealFileSystem, SyncToAsyncFs},
     workspace::Workspace,
-    Command,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -393,10 +393,7 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
     let ws = Workspace::new(SyncToAsyncFs::new(RealFileSystem));
     let workspace_has_root = match ws.find_root_index_in_dir(&actual_workspace).await {
         Ok(Some(path)) => {
-            log::info!(
-                "[initialize_app] Found root index at: {:?}",
-                path
-            );
+            log::info!("[initialize_app] Found root index at: {:?}", path);
             true
         }
         Ok(None) => {
@@ -638,63 +635,63 @@ pub async fn backup_to_s3<R: Runtime>(
     });
 
     // Run backup in a blocking thread to not freeze the UI
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let fs = RealFileSystem;
+    let result =
+        tauri::async_runtime::spawn_blocking(move || {
+            let fs = RealFileSystem;
 
-        // Emit preparing stage
-        let _ = progress_tx.send(BackupProgressEvent {
-            stage: "preparing".to_string(),
-            percent: 5,
-            message: Some("Preparing backup...".to_string()),
-        });
-
-        let cloud_config = CloudBackupConfig {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: config.name.clone(),
-            provider: CloudProvider::S3 {
-                bucket: config.bucket,
-                region: config.region,
-                prefix: config.prefix,
-                endpoint: config.endpoint,
-            },
-            enabled: true,
-        };
-
-        let target = S3Target::new(cloud_config, config.access_key, config.secret_key).map_err(
-            |e| SerializableError {
-                kind: "S3ConfigError".to_string(),
-                message: e,
-                path: None,
-            },
-        )?;
-
-        // Use backup_with_progress to get per-file progress callbacks
-        let result =
-            target.backup_with_progress(&fs, &workspace, |stage, current, total, percent| {
-                let message = match stage {
-                    "preparing" => Some("Preparing backup...".to_string()),
-                    "zipping" => Some(format!("Zipping files: {}/{}", current, total)),
-                    "uploading" => Some("Uploading to S3...".to_string()),
-                    "complete" => Some("Backup complete!".to_string()),
-                    "error" => Some("Backup failed".to_string()),
-                    _ => None,
-                };
-
-                let _ = progress_tx.send(BackupProgressEvent {
-                    stage: stage.to_string(),
-                    percent,
-                    message,
-                });
+            // Emit preparing stage
+            let _ = progress_tx.send(BackupProgressEvent {
+                stage: "preparing".to_string(),
+                percent: 5,
+                message: Some("Preparing backup...".to_string()),
             });
 
-        Ok::<_, SerializableError>(result)
-    })
-    .await
-    .map_err(|e| SerializableError {
-        kind: "SpawnError".to_string(),
-        message: e.to_string(),
-        path: None,
-    })??;
+            let cloud_config = CloudBackupConfig {
+                id: uuid::Uuid::new_v4().to_string(),
+                name: config.name.clone(),
+                provider: CloudProvider::S3 {
+                    bucket: config.bucket,
+                    region: config.region,
+                    prefix: config.prefix,
+                    endpoint: config.endpoint,
+                },
+                enabled: true,
+            };
+
+            let target = S3Target::new(cloud_config, config.access_key, config.secret_key)
+                .map_err(|e| SerializableError {
+                    kind: "S3ConfigError".to_string(),
+                    message: e,
+                    path: None,
+                })?;
+
+            // Use backup_with_progress to get per-file progress callbacks
+            let result =
+                target.backup_with_progress(&fs, &workspace, |stage, current, total, percent| {
+                    let message = match stage {
+                        "preparing" => Some("Preparing backup...".to_string()),
+                        "zipping" => Some(format!("Zipping files: {}/{}", current, total)),
+                        "uploading" => Some("Uploading to S3...".to_string()),
+                        "complete" => Some("Backup complete!".to_string()),
+                        "error" => Some("Backup failed".to_string()),
+                        _ => None,
+                    };
+
+                    let _ = progress_tx.send(BackupProgressEvent {
+                        stage: stage.to_string(),
+                        percent,
+                        message,
+                    });
+                });
+
+            Ok::<_, SerializableError>(result)
+        })
+        .await
+        .map_err(|e| SerializableError {
+            kind: "SpawnError".to_string(),
+            message: e.to_string(),
+            path: None,
+        })??;
 
     // Wait for event task to finish
     let _ = event_task.await;

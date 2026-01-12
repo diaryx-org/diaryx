@@ -464,9 +464,11 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
 
                     if self.fs.is_dir(&entry).await {
                         // Recurse into subdirectory with decremented depth
-                        if let Ok(child_tree) = Box::pin(
-                            self.build_filesystem_tree_recursive(&entry, show_hidden, next_depth),
-                        )
+                        if let Ok(child_tree) = Box::pin(self.build_filesystem_tree_recursive(
+                            &entry,
+                            show_hidden,
+                            next_depth,
+                        ))
                         .await
                         {
                             children.push(child_tree);

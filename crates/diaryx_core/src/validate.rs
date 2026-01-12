@@ -178,7 +178,12 @@ impl<FS: AsyncFileSystem> Validator<FS> {
         // Find unlinked entries: files/dirs in workspace not visited during traversal
         // Scan recursively to find orphans in subdirectories
         let workspace_root = root_path.parent().unwrap_or(Path::new("."));
-        if let Ok(all_entries) = self.ws.fs_ref().list_all_files_recursive(workspace_root).await {
+        if let Ok(all_entries) = self
+            .ws
+            .fs_ref()
+            .list_all_files_recursive(workspace_root)
+            .await
+        {
             // Normalize visited paths for comparison
             let visited_normalized: HashSet<PathBuf> = visited
                 .iter()
@@ -1216,10 +1221,7 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
                     )),
                 }
             }
-            _ => FixResult::failure(format!(
-                "Could not read contents from {}",
-                file.display()
-            )),
+            _ => FixResult::failure(format!("Could not read contents from {}", file.display())),
         }
     }
 
@@ -1315,8 +1317,7 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
                 ..
             } => {
                 // Can auto-fix if we have a suggestion
-                if let (Some(file), Some(contents_ref)) =
-                    (suggested_file, suggested_remove_part_of)
+                if let (Some(file), Some(contents_ref)) = (suggested_file, suggested_remove_part_of)
                 {
                     Some(self.fix_circular_reference(file, contents_ref).await)
                 } else {

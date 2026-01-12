@@ -10,7 +10,7 @@ use std::collections::HashMap;
 ///
 /// This represents the synchronized state of a file's frontmatter properties,
 /// stored in a Y.Map within the workspace document.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct FileMetadata {
     /// Display title from frontmatter
     pub title: Option<String>,
@@ -40,22 +40,6 @@ pub struct FileMetadata {
     pub modified_at: i64,
 }
 
-impl Default for FileMetadata {
-    fn default() -> Self {
-        Self {
-            title: None,
-            part_of: None,
-            contents: None,
-            attachments: Vec::new(),
-            deleted: false,
-            audience: None,
-            description: None,
-            extra: HashMap::new(),
-            modified_at: 0,
-        }
-    }
-}
-
 impl FileMetadata {
     /// Create new FileMetadata with the given title
     pub fn new(title: Option<String>) -> Self {
@@ -74,7 +58,7 @@ impl FileMetadata {
 
     /// Check if this file is an index (has contents)
     pub fn is_index(&self) -> bool {
-        self.contents.as_ref().map_or(false, |c| !c.is_empty())
+        self.contents.as_ref().is_some_and(|c| !c.is_empty())
     }
 }
 
@@ -239,8 +223,14 @@ mod tests {
 
     #[test]
     fn test_update_origin_from_str() {
-        assert_eq!("local".parse::<UpdateOrigin>().unwrap(), UpdateOrigin::Local);
-        assert_eq!("remote".parse::<UpdateOrigin>().unwrap(), UpdateOrigin::Remote);
+        assert_eq!(
+            "local".parse::<UpdateOrigin>().unwrap(),
+            UpdateOrigin::Local
+        );
+        assert_eq!(
+            "remote".parse::<UpdateOrigin>().unwrap(),
+            UpdateOrigin::Remote
+        );
         assert!("invalid".parse::<UpdateOrigin>().is_err());
     }
 }

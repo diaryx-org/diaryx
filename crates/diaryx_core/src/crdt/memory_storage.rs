@@ -71,12 +71,7 @@ impl CrdtStorage for MemoryStorage {
         Ok(docs.keys().cloned().collect())
     }
 
-    fn append_update(
-        &self,
-        name: &str,
-        update: &[u8],
-        origin: UpdateOrigin,
-    ) -> StorageResult<i64> {
+    fn append_update(&self, name: &str, update: &[u8], origin: UpdateOrigin) -> StorageResult<i64> {
         let id = self.next_update_id();
         let stored = StoredUpdate {
             id,
@@ -86,10 +81,7 @@ impl CrdtStorage for MemoryStorage {
         };
 
         let mut updates = self.updates.write().unwrap();
-        updates
-            .entry(name.to_string())
-            .or_default()
-            .push(stored);
+        updates.entry(name.to_string()).or_default().push(stored);
 
         Ok(id)
     }
@@ -122,12 +114,11 @@ impl CrdtStorage for MemoryStorage {
         let updates = self.updates.read().unwrap();
         let doc_updates = updates.get(name);
 
-        if let Some(updates) = doc_updates {
-            if let Some(last) = updates.last() {
-                if update_id >= last.id {
-                    return self.load_doc(name);
-                }
-            }
+        if let Some(updates) = doc_updates
+            && let Some(last) = updates.last()
+            && update_id >= last.id
+        {
+            return self.load_doc(name);
         }
 
         // TODO: Implement proper state reconstruction by replaying updates
@@ -138,12 +129,12 @@ impl CrdtStorage for MemoryStorage {
     fn compact(&self, name: &str, keep_updates: usize) -> StorageResult<()> {
         let mut updates = self.updates.write().unwrap();
 
-        if let Some(doc_updates) = updates.get_mut(name) {
-            if doc_updates.len() > keep_updates {
-                // Keep only the last `keep_updates` entries
-                let drain_count = doc_updates.len() - keep_updates;
-                doc_updates.drain(0..drain_count);
-            }
+        if let Some(doc_updates) = updates.get_mut(name)
+            && doc_updates.len() > keep_updates
+        {
+            // Keep only the last `keep_updates` entries
+            let drain_count = doc_updates.len() - keep_updates;
+            doc_updates.drain(0..drain_count);
         }
 
         Ok(())
@@ -185,7 +176,9 @@ mod tests {
     fn test_delete_doc() {
         let storage = MemoryStorage::new();
         storage.save_doc("test", b"data").unwrap();
-        storage.append_update("test", b"update", UpdateOrigin::Local).unwrap();
+        storage
+            .append_update("test", b"update", UpdateOrigin::Local)
+            .unwrap();
 
         storage.delete_doc("test").unwrap();
 
@@ -209,9 +202,15 @@ mod tests {
     fn test_append_and_get_updates() {
         let storage = MemoryStorage::new();
 
-        let id1 = storage.append_update("test", b"update1", UpdateOrigin::Local).unwrap();
-        let id2 = storage.append_update("test", b"update2", UpdateOrigin::Remote).unwrap();
-        let id3 = storage.append_update("test", b"update3", UpdateOrigin::Sync).unwrap();
+        let id1 = storage
+            .append_update("test", b"update1", UpdateOrigin::Local)
+            .unwrap();
+        let id2 = storage
+            .append_update("test", b"update2", UpdateOrigin::Remote)
+            .unwrap();
+        let id3 = storage
+            .append_update("test", b"update3", UpdateOrigin::Sync)
+            .unwrap();
 
         assert!(id1 < id2);
         assert!(id2 < id3);
@@ -232,7 +231,11 @@ mod tests {
 
         for i in 0..10 {
             storage
-                .append_update("test", format!("update{}", i).as_bytes(), UpdateOrigin::Local)
+                .append_update(
+                    "test",
+                    format!("update{}", i).as_bytes(),
+                    UpdateOrigin::Local,
+                )
                 .unwrap();
         }
 
@@ -250,10 +253,14 @@ mod tests {
 
         assert_eq!(storage.get_latest_update_id("test").unwrap(), 0);
 
-        let id1 = storage.append_update("test", b"update1", UpdateOrigin::Local).unwrap();
+        let id1 = storage
+            .append_update("test", b"update1", UpdateOrigin::Local)
+            .unwrap();
         assert_eq!(storage.get_latest_update_id("test").unwrap(), id1);
 
-        let id2 = storage.append_update("test", b"update2", UpdateOrigin::Local).unwrap();
+        let id2 = storage
+            .append_update("test", b"update2", UpdateOrigin::Local)
+            .unwrap();
         assert_eq!(storage.get_latest_update_id("test").unwrap(), id2);
     }
 }

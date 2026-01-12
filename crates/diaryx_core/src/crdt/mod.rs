@@ -43,11 +43,15 @@
 //! ```
 
 mod memory_storage;
+#[cfg(not(target_arch = "wasm32"))]
+mod sqlite_storage;
 mod storage;
 mod types;
 mod workspace_doc;
 
 pub use memory_storage::MemoryStorage;
+#[cfg(not(target_arch = "wasm32"))]
+pub use sqlite_storage::SqliteStorage;
 pub use storage::{CrdtStorage, StorageResult};
 pub use types::{BinaryRef, CrdtUpdate, FileMetadata, UpdateOrigin};
 pub use workspace_doc::WorkspaceCrdt;

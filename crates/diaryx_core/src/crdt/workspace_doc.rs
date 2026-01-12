@@ -228,9 +228,8 @@ impl WorkspaceCrdt {
     ///
     /// Returns the update ID if the update was persisted to storage.
     pub fn apply_update(&self, update: &[u8], origin: UpdateOrigin) -> StorageResult<Option<i64>> {
-        let decoded = Update::decode_v1(update).map_err(|e| {
-            DiaryxError::Unsupported(format!("Failed to decode update: {}", e))
-        })?;
+        let decoded = Update::decode_v1(update)
+            .map_err(|e| DiaryxError::Unsupported(format!("Failed to decode update: {}", e)))?;
 
         {
             let mut txn = self.doc.transact_mut();
@@ -318,16 +317,16 @@ impl WorkspaceCrdt {
             let changes: Vec<(String, Option<FileMetadata>)> = event
                 .keys(txn)
                 .iter()
-                .filter_map(|(key, change)| {
+                .map(|(key, change)| {
                     let path = key.to_string();
                     match change {
                         yrs::types::EntryChange::Inserted(value)
                         | yrs::types::EntryChange::Updated(_, value) => {
                             let json = value.clone().cast::<String>().unwrap_or_default();
                             let metadata: Option<FileMetadata> = serde_json::from_str(&json).ok();
-                            Some((path, metadata))
+                            (path, metadata)
                         }
-                        yrs::types::EntryChange::Removed(_) => Some((path, None)),
+                        yrs::types::EntryChange::Removed(_) => (path, None),
                     }
                 })
                 .collect();
@@ -502,8 +501,14 @@ mod tests {
         let crdt1 = WorkspaceCrdt::new(storage1);
         let crdt2 = WorkspaceCrdt::new(storage2);
 
-        crdt1.set_file("file1.md", FileMetadata::new(Some("From CRDT1".to_string())));
-        crdt2.set_file("file2.md", FileMetadata::new(Some("From CRDT2".to_string())));
+        crdt1.set_file(
+            "file1.md",
+            FileMetadata::new(Some("From CRDT1".to_string())),
+        );
+        crdt2.set_file(
+            "file2.md",
+            FileMetadata::new(Some("From CRDT2".to_string())),
+        );
 
         let update1 = crdt1.encode_state_as_update();
         let update2 = crdt2.encode_state_as_update();

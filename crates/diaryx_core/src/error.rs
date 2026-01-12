@@ -143,6 +143,16 @@ pub enum DiaryxError {
         /// Description of what's wrong with the path
         message: String,
     },
+
+    /// Error from CRDT operations (sync, storage, etc.)
+    #[cfg(feature = "crdt")]
+    #[error("CRDT error: {0}")]
+    Crdt(String),
+
+    /// Error from SQLite database operations
+    #[cfg(all(feature = "crdt", not(target_arch = "wasm32")))]
+    #[error("Database error: {0}")]
+    Database(#[from] rusqlite::Error),
 }
 
 /// Result type alias for Diaryx operations
@@ -182,6 +192,10 @@ impl From<&DiaryxError> for SerializableError {
             DiaryxError::TemplateAlreadyExists(_) => "TemplateAlreadyExists",
             DiaryxError::InvalidPath { .. } => "InvalidPath",
             DiaryxError::Unsupported(_) => "Unsupported",
+            #[cfg(feature = "crdt")]
+            DiaryxError::Crdt(_) => "Crdt",
+            #[cfg(all(feature = "crdt", not(target_arch = "wasm32")))]
+            DiaryxError::Database(_) => "Database",
         }
         .to_string();
 

@@ -44,12 +44,7 @@ pub trait CrdtStorage: Send + Sync {
     /// Append an incremental update to the update log.
     ///
     /// Returns the ID of the newly created update record.
-    fn append_update(
-        &self,
-        name: &str,
-        update: &[u8],
-        origin: UpdateOrigin,
-    ) -> StorageResult<i64>;
+    fn append_update(&self, name: &str, update: &[u8], origin: UpdateOrigin) -> StorageResult<i64>;
 
     /// Get all updates for a document since a given update ID.
     ///

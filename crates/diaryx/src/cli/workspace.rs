@@ -368,15 +368,134 @@ fn handle_validate(
         println!("Warnings ({}):", result.warnings.len());
         for warn in &result.warnings {
             match warn {
-                ValidationWarning::OrphanFile { file } => {
-                    println!("  ⚠ Orphan file: {}", file.display());
+                ValidationWarning::OrphanFile {
+                    file,
+                    suggested_index,
+                } => {
+                    if fix {
+                        if let Some(index) = suggested_index {
+                            let result = block_on(fixer.fix_unlisted_file(index, file));
+                            if result.success {
+                                println!(
+                                    "  ✓ Fixed: Added orphan '{}' to {}",
+                                    file.display(),
+                                    index.display()
+                                );
+                                fixed_count += 1;
+                            } else {
+                                println!(
+                                    "  ⚠ Orphan file: {} (failed to add to {})",
+                                    file.display(),
+                                    index.display()
+                                );
+                            }
+                        } else {
+                            println!(
+                                "  ⚠ Orphan file: {} (no parent index found)",
+                                file.display()
+                            );
+                        }
+                    } else {
+                        println!("  ⚠ Orphan file: {}", file.display());
+                    }
                 }
-                ValidationWarning::CircularReference { files } => {
-                    println!("  ⚠ Circular reference involving: {:?}", files);
+                ValidationWarning::CircularReference {
+                    files,
+                    suggested_file,
+                    suggested_remove_part_of,
+                } => {
+                    if fix {
+                        if let (Some(target_file), Some(ref_to_remove)) =
+                            (suggested_file, suggested_remove_part_of)
+                        {
+                            let result =
+                                block_on(fixer.fix_circular_reference(target_file, ref_to_remove));
+                            if result.success {
+                                println!(
+                                    "  ✓ Fixed: Removed '{}' from contents in {} to break cycle",
+                                    ref_to_remove,
+                                    target_file.display()
+                                );
+                                fixed_count += 1;
+                            } else {
+                                println!(
+                                    "  ⚠ Circular reference involving {:?} (failed to fix)",
+                                    files
+                                );
+                            }
+                        } else {
+                            println!(
+                                "  ⚠ Circular reference involving {:?} (no auto-fix available)",
+                                files
+                            );
+                        }
+                    } else {
+                        println!("  ⚠ Circular reference involving: {:?}", files);
+                    }
                 }
-                ValidationWarning::UnlinkedEntry { path, is_dir } => {
+                ValidationWarning::UnlinkedEntry {
+                    path,
+                    is_dir,
+                    suggested_index,
+                    index_file,
+                } => {
                     let icon = if *is_dir { "📁" } else { "📄" };
-                    println!("  {} Unlinked: {}", icon, path.display());
+                    if fix {
+                        if let Some(index) = suggested_index {
+                            if *is_dir {
+                                if let Some(dir_index) = index_file {
+                                    let result = block_on(fixer.fix_unlisted_file(index, dir_index));
+                                    if result.success {
+                                        println!(
+                                            "  ✓ Fixed: Added {} '{}' (via {}) to {}",
+                                            icon,
+                                            path.display(),
+                                            dir_index.display(),
+                                            index.display()
+                                        );
+                                        fixed_count += 1;
+                                    } else {
+                                        println!(
+                                            "  {} Unlinked: {} (failed to add)",
+                                            icon,
+                                            path.display()
+                                        );
+                                    }
+                                } else {
+                                    println!(
+                                        "  {} Unlinked: {} (directory has no index file)",
+                                        icon,
+                                        path.display()
+                                    );
+                                }
+                            } else {
+                                let result = block_on(fixer.fix_unlisted_file(index, path));
+                                if result.success {
+                                    println!(
+                                        "  ✓ Fixed: Added {} '{}' to {}",
+                                        icon,
+                                        path.display(),
+                                        index.display()
+                                    );
+                                    fixed_count += 1;
+                                } else {
+                                    println!(
+                                        "  {} Unlinked: {} (failed to add)",
+                                        icon,
+                                        path.display()
+                                    );
+                                }
+                            }
+                        } else {
+                            println!(
+                                "  {} Unlinked: {} (no parent index found)",
+                                icon,
+                                path.display()
+                            );
+                        }
+                    } else {
+                        println!("  {} Unlinked: {}", icon, path.display());
+                    }
                 }
                 ValidationWarning::UnlistedFile { index, file } => {
                     if fix {
@@ -695,15 +814,135 @@ fn report_and_fix_validation(
                         );
                     }
                 }
-                ValidationWarning::OrphanFile { file } => {
-                    println!("  ⚠ Orphan file: {}", file.display());
+                ValidationWarning::OrphanFile {
+                    file,
+                    suggested_index,
+                } => {
+                    if fix {
+                        if let Some(index) = suggested_index {
+                            let fix_result = block_on(fixer.fix_unlisted_file(index, file));
+                            if fix_result.success {
+                                println!(
+                                    "  ✓ Fixed: Added orphan '{}' to {}",
+                                    file.display(),
+                                    index.display()
+                                );
+                                fixed_count += 1;
+                            } else {
+                                println!(
+                                    "  ⚠ Orphan file: {} (failed to add to {})",
+                                    file.display(),
+                                    index.display()
+                                );
+                            }
+                        } else {
+                            println!(
+                                "  ⚠ Orphan file: {} (no parent index found)",
+                                file.display()
+                            );
+                        }
+                    } else {
+                        println!("  ⚠ Orphan file: {}", file.display());
+                    }
                 }
-                ValidationWarning::CircularReference { files } => {
-                    println!("  ⚠ Circular reference involving: {:?}", files);
+                ValidationWarning::CircularReference {
+                    files,
+                    suggested_file,
+                    suggested_remove_part_of,
+                } => {
+                    if fix {
+                        if let (Some(target_file), Some(ref_to_remove)) =
+                            (suggested_file, suggested_remove_part_of)
+                        {
+                            let fix_result =
+                                block_on(fixer.fix_circular_reference(target_file, ref_to_remove));
+                            if fix_result.success {
+                                println!(
+                                    "  ✓ Fixed: Removed '{}' from contents in {} to break cycle",
+                                    ref_to_remove,
+                                    target_file.display()
+                                );
+                                fixed_count += 1;
+                            } else {
+                                println!(
+                                    "  ⚠ Circular reference involving {:?} (failed to fix)",
+                                    files
+                                );
+                            }
+                        } else {
+                            println!(
+                                "  ⚠ Circular reference involving {:?} (no auto-fix available)",
+                                files
+                            );
+                        }
+                    } else {
+                        println!("  ⚠ Circular reference involving: {:?}", files);
+                    }
                 }
-                ValidationWarning::UnlinkedEntry { path, is_dir } => {
+                ValidationWarning::UnlinkedEntry {
+                    path,
+                    is_dir,
+                    suggested_index,
+                    index_file,
+                } => {
                     let icon = if *is_dir { "📁" } else { "📄" };
-                    println!("  {} Unlinked: {}", icon, path.display());
+                    if fix {
+                        if let Some(index) = suggested_index {
+                            if *is_dir {
+                                if let Some(dir_index) = index_file {
+                                    let fix_result =
+                                        block_on(fixer.fix_unlisted_file(index, dir_index));
+                                    if fix_result.success {
+                                        println!(
+                                            "  ✓ Fixed: Added {} '{}' (via {}) to {}",
+                                            icon,
+                                            path.display(),
+                                            dir_index.display(),
+                                            index.display()
+                                        );
+                                        fixed_count += 1;
+                                    } else {
+                                        println!(
+                                            "  {} Unlinked: {} (failed to add)",
+                                            icon,
+                                            path.display()
+                                        );
+                                    }
+                                } else {
+                                    println!(
+                                        "  {} Unlinked: {} (directory has no index file)",
+                                        icon,
+                                        path.display()
+                                    );
+                                }
+                            } else {
+                                let fix_result = block_on(fixer.fix_unlisted_file(index, path));
+                                if fix_result.success {
+                                    println!(
+                                        "  ✓ Fixed: Added {} '{}' to {}",
+                                        icon,
+                                        path.display(),
+                                        index.display()
+                                    );
+                                    fixed_count += 1;
+                                } else {
+                                    println!(
+                                        "  {} Unlinked: {} (failed to add)",
+                                        icon,
+                                        path.display()
+                                    );
+                                }
+                            }
+                        } else {
+                            println!(
+                                "  {} Unlinked: {} (no parent index found)",
+                                icon,
+                                path.display()
+                            );
+                        }
+                    } else {
+                        println!("  {} Unlinked: {}", icon, path.display());
+                    }
                 }
                 ValidationWarning::MultipleIndexes { directory, indexes } => {
                     println!(

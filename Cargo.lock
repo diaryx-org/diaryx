@@ -270,12 +270,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
-name = "atomic_refcell"
-version = "0.1.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41e67cd8309bbd06cd603a9e693a784ac2e5d1e955f11286e355089fcab3047c"
-
-[[package]]
 name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1658,8 +1652,7 @@ dependencies = [
  "thiserror 2.0.17",
  "toml 0.9.8",
  "ts-rs",
- "y-sync",
- "yrs 0.25.0",
+ "yrs",
 ]
 
 [[package]]
@@ -2587,10 +2580,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fc3cb4d91f53b50155bdcfd23f6a4c39ae1969c2ae85982b135750cccaf5fce"
 dependencies = [
  "cfg-if",
- "js-sys",
  "libc",
  "wasi 0.9.0+wasi-snapshot-preview1",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -8464,16 +8455,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66fee0b777b0f5ac1c69bb06d361268faafa61cd4682ae064a171c16c433e9e4"
 
 [[package]]
-name = "y-sync"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52e3675a497cde881a71e7e5c2ae1d087dfc7733ddece9b24a9a61408e969d3b"
-dependencies = [
- "thiserror 1.0.69",
- "yrs 0.17.4",
-]
-
-[[package]]
 name = "yaml-rust"
 version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8503,21 +8484,6 @@ dependencies = [
  "quote",
  "syn 2.0.111",
  "synstructure",
-]
-
-[[package]]
-name = "yrs"
-version = "0.17.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4830316bfee4bec0044fe34a001cda783506d5c4c0852f8433c6041dfbfce51"
-dependencies = [
- "atomic_refcell",
- "rand 0.7.3",
- "serde",
- "serde_json",
- "smallstr",
- "smallvec",
- "thiserror 1.0.69",
 ]
 
 [[package]]

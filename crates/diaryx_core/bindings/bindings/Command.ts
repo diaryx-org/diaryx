@@ -461,4 +461,24 @@ doc_name: string, } } | { "type": "SaveAllBodyDocs" } | { "type": "ListLoadedBod
 /**
  * Document name (file path).
  */
-doc_name: string, } };
+doc_name: string, } } | { "type": "CreateSyncStep1", "params": { 
+/**
+ * Document name (use "workspace" for workspace CRDT).
+ */
+doc_name: string, } } | { "type": "HandleSyncMessage", "params": { 
+/**
+ * Document name (use "workspace" for workspace CRDT).
+ */
+doc_name: string, 
+/**
+ * The incoming message bytes.
+ */
+message: Array<number>, } } | { "type": "CreateUpdateMessage", "params": { 
+/**
+ * Document name (use "workspace" for workspace CRDT).
+ */
+doc_name: string, 
+/**
+ * The update bytes to send.
+ */
+update: Array<number>, } };

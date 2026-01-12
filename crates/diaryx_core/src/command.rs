@@ -579,6 +579,36 @@ pub enum Command {
         /// Document name (file path).
         doc_name: String,
     },
+
+    // ==================== Sync Protocol Commands ====================
+    /// Create a SyncStep1 message for initiating sync.
+    ///
+    /// Returns the encoded message that should be sent to the sync server.
+    #[cfg(feature = "crdt")]
+    CreateSyncStep1 {
+        /// Document name (use "workspace" for workspace CRDT).
+        doc_name: String,
+    },
+
+    /// Handle an incoming sync message.
+    ///
+    /// Returns an optional response message to send back.
+    #[cfg(feature = "crdt")]
+    HandleSyncMessage {
+        /// Document name (use "workspace" for workspace CRDT).
+        doc_name: String,
+        /// The incoming message bytes.
+        message: Vec<u8>,
+    },
+
+    /// Create an update message to broadcast local changes.
+    #[cfg(feature = "crdt")]
+    CreateUpdateMessage {
+        /// Document name (use "workspace" for workspace CRDT).
+        doc_name: String,
+        /// The update bytes to send.
+        update: Vec<u8>,
+    },
 }
 
 // ============================================================================

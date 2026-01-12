@@ -763,6 +763,115 @@ impl<'a, FS: AsyncFileSystem> CrdtOps<'a, FS> {
     pub fn unload_body_doc(&self, doc_name: &str) {
         self.body_docs.unload(doc_name);
     }
+
+    // ==================== Sync Protocol Operations ====================
+
+    /// Create a SyncStep1 message for workspace or body document.
+    ///
+    /// Use doc_name="workspace" for the workspace CRDT, or a file path for body docs.
+    pub fn create_sync_step1(&self, doc_name: &str) -> Vec<u8> {
+        if doc_name == "workspace" {
+            let sv = self.crdt.encode_state_vector();
+            crate::crdt::SyncMessage::SyncStep1(sv).encode()
+        } else {
+            let doc = self.body_docs.get_or_create(doc_name);
+            let sv = doc.encode_state_vector();
+            crate::crdt::SyncMessage::SyncStep1(sv).encode()
+        }
+    }
+
+    /// Handle an incoming sync message.
+    ///
+    /// Returns an optional response message to send back.
+    pub fn handle_sync_message(&self, doc_name: &str, message: &[u8]) -> Result<Option<Vec<u8>>> {
+        let sync_msg = match crate::crdt::SyncMessage::decode(message)? {
+            Some(msg) => msg,
+            None => return Ok(None),
+        };
+
+        if doc_name == "workspace" {
+            self.handle_workspace_sync_message(sync_msg)
+        } else {
+            self.handle_body_sync_message(doc_name, sync_msg)
+        }
+    }
+
+    fn handle_workspace_sync_message(
+        &self,
+        msg: crate::crdt::SyncMessage,
+    ) -> Result<Option<Vec<u8>>> {
+        match msg {
+            crate::crdt::SyncMessage::SyncStep1(remote_sv) => {
+                // Create SyncStep2 with missing updates
+                let diff = self.crdt.encode_diff(&remote_sv)?;
+                let step2 = crate::crdt::SyncMessage::SyncStep2(diff).encode();
+
+                // Also send our state vector
+                let our_sv = self.crdt.encode_state_vector();
+                let step1 = crate::crdt::SyncMessage::SyncStep1(our_sv).encode();
+
+                let mut combined = step2;
+                combined.extend_from_slice(&step1);
+                Ok(Some(combined))
+            }
+            crate::crdt::SyncMessage::SyncStep2(update) => {
+                if !update.is_empty() {
+                    self.crdt
+                        .apply_update(&update, crate::crdt::UpdateOrigin::Sync)?;
+                }
+                Ok(None)
+            }
+            crate::crdt::SyncMessage::Update(update) => {
+                if !update.is_empty() {
+                    self.crdt
+                        .apply_update(&update, crate::crdt::UpdateOrigin::Remote)?;
+                }
+                Ok(None)
+            }
+        }
+    }
+
+    fn handle_body_sync_message(
+        &self,
+        doc_name: &str,
+        msg: crate::crdt::SyncMessage,
+    ) -> Result<Option<Vec<u8>>> {
+        let doc = self.body_docs.get_or_create(doc_name);
+
+        match msg {
+            crate::crdt::SyncMessage::SyncStep1(remote_sv) => {
+                // Create SyncStep2 with missing updates
+                let diff = doc.encode_diff(&remote_sv)?;
+                let step2 = crate::crdt::SyncMessage::SyncStep2(diff).encode();
+
+                // Also send our state vector
+                let our_sv = doc.encode_state_vector();
+                let step1 = crate::crdt::SyncMessage::SyncStep1(our_sv).encode();
+
+                let mut combined = step2;
+                combined.extend_from_slice(&step1);
+                Ok(Some(combined))
+            }
+            crate::crdt::SyncMessage::SyncStep2(update) => {
+                if !update.is_empty() {
+                    doc.apply_update(&update, crate::crdt::UpdateOrigin::Sync)?;
+                }
+                Ok(None)
+            }
+            crate::crdt::SyncMessage::Update(update) => {
+                if !update.is_empty() {
+                    doc.apply_update(&update, crate::crdt::UpdateOrigin::Remote)?;
+                }
+                Ok(None)
+            }
+        }
+    }
+
+    /// Create an update message for broadcasting local changes.
+    pub fn create_update_message(&self, doc_name: &str, update: &[u8]) -> Vec<u8> {
+        let _ = doc_name; // doc_name is for future use with different encodings
+        crate::crdt::SyncMessage::Update(update.to_vec()).encode()
+    }
 }
 
 #[cfg(test)]

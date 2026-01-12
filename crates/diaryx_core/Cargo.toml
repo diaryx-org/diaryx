@@ -24,7 +24,6 @@ thiserror.workspace = true
 
 # CRDT support
 yrs = { version = "0.25", optional = true }
-y-sync = { version = "0.4", optional = true }
 
 # TypeScript bindings generation
 ts-rs = { version = "10", features = ["serde-json-impl", "indexmap-impl"] }
@@ -52,7 +51,7 @@ rusqlite = { version = "0.34", features = ["bundled"], optional = true }
 markdown = ["dep:comrak"]
 
 # Enable CRDT-based sync and version history
-crdt = ["dep:yrs", "dep:y-sync", "dep:rusqlite"]
+crdt = ["dep:yrs", "dep:rusqlite"]
 
 # Placeholder feature for workspace crates that currently enable it.
 live-sync = []

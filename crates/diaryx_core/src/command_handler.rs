@@ -1180,6 +1180,37 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 crdt.unload_body_doc(&doc_name);
                 Ok(Response::Ok)
             }
+
+            // ==================== Sync Protocol Commands ====================
+            #[cfg(feature = "crdt")]
+            Command::CreateSyncStep1 { doc_name } => {
+                let crdt = self.crdt().ok_or_else(|| {
+                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
+                })?;
+                let message = crdt.create_sync_step1(&doc_name);
+                Ok(Response::Binary(message))
+            }
+
+            #[cfg(feature = "crdt")]
+            Command::HandleSyncMessage { doc_name, message } => {
+                let crdt = self.crdt().ok_or_else(|| {
+                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
+                })?;
+                let response = crdt.handle_sync_message(&doc_name, &message)?;
+                match response {
+                    Some(data) => Ok(Response::Binary(data)),
+                    None => Ok(Response::Ok),
+                }
+            }
+
+            #[cfg(feature = "crdt")]
+            Command::CreateUpdateMessage { doc_name, update } => {
+                let crdt = self.crdt().ok_or_else(|| {
+                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
+                })?;
+                let message = crdt.create_update_message(&doc_name, &update);
+                Ok(Response::Binary(message))
+            }
         }
     }
 }

@@ -150,7 +150,7 @@ pub enum DiaryxError {
     Crdt(String),
 
     /// Error from SQLite database operations
-    #[cfg(all(feature = "crdt", not(target_arch = "wasm32")))]
+    #[cfg(all(feature = "crdt-sqlite", not(target_arch = "wasm32")))]
     #[error("Database error: {0}")]
     Database(#[from] rusqlite::Error),
 }
@@ -194,7 +194,7 @@ impl From<&DiaryxError> for SerializableError {
             DiaryxError::Unsupported(_) => "Unsupported",
             #[cfg(feature = "crdt")]
             DiaryxError::Crdt(_) => "Crdt",
-            #[cfg(all(feature = "crdt", not(target_arch = "wasm32")))]
+            #[cfg(all(feature = "crdt-sqlite", not(target_arch = "wasm32")))]
             DiaryxError::Database(_) => "Database",
         }
         .to_string();

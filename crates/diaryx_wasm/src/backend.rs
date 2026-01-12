@@ -2464,6 +2464,30 @@ impl DiaryxBackend {
             serde_wasm_bindgen::to_value(&summary).js_err()
         })
     }
+
+    // ========================================================================
+    // CRDT Sync API
+    // ========================================================================
+    //
+    // Note: CRDT operations are available through the execute() command API.
+    // The sync commands (CreateSyncStep1, HandleSyncMessage, etc.) require
+    // a CRDT-enabled Diaryx instance. For full sync support in the browser,
+    // use the JavaScript sync adapters that work with the execute() API.
+    //
+    // Example usage via execute():
+    // ```javascript
+    // // Get sync state
+    // const response = await backend.executeJs({
+    //   type: 'CreateSyncStep1',
+    //   params: { doc_name: 'workspace' }
+    // });
+    //
+    // // Handle sync message from server
+    // const response = await backend.executeJs({
+    //   type: 'HandleSyncMessage',
+    //   params: { doc_name: 'workspace', message: Array.from(messageBytes) }
+    // });
+    // ```
 }
 
 // ============================================================================

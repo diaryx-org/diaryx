@@ -50,8 +50,12 @@ rusqlite = { version = "0.34", features = ["bundled"], optional = true }
 # Enable markdown-to-HTML conversion (for publish feature)
 markdown = ["dep:comrak"]
 
-# Enable CRDT-based sync and version history
-crdt = ["dep:yrs", "dep:rusqlite"]
+# Enable CRDT-based sync and version history (works on all platforms)
+# On native, also enables SqliteStorage via rusqlite
+crdt = ["dep:yrs"]
+
+# Enable SQLite storage for CRDT (native only, automatically enabled with crdt on non-WASM)
+crdt-sqlite = ["crdt", "dep:rusqlite"]
 
 # Placeholder feature for workspace crates that currently enable it.
 live-sync = []

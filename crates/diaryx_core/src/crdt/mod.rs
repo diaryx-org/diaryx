@@ -45,7 +45,7 @@
 mod body_doc;
 mod body_doc_manager;
 mod memory_storage;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "crdt-sqlite"))]
 mod sqlite_storage;
 mod storage;
 mod sync;
@@ -55,7 +55,7 @@ mod workspace_doc;
 pub use body_doc::BodyDoc;
 pub use body_doc_manager::BodyDocManager;
 pub use memory_storage::MemoryStorage;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "crdt-sqlite"))]
 pub use sqlite_storage::SqliteStorage;
 pub use storage::{CrdtStorage, StorageResult};
 pub use sync::{BodySyncProtocol, SyncMessage, SyncProtocol};

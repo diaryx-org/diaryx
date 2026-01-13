@@ -262,12 +262,18 @@ impl<FS: AsyncFileSystem> Validator<FS> {
             ];
 
             for entry in all_entries {
-                // Skip hidden files/directories (dotfiles) - files/dirs starting with '.'
-                // This matches the tree building behavior in workspace/mod.rs
-                if let Some(file_name) = entry.file_name().and_then(|n| n.to_str()) {
-                    if file_name.starts_with('.') {
-                        continue;
+                // Skip entries that are in hidden directories or are hidden files
+                // Check all path components, not just the filename
+                let in_hidden_dir = entry.components().any(|c| {
+                    if let std::path::Component::Normal(name) = c {
+                        name.to_str().is_some_and(|s| s.starts_with('.'))
+                    } else {
+                        false
                     }
+                });
+
+                if in_hidden_dir {
+                    continue;
                 }
 
                 // Skip entries in common non-workspace directories
@@ -285,54 +291,27 @@ impl<FS: AsyncFileSystem> Validator<FS> {
 
                 let entry_normalized = normalize_path(&entry);
                 if !visited_normalized.contains(&entry_normalized) {
-                    let is_dir = self.ws.fs_ref().is_dir(&entry).await;
-                    let suggested_index = find_nearest_index(&entry);
-
-                    // For directories, check if they have an index file inside
-                    let index_file = if is_dir {
-                        self.ws.find_root_index_in_dir(&entry).await.ok().flatten()
-                    } else {
-                        None
-                    };
-
-                    // If directory has an index file that IS visited, don't report as unlinked
-                    if is_dir && let Some(ref idx_path) = index_file {
-                        let idx_normalized = normalize_path(idx_path);
-                        if visited_normalized.contains(&idx_normalized) {
-                            continue; // Skip - directory's index is properly linked
-                        }
+                    // Skip directories - we don't emit warnings for them.
+                    // If a directory has an unlinked index file, OrphanFile covers it.
+                    // If a directory has no index file, it's just a regular folder.
+                    if self.ws.fs_ref().is_dir(&entry).await {
+                        continue;
                     }
 
-                    // Issue 2 fix: Check if it's a binary file (non-.md, non-directory)
+                    let suggested_index = find_nearest_index(&entry);
                     let extension = entry.extension().and_then(|e| e.to_str());
-                    let is_binary = !is_dir && extension.is_some() && extension != Some("md");
 
-                    if is_binary {
-                        // Report as OrphanBinaryFile instead of UnlinkedEntry
+                    if extension == Some("md") {
+                        // Markdown file not in hierarchy
+                        result.warnings.push(ValidationWarning::OrphanFile {
+                            file: entry.clone(),
+                            suggested_index,
+                        });
+                    } else if extension.is_some() {
+                        // Binary file not referenced by any attachments
                         result.warnings.push(ValidationWarning::OrphanBinaryFile {
                             file: entry.clone(),
                             suggested_index,
-                        });
-                        continue; // Don't also report as UnlinkedEntry
-                    }
-
-                    // Report as OrphanFile if it's an .md file
-                    // Don't also report as UnlinkedEntry to avoid duplicate warnings
-                    if entry.extension().is_some_and(|ext| ext == "md") {
-                        result.warnings.push(ValidationWarning::OrphanFile {
-                            file: entry.clone(),
-                            suggested_index: suggested_index.clone(),
-                        });
-                        continue; // Don't also report as UnlinkedEntry
-                    }
-
-                    // Report as UnlinkedEntry only for directories (not md files or binary files)
-                    if is_dir {
-                        result.warnings.push(ValidationWarning::UnlinkedEntry {
-                            path: entry,
-                            is_dir,
-                            suggested_index,
-                            index_file,
                         });
                     }
                 }
@@ -441,6 +420,14 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                         file: path.to_path_buf(),
                         target: part_of.clone(),
                     });
+                }
+            }
+
+            // Add attachments to visited set so they're not reported as orphans
+            for attachment in index.frontmatter.attachments_list() {
+                let attachment_path = dir.join(attachment);
+                if self.ws.fs_ref().exists(&attachment_path).await {
+                    visited.insert(normalize_path(&attachment_path));
                 }
             }
         }

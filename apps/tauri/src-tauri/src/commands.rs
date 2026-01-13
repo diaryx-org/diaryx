@@ -11,11 +11,12 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use diaryx_core::{
     Command,
     config::Config,
+    crdt::{CrdtStorage, SqliteStorage},
     diaryx::Diaryx,
     error::SerializableError,
     fs::{FileSystem, RealFileSystem, SyncToAsyncFs},
@@ -41,6 +42,10 @@ pub struct AppPaths {
     pub config_path: PathBuf,
     /// Whether this is a mobile platform (iOS/Android)
     pub is_mobile: bool,
+    /// Whether CRDT storage was successfully initialized
+    pub crdt_initialized: bool,
+    /// Error message if CRDT initialization failed
+    pub crdt_error: Option<String>,
 }
 
 /// Google Auth configuration
@@ -48,6 +53,44 @@ pub struct AppPaths {
 pub struct GoogleAuthConfig {
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
+}
+
+/// Global state for CRDT-enabled Diaryx instances.
+///
+/// This stores the SQLite storage backend shared across all execute() calls,
+/// allowing CRDT state to persist across commands.
+pub struct CrdtState {
+    /// Path to the active workspace
+    pub workspace_path: Mutex<Option<PathBuf>>,
+    /// CRDT storage backend (shared across calls)
+    /// Note: CrdtStorage trait already requires Send + Sync
+    pub storage: Mutex<Option<Arc<dyn CrdtStorage>>>,
+}
+
+impl CrdtState {
+    pub fn new() -> Self {
+        Self {
+            workspace_path: Mutex::new(None),
+            storage: Mutex::new(None),
+        }
+    }
+}
+
+impl Default for CrdtState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Helper function to safely acquire a mutex lock without panicking.
+///
+/// Returns a SerializableError if the mutex is poisoned, instead of panicking.
+fn acquire_lock<T>(mutex: &Mutex<T>) -> Result<std::sync::MutexGuard<'_, T>, SerializableError> {
+    mutex.lock().map_err(|e| SerializableError {
+        kind: "LockError".to_string(),
+        message: format!("Failed to acquire lock: mutex is poisoned - {}", e),
+        path: None,
+    })
 }
 
 // ============================================================================
@@ -66,7 +109,10 @@ pub struct GoogleAuthConfig {
 /// const result = JSON.parse(response);
 /// ```
 #[tauri::command]
-pub async fn execute(command_json: String) -> Result<String, SerializableError> {
+pub async fn execute<R: Runtime>(
+    app: AppHandle<R>,
+    command_json: String,
+) -> Result<String, SerializableError> {
     log::info!("[execute] Received command");
     log::debug!("[execute] Command JSON: {}", command_json);
 
@@ -85,8 +131,30 @@ pub async fn execute(command_json: String) -> Result<String, SerializableError> 
         std::mem::discriminant(&cmd)
     );
 
-    // Create a Diaryx instance with the real filesystem
-    let diaryx = Diaryx::new(SyncToAsyncFs::new(RealFileSystem));
+    // Create a Diaryx instance, using CRDT state if available
+    let diaryx = {
+        let crdt_state = app.state::<CrdtState>();
+        let storage_guard = acquire_lock(&crdt_state.storage)?;
+
+        if let Some(storage) = storage_guard.as_ref() {
+            match Diaryx::with_crdt_load(SyncToAsyncFs::new(RealFileSystem), Arc::clone(storage)) {
+                Ok(d) => {
+                    log::debug!("[execute] Using Diaryx with CRDT support");
+                    d
+                }
+                Err(e) => {
+                    log::warn!(
+                        "[execute] Failed to load CRDT state: {:?}, using without CRDT",
+                        e
+                    );
+                    Diaryx::new(SyncToAsyncFs::new(RealFileSystem))
+                }
+            }
+        } else {
+            log::debug!("[execute] No CRDT storage configured, using basic Diaryx");
+            Diaryx::new(SyncToAsyncFs::new(RealFileSystem))
+        }
+    };
 
     // Execute the command
     let response = diaryx.execute(cmd).await.map_err(|e| {
@@ -151,6 +219,8 @@ fn get_platform_paths<R: Runtime>(app: &AppHandle<R>) -> Result<AppPaths, Serial
             default_workspace,
             config_path,
             is_mobile: true,
+            crdt_initialized: false,
+            crdt_error: None,
         })
     } else {
         // On desktop, use standard locations
@@ -192,6 +262,8 @@ fn get_platform_paths<R: Runtime>(app: &AppHandle<R>) -> Result<AppPaths, Serial
             default_workspace,
             config_path,
             is_mobile: false,
+            crdt_initialized: false,
+            crdt_error: None,
         })
     }
 }
@@ -288,13 +360,15 @@ pub async fn pick_workspace_folder<R: Runtime>(
             .map_err(|e| e.to_serializable())?;
     }
 
-    // Return updated paths
+    // Return updated paths (CRDT not initialized for new workspace yet)
     Ok(Some(AppPaths {
         data_dir: paths.data_dir,
         document_dir: paths.document_dir,
         default_workspace: selected_path,
         config_path: paths.config_path,
         is_mobile: paths.is_mobile,
+        crdt_initialized: false,
+        crdt_error: None,
     }))
 }
 
@@ -425,13 +499,60 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
 
     log::info!("[initialize_app] Initialization complete!");
 
-    // Return paths with the actual workspace from config
+    // Initialize CRDT storage for the workspace
+    let (crdt_initialized, crdt_error) = {
+        let crdt_state = app.state::<CrdtState>();
+        let crdt_dir = actual_workspace.join(".diaryx");
+
+        match std::fs::create_dir_all(&crdt_dir) {
+            Err(e) => {
+                let error_msg = format!("Failed to create CRDT directory {:?}: {}", crdt_dir, e);
+                log::warn!("[initialize_app] {}", error_msg);
+                (false, Some(error_msg))
+            }
+            Ok(_) => {
+                let db_path = crdt_dir.join("crdt.db");
+                match SqliteStorage::open(&db_path) {
+                    Ok(storage) => {
+                        match (
+                            acquire_lock(&crdt_state.workspace_path),
+                            acquire_lock(&crdt_state.storage),
+                        ) {
+                            (Ok(mut ws_lock), Ok(mut storage_lock)) => {
+                                *ws_lock = Some(actual_workspace.clone());
+                                *storage_lock = Some(Arc::new(storage));
+                                log::info!(
+                                    "[initialize_app] CRDT storage initialized at {:?}",
+                                    db_path
+                                );
+                                (true, None)
+                            }
+                            (Err(e), _) | (_, Err(e)) => {
+                                let error_msg = format!("Failed to acquire CRDT state lock: {:?}", e);
+                                log::error!("[initialize_app] {}", error_msg);
+                                (false, Some(error_msg))
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let error_msg = format!("Failed to initialize CRDT storage at {:?}: {:?}", db_path, e);
+                        log::warn!("[initialize_app] {}", error_msg);
+                        (false, Some(error_msg))
+                    }
+                }
+            }
+        }
+    };
+
+    // Return paths with the actual workspace from config and CRDT status
     Ok(AppPaths {
         data_dir: paths.data_dir,
         document_dir: paths.document_dir,
         default_workspace: actual_workspace,
         config_path: paths.config_path,
         is_mobile: paths.is_mobile,
+        crdt_initialized,
+        crdt_error,
     })
 }
 

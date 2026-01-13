@@ -1,5 +1,7 @@
 <script lang="ts">
   import type { EntryData } from "./backend";
+  import type { RustCrdtApi } from "$lib/crdt/rustCrdtApi";
+  import type { CrdtHistoryEntry, FileDiff } from "$lib/backend/generated";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import * as Alert from "$lib/components/ui/alert";
@@ -25,8 +27,12 @@
     FileArchive,
     FileSpreadsheet,
     FileCode,
+    History,
+    RefreshCw,
+    RotateCcw,
   } from "@lucide/svelte";
   import type { Component } from "svelte";
+  import VersionDiff from "./history/VersionDiff.svelte";
 
   interface Props {
     entry: EntryData | null;
@@ -41,6 +47,9 @@
     onDeleteAttachment?: (attachmentPath: string) => void;
     attachmentError?: string | null;
     onAttachmentErrorClear?: () => void;
+    // History props
+    rustApi?: RustCrdtApi | null;
+    onHistoryRestore?: () => void;
   }
 
   let {
@@ -56,7 +65,148 @@
     onDeleteAttachment,
     attachmentError = null,
     onAttachmentErrorClear,
+    rustApi = null,
+    onHistoryRestore,
   }: Props = $props();
+
+  // Tab state: "properties" | "history"
+  type TabType = "properties" | "history";
+  let activeTab: TabType = $state("properties");
+
+  // History state
+  let history: CrdtHistoryEntry[] = $state([]);
+  let historyLoading = $state(false);
+  let historyError = $state<string | null>(null);
+  let selectedEntry: CrdtHistoryEntry | null = $state(null);
+  let diffs: FileDiff[] = $state([]);
+  let loadingDiff = $state(false);
+
+  // Get document name for history API
+  // Note: History is stored per-document in the CRDT.
+  // Workspace metadata changes: "workspace" 
+  // Body content changes: "doc:{path}" (only when collaboration is enabled)
+  function getDocName(): string {
+    if (!entry?.path) return "workspace";
+    // For now, query workspace history which tracks metadata changes
+    // Body content history is only available when collaboration is enabled
+    return "workspace";
+  }
+
+  // Load history for current document
+  async function loadHistory() {
+    if (!rustApi || !entry) return;
+    
+    historyLoading = true;
+    historyError = null;
+    selectedEntry = null;
+    diffs = [];
+    
+    try {
+      history = await rustApi.getHistory(getDocName(), 100);
+    } catch (e) {
+      historyError = e instanceof Error ? e.message : "Failed to load history";
+      console.error("[RightSidebar] Error loading history:", e);
+    } finally {
+      historyLoading = false;
+    }
+  }
+
+  // Select a history entry and load its diff
+  async function selectHistoryEntry(historyEntry: CrdtHistoryEntry) {
+    if (!rustApi) return;
+    
+    if (selectedEntry?.update_id === historyEntry.update_id) {
+      // Deselect
+      selectedEntry = null;
+      diffs = [];
+      return;
+    }
+
+    selectedEntry = historyEntry;
+    loadingDiff = true;
+    diffs = [];
+
+    try {
+      const idx = history.findIndex((h) => h.update_id === historyEntry.update_id);
+      if (idx < history.length - 1) {
+        const previousEntry = history[idx + 1];
+        diffs = await rustApi.getVersionDiff(previousEntry.update_id, historyEntry.update_id, getDocName());
+      }
+    } catch (e) {
+      console.error("[RightSidebar] Error loading diff:", e);
+    } finally {
+      loadingDiff = false;
+    }
+  }
+
+  // Restore to a specific version
+  async function restoreVersion(historyEntry: CrdtHistoryEntry) {
+    if (!rustApi) return;
+    
+    const confirmRestore = confirm(`Restore to version from ${formatTimestamp(historyEntry.timestamp)}?`);
+    if (!confirmRestore) return;
+
+    try {
+      await rustApi.restoreVersion(historyEntry.update_id, getDocName());
+      onHistoryRestore?.();
+      await loadHistory();
+    } catch (e) {
+      console.error("[RightSidebar] Error restoring version:", e);
+      alert("Failed to restore version");
+    }
+  }
+
+  function formatTimestamp(timestamp: bigint): string {
+    const date = new Date(Number(timestamp));
+    return date.toLocaleString();
+  }
+
+  function formatRelativeTime(timestamp: bigint): string {
+    const now = Date.now();
+    const diff = now - Number(timestamp);
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+
+    if (minutes < 1) return "Just now";
+    if (minutes < 60) return `${minutes}m ago`;
+    if (hours < 24) return `${hours}h ago`;
+    return `${days}d ago`;
+  }
+
+  function getOriginLabel(origin: string): string {
+    switch (origin) {
+      case "Local": return "You";
+      case "Remote": return "Remote";
+      case "Sync": return "Sync";
+      default: return origin;
+    }
+  }
+
+  function getOriginClass(origin: string): string {
+    switch (origin) {
+      case "Local": return "bg-primary text-primary-foreground";
+      case "Remote": return "bg-secondary text-secondary-foreground";
+      case "Sync": return "bg-accent text-accent-foreground";
+      default: return "bg-muted text-muted-foreground";
+    }
+  }
+
+  // Load history when switching to history tab or when entry changes
+  $effect(() => {
+    if (activeTab === "history" && entry && rustApi) {
+      loadHistory();
+    }
+  });
+
+  // Reset history state when entry changes
+  $effect(() => {
+    if (entry) {
+      history = [];
+      selectedEntry = null;
+      diffs = [];
+    }
+  });
 
   // Get attachments from frontmatter
   $effect(() => {
@@ -261,25 +411,44 @@
     {collapsed ? 'w-0 opacity-0 overflow-hidden md:w-0' : 'w-72'}
     fixed right-0 md:relative z-40 md:z-auto"
 >
-  <!-- Header -->
+  <!-- Header with collapse button -->
   <div
-    class="flex items-center justify-between px-4 py-4 border-b border-sidebar-border shrink-0"
+    class="flex items-center justify-between px-4 py-3 border-b border-sidebar-border shrink-0"
   >
     <Button
       variant="ghost"
       size="icon"
       onclick={onToggleCollapse}
       class="size-8"
-      aria-label="Collapse properties panel"
+      aria-label="Collapse panel"
     >
       <PanelRightClose class="size-4" />
     </Button>
-    <h2 class="text-sm font-semibold text-sidebar-foreground">Properties</h2>
+    
+    <!-- Tab Toggle -->
+    <div class="flex items-center gap-1 bg-muted rounded-md p-0.5">
+      <button
+        type="button"
+        class="px-2.5 py-1 text-xs font-medium rounded transition-colors {activeTab === 'properties' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+        onclick={() => activeTab = "properties"}
+      >
+        Properties
+      </button>
+      <button
+        type="button"
+        class="px-2.5 py-1 text-xs font-medium rounded transition-colors {activeTab === 'history' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+        onclick={() => activeTab = "history"}
+      >
+        History
+      </button>
+    </div>
   </div>
 
   <!-- Content -->
   <div class="flex-1 overflow-y-auto">
-    {#if entry}
+    {#if activeTab === "properties"}
+      <!-- Properties Tab -->
+      {#if entry}
       {#if Object.keys(entry.frontmatter).length > 0}
         <div class="p-3 space-y-3">
           {#each getSortedFrontmatter(entry.frontmatter) as [key, value]}
@@ -561,16 +730,128 @@
           Add Attachment
         </Button>
       </div>
+      {:else}
+        <div
+          class="flex flex-col items-center justify-center py-8 px-4 text-center"
+        >
+          <FileText class="size-8 text-muted-foreground mb-2" />
+          <p class="text-sm text-muted-foreground">No entry selected</p>
+          <p class="text-xs text-muted-foreground mt-1">
+            Select an entry to view its properties
+          </p>
+        </div>
+      {/if}
     {:else}
-      <div
-        class="flex flex-col items-center justify-center py-8 px-4 text-center"
-      >
-        <FileText class="size-8 text-muted-foreground mb-2" />
-        <p class="text-sm text-muted-foreground">No entry selected</p>
-        <p class="text-xs text-muted-foreground mt-1">
-          Select an entry to view its properties
-        </p>
-      </div>
+      <!-- History Tab -->
+      {#if entry}
+        <div class="p-3">
+          <!-- History Header -->
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2 text-xs text-muted-foreground">
+              <History class="size-3.5" />
+              <span class="font-medium">Version History</span>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              class="size-6"
+              onclick={loadHistory}
+              disabled={historyLoading}
+              aria-label="Refresh history"
+            >
+              <RefreshCw class="size-3 {historyLoading ? 'animate-spin' : ''}" />
+            </Button>
+          </div>
+
+          {#if historyError}
+            <Alert.Root variant="destructive" class="mb-3 py-2">
+              <AlertCircle class="size-4" />
+              <Alert.Description class="text-xs">
+                {historyError}
+              </Alert.Description>
+            </Alert.Root>
+          {/if}
+
+          {#if historyLoading && history.length === 0}
+            <div class="flex items-center justify-center py-8">
+              <RefreshCw class="size-5 animate-spin text-muted-foreground" />
+            </div>
+          {:else if history.length === 0}
+            <div class="flex flex-col items-center justify-center py-8 text-center">
+              <History class="size-8 text-muted-foreground mb-2" />
+              <p class="text-sm text-muted-foreground">No history available</p>
+              <p class="text-xs text-muted-foreground mt-1">
+                Changes will appear here
+              </p>
+            </div>
+          {:else}
+            <!-- History Entries -->
+            <div class="space-y-1">
+              {#each history as historyEntry (historyEntry.update_id)}
+                {@const isSelected = selectedEntry?.update_id === historyEntry.update_id}
+                <div
+                  class="rounded-md cursor-pointer transition-colors {isSelected ? 'bg-accent' : 'hover:bg-muted'}"
+                  role="button"
+                  tabindex="0"
+                  onclick={() => selectHistoryEntry(historyEntry)}
+                  onkeydown={(e) => e.key === 'Enter' && selectHistoryEntry(historyEntry)}
+                >
+                  <div class="flex items-center justify-between p-2">
+                    <div class="flex-1 min-w-0">
+                      <div class="flex items-center gap-2">
+                        <span class="text-sm font-medium text-foreground">
+                          {formatRelativeTime(historyEntry.timestamp)}
+                        </span>
+                        <span class="text-[10px] px-1.5 py-0.5 rounded {getOriginClass(historyEntry.origin)}">
+                          {getOriginLabel(historyEntry.origin)}
+                        </span>
+                      </div>
+                      <div class="text-[10px] text-muted-foreground mt-0.5">
+                        #{historyEntry.update_id.toString()}
+                      </div>
+                    </div>
+                    {#if isSelected}
+                      <Button
+                        variant="default"
+                        size="sm"
+                        class="h-6 text-xs px-2 shrink-0"
+                        onclick={(e) => { e.stopPropagation(); restoreVersion(historyEntry); }}
+                      >
+                        <RotateCcw class="size-3 mr-1" />
+                        Restore
+                      </Button>
+                    {/if}
+                  </div>
+                </div>
+              {/each}
+            </div>
+
+            <!-- Version Diff -->
+            {#if selectedEntry && (diffs.length > 0 || loadingDiff)}
+              <div class="mt-4 pt-3 border-t border-sidebar-border">
+                <h4 class="text-xs font-medium text-muted-foreground mb-2">Changes in this version</h4>
+                {#if loadingDiff}
+                  <div class="flex items-center justify-center py-4">
+                    <RefreshCw class="size-4 animate-spin text-muted-foreground" />
+                  </div>
+                {:else}
+                  <VersionDiff {diffs} />
+                {/if}
+              </div>
+            {/if}
+          {/if}
+        </div>
+      {:else}
+        <div
+          class="flex flex-col items-center justify-center py-8 px-4 text-center"
+        >
+          <History class="size-8 text-muted-foreground mb-2" />
+          <p class="text-sm text-muted-foreground">No entry selected</p>
+          <p class="text-xs text-muted-foreground mt-1">
+            Select an entry to view its history
+          </p>
+        </div>
+      {/if}
     {/if}
   </div>
 

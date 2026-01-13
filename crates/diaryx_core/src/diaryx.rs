@@ -649,13 +649,21 @@ impl<'a, FS: AsyncFileSystem> CrdtOps<'a, FS> {
     }
 
     /// Set file metadata in CRDT.
-    pub fn set_file(&self, path: &str, metadata: crate::crdt::FileMetadata) {
-        self.crdt.set_file(path, metadata);
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the update fails to persist to storage.
+    pub fn set_file(&self, path: &str, metadata: crate::crdt::FileMetadata) -> Result<()> {
+        self.crdt.set_file(path, metadata)
     }
 
     /// Delete a file (marks as deleted in CRDT).
-    pub fn delete_file(&self, path: &str) {
-        self.crdt.delete_file(path);
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the update fails to persist to storage.
+    pub fn delete_file(&self, path: &str) -> Result<()> {
+        self.crdt.delete_file(path)
     }
 
     /// List all files (including deleted).
@@ -715,9 +723,9 @@ impl<'a, FS: AsyncFileSystem> CrdtOps<'a, FS> {
     }
 
     /// Set the body content of a file in CRDT.
-    pub fn set_body_content(&self, doc_name: &str, content: &str) {
+    pub fn set_body_content(&self, doc_name: &str, content: &str) -> Result<()> {
         let doc = self.body_docs.get_or_create(doc_name);
-        doc.set_body(content);
+        doc.set_body(content)
     }
 
     /// Get body document state vector for sync.
@@ -949,7 +957,7 @@ mod tests {
 
             // Test file operations
             let metadata = crate::crdt::FileMetadata::new(Some("Test File".to_string()));
-            crdt.set_file("test.md", metadata);
+            crdt.set_file("test.md", metadata).unwrap();
 
             let retrieved = crdt.get_file("test.md");
             assert!(retrieved.is_some());
@@ -984,7 +992,7 @@ mod tests {
 
             // Add file on first instance
             let metadata = crate::crdt::FileMetadata::new(Some("Shared File".to_string()));
-            crdt1.set_file("shared.md", metadata);
+            crdt1.set_file("shared.md", metadata).unwrap();
 
             // Get state and apply to second instance
             let state = crdt1.get_full_state();

@@ -100,11 +100,14 @@ export class RustCrdtApi {
    * Get the version history for a document.
    */
   async getHistory(docName: string = 'workspace', limit?: number): Promise<CrdtHistoryEntry[]> {
+    console.log('[RustCrdtApi] getHistory:', docName, 'limit:', limit);
     const response = await this.backend.execute({
       type: 'GetHistory',
       params: { doc_name: docName, limit: limit ?? null },
     });
-    return expectResponse(response, 'CrdtHistory').data;
+    const history = expectResponse(response, 'CrdtHistory').data;
+    console.log('[RustCrdtApi] getHistory result:', history.length, 'entries');
+    return history;
   }
 
   /**
@@ -166,10 +169,12 @@ export class RustCrdtApi {
    * Set file metadata in the CRDT.
    */
   async setFile(path: string, metadata: FileMetadata): Promise<void> {
+    console.log('[RustCrdtApi] setFile:', path);
     await this.backend.execute({
       type: 'SetCrdtFile',
       params: { path, metadata: metadata as unknown as JsonValue },
     });
+    console.log('[RustCrdtApi] setFile complete:', path);
   }
 
   /**

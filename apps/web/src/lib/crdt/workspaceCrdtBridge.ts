@@ -3,19 +3,65 @@
  *
  * This module provides the same API surface as the original workspaceCrdt.ts
  * but delegates all operations to the Rust CRDT via RustCrdtApi.
+ *
+ * Supports both:
+ * - Hocuspocus server-based sync
+ * - P2P sync via y-webrtc (no server required)
  */
 
+import * as Y from 'yjs';
 import type { RustCrdtApi } from './rustCrdtApi';
 import type { HocuspocusBridge } from './hocuspocusBridge';
 import type { FileMetadata, BinaryRef } from '../backend/generated';
+import {
+  isP2PEnabled,
+  createP2PProvider,
+  destroyP2PProvider,
+} from './p2pSyncBridge';
+import type { WebrtcProvider } from 'y-webrtc';
 
 // State
 let rustApi: RustCrdtApi | null = null;
 let syncBridge: HocuspocusBridge | null = null;
+let p2pProvider: WebrtcProvider | null = null;
+let workspaceYDoc: Y.Doc | null = null;
 let serverUrl: string | null = null;
 let _workspaceId: string | null = null;
 let initialized = false;
 let _initializing = false;
+
+// Per-file mutex to prevent race conditions on concurrent updates
+// Map of path -> Promise that resolves when the lock is released
+const fileLocks = new Map<string, Promise<void>>();
+
+// Track pending intervals/timeouts for proper cleanup
+const pendingIntervals: Set<ReturnType<typeof setInterval>> = new Set();
+const pendingTimeouts: Set<ReturnType<typeof setTimeout>> = new Set();
+
+/**
+ * Acquire a lock for a specific file path.
+ * Returns a release function to call when done.
+ * This prevents concurrent read-modify-write races on the same file.
+ */
+async function acquireFileLock(path: string): Promise<() => void> {
+  // Wait for any existing lock to be released
+  while (fileLocks.has(path)) {
+    await fileLocks.get(path);
+  }
+
+  // Create a new lock
+  let releaseLock: () => void;
+  const lockPromise = new Promise<void>((resolve) => {
+    releaseLock = resolve;
+  });
+  fileLocks.set(path, lockPromise);
+
+  // Return the release function
+  return () => {
+    fileLocks.delete(path);
+    releaseLock!();
+  };
+}
 
 // Callbacks
 type FileChangeCallback = (path: string, metadata: FileMetadata | null) => void;
@@ -112,10 +158,76 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
       await syncBridge.connect();
     }
 
+    // Initialize P2P if enabled
+    await initP2PWorkspaceSync();
+
     initialized = true;
     options.onReady?.();
   } finally {
     _initializing = false;
+  }
+}
+
+/**
+ * Initialize P2P sync for workspace.
+ * Creates a Y.Doc that syncs workspace state via WebRTC.
+ */
+async function initP2PWorkspaceSync(): Promise<void> {
+  if (!isP2PEnabled() || !rustApi) {
+    return;
+  }
+
+  // Create workspace Y.Doc for P2P sync
+  workspaceYDoc = new Y.Doc();
+
+  // Load initial state from Rust CRDT
+  try {
+    const fullState = await rustApi.getFullState('workspace');
+    if (fullState.length > 0) {
+      Y.applyUpdate(workspaceYDoc, fullState, 'rust');
+    }
+  } catch (error) {
+    console.warn('[WorkspaceCrdtBridge] Failed to load workspace state for P2P:', error);
+  }
+
+  // Create P2P provider
+  const docName = _workspaceId ? `${_workspaceId}:workspace` : 'workspace';
+  p2pProvider = createP2PProvider(workspaceYDoc, docName);
+
+  if (p2pProvider) {
+    console.log('[WorkspaceCrdtBridge] P2P provider created for workspace');
+
+    // Sync Y.Doc changes back to Rust CRDT
+    workspaceYDoc.on('update', async (update: Uint8Array, origin: unknown) => {
+      if (origin === 'rust' || !rustApi) return;
+      
+      try {
+        await rustApi.applyRemoteUpdate(update, 'workspace');
+      } catch (error) {
+        console.error('[WorkspaceCrdtBridge] Failed to sync P2P update to Rust:', error);
+      }
+    });
+  }
+}
+
+/**
+ * Refresh P2P sync for workspace.
+ * Call this after enabling/disabling P2P.
+ */
+export async function refreshWorkspaceP2P(): Promise<void> {
+  // Cleanup existing P2P
+  if (p2pProvider) {
+    destroyP2PProvider(_workspaceId ? `${_workspaceId}:workspace` : 'workspace');
+    p2pProvider = null;
+  }
+  if (workspaceYDoc) {
+    workspaceYDoc.destroy();
+    workspaceYDoc = null;
+  }
+
+  // Reinitialize if P2P is enabled
+  if (isP2PEnabled() && initialized) {
+    await initP2PWorkspaceSync();
   }
 }
 
@@ -139,6 +251,31 @@ export function reconnectWorkspace(): void {
 export async function destroyWorkspace(): Promise<void> {
   syncBridge?.destroy();
   syncBridge = null;
+
+  // Cleanup P2P
+  if (p2pProvider) {
+    destroyP2PProvider(_workspaceId ? `${_workspaceId}:workspace` : 'workspace');
+    p2pProvider = null;
+  }
+  if (workspaceYDoc) {
+    workspaceYDoc.destroy();
+    workspaceYDoc = null;
+  }
+
+  // Clear pending intervals/timeouts to prevent memory leaks
+  for (const interval of pendingIntervals) {
+    clearInterval(interval);
+  }
+  pendingIntervals.clear();
+
+  for (const timeout of pendingTimeouts) {
+    clearTimeout(timeout);
+  }
+  pendingTimeouts.clear();
+
+  // Clear file locks
+  fileLocks.clear();
+
   rustApi = null;
   initialized = false;
   fileChangeCallbacks.clear();
@@ -152,10 +289,18 @@ export function isWorkspaceInitialized(): boolean {
 }
 
 /**
- * Check if workspace is connected to sync server.
+ * Check if workspace is connected (via server or P2P).
  */
 export function isWorkspaceConnected(): boolean {
-  return syncBridge?.isSynced() ?? false;
+  // Check Hocuspocus connection
+  if (syncBridge?.isSynced()) {
+    return true;
+  }
+  // Check P2P connection
+  if (p2pProvider?.connected) {
+    return true;
+  }
+  return false;
 }
 
 // ===========================================================================
@@ -201,6 +346,7 @@ export async function setFileMetadata(path: string, metadata: FileMetadata): Pro
 
 /**
  * Update specific fields of file metadata.
+ * Uses a per-file lock to prevent race conditions on concurrent updates.
  */
 export async function updateFileMetadata(
   path: string,
@@ -210,21 +356,30 @@ export async function updateFileMetadata(
     throw new Error('Workspace not initialized');
   }
 
-  const existing = await rustApi.getFile(path);
-  const updated: FileMetadata = {
-    title: updates.title ?? existing?.title ?? null,
-    part_of: updates.part_of ?? existing?.part_of ?? null,
-    contents: updates.contents ?? existing?.contents ?? null,
-    attachments: updates.attachments ?? existing?.attachments ?? [],
-    deleted: updates.deleted ?? existing?.deleted ?? false,
-    audience: updates.audience ?? existing?.audience ?? null,
-    description: updates.description ?? existing?.description ?? null,
-    extra: updates.extra ?? existing?.extra ?? {},
-    modified_at: BigInt(Date.now()),
-  };
+  // Acquire lock to prevent concurrent read-modify-write races
+  const releaseLock = await acquireFileLock(path);
 
-  await rustApi.setFile(path, updated);
-  notifyFileChange(path, updated);
+  try {
+    const existing = await rustApi.getFile(path);
+    const updated: FileMetadata = {
+      title: updates.title ?? existing?.title ?? null,
+      part_of: updates.part_of ?? existing?.part_of ?? null,
+      contents: updates.contents ?? existing?.contents ?? null,
+      attachments: updates.attachments ?? existing?.attachments ?? [],
+      deleted: updates.deleted ?? existing?.deleted ?? false,
+      audience: updates.audience ?? existing?.audience ?? null,
+      description: updates.description ?? existing?.description ?? null,
+      extra: updates.extra ?? existing?.extra ?? {},
+      modified_at: BigInt(Date.now()),
+    };
+
+    console.log('[WorkspaceCrdtBridge] Updating file metadata:', path, updated);
+    await rustApi.setFile(path, updated);
+    console.log('[WorkspaceCrdtBridge] File metadata updated successfully:', path);
+    notifyFileChange(path, updated);
+  } finally {
+    releaseLock();
+  }
 }
 
 /**
@@ -272,30 +427,58 @@ export async function purgeFile(path: string): Promise<void> {
 
 /**
  * Add a child to a parent's contents array.
+ * Uses locking to prevent race conditions with concurrent modifications.
  */
 export async function addToContents(parentPath: string, childPath: string): Promise<void> {
-  const parent = await getFileMetadata(parentPath);
-  if (!parent) return;
+  if (!rustApi) return;
 
-  const contents = parent.contents ?? [];
-  if (!contents.includes(childPath)) {
-    contents.push(childPath);
-    await updateFileMetadata(parentPath, { contents });
+  const releaseLock = await acquireFileLock(parentPath);
+  try {
+    const parent = await rustApi.getFile(parentPath);
+    if (!parent) return;
+
+    const contents = parent.contents ?? [];
+    if (!contents.includes(childPath)) {
+      contents.push(childPath);
+      const updated: FileMetadata = {
+        ...parent,
+        contents,
+        modified_at: BigInt(Date.now()),
+      };
+      await rustApi.setFile(parentPath, updated);
+      notifyFileChange(parentPath, updated);
+    }
+  } finally {
+    releaseLock();
   }
 }
 
 /**
  * Remove a child from a parent's contents array.
+ * Uses locking to prevent race conditions with concurrent modifications.
  */
 export async function removeFromContents(parentPath: string, childPath: string): Promise<void> {
-  const parent = await getFileMetadata(parentPath);
-  if (!parent) return;
+  if (!rustApi) return;
 
-  const contents = parent.contents ?? [];
-  const index = contents.indexOf(childPath);
-  if (index !== -1) {
-    contents.splice(index, 1);
-    await updateFileMetadata(parentPath, { contents: contents.length > 0 ? contents : null });
+  const releaseLock = await acquireFileLock(parentPath);
+  try {
+    const parent = await rustApi.getFile(parentPath);
+    if (!parent) return;
+
+    const contents = parent.contents ?? [];
+    const index = contents.indexOf(childPath);
+    if (index !== -1) {
+      contents.splice(index, 1);
+      const updated: FileMetadata = {
+        ...parent,
+        contents: contents.length > 0 ? contents : null,
+        modified_at: BigInt(Date.now()),
+      };
+      await rustApi.setFile(parentPath, updated);
+      notifyFileChange(parentPath, updated);
+    }
+  } finally {
+    releaseLock();
   }
 }
 
@@ -364,24 +547,52 @@ export async function renameFile(oldPath: string, newPath: string): Promise<void
 
 /**
  * Add an attachment to a file.
+ * Uses locking to prevent race conditions with concurrent modifications.
  */
 export async function addAttachment(filePath: string, attachment: BinaryRef): Promise<void> {
-  const file = await getFileMetadata(filePath);
-  if (!file) return;
+  if (!rustApi) return;
 
-  const attachments = [...file.attachments, attachment];
-  await updateFileMetadata(filePath, { attachments });
+  const releaseLock = await acquireFileLock(filePath);
+  try {
+    const file = await rustApi.getFile(filePath);
+    if (!file) return;
+
+    const attachments = [...file.attachments, attachment];
+    const updated: FileMetadata = {
+      ...file,
+      attachments,
+      modified_at: BigInt(Date.now()),
+    };
+    await rustApi.setFile(filePath, updated);
+    notifyFileChange(filePath, updated);
+  } finally {
+    releaseLock();
+  }
 }
 
 /**
  * Remove an attachment from a file.
+ * Uses locking to prevent race conditions with concurrent modifications.
  */
 export async function removeAttachment(filePath: string, attachmentPath: string): Promise<void> {
-  const file = await getFileMetadata(filePath);
-  if (!file) return;
+  if (!rustApi) return;
 
-  const attachments = file.attachments.filter((a) => a.path !== attachmentPath);
-  await updateFileMetadata(filePath, { attachments });
+  const releaseLock = await acquireFileLock(filePath);
+  try {
+    const file = await rustApi.getFile(filePath);
+    if (!file) return;
+
+    const attachments = file.attachments.filter((a) => a.path !== attachmentPath);
+    const updated: FileMetadata = {
+      ...file,
+      attachments,
+      modified_at: BigInt(Date.now()),
+    };
+    await rustApi.setFile(filePath, updated);
+    notifyFileChange(filePath, updated);
+  } finally {
+    releaseLock();
+  }
 }
 
 /**
@@ -414,17 +625,26 @@ export function waitForSync(timeoutMs = 5000): Promise<boolean> {
       return;
     }
 
+    const cleanup = () => {
+      clearInterval(checkInterval);
+      clearTimeout(timeout);
+      pendingIntervals.delete(checkInterval);
+      pendingTimeouts.delete(timeout);
+    };
+
     const timeout = setTimeout(() => {
+      cleanup();
       resolve(false);
     }, timeoutMs);
+    pendingTimeouts.add(timeout);
 
     const checkInterval = setInterval(() => {
       if (isWorkspaceConnected()) {
-        clearInterval(checkInterval);
-        clearTimeout(timeout);
+        cleanup();
         resolve(true);
       }
     }, 100);
+    pendingIntervals.add(checkInterval);
   });
 }
 

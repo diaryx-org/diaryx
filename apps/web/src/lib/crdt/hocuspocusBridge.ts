@@ -32,8 +32,12 @@ export interface HocuspocusBridgeOptions {
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'syncing' | 'synced';
 
+type EventCallback = (...args: any[]) => void;
+
 /**
  * Bridge for Hocuspocus WebSocket communication via Rust CRDT.
+ *
+ * Implements HocuspocusProvider-compatible event interface for use with TipTap Editor.
  */
 export class HocuspocusBridge {
   private ws: WebSocket | null = null;
@@ -43,7 +47,7 @@ export class HocuspocusBridge {
   private yDocProxy?: YDocProxy;
   private token?: string;
   private onStatusChange?: (connected: boolean) => void;
-  private onSynced?: () => void;
+  private onSyncedCallback?: () => void;
   private onUpdate?: (update: Uint8Array) => void;
 
   private status: ConnectionStatus = 'disconnected';
@@ -52,6 +56,16 @@ export class HocuspocusBridge {
   private maxReconnectAttempts = 10;
   private destroyed = false;
 
+  // Queue for updates when disconnected to prevent data loss
+  private pendingUpdates: Uint8Array[] = [];
+  private maxPendingUpdates = 100;
+
+  // HocuspocusProvider-compatible event interface
+  private eventListeners: Map<string, Set<EventCallback>> = new Map();
+
+  /** HocuspocusProvider compatibility: true when synced with server */
+  synced = false;
+
   constructor(options: HocuspocusBridgeOptions) {
     this.url = options.url;
     this.docName = options.docName;
@@ -59,8 +73,51 @@ export class HocuspocusBridge {
     this.yDocProxy = options.yDocProxy;
     this.token = options.token;
     this.onStatusChange = options.onStatusChange;
-    this.onSynced = options.onSynced;
+    this.onSyncedCallback = options.onSynced;
     this.onUpdate = options.onUpdate;
+  }
+
+  // ============================================================================
+  // HocuspocusProvider-compatible event interface
+  // ============================================================================
+
+  /**
+   * Subscribe to an event (HocuspocusProvider compatibility).
+   * Supported events: 'synced', 'status', 'disconnect'
+   */
+  on(event: string, callback: EventCallback): this {
+    if (!this.eventListeners.has(event)) {
+      this.eventListeners.set(event, new Set());
+    }
+    this.eventListeners.get(event)!.add(callback);
+    return this;
+  }
+
+  /**
+   * Unsubscribe from an event (HocuspocusProvider compatibility).
+   */
+  off(event: string, callback: EventCallback): this {
+    const listeners = this.eventListeners.get(event);
+    if (listeners) {
+      listeners.delete(callback);
+    }
+    return this;
+  }
+
+  /**
+   * Emit an event to all listeners.
+   */
+  private emit(event: string, ...args: any[]): void {
+    const listeners = this.eventListeners.get(event);
+    if (listeners) {
+      for (const callback of listeners) {
+        try {
+          callback(...args);
+        } catch (e) {
+          console.error(`[HocuspocusBridge] Event handler error for '${event}':`, e);
+        }
+      }
+    }
   }
 
   /**
@@ -130,10 +187,17 @@ export class HocuspocusBridge {
 
   /**
    * Broadcast a local update to the server.
+   * If not connected, queues the update for transmission when reconnected.
    */
   async broadcastUpdate(update: Uint8Array): Promise<void> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      console.warn('[HocuspocusBridge] Cannot broadcast: not connected');
+      // Queue update for later transmission to prevent data loss
+      if (this.pendingUpdates.length < this.maxPendingUpdates) {
+        this.pendingUpdates.push(update);
+        console.log('[HocuspocusBridge] Update queued for reconnection, queue size:', this.pendingUpdates.length);
+      } else {
+        console.error('[HocuspocusBridge] Pending update queue full, update dropped');
+      }
       return;
     }
 
@@ -143,15 +207,61 @@ export class HocuspocusBridge {
       this.ws.send(message);
     } catch (error) {
       console.error('[HocuspocusBridge] Broadcast error:', error);
+      // Queue the update if send failed
+      if (this.pendingUpdates.length < this.maxPendingUpdates) {
+        this.pendingUpdates.push(update);
+      }
+    }
+  }
+
+  /**
+   * Flush all pending updates to the server.
+   * Called after sync is complete to ensure queued updates are sent.
+   */
+  private async flushPendingUpdates(): Promise<void> {
+    if (this.pendingUpdates.length === 0) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+
+    console.log('[HocuspocusBridge] Flushing', this.pendingUpdates.length, 'pending updates');
+    const updates = [...this.pendingUpdates];
+    this.pendingUpdates = [];
+
+    for (const update of updates) {
+      try {
+        const message = await this.rustApi.createUpdateMessage(update, this.docName);
+        this.ws.send(message);
+      } catch (error) {
+        console.error('[HocuspocusBridge] Failed to flush update:', error);
+        // Re-queue failed updates
+        this.pendingUpdates.push(update);
+      }
     }
   }
 
   // Private methods
 
   private setStatus(status: ConnectionStatus): void {
+    const previousStatus = this.status;
     this.status = status;
     const connected = status === 'connected' || status === 'syncing' || status === 'synced';
     this.onStatusChange?.(connected);
+
+    // Emit HocuspocusProvider-compatible events
+    this.emit('status', { status });
+
+    if (status === 'synced' && previousStatus !== 'synced') {
+      this.synced = true;
+      this.emit('synced', { state: 'connected' });
+      this.onSyncedCallback?.();
+
+      // Flush any pending updates that accumulated during disconnection
+      this.flushPendingUpdates().catch((error) => {
+        console.error('[HocuspocusBridge] Failed to flush pending updates:', error);
+      });
+    } else if (status === 'disconnected' && previousStatus !== 'disconnected') {
+      this.synced = false;
+      this.emit('disconnect', { event: { code: 1000 } });
+    }
   }
 
   private async handleOpen(): Promise<void> {
@@ -187,7 +297,6 @@ export class HocuspocusBridge {
       if (message[0] === 0 && message[1] === 1) {
         // SyncStep2 received - we're synced
         this.setStatus('synced');
-        this.onSynced?.();
       }
 
       // If it's an update message, sync to YDocProxy and notify

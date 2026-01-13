@@ -6,6 +6,8 @@
 /// Where all the Tauri `invoke` functions are defined.
 mod commands;
 
+use commands::CrdtState;
+
 /// Cloud backup targets (S3, Google Drive, etc.)
 mod cloud;
 
@@ -44,6 +46,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_google_auth::init())
+        // CRDT state for version history and sync
+        .manage(CrdtState::new())
         .invoke_handler(tauri::generate_handler![
             // ============================================================
             // UNIFIED COMMAND API - All operations go through execute()

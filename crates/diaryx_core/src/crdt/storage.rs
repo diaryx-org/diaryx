@@ -46,6 +46,26 @@ pub trait CrdtStorage: Send + Sync {
     /// Returns the ID of the newly created update record.
     fn append_update(&self, name: &str, update: &[u8], origin: UpdateOrigin) -> StorageResult<i64>;
 
+    /// Append multiple updates atomically.
+    ///
+    /// All updates are applied in a single transaction. If any update fails,
+    /// no updates are persisted. This enables atomic operations across multiple
+    /// documents (e.g., creating a file updates both workspace and body CRDTs).
+    ///
+    /// Returns the IDs of all newly created update records in order.
+    fn batch_append_updates(
+        &self,
+        updates: &[(&str, &[u8], UpdateOrigin)],
+    ) -> StorageResult<Vec<i64>> {
+        // Default implementation: apply updates sequentially (not atomic)
+        // Storage backends should override this with proper transaction support
+        let mut ids = Vec::with_capacity(updates.len());
+        for (name, update, origin) in updates {
+            ids.push(self.append_update(name, update, *origin)?);
+        }
+        Ok(ids)
+    }
+
     /// Get all updates for a document since a given update ID.
     ///
     /// This is used for sync: a client sends their last known update ID,

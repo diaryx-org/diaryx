@@ -1,18 +1,30 @@
-//! In-memory storage implementation for testing.
+//! In-memory storage implementation for testing and WASM.
 //!
 //! This provides a simple in-memory implementation of [`CrdtStorage`]
-//! for use in unit tests and development.
+//! for use in unit tests, development, and WASM environments.
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+use yrs::{Doc, ReadTxn, Transact, Update, updates::decoder::Decode};
+
 use super::storage::{CrdtStorage, StorageResult};
 use super::types::{CrdtUpdate, UpdateOrigin};
+
+/// Threshold for triggering auto-compaction (number of updates)
+const AUTO_COMPACT_THRESHOLD: usize = 1000;
+
+/// Number of updates to keep after auto-compaction
+const AUTO_COMPACT_KEEP: usize = 500;
 
 /// In-memory CRDT storage for testing.
 ///
 /// This implementation stores all data in memory using `HashMap` and `Vec`.
 /// It's thread-safe via `RwLock` but data is lost when dropped.
+///
+/// Auto-compaction is triggered when the number of updates for a document
+/// exceeds [`AUTO_COMPACT_THRESHOLD`], keeping the most recent
+/// [`AUTO_COMPACT_KEEP`] updates.
 #[derive(Debug, Default)]
 pub struct MemoryStorage {
     /// Document snapshots (name -> binary state)
@@ -81,7 +93,14 @@ impl CrdtStorage for MemoryStorage {
         };
 
         let mut updates = self.updates.write().unwrap();
-        updates.entry(name.to_string()).or_default().push(stored);
+        let doc_updates = updates.entry(name.to_string()).or_default();
+        doc_updates.push(stored);
+
+        // Auto-compact if we've exceeded the threshold
+        if doc_updates.len() > AUTO_COMPACT_THRESHOLD {
+            let drain_count = doc_updates.len() - AUTO_COMPACT_KEEP;
+            doc_updates.drain(0..drain_count);
+        }
 
         Ok(id)
     }
@@ -108,22 +127,50 @@ impl CrdtStorage for MemoryStorage {
     }
 
     fn get_state_at(&self, name: &str, update_id: i64) -> StorageResult<Option<Vec<u8>>> {
-        // For memory storage, we don't implement proper state reconstruction.
-        // A real implementation would apply updates up to the given ID.
-        // For now, if asking for latest, return current state.
-        let updates = self.updates.read().unwrap();
-        let doc_updates = updates.get(name);
+        // Load base document snapshot
+        let base_state = self.load_doc(name)?;
 
-        if let Some(updates) = doc_updates
-            && let Some(last) = updates.last()
-            && update_id >= last.id
-        {
-            return self.load_doc(name);
+        // Get updates up to the specified ID
+        let updates_lock = self.updates.read().unwrap();
+        let doc_updates: Vec<Vec<u8>> = updates_lock
+            .get(name)
+            .map(|updates| {
+                updates
+                    .iter()
+                    .filter(|u| u.id <= update_id)
+                    .map(|u| u.data.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // If no base state and no updates, return None
+        if base_state.is_none() && doc_updates.is_empty() {
+            return Ok(None);
         }
 
-        // TODO: Implement proper state reconstruction by replaying updates
-        // This requires yrs integration to merge updates
-        self.load_doc(name)
+        // Create a new doc and apply all state
+        let doc = Doc::new();
+        {
+            let mut txn = doc.transact_mut();
+
+            // Apply base state if it exists
+            if let Some(state) = &base_state
+                && let Ok(update) = Update::decode_v1(state)
+            {
+                let _ = txn.apply_update(update);
+            }
+
+            // Apply incremental updates up to the specified ID
+            for update_data in doc_updates {
+                if let Ok(update) = Update::decode_v1(&update_data) {
+                    let _ = txn.apply_update(update);
+                }
+            }
+        }
+
+        // Encode final state
+        let txn = doc.transact();
+        Ok(Some(txn.encode_state_as_update_v1(&Default::default())))
     }
 
     fn compact(&self, name: &str, keep_updates: usize) -> StorageResult<()> {
@@ -262,5 +309,89 @@ mod tests {
             .append_update("test", b"update2", UpdateOrigin::Local)
             .unwrap();
         assert_eq!(storage.get_latest_update_id("test").unwrap(), id2);
+    }
+
+    #[test]
+    fn test_get_state_at_reconstructs_history() {
+        use yrs::{GetString, Text, Transact, updates::encoder::Encode};
+
+        let storage = MemoryStorage::new();
+
+        // Create a Y.Doc and make some changes, storing updates
+        let doc = Doc::new();
+        let text = doc.get_or_insert_text("content");
+
+        // First update: add "Hello"
+        let update1 = {
+            let mut txn = doc.transact_mut();
+            text.insert(&mut txn, 0, "Hello");
+            txn.encode_update_v1()
+        };
+        let id1 = storage
+            .append_update("test", &update1, UpdateOrigin::Local)
+            .unwrap();
+
+        // Second update: add " World"
+        let update2 = {
+            let mut txn = doc.transact_mut();
+            text.insert(&mut txn, 5, " World");
+            txn.encode_update_v1()
+        };
+        let id2 = storage
+            .append_update("test", &update2, UpdateOrigin::Local)
+            .unwrap();
+
+        // Third update: add "!"
+        let update3 = {
+            let mut txn = doc.transact_mut();
+            text.insert(&mut txn, 11, "!");
+            txn.encode_update_v1()
+        };
+        let _id3 = storage
+            .append_update("test", &update3, UpdateOrigin::Local)
+            .unwrap();
+
+        // Verify current state is "Hello World!"
+        {
+            let txn = doc.transact();
+            assert_eq!(text.get_string(&txn), "Hello World!");
+        }
+
+        // Get state at id1 - should only have "Hello"
+        let state_at_1 = storage.get_state_at("test", id1).unwrap().unwrap();
+        let doc_at_1 = Doc::new();
+        {
+            let mut txn = doc_at_1.transact_mut();
+            let update = Update::decode_v1(&state_at_1).unwrap();
+            txn.apply_update(update);
+        }
+        let text_at_1 = doc_at_1.get_or_insert_text("content");
+        {
+            let txn = doc_at_1.transact();
+            assert_eq!(text_at_1.get_string(&txn), "Hello");
+        }
+
+        // Get state at id2 - should have "Hello World"
+        let state_at_2 = storage.get_state_at("test", id2).unwrap().unwrap();
+        let doc_at_2 = Doc::new();
+        {
+            let mut txn = doc_at_2.transact_mut();
+            let update = Update::decode_v1(&state_at_2).unwrap();
+            txn.apply_update(update);
+        }
+        let text_at_2 = doc_at_2.get_or_insert_text("content");
+        {
+            let txn = doc_at_2.transact();
+            assert_eq!(text_at_2.get_string(&txn), "Hello World");
+        }
+    }
+
+    #[test]
+    fn test_get_state_at_nonexistent() {
+        let storage = MemoryStorage::new();
+
+        // No doc, no updates - should return None
+        let result = storage.get_state_at("nonexistent", 1).unwrap();
+        assert!(result.is_none());
     }
 }

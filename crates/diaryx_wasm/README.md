@@ -33,6 +33,7 @@ The crate provides typed class-based APIs that wrap `diaryx_core` functionality:
 | `DiaryxAttachment`       | Attachment upload/download                |
 | `DiaryxFilesystem`       | Low-level filesystem operations (sync)    |
 | `DiaryxAsyncFilesystem`  | Async filesystem operations with Promises |
+| `Diaryx`                 | Unified command API (includes CRDT ops)   |
 
 ### In-Memory Filesystem
 
@@ -165,6 +166,158 @@ While the underlying `InMemoryFileSystem` is synchronous, `DiaryxAsyncFilesystem
 1. Enables consistent async/await patterns in JavaScript
 2. Allows for future integration with truly async operations
 3. Works well with JavaScript's event loop
+
+### Diaryx (Command API with CRDT)
+
+The `Diaryx` class provides a unified command API that includes CRDT operations for real-time collaboration. Commands are executed via `execute()` (returns typed result) or `executeJs()` (returns JS-friendly object).
+
+```javascript
+import init, { Diaryx } from "./wasm/diaryx_wasm.js";
+
+await init();
+const diaryx = new Diaryx();
+
+// All CRDT commands use the execute/executeJs pattern
+```
+
+#### CRDT Workspace Operations
+
+```javascript
+// Set file metadata in the CRDT workspace
+await diaryx.executeJs({
+  type: "SetFileMetadata",
+  path: "notes/my-note.md",
+  metadata: {
+    title: "My Note",
+    audience: ["public"],
+    part_of: "README.md",
+  },
+});
+
+// Get file metadata
+const result = await diaryx.executeJs({
+  type: "GetFileMetadata",
+  path: "notes/my-note.md",
+});
+console.log(result.metadata); // { title: "My Note", ... }
+
+// List all files in workspace
+const files = await diaryx.executeJs({ type: "ListFiles" });
+console.log(files.files); // ["notes/my-note.md", ...]
+
+// Remove a file from workspace
+await diaryx.executeJs({
+  type: "RemoveFile",
+  path: "notes/my-note.md",
+});
+```
+
+#### CRDT Body Document Operations
+
+```javascript
+// Set document body content
+await diaryx.executeJs({
+  type: "SetBody",
+  path: "notes/my-note.md",
+  content: "# Hello World\n\nThis is my note.",
+});
+
+// Get document body
+const body = await diaryx.executeJs({
+  type: "GetBody",
+  path: "notes/my-note.md",
+});
+console.log(body.content);
+
+// Insert text at position (collaborative editing)
+await diaryx.executeJs({
+  type: "InsertAt",
+  path: "notes/my-note.md",
+  position: 0,
+  text: "Prefix: ",
+});
+
+// Delete text range
+await diaryx.executeJs({
+  type: "DeleteRange",
+  path: "notes/my-note.md",
+  start: 0,
+  end: 8,
+});
+```
+
+#### CRDT Sync Operations
+
+For synchronizing with Hocuspocus or other Y.js-compatible servers:
+
+```javascript
+// Get sync state (state vector) for initial handshake
+const syncState = await diaryx.executeJs({
+  type: "GetSyncState",
+  doc_type: "workspace", // or "body"
+  doc_name: null, // required for "body" type
+});
+const stateVector = syncState.state_vector; // Uint8Array
+
+// Apply remote update from server
+await diaryx.executeJs({
+  type: "ApplyRemoteUpdate",
+  doc_type: "workspace",
+  doc_name: null,
+  update: remoteUpdateBytes, // Uint8Array from WebSocket
+});
+
+// Encode full state to send to server
+const state = await diaryx.executeJs({
+  type: "EncodeState",
+  doc_type: "workspace",
+  doc_name: null,
+});
+sendToServer(state.state); // Uint8Array
+
+// Encode incremental update since a state vector
+const diff = await diaryx.executeJs({
+  type: "EncodeStateAsUpdate",
+  doc_type: "workspace",
+  doc_name: null,
+  state_vector: remoteStateVector, // Uint8Array
+});
+sendToServer(diff.update); // Uint8Array
+```
+
+#### Version History
+
+```javascript
+// Get version history for a document
+const history = await diaryx.executeJs({
+  type: "GetHistory",
+  doc_type: "workspace", // or "body"
+  doc_name: null, // required for "body" type
+});
+
+for (const entry of history.entries) {
+  console.log(`Version ${entry.version} at ${entry.timestamp}`);
+  console.log(`  Origin: ${entry.origin}`); // "local" or "remote"
+  console.log(`  Size: ${entry.update.length} bytes`);
+}
+
+// Restore to a specific version (time travel)
+await diaryx.executeJs({
+  type: "RestoreToVersion",
+  doc_type: "workspace",
+  doc_name: null,
+  version: 5,
+});
+```
+
+#### Document Types
+
+CRDT operations use `doc_type` to specify which document to operate on:
+
+| doc_type    | doc_name  | Description                              |
+| ----------- | --------- | ---------------------------------------- |
+| `workspace` | `null`    | The workspace file hierarchy metadata    |
+| `body`      | file path | Per-file body content (e.g., `notes/a.md`) |
 
 ## Error Handling
 

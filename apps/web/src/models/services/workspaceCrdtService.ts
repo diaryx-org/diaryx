@@ -1,19 +1,17 @@
-import type { Backend } from '$lib/backend';
-import type { Api } from '$lib/backend/api';
-import { setWorkspaceId } from '$lib/collaborationUtils';
+import type { RustCrdtApi } from '$lib/crdt/rustCrdtApi';
+import { HocuspocusBridge, createHocuspocusBridge } from '$lib/crdt/hocuspocusBridge';
 import {
   initWorkspace,
-  syncFromBackend,
-  syncToLocal,
-  garbageCollect,
-  getWorkspaceStats,
-  updateFileMetadata,
-  addToContents,
+  setWorkspaceId,
   setInitializing,
-  waitForIndexedDBSync,
+  updateFileMetadata as updateFileInCrdt,
+  addToContents,
+  getWorkspaceStats,
   type FileMetadata,
   type BinaryRef,
-} from '$lib/workspaceCrdt';
+} from '$lib/crdt/workspaceCrdtBridge';
+import { setCollaborationWorkspaceId } from '$lib/crdt/collaborationBridge';
+import type { JsonValue } from '$lib/backend/generated/serde_json/JsonValue';
 
 // ============================================================================
 // Types
@@ -44,82 +42,60 @@ let isInitialized = false;
  * Initialize the workspace CRDT system.
  *
  * @param workspaceId - Unique workspace identifier (null for simple room names)
+ * @param _workspacePath - Path to workspace root (for display, currently unused)
  * @param serverUrl - Collaboration server URL (null for offline mode)
- * @param backend - Backend instance for event subscriptions
- * @param api - API wrapper for data operations
+ * @param collaborationEnabled - Whether collaboration is enabled
+ * @param rustApi - Rust CRDT API instance
  * @param callbacks - Event callbacks
  * @returns Whether initialization succeeded
  */
 export async function initializeWorkspaceCrdt(
   workspaceId: string | null,
-  workspacePath: string | null,
+  _workspacePath: string | null,
   serverUrl: string | null,
   collaborationEnabled: boolean,
-  backend: Backend,
-  api: Api,
+  rustApi: RustCrdtApi,
   callbacks: WorkspaceCrdtCallbacks,
 ): Promise<boolean> {
   try {
     // Set workspace ID for per-file document room naming
     setWorkspaceId(workspaceId);
+    setCollaborationWorkspaceId(workspaceId);
 
-    // Track if this is the first server sync (for syncToLocal)
-    let hasRunSyncToLocal = false;
+    // Create sync bridge if collaboration is enabled
+    let syncBridge: HocuspocusBridge | undefined;
+    if (collaborationEnabled && serverUrl) {
+      const docName = workspaceId ? `${workspaceId}:workspace` : 'workspace';
+      syncBridge = createHocuspocusBridge({
+        url: serverUrl,
+        docName,
+        rustApi,
+        onStatusChange: callbacks.onConnectionChange,
+        onSynced: () => {
+          console.log('[WorkspaceCrdtService] Workspace synced with server');
+        },
+      });
+    }
 
-    // Initialize workspace CRDT with background server sync callback
-    await initWorkspace({
-      workspaceId: workspaceId ?? undefined,
-      serverUrl: collaborationEnabled ? serverUrl : null,
-      backend: backend,
-      api: api,
-      onFilesChange: callbacks.onFilesChange,
-      onConnectionChange: callbacks.onConnectionChange,
-      onRemoteFileSync: callbacks.onRemoteFileSync,
-      // This callback runs when server sync completes (in background)
-      onServerSynced: async () => {
-        // Only run syncToLocal once per session
-        if (hasRunSyncToLocal) return;
-        hasRunSyncToLocal = true;
-        
-        console.log('[WorkspaceCrdtService] Background server sync complete, running syncToLocal...');
-        try {
-          const { created, deleted } = await syncToLocal();
-          if (created.length > 0 || deleted.length > 0) {
-            console.log(`[WorkspaceCrdtService] Background syncToLocal: created ${created.length}, deleted ${deleted.length}`);
-          }
-        } catch (e) {
-          console.error('[WorkspaceCrdtService] Background syncToLocal failed:', e);
-        }
-      },
-    });
-
-    // STEP 1: Wait for LOCAL IndexedDB sync (instant if data cached)
-    await waitForIndexedDBSync();
-    console.log('[WorkspaceCrdtService] Local IndexedDB synced');
-
-    // STEP 2: Sync Local → CRDT (user can start working immediately!)
-    // Use setInitializing to prevent race conditions with incoming remote changes
+    // Initialize workspace CRDT
     setInitializing(true);
     try {
-      console.log(`[WorkspaceCrdtService] Syncing local to CRDT from ${workspacePath || 'default'}...`);
-      await syncFromBackend(api, workspacePath ?? undefined);
+      await initWorkspace({
+        rustApi,
+        syncBridge,
+        serverUrl: serverUrl ?? undefined,
+        workspaceId: workspaceId ?? undefined,
+        onReady: () => {
+          console.log('[WorkspaceCrdtService] Workspace CRDT ready');
+        },
+      });
     } finally {
       setInitializing(false);
     }
 
-    // STEP 3: Server sync happens in background via HocuspocusProvider
-    // When it completes, onServerSynced callback runs syncToLocal()
-    // (no blocking waitForSync!)
-
-    // Garbage collect old deleted files (older than 7 days)
-    const purged = garbageCollect(7 * 24 * 60 * 60 * 1000);
-    if (purged > 0) {
-      console.log(`[WorkspaceCrdtService] Garbage collected ${purged} old deleted files`);
-    }
-
-    const stats = getWorkspaceStats();
+    const stats = await getWorkspaceStats();
     console.log(
-      `[WorkspaceCrdtService] Initialized: ${stats.activeFiles} files, ${stats.totalAttachments} attachments`,
+      `[WorkspaceCrdtService] Initialized: ${stats.activeFiles} active, ${stats.deletedFiles} deleted files`,
     );
 
     isInitialized = true;
@@ -148,16 +124,24 @@ export function resetCrdtState(): void {
 /**
  * Update file metadata in the CRDT.
  */
-export function updateCrdtFileMetadata(
+export async function updateCrdtFileMetadata(
   path: string,
   frontmatter: Record<string, unknown>,
-): void {
+): Promise<void> {
   if (!isInitialized) return;
 
   try {
-    updateFileMetadata(path, {
+    // Build extra fields with proper typing
+    const extraFields: Record<string, JsonValue | undefined> = {};
+    for (const [key, value] of Object.entries(frontmatter)) {
+      if (!['title', 'part_of', 'contents', 'attachments', 'audience', 'description'].includes(key)) {
+        extraFields[key] = value as JsonValue;
+      }
+    }
+
+    await updateFileInCrdt(path, {
       title: (frontmatter.title as string) ?? null,
-      partOf: (frontmatter.part_of as string) ?? null,
+      part_of: (frontmatter.part_of as string) ?? null,
       // Keep contents as relative paths (as stored in frontmatter)
       // The CRDT uses relative paths consistently - don't convert to full paths
       contents: frontmatter.contents
@@ -165,12 +149,7 @@ export function updateCrdtFileMetadata(
         : null,
       audience: (frontmatter.audience as string[]) ?? null,
       description: (frontmatter.description as string) ?? null,
-      extra: Object.fromEntries(
-        Object.entries(frontmatter).filter(
-          ([key]) =>
-            !['title', 'part_of', 'contents', 'attachments', 'audience', 'description'].includes(key),
-        ),
-      ),
+      extra: extraFields,
     });
   } catch (e) {
     console.error('[WorkspaceCrdtService] Failed to update metadata:', e);
@@ -180,48 +159,51 @@ export function updateCrdtFileMetadata(
 /**
  * Add a new file to the CRDT.
  */
-export function addFileToCrdt(
+export async function addFileToCrdt(
   path: string,
   frontmatter: Record<string, unknown>,
   parentPath: string | null,
-): void {
+): Promise<void> {
   if (!isInitialized) return;
 
   try {
+    // Build extra fields with proper typing
+    const extraFields: Record<string, JsonValue | undefined> = {};
+    for (const [key, value] of Object.entries(frontmatter)) {
+      if (!['title', 'part_of', 'contents', 'attachments', 'audience', 'description'].includes(key)) {
+        extraFields[key] = value as JsonValue;
+      }
+    }
+
     const metadata: FileMetadata = {
       title: (frontmatter.title as string) ?? null,
-      partOf: parentPath ?? (frontmatter.part_of as string) ?? null,
+      part_of: parentPath ?? (frontmatter.part_of as string) ?? null,
       // Keep contents as relative paths (as stored in frontmatter)
       // The CRDT uses relative paths consistently - don't convert to full paths
       contents: frontmatter.contents
         ? (frontmatter.contents as string[])
         : null,
-      attachments: ((frontmatter.attachments as string[]) ?? []).map((p) => ({
+      attachments: ((frontmatter.attachments as string[]) ?? []).map((p): BinaryRef => ({
         path: p,
-        source: 'local' as const,
+        source: 'local',
         hash: '',
-        mimeType: '',
-        size: 0,
+        mime_type: '',
+        size: BigInt(0),
+        uploaded_at: null,
         deleted: false,
       })),
       deleted: false,
       audience: (frontmatter.audience as string[]) ?? null,
       description: (frontmatter.description as string) ?? null,
-      extra: Object.fromEntries(
-        Object.entries(frontmatter).filter(
-          ([key]) =>
-            !['title', 'part_of', 'contents', 'attachments', 'audience', 'description'].includes(key),
-        ),
-      ),
-      modifiedAt: Date.now(),
+      extra: extraFields,
+      modified_at: BigInt(Date.now()),
     };
 
-    updateFileMetadata(path, metadata);
+    await updateFileInCrdt(path, metadata);
 
     // Add to parent's contents if parent exists
     if (parentPath) {
       // Calculate relative path (just the filename if inside parent dir, or fully relative)
-      // Mirror logic from workspaceCrdt.ts getRelativePathForContents
       let relativePath = path;
       if (path.startsWith(parentPath + '/')) {
         relativePath = path.substring(parentPath.length + 1);
@@ -229,7 +211,7 @@ export function addFileToCrdt(
         const lastSlash = path.lastIndexOf('/');
         relativePath = lastSlash >= 0 ? path.substring(lastSlash + 1) : path;
       }
-      addToContents(parentPath, relativePath);
+      await addToContents(parentPath, relativePath);
     }
   } catch (e) {
     console.error('[WorkspaceCrdtService] Failed to add file:', e);
@@ -245,10 +227,11 @@ export function createAttachmentRef(
 ): BinaryRef {
   return {
     path: attachmentPath,
-    source: 'local' as const,
+    source: 'local',
     hash: '',
-    mimeType: file.type,
-    size: file.size,
+    mime_type: file.type,
+    size: BigInt(file.size),
+    uploaded_at: BigInt(Date.now()),
     deleted: false,
   };
 }
@@ -256,6 +239,10 @@ export function createAttachmentRef(
 /**
  * Get workspace statistics.
  */
-export function getCrdtStats(): WorkspaceCrdtStats {
-  return getWorkspaceStats();
+export async function getCrdtStats(): Promise<WorkspaceCrdtStats> {
+  const stats = await getWorkspaceStats();
+  return {
+    activeFiles: stats.activeFiles,
+    totalAttachments: 0, // TODO: count attachments from all files
+  };
 }

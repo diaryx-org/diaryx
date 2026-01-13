@@ -1089,7 +1089,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 })?;
                 let file_metadata: crate::crdt::FileMetadata = serde_json::from_value(metadata)
                     .map_err(|e| DiaryxError::Unsupported(format!("Invalid metadata: {}", e)))?;
-                crdt.set_file(&path, file_metadata);
+                crdt.set_file(&path, file_metadata)?;
                 Ok(Response::Ok)
             }
 
@@ -1132,7 +1132,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 let crdt = self.crdt().ok_or_else(|| {
                     DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
                 })?;
-                crdt.set_body_content(&doc_name, &content);
+                crdt.set_body_content(&doc_name, &content)?;
                 Ok(Response::Ok)
             }
 

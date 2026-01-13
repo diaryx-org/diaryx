@@ -137,21 +137,52 @@ impl WorkspaceCrdt {
     /// Set metadata for a file at the given path.
     ///
     /// This will create a new entry or update an existing one.
-    pub fn set_file(&self, path: &str, metadata: FileMetadata) {
-        let mut txn = self.doc.transact_mut();
-        let json = serde_json::to_string(&metadata).unwrap_or_default();
-        self.files_map.insert(&mut txn, path, json);
+    /// The change is automatically recorded in the update history.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the update fails to persist to storage.
+    pub fn set_file(&self, path: &str, metadata: FileMetadata) -> StorageResult<()> {
+        // Get state vector before the change
+        let sv_before = {
+            let txn = self.doc.transact();
+            txn.state_vector()
+        };
+
+        // Make the change
+        {
+            let mut txn = self.doc.transact_mut();
+            let json = serde_json::to_string(&metadata).unwrap_or_default();
+            self.files_map.insert(&mut txn, path, json);
+        }
+
+        // Capture the incremental update and store it
+        let update = {
+            let txn = self.doc.transact();
+            txn.encode_state_as_update_v1(&sv_before)
+        };
+
+        if !update.is_empty() {
+            self.storage
+                .append_update(&self.doc_name, &update, UpdateOrigin::Local)?;
+        }
+        Ok(())
     }
 
     /// Mark a file as deleted (soft delete).
     ///
     /// This sets the `deleted` flag to true rather than removing the entry,
     /// which is important for proper CRDT tombstone handling.
-    pub fn delete_file(&self, path: &str) {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the update fails to persist to storage.
+    pub fn delete_file(&self, path: &str) -> StorageResult<()> {
         if let Some(mut metadata) = self.get_file(path) {
             metadata.mark_deleted();
-            self.set_file(path, metadata);
+            self.set_file(path, metadata)?;
         }
+        Ok(())
     }
 
     /// Remove a file entry completely from the CRDT.
@@ -159,9 +190,34 @@ impl WorkspaceCrdt {
     /// **Warning**: This should generally not be used. Prefer [`delete_file`]
     /// for proper tombstone handling. Use this only for garbage collection
     /// of very old deleted entries.
-    pub fn remove_file(&self, path: &str) {
-        let mut txn = self.doc.transact_mut();
-        self.files_map.remove(&mut txn, path);
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the update fails to persist to storage.
+    pub fn remove_file(&self, path: &str) -> StorageResult<()> {
+        // Get state vector before the change
+        let sv_before = {
+            let txn = self.doc.transact();
+            txn.state_vector()
+        };
+
+        // Make the change
+        {
+            let mut txn = self.doc.transact_mut();
+            self.files_map.remove(&mut txn, path);
+        }
+
+        // Capture the incremental update and store it
+        let update = {
+            let txn = self.doc.transact();
+            txn.encode_state_as_update_v1(&sv_before)
+        };
+
+        if !update.is_empty() {
+            self.storage
+                .append_update(&self.doc_name, &update, UpdateOrigin::Local)?;
+        }
+        Ok(())
     }
 
     /// List all files in the workspace.
@@ -374,7 +430,7 @@ mod tests {
         let crdt = create_test_crdt();
 
         let metadata = FileMetadata::new(Some("Test File".to_string()));
-        crdt.set_file("test.md", metadata.clone());
+        crdt.set_file("test.md", metadata.clone()).unwrap();
 
         let retrieved = crdt.get_file("test.md").unwrap();
         assert_eq!(retrieved.title, Some("Test File".to_string()));
@@ -391,10 +447,10 @@ mod tests {
         let crdt = create_test_crdt();
 
         let mut metadata = FileMetadata::new(Some("Original".to_string()));
-        crdt.set_file("test.md", metadata.clone());
+        crdt.set_file("test.md", metadata.clone()).unwrap();
 
         metadata.title = Some("Updated".to_string());
-        crdt.set_file("test.md", metadata);
+        crdt.set_file("test.md", metadata).unwrap();
 
         let retrieved = crdt.get_file("test.md").unwrap();
         assert_eq!(retrieved.title, Some("Updated".to_string()));
@@ -406,9 +462,9 @@ mod tests {
         let crdt = create_test_crdt();
 
         let metadata = FileMetadata::new(Some("To Delete".to_string()));
-        crdt.set_file("test.md", metadata);
+        crdt.set_file("test.md", metadata).unwrap();
 
-        crdt.delete_file("test.md");
+        crdt.delete_file("test.md").unwrap();
 
         let retrieved = crdt.get_file("test.md").unwrap();
         assert!(retrieved.deleted);
@@ -419,9 +475,9 @@ mod tests {
     fn test_list_active_files() {
         let crdt = create_test_crdt();
 
-        crdt.set_file("active.md", FileMetadata::new(Some("Active".to_string())));
-        crdt.set_file("deleted.md", FileMetadata::new(Some("Deleted".to_string())));
-        crdt.delete_file("deleted.md");
+        crdt.set_file("active.md", FileMetadata::new(Some("Active".to_string()))).unwrap();
+        crdt.set_file("deleted.md", FileMetadata::new(Some("Deleted".to_string()))).unwrap();
+        crdt.delete_file("deleted.md").unwrap();
 
         let all = crdt.list_files();
         assert_eq!(all.len(), 2);
@@ -435,10 +491,10 @@ mod tests {
     fn test_remove_file() {
         let crdt = create_test_crdt();
 
-        crdt.set_file("test.md", FileMetadata::new(Some("Test".to_string())));
+        crdt.set_file("test.md", FileMetadata::new(Some("Test".to_string()))).unwrap();
         assert_eq!(crdt.file_count(), 1);
 
-        crdt.remove_file("test.md");
+        crdt.remove_file("test.md").unwrap();
         assert_eq!(crdt.file_count(), 0);
         assert!(crdt.get_file("test.md").is_none());
     }
@@ -448,8 +504,8 @@ mod tests {
         let crdt1 = create_test_crdt();
         let crdt2 = create_test_crdt();
 
-        crdt1.set_file("file1.md", FileMetadata::new(Some("File 1".to_string())));
-        crdt1.set_file("file2.md", FileMetadata::new(Some("File 2".to_string())));
+        crdt1.set_file("file1.md", FileMetadata::new(Some("File 1".to_string()))).unwrap();
+        crdt1.set_file("file2.md", FileMetadata::new(Some("File 2".to_string()))).unwrap();
 
         let update = crdt1.encode_state_as_update();
         crdt2.apply_update(&update, UpdateOrigin::Remote).unwrap();
@@ -464,12 +520,12 @@ mod tests {
         let crdt1 = create_test_crdt();
         let crdt2 = create_test_crdt();
 
-        crdt1.set_file("file1.md", FileMetadata::new(Some("File 1".to_string())));
+        crdt1.set_file("file1.md", FileMetadata::new(Some("File 1".to_string()))).unwrap();
 
         let update = crdt1.encode_state_as_update();
         crdt2.apply_update(&update, UpdateOrigin::Sync).unwrap();
 
-        crdt1.set_file("file2.md", FileMetadata::new(Some("File 2".to_string())));
+        crdt1.set_file("file2.md", FileMetadata::new(Some("File 2".to_string()))).unwrap();
 
         let sv = crdt2.encode_state_vector();
         let diff = crdt1.encode_diff(&sv).unwrap();
@@ -485,8 +541,8 @@ mod tests {
 
         {
             let crdt1 = WorkspaceCrdt::new(Arc::clone(&storage));
-            crdt1.set_file("file1.md", FileMetadata::new(Some("File 1".to_string())));
-            crdt1.set_file("file2.md", FileMetadata::new(Some("File 2".to_string())));
+            crdt1.set_file("file1.md", FileMetadata::new(Some("File 1".to_string()))).unwrap();
+            crdt1.set_file("file2.md", FileMetadata::new(Some("File 2".to_string()))).unwrap();
             crdt1.save().unwrap();
         }
 
@@ -509,11 +565,11 @@ mod tests {
         crdt1.set_file(
             "file1.md",
             FileMetadata::new(Some("From CRDT1".to_string())),
-        );
+        ).unwrap();
         crdt2.set_file(
             "file2.md",
             FileMetadata::new(Some("From CRDT2".to_string())),
-        );
+        ).unwrap();
 
         let update1 = crdt1.encode_state_as_update();
         let update2 = crdt2.encode_state_as_update();
@@ -538,7 +594,7 @@ mod tests {
         metadata.contents = Some(vec!["child1.md".to_string(), "child2.md".to_string()]);
         metadata.audience = Some(vec!["public".to_string()]);
 
-        crdt.set_file("index.md", metadata);
+        crdt.set_file("index.md", metadata).unwrap();
 
         let retrieved = crdt.get_file("index.md").unwrap();
         assert_eq!(retrieved.contents.unwrap().len(), 2);
@@ -558,7 +614,7 @@ mod tests {
             changes_clone.borrow_mut().extend(file_changes);
         });
 
-        crdt.set_file("test.md", FileMetadata::new(Some("Test".to_string())));
+        crdt.set_file("test.md", FileMetadata::new(Some("Test".to_string()))).unwrap();
 
         let captured = changes.borrow();
         assert_eq!(captured.len(), 1);

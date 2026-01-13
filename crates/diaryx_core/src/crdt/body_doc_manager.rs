@@ -52,8 +52,9 @@ impl BodyDocManager {
     /// Get a document by name, loading from storage if necessary.
     ///
     /// Returns None if the document doesn't exist in storage.
+    /// Uses double-checked locking to prevent race conditions.
     pub fn get(&self, doc_name: &str) -> Option<Arc<BodyDoc>> {
-        // Check cache first
+        // Fast path: check cache with read lock
         {
             let docs = self.docs.read().unwrap();
             if let Some(doc) = docs.get(doc_name) {
@@ -64,11 +65,18 @@ impl BodyDocManager {
         // Check if document exists in storage before loading
         match self.storage.load_doc(doc_name) {
             Ok(Some(_)) => {
+                // Acquire write lock for potential insertion
+                let mut docs = self.docs.write().unwrap();
+
+                // Double-check: another thread may have inserted while we waited
+                if let Some(doc) = docs.get(doc_name) {
+                    return Some(Arc::clone(doc));
+                }
+
                 // Document exists, load it
                 match BodyDoc::load(Arc::clone(&self.storage), doc_name.to_string()) {
                     Ok(doc) => {
                         let doc = Arc::new(doc);
-                        let mut docs = self.docs.write().unwrap();
                         docs.insert(doc_name.to_string(), Arc::clone(&doc));
                         Some(doc)
                     }
@@ -80,13 +88,22 @@ impl BodyDocManager {
     }
 
     /// Get a document by name, creating it if it doesn't exist.
+    /// Uses double-checked locking to prevent race conditions.
     pub fn get_or_create(&self, doc_name: &str) -> Arc<BodyDoc> {
-        // Check cache first
+        // Fast path: check cache with read lock
         {
             let docs = self.docs.read().unwrap();
             if let Some(doc) = docs.get(doc_name) {
                 return Arc::clone(doc);
             }
+        }
+
+        // Acquire write lock for potential insertion
+        let mut docs = self.docs.write().unwrap();
+
+        // Double-check: another thread may have inserted while we waited
+        if let Some(doc) = docs.get(doc_name) {
+            return Arc::clone(doc);
         }
 
         // Try to load, or create new
@@ -98,7 +115,6 @@ impl BodyDocManager {
             )),
         };
 
-        let mut docs = self.docs.write().unwrap();
         docs.insert(doc_name.to_string(), Arc::clone(&doc));
         doc
     }

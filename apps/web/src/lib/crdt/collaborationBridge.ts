@@ -6,13 +6,20 @@
  *
  * Key features:
  * - YDocProxy for TipTap integration (JS Y.Doc synced with Rust CRDT)
- * - HocuspocusBridge for real-time sync
+ * - HocuspocusBridge for real-time sync (server-based)
+ * - P2P sync via y-webrtc (peer-to-peer, no server required)
  * - Support for both workspace and per-file CRDTs
  */
 
 import type { RustCrdtApi } from './rustCrdtApi';
 import { YDocProxy, createYDocProxy } from './yDocProxy';
 import { HocuspocusBridge, createHocuspocusBridge } from './hocuspocusBridge';
+import {
+  isP2PEnabled,
+  createP2PProvider,
+  destroyP2PProvider,
+} from './p2pSyncBridge';
+import type { WebrtcProvider } from 'y-webrtc';
 
 // ============================================================================
 // Types
@@ -22,6 +29,7 @@ export interface CollaborationSession {
   docName: string;
   yDocProxy: YDocProxy;
   bridge: HocuspocusBridge | null;
+  p2pProvider: WebrtcProvider | null;
   saveTimeout: ReturnType<typeof setTimeout> | null;
   onMarkdownSave?: (markdown: string) => void;
 }
@@ -45,6 +53,7 @@ let config: CollaborationConfig = {
 
 const SAVE_DEBOUNCE_MS = 5000;
 let connectionStatusCallback: ((connected: boolean) => void) | null = null;
+let p2pStatusUnsubscribe: (() => void) | null = null;
 
 // ============================================================================
 // Configuration
@@ -58,7 +67,7 @@ export function initCollaboration(api: RustCrdtApi): void {
 }
 
 /**
- * Configure the collaboration server.
+ * Configure the collaboration server (for Hocuspocus-based sync).
  */
 export function setCollaborationServer(url: string | null): void {
   const previousUrl = config.serverUrl;
@@ -76,6 +85,30 @@ export function setCollaborationServer(url: string | null): void {
         session.bridge?.connect();
       } else {
         session.bridge = null;
+      }
+    }
+  }
+}
+
+/**
+ * Refresh P2P providers for all sessions.
+ * Call this after enabling/disabling P2P sync.
+ */
+export function refreshP2PProviders(): void {
+  console.log('[CollaborationBridge] Refreshing P2P providers...');
+  
+  for (const [path, session] of sessions.entries()) {
+    // Destroy existing P2P provider
+    if (session.p2pProvider) {
+      destroyP2PProvider(session.docName);
+      session.p2pProvider = null;
+    }
+
+    // Create new P2P provider if enabled
+    if (isP2PEnabled()) {
+      session.p2pProvider = createP2PProvider(session.yDocProxy.getYDoc(), session.docName);
+      if (session.p2pProvider) {
+        console.log(`[CollaborationBridge] P2P provider created for: ${path}`);
       }
     }
   }
@@ -138,6 +171,7 @@ export async function getCollaborativeDocument(
 ): Promise<{
   yDocProxy: YDocProxy;
   bridge: HocuspocusBridge | null;
+  p2pProvider: WebrtcProvider | null;
 }> {
   if (!rustApi) {
     throw new Error('Collaboration not initialized. Call initCollaboration first.');
@@ -149,6 +183,7 @@ export async function getCollaborativeDocument(
     return {
       yDocProxy: existing.yDocProxy,
       bridge: existing.bridge,
+      p2pProvider: existing.p2pProvider,
     };
   }
 
@@ -176,14 +211,24 @@ export async function getCollaborativeDocument(
     },
   });
 
-  // Create bridge if server configured
+  // Create Hocuspocus bridge if server configured
   const bridge = createBridge(docName, yDocProxy);
+
+  // Create P2P provider if P2P sync is enabled
+  const p2pProvider = isP2PEnabled()
+    ? createP2PProvider(yDocProxy.getYDoc(), docName)
+    : null;
+
+  if (p2pProvider) {
+    console.log(`[CollaborationBridge] P2P provider created for: ${documentPath}`);
+  }
 
   // Store session
   const session: CollaborationSession = {
     docName,
     yDocProxy,
     bridge,
+    p2pProvider,
     saveTimeout: null,
     onMarkdownSave: options?.onMarkdownSave,
   };
@@ -194,30 +239,47 @@ export async function getCollaborativeDocument(
     await bridge.connect();
   }
 
-  return { yDocProxy, bridge };
+  return { yDocProxy, bridge, p2pProvider };
 }
 
 /**
  * Release a collaborative document session.
+ * Ensures any pending debounced save is executed before cleanup.
  */
 export async function releaseDocument(documentPath: string): Promise<void> {
   const session = sessions.get(documentPath);
   if (!session) return;
 
-  // Save before releasing
+  // Execute pending debounced save immediately before cleanup
+  // This prevents data loss when releasing while a save is pending
+  if (session.saveTimeout) {
+    clearTimeout(session.saveTimeout);
+    session.saveTimeout = null;
+
+    // Execute the pending save callback immediately
+    if (session.onMarkdownSave && !session.yDocProxy.isDestroyed()) {
+      try {
+        const content = session.yDocProxy.getContent();
+        session.onMarkdownSave(content);
+        console.log('[CollaborationBridge] Executed pending save on release:', documentPath);
+      } catch (error) {
+        console.error('[CollaborationBridge] Failed to execute pending save:', error);
+      }
+    }
+  }
+
+  // Save CRDT state before releasing
   try {
     await session.yDocProxy.save();
   } catch (error) {
-    console.error('[CollaborationBridge] Failed to save on release:', error);
-  }
-
-  // Clear save timeout
-  if (session.saveTimeout) {
-    clearTimeout(session.saveTimeout);
+    console.error('[CollaborationBridge] Failed to save CRDT on release:', error);
   }
 
   // Disconnect and cleanup
   session.bridge?.destroy();
+  if (session.p2pProvider) {
+    destroyP2PProvider(session.docName);
+  }
   session.yDocProxy.destroy();
   sessions.delete(documentPath);
 }
@@ -267,11 +329,16 @@ export function reconnectAll(): void {
 }
 
 /**
- * Check if any session is connected.
+ * Check if any session is connected (via Hocuspocus or P2P).
  */
 export function isConnected(): boolean {
   for (const session of sessions.values()) {
+    // Check Hocuspocus connection
     if (session.bridge?.isSynced()) {
+      return true;
+    }
+    // Check P2P connection
+    if (session.p2pProvider?.connected) {
       return true;
     }
   }
@@ -312,10 +379,19 @@ function createBridge(docName: string, yDocProxy: YDocProxy): HocuspocusBridge |
 export function cleanup(): void {
   for (const session of sessions.values()) {
     session.bridge?.destroy();
+    if (session.p2pProvider) {
+      destroyP2PProvider(session.docName);
+    }
     session.yDocProxy.destroy();
   }
   sessions.clear();
   rustApi = null;
+  
+  // Cleanup P2P status subscription
+  if (p2pStatusUnsubscribe) {
+    p2pStatusUnsubscribe();
+    p2pStatusUnsubscribe = null;
+  }
 }
 
 // Register cleanup on page unload

@@ -315,9 +315,10 @@ impl CrdtStorage for SqliteStorage {
     }
 
     fn compact(&self, name: &str, keep_updates: usize) -> StorageResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock().unwrap();
 
         // Get the current full state by reconstructing from base + all updates
+        // This is done outside the transaction since it's read-only
         let full_state = {
             // Get base state
             let base_state: Option<Vec<u8>> = conn
@@ -380,13 +381,7 @@ impl CrdtStorage for SqliteStorage {
             )
             .unwrap_or(0);
 
-        // Delete old updates
-        conn.execute(
-            "DELETE FROM updates WHERE doc_name = ? AND id < ?",
-            params![name, cutoff_id],
-        )?;
-
-        // Update the document snapshot with the compacted state
+        // Compute the state vector before starting transaction
         let now = chrono::Utc::now().timestamp_millis();
         let state_vector = {
             let doc = Doc::new();
@@ -400,13 +395,59 @@ impl CrdtStorage for SqliteStorage {
             txn.state_vector().encode_v1()
         };
 
-        conn.execute(
+        // Use a transaction to ensure atomicity of delete + update
+        // This prevents data loss if the process crashes mid-operation
+        let tx = conn.transaction()?;
+
+        // IMPORTANT: Save the new snapshot FIRST, then delete old updates
+        // This ensures we never lose data even if the transaction is interrupted
+        tx.execute(
             "INSERT OR REPLACE INTO documents (name, state, state_vector, updated_at)
              VALUES (?, ?, ?, ?)",
             params![name, full_state, state_vector, now],
         )?;
 
+        // Now safe to delete old updates since snapshot is saved
+        tx.execute(
+            "DELETE FROM updates WHERE doc_name = ? AND id < ?",
+            params![name, cutoff_id],
+        )?;
+
+        // Commit the transaction - either both operations succeed or neither
+        tx.commit()?;
+
         Ok(())
+    }
+
+    fn batch_append_updates(
+        &self,
+        updates: &[(&str, &[u8], UpdateOrigin)],
+    ) -> StorageResult<Vec<i64>> {
+        if updates.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+
+        // Use a SQL transaction for atomicity
+        let tx = conn.transaction()?;
+        let mut ids = Vec::with_capacity(updates.len());
+
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO updates (doc_name, data, origin, timestamp) VALUES (?, ?, ?, ?)",
+            )?;
+
+            for (name, update, origin) in updates {
+                let origin_str = origin.to_string();
+                stmt.execute(params![*name, *update, origin_str, now])?;
+                ids.push(tx.last_insert_rowid());
+            }
+        }
+
+        tx.commit()?;
+        Ok(ids)
     }
 
     fn get_latest_update_id(&self, name: &str) -> StorageResult<i64> {
@@ -636,5 +677,41 @@ mod tests {
         // file1 and file2 should exist
         assert!(map2.get(&txn, "file1").is_some());
         assert!(map2.get(&txn, "file2").is_some());
+    }
+
+    #[test]
+    fn test_sqlite_batch_append_updates() {
+        let storage = SqliteStorage::in_memory().unwrap();
+
+        // Batch append updates to multiple documents
+        let updates: Vec<(&str, &[u8], UpdateOrigin)> = vec![
+            ("doc1", b"update1", UpdateOrigin::Local),
+            ("doc2", b"update2", UpdateOrigin::Local),
+            ("doc1", b"update3", UpdateOrigin::Remote),
+        ];
+
+        let ids = storage.batch_append_updates(&updates).unwrap();
+        assert_eq!(ids.len(), 3);
+        assert!(ids[0] < ids[1]);
+        assert!(ids[1] < ids[2]);
+
+        // Verify updates were persisted to correct docs
+        let doc1_updates = storage.get_all_updates("doc1").unwrap();
+        assert_eq!(doc1_updates.len(), 2);
+        assert_eq!(doc1_updates[0].origin, UpdateOrigin::Local);
+        assert_eq!(doc1_updates[1].origin, UpdateOrigin::Remote);
+
+        let doc2_updates = storage.get_all_updates("doc2").unwrap();
+        assert_eq!(doc2_updates.len(), 1);
+        assert_eq!(doc2_updates[0].origin, UpdateOrigin::Local);
+    }
+
+    #[test]
+    fn test_sqlite_batch_append_empty() {
+        let storage = SqliteStorage::in_memory().unwrap();
+
+        // Empty batch should return empty vec
+        let ids = storage.batch_append_updates(&[]).unwrap();
+        assert!(ids.is_empty());
     }
 }

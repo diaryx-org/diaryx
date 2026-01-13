@@ -40,7 +40,20 @@ let tree = futures_lite::future::block_on(
 diaryx_core
 └── src
     ├── backup.rs ("Backup" is making a ZIP file of all the markdown files)
+    ├── command.rs (Command pattern API for unified WASM/Tauri operations)
+    ├── command_handler.rs (Command execution implementation)
     ├── config.rs (configuration for the core to share)
+    ├── crdt (CRDT-based real-time collaboration, feature-gated)
+    │   ├── mod.rs
+    │   ├── workspace_doc.rs (WorkspaceCrdt - file hierarchy metadata)
+    │   ├── body_doc.rs (BodyDoc - per-file content)
+    │   ├── body_doc_manager.rs (BodyDocManager - manages multiple BodyDocs)
+    │   ├── sync.rs (Y-sync protocol for Hocuspocus server)
+    │   ├── history.rs (Version history and time travel)
+    │   ├── storage.rs (CrdtStorage trait definition)
+    │   ├── memory_storage.rs (In-memory CRDT storage)
+    │   ├── sqlite_storage.rs (SQLite-based persistent storage)
+    │   └── types.rs (Shared types: FileMetadata, UpdateOrigin, etc.)
     ├── diaryx.rs (Central data structure used)
     ├── entry (Functionality to manipulate entries)
     │   ├── helpers.rs
@@ -236,6 +249,218 @@ futures_lite::future::block_on(async {
     fixer.fix_broken_contents_ref(Path::new("./index.md"), "missing.md").await;
     fixer.fix_unlisted_file(Path::new("./index.md"), Path::new("./new-file.md")).await;
     fixer.fix_missing_part_of(Path::new("./orphan.md"), Path::new("./index.md")).await;
+});
+```
+
+## CRDT (Real-time Collaboration)
+
+The `crdt` module provides conflict-free replicated data types for real-time collaboration, built on [yrs](https://github.com/y-crdt/y-crdt) (Rust port of Yjs). This module is **feature-gated** and must be enabled explicitly.
+
+### Feature Flags
+
+```toml
+[dependencies]
+diaryx_core = { version = "0.1", features = ["crdt"] }
+
+# For SQLite-based persistent storage
+diaryx_core = { version = "0.1", features = ["crdt", "crdt-sqlite"] }
+```
+
+### Architecture
+
+The CRDT system uses two document types:
+
+- **WorkspaceCrdt** - A single Y.Doc that stores file hierarchy metadata (file paths, titles, audiences, etc.)
+- **BodyDoc** - Per-file Y.Docs that store document content (body text and frontmatter)
+
+Both document types support:
+- Real-time synchronization via Y-sync protocol (compatible with Hocuspocus server)
+- Version history with time travel capabilities
+- Pluggable storage backends (in-memory or SQLite)
+
+### WorkspaceCrdt
+
+Manages the workspace file hierarchy as a CRDT:
+
+```rust,ignore
+use diaryx_core::crdt::{WorkspaceCrdt, MemoryStorage, FileMetadata};
+use std::sync::Arc;
+
+let storage = Arc::new(MemoryStorage::new());
+let workspace = WorkspaceCrdt::new("workspace", storage);
+
+// Set file metadata
+let metadata = FileMetadata {
+    title: Some("My Note".to_string()),
+    audience: Some(vec!["public".to_string()]),
+    part_of: Some("README.md".to_string()),
+    contents: None,
+    attachments: None,
+};
+workspace.set_file("notes/my-note.md", metadata);
+
+// Get file metadata
+if let Some(meta) = workspace.get_file("notes/my-note.md") {
+    println!("Title: {:?}", meta.title);
+}
+
+// List all files
+let files = workspace.list_files();
+
+// Remove a file
+workspace.remove_file("notes/my-note.md");
+```
+
+### BodyDoc
+
+Manages individual document content:
+
+```rust,ignore
+use diaryx_core::crdt::{BodyDoc, MemoryStorage};
+use std::sync::Arc;
+
+let storage = Arc::new(MemoryStorage::new());
+let doc = BodyDoc::new("notes/my-note.md", storage);
+
+// Set body content
+doc.set_body("# Hello World\n\nThis is my note.");
+
+// Get body content
+let content = doc.get_body();
+
+// Collaborative editing operations
+doc.insert_at(0, "Prefix: ");
+doc.delete_range(0, 8);
+
+// Frontmatter operations
+doc.set_frontmatter("title", "My Note");
+doc.set_frontmatter("audience", "public");
+let title = doc.get_frontmatter("title");
+doc.remove_frontmatter("audience");
+```
+
+### BodyDocManager
+
+Manages multiple BodyDocs with lazy loading:
+
+```rust,ignore
+use diaryx_core::crdt::{BodyDocManager, MemoryStorage};
+use std::sync::Arc;
+
+let storage = Arc::new(MemoryStorage::new());
+let manager = BodyDocManager::new(storage);
+
+// Get or create a BodyDoc for a file
+let doc = manager.get_or_create("notes/my-note.md");
+doc.set_body("Content here");
+
+// Check if a doc exists
+if manager.has_doc("notes/my-note.md") {
+    // ...
+}
+
+// Remove a doc from the manager
+manager.remove_doc("notes/my-note.md");
+```
+
+### Sync Protocol
+
+The sync module implements Y-sync protocol for real-time collaboration with Hocuspocus or other Y.js-compatible servers:
+
+```rust,ignore
+use diaryx_core::crdt::{WorkspaceCrdt, MemoryStorage};
+use std::sync::Arc;
+
+let storage = Arc::new(MemoryStorage::new());
+let workspace = WorkspaceCrdt::new("workspace", storage);
+
+// Get sync state for initial handshake
+let state_vector = workspace.get_sync_state();
+
+// Apply remote update from server
+let remote_update: Vec<u8> = /* from WebSocket */;
+workspace.apply_update(&remote_update);
+
+// Encode state for sending to server
+let full_state = workspace.encode_state();
+
+// Encode incremental update since a state vector
+let diff = workspace.encode_state_as_update(&remote_state_vector);
+```
+
+### Version History
+
+All local changes are automatically recorded in the storage backend, enabling version history and time travel:
+
+```rust,ignore
+use diaryx_core::crdt::{WorkspaceCrdt, MemoryStorage, HistoryEntry};
+use std::sync::Arc;
+
+let storage = Arc::new(MemoryStorage::new());
+let workspace = WorkspaceCrdt::new("workspace", storage.clone());
+
+// Make some changes
+workspace.set_file("file1.md", metadata1);
+workspace.set_file("file2.md", metadata2);
+
+// Get version history
+let history: Vec<HistoryEntry> = storage.get_all_updates("workspace").unwrap();
+for entry in &history {
+    println!("Version {} at {:?}: {} bytes",
+             entry.version, entry.timestamp, entry.update.len());
+}
+
+// Time travel to a specific version
+workspace.restore_to_version(1);
+```
+
+### Storage Backends
+
+#### MemoryStorage
+
+In-memory storage for WASM/web and testing:
+
+```rust,ignore
+use diaryx_core::crdt::MemoryStorage;
+use std::sync::Arc;
+
+let storage = Arc::new(MemoryStorage::new());
+```
+
+#### SqliteStorage (requires `crdt-sqlite` feature)
+
+Persistent storage using SQLite:
+
+```rust,ignore
+use diaryx_core::crdt::SqliteStorage;
+use std::sync::Arc;
+
+let storage = Arc::new(SqliteStorage::open("crdt.db").unwrap());
+```
+
+### Command API
+
+CRDT operations are also available through the unified command API (used by WASM and Tauri):
+
+```rust,ignore
+use diaryx_core::{Diaryx, Command, CommandResult};
+
+let diaryx = Diaryx::with_crdt(fs, crdt_storage);
+
+// Execute CRDT commands
+let result = diaryx.execute(Command::GetSyncState {
+    doc_type: "workspace".to_string(),
+    doc_name: None,
+});
+
+let result = diaryx.execute(Command::SetFileMetadata {
+    path: "notes/my-note.md".to_string(),
+    metadata: file_metadata,
+});
+
+let result = diaryx.execute(Command::GetHistory {
+    doc_type: "workspace".to_string(),
+    doc_name: None,
 });
 ```
 

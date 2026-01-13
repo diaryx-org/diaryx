@@ -25,6 +25,10 @@ interface AppPaths {
   default_workspace: string;
   config_path: string;
   is_mobile: boolean;
+  /** Whether CRDT storage was successfully initialized */
+  crdt_initialized: boolean;
+  /** Error message if CRDT initialization failed */
+  crdt_error: string | null;
 }
 
 interface ImportResult {
@@ -152,6 +156,19 @@ export class TauriBackend implements Backend {
     console.log("[TauriBackend] Step 3 complete: Result validated");
     console.log("[TauriBackend] App paths:", this.appPaths);
 
+    // Step 4: Check CRDT initialization status
+    if (!this.appPaths.crdt_initialized) {
+      console.warn(
+        "[TauriBackend] CRDT storage failed to initialize:",
+        this.appPaths.crdt_error || "Unknown error",
+      );
+      console.warn(
+        "[TauriBackend] Sync and history features may not work correctly.",
+      );
+    } else {
+      console.log("[TauriBackend] CRDT storage initialized successfully");
+    }
+
     // Create config object from appPaths (no separate command needed)
     // The workspace path is already resolved by initialize_app
     this.config = {
@@ -233,6 +250,21 @@ export class TauriBackend implements Backend {
     return this.appPaths?.is_mobile ?? false;
   }
 
+  /**
+   * Check if CRDT storage was successfully initialized.
+   * If false, sync and history features may not work.
+   */
+  isCrdtInitialized(): boolean {
+    return this.appPaths?.crdt_initialized ?? false;
+  }
+
+  /**
+   * Get the CRDT initialization error message, if any.
+   */
+  getCrdtError(): string | null {
+    return this.appPaths?.crdt_error ?? null;
+  }
+
   // --------------------------------------------------------------------------
   // Events
   // --------------------------------------------------------------------------
@@ -251,9 +283,20 @@ export class TauriBackend implements Backend {
 
   async execute(command: Command): Promise<Response> {
     try {
-      const commandJson = JSON.stringify(command);
+      // Custom replacer to handle BigInt serialization
+      const commandJson = JSON.stringify(command, (_key, value) =>
+        typeof value === 'bigint' ? Number(value) : value
+      );
       const responseJson = await this.getInvoke()<string>("execute", { commandJson });
-      return JSON.parse(responseJson) as Response;
+      // Custom reviver to handle BigInt deserialization for known fields
+      return JSON.parse(responseJson, (key, value) => {
+        // Convert numeric timestamps back to BigInt for specific fields
+        if ((key === 'modified_at' || key === 'uploaded_at' || key === 'size' || 
+             key === 'timestamp' || key === 'update_id') && typeof value === 'number') {
+          return BigInt(value);
+        }
+        return value;
+      }) as Response;
     } catch (e) {
       handleError(e);
     }

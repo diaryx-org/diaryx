@@ -107,25 +107,84 @@ impl BodyDoc {
     }
 
     /// Set the body content, replacing any existing content.
-    pub fn set_body(&self, content: &str) {
-        let mut txn = self.doc.transact_mut();
-        let current_len = self.body_text.len(&txn);
-        if current_len > 0 {
-            self.body_text.remove_range(&mut txn, 0, current_len);
+    /// The change is automatically recorded in the update history.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the update fails to persist to storage.
+    pub fn set_body(&self, content: &str) -> StorageResult<()> {
+        // Get state vector before the change
+        let sv_before = {
+            let txn = self.doc.transact();
+            txn.state_vector()
+        };
+
+        // Make the change
+        {
+            let mut txn = self.doc.transact_mut();
+            let current_len = self.body_text.len(&txn);
+            if current_len > 0 {
+                self.body_text.remove_range(&mut txn, 0, current_len);
+            }
+            self.body_text.insert(&mut txn, 0, content);
         }
-        self.body_text.insert(&mut txn, 0, content);
+
+        // Capture the incremental update and store it
+        self.record_update(&sv_before)
     }
 
     /// Insert text at a specific position.
-    pub fn insert_at(&self, index: u32, text: &str) {
-        let mut txn = self.doc.transact_mut();
-        self.body_text.insert(&mut txn, index, text);
+    /// The change is automatically recorded in the update history.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the update fails to persist to storage.
+    pub fn insert_at(&self, index: u32, text: &str) -> StorageResult<()> {
+        let sv_before = {
+            let txn = self.doc.transact();
+            txn.state_vector()
+        };
+
+        {
+            let mut txn = self.doc.transact_mut();
+            self.body_text.insert(&mut txn, index, text);
+        }
+
+        self.record_update(&sv_before)
     }
 
     /// Delete a range of text.
-    pub fn delete_range(&self, index: u32, length: u32) {
-        let mut txn = self.doc.transact_mut();
-        self.body_text.remove_range(&mut txn, index, length);
+    /// The change is automatically recorded in the update history.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the update fails to persist to storage.
+    pub fn delete_range(&self, index: u32, length: u32) -> StorageResult<()> {
+        let sv_before = {
+            let txn = self.doc.transact();
+            txn.state_vector()
+        };
+
+        {
+            let mut txn = self.doc.transact_mut();
+            self.body_text.remove_range(&mut txn, index, length);
+        }
+
+        self.record_update(&sv_before)
+    }
+
+    /// Helper to record an update in storage after a mutation.
+    fn record_update(&self, sv_before: &yrs::StateVector) -> StorageResult<()> {
+        let update = {
+            let txn = self.doc.transact();
+            txn.encode_state_as_update_v1(sv_before)
+        };
+
+        if !update.is_empty() {
+            self.storage
+                .append_update(&self.doc_name, &update, UpdateOrigin::Local)?;
+        }
+        Ok(())
     }
 
     /// Get the length of the body content.
@@ -145,15 +204,43 @@ impl BodyDoc {
     }
 
     /// Set a frontmatter property.
-    pub fn set_frontmatter(&self, key: &str, value: &str) {
-        let mut txn = self.doc.transact_mut();
-        self.frontmatter_map.insert(&mut txn, key, value);
+    /// The change is automatically recorded in the update history.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the update fails to persist to storage.
+    pub fn set_frontmatter(&self, key: &str, value: &str) -> StorageResult<()> {
+        let sv_before = {
+            let txn = self.doc.transact();
+            txn.state_vector()
+        };
+
+        {
+            let mut txn = self.doc.transact_mut();
+            self.frontmatter_map.insert(&mut txn, key, value);
+        }
+
+        self.record_update(&sv_before)
     }
 
     /// Remove a frontmatter property.
-    pub fn remove_frontmatter(&self, key: &str) {
-        let mut txn = self.doc.transact_mut();
-        self.frontmatter_map.remove(&mut txn, key);
+    /// The change is automatically recorded in the update history.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the update fails to persist to storage.
+    pub fn remove_frontmatter(&self, key: &str) -> StorageResult<()> {
+        let sv_before = {
+            let txn = self.doc.transact();
+            txn.state_vector()
+        };
+
+        {
+            let mut txn = self.doc.transact_mut();
+            self.frontmatter_map.remove(&mut txn, key);
+        }
+
+        self.record_update(&sv_before)
     }
 
     /// Get all frontmatter keys.
@@ -290,7 +377,7 @@ mod tests {
         let doc = create_body_doc("test.md");
 
         let content = "# Hello World\n\nThis is content.";
-        doc.set_body(content);
+        doc.set_body(content).unwrap();
         assert_eq!(doc.get_body(), content);
         assert_eq!(doc.body_len(), content.len() as u32);
     }
@@ -299,8 +386,8 @@ mod tests {
     fn test_replace_body() {
         let doc = create_body_doc("test.md");
 
-        doc.set_body("Original content");
-        doc.set_body("New content");
+        doc.set_body("Original content").unwrap();
+        doc.set_body("New content").unwrap();
 
         assert_eq!(doc.get_body(), "New content");
     }
@@ -309,8 +396,8 @@ mod tests {
     fn test_insert_at() {
         let doc = create_body_doc("test.md");
 
-        doc.set_body("Hello World");
-        doc.insert_at(6, "Beautiful ");
+        doc.set_body("Hello World").unwrap();
+        doc.insert_at(6, "Beautiful ").unwrap();
 
         assert_eq!(doc.get_body(), "Hello Beautiful World");
     }
@@ -319,8 +406,8 @@ mod tests {
     fn test_delete_range() {
         let doc = create_body_doc("test.md");
 
-        doc.set_body("Hello Beautiful World");
-        doc.delete_range(6, 10); // Remove "Beautiful "
+        doc.set_body("Hello Beautiful World").unwrap();
+        doc.delete_range(6, 10).unwrap(); // Remove "Beautiful "
 
         assert_eq!(doc.get_body(), "Hello World");
     }
@@ -330,8 +417,8 @@ mod tests {
         let doc = create_body_doc("test.md");
 
         // Set properties
-        doc.set_frontmatter("title", "My Title");
-        doc.set_frontmatter("author", "John Doe");
+        doc.set_frontmatter("title", "My Title").unwrap();
+        doc.set_frontmatter("author", "John Doe").unwrap();
 
         // Get properties
         assert_eq!(doc.get_frontmatter("title"), Some("My Title".to_string()));
@@ -344,7 +431,7 @@ mod tests {
         assert!(keys.contains(&"author".to_string()));
 
         // Remove property
-        doc.remove_frontmatter("author");
+        doc.remove_frontmatter("author").unwrap();
         assert_eq!(doc.get_frontmatter("author"), None);
     }
 
@@ -356,8 +443,8 @@ mod tests {
         // Create and populate
         {
             let doc = BodyDoc::new(storage.clone(), doc_name.clone());
-            doc.set_body("# Persistent Content");
-            doc.set_frontmatter("title", "Saved Title");
+            doc.set_body("# Persistent Content").unwrap();
+            doc.set_frontmatter("title", "Saved Title").unwrap();
             doc.save().unwrap();
         }
 
@@ -381,8 +468,8 @@ mod tests {
         let doc2 = BodyDoc::new(storage2, "test.md".to_string());
 
         // Edit on doc1
-        doc1.set_body("Content from doc1");
-        doc1.set_frontmatter("source", "doc1");
+        doc1.set_body("Content from doc1").unwrap();
+        doc1.set_frontmatter("source", "doc1").unwrap();
 
         // Sync to doc2
         let update = doc1.encode_state_as_update();
@@ -402,13 +489,13 @@ mod tests {
         let doc2 = BodyDoc::new(storage2, "test.md".to_string());
 
         // Both start with same content
-        doc1.set_body("Hello World");
+        doc1.set_body("Hello World").unwrap();
         let initial = doc1.encode_state_as_update();
         doc2.apply_update(&initial, UpdateOrigin::Remote).unwrap();
 
         // Concurrent edits
-        doc1.insert_at(0, "A: "); // "A: Hello World"
-        doc2.insert_at(11, "!"); // "Hello World!"
+        doc1.insert_at(0, "A: ").unwrap(); // "A: Hello World"
+        doc2.insert_at(11, "!").unwrap(); // "Hello World!"
 
         // Exchange updates
         let update1 = doc1.encode_state_as_update();
@@ -434,7 +521,7 @@ mod tests {
         let doc2 = BodyDoc::new(storage2, "test.md".to_string());
 
         // Initial sync
-        doc1.set_body("Initial content");
+        doc1.set_body("Initial content").unwrap();
         let initial = doc1.encode_state_as_update();
         doc2.apply_update(&initial, UpdateOrigin::Remote).unwrap();
 
@@ -442,7 +529,7 @@ mod tests {
         let sv2 = doc2.encode_state_vector();
 
         // Doc1 makes more changes
-        doc1.insert_at(0, "NEW: ");
+        doc1.insert_at(0, "NEW: ").unwrap();
 
         // Get only the diff
         let diff = doc1.encode_diff(&sv2).unwrap();
@@ -465,7 +552,7 @@ mod tests {
             changed_clone.store(true, Ordering::SeqCst);
         });
 
-        doc.set_body("Trigger change");
+        doc.set_body("Trigger change").unwrap();
 
         assert!(changed.load(Ordering::SeqCst));
     }

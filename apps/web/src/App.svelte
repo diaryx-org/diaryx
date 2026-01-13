@@ -3,19 +3,25 @@
   import { getBackend, type TreeNode } from "./lib/backend";
   import { createApi, type Api } from "./lib/backend/api";
   import type { JsonValue } from "./lib/backend/generated/serde_json/JsonValue";
+  // New Rust CRDT module imports
+  import { RustCrdtApi } from "./lib/crdt/rustCrdtApi";
   import {
-    getCollaborativeDocument,
-    disconnectDocument,
-    destroyDocument,
-    setWorkspaceId,
+    initCollaboration,
     setCollaborationServer,
-  } from "./lib/collaborationUtils";
+    getCollaborativeDocument,
+    releaseDocument,
+    releaseAllDocuments,
+    disconnectAll,
+    reconnectAll,
+    cleanup as cleanupCollaboration,
+  } from "./lib/crdt/collaborationBridge";
   import {
     disconnectWorkspace,
     reconnectWorkspace,
     destroyWorkspace,
     setWorkspaceServer,
-  } from "./lib/workspaceCrdt";
+    setWorkspaceId,
+  } from "./lib/crdt/workspaceCrdtBridge";
   // Note: YDoc and HocuspocusProvider types are now handled by collaborationStore
   import LeftSidebar from "./lib/LeftSidebar.svelte";
   import RightSidebar from "./lib/RightSidebar.svelte";
@@ -92,6 +98,9 @@
 
   // API wrapper - uses execute() internally for all operations
   let api: Api | null = $derived(backend ? createApi(backend) : null);
+
+  // Rust CRDT API instance
+  let rustApi: RustCrdtApi | null = $state(null);
   
   // Collaboration state - proxied from collaborationStore  
   let currentYDoc = $derived(collaborationStore.currentYDoc);
@@ -145,6 +154,8 @@
   let pendingAttachmentPath = $state("");
   let attachmentError: string | null = $state(null);
   let attachmentFileInput: HTMLInputElement | null = $state(null);
+
+
   // Note: Blob URL management is now in attachmentService.ts
 
   // Persist display setting to localStorage when changed
@@ -184,10 +195,14 @@
       Editor = module.default;
 
       // Initialize the backend (auto-detects Tauri vs WASM)
-      workspaceStore.setBackend(await getBackend());
+      const backendInstance = await getBackend();
+      workspaceStore.setBackend(backendInstance);
 
-      // Start auto-persist for WASM backend (no-op for Tauri)
-      //startAutoPersist(5000);
+      // Initialize Rust CRDT API
+      rustApi = new RustCrdtApi(backendInstance);
+
+      // Initialize collaboration system with the Rust API
+      initCollaboration(rustApi);
 
       // Initialize workspace CRDT (unless disabled for debugging)
       if (!workspaceCrdtDisabled) {
@@ -239,14 +254,15 @@
   onDestroy(() => {
     // Cleanup blob URLs
     revokeBlobUrls();
+    // Cleanup collaboration sessions
+    cleanupCollaboration();
     // Disconnect workspace CRDT (keeps local state for quick reconnect)
     disconnectWorkspace();
   });
 
   // Initialize the workspace CRDT
-  // Initialize the workspace CRDT
   async function setupWorkspaceCrdt(retryCount = 0) {
-    if (!api || !backend) return;
+    if (!api || !backend || !rustApi) return;
 
     try {
       // Workspace ID priority:
@@ -378,41 +394,17 @@
       // If null, rooms will be "doc:{path}" instead of "{id}:doc:{path}"
       setWorkspaceId(workspaceId);
 
-      // Initialize workspace CRDT using service
-      // Note: initializeWorkspaceCrdt needs both backend (for events) and api (for data operations)
+      // Initialize workspace CRDT using service with Rust API
       workspaceCrdtInitialized = await initializeWorkspaceCrdt(
         workspaceId,
         workspacePath,
         collaborationServerUrl,
         collaborationEnabled,
-        backend,
-        api,
+        rustApi,
         {
-          onFilesChange: async (files: Map<string, any>) => {
-            console.log("[App] Workspace CRDT files changed:", files.size);
-            // Refresh tree to show updated metadata (titles, etc.)
-            await refreshTree();
-            // Reload current entry if it was updated to show new metadata
-            if (currentEntry && files.has(currentEntry.path) && api) {
-              try {
-                const entry = await api.getEntry(currentEntry.path);
-                entry.frontmatter = normalizeFrontmatter(entry.frontmatter);
-                currentEntry = entry;
-              } catch {
-                // File might have been deleted
-              }
-            }
-          },
           onConnectionChange: (connected: boolean) => {
             console.log("[App] Workspace CRDT connection:", connected ? "online" : "offline");
             collaborationStore.setConnected(connected);
-          },
-          onRemoteFileSync: async (created: string[], deleted: string[]) => {
-            console.log(`[App] Remote file sync: created ${created.length}, deleted ${deleted.length}`);
-            if (created.length > 0 || deleted.length > 0) {
-              await refreshTree();
-              await runValidation();
-            }
           },
         },
       );
@@ -492,10 +484,10 @@
           // Delay destruction to avoid `ystate.doc` errors from TipTap
           setTimeout(() => {
             try {
-              destroyDocument(pathToDestroy);
+              releaseDocument(pathToDestroy);
             } catch (e) {
               console.warn(
-                "[App] Failed to destroy collaboration session:",
+                "[App] Failed to release collaboration session:",
                 e,
               );
             }
@@ -514,10 +506,16 @@
               ")",
             );
 
-            const { ydoc, provider } = getCollaborativeDocument(newRelativePath, {
+            // Use new CRDT module
+            const { yDocProxy, bridge } = await getCollaborativeDocument(newRelativePath, {
               initialContent: currentEntry.content, // Seed Y.Doc with content on first create
             });
-            collaborationStore.setCollaborationSession(ydoc, provider, newRelativePath);
+            // Get the underlying Y.Doc for TipTap, bridge implements HocuspocusProvider interface
+            collaborationStore.setCollaborationSession(
+              yDocProxy.getYDoc(),
+              bridge as any, // HocuspocusBridge is compatible with HocuspocusProvider
+              newRelativePath
+            );
           } catch (e) {
             console.warn("[App] Failed to setup collaboration:", e);
             collaborationStore.clearCollaborationSession();
@@ -630,6 +628,7 @@
         await setupWorkspaceCrdt();
       } else {
         reconnectWorkspace();
+        reconnectAll(); // Also reconnect per-file documents
       }
       // Refresh current entry to establish collaboration
       if (currentEntry) {
@@ -639,8 +638,8 @@
       // Disconnect collaboration
       collaborationStore.setConnected(false);
       disconnectWorkspace();
+      disconnectAll(); // Disconnect all per-file documents
       if (currentCollaborationPath) {
-        disconnectDocument(currentCollaborationPath);
         collaborationStore.clearCollaborationSession();
       }
       // Refresh current entry without collaboration
@@ -664,14 +663,13 @@
     // Disconnect and reconnect
     collaborationStore.setConnected(false);
     disconnectWorkspace();
-    if (currentCollaborationPath) {
-      disconnectDocument(currentCollaborationPath);
-      collaborationStore.clearCollaborationSession();
-    }
+    disconnectAll(); // Disconnect all per-file documents
+    collaborationStore.clearCollaborationSession();
 
     // Re-initialize
     if (!workspaceCrdtDisabled) {
       await destroyWorkspace();
+      await releaseAllDocuments(); // Release all document sessions
       workspaceStore.setWorkspaceCrdtInitialized(false);
       await setupWorkspaceCrdt();
     }
@@ -1560,7 +1558,7 @@
     {/if}
   </main>
 
-  <!-- Right Sidebar (Properties) -->
+  <!-- Right Sidebar (Properties & History) -->
   <RightSidebar
     entry={currentEntry}
     collapsed={rightSidebarCollapsed}
@@ -1575,5 +1573,12 @@
     onDeleteAttachment={handleDeleteAttachment}
     {attachmentError}
     onAttachmentErrorClear={() => (attachmentError = null)}
+    {rustApi}
+    onHistoryRestore={async () => {
+      // Refresh current entry after restore
+      if (currentEntry) {
+        await openEntry(currentEntry.path);
+      }
+    }}
   />
 </div>

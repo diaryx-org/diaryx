@@ -27,7 +27,7 @@
 //! ```
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -37,6 +37,12 @@ use yrs::{Doc, Map, ReadTxn, StateVector, Transact, Update};
 use super::storage::{CrdtStorage, StorageResult};
 use super::types::FileMetadata;
 use crate::error::DiaryxError;
+
+/// Maximum number of cached snapshots per document
+const SNAPSHOT_CACHE_MAX_SIZE: usize = 10;
+
+/// Snapshot interval - cache a snapshot every N updates
+const SNAPSHOT_INTERVAL: i64 = 100;
 
 /// The name of the Y.Map containing file metadata.
 const FILES_MAP_NAME: &str = "files";
@@ -89,15 +95,31 @@ pub struct FileDiff {
     pub new_metadata: Option<FileMetadata>,
 }
 
+/// Cached snapshot at a specific update ID
+#[derive(Clone)]
+struct CachedSnapshot {
+    update_id: i64,
+    state: Vec<u8>,
+}
+
 /// Manager for version history operations.
+///
+/// Includes an in-memory snapshot cache to speed up repeated history queries.
+/// The cache stores snapshots at intervals to reduce the number of updates
+/// that need to be replayed when reconstructing historical state.
 pub struct HistoryManager {
     storage: Arc<dyn CrdtStorage>,
+    /// Cache of snapshots: doc_name -> list of (update_id, state) pairs
+    snapshot_cache: RwLock<HashMap<String, Vec<CachedSnapshot>>>,
 }
 
 impl HistoryManager {
     /// Create a new history manager with the given storage backend.
     pub fn new(storage: Arc<dyn CrdtStorage>) -> Self {
-        Self { storage }
+        Self {
+            storage,
+            snapshot_cache: RwLock::new(HashMap::new()),
+        }
     }
 
     /// Get the history of updates for a document.
@@ -127,11 +149,8 @@ impl HistoryManager {
 
     /// Reconstruct document state at a specific update ID.
     ///
-    /// This creates a new yrs Doc and applies all updates up to (and including)
-    /// the specified update ID to reconstruct the state at that point.
-    ///
-    /// Note: This replays updates from the beginning, not from the base state.
-    /// This ensures accurate historical reconstruction.
+    /// This creates a new yrs Doc and applies updates to reconstruct the state.
+    /// Uses a snapshot cache to avoid replaying all updates from the beginning.
     pub fn get_state_at(&self, doc_name: &str, update_id: i64) -> StorageResult<Option<Vec<u8>>> {
         // Get all updates
         let all_updates = self.storage.get_all_updates(doc_name)?;
@@ -148,12 +167,31 @@ impl HistoryManager {
             }
         }
 
-        // Create a new document and apply updates up to the target ID
+        // Find the nearest cached snapshot before the target update_id
+        let (start_update_id, base_state) = self.find_nearest_snapshot(doc_name, update_id);
+
+        // Create a new document
         let doc = Doc::new();
         let _files_map = doc.get_or_insert_map(FILES_MAP_NAME);
 
-        // Apply updates up to target ID (replaying from beginning)
-        for update in all_updates {
+        // Apply base state from cache if available
+        if let Some(state) = base_state {
+            if let Ok(decoded) = Update::decode_v1(&state) {
+                let mut txn = doc.transact_mut();
+                let _ = txn.apply_update(decoded);
+            }
+        }
+
+        // Track updates for potential caching
+        let mut updates_applied_since_cache = 0i64;
+        let mut last_cacheable_id: Option<i64> = None;
+
+        // Apply updates from start_update_id to target ID
+        for update in &all_updates {
+            // Skip updates we've already applied via cache
+            if update.update_id <= start_update_id {
+                continue;
+            }
             if update.update_id > update_id {
                 break;
             }
@@ -172,13 +210,88 @@ impl HistoryManager {
                     update.update_id, e
                 ))
             })?;
+
+            updates_applied_since_cache += 1;
+
+            // Mark this as a potential cache point
+            if updates_applied_since_cache % SNAPSHOT_INTERVAL == 0 {
+                last_cacheable_id = Some(update.update_id);
+            }
         }
 
         // Encode the reconstructed state
         let txn = doc.transact();
         let state = txn.encode_state_as_update_v1(&StateVector::default());
 
+        // Cache this snapshot if we applied many updates
+        if let Some(cache_id) = last_cacheable_id {
+            // Only cache intermediate snapshots, not the final target
+            if cache_id < update_id {
+                self.cache_snapshot(doc_name, cache_id, &state);
+            }
+        }
+
         Ok(Some(state))
+    }
+
+    /// Find the nearest cached snapshot at or before the given update_id.
+    /// Returns (update_id, state) where update_id is 0 if no cache hit.
+    fn find_nearest_snapshot(&self, doc_name: &str, target_id: i64) -> (i64, Option<Vec<u8>>) {
+        let cache = self.snapshot_cache.read().unwrap();
+        if let Some(snapshots) = cache.get(doc_name) {
+            // Find the largest update_id that's <= target_id
+            if let Some(snapshot) = snapshots
+                .iter()
+                .filter(|s| s.update_id <= target_id)
+                .max_by_key(|s| s.update_id)
+            {
+                return (snapshot.update_id, Some(snapshot.state.clone()));
+            }
+        }
+        (0, None)
+    }
+
+    /// Cache a snapshot for faster future access.
+    fn cache_snapshot(&self, doc_name: &str, update_id: i64, state: &[u8]) {
+        let mut cache = self.snapshot_cache.write().unwrap();
+        let snapshots = cache.entry(doc_name.to_string()).or_default();
+
+        // Check if we already have this snapshot
+        if snapshots.iter().any(|s| s.update_id == update_id) {
+            return;
+        }
+
+        // Add the new snapshot
+        snapshots.push(CachedSnapshot {
+            update_id,
+            state: state.to_vec(),
+        });
+
+        // Sort by update_id for efficient lookup
+        snapshots.sort_by_key(|s| s.update_id);
+
+        // Trim cache if it's too large
+        if snapshots.len() > SNAPSHOT_CACHE_MAX_SIZE {
+            // Keep snapshots evenly distributed across the range
+            let step = snapshots.len() / SNAPSHOT_CACHE_MAX_SIZE;
+            let keep_indices: Vec<usize> = (0..SNAPSHOT_CACHE_MAX_SIZE)
+                .map(|i| i * step)
+                .collect();
+            let kept: Vec<CachedSnapshot> = snapshots
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| keep_indices.contains(i))
+                .map(|(_, s)| s.clone())
+                .collect();
+            *snapshots = kept;
+        }
+    }
+
+    /// Clear the snapshot cache for a document.
+    /// Call this after modifying the document (e.g., restore operation).
+    pub fn clear_cache(&self, doc_name: &str) {
+        let mut cache = self.snapshot_cache.write().unwrap();
+        cache.remove(doc_name);
     }
 
     /// Get files from a document state.

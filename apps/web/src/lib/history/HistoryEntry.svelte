@@ -56,7 +56,7 @@
   {#if selected}
     <button
       class="restore-btn"
-      onclick|stopPropagation={onRestore}
+      onclick={(e) => { e.stopPropagation(); onRestore(); }}
     >
       Restore
     </button>

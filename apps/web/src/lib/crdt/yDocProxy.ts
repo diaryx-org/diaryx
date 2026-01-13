@@ -22,6 +22,8 @@ export interface YDocProxyOptions {
   onContentChange?: (content: string) => void;
   /** Initial content to seed if CRDT is empty */
   initialContent?: string;
+  /** Initialization timeout in milliseconds (default: 10000ms) */
+  initTimeoutMs?: number;
 }
 
 /**
@@ -59,10 +61,30 @@ export class YDocProxy {
   /**
    * Create and initialize a YDocProxy.
    * Loads initial state from Rust CRDT.
+   *
+   * @throws Error if initialization times out
    */
   static async create(options: YDocProxyOptions): Promise<YDocProxy> {
     const proxy = new YDocProxy(options);
-    await proxy.initialize(options.initialContent);
+    const timeoutMs = options.initTimeoutMs ?? 10000;
+
+    // Wrap initialization with timeout to prevent indefinite hangs
+    const initPromise = proxy.initialize(options.initialContent);
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(
+        () => reject(new Error(`YDocProxy initialization timed out after ${timeoutMs}ms`)),
+        timeoutMs
+      );
+    });
+
+    try {
+      await Promise.race([initPromise, timeoutPromise]);
+    } catch (error) {
+      // Cleanup on failure
+      proxy.destroy();
+      throw error;
+    }
+
     return proxy;
   }
 
@@ -188,7 +210,9 @@ export class YDocProxy {
 
       try {
         // Forward update to Rust CRDT
-        await this.rustApi.applyBodyUpdate(this.docName, update);
+        console.log('[YDocProxy] Syncing update to Rust:', this.docName, 'size:', update.length);
+        const updateId = await this.rustApi.applyBodyUpdate(this.docName, update);
+        console.log('[YDocProxy] Update synced, ID:', updateId);
 
         // Notify content change
         if (this.onContentChange) {

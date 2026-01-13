@@ -134,9 +134,20 @@ export class WorkerBackendNew implements Backend {
    * This is the new primary API - all operations can be performed via execute().
    */
   async execute(command: Command): Promise<Response> {
-    const commandJson = JSON.stringify(command);
+    // Custom replacer to handle BigInt serialization
+    const commandJson = JSON.stringify(command, (_key, value) =>
+      typeof value === 'bigint' ? Number(value) : value
+    );
     const responseJson = await this.remote!.execute(commandJson);
-    return JSON.parse(responseJson) as Response;
+    // Custom reviver to handle BigInt deserialization for known fields
+    return JSON.parse(responseJson, (key, value) => {
+      // Convert numeric timestamps back to BigInt for specific fields
+      if ((key === 'modified_at' || key === 'uploaded_at' || key === 'size' || 
+           key === 'timestamp' || key === 'update_id') && typeof value === 'number') {
+        return BigInt(value);
+      }
+      return value;
+    }) as Response;
   }
 
   // =========================================================================

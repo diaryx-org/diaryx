@@ -269,7 +269,9 @@ fn handle_validate(
         println!("Validating workspace: {}", root_path.display());
     }
 
-    let result = match block_on(validator.validate_workspace(&root_path)) {
+    // Use depth limit of 2 to match tree view behavior and improve performance
+    // For full validation, users can use the --recursive flag on a directory
+    let result = match block_on(validator.validate_workspace(&root_path, Some(2))) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("✗ Error validating workspace: {}", e);

@@ -130,9 +130,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             // === Validation Operations ===
             Command::ValidateWorkspace { path } => {
                 let root_path = path.unwrap_or_else(|| "workspace/index.md".to_string());
+                // Use depth limit of 2 to match tree view (TREE_INITIAL_DEPTH in App.svelte)
+                // This significantly improves performance for large workspaces
                 let result = self
                     .validate()
-                    .validate_workspace(Path::new(&root_path))
+                    .validate_workspace(Path::new(&root_path), Some(2))
                     .await?;
                 Ok(Response::ValidationResult(result))
             }

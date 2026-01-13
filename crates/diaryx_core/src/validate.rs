@@ -11,7 +11,7 @@
 //! `SyncToAsyncFs` and use `futures_lite::future::block_on()`.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -20,6 +20,28 @@ use crate::error::Result;
 use crate::fs::AsyncFileSystem;
 use crate::utils::path::relative_path_from_file_to_target;
 use crate::workspace::Workspace;
+
+/// Normalize a path by removing `.` and `..` components without filesystem access.
+/// This is more reliable than `canonicalize()` which can fail on WASM or with symlinks.
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                // Pop the last component if possible
+                normalized.pop();
+            }
+            Component::CurDir => {
+                // Skip `.` components
+            }
+            _ => {
+                // Keep everything else (Normal, RootDir, Prefix)
+                normalized.push(component);
+            }
+        }
+    }
+    normalized
+}
 
 /// A validation error indicating a broken reference.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -168,7 +190,15 @@ impl<FS: AsyncFileSystem> Validator<FS> {
     /// - All `contents` references point to existing files
     /// - All `part_of` references point to existing files
     /// - Detects unlinked files/directories (not reachable via contents references)
-    pub async fn validate_workspace(&self, root_path: &Path) -> Result<ValidationResult> {
+    ///
+    /// # Arguments
+    /// * `root_path` - Path to the root index file
+    /// * `max_depth` - Maximum depth for orphan detection (None = unlimited, Some(2) matches tree view)
+    pub async fn validate_workspace(
+        &self,
+        root_path: &Path,
+        max_depth: Option<usize>,
+    ) -> Result<ValidationResult> {
         let mut result = ValidationResult::default();
         let mut visited = HashSet::new();
 
@@ -176,19 +206,17 @@ impl<FS: AsyncFileSystem> Validator<FS> {
             .await?;
 
         // Find unlinked entries: files/dirs in workspace not visited during traversal
-        // Scan recursively to find orphans in subdirectories
+        // Scan with depth limit to match tree view behavior and improve performance
         let workspace_root = root_path.parent().unwrap_or(Path::new("."));
-        if let Ok(all_entries) = self
-            .ws
-            .fs_ref()
-            .list_all_files_recursive(workspace_root)
-            .await
-        {
-            // Normalize visited paths for comparison
-            let visited_normalized: HashSet<PathBuf> = visited
-                .iter()
-                .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()))
-                .collect();
+        let all_entries = self
+            .list_files_with_depth(workspace_root, 0, max_depth)
+            .await;
+
+        if !all_entries.is_empty() {
+            // Normalize visited paths for comparison using path normalization
+            // This is more reliable than canonicalize() which can fail on WASM
+            let visited_normalized: HashSet<PathBuf> =
+                visited.iter().map(|p| normalize_path(p)).collect();
 
             // Build a map of directory -> index file path from visited files
             // This allows us to find the nearest parent index for orphan files
@@ -234,6 +262,14 @@ impl<FS: AsyncFileSystem> Validator<FS> {
             ];
 
             for entry in all_entries {
+                // Skip hidden files/directories (dotfiles) - files/dirs starting with '.'
+                // This matches the tree building behavior in workspace/mod.rs
+                if let Some(file_name) = entry.file_name().and_then(|n| n.to_str()) {
+                    if file_name.starts_with('.') {
+                        continue;
+                    }
+                }
+
                 // Skip entries in common non-workspace directories
                 let should_skip = entry.components().any(|c| {
                     if let std::path::Component::Normal(name) = c {
@@ -247,8 +283,8 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                     continue;
                 }
 
-                let entry_canonical = entry.canonicalize().unwrap_or_else(|_| entry.clone());
-                if !visited_normalized.contains(&entry_canonical) {
+                let entry_normalized = normalize_path(&entry);
+                if !visited_normalized.contains(&entry_normalized) {
                     let is_dir = self.ws.fs_ref().is_dir(&entry).await;
                     let suggested_index = find_nearest_index(&entry);
 
@@ -259,11 +295,10 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                         None
                     };
 
-                    // Issue 1 fix: If directory has an index file that IS visited, don't report as unlinked
+                    // If directory has an index file that IS visited, don't report as unlinked
                     if is_dir && let Some(ref idx_path) = index_file {
-                        let idx_canonical =
-                            idx_path.canonicalize().unwrap_or_else(|_| idx_path.clone());
-                        if visited_normalized.contains(&idx_canonical) {
+                        let idx_normalized = normalize_path(idx_path);
+                        if visited_normalized.contains(&idx_normalized) {
                             continue; // Skip - directory's index is properly linked
                         }
                     }
@@ -281,26 +316,67 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                         continue; // Don't also report as UnlinkedEntry
                     }
 
-                    // Report as OrphanFile if it's an .md file (for backwards compat)
+                    // Report as OrphanFile if it's an .md file
+                    // Don't also report as UnlinkedEntry to avoid duplicate warnings
                     if entry.extension().is_some_and(|ext| ext == "md") {
                         result.warnings.push(ValidationWarning::OrphanFile {
                             file: entry.clone(),
                             suggested_index: suggested_index.clone(),
                         });
+                        continue; // Don't also report as UnlinkedEntry
                     }
 
-                    // Report as UnlinkedEntry for "List All Files" mode (md files and dirs without index)
-                    result.warnings.push(ValidationWarning::UnlinkedEntry {
-                        path: entry,
-                        is_dir,
-                        suggested_index,
-                        index_file,
-                    });
+                    // Report as UnlinkedEntry only for directories (not md files or binary files)
+                    if is_dir {
+                        result.warnings.push(ValidationWarning::UnlinkedEntry {
+                            path: entry,
+                            is_dir,
+                            suggested_index,
+                            index_file,
+                        });
+                    }
                 }
             }
         }
 
         Ok(result)
+    }
+
+    /// List files and directories with depth limiting.
+    /// Returns all entries up to the specified depth from the starting directory.
+    async fn list_files_with_depth(
+        &self,
+        dir: &Path,
+        current_depth: usize,
+        max_depth: Option<usize>,
+    ) -> Vec<PathBuf> {
+        // Check if we've exceeded max depth
+        if let Some(max) = max_depth {
+            if current_depth >= max {
+                return Vec::new();
+            }
+        }
+
+        let mut all_entries = Vec::new();
+
+        if let Ok(entries) = self.ws.fs_ref().list_files(dir).await {
+            for entry in entries {
+                all_entries.push(entry.clone());
+
+                // Recurse into subdirectories
+                if self.ws.fs_ref().is_dir(&entry).await {
+                    let sub_entries = Box::pin(self.list_files_with_depth(
+                        &entry,
+                        current_depth + 1,
+                        max_depth,
+                    ))
+                    .await;
+                    all_entries.extend(sub_entries);
+                }
+            }
+        }
+
+        all_entries
     }
 
     /// Recursively validate from a given path.
@@ -314,9 +390,9 @@ impl<FS: AsyncFileSystem> Validator<FS> {
         from_parent: Option<&Path>,
         contents_ref: Option<&str>,
     ) -> Result<()> {
-        // Avoid cycles
-        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        if visited.contains(&canonical) {
+        // Avoid cycles - use normalize_path for consistent path comparison
+        let normalized = normalize_path(path);
+        if visited.contains(&normalized) {
             // Cycle detected! Suggest removing the contents reference from the parent
             result.warnings.push(ValidationWarning::CircularReference {
                 files: vec![path.to_path_buf()],
@@ -328,7 +404,7 @@ impl<FS: AsyncFileSystem> Validator<FS> {
             });
             return Ok(());
         }
-        visited.insert(canonical);
+        visited.insert(normalized);
         result.files_checked += 1;
 
         // Try to parse as index
@@ -1390,7 +1466,9 @@ mod tests {
 
         let async_fs: TestFs = SyncToAsyncFs::new(fs);
         let validator = Validator::new(async_fs);
-        let result = block_on_test(validator.validate_workspace(Path::new("README.md"))).unwrap();
+        // Use None for unlimited depth in tests
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
 
         assert!(result.is_ok());
         assert_eq!(result.files_checked, 2);
@@ -1407,7 +1485,8 @@ mod tests {
 
         let async_fs: TestFs = SyncToAsyncFs::new(fs);
         let validator = Validator::new(async_fs);
-        let result = block_on_test(validator.validate_workspace(Path::new("README.md"))).unwrap();
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
 
         assert!(!result.is_ok());
         assert_eq!(result.errors.len(), 1);
@@ -1435,7 +1514,8 @@ mod tests {
 
         let async_fs: TestFs = SyncToAsyncFs::new(fs);
         let validator = Validator::new(async_fs);
-        let result = block_on_test(validator.validate_workspace(Path::new("README.md"))).unwrap();
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
 
         assert!(!result.is_ok());
         assert_eq!(result.errors.len(), 1);

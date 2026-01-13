@@ -174,9 +174,12 @@ let fs = SyncToAsyncFs::new(RealFileSystem);
 let validator = Validator::new(fs);
 
 // Validate entire workspace starting from root index
+// The second parameter controls orphan detection depth:
+// - Some(2) matches tree view depth (recommended for UI)
+// - None for unlimited depth (full workspace scan)
 let root_path = Path::new("./workspace/README.md");
 let result = futures_lite::future::block_on(
-    validator.validate_workspace(&root_path)
+    validator.validate_workspace(&root_path, Some(2))
 ).unwrap();
 
 // Or validate a single file
@@ -224,10 +227,10 @@ let fs = SyncToAsyncFs::new(RealFileSystem);
 let validator = Validator::new(fs.clone());
 let fixer = ValidationFixer::new(fs);
 
-// Validate workspace
+// Validate workspace (use None for full depth when fixing)
 let root_path = Path::new("./workspace/README.md");
 let result = futures_lite::future::block_on(
-    validator.validate_workspace(&root_path)
+    validator.validate_workspace(&root_path, None)
 ).unwrap();
 
 // Fix all issues at once

@@ -975,14 +975,16 @@ impl DiaryxBackend {
     // ========================================================================
 
     /// Validate workspace links.
+    /// Uses depth limit of 2 to match tree view and improve performance.
     #[wasm_bindgen(js_name = "validateWorkspace")]
     pub fn validate_workspace(&self, workspace_path: String) -> Promise {
         let fs = self.fs.clone();
 
         future_to_promise(async move {
             let validator = Validator::new(&*fs);
+            // Use depth limit of 2 to match tree view (TREE_INITIAL_DEPTH)
             let results = validator
-                .validate_workspace(&PathBuf::from(&workspace_path))
+                .validate_workspace(&PathBuf::from(&workspace_path), Some(2))
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
 

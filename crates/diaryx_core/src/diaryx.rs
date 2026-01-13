@@ -582,11 +582,16 @@ impl<'a, FS: AsyncFileSystem + Clone> ValidateOps<'a, FS> {
     }
 
     /// Validate all links starting from a workspace root index.
+    ///
+    /// # Arguments
+    /// * `root_path` - Path to the root index file
+    /// * `max_depth` - Maximum depth for orphan detection (None = unlimited, Some(2) matches tree view)
     pub async fn validate_workspace(
         &self,
         root_path: &std::path::Path,
+        max_depth: Option<usize>,
     ) -> crate::error::Result<crate::validate::ValidationResult> {
-        self.inner().validate_workspace(root_path).await
+        self.inner().validate_workspace(root_path, max_depth).await
     }
 
     /// Validate a single file's links.

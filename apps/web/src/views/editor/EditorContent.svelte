@@ -42,24 +42,28 @@
   }: Props = $props();
 </script>
 
-<div class="flex-1 overflow-y-auto p-4 md:p-6">
-  {#if Editor}
-    {#key editorKey}
-      <Editor
-        debugMenus={false}
-        bind:this={editorRef}
-        {content}
-        {onchange}
-        {onblur}
-        placeholder="Start writing..."
-        {onInsertImage}
-        {onFileDrop}
-        {onLinkClick}
-        ydoc={collaborationEnabled ? (currentYDoc ?? undefined) : undefined}
-        provider={collaborationEnabled ? (currentProvider ?? undefined) : undefined}
-      />
-    {/key}
-  {:else}
-    <LoadingSpinner />
-  {/if}
+<!-- Outer container: edge-to-edge on desktop, scrollbar touches edges -->
+<div class="flex-1 overflow-y-auto">
+  <!-- Inner wrapper: padding for readable text content -->
+  <div class="p-4 md:px-6 md:py-4 min-h-full">
+    {#if Editor}
+      {#key editorKey}
+        <Editor
+          debugMenus={false}
+          bind:this={editorRef}
+          {content}
+          {onchange}
+          {onblur}
+          placeholder="Start writing..."
+          {onInsertImage}
+          {onFileDrop}
+          {onLinkClick}
+          ydoc={collaborationEnabled ? (currentYDoc ?? undefined) : undefined}
+          provider={collaborationEnabled ? (currentProvider ?? undefined) : undefined}
+        />
+      {/key}
+    {:else}
+      <LoadingSpinner />
+    {/if}
+  </div>
 </div>

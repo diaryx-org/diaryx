@@ -1518,7 +1518,6 @@
     {tree}
     {currentEntry}
     {isLoading}
-    {error}
     {expandedNodes}
     {validationResult}
     {showUnlinkedFiles}

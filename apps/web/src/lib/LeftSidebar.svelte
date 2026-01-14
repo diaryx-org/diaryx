@@ -31,7 +31,6 @@
     tree: TreeNode | null;
     currentEntry: EntryData | null;
     isLoading: boolean;
-    error: string | null;
     expandedNodes: Set<string>;
     validationResult: ValidationResultWithMeta | null;
     collapsed: boolean;
@@ -59,7 +58,6 @@
     tree,
     currentEntry,
     isLoading,
-    error,
     expandedNodes,
     validationResult,
     collapsed,
@@ -769,17 +767,10 @@
 
   <!-- Content Area -->
   <div class="flex-1 overflow-y-auto px-3 pb-3">
-    {#if isLoading}
-      <!-- Loading State -->
+    {#if !tree && isLoading}
+      <!-- Loading State - only shown during initial tree load -->
       <div class="flex items-center justify-center py-8">
         <Loader2 class="size-6 animate-spin text-muted-foreground" />
-      </div>
-    {:else if error}
-      <!-- Error State -->
-      <div
-        class="rounded-md bg-destructive/10 border border-destructive/20 p-3"
-      >
-        <p class="text-sm text-destructive">{error}</p>
       </div>
     {:else if tree}
       <!-- Tree View -->
@@ -1067,7 +1058,7 @@
                   onclick={(e: MouseEvent) => e.stopPropagation()}
                   class="shrink-0 focus:outline-none"
                 >
-                  <AlertCircle class="size-4 text-destructive hover:text-destructive/80 transition-colors" />
+                  <AlertCircle class="size-4 shrink-0 text-destructive hover:text-destructive/80 transition-colors" />
                 </Popover.Trigger>
                 <Popover.Content class="w-80 p-3" side="right" align="start">
                   <div class="space-y-3">
@@ -1123,7 +1114,7 @@
                   onclick={(e: MouseEvent) => e.stopPropagation()}
                   class="shrink-0 focus:outline-none"
                 >
-                  <AlertCircle class="size-4 text-amber-500 hover:text-amber-400 transition-colors" />
+                  <AlertCircle class="size-4 shrink-0 text-amber-500 hover:text-amber-400 transition-colors" />
                 </Popover.Trigger>
                 <Popover.Content class="w-72 p-3" side="right" align="start">
                   <div class="space-y-3">
@@ -1162,7 +1153,7 @@
                   class="shrink-0 focus:outline-none"
                 >
                   <span class="relative inline-flex items-center">
-                    <AlertTriangle class="size-4 text-amber-500/70 hover:text-amber-500 transition-colors" />
+                    <AlertTriangle class="size-4 shrink-0 text-amber-500/70 hover:text-amber-500 transition-colors" />
                     <span class="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] text-[9px] font-bold
                       bg-amber-500 text-white rounded-full flex items-center justify-center px-0.5">
                       {inherited.length}

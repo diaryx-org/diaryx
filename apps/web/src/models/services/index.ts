@@ -1,6 +1,6 @@
 /**
  * Services Re-exports
- * 
+ *
  * Central export point for all services.
  */
 
@@ -24,3 +24,12 @@ export {
   type WorkspaceCrdtCallbacks,
   type WorkspaceCrdtStats,
 } from './workspaceCrdtService';
+
+export {
+  showError,
+  showSuccess,
+  showWarning,
+  showInfo,
+  showLoading,
+  handleError,
+} from './toastService';

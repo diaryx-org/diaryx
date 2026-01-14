@@ -39,6 +39,10 @@ export type { BinaryExportFile } from './BinaryExportFile';
 // Template types
 export type { TemplateInfo } from './TemplateInfo';
 
+// Attachment types
+export type { AncestorAttachmentEntry } from './AncestorAttachmentEntry';
+export type { AncestorAttachmentsResult } from './AncestorAttachmentsResult';
+
 // Storage types
 export type { StorageInfo } from './StorageInfo';
 

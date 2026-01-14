@@ -22,7 +22,7 @@
     onchange: (markdown: string) => void;
     onblur: () => void;
     // These match the Editor component prop types
-    onInsertImage?: () => void;
+    onOpenAttachmentPicker?: () => void;
     onFileDrop?: (file: File) => Promise<{ blobUrl: string; attachmentPath: string } | null>;
     onLinkClick?: (href: string) => void;
   }
@@ -38,7 +38,7 @@
     readableLineLength = true,
     onchange,
     onblur,
-    onInsertImage,
+    onOpenAttachmentPicker,
     onFileDrop,
     onLinkClick,
   }: Props = $props();
@@ -46,11 +46,20 @@
 
 <!-- Outer container: scrollable area -->
 <div class="flex-1 overflow-y-auto">
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <!-- Inner wrapper: padding and optional max-width for readability -->
   <div
     class="px-4 py-8 md:px-6 md:py-12 min-h-full"
     class:max-w-prose={readableLineLength}
     class:mx-auto={readableLineLength}
+    onclick={(e) => {
+      // Only handle clicks directly on this container (not bubbled from editor content)
+      // This allows clicking in the empty space below the editor to focus at the end
+      if (e.target === e.currentTarget) {
+        editorRef?.focusAtEnd?.();
+      }
+    }}
   >
     {#if Editor}
       {#key editorKey}
@@ -61,7 +70,7 @@
           {onchange}
           {onblur}
           placeholder="Start writing..."
-          {onInsertImage}
+          {onOpenAttachmentPicker}
           {onFileDrop}
           {onLinkClick}
           ydoc={collaborationEnabled ? (currentYDoc ?? undefined) : undefined}

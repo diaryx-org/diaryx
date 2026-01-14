@@ -3,7 +3,48 @@
 //! This module provides functions to compute relative paths, which is useful for
 //! maintaining `part_of` and `contents` references in the workspace.
 
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
+
+/// Normalize a path by resolving `.` and `..` components without filesystem access.
+///
+/// This is necessary for web/WASM where the virtual filesystem doesn't handle
+/// `..` in paths automatically.
+///
+/// # Example
+/// ```
+/// use diaryx_core::path_utils::normalize_path;
+/// use std::path::Path;
+///
+/// let path = Path::new("foo/bar/../baz.txt");
+/// assert_eq!(normalize_path(path), Path::new("foo/baz.txt"));
+/// ```
+pub fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = Vec::new();
+
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                // Pop the last component if possible (handle ..)
+                if !normalized.is_empty()
+                    && !matches!(normalized.last(), Some(Component::ParentDir))
+                {
+                    normalized.pop();
+                } else {
+                    // Can't go up further, keep the ..
+                    normalized.push(component);
+                }
+            }
+            Component::CurDir => {
+                // Skip . components
+            }
+            _ => {
+                normalized.push(component);
+            }
+        }
+    }
+
+    normalized.iter().collect()
+}
 
 /// Compute a relative path from a base directory to a target file.
 ///

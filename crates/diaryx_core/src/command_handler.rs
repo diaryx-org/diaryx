@@ -239,6 +239,55 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 Ok(Response::Strings(attachments))
             }
 
+            Command::GetAncestorAttachments { path } => {
+                use crate::command::{AncestorAttachmentEntry, AncestorAttachmentsResult};
+                use std::collections::HashSet;
+
+                let ws = self.workspace().inner();
+                let mut entries = Vec::new();
+                let mut visited = HashSet::new();
+                let mut current_path = PathBuf::from(&path);
+
+                // Maximum depth to prevent runaway traversal
+                const MAX_DEPTH: usize = 100;
+
+                // Traverse up the part_of chain
+                for _ in 0..MAX_DEPTH {
+                    let path_str = current_path.to_string_lossy().to_string();
+                    if visited.contains(&path_str) {
+                        break; // Circular reference protection
+                    }
+                    visited.insert(path_str.clone());
+
+                    // Try to parse the file
+                    if let Ok(index) = ws.parse_index(&current_path).await {
+                        let attachments = index.frontmatter.attachments_list().to_vec();
+
+                        // Only add if there are attachments
+                        if !attachments.is_empty() {
+                            entries.push(AncestorAttachmentEntry {
+                                entry_path: path_str,
+                                entry_title: index.frontmatter.title.clone(),
+                                attachments,
+                            });
+                        }
+
+                        // Move to parent via part_of
+                        if let Some(part_of) = &index.frontmatter.part_of {
+                            current_path = index.resolve_path(part_of);
+                        } else {
+                            break; // Reached root
+                        }
+                    } else {
+                        break; // File doesn't exist or can't be parsed
+                    }
+                }
+
+                Ok(Response::AncestorAttachments(AncestorAttachmentsResult {
+                    entries,
+                }))
+            }
+
             // === Entry Creation/Deletion Operations ===
             Command::CreateEntry { path, options } => {
                 // Derive title from filename if not provided
@@ -867,9 +916,12 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 entry_path,
                 attachment_path,
             } => {
+                use crate::utils::path::normalize_path;
+
                 let entry = PathBuf::from(&entry_path);
                 let entry_dir = entry.parent().unwrap_or_else(|| Path::new("."));
-                let full_path = entry_dir.join(&attachment_path);
+                // Normalize the path to handle .. components (important for inherited attachments)
+                let full_path = normalize_path(&entry_dir.join(&attachment_path));
 
                 let data =
                     self.fs()

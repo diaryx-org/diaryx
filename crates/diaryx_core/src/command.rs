@@ -394,6 +394,13 @@ pub enum Command {
         new_filename: Option<String>,
     },
 
+    /// Get attachments from current entry and all ancestor indexes.
+    /// Traverses up the `part_of` chain to collect inherited attachments.
+    GetAncestorAttachments {
+        /// Path to the entry file.
+        path: String,
+    },
+
     // === File System ===
     /// Check if a file exists.
     FileExists {
@@ -690,6 +697,9 @@ pub enum Response {
     /// Storage info response.
     StorageInfo(StorageInfo),
 
+    /// Ancestor attachments response.
+    AncestorAttachments(AncestorAttachmentsResult),
+
     /// Binary data response (for CRDT state vectors, updates).
     #[cfg(feature = "crdt")]
     Binary(Vec<u8>),
@@ -813,6 +823,27 @@ pub struct FixSummary {
     pub total_fixed: usize,
     /// Total number of fixes that failed.
     pub total_failed: usize,
+}
+
+/// A single entry's attachments in the ancestor chain.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub struct AncestorAttachmentEntry {
+    /// Path to the entry file.
+    pub entry_path: String,
+    /// Title of the entry (from frontmatter).
+    pub entry_title: Option<String>,
+    /// List of attachment paths for this entry.
+    pub attachments: Vec<String>,
+}
+
+/// Result of GetAncestorAttachments command.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub struct AncestorAttachmentsResult {
+    /// Attachments from current entry and all ancestors.
+    /// Ordered from current entry first, then ancestors (closest to root).
+    pub entries: Vec<AncestorAttachmentEntry>,
 }
 
 /// CRDT history entry for version tracking.

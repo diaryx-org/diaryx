@@ -589,7 +589,7 @@ impl<FS: AsyncFileSystem> Validator<FS> {
 
             // Check all contents references
             for child_ref in index.frontmatter.contents_list() {
-                let child_path = dir.join(child_ref);
+                let child_path = normalize_path(&dir.join(child_ref));
 
                 if !self.ws.fs_ref().exists(&child_path).await {
                     result.errors.push(ValidationError::BrokenContentsRef {
@@ -617,7 +617,7 @@ impl<FS: AsyncFileSystem> Validator<FS> {
 
             // Check part_of if present
             if let Some(ref part_of) = index.frontmatter.part_of {
-                let parent_path = dir.join(part_of);
+                let parent_path = normalize_path(&dir.join(part_of));
                 if !self.ws.fs_ref().exists(&parent_path).await {
                     result.errors.push(ValidationError::BrokenPartOf {
                         file: path.to_path_buf(),
@@ -628,9 +628,9 @@ impl<FS: AsyncFileSystem> Validator<FS> {
 
             // Add attachments to visited set so they're not reported as orphans
             for attachment in index.frontmatter.attachments_list() {
-                let attachment_path = dir.join(attachment);
+                let attachment_path = normalize_path(&dir.join(attachment));
                 if self.ws.fs_ref().exists(&attachment_path).await {
-                    visited.insert(normalize_path(&attachment_path));
+                    visited.insert(attachment_path);
                 }
             }
         }
@@ -686,7 +686,7 @@ impl<FS: AsyncFileSystem> Validator<FS> {
 
             // Check all contents references
             for child_ref in contents_list {
-                let child_path = dir.join(child_ref);
+                let child_path = normalize_path(&dir.join(child_ref));
 
                 if !self.ws.fs_ref().exists(&child_path).await {
                     result.errors.push(ValidationError::BrokenContentsRef {
@@ -698,7 +698,7 @@ impl<FS: AsyncFileSystem> Validator<FS> {
 
             // Check part_of if present
             if let Some(ref part_of) = index.frontmatter.part_of {
-                let parent_path = dir.join(part_of);
+                let parent_path = normalize_path(&dir.join(part_of));
                 if !self.ws.fs_ref().exists(&parent_path).await {
                     result.errors.push(ValidationError::BrokenPartOf {
                         file: path.clone(),
@@ -738,7 +738,7 @@ impl<FS: AsyncFileSystem> Validator<FS> {
 
             // Check attachments if present
             for attachment in index.frontmatter.attachments_list() {
-                let attachment_path = dir.join(attachment);
+                let attachment_path = normalize_path(&dir.join(attachment));
 
                 // Check if attachment exists
                 if !self.ws.fs_ref().exists(&attachment_path).await {

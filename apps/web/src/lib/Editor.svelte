@@ -23,16 +23,13 @@
   import type * as Y from "yjs";
   import type { HocuspocusProvider } from "@hocuspocus/provider";
 
-  // Mobile detection
-  import { getMobileState } from "./hooks/useMobile.svelte";
-
-  // InlineToolbar for inline formatting (Bold, Italic, etc.)
-  import InlineToolbar from "./components/InlineToolbar.svelte";
-
   // FloatingMenu for block formatting (headings, lists, etc.)
   import FloatingMenuComponent from "./components/FloatingMenuComponent.svelte";
   // BubbleMenu for inline formatting when text is selected
   import BubbleMenuComponent from "./components/BubbleMenuComponent.svelte";
+
+  // Custom extension for attachment picker
+  import { AttachmentExtension } from "./extensions/AttachmentExtension";
 
   interface Props {
     content?: string;
@@ -40,7 +37,7 @@
     onchange?: (markdown: string) => void;
     onblur?: () => void;
     readonly?: boolean;
-    onInsertImage?: () => void;
+    onOpenAttachmentPicker?: () => void;
     onFileDrop?: (
       file: File,
     ) => Promise<{ blobUrl: string; attachmentPath: string } | null>;
@@ -61,7 +58,7 @@
     onchange,
     onblur,
     readonly = false,
-    onInsertImage,
+    onOpenAttachmentPicker,
     onFileDrop,
     ydoc,
     provider,
@@ -83,9 +80,6 @@
   // Track the last content prop value we synced FROM, so we only sync when it actually changes
   // This prevents resetting editor content when the user is typing and the prop hasn't changed
   let lastSyncedContent: string | undefined = undefined;
-
-  // Mobile state for responsive behavior
-  const mobileState = getMobileState();
 
   // Collaboration gating:
   // We show local markdown content first, then enable Collaboration after provider has synced once.
@@ -238,6 +232,10 @@
           class: "editor-image",
         },
       }),
+      // Attachment picker extension
+      AttachmentExtension.configure({
+        onOpenPicker: onOpenAttachmentPicker,
+      }),
     ];
 
     // Add FloatingMenu extension (for block formatting on empty lines)
@@ -329,9 +327,6 @@
               offset: 10,
             },
             shouldShow: ({ editor: ed, view, state, from, to }) => {
-              // Only show on desktop
-              if (mobileState.isMobile) return false;
-
               // Must be editable
               if (!ed.isEditable) return false;
 
@@ -486,6 +481,26 @@
    */
   export function focus(): void {
     editor?.commands.focus();
+  }
+
+  /**
+   * Focus the editor at the end of the document and create a new paragraph if needed
+   */
+  export function focusAtEnd(): void {
+    if (!editor) return;
+
+    // Move cursor to end of document
+    editor.commands.focus("end");
+
+    // Check if we're on an empty paragraph - if not, create one
+    const { selection } = editor.state;
+    const currentNode = selection.$anchor.parent;
+    const isEmptyParagraph = currentNode.type.name === "paragraph" && currentNode.content.size === 0;
+
+    if (!isEmptyParagraph) {
+      // Insert a new paragraph at the end
+      editor.chain().focus("end").createParagraphNear().focus("end").run();
+    }
   }
 
   /**
@@ -658,30 +673,18 @@
   }}
 ></div>
 
-<!-- Mobile inline toolbar: appears above virtual keyboard when keyboard is visible -->
-<!-- Uses top positioning with visualViewport for proper iOS keyboard handling -->
-{#if !readonly && mobileState.isMobile && mobileState.keyboardVisible}
-  <InlineToolbar
-    {editor}
-    position="bottom"
-    viewportOffsetTop={mobileState.viewportOffsetTop}
-    viewportHeight={mobileState.viewportHeight}
-    showDone={true}
-  />
-{/if}
 
 <!-- FloatingMenu for block formatting (appears on empty lines) -->
 <!-- Element must exist before editor creation for extension to bind to it -->
 {#if !readonly}
   <FloatingMenuComponent
     {editor}
-    {onInsertImage}
+    onInsertAttachment={onOpenAttachmentPicker}
     bind:element={floatingMenuElement}
   />
 {/if}
 
 <!-- BubbleMenu for inline formatting (appears when text is selected) -->
-<!-- Only used on desktop - mobile uses the bottom InlineToolbar -->
 {#if !readonly}
   <BubbleMenuComponent {editor} bind:element={bubbleMenuElement} />
 {/if}

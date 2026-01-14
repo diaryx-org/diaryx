@@ -6,11 +6,41 @@
 //! - `TreeNode` - A node in the workspace tree for display
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
 use ts_rs::TS;
+
+/// Normalize a path by resolving `.` and `..` components without filesystem access.
+/// This is necessary for web/WASM where the virtual filesystem doesn't handle `..` in paths.
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = Vec::new();
+
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                // Pop the last component if possible (handle ..)
+                if !normalized.is_empty()
+                    && !matches!(normalized.last(), Some(Component::ParentDir))
+                {
+                    normalized.pop();
+                } else {
+                    // Can't go up further, keep the ..
+                    normalized.push(component);
+                }
+            }
+            Component::CurDir => {
+                // Skip . components
+            }
+            _ => {
+                normalized.push(component);
+            }
+        }
+    }
+
+    normalized.iter().collect()
+}
 
 /// Represents an index file's frontmatter
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,11 +153,17 @@ impl IndexFile {
         self.path.parent()
     }
 
-    /// Resolve a relative path from this index's location
+    /// Resolve a relative path from this index's location.
+    /// The path is normalized to handle `..` and `.` components,
+    /// which is necessary for web/WASM where the virtual filesystem
+    /// doesn't automatically resolve these.
     pub fn resolve_path(&self, relative: &str) -> PathBuf {
-        self.directory()
+        let joined = self
+            .directory()
             .map(|dir| dir.join(relative))
-            .unwrap_or_else(|| PathBuf::from(relative))
+            .unwrap_or_else(|| PathBuf::from(relative));
+
+        normalize_path(&joined)
     }
 }
 

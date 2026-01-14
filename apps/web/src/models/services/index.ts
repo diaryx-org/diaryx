@@ -11,6 +11,7 @@ export {
   trackBlobUrl,
   getBlobUrl,
   hasBlobUrls,
+  computeRelativeAttachmentPath,
 } from './attachmentService';
 
 export {

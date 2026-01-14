@@ -337,7 +337,11 @@ attachment_path: string,
 /**
  * Optional new filename (for handling collisions).
  */
-new_filename: string | null, } } | { "type": "FileExists", "params": { 
+new_filename: string | null, } } | { "type": "GetAncestorAttachments", "params": { 
+/**
+ * Path to the entry file.
+ */
+path: string, } } | { "type": "FileExists", "params": { 
 /**
  * Path to check.
  */

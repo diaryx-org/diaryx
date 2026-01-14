@@ -184,3 +184,82 @@ export function trackBlobUrl(originalPath: string, blobUrl: string): void {
 export function hasBlobUrls(): boolean {
   return blobUrlMap.size > 0;
 }
+
+// ============================================================================
+// Path Utilities
+// ============================================================================
+
+/**
+ * Get the directory portion of a path (browser-compatible dirname).
+ */
+function getDirectory(filePath: string): string {
+  const lastSlash = filePath.lastIndexOf('/');
+  return lastSlash >= 0 ? filePath.substring(0, lastSlash) : '';
+}
+
+/**
+ * Join path segments (browser-compatible path.join).
+ */
+function joinPaths(...segments: string[]): string {
+  return segments
+    .filter(s => s.length > 0)
+    .join('/')
+    .replace(/\/+/g, '/'); // Remove duplicate slashes
+}
+
+/**
+ * Compute a relative path from one directory to another (browser-compatible).
+ */
+function relativePath(fromDir: string, toDir: string): string {
+  if (fromDir === toDir) return '';
+
+  const fromParts = fromDir.split('/').filter(p => p.length > 0);
+  const toParts = toDir.split('/').filter(p => p.length > 0);
+
+  // Find common prefix
+  let commonLength = 0;
+  while (
+    commonLength < fromParts.length &&
+    commonLength < toParts.length &&
+    fromParts[commonLength] === toParts[commonLength]
+  ) {
+    commonLength++;
+  }
+
+  // Build relative path: go up from 'from', then down to 'to'
+  const upCount = fromParts.length - commonLength;
+  const ups = Array(upCount).fill('..');
+  const downs = toParts.slice(commonLength);
+
+  return [...ups, ...downs].join('/');
+}
+
+/**
+ * Compute the relative path from the current entry to an attachment
+ * that may be defined in an ancestor entry.
+ *
+ * @param currentEntryPath - Path to the current entry (e.g., "2025/01/day.md")
+ * @param sourceEntryPath - Path to entry containing the attachment (e.g., "2025/01.index.md")
+ * @param attachmentPath - The attachment path relative to source (e.g., "header.png")
+ * @returns Relative path from current entry to attachment
+ */
+export function computeRelativeAttachmentPath(
+  currentEntryPath: string,
+  sourceEntryPath: string,
+  attachmentPath: string
+): string {
+  // If same entry, just return attachment path
+  if (currentEntryPath === sourceEntryPath) {
+    return attachmentPath;
+  }
+
+  // Get directories
+  const currentDir = getDirectory(currentEntryPath);
+  const sourceDir = getDirectory(sourceEntryPath);
+
+  // Compute relative path from current dir to source dir
+  const relToSource = relativePath(currentDir, sourceDir);
+
+  // Join with attachment path
+  return relToSource ? joinPaths(relToSource, attachmentPath) : attachmentPath;
+}

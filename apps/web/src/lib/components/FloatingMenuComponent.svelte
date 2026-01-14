@@ -2,27 +2,27 @@
   import type { Editor } from "@tiptap/core";
   import {
     Plus,
-    Heading1,
-    Heading2,
-    Heading3,
+    Heading,
     List,
     ListOrdered,
     CheckSquare,
     Quote,
     Braces,
-    ImageIcon,
     Minus,
+    Paperclip,
   } from "@lucide/svelte";
+  import * as NativeSelect from "$lib/components/ui/native-select";
 
   interface Props {
     editor: Editor | null;
-    onInsertImage?: () => void;
+    onInsertAttachment?: () => void;
     element?: HTMLDivElement;
   }
 
-  let { editor, onInsertImage, element = $bindable() }: Props = $props();
+  let { editor, onInsertAttachment, element = $bindable() }: Props = $props();
 
   let isExpanded = $state(false);
+  let headingValue = $state("");
 
   function collapseMenu() {
     isExpanded = false;
@@ -35,9 +35,15 @@
     isExpanded = true;
   }
 
-  function handleHeading(level: 1 | 2 | 3) {
-    editor?.chain().focus().toggleHeading({ level }).run();
-    collapseMenu();
+  function handleHeadingChange(event: Event) {
+    const value = (event.target as HTMLSelectElement).value;
+    if (value && editor) {
+      const level = parseInt(value) as 1 | 2 | 3;
+      editor.chain().focus().toggleHeading({ level }).run();
+      collapseMenu();
+    }
+    // Reset the select value so it can be selected again
+    headingValue = "";
   }
 
   function handleBulletList() {
@@ -70,8 +76,8 @@
     collapseMenu();
   }
 
-  function handleImage() {
-    onInsertImage?.();
+  function handleAttachment() {
+    onInsertAttachment?.();
     collapseMenu();
   }
 
@@ -119,34 +125,20 @@
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="menu-expanded" onclick={(e) => e.stopPropagation()}>
-      <div class="menu-section">
-        <button
-          type="button"
-          onclick={(e) => handleMenuItemClick(e, () => handleHeading(1))}
-          class="menu-item"
-          title="Heading 1"
+      <div class="menu-section heading-section">
+        <NativeSelect.Root
+          bind:value={headingValue}
+          onchange={handleHeadingChange}
+          onmousedown={(e) => e.stopPropagation()}
+          class="heading-select"
         >
-          <Heading1 class="size-4" />
-          <span>Heading 1</span>
-        </button>
-        <button
-          type="button"
-          onclick={(e) => handleMenuItemClick(e, () => handleHeading(2))}
-          class="menu-item"
-          title="Heading 2"
-        >
-          <Heading2 class="size-4" />
-          <span>Heading 2</span>
-        </button>
-        <button
-          type="button"
-          onclick={(e) => handleMenuItemClick(e, () => handleHeading(3))}
-          class="menu-item"
-          title="Heading 3"
-        >
-          <Heading3 class="size-4" />
-          <span>Heading 3</span>
-        </button>
+          <NativeSelect.Option value="" disabled selected>
+            <Heading class="size-4 inline mr-1" />H
+          </NativeSelect.Option>
+          <NativeSelect.Option value="1">H1</NativeSelect.Option>
+          <NativeSelect.Option value="2">H2</NativeSelect.Option>
+          <NativeSelect.Option value="3">H3</NativeSelect.Option>
+        </NativeSelect.Root>
       </div>
 
       <div class="menu-divider"></div>
@@ -213,18 +205,18 @@
         </button>
       </div>
 
-      {#if onInsertImage}
+      {#if onInsertAttachment}
         <div class="menu-divider"></div>
 
         <div class="menu-section">
           <button
             type="button"
-            onclick={(e) => handleMenuItemClick(e, handleImage)}
+            onclick={(e) => handleMenuItemClick(e, handleAttachment)}
             class="menu-item"
-            title="Insert Image"
+            title="Insert Attachment"
           >
-            <ImageIcon class="size-4" />
-            <span>Image</span>
+            <Paperclip class="size-4" />
+            <span>Attachment</span>
           </button>
         </div>
       {/if}
@@ -313,6 +305,29 @@
     gap: 2px;
   }
 
+  .heading-section :global([data-slot="native-select-wrapper"]) {
+    width: auto;
+  }
+
+  .heading-section :global([data-slot="native-select"]) {
+    height: 32px;
+    min-width: 56px;
+    padding: 0 24px 0 8px;
+    font-size: 13px;
+    font-weight: 500;
+    border: none;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .heading-section :global([data-slot="native-select"]:hover) {
+    background: var(--accent);
+  }
+
+  .heading-section :global([data-slot="native-select-icon"]) {
+    right: 6px;
+  }
+
   .menu-item {
     display: flex;
     flex-direction: row;
@@ -360,13 +375,19 @@
   /* Mobile-specific adjustments */
   @media (max-width: 767px) {
     .trigger-button {
-      width: 28px;
-      height: 28px;
+      width: 36px;
+      height: 36px;
     }
 
     .menu-item {
-      width: 36px;
-      height: 36px;
+      width: 40px;
+      height: 40px;
+    }
+
+    .heading-section :global([data-slot="native-select"]) {
+      height: 40px;
+      min-width: 64px;
+      font-size: 14px;
     }
   }
 </style>

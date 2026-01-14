@@ -102,6 +102,10 @@
     // Prevent focus loss when clicking on the menu
     e.preventDefault();
   }}
+  ontouchstart={(e) => {
+    // Same for touch events on mobile
+    e.preventDefault();
+  }}
 >
   <button
     type="button"
@@ -255,5 +259,24 @@
     background: var(--border);
     margin: 0 2px;
     flex-shrink: 0;
+  }
+
+  /* Mobile-specific adjustments for larger touch targets */
+  @media (max-width: 767px) {
+    .bubble-menu {
+      gap: 4px;
+      padding: 6px;
+    }
+
+    .toolbar-button {
+      padding: 10px;
+      min-width: 44px;
+      min-height: 44px;
+    }
+
+    .toolbar-divider {
+      height: 20px;
+      margin: 0 4px;
+    }
   }
 </style>

@@ -22,6 +22,7 @@ import type {
   StorageInfo,
   CreateEntryOptions,
   SearchOptions,
+  AncestorAttachmentsResult,
 } from './generated';
 import type { JsonValue } from './generated/serde_json/JsonValue';
 
@@ -459,6 +460,15 @@ export function createApi(backend: Backend) {
         },
       });
       return expectResponse(response, 'String').data;
+    },
+
+    /** Get attachments from current entry and all ancestor indexes in the part_of chain. */
+    async getAncestorAttachments(path: string): Promise<AncestorAttachmentsResult> {
+      const response = await backend.execute({
+        type: 'GetAncestorAttachments',
+        params: { path },
+      });
+      return expectResponse(response, 'AncestorAttachments').data;
     },
 
     // =========================================================================

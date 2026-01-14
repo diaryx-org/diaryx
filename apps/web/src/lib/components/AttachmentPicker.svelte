@@ -1,19 +1,14 @@
 <script lang="ts">
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
-  import { Input } from "$lib/components/ui/input";
-  import { Label } from "$lib/components/ui/label";
   import {
     Upload,
-    Image as ImageIcon,
     FileIcon,
     FileText,
     FileSpreadsheet,
     FolderOpen,
-    Link as LinkIcon,
   } from "@lucide/svelte";
   import type { Api } from "$lib/backend/api";
-  import type { AncestorAttachmentEntry } from "$lib/backend/generated";
 
   interface Props {
     open: boolean;
@@ -26,7 +21,6 @@
   export interface AttachmentSelection {
     path: string;
     isImage: boolean;
-    mode: "embed" | "link";
     blobUrl?: string;
     /** The entry path where this attachment lives (for getting data) */
     sourceEntryPath: string;
@@ -48,7 +42,6 @@
   let loading = $state(false);
   let error = $state<string | null>(null);
   let activeTab = $state<"existing" | "upload">("existing");
-  let insertMode = $state<"embed" | "link">("embed");
   let isDragging = $state(false);
   let fileInput: HTMLInputElement | null = $state(null);
 
@@ -225,7 +218,6 @@
     onSelect({
       path: attachment.path,
       isImage: attachment.isImage,
-      mode: insertMode,
       blobUrl: attachment.thumbnail,
       sourceEntryPath,
     });
@@ -259,7 +251,6 @@
       onSelect({
         path: attachmentPath,
         isImage,
-        mode: insertMode,
         blobUrl,
         sourceEntryPath: entryPath,
       });
@@ -430,30 +421,5 @@
       {/if}
     </div>
 
-    <!-- Insert mode toggle -->
-    <div class="border-t pt-3 flex items-center gap-4">
-      <Label class="text-sm text-muted-foreground">Insert as:</Label>
-      <div class="flex gap-2">
-        <Button
-          variant={insertMode === "embed" ? "default" : "outline"}
-          size="sm"
-          onclick={() => (insertMode = "embed")}
-        >
-          <ImageIcon class="size-4 mr-2" />
-          Embed
-        </Button>
-        <Button
-          variant={insertMode === "link" ? "default" : "outline"}
-          size="sm"
-          onclick={() => (insertMode = "link")}
-        >
-          <LinkIcon class="size-4 mr-2" />
-          Link
-        </Button>
-      </div>
-      <span class="text-xs text-muted-foreground ml-auto">
-        {insertMode === "embed" ? "![alt](path)" : "[text](path)"}
-      </span>
-    </div>
-  </Dialog.Content>
+    </Dialog.Content>
 </Dialog.Root>

@@ -29,8 +29,7 @@
   import CommandPalette from "./lib/CommandPalette.svelte";
   import SettingsDialog from "./lib/SettingsDialog.svelte";
   import ExportDialog from "./lib/ExportDialog.svelte";
-  import AttachmentPicker, { type AttachmentSelection } from "./lib/components/AttachmentPicker.svelte";
-  import EditorHeader from "./views/editor/EditorHeader.svelte";
+    import EditorHeader from "./views/editor/EditorHeader.svelte";
   import EditorEmptyState from "./views/editor/EditorEmptyState.svelte";
   import EditorContent from "./views/editor/EditorContent.svelte";
   import { Toaster } from "$lib/components/ui/sonner";
@@ -167,9 +166,6 @@
   let pendingAttachmentPath = $state("");
   let attachmentError: string | null = $state(null);
   let attachmentFileInput: HTMLInputElement | null = $state(null);
-
-  // Attachment picker state
-  let showAttachmentPicker = $state(false);
 
   // Note: Blob URL management is now in attachmentService.ts
 
@@ -1060,13 +1056,13 @@
     }
   }
 
-  // Open attachment picker
-  function handleOpenAttachmentPicker() {
-    showAttachmentPicker = true;
-  }
-
-  // Handle attachment selection from picker
-  function handleAttachmentSelect(selection: AttachmentSelection | null) {
+  // Handle attachment selection from inline picker node
+  function handleAttachmentInsert(selection: {
+    path: string;
+    isImage: boolean;
+    blobUrl?: string;
+    sourceEntryPath: string;
+  }) {
     if (!selection || !editorRef || !currentEntry) return;
 
     const filename = selection.path.split("/").pop() || selection.path;
@@ -1079,27 +1075,17 @@
       selection.path
     );
 
-    if (selection.mode === "embed") {
-      if (selection.isImage && selection.blobUrl) {
-        // Track the blob URL for reverse transformation on save
-        trackBlobUrl(relativePath, selection.blobUrl);
-        // Insert image with blob URL
-        editorRef.insertImage(selection.blobUrl, filename);
-      } else {
-        // For non-images or images without blob URL, insert markdown syntax
-        // This will be converted to blob URL by the attachment service when content is displayed
-        const markdown = `![${filename}](${relativePath})`;
-        editorRef.setContent(editorRef.getMarkdown() + `\n${markdown}\n`);
-      }
+    // Always embed mode (link mode removed)
+    if (selection.isImage && selection.blobUrl) {
+      // Track the blob URL for reverse transformation on save
+      trackBlobUrl(relativePath, selection.blobUrl);
+      // Insert image with blob URL
+      editorRef.insertImage(selection.blobUrl, filename);
     } else {
-      // Link mode - insert as markdown link
-      const markdown = `[${filename}](${relativePath})`;
-      // Insert at cursor position by focusing and using insertContent
-      const editor = editorRef;
-      // TipTap editor - insert content at cursor
-      if (editor?.chain) {
-        editor.chain().focus().insertContent(markdown).run();
-      }
+      // For non-images or images without blob URL, insert markdown syntax
+      // This will be converted to blob URL by the attachment service when content is displayed
+      const markdown = `![${filename}](${relativePath})`;
+      editorRef.setContent(editorRef.getMarkdown() + `\n${markdown}\n`);
     }
   }
 
@@ -1441,17 +1427,6 @@
   onOpenChange={(open) => (showExportDialog = open)}
 />
 
-<!-- Attachment Picker Dialog -->
-{#if currentEntry}
-  <AttachmentPicker
-    bind:open={showAttachmentPicker}
-    entryPath={currentEntry.path}
-    {api}
-    onSelect={handleAttachmentSelect}
-    onClose={() => (showAttachmentPicker = false)}
-  />
-{/if}
-
 <!-- Toast Notifications -->
 <Toaster />
 
@@ -1530,7 +1505,9 @@
         {readableLineLength}
         onchange={handleContentChange}
         onblur={handleEditorBlur}
-        onOpenAttachmentPicker={handleOpenAttachmentPicker}
+        entryPath={currentEntry.path}
+        {api}
+        onAttachmentInsert={handleAttachmentInsert}
         onFileDrop={handleEditorFileDrop}
         onLinkClick={handleLinkClick}
       />

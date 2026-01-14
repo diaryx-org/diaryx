@@ -4,8 +4,6 @@
     Plus,
     Heading,
     List,
-    ListOrdered,
-    CheckSquare,
     Quote,
     Braces,
     Minus,
@@ -23,16 +21,71 @@
 
   let isExpanded = $state(false);
   let headingValue = $state("");
+  let listValue = $state("");
+  let focusedIndex = $state(-1);
+  let focusableItems: HTMLElement[] = $state([]);
 
   function collapseMenu() {
     isExpanded = false;
   }
 
-  function expandMenu(event: MouseEvent | TouchEvent) {
+  function expandMenu(event?: MouseEvent | TouchEvent | KeyboardEvent) {
     // Prevent the event from bubbling to the window click handler
-    event.stopPropagation();
-    event.preventDefault();
+    event?.stopPropagation();
+    event?.preventDefault();
     isExpanded = true;
+    // Focus first item after expansion
+    setTimeout(() => {
+      updateFocusableItems();
+      if (focusableItems.length > 0) {
+        focusedIndex = 0;
+        focusableItems[0]?.focus();
+      }
+    }, 0);
+  }
+
+  // Expose expand function for external triggering (e.g., keyboard shortcut from editor)
+  export function expand() {
+    if (!isExpanded) {
+      expandMenu();
+    }
+  }
+
+  function updateFocusableItems() {
+    focusableItems = Array.from(
+      element?.querySelectorAll('[data-slot="native-select"], .menu-item') || []
+    ) as HTMLElement[];
+  }
+
+  function handleMenuKeydown(event: KeyboardEvent) {
+    if (!isExpanded) return;
+
+    switch (event.key) {
+      case "Escape":
+        event.preventDefault();
+        collapseMenu();
+        // Refocus editor so user can continue typing
+        editor?.commands.focus();
+        break;
+      case "ArrowRight":
+        event.preventDefault();
+        updateFocusableItems();
+        focusedIndex = (focusedIndex + 1) % focusableItems.length;
+        focusableItems[focusedIndex]?.focus();
+        break;
+      case "ArrowLeft":
+        event.preventDefault();
+        updateFocusableItems();
+        focusedIndex = (focusedIndex - 1 + focusableItems.length) % focusableItems.length;
+        focusableItems[focusedIndex]?.focus();
+        break;
+    }
+  }
+
+  function handleTriggerKeydown(event: KeyboardEvent) {
+    if (event.key === "Enter" || event.key === " ") {
+      expandMenu(event);
+    }
   }
 
   function handleHeadingChange(event: Event) {
@@ -46,19 +99,24 @@
     headingValue = "";
   }
 
-  function handleBulletList() {
-    editor?.chain().focus().toggleBulletList().run();
-    collapseMenu();
-  }
-
-  function handleOrderedList() {
-    editor?.chain().focus().toggleOrderedList().run();
-    collapseMenu();
-  }
-
-  function handleTaskList() {
-    editor?.chain().focus().toggleTaskList().run();
-    collapseMenu();
+  function handleListChange(event: Event) {
+    const value = (event.target as HTMLSelectElement).value;
+    if (value && editor) {
+      switch (value) {
+        case "bullet":
+          editor.chain().focus().toggleBulletList().run();
+          break;
+        case "ordered":
+          editor.chain().focus().toggleOrderedList().run();
+          break;
+        case "task":
+          editor.chain().focus().toggleTaskList().run();
+          break;
+      }
+      collapseMenu();
+    }
+    // Reset the select value so it can be selected again
+    listValue = "";
   }
 
   function handleBlockquote() {
@@ -124,7 +182,7 @@
   {#if isExpanded}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="menu-expanded" onclick={(e) => e.stopPropagation()}>
+    <div class="menu-expanded" onclick={(e) => e.stopPropagation()} onkeydown={handleMenuKeydown}>
       <div class="menu-section heading-section">
         <NativeSelect.Root
           bind:value={headingValue}
@@ -143,34 +201,20 @@
 
       <div class="menu-divider"></div>
 
-      <div class="menu-section">
-        <button
-          type="button"
-          onclick={(e) => handleMenuItemClick(e, handleBulletList)}
-          class="menu-item"
-          title="Bullet List"
+      <div class="menu-section list-section">
+        <NativeSelect.Root
+          bind:value={listValue}
+          onchange={handleListChange}
+          onmousedown={(e) => e.stopPropagation()}
+          class="list-select"
         >
-          <List class="size-4" />
-          <span>Bullet List</span>
-        </button>
-        <button
-          type="button"
-          onclick={(e) => handleMenuItemClick(e, handleOrderedList)}
-          class="menu-item"
-          title="Numbered List"
-        >
-          <ListOrdered class="size-4" />
-          <span>Numbered List</span>
-        </button>
-        <button
-          type="button"
-          onclick={(e) => handleMenuItemClick(e, handleTaskList)}
-          class="menu-item"
-          title="Task List"
-        >
-          <CheckSquare class="size-4" />
-          <span>Task List</span>
-        </button>
+          <NativeSelect.Option value="" disabled selected>
+            <List class="size-4 inline mr-1" />Lists
+          </NativeSelect.Option>
+          <NativeSelect.Option value="bullet">Bullet List</NativeSelect.Option>
+          <NativeSelect.Option value="ordered">Numbered List</NativeSelect.Option>
+          <NativeSelect.Option value="task">Task List</NativeSelect.Option>
+        </NativeSelect.Root>
       </div>
 
       <div class="menu-divider"></div>
@@ -230,6 +274,7 @@
         e.stopPropagation();
       }}
       onclick={expandMenu}
+      onkeydown={handleTriggerKeydown}
       title="Add block"
       aria-expanded={isExpanded}
     >
@@ -320,11 +365,50 @@
     box-shadow: none;
   }
 
-  .heading-section :global([data-slot="native-select"]:hover) {
+  .heading-section :global([data-slot="native-select"]:hover),
+  .heading-section :global([data-slot="native-select"]:focus) {
     background: var(--accent);
+    outline: none;
+  }
+
+  .heading-section :global([data-slot="native-select"]:focus-visible) {
+    outline: 2px solid var(--ring);
+    outline-offset: -2px;
+    border-radius: 6px;
   }
 
   .heading-section :global([data-slot="native-select-icon"]) {
+    right: 6px;
+  }
+
+  .list-section :global([data-slot="native-select-wrapper"]) {
+    width: auto;
+  }
+
+  .list-section :global([data-slot="native-select"]) {
+    height: 32px;
+    min-width: 70px;
+    padding: 0 24px 0 8px;
+    font-size: 13px;
+    font-weight: 500;
+    border: none;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .list-section :global([data-slot="native-select"]:hover),
+  .list-section :global([data-slot="native-select"]:focus) {
+    background: var(--accent);
+    outline: none;
+  }
+
+  .list-section :global([data-slot="native-select"]:focus-visible) {
+    outline: 2px solid var(--ring);
+    outline-offset: -2px;
+    border-radius: 6px;
+  }
+
+  .list-section :global([data-slot="native-select-icon"]) {
     right: 6px;
   }
 
@@ -353,9 +437,16 @@
     display: none;
   }
 
-  .menu-item:hover {
+  .menu-item:hover,
+  .menu-item:focus {
     background: var(--accent);
     color: var(--accent-foreground);
+    outline: none;
+  }
+
+  .menu-item:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: -2px;
   }
 
   .menu-item:active {
@@ -387,6 +478,12 @@
     .heading-section :global([data-slot="native-select"]) {
       height: 40px;
       min-width: 64px;
+      font-size: 14px;
+    }
+
+    .list-section :global([data-slot="native-select"]) {
+      height: 40px;
+      min-width: 80px;
       font-size: 14px;
     }
   }

@@ -9,6 +9,7 @@
   import LoadingSpinner from "../shared/LoadingSpinner.svelte";
   import type { Doc as YDoc } from "yjs";
   import type { HocuspocusProvider } from "@hocuspocus/provider";
+  import type { Api } from "$lib/backend/api";
 
   interface Props {
     Editor: typeof import("$lib/Editor.svelte").default | null;
@@ -22,9 +23,17 @@
     onchange: (markdown: string) => void;
     onblur: () => void;
     // These match the Editor component prop types
-    onOpenAttachmentPicker?: () => void;
     onFileDrop?: (file: File) => Promise<{ blobUrl: string; attachmentPath: string } | null>;
     onLinkClick?: (href: string) => void;
+    // Attachment picker props
+    entryPath?: string;
+    api?: Api | null;
+    onAttachmentInsert?: (selection: {
+      path: string;
+      isImage: boolean;
+      blobUrl?: string;
+      sourceEntryPath: string;
+    }) => void;
   }
 
   let {
@@ -38,9 +47,11 @@
     readableLineLength = true,
     onchange,
     onblur,
-    onOpenAttachmentPicker,
     onFileDrop,
     onLinkClick,
+    entryPath,
+    api,
+    onAttachmentInsert,
   }: Props = $props();
 </script>
 
@@ -70,9 +81,11 @@
           {onchange}
           {onblur}
           placeholder="Start writing..."
-          {onOpenAttachmentPicker}
           {onFileDrop}
           {onLinkClick}
+          {entryPath}
+          {api}
+          {onAttachmentInsert}
           ydoc={collaborationEnabled ? (currentYDoc ?? undefined) : undefined}
           provider={collaborationEnabled ? (currentProvider ?? undefined) : undefined}
         />

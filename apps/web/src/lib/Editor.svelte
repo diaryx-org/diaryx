@@ -28,8 +28,9 @@
   // BubbleMenu for inline formatting when text is selected
   import BubbleMenuComponent from "./components/BubbleMenuComponent.svelte";
 
-  // Custom extension for attachment picker
-  import { AttachmentExtension } from "./extensions/AttachmentExtension";
+  // Custom extension for inline attachment picker node
+  import { AttachmentPickerNode } from "./extensions/AttachmentPickerNode";
+  import type { Api } from "$lib/backend/api";
 
   interface Props {
     content?: string;
@@ -37,7 +38,6 @@
     onchange?: (markdown: string) => void;
     onblur?: () => void;
     readonly?: boolean;
-    onOpenAttachmentPicker?: () => void;
     onFileDrop?: (
       file: File,
     ) => Promise<{ blobUrl: string; attachmentPath: string } | null>;
@@ -50,6 +50,15 @@
     debugMenus?: boolean;
     // Callback when a link is clicked (for handling relative links to other notes)
     onLinkClick?: (href: string) => void;
+    // Attachment picker options
+    entryPath?: string;
+    api?: Api | null;
+    onAttachmentInsert?: (selection: {
+      path: string;
+      isImage: boolean;
+      blobUrl?: string;
+      sourceEntryPath: string;
+    }) => void;
   }
 
   let {
@@ -58,7 +67,6 @@
     onchange,
     onblur,
     readonly = false,
-    onOpenAttachmentPicker,
     onFileDrop,
     ydoc,
     provider,
@@ -66,6 +74,9 @@
     userColor = "#958DF1",
     debugMenus = false,
     onLinkClick,
+    entryPath = "",
+    api = null,
+    onAttachmentInsert,
   }: Props = $props();
 
   let element: HTMLDivElement;
@@ -73,6 +84,8 @@
 
   // FloatingMenu element ref - must exist before editor creation
   let floatingMenuElement: HTMLDivElement | undefined = $state();
+  // FloatingMenu component ref - for programmatic expansion
+  let floatingMenuRef: { expand: () => void } | undefined = $state();
   // BubbleMenu element ref - must exist before editor creation
   let bubbleMenuElement: HTMLDivElement | undefined = $state();
   let isUpdatingContent = false; // Flag to skip onchange during programmatic updates
@@ -232,9 +245,13 @@
           class: "editor-image",
         },
       }),
-      // Attachment picker extension
-      AttachmentExtension.configure({
-        onOpenPicker: onOpenAttachmentPicker,
+      // Inline attachment picker node extension
+      AttachmentPickerNode.configure({
+        entryPath,
+        api,
+        onAttachmentSelect: (selection) => {
+          onAttachmentInsert?.(selection);
+        },
       }),
     ];
 
@@ -436,6 +453,27 @@
       editorProps: {
         attributes: {
           class: "editor-content",
+        },
+        handleKeyDown: (view, event) => {
+          // Right Arrow on empty paragraph opens floating menu
+          if (event.key === "ArrowRight" && floatingMenuRef) {
+            const { state } = view;
+            const { selection } = state;
+            const { empty } = selection;
+            const anchor = selection.$anchor;
+
+            // Check if we're on an empty paragraph (same conditions as floating menu shouldShow)
+            const isEmptyParagraph =
+              anchor.parent.type.name === "paragraph" &&
+              anchor.parent.content.size === 0;
+
+            if (empty && isEmptyParagraph) {
+              event.preventDefault();
+              floatingMenuRef.expand();
+              return true;
+            }
+          }
+          return false;
         },
         handlePaste: (_view, event) => {
           const items = event.clipboardData?.items;
@@ -678,8 +716,9 @@
 <!-- Element must exist before editor creation for extension to bind to it -->
 {#if !readonly}
   <FloatingMenuComponent
+    bind:this={floatingMenuRef}
     {editor}
-    onInsertAttachment={onOpenAttachmentPicker}
+    onInsertAttachment={() => editor?.commands.insertAttachmentPicker()}
     bind:element={floatingMenuElement}
   />
 {/if}

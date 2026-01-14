@@ -1,7 +1,9 @@
 <script lang="ts">
   import * as Command from "$lib/components/ui/command";
+  import * as Drawer from "$lib/components/ui/drawer";
   import type { TreeNode, SearchResults } from "./backend";
   import type { Api } from "./backend/api";
+  import { getMobileState } from "./hooks/useMobile.svelte";
   import {
     Search,
     CalendarDays,
@@ -97,9 +99,11 @@
         )
       : []
   );
+
+  const mobileState = getMobileState();
 </script>
 
-<Command.Dialog bind:open title="Command Palette" description="Search or run a command">
+{#snippet commandContent()}
   <Command.Input
     placeholder="Search entries or type a command..."
     bind:value={searchValue}
@@ -172,4 +176,22 @@
       </Command.Group>
     {/if}
   </Command.List>
-</Command.Dialog>
+{/snippet}
+
+{#if mobileState.isMobile}
+  <!-- Mobile: Use Drawer from top -->
+  <Drawer.Root bind:open direction="top">
+    <Drawer.Content>
+      <div class="mx-auto w-full max-w-md px-4 pb-4">
+        <Command.Root class="rounded-lg border-none shadow-none">
+          {@render commandContent()}
+        </Command.Root>
+      </div>
+    </Drawer.Content>
+  </Drawer.Root>
+{:else}
+  <!-- Desktop: Use Dialog -->
+  <Command.Dialog bind:open title="Command Palette" description="Search or run a command">
+    {@render commandContent()}
+  </Command.Dialog>
+{/if}

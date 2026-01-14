@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from "svelte";
-  import { getBackend, type TreeNode } from "./lib/backend";
+  import { getBackend, isTauri } from "./lib/backend";
   import { createApi, type Api } from "./lib/backend/api";
   import type { JsonValue } from "./lib/backend/generated/serde_json/JsonValue";
   // New Rust CRDT module imports
@@ -33,6 +33,7 @@
   import EditorEmptyState from "./views/editor/EditorEmptyState.svelte";
   import EditorContent from "./views/editor/EditorContent.svelte";
   import { Toaster } from "$lib/components/ui/sonner";
+  import * as Tooltip from "$lib/components/ui/tooltip";
   import { toast } from "svelte-sonner";
   // Note: Button, icons, and LoadingSpinner are now only used in extracted view components
   
@@ -65,19 +66,6 @@
     loadNodeChildren as loadNodeChildrenController,
     runValidation as runValidationController,
     validatePath,
-    setupWorkspaceCrdt as setupWorkspaceCrdtController,
-  } from "./controllers";
-  import {
-    openEntry as openEntryController,
-    saveEntry as saveEntryController,
-    createChildEntry as createChildEntryController,
-    createEntry as createEntryController,
-    ensureDailyEntry,
-    deleteEntry as deleteEntryController,
-    moveEntry as moveEntryController,
-    handlePropertyChange as handlePropertyChangeController,
-    removeProperty,
-    addProperty,
   } from "./controllers";
 
   // Dynamically import Editor to avoid SSR issues
@@ -104,7 +92,6 @@
   let showExportDialog = $derived(uiStore.showExportDialog);
   let showNewEntryModal = $derived(uiStore.showNewEntryModal);
   let exportPath = $derived(uiStore.exportPath);
-  let error = $derived(uiStore.error);
   let editorRef = $derived(uiStore.editorRef);
   
   // Workspace state - proxied from workspaceStore
@@ -116,6 +103,9 @@
   let backend = $derived(workspaceStore.backend);
   let showUnlinkedFiles = $derived(workspaceStore.showUnlinkedFiles);
   let showHiddenFiles = $derived(workspaceStore.showHiddenFiles);
+  let showEditorTitle = $derived(workspaceStore.showEditorTitle);
+  let showEditorPath = $derived(workspaceStore.showEditorPath);
+  let readableLineLength = $derived(workspaceStore.readableLineLength);
 
   // API wrapper - uses execute() internally for all operations
   let api: Api | null = $derived(backend ? createApi(backend) : null);
@@ -725,6 +715,15 @@
       event.preventDefault();
       toggleRightSidebar();
     }
+    // Open settings:
+    // - Tauri: Cmd/Ctrl + , (standard desktop convention)
+    // - Web: Cmd/Ctrl + Shift + , (to avoid browser settings conflict)
+    if ((event.metaKey || event.ctrlKey) && event.key === ",") {
+      if (isTauri() || event.shiftKey) {
+        event.preventDefault();
+        showSettingsDialog = true;
+      }
+    }
   }
 
   async function handleCreateChildEntry(parentPath: string) {
@@ -740,7 +739,7 @@
       await openEntry(newPath);
       await runValidation();
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      uiStore.setError(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -772,7 +771,7 @@
       await refreshTree();
       await openEntry(path);
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      uiStore.setError(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -814,7 +813,7 @@
         }, 500);
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      uiStore.setError(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -841,7 +840,7 @@
         currentEntry = await api.getEntry(filePath);
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      uiStore.setError(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -864,7 +863,7 @@
         }
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      uiStore.setError(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -877,7 +876,7 @@
       await refreshTree();
       await runValidation();
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      uiStore.setError(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -1086,7 +1085,7 @@
       await refreshTree();
       await runValidation();
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      uiStore.setError(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -1211,7 +1210,7 @@
         }
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      uiStore.setError(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -1238,7 +1237,7 @@
       // Update CRDT
       updateCrdtFileMetadata(path, newFrontmatter);
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      uiStore.setError(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -1256,57 +1255,8 @@
       // Update CRDT
       updateCrdtFileMetadata(path, currentEntry.frontmatter);
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      uiStore.setError(e instanceof Error ? e.message : String(e));
     }
-  }
-
-  function exportEntry() {
-    if (!currentEntry) return;
-
-    // Reconstruct full markdown with frontmatter
-    let fullContent = "";
-    if (
-      currentEntry.frontmatter &&
-      Object.keys(currentEntry.frontmatter).length > 0
-    ) {
-      const yamlLines = ["---"];
-      for (const [key, value] of Object.entries(currentEntry.frontmatter)) {
-        if (Array.isArray(value)) {
-          yamlLines.push(`${key}:`);
-          for (const item of value) {
-            yamlLines.push(`  - ${item}`);
-          }
-        } else if (typeof value === "string" && value.includes("\n")) {
-          // Multi-line string
-          yamlLines.push(`${key}: |`);
-          for (const line of value.split("\n")) {
-            yamlLines.push(`  ${line}`);
-          }
-        } else if (typeof value === "string") {
-          // Quote strings that might need it
-          const needsQuotes = /[:#{}[\],&*?|<>=!%@`]/.test(value);
-          yamlLines.push(
-            `${key}: ${needsQuotes ? `"${value.replace(/"/g, '\\"')}"` : value}`,
-          );
-        } else {
-          yamlLines.push(`${key}: ${JSON.stringify(value)}`);
-        }
-      }
-      yamlLines.push("---");
-      fullContent = yamlLines.join("\n") + "\n" + currentEntry.content;
-    } else {
-      fullContent = currentEntry.content;
-    }
-
-    const blob = new Blob([fullContent], {
-      type: "text/markdown;charset=utf-8",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = currentEntry.path.split("/").pop() || "entry.md";
-    a.click();
-    URL.revokeObjectURL(url);
   }
 
   function getEntryTitle(entry: { path: string; title?: string | null; frontmatter?: Record<string, unknown> }): string {
@@ -1396,7 +1346,7 @@
           await openEntry(targetPath);
         } catch (e) {
           console.error("Failed to create entry:", e);
-          error = e instanceof Error ? e.message : String(e);
+          uiStore.setError(e instanceof Error ? e.message : String(e));
         }
       }
     }
@@ -1433,6 +1383,9 @@
   bind:open={showSettingsDialog}
   bind:showUnlinkedFiles
   bind:showHiddenFiles
+  bind:showEditorTitle
+  bind:showEditorPath
+  bind:readableLineLength
   workspacePath={tree?.path}
   bind:collaborationEnabled
   {collaborationConnected}
@@ -1451,7 +1404,10 @@
 <!-- Toast Notifications -->
 <Toaster />
 
-<div class="flex h-screen bg-background overflow-hidden">
+<!-- Tooltip Provider for keyboard shortcut hints -->
+<Tooltip.Provider>
+
+<div class="flex h-dvh bg-background overflow-hidden pt-[env(safe-area-inset-top)]">
   <!-- Left Sidebar -->
   <LeftSidebar
     {tree}
@@ -1502,8 +1458,11 @@
         path={currentEntry.path}
         {isDirty}
         {isSaving}
+        showTitle={showEditorTitle}
+        showPath={showEditorPath}
+        leftSidebarOpen={!leftSidebarCollapsed}
+        rightSidebarOpen={!rightSidebarCollapsed}
         onSave={save}
-        onExport={exportEntry}
         onToggleLeftSidebar={toggleLeftSidebar}
         onToggleRightSidebar={toggleRightSidebar}
         onOpenCommandPalette={uiStore.openCommandPalette}
@@ -1517,6 +1476,7 @@
         {collaborationEnabled}
         {currentYDoc}
         {currentProvider}
+        {readableLineLength}
         onchange={handleContentChange}
         onblur={handleEditorBlur}
         onInsertImage={handleEditorImageInsert}
@@ -1527,6 +1487,7 @@
       <EditorEmptyState
         {leftSidebarCollapsed}
         onToggleLeftSidebar={toggleLeftSidebar}
+        onOpenCommandPalette={uiStore.openCommandPalette}
       />
     {/if}
   </main>
@@ -1555,3 +1516,5 @@
     }}
   />
 </div>
+
+</Tooltip.Provider>

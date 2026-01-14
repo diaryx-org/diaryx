@@ -13,10 +13,7 @@ import type { Backend } from '../lib/backend/interface';
 import type { RustCrdtApi } from '../lib/crdt/rustCrdtApi';
 import { workspaceStore } from '../models/stores';
 import { initializeWorkspaceCrdt } from '../models/services';
-import {
-  setWorkspaceId,
-  setWorkspaceServer,
-} from '../lib/crdt/workspaceCrdtBridge';
+import { setWorkspaceId } from '../lib/crdt/workspaceCrdtBridge';
 import { toast } from 'svelte-sonner';
 
 // Depth limit for initial tree loading (lazy loading)

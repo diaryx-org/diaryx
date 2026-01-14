@@ -1,24 +1,26 @@
 <script lang="ts">
   /**
    * EditorEmptyState - Welcome screen shown when no entry is selected
-   * 
+   *
    * A pure presentational component that displays:
-   * - Mobile header with menu toggle
+   * - Mobile header with menu toggle and command palette access
    * - Desktop sidebar toggle button (when collapsed)
    * - Welcome message
    */
-  
+
   import { Button } from "$lib/components/ui/button";
-  import { PanelLeft, Menu } from "@lucide/svelte";
+  import { PanelLeft, Menu, Search } from "@lucide/svelte";
 
   interface Props {
     leftSidebarCollapsed: boolean;
     onToggleLeftSidebar: () => void;
+    onOpenCommandPalette: () => void;
   }
 
   let {
     leftSidebarCollapsed,
     onToggleLeftSidebar,
+    onOpenCommandPalette,
   }: Props = $props();
 </script>
 
@@ -36,7 +38,15 @@
     <Menu class="size-4" />
   </Button>
   <span class="text-lg font-semibold">Diaryx</span>
-  <div class="size-8"></div>
+  <Button
+    variant="ghost"
+    size="icon"
+    onclick={onOpenCommandPalette}
+    class="size-8"
+    aria-label="Open command palette"
+  >
+    <Search class="size-4" />
+  </Button>
 </header>
 
 <!-- Welcome content -->

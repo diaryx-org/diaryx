@@ -11,12 +11,16 @@
  *   - isTouchDevice: true if device supports touch
  *   - keyboardVisible: true if virtual keyboard is likely visible
  *   - keyboardHeight: estimated height of virtual keyboard in pixels
+ *   - viewportOffsetTop: iOS visual viewport scroll offset (for fixed element positioning)
+ *   - viewportHeight: current visual viewport height (accounts for keyboard)
  */
 export function createMobileState() {
   let isMobile = $state(false);
   let isTouchDevice = $state(false);
   let keyboardVisible = $state(false);
   let keyboardHeight = $state(0);
+  let viewportOffsetTop = $state(0);
+  let viewportHeight = $state(typeof window !== 'undefined' ? window.innerHeight : 0);
 
   if (typeof window !== 'undefined') {
     // Initial detection
@@ -38,19 +42,48 @@ export function createMobileState() {
         // When keyboard is open, visualViewport.height is reduced
         const heightDiff = window.innerHeight - viewport.height;
 
-        // Use a threshold to determine if keyboard is visible
-        // 150px is a reasonable threshold that accounts for browser chrome
-        // but catches most virtual keyboards (typically 250-350px)
-        const threshold = 150;
-        keyboardVisible = heightDiff > threshold;
-        keyboardHeight = keyboardVisible ? heightDiff : 0;
+        // Always update viewport height for positioning calculations
+        viewportHeight = viewport.height;
+
+        // Use different thresholds for opening vs closing (hysteresis)
+        // This prevents flickering during scrolling
+        const openThreshold = 150;  // Height diff to consider keyboard "opened"
+        const closeThreshold = 100; // Height diff to consider keyboard "closed"
+
+        if (keyboardVisible) {
+          // Keyboard is currently visible - require larger change to close
+          if (heightDiff < closeThreshold) {
+            keyboardVisible = false;
+            keyboardHeight = 0;
+          } else {
+            // Update height but keep visible
+            keyboardHeight = heightDiff;
+          }
+        } else {
+          // Keyboard is currently hidden - check if it opened
+          if (heightDiff > openThreshold) {
+            keyboardVisible = true;
+            keyboardHeight = heightDiff;
+          }
+        }
+      };
+
+      // Track viewport scroll offset for fixed positioning adjustment
+      // On iOS, when scrolling with keyboard open, the viewport scrolls
+      // and fixed elements need to account for this offset
+      const handleViewportScroll = () => {
+        const viewport = window.visualViewport!;
+        viewportOffsetTop = viewport.offsetTop;
+        // Also update height during scroll as it can change
+        viewportHeight = viewport.height;
       };
 
       window.visualViewport.addEventListener('resize', handleViewportResize);
-      window.visualViewport.addEventListener('scroll', handleViewportResize);
+      window.visualViewport.addEventListener('scroll', handleViewportScroll);
 
       // Initial check
       handleViewportResize();
+      handleViewportScroll();
     }
   }
 
@@ -59,6 +92,8 @@ export function createMobileState() {
     get isTouchDevice() { return isTouchDevice; },
     get keyboardVisible() { return keyboardVisible; },
     get keyboardHeight() { return keyboardHeight; },
+    get viewportOffsetTop() { return viewportOffsetTop; },
+    get viewportHeight() { return viewportHeight; },
   };
 }
 
@@ -76,6 +111,8 @@ export function getMobileState() {
       get isTouchDevice() { return false; },
       get keyboardVisible() { return false; },
       get keyboardHeight() { return 0; },
+      get viewportOffsetTop() { return 0; },
+      get viewportHeight() { return 0; },
     };
   }
 

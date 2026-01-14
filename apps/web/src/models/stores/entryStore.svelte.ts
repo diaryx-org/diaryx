@@ -46,7 +46,11 @@ export function getEntryStore() {
       isDirty = false;
       titleError = null;
     },
-    
+
+    setCurrentEntry(entry: EntryData | null) {
+      currentEntry = entry;
+    },
+
     setDisplayContent(content: string) {
       displayContent = content;
     },

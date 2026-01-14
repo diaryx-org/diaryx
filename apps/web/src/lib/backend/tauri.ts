@@ -29,6 +29,8 @@ interface AppPaths {
   crdt_initialized: boolean;
   /** Error message if CRDT initialization failed */
   crdt_error: string | null;
+  /** Index signature for Record compatibility */
+  [key: string]: string | boolean | null;
 }
 
 interface ImportResult {
@@ -239,7 +241,7 @@ export class TauriBackend implements Backend {
   /**
    * Get the app paths (useful for debugging or displaying to user)
    */
-  getAppPaths(): Record<string, string | boolean> | null {
+  getAppPaths(): Record<string, string | boolean | null> | null {
     return this.appPaths;
   }
 

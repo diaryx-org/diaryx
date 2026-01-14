@@ -37,6 +37,25 @@ let showHiddenFiles = $state(
     : false
 );
 
+// Editor header display settings (default to false for minimal header)
+let showEditorTitle = $state(
+  typeof window !== 'undefined'
+    ? localStorage.getItem('diaryx-show-editor-title') === 'true'
+    : false
+);
+let showEditorPath = $state(
+  typeof window !== 'undefined'
+    ? localStorage.getItem('diaryx-show-editor-path') === 'true'
+    : false
+);
+
+// Readable line length setting (default to true for better readability)
+let readableLineLength = $state(
+  typeof window !== 'undefined'
+    ? localStorage.getItem('diaryx-readable-line-length') !== 'false'
+    : true
+);
+
 // ============================================================================
 // Store Factory
 // ============================================================================
@@ -55,6 +74,9 @@ export function getWorkspaceStore() {
     get backend() { return backend; },
     get showUnlinkedFiles() { return showUnlinkedFiles; },
     get showHiddenFiles() { return showHiddenFiles; },
+    get showEditorTitle() { return showEditorTitle; },
+    get showEditorPath() { return showEditorPath; },
+    get readableLineLength() { return readableLineLength; },
     
     // Tree management
     setTree(newTree: TreeNode | null) {
@@ -138,7 +160,28 @@ export function getWorkspaceStore() {
         localStorage.setItem('diaryx-show-hidden-files', String(show));
       }
     },
-    
+
+    setShowEditorTitle(show: boolean) {
+      showEditorTitle = show;
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('diaryx-show-editor-title', String(show));
+      }
+    },
+
+    setShowEditorPath(show: boolean) {
+      showEditorPath = show;
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('diaryx-show-editor-path', String(show));
+      }
+    },
+
+    setReadableLineLength(enabled: boolean) {
+      readableLineLength = enabled;
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('diaryx-readable-line-length', String(enabled));
+      }
+    },
+
     // Persist display settings
     persistDisplaySettings() {
       if (typeof window !== 'undefined') {

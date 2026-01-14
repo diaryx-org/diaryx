@@ -12,11 +12,17 @@
   interface Props {
     showUnlinkedFiles?: boolean;
     showHiddenFiles?: boolean;
+    showEditorTitle?: boolean;
+    showEditorPath?: boolean;
+    readableLineLength?: boolean;
   }
 
   let {
     showUnlinkedFiles = $bindable(false),
     showHiddenFiles = $bindable(false),
+    showEditorTitle = $bindable(false),
+    showEditorPath = $bindable(false),
+    readableLineLength = $bindable(true),
   }: Props = $props();
 
   const themeStore = getThemeStore();
@@ -52,6 +58,43 @@
         <Moon class="size-3" /> Dark
       </option>
     </select>
+  </div>
+
+  <!-- Editor Header: Show Title -->
+  <div class="flex items-center justify-between gap-4 px-1">
+    <Label for="show-editor-title" class="text-sm cursor-pointer flex flex-col gap-0.5">
+      <span>Show title in editor</span>
+      <span class="font-normal text-xs text-muted-foreground">
+        Display the entry title in the editor header.
+      </span>
+    </Label>
+    <Switch id="show-editor-title" bind:checked={showEditorTitle} />
+  </div>
+
+  <!-- Editor Header: Show Path -->
+  <div class="flex items-center justify-between gap-4 px-1">
+    <Label for="show-editor-path" class="text-sm cursor-pointer flex flex-col gap-0.5">
+      <span>Show filename in editor</span>
+      <span class="font-normal text-xs text-muted-foreground">
+        Display the file path below the title.
+      </span>
+    </Label>
+    <Switch
+      id="show-editor-path"
+      bind:checked={showEditorPath}
+      disabled={!showEditorTitle}
+    />
+  </div>
+
+  <!-- Readable Line Length -->
+  <div class="flex items-center justify-between gap-4 px-1">
+    <Label for="readable-line-length" class="text-sm cursor-pointer flex flex-col gap-0.5">
+      <span>Readable line length</span>
+      <span class="font-normal text-xs text-muted-foreground">
+        Limit text width for comfortable reading.
+      </span>
+    </Label>
+    <Switch id="readable-line-length" bind:checked={readableLineLength} />
   </div>
 
   <!-- Show Unlinked Files -->

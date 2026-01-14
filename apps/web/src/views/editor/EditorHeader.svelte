@@ -1,24 +1,36 @@
 <script lang="ts">
   /**
-   * EditorHeader - Header bar for the editor with title, actions, and sidebar toggles
-   * 
+   * EditorHeader - Header bar for the editor with actions and sidebar toggles
+   *
    * A pure presentational component that displays:
-   * - Sidebar toggle buttons (left/right)
-   * - Entry title and path
+   * - Sidebar toggle buttons (only when sidebar is closed)
+   * - Entry title and path (configurable via settings)
    * - Unsaved indicator badge
-   * - Save and Export buttons
+   * - Save button with keyboard shortcut tooltip
+   * - Command palette button with keyboard shortcut tooltip
    */
-  
+
   import { Button } from "$lib/components/ui/button";
-  import { Save, Download, PanelLeft, PanelRight, Menu, Loader2, Search } from "@lucide/svelte";
+  import * as Tooltip from "$lib/components/ui/tooltip";
+  import {
+    Save,
+    PanelLeft,
+    PanelRight,
+    Menu,
+    Loader2,
+    Search,
+  } from "@lucide/svelte";
 
   interface Props {
     title: string;
     path: string;
     isDirty: boolean;
     isSaving: boolean;
+    showTitle: boolean;
+    showPath: boolean;
+    leftSidebarOpen: boolean;
+    rightSidebarOpen: boolean;
     onSave: () => void;
-    onExport: () => void;
     onToggleLeftSidebar: () => void;
     onToggleRightSidebar: () => void;
     onOpenCommandPalette: () => void;
@@ -29,12 +41,21 @@
     path,
     isDirty,
     isSaving,
+    showTitle,
+    showPath,
+    leftSidebarOpen,
+    rightSidebarOpen,
     onSave,
-    onExport,
     onToggleLeftSidebar,
     onToggleRightSidebar,
     onOpenCommandPalette,
   }: Props = $props();
+
+  // Detect platform for keyboard shortcut display
+  const isMac =
+    typeof navigator !== "undefined" &&
+    navigator.platform.toUpperCase().indexOf("MAC") >= 0;
+  const modKey = isMac ? "⌘" : "Ctrl+";
 </script>
 
 <header
@@ -42,7 +63,7 @@
 >
   <!-- Left side: toggle + title -->
   <div class="flex items-center gap-2 min-w-0 flex-1">
-    <!-- Mobile menu button -->
+    <!-- Mobile menu button (always show on mobile for navigation) -->
     <Button
       variant="ghost"
       size="icon"
@@ -53,25 +74,39 @@
       <Menu class="size-4" />
     </Button>
 
-    <!-- Desktop left sidebar toggle -->
-    <Button
-      variant="ghost"
-      size="icon"
-      onclick={onToggleLeftSidebar}
-      class="size-8 hidden md:flex shrink-0"
-      aria-label="Toggle navigation sidebar"
-    >
-      <PanelLeft class="size-4" />
-    </Button>
+    <!-- Desktop left sidebar toggle (only when sidebar is closed) -->
+    {#if !leftSidebarOpen}
+      <Tooltip.Root>
+        <Tooltip.Trigger>
+          <Button
+            variant="ghost"
+            size="icon"
+            onclick={onToggleLeftSidebar}
+            class="size-8 hidden md:flex shrink-0"
+            aria-label="Open navigation sidebar"
+          >
+            <PanelLeft class="size-4" />
+          </Button>
+        </Tooltip.Trigger>
+        <Tooltip.Content>Open sidebar</Tooltip.Content>
+      </Tooltip.Root>
+    {/if}
 
-    <div class="min-w-0 flex-1">
-      <h2 class="text-lg md:text-xl font-semibold text-foreground truncate">
-        {title}
-      </h2>
-      <p class="text-xs md:text-sm text-muted-foreground truncate hidden sm:block">
-        {path}
-      </p>
-    </div>
+    <!-- Title and path (conditional based on settings) -->
+    {#if showTitle}
+      <div class="min-w-0 flex-1">
+        <h2 class="text-lg md:text-xl font-semibold text-foreground truncate">
+          {title}
+        </h2>
+        {#if showPath}
+          <p
+            class="text-xs md:text-sm text-muted-foreground truncate hidden sm:block"
+          >
+            {path}
+          </p>
+        {/if}
+      </div>
+    {/if}
   </div>
 
   <!-- Right side: actions -->
@@ -84,54 +119,63 @@
       </span>
     {/if}
 
-    <Button
-      onclick={onSave}
-      disabled={!isDirty || isSaving}
-      variant={!isDirty && !isSaving ? "ghost" : "default"}
-      size="sm"
-      class="gap-1 md:gap-2 min-w-[80px]"
-    >
-      {#if isSaving}
-        <Loader2 class="size-4 animate-spin" />
-        <span class="hidden sm:inline">Saving...</span>
-      {:else if !isDirty}
-        <Save class="size-4 opacity-50" />
-        <span class="hidden sm:inline opacity-50">Saved</span>
-      {:else}
-        <Save class="size-4" />
-        <span class="hidden sm:inline">Save</span>
-      {/if}
-    </Button>
+    <!-- Save button with tooltip -->
+    <Tooltip.Root>
+      <Tooltip.Trigger>
+        <Button
+          onclick={onSave}
+          disabled={!isDirty || isSaving}
+          variant={!isDirty && !isSaving ? "ghost" : "default"}
+          size="sm"
+          class="gap-1 md:gap-2 min-w-[80px]"
+        >
+          {#if isSaving}
+            <Loader2 class="size-4 animate-spin" />
+            <span class="hidden sm:inline">Saving...</span>
+          {:else if !isDirty}
+            <Save class="size-4 opacity-50" />
+            <span class="hidden sm:inline opacity-50">Saved</span>
+          {:else}
+            <Save class="size-4" />
+            <span class="hidden sm:inline">Save</span>
+          {/if}
+        </Button>
+      </Tooltip.Trigger>
+      <Tooltip.Content>Save ({modKey}S)</Tooltip.Content>
+    </Tooltip.Root>
 
-    <Button
-      variant="ghost"
-      size="icon"
-      onclick={onOpenCommandPalette}
-      class="size-8"
-      aria-label="Open command palette"
-    >
-      <Search class="size-4" />
-    </Button>
+    <!-- Command palette button with tooltip -->
+    <Tooltip.Root>
+      <Tooltip.Trigger>
+        <Button
+          variant="ghost"
+          size="icon"
+          onclick={onOpenCommandPalette}
+          class="size-8"
+          aria-label="Open command palette"
+        >
+          <Search class="size-4" />
+        </Button>
+      </Tooltip.Trigger>
+      <Tooltip.Content>Search ({modKey}K)</Tooltip.Content>
+    </Tooltip.Root>
 
-    <Button
-      onclick={onExport}
-      variant="outline"
-      size="sm"
-      class="gap-1 md:gap-2 hidden sm:flex"
-    >
-      <Download class="size-4" />
-      <span class="hidden md:inline">Export</span>
-    </Button>
-
-    <!-- Properties panel toggle -->
-    <Button
-      variant="ghost"
-      size="icon"
-      onclick={onToggleRightSidebar}
-      class="size-8"
-      aria-label="Toggle properties panel"
-    >
-      <PanelRight class="size-4" />
-    </Button>
+    <!-- Right sidebar toggle (only when sidebar is closed) -->
+    {#if !rightSidebarOpen}
+      <Tooltip.Root>
+        <Tooltip.Trigger>
+          <Button
+            variant="ghost"
+            size="icon"
+            onclick={onToggleRightSidebar}
+            class="size-8"
+            aria-label="Open properties panel"
+          >
+            <PanelRight class="size-4" />
+          </Button>
+        </Tooltip.Trigger>
+        <Tooltip.Content>Open properties</Tooltip.Content>
+      </Tooltip.Root>
+    {/if}
   </div>
 </header>

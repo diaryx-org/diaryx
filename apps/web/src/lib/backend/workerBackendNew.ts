@@ -112,7 +112,7 @@ export class WorkerBackendNew implements Backend {
   /**
    * Get app paths (Tauri-specific, returns null for WASM).
    */
-  getAppPaths(): Record<string, string | boolean> | null {
+  getAppPaths(): Record<string, string | boolean | null> | null {
     return null;
   }
 
@@ -154,7 +154,6 @@ export class WorkerBackendNew implements Backend {
   // Proxy methods - delegate to worker (legacy, will be deprecated)
   // =========================================================================
 
-  getConfig = () => this.remote!.getConfig();
   saveConfig = (config: any) => this.remote!.saveConfig(config);
 
   // Root index discovery

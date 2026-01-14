@@ -21,8 +21,10 @@
     onDone?: () => void;
     /** Position mode: 'top' for desktop, 'bottom' for mobile above keyboard */
     position?: "top" | "bottom";
-    /** Bottom offset in pixels (for positioning above virtual keyboard) */
-    bottomOffset?: number;
+    /** Visual viewport offset from top (iOS scroll offset when keyboard is open) */
+    viewportOffsetTop?: number;
+    /** Visual viewport height (shrinks when keyboard is visible) */
+    viewportHeight?: number;
   }
 
   let {
@@ -30,7 +32,8 @@
     showDone = false,
     onDone,
     position = "top",
-    bottomOffset = 0,
+    viewportOffsetTop = 0,
+    viewportHeight = 0,
   }: Props = $props();
 
   // Track active states reactively
@@ -153,9 +156,16 @@
   class="inline-toolbar"
   class:position-top={position === "top"}
   class:position-bottom={position === "bottom"}
-  style={position === "bottom" ? `bottom: ${bottomOffset}px` : ""}
+  style={position === "bottom" ? `top: ${viewportOffsetTop + viewportHeight}px; transform: translateY(-100%);` : ""}
   role="toolbar"
   aria-label="Text formatting"
+  tabindex="-1"
+  onpointerdown={(e) => {
+    // Prevent focus loss when clicking/tapping on the toolbar
+    // This keeps the editor focused so formatting commands work
+    // Using pointerdown handles both mouse and touch uniformly
+    e.preventDefault();
+  }}
 >
   <div class="toolbar-scroll">
     <div class="toolbar-group">
@@ -299,10 +309,11 @@
     position: fixed;
     left: 0;
     right: 0;
+    /* Using top positioning with transform: translateY(-100%) for iOS visual viewport compatibility */
+    /* The top value and transform are set via inline style */
     border-top-width: 1px;
     border-top-style: solid;
     padding: 8px;
-    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
     background: var(--card);
     /* Subtle shadow for elevation */
     box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1);
@@ -405,7 +416,6 @@
   @media (max-width: 767px) {
     .position-bottom {
       padding: 6px 8px;
-      padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px));
     }
 
     .toolbar-button {

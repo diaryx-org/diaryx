@@ -7,22 +7,28 @@
 
 import type { Backend } from '../backend/interface';
 import type {
-  Response,
   CrdtHistoryEntry,
   FileDiff,
   FileMetadata,
 } from '../backend/generated';
 import type { JsonValue } from '../backend/generated/serde_json/JsonValue';
+import type { CrdtCommand, CrdtResponse } from './types';
 
 // Helper to extract response data with type checking
-function expectResponse<T extends Response['type']>(
-  response: Response,
+function expectResponse<T extends CrdtResponse['type']>(
+  response: CrdtResponse,
   expectedType: T
-): Extract<Response, { type: T }> {
+): Extract<CrdtResponse, { type: T }> {
   if (response.type !== expectedType) {
     throw new Error(`Expected response type '${expectedType}', got '${response.type}'`);
   }
-  return response as Extract<Response, { type: T }>;
+  return response as Extract<CrdtResponse, { type: T }>;
+}
+
+// Type-safe execute helper that accepts CRDT commands
+async function executeCrdt(backend: Backend, command: CrdtCommand): Promise<CrdtResponse> {
+  // Cast to any since the Backend interface only knows about generated Command type
+  return await backend.execute(command as any) as CrdtResponse;
 }
 
 /**
@@ -40,7 +46,7 @@ export class RustCrdtApi {
    * Used to initiate sync with a remote peer.
    */
   async getSyncState(docName: string = 'workspace'): Promise<Uint8Array> {
-    const response = await this.backend.execute({
+    const response = await executeCrdt(this.backend, {
       type: 'GetSyncState',
       params: { doc_name: docName },
     });
@@ -56,7 +62,7 @@ export class RustCrdtApi {
     update: Uint8Array,
     docName: string = 'workspace'
   ): Promise<bigint | null> {
-    const response = await this.backend.execute({
+    const response = await executeCrdt(this.backend, {
       type: 'ApplyRemoteUpdate',
       params: { doc_name: docName, update: Array.from(update) },
     });
@@ -71,7 +77,7 @@ export class RustCrdtApi {
     remoteStateVector: Uint8Array,
     docName: string = 'workspace'
   ): Promise<Uint8Array> {
-    const response = await this.backend.execute({
+    const response = await executeCrdt(this.backend, {
       type: 'GetMissingUpdates',
       params: { doc_name: docName, remote_state_vector: Array.from(remoteStateVector) },
     });
@@ -84,7 +90,7 @@ export class RustCrdtApi {
    * Can be used to initialize a new peer.
    */
   async getFullState(docName: string = 'workspace'): Promise<Uint8Array> {
-    const response = await this.backend.execute({
+    const response = await executeCrdt(this.backend, {
       type: 'GetFullState',
       params: { doc_name: docName },
     });
@@ -101,7 +107,7 @@ export class RustCrdtApi {
    */
   async getHistory(docName: string = 'workspace', limit?: number): Promise<CrdtHistoryEntry[]> {
     console.log('[RustCrdtApi] getHistory:', docName, 'limit:', limit);
-    const response = await this.backend.execute({
+    const response = await executeCrdt(this.backend, {
       type: 'GetHistory',
       params: { doc_name: docName, limit: limit ?? null },
     });
@@ -114,7 +120,7 @@ export class RustCrdtApi {
    * Restore a document to a previous version.
    */
   async restoreVersion(updateId: bigint, docName: string = 'workspace'): Promise<void> {
-    await this.backend.execute({
+    await executeCrdt(this.backend, {
       type: 'RestoreVersion',
       params: { doc_name: docName, update_id: updateId },
     });
@@ -128,7 +134,7 @@ export class RustCrdtApi {
     toId: bigint,
     docName: string = 'workspace'
   ): Promise<FileDiff[]> {
-    const response = await this.backend.execute({
+    const response = await executeCrdt(this.backend, {
       type: 'GetVersionDiff',
       params: { doc_name: docName, from_id: fromId, to_id: toId },
     });
@@ -139,7 +145,7 @@ export class RustCrdtApi {
    * Get the state of a document at a specific point in history.
    */
   async getStateAt(updateId: bigint, docName: string = 'workspace'): Promise<Uint8Array | null> {
-    const response = await this.backend.execute({
+    const response = await executeCrdt(this.backend, {
       type: 'GetStateAt',
       params: { doc_name: docName, update_id: updateId },
     });
@@ -158,7 +164,7 @@ export class RustCrdtApi {
    * Get file metadata from the CRDT.
    */
   async getFile(path: string): Promise<FileMetadata | null> {
-    const response = await this.backend.execute({
+    const response = await executeCrdt(this.backend, {
       type: 'GetCrdtFile',
       params: { path },
     });
@@ -170,7 +176,7 @@ export class RustCrdtApi {
    */
   async setFile(path: string, metadata: FileMetadata): Promise<void> {
     console.log('[RustCrdtApi] setFile:', path);
-    await this.backend.execute({
+    await executeCrdt(this.backend, {
       type: 'SetCrdtFile',
       params: { path, metadata: metadata as unknown as JsonValue },
     });
@@ -181,7 +187,7 @@ export class RustCrdtApi {
    * List all files in the CRDT.
    */
   async listFiles(includeDeleted: boolean = false): Promise<[string, FileMetadata][]> {
-    const response = await this.backend.execute({
+    const response = await executeCrdt(this.backend, {
       type: 'ListCrdtFiles',
       params: { include_deleted: includeDeleted },
     });
@@ -192,7 +198,7 @@ export class RustCrdtApi {
    * Save CRDT state to persistent storage.
    */
   async saveCrdtState(docName: string = 'workspace'): Promise<void> {
-    await this.backend.execute({
+    await executeCrdt(this.backend, {
       type: 'SaveCrdtState',
       params: { doc_name: docName },
     });
@@ -206,7 +212,7 @@ export class RustCrdtApi {
    * Get body content from a document CRDT.
    */
   async getBodyContent(docName: string): Promise<string> {
-    const response = await this.backend.execute({
+    const response = await executeCrdt(this.backend, {
       type: 'GetBodyContent',
       params: { doc_name: docName },
     });
@@ -217,7 +223,7 @@ export class RustCrdtApi {
    * Set body content in a document CRDT.
    */
   async setBodyContent(docName: string, content: string): Promise<void> {
-    await this.backend.execute({
+    await executeCrdt(this.backend, {
       type: 'SetBodyContent',
       params: { doc_name: docName, content },
     });
@@ -227,7 +233,7 @@ export class RustCrdtApi {
    * Get sync state (state vector) for a body document.
    */
   async getBodySyncState(docName: string): Promise<Uint8Array> {
-    const response = await this.backend.execute({
+    const response = await executeCrdt(this.backend, {
       type: 'GetBodySyncState',
       params: { doc_name: docName },
     });
@@ -239,7 +245,7 @@ export class RustCrdtApi {
    * Get full state of a body document as an update.
    */
   async getBodyFullState(docName: string): Promise<Uint8Array> {
-    const response = await this.backend.execute({
+    const response = await executeCrdt(this.backend, {
       type: 'GetBodyFullState',
       params: { doc_name: docName },
     });
@@ -252,7 +258,7 @@ export class RustCrdtApi {
    * Returns the update ID assigned to this update.
    */
   async applyBodyUpdate(docName: string, update: Uint8Array): Promise<bigint | null> {
-    const response = await this.backend.execute({
+    const response = await executeCrdt(this.backend, {
       type: 'ApplyBodyUpdate',
       params: { doc_name: docName, update: Array.from(update) },
     });
@@ -266,7 +272,7 @@ export class RustCrdtApi {
     docName: string,
     remoteStateVector: Uint8Array
   ): Promise<Uint8Array> {
-    const response = await this.backend.execute({
+    const response = await executeCrdt(this.backend, {
       type: 'GetBodyMissingUpdates',
       params: { doc_name: docName, remote_state_vector: Array.from(remoteStateVector) },
     });
@@ -278,7 +284,7 @@ export class RustCrdtApi {
    * Save a body document to storage.
    */
   async saveBodyDoc(docName: string): Promise<void> {
-    await this.backend.execute({
+    await executeCrdt(this.backend, {
       type: 'SaveBodyDoc',
       params: { doc_name: docName },
     });
@@ -288,14 +294,14 @@ export class RustCrdtApi {
    * Save all body documents to storage.
    */
   async saveAllBodyDocs(): Promise<void> {
-    await this.backend.execute({ type: 'SaveAllBodyDocs' });
+    await executeCrdt(this.backend, { type: 'SaveAllBodyDocs' });
   }
 
   /**
    * Get list of loaded body documents.
    */
   async listLoadedBodyDocs(): Promise<string[]> {
-    const response = await this.backend.execute({ type: 'ListLoadedBodyDocs' });
+    const response = await executeCrdt(this.backend, { type: 'ListLoadedBodyDocs' });
     return expectResponse(response, 'Strings').data;
   }
 
@@ -303,7 +309,7 @@ export class RustCrdtApi {
    * Unload a body document from memory.
    */
   async unloadBodyDoc(docName: string): Promise<void> {
-    await this.backend.execute({
+    await executeCrdt(this.backend, {
       type: 'UnloadBodyDoc',
       params: { doc_name: docName },
     });
@@ -318,7 +324,7 @@ export class RustCrdtApi {
    * Returns the encoded message that should be sent to the sync server.
    */
   async createSyncStep1(docName: string = 'workspace'): Promise<Uint8Array> {
-    const response = await this.backend.execute({
+    const response = await executeCrdt(this.backend, {
       type: 'CreateSyncStep1',
       params: { doc_name: docName },
     });
@@ -334,7 +340,7 @@ export class RustCrdtApi {
     message: Uint8Array,
     docName: string = 'workspace'
   ): Promise<Uint8Array | null> {
-    const response = await this.backend.execute({
+    const response = await executeCrdt(this.backend, {
       type: 'HandleSyncMessage',
       params: { doc_name: docName, message: Array.from(message) },
     });
@@ -349,7 +355,7 @@ export class RustCrdtApi {
    * Create an update message to broadcast local changes.
    */
   async createUpdateMessage(update: Uint8Array, docName: string = 'workspace'): Promise<Uint8Array> {
-    const response = await this.backend.execute({
+    const response = await executeCrdt(this.backend, {
       type: 'CreateUpdateMessage',
       params: { doc_name: docName, update: Array.from(update) },
     });

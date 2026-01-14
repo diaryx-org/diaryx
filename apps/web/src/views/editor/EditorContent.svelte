@@ -18,6 +18,7 @@
     collaborationEnabled: boolean;
     currentYDoc: YDoc | null;
     currentProvider: HocuspocusProvider | null;
+    readableLineLength?: boolean;
     onchange: (markdown: string) => void;
     onblur: () => void;
     // These match the Editor component prop types
@@ -34,6 +35,7 @@
     collaborationEnabled,
     currentYDoc,
     currentProvider,
+    readableLineLength = true,
     onchange,
     onblur,
     onInsertImage,
@@ -42,10 +44,14 @@
   }: Props = $props();
 </script>
 
-<!-- Outer container: edge-to-edge on desktop, scrollbar touches edges -->
+<!-- Outer container: scrollable area -->
 <div class="flex-1 overflow-y-auto">
-  <!-- Inner wrapper: padding for readable text content -->
-  <div class="p-4 md:px-6 md:py-4 min-h-full">
+  <!-- Inner wrapper: padding and optional max-width for readability -->
+  <div
+    class="px-4 py-8 md:px-6 md:py-12 min-h-full"
+    class:max-w-prose={readableLineLength}
+    class:mx-auto={readableLineLength}
+  >
     {#if Editor}
       {#key editorKey}
         <Editor

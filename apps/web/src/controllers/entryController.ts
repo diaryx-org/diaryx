@@ -13,7 +13,7 @@
 import { tick } from 'svelte';
 import type { EntryData, TreeNode, Api } from '../lib/backend';
 import type { JsonValue } from '../lib/backend/generated/serde_json/JsonValue';
-import { entryStore, uiStore, collaborationStore, workspaceStore } from '../models/stores';
+import { entryStore, uiStore, collaborationStore } from '../models/stores';
 import {
   revokeBlobUrls,
   transformAttachmentPaths,

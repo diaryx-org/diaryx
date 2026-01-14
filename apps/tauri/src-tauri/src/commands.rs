@@ -294,82 +294,95 @@ pub fn get_google_auth_config() -> GoogleAuthConfig {
 pub async fn pick_workspace_folder<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<Option<AppPaths>, SerializableError> {
-    use tauri_plugin_dialog::DialogExt;
-
-    let paths = get_platform_paths(&app)?;
-
-    // Use folder picker
-    let folder_path = app
-        .dialog()
-        .file()
-        .set_title("Select Workspace Folder")
-        .blocking_pick_folder();
-
-    let selected_path = match folder_path {
-        Some(path) => path.into_path().map_err(|e| SerializableError {
-            kind: "PathError".to_string(),
-            message: format!("Failed to get folder path: {:?}", e),
+    // Folder picking is not supported on iOS
+    #[cfg(target_os = "ios")]
+    {
+        return Err(SerializableError {
+            kind: "UnsupportedPlatform".to_string(),
+            message: "Folder picking is not supported on iOS".to_string(),
             path: None,
-        })?,
-        None => {
-            // User cancelled
-            return Ok(None);
-        }
-    };
-
-    log::info!(
-        "[pick_workspace_folder] User selected folder: {:?}",
-        selected_path
-    );
-
-    let fs = SyncToAsyncFs::new(RealFileSystem);
-
-    // Load existing config or create new one
-    let mut config = if paths.config_path.exists() {
-        Config::load_from(&fs, &paths.config_path)
-            .await
-            .unwrap_or_else(|_| Config::new(paths.default_workspace.clone()))
-    } else {
-        Config::new(paths.default_workspace.clone())
-    };
-
-    // Update workspace path
-    config.default_workspace = selected_path.clone();
-
-    // Save config
-    config
-        .save_to(&fs, &paths.config_path)
-        .await
-        .map_err(|e| e.to_serializable())?;
-
-    // Initialize workspace if it doesn't exist
-    let ws = Workspace::new(SyncToAsyncFs::new(RealFileSystem));
-    let workspace_initialized = match ws.find_root_index_in_dir(&selected_path).await {
-        Ok(Some(_)) => true,
-        Ok(None) => false,
-        Err(_) => false,
-    };
-
-    if !workspace_initialized {
-        log::info!(
-            "[pick_workspace_folder] Initializing workspace at {:?}",
-            selected_path
-        );
-        ws.init_workspace(&selected_path, Some("My Workspace"), None)
-            .await
-            .map_err(|e| e.to_serializable())?;
+        });
     }
 
-    // Return updated paths (CRDT not initialized for new workspace yet)
-    Ok(Some(AppPaths {
-        data_dir: paths.data_dir,
-        document_dir: paths.document_dir,
-        default_workspace: selected_path,
-        config_path: paths.config_path,
-        is_mobile: paths.is_mobile,
-        crdt_initialized: false,
-        crdt_error: None,
-    }))
+    #[cfg(not(target_os = "ios"))]
+    {
+        use tauri_plugin_dialog::DialogExt;
+
+        let paths = get_platform_paths(&app)?;
+
+        // Use folder picker
+        let folder_path = app
+            .dialog()
+            .file()
+            .set_title("Select Workspace Folder")
+            .blocking_pick_folder();
+
+        let selected_path = match folder_path {
+            Some(path) => path.into_path().map_err(|e| SerializableError {
+                kind: "PathError".to_string(),
+                message: format!("Failed to get folder path: {:?}", e),
+                path: None,
+            })?,
+            None => {
+                // User cancelled
+                return Ok(None);
+            }
+        };
+
+        log::info!(
+            "[pick_workspace_folder] User selected folder: {:?}",
+            selected_path
+        );
+
+        let fs = SyncToAsyncFs::new(RealFileSystem);
+
+        // Load existing config or create new one
+        let mut config = if paths.config_path.exists() {
+            Config::load_from(&fs, &paths.config_path)
+                .await
+                .unwrap_or_else(|_| Config::new(paths.default_workspace.clone()))
+        } else {
+            Config::new(paths.default_workspace.clone())
+        };
+
+        // Update workspace path
+        config.default_workspace = selected_path.clone();
+
+        // Save config
+        config
+            .save_to(&fs, &paths.config_path)
+            .await
+            .map_err(|e| e.to_serializable())?;
+
+        // Initialize workspace if it doesn't exist
+        let ws = Workspace::new(SyncToAsyncFs::new(RealFileSystem));
+        let workspace_initialized = match ws.find_root_index_in_dir(&selected_path).await {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(_) => false,
+        };
+
+        if !workspace_initialized {
+            log::info!(
+                "[pick_workspace_folder] Initializing workspace at {:?}",
+                selected_path
+            );
+            ws.init_workspace(&selected_path, Some("My Workspace"), None)
+                .await
+                .map_err(|e| e.to_serializable())?;
+        }
+
+        // Return updated paths (CRDT not initialized for new workspace yet)
+        Ok(Some(AppPaths {
+            data_dir: paths.data_dir,
+            document_dir: paths.document_dir,
+            default_workspace: selected_path,
+            config_path: paths.config_path,
+            is_mobile: paths.is_mobile,
+            crdt_initialized: false,
+            crdt_error: None,
+        }))
+    }
 }
 
 /// Initialize the app - creates necessary directories and default workspace if needed
@@ -405,9 +418,12 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
     // Load or create config file FIRST to get the actual workspace path
     log::info!("[initialize_app] Loading/creating config...");
     let config = if paths.is_mobile {
-        // On mobile, always use a placeholder - actual paths resolved at runtime
-        log::info!("[initialize_app] Mobile: using placeholder workspace path in config");
-        Config::new(PathBuf::from("workspace"))
+        // On mobile, use the platform-specific Documents/Diaryx path
+        log::info!(
+            "[initialize_app] Mobile: using platform workspace path: {:?}",
+            paths.default_workspace
+        );
+        Config::new(paths.default_workspace.clone())
     } else if paths.config_path.exists() {
         log::info!(
             "[initialize_app] Loading existing config from {:?}",

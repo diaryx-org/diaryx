@@ -1,12 +1,14 @@
 <script lang="ts">
-  import type { TreeNode, EntryData, ValidationResultWithMeta, ValidationErrorWithMeta, ValidationWarningWithMeta, Api } from "./backend";
+  import { isTauri, type TreeNode, type EntryData, type ValidationResultWithMeta, type ValidationErrorWithMeta, type ValidationWarningWithMeta, type Api } from "./backend";
   import { Button } from "$lib/components/ui/button";
+  import * as Tooltip from "$lib/components/ui/tooltip";
   import { toast } from "svelte-sonner";
 
   import * as ContextMenu from "$lib/components/ui/context-menu";
   import * as Popover from "$lib/components/ui/popover";
   import MobileActionSheet from "../views/sidebar/MobileActionSheet.svelte";
   import { createContextMenuState, type TreeNodeMenuData } from "./hooks/useContextMenu.svelte";
+  import { getMobileState } from "./hooks/useMobile.svelte";
   import {
     ChevronRight,
     ChevronDown,
@@ -27,6 +29,7 @@
     Eye,
     X,
     SearchCheck,
+    MoreVertical,
   } from "@lucide/svelte";
 
   interface Props {
@@ -83,8 +86,19 @@
     onValidate,
   }: Props = $props();
 
+  // Platform detection for keyboard shortcut display
+  const isMac =
+    typeof navigator !== "undefined" &&
+    navigator.platform.toUpperCase().indexOf("MAC") >= 0;
+  const modKey = isMac ? "⌘" : "Ctrl+";
+  // Settings shortcut: Cmd+, on Tauri, Cmd+Shift+, on web
+  const settingsShortcut = isTauri() ? `${modKey},` : `${modKey}Shift+,`;
+
   // Context menu state for mobile/desktop switching
   const contextMenuState = createContextMenuState<TreeNodeMenuData>();
+
+  // Mobile state for showing explicit menu button
+  const mobileState = getMobileState();
 
   // Track which nodes are currently loading children
   let loadingNodes = $state(new Set<string>());
@@ -221,12 +235,6 @@
   function getWarningDescription(warning: ValidationWarningWithMeta): string {
     return warning.description;
   }
-
-  // Computed tree index map for reuse
-  let treeIndexMap = $derived(() => {
-    if (!tree) return new Map<string, string>();
-    return buildTreeIndexMap(tree);
-  });
 
   // Check if a warning is auto-fixable (uses metadata from core)
   function isWarningFixable(warning: ValidationWarningWithMeta): boolean {
@@ -739,34 +747,34 @@
       Diaryx
     </a>
     <div class="flex items-center gap-1">
-      <Button
-        variant="ghost"
-        size="icon"
-        onclick={() => tree && onExport(tree.path)}
-        class="size-8"
-        aria-label="Export workspace"
-        disabled={!tree}
-      >
-        <Download class="size-4" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        onclick={onOpenSettings}
-        class="size-8"
-        aria-label="Open settings"
-      >
-        <Settings class="size-4" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        onclick={onToggleCollapse}
-        class="size-8"
-        aria-label="Collapse sidebar"
-      >
-        <PanelLeftClose class="size-4" />
-      </Button>
+      <Tooltip.Root>
+        <Tooltip.Trigger>
+          <Button
+            variant="ghost"
+            size="icon"
+            onclick={onOpenSettings}
+            class="size-8"
+            aria-label="Open settings"
+          >
+            <Settings class="size-4" />
+          </Button>
+        </Tooltip.Trigger>
+        <Tooltip.Content>Settings ({settingsShortcut})</Tooltip.Content>
+      </Tooltip.Root>
+      <Tooltip.Root>
+        <Tooltip.Trigger>
+          <Button
+            variant="ghost"
+            size="icon"
+            onclick={onToggleCollapse}
+            class="size-8"
+            aria-label="Collapse sidebar"
+          >
+            <PanelLeftClose class="size-4" />
+          </Button>
+        </Tooltip.Trigger>
+        <Tooltip.Content>Collapse sidebar ({modKey}B)</Tooltip.Content>
+      </Tooltip.Root>
     </div>
   </div>
 
@@ -947,7 +955,6 @@
   nodeName={contextMenuState.targetData?.name ?? ''}
   onClose={contextMenuState.closeMenu}
   onCreateChild={onCreateChildEntry}
-  onCopyPath={copyPathToClipboard}
   onExport={onExport}
   onAddAttachment={onAddAttachment}
   onValidate={onValidate}
@@ -967,7 +974,9 @@
   >
     <div
       class="bg-background rounded-lg shadow-xl max-w-md w-full mx-4 max-h-[80vh] flex flex-col"
+      role="presentation"
       onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
     >
       <div class="flex items-center justify-between p-4 border-b">
         <h2 id="parent-picker-title" class="text-lg font-semibold">Choose Parent Index</h2>
@@ -1248,6 +1257,21 @@
               </Popover.Root>
             {/if}
           </button>
+
+          <!-- Mobile "more" button - visible tap target for context menu -->
+          {#if mobileState.isMobile || mobileState.isTouchDevice}
+            <button
+              type="button"
+              class="p-1.5 rounded-md hover:bg-sidebar-accent-foreground/10 transition-colors shrink-0"
+              onclick={(e) => {
+                e.stopPropagation();
+                contextMenuState.openMenu({ path: node.path, name: node.name, hasChildren: node.children.length > 0 });
+              }}
+              aria-label="More actions"
+            >
+              <MoreVertical class="size-4 text-muted-foreground" />
+            </button>
+          {/if}
         </div>
 
         {#if node.children.length > 0 && expandedNodes.has(node.path)}

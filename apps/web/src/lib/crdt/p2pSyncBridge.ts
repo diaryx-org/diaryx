@@ -304,6 +304,7 @@ export function createP2PProvider(
   });
 
   // Track signaling errors
+  // @ts-expect-error - signalingError event exists but isn't in type definitions
   provider.on('signalingError', (event: { error: Error }) => {
     console.error('[P2PSyncBridge] Signaling error:', event.error);
     // Don't set error status immediately - other signaling servers may work

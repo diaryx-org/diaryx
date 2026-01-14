@@ -686,6 +686,8 @@
               {@const Icon = getFileIcon(getFilename(attachment))}
               <div
                 class="flex items-center justify-between gap-2 px-2 py-1.5 rounded-md bg-secondary/50 group cursor-grab active:cursor-grabbing"
+                role="listitem"
+                aria-label="Attachment: {getFilename(attachment)}, drag to move"
                 draggable="true"
                 ondragstart={(e) => {
                   if (e.dataTransfer && entry) {

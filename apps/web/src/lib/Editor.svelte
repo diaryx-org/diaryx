@@ -13,6 +13,8 @@
   import Image from "@tiptap/extension-image";
   // FloatingMenu extension for block formatting
   import FloatingMenu from "@tiptap/extension-floating-menu";
+  // BubbleMenu extension for inline formatting on selection
+  import BubbleMenu from "@tiptap/extension-bubble-menu";
   // ProseMirror Plugin for link click handling
   import { Plugin as ProseMirrorPlugin } from "@tiptap/pm/state";
   // Y.js collaboration
@@ -29,6 +31,8 @@
 
   // FloatingMenu for block formatting (headings, lists, etc.)
   import FloatingMenuComponent from "./components/FloatingMenuComponent.svelte";
+  // BubbleMenu for inline formatting when text is selected
+  import BubbleMenuComponent from "./components/BubbleMenuComponent.svelte";
 
   interface Props {
     content?: string;
@@ -72,10 +76,9 @@
 
   // FloatingMenu element ref - must exist before editor creation
   let floatingMenuElement: HTMLDivElement | undefined = $state();
+  // BubbleMenu element ref - must exist before editor creation
+  let bubbleMenuElement: HTMLDivElement | undefined = $state();
   let isUpdatingContent = false; // Flag to skip onchange during programmatic updates
-
-  // Track editor focus state for mobile toolbar visibility
-  let editorHasFocus = $state(false);
 
   // Track the last content prop value we synced FROM, so we only sync when it actually changes
   // This prevents resetting editor content when the user is typing and the prop hasn't changed
@@ -315,6 +318,45 @@
           },
         }),
       );
+
+      // Add BubbleMenu extension (for inline formatting when text is selected)
+      // Only show on desktop - mobile uses the bottom InlineToolbar
+      if (bubbleMenuElement) {
+        extensions.push(
+          BubbleMenu.configure({
+            element: bubbleMenuElement,
+            options: {
+              offset: 10,
+            },
+            shouldShow: ({ editor: ed, view, state, from, to }) => {
+              // Only show on desktop
+              if (mobileState.isMobile) return false;
+
+              // Must be editable
+              if (!ed.isEditable) return false;
+
+              // Must have focus
+              if (!view.hasFocus()) return false;
+
+              // Must have a selection (not just cursor)
+              const { empty } = state.selection;
+              if (empty) return false;
+
+              // Don't show in code blocks
+              if (ed.isActive("codeBlock")) return false;
+
+              // Check if the selection contains actual text content
+              const text = state.doc.textBetween(from, to, " ");
+              if (!text.trim()) return false;
+
+              if (debugMenus) {
+                console.log("[BubbleMenu] shouldShow: true");
+              }
+              return true;
+            },
+          }),
+        );
+      }
     }
 
     // Only enable Collaboration after provider has reported initial sync.
@@ -325,7 +367,7 @@
       // would show empty content because TipTap ignores the `content` prop when
       // Collaboration is enabled.
       const fragment = ydoc.getXmlFragment("default");
-      
+
       // Only seed content if:
       // 1. Fragment is truly empty (no content from server or cache)
       // 2. We have local content to seed
@@ -375,7 +417,7 @@
     // - If Collaboration is NOT enabled: use local markdown content
     // - If Collaboration IS enabled: don't pass content prop (Y.Doc is source of truth)
     const useCollaboration = ydoc && provider && collabReady;
-    
+
     editor = new Editor({
       element,
       extensions,
@@ -393,11 +435,7 @@
           onchange(markdown);
         }
       },
-      onFocus: () => {
-        editorHasFocus = true;
-      },
       onBlur: () => {
-        editorHasFocus = false;
         onblur?.();
       },
       editorProps: {
@@ -487,12 +525,14 @@
     // Explicitly track the element refs so Svelte knows to re-run when they change
     const hasEditorElement = !!element;
     const hasFloatingMenu = !!floatingMenuElement;
+    const hasBubbleMenu = !!bubbleMenuElement;
     const isReadonly = readonly;
 
     if (debugMenus) {
       console.log("[Editor] Init effect check", {
         hasEditorElement,
         hasFloatingMenu,
+        hasBubbleMenu,
         isReadonly,
         editorInitialized,
       });
@@ -513,11 +553,12 @@
       return;
     }
 
-    // In edit mode, wait for FloatingMenu element
-    if (!editorInitialized && hasEditorElement && hasFloatingMenu) {
+    // In edit mode, wait for menu elements
+    if (!editorInitialized && hasEditorElement && hasFloatingMenu && hasBubbleMenu) {
       if (debugMenus) {
         console.log("[Editor] Menu elements ready, creating editor", {
           floatingMenuElement,
+          bubbleMenuElement,
         });
       }
       createEditor();
@@ -591,48 +632,40 @@
   });
 </script>
 
-<!-- Container: blends with background on all screen sizes -->
+<!-- Editor content area - scrolling handled by parent EditorContent -->
 <div
-  class="relative flex flex-col h-full overflow-hidden bg-background"
->
-  <!-- Desktop inline toolbar: fixed at top, hidden on mobile -->
-  {#if !readonly && (!mobileState.isMobile || (mobileState.isMobile && !mobileState.keyboardVisible))}
-    <InlineToolbar {editor} position="top" />
-  {/if}
-
-  <!-- Editor content area -->
-  <div
-    class="relative flex-1 overflow-y-auto px-4 py-3 md:p-4"
-    bind:this={element}
-    role="application"
-    ondragover={(e) => {
-      e.preventDefault();
-      e.dataTransfer && (e.dataTransfer.dropEffect = "copy");
-    }}
-    ondrop={async (e) => {
-      e.preventDefault();
-      const file = e.dataTransfer?.files?.[0];
-      if (file && onFileDrop) {
-        const result = await onFileDrop(file);
-        // Only insert into editor if it's an image with a blob URL
-        if (result && result.blobUrl && editor && file.type.startsWith("image/")) {
-          editor
-            .chain()
-            .focus()
-            .setImage({ src: result.blobUrl, alt: file.name })
-            .run();
-        }
+  bind:this={element}
+  class="min-h-full"
+  role="application"
+  ondragover={(e) => {
+    e.preventDefault();
+    e.dataTransfer && (e.dataTransfer.dropEffect = "copy");
+  }}
+  ondrop={async (e) => {
+    e.preventDefault();
+    const file = e.dataTransfer?.files?.[0];
+    if (file && onFileDrop) {
+      const result = await onFileDrop(file);
+      // Only insert into editor if it's an image with a blob URL
+      if (result && result.blobUrl && editor && file.type.startsWith("image/")) {
+        editor
+          .chain()
+          .focus()
+          .setImage({ src: result.blobUrl, alt: file.name })
+          .run();
       }
-    }}
-  ></div>
-</div>
+    }
+  }}
+></div>
 
-<!-- Mobile inline toolbar: appears above virtual keyboard when keyboard is visible AND editor is focused -->
-{#if !readonly && mobileState.isMobile && mobileState.keyboardVisible && editorHasFocus}
+<!-- Mobile inline toolbar: appears above virtual keyboard when keyboard is visible -->
+<!-- Uses top positioning with visualViewport for proper iOS keyboard handling -->
+{#if !readonly && mobileState.isMobile && mobileState.keyboardVisible}
   <InlineToolbar
     {editor}
     position="bottom"
-    bottomOffset={mobileState.keyboardHeight}
+    viewportOffsetTop={mobileState.viewportOffsetTop}
+    viewportHeight={mobileState.viewportHeight}
     showDone={true}
   />
 {/if}
@@ -645,6 +678,12 @@
     {onInsertImage}
     bind:element={floatingMenuElement}
   />
+{/if}
+
+<!-- BubbleMenu for inline formatting (appears when text is selected) -->
+<!-- Only used on desktop - mobile uses the bottom InlineToolbar -->
+{#if !readonly}
+  <BubbleMenuComponent {editor} bind:element={bubbleMenuElement} />
 {/if}
 
 <style global>

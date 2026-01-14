@@ -6,12 +6,12 @@
    * Uses the Backend interface to get config and app paths.
    */
   import { Info, Settings } from "@lucide/svelte";
-  import { getBackend, isTauri } from "../backend";
+  import { getBackend } from "../backend";
   import type { Config } from "../backend/interface";
 
   // Config info state
   let config: Config | null = $state(null);
-  let appPaths: Record<string, string | boolean> | null = $state(null);
+  let appPaths: Record<string, string | boolean | null> | null = $state(null);
 
   // Load config on mount
   $effect(() => {

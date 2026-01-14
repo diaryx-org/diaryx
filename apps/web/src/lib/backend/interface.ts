@@ -307,9 +307,9 @@ export interface Backend {
 
   /**
    * Get app paths (Tauri-specific, returns null for WASM).
-   * Includes data_dir, document_dir, default_workspace, config_path, is_mobile.
+   * Includes data_dir, document_dir, default_workspace, config_path, is_mobile, crdt_initialized, crdt_error.
    */
-  getAppPaths(): Record<string, string | boolean> | null;
+  getAppPaths(): Record<string, string | boolean | null> | null;
 
   // --------------------------------------------------------------------------
   // Unified Command API

@@ -28,6 +28,7 @@
     showEditorTitle?: boolean;
     showEditorPath?: boolean;
     readableLineLength?: boolean;
+    focusMode?: boolean;
     workspacePath?: string | null;
     collaborationEnabled?: boolean;
     collaborationConnected?: boolean;
@@ -42,6 +43,7 @@
     showEditorTitle = $bindable(false),
     showEditorPath = $bindable(false),
     readableLineLength = $bindable(true),
+    focusMode = $bindable(true),
     workspacePath = null,
     collaborationEnabled = $bindable(false),
     collaborationConnected = false,
@@ -61,6 +63,7 @@
       bind:showEditorTitle
       bind:showEditorPath
       bind:readableLineLength
+      bind:focusMode
     />
 
     <!-- Workspace Settings -->

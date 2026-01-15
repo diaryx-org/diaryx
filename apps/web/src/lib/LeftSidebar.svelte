@@ -79,7 +79,7 @@
     onCreateChildEntry,
     onDeleteEntry,
     onExport,
-    onAddAttachment,
+    onAddAttachment: _onAddAttachment,
     onMoveAttachment,
     onRemoveBrokenPartOf,
     onRemoveBrokenContentsRef,
@@ -394,14 +394,12 @@
 
   let showRenameDialog = $state(false);
   let renameTargetPath = $state<string | null>(null);
-  let renameTargetName = $state('');
   let renameNewName = $state('');
   let isRenaming = $state(false);
 
   // Open rename dialog for an entry
   function handleRenameClick(path: string, currentName: string) {
     renameTargetPath = path;
-    renameTargetName = currentName;
     // Pre-fill with the current filename
     renameNewName = currentName;
     showRenameDialog = true;
@@ -435,7 +433,6 @@
   function closeRenameDialog() {
     showRenameDialog = false;
     renameTargetPath = null;
-    renameTargetName = '';
     renameNewName = '';
   }
 

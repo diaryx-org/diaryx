@@ -56,6 +56,16 @@ let readableLineLength = $state(
     : true
 );
 
+// Focus mode setting (default to true on desktop, false on mobile)
+// When enabled and both sidebars are closed, the editor header fades out
+let focusMode = $state(
+  typeof window !== 'undefined'
+    ? localStorage.getItem('diaryx-focus-mode') !== null
+      ? localStorage.getItem('diaryx-focus-mode') === 'true'
+      : window.innerWidth >= 768 // Default: true on desktop, false on mobile
+    : false
+);
+
 // ============================================================================
 // Store Factory
 // ============================================================================
@@ -77,6 +87,7 @@ export function getWorkspaceStore() {
     get showEditorTitle() { return showEditorTitle; },
     get showEditorPath() { return showEditorPath; },
     get readableLineLength() { return readableLineLength; },
+    get focusMode() { return focusMode; },
     
     // Tree management
     setTree(newTree: TreeNode | null) {
@@ -179,6 +190,13 @@ export function getWorkspaceStore() {
       readableLineLength = enabled;
       if (typeof window !== 'undefined') {
         localStorage.setItem('diaryx-readable-line-length', String(enabled));
+      }
+    },
+
+    setFocusMode(enabled: boolean) {
+      focusMode = enabled;
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('diaryx-focus-mode', String(enabled));
       }
     },
 

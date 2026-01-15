@@ -34,6 +34,7 @@
     showPath: boolean;
     leftSidebarOpen: boolean;
     rightSidebarOpen: boolean;
+    focusMode?: boolean;
     onSave: () => void;
     onToggleLeftSidebar: () => void;
     onToggleRightSidebar: () => void;
@@ -49,11 +50,17 @@
     showPath,
     leftSidebarOpen,
     rightSidebarOpen,
+    focusMode = false,
     onSave,
     onToggleLeftSidebar,
     onToggleRightSidebar,
     onOpenCommandPalette,
   }: Props = $props();
+
+  // Focus mode: header is invisible when both sidebars are closed
+  let bothSidebarsClosed = $derived(!leftSidebarOpen && !rightSidebarOpen);
+  let shouldFade = $derived(focusMode && bothSidebarsClosed);
+  let isHovered = $state(false);
 
   // Detect platform for keyboard shortcut display
   const isMac =
@@ -63,7 +70,11 @@
 </script>
 
 <header
-  class="flex items-center justify-between px-4 md:px-6 py-3 md:py-4 border-b border-border bg-background shrink-0"
+  class="flex items-center justify-between px-4 md:px-6 py-3 md:py-4 border-b border-border bg-background shrink-0
+    transition-opacity duration-300 ease-in-out
+    {shouldFade && !isHovered ? 'opacity-0' : 'opacity-100'}"
+  onmouseenter={() => isHovered = true}
+  onmouseleave={() => isHovered = false}
 >
   <!-- Left side: toggle + title -->
   <div class="flex items-center gap-2 min-w-0 flex-1">

@@ -107,6 +107,7 @@
   let showEditorTitle = $derived(workspaceStore.showEditorTitle);
   let showEditorPath = $derived(workspaceStore.showEditorPath);
   let readableLineLength = $derived(workspaceStore.readableLineLength);
+  let focusMode = $derived(workspaceStore.focusMode);
 
   // API wrapper - uses execute() internally for all operations
   let api: Api | null = $derived(backend ? createApi(backend) : null);
@@ -1430,6 +1431,7 @@
   bind:showEditorTitle
   bind:showEditorPath
   bind:readableLineLength
+  bind:focusMode
   workspacePath={tree?.path}
   bind:collaborationEnabled
   {collaborationConnected}
@@ -1508,6 +1510,7 @@
         showPath={showEditorPath}
         leftSidebarOpen={!leftSidebarCollapsed}
         rightSidebarOpen={!rightSidebarCollapsed}
+        {focusMode}
         onSave={save}
         onToggleLeftSidebar={toggleLeftSidebar}
         onToggleRightSidebar={toggleRightSidebar}

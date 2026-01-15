@@ -15,6 +15,7 @@
     showEditorTitle?: boolean;
     showEditorPath?: boolean;
     readableLineLength?: boolean;
+    focusMode?: boolean;
   }
 
   let {
@@ -23,6 +24,7 @@
     showEditorTitle = $bindable(false),
     showEditorPath = $bindable(false),
     readableLineLength = $bindable(true),
+    focusMode = $bindable(true),
   }: Props = $props();
 
   const themeStore = getThemeStore();
@@ -95,6 +97,17 @@
       </span>
     </Label>
     <Switch id="readable-line-length" bind:checked={readableLineLength} />
+  </div>
+
+  <!-- Focus Mode -->
+  <div class="flex items-center justify-between gap-4 px-1">
+    <Label for="focus-mode" class="text-sm cursor-pointer flex flex-col gap-0.5">
+      <span>Focus mode</span>
+      <span class="font-normal text-xs text-muted-foreground">
+        Hide header when both sidebars are closed. Hover to reveal.
+      </span>
+    </Label>
+    <Switch id="focus-mode" bind:checked={focusMode} />
   </div>
 
   <!-- Show Unlinked Files (temporarily disabled) -->

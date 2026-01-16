@@ -2,7 +2,7 @@
 title: Diaryx
 description: Repository for the Diaryx project
 author: adammharris
-version: v0.8.0
+version: v0.9.0
 updated: 2026-01-10T13:50:20-05:00
 contents:
   - crates/diaryx/README.md

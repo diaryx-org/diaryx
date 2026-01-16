@@ -73,7 +73,7 @@ function getServerUrl(): string {
     return storeUrl.replace(/^http/, 'ws');
   }
   // Default to localhost for development
-  return 'ws://localhost:1234';
+  return 'wss://sync.diaryx.org';
 }
 
 function validateJoinCode(code: string): boolean {

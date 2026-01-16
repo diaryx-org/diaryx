@@ -380,7 +380,11 @@ impl AsyncFileSystem for IndexedDbFileSystem {
         let dir_str = dir_path.to_string_lossy().to_string();
         let db = self.db.clone();
 
+        // Clone dir_str for use after the closure moves it
+        let dir_str_for_prefix = dir_str.clone();
+
         Box::pin(async move {
+            // Collect ALL file paths that are under this directory (not just direct children)
             let all_keys = db
                 .transaction(&[STORE_FILES, STORE_BINARY_FILES])
                 .run(move |t| async move {
@@ -391,39 +395,27 @@ impl AsyncFileSystem for IndexedDbFileSystem {
                         format!("{}/", dir_str)
                     };
 
-                    // Get text file keys
+                    // Get text file keys - include all files under this directory
                     let store = t.object_store(STORE_FILES)?;
                     let mut cursor = store.cursor().open().await?;
                     while let Some(key) = cursor.key() {
                         if let Some(js_str) = key.dyn_ref::<JsString>() {
                             let s = String::from(js_str);
-                            if prefix.is_empty() {
-                                if !s.contains('/') {
-                                    keys.push(s);
-                                }
-                            } else if let Some(rest) = s.strip_prefix(&prefix) {
-                                if !rest.contains('/') {
-                                    keys.push(s);
-                                }
+                            if prefix.is_empty() || s.starts_with(&prefix) {
+                                keys.push(s);
                             }
                         }
                         cursor.advance(1).await?;
                     }
 
-                    // Get binary file keys
+                    // Get binary file keys - include all files under this directory
                     let store = t.object_store(STORE_BINARY_FILES)?;
                     let mut cursor = store.cursor().open().await?;
                     while let Some(key) = cursor.key() {
                         if let Some(js_str) = key.dyn_ref::<JsString>() {
                             let s = String::from(js_str);
-                            if prefix.is_empty() {
-                                if !s.contains('/') {
-                                    keys.push(s);
-                                }
-                            } else if let Some(rest) = s.strip_prefix(&prefix) {
-                                if !rest.contains('/') {
-                                    keys.push(s);
-                                }
+                            if prefix.is_empty() || s.starts_with(&prefix) {
+                                keys.push(s);
                             }
                         }
                         cursor.advance(1).await?;
@@ -434,7 +426,42 @@ impl AsyncFileSystem for IndexedDbFileSystem {
                 .await
                 .map_err(idb_to_io_error)?;
 
-            Ok(all_keys.into_iter().map(PathBuf::from).collect())
+            let prefix = if dir_str_for_prefix.is_empty() || dir_str_for_prefix == "." {
+                String::new()
+            } else {
+                format!("{}/", dir_str_for_prefix)
+            };
+
+            // Extract direct children (both files and synthesized directories)
+            // This matches native filesystem behavior where list_files returns
+            // all entries (files AND directories) for recursive operations
+            let mut result = std::collections::HashSet::new();
+            for key in all_keys {
+                let rest = if prefix.is_empty() {
+                    key.as_str()
+                } else if let Some(r) = key.strip_prefix(&prefix) {
+                    r
+                } else {
+                    continue;
+                };
+
+                // Get the first path component (could be file or directory)
+                if let Some(slash_pos) = rest.find('/') {
+                    // This file is in a subdirectory - synthesize the directory entry
+                    let dir_name = &rest[..slash_pos];
+                    let full_path = if prefix.is_empty() {
+                        dir_name.to_string()
+                    } else {
+                        format!("{}{}", prefix, dir_name)
+                    };
+                    result.insert(full_path);
+                } else if !rest.is_empty() {
+                    // This is a direct file in this directory
+                    result.insert(key);
+                }
+            }
+
+            Ok(result.into_iter().map(PathBuf::from).collect())
         })
     }
 }

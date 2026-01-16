@@ -454,11 +454,11 @@ impl AsyncFileSystem for OpfsFileSystem {
 
             let mut files = Vec::new();
             while let Some(entry_result) = entries_stream.next().await {
-                if let Ok((name, entry)) = entry_result {
-                    // Only include actual files, not directories
-                    if matches!(entry, DirectoryEntry::File(_)) {
-                        files.push(dir_path.join(&name));
-                    }
+                if let Ok((name, _entry)) = entry_result {
+                    // Include ALL entries (files and directories)
+                    // This matches native filesystem behavior and is needed for
+                    // recursive operations like ExportBinaryAttachments
+                    files.push(dir_path.join(&name));
                 }
             }
 

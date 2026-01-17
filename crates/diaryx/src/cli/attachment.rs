@@ -69,6 +69,7 @@ pub fn handle_attachment_command(
 }
 
 /// Handle 'attachment add' command
+#[allow(clippy::too_many_arguments)]
 fn handle_add(
     _ws: &CliWorkspace,
     app: &CliDiaryxAppSync,
@@ -192,6 +193,7 @@ fn handle_add(
 }
 
 /// Handle 'attachment remove' command
+#[allow(clippy::too_many_arguments)]
 fn handle_remove(
     _ws: &CliWorkspace,
     app: &CliDiaryxAppSync,

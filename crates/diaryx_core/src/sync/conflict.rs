@@ -4,6 +4,8 @@
 //! a conflict is detected. This module provides types for representing
 //! and resolving these conflicts.
 
+use std::str::FromStr;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -80,18 +82,21 @@ pub enum ConflictResolution {
     Skip,
 }
 
-impl ConflictResolution {
-    /// Parse resolution from string (for command/UI interaction)
-    pub fn from_str(s: &str) -> Option<Self> {
+impl FromStr for ConflictResolution {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "local" | "keep_local" | "keep-local" => Some(ConflictResolution::KeepLocal),
-            "remote" | "keep_remote" | "keep-remote" => Some(ConflictResolution::KeepRemote),
-            "both" | "keep_both" | "keep-both" => Some(ConflictResolution::KeepBoth),
-            "skip" => Some(ConflictResolution::Skip),
-            _ => None,
+            "local" | "keep_local" | "keep-local" => Ok(ConflictResolution::KeepLocal),
+            "remote" | "keep_remote" | "keep-remote" => Ok(ConflictResolution::KeepRemote),
+            "both" | "keep_both" | "keep-both" => Ok(ConflictResolution::KeepBoth),
+            "skip" => Ok(ConflictResolution::Skip),
+            _ => Err(()),
         }
     }
+}
 
+impl ConflictResolution {
     /// Check if this resolution keeps the local version
     pub fn keeps_local(&self) -> bool {
         matches!(

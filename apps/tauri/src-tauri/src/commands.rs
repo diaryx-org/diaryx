@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use diaryx_core::{
@@ -2247,7 +2248,7 @@ pub async fn resolve_sync_conflict<R: Runtime>(
     provider: String,
     path: String,
     resolution: String,
-    workspace_path: Option<String>,
+    _workspace_path: Option<String>,
     _config: Option<serde_json::Value>,
 ) -> Result<bool, SerializableError> {
     use diaryx_core::sync::conflict::ConflictResolution;
@@ -2255,7 +2256,7 @@ pub async fn resolve_sync_conflict<R: Runtime>(
     let _paths = get_platform_paths(&app)?;
 
     let resolution =
-        ConflictResolution::from_str(&resolution).ok_or_else(|| SerializableError {
+        ConflictResolution::from_str(&resolution).map_err(|_| SerializableError {
             kind: "SyncError".to_string(),
             message: format!(
                 "Invalid resolution: {}. Use 'local', 'remote', 'both', or 'skip'",

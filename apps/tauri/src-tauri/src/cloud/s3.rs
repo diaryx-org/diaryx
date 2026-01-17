@@ -387,7 +387,7 @@ impl S3Target {
 
             let data = zip_data_clone.clone();
             let tx = progress_tx.clone();
-            let total = data.len();
+            let _total = data.len();
 
             // For simplicity, we emit progress based on the fact the body was created
             // Real chunked progress would require implementing http_body::Body

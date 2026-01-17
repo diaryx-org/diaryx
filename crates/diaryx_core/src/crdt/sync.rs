@@ -112,6 +112,7 @@ mod msg_type {
     /// Sync message (SyncStep1, SyncStep2, Update)
     pub const SYNC: u8 = 0;
     /// Awareness message
+    #[allow(dead_code)]
     pub const AWARENESS: u8 = 1;
     /// Auth message (reserved for future use)
     #[allow(dead_code)]

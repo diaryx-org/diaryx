@@ -36,9 +36,8 @@ pub fn run() {
                     ..Default::default()
                 };
                 let salt = "diaryx-stronghold-salt";
-                let key = hash_raw(password.as_bytes(), salt.as_bytes(), &config)
-                    .expect("Failed to hash password");
-                key.try_into().expect("Hash should be 32 bytes")
+                hash_raw(password.as_bytes(), salt.as_bytes(), &config)
+                    .expect("Failed to hash password")
             })
             .build(),
         )

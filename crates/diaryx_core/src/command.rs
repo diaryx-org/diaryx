@@ -657,6 +657,7 @@ pub enum Command {
 // Response Types
 // ============================================================================
 
+/// Response from a command execution.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings/")]
 #[serde(tag = "type", content = "data")]
@@ -751,6 +752,7 @@ pub enum Response {
 // Helper Types
 // ============================================================================
 
+/// Data for a single diary entry.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings/")]
 pub struct EntryData {
@@ -764,6 +766,7 @@ pub struct EntryData {
     pub content: String,
 }
 
+/// Options for creating a new entry.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings/")]
 pub struct CreateEntryOptions {
@@ -775,6 +778,7 @@ pub struct CreateEntryOptions {
     pub template: Option<String>,
 }
 
+/// Options for searching entries.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings/")]
 pub struct SearchOptions {
@@ -790,6 +794,7 @@ pub struct SearchOptions {
     pub case_sensitive: bool,
 }
 
+/// An exported file with its path and content.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings/")]
 pub struct ExportedFile {
@@ -799,6 +804,7 @@ pub struct ExportedFile {
     pub content: String,
 }
 
+/// A binary file with its path and data.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings/")]
 pub struct BinaryExportFile {
@@ -819,6 +825,7 @@ pub struct BinaryFileInfo {
     pub relative_path: String,
 }
 
+/// Information about a template.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings/")]
 pub struct TemplateInfo {
@@ -830,6 +837,7 @@ pub struct TemplateInfo {
     pub source: String,
 }
 
+/// Information about storage usage.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings/")]
 pub struct StorageInfo {
@@ -841,6 +849,7 @@ pub struct StorageInfo {
     pub attachment_limit: Option<u64>,
 }
 
+/// Summary of fix operations performed.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings/")]
 pub struct FixSummary {

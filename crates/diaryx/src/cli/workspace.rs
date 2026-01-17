@@ -155,6 +155,7 @@ pub fn handle_workspace_command(
 
 /// Handle the 'workspace validate' command
 /// Validates workspace link integrity (part_of and contents references)
+#[allow(clippy::too_many_arguments)]
 fn handle_validate(
     workspace_override: Option<PathBuf>,
     ws: &CliWorkspace,

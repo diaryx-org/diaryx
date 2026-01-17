@@ -53,6 +53,7 @@ pub type AsyncFs = SyncToAsyncFs<RealFileSystem>;
 
 /// Type alias for DiaryxApp with the CLI's async filesystem.
 /// Used for async operations (frontmatter, content, attachments).
+#[allow(dead_code)]
 pub type CliDiaryxApp = DiaryxApp<AsyncFs>;
 
 /// Type alias for the sync DiaryxApp.
@@ -77,7 +78,7 @@ pub fn run_cli() {
     // Setup dependencies
     // Use SyncToAsyncFs wrapper for the async-first core API
     let async_fs = SyncToAsyncFs::new(RealFileSystem);
-    let app = DiaryxApp::new(async_fs.clone());
+    let _app = DiaryxApp::new(async_fs.clone());
     let app_sync = DiaryxAppSync::new(RealFileSystem);
     let ws = Workspace::new(async_fs);
 

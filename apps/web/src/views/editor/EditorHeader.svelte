@@ -69,6 +69,7 @@
   const modKey = isMac ? "⌘" : "Ctrl+";
 </script>
 
+<!-- svelte-ignore a11y_no_static_element_interactions -->
 <header
   class="flex items-center justify-between px-4 md:px-6 py-3 md:py-4 border-b border-border bg-background shrink-0
     transition-opacity duration-300 ease-in-out

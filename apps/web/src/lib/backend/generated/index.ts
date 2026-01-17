@@ -35,6 +35,7 @@ export type { ExcludedFile } from './ExcludedFile';
 export type { ExclusionReason } from './ExclusionReason';
 export type { ExportedFile } from './ExportedFile';
 export type { BinaryExportFile } from './BinaryExportFile';
+export type { BinaryFileInfo } from './BinaryFileInfo';
 
 // Template types
 export type { TemplateInfo } from './TemplateInfo';

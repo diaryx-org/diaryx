@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 vi.mock('./rustCrdtApi', () => ({}))
 
 vi.mock('./yDocProxy', () => ({
-  createYDocProxy: vi.fn().mockImplementation(async (options) => ({
+  createYDocProxy: vi.fn().mockImplementation(async (_options) => ({
     getYDoc: vi.fn().mockReturnValue({
       on: vi.fn(),
       off: vi.fn(),

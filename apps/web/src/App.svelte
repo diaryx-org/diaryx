@@ -3,6 +3,7 @@
   import { getBackend, isTauri } from "./lib/backend";
   import { createApi, type Api } from "./lib/backend/api";
   import type { JsonValue } from "./lib/backend/generated/serde_json/JsonValue";
+  import type { FileMetadata } from "./lib/backend/generated";
   // New Rust CRDT module imports
   import { RustCrdtApi } from "./lib/crdt/rustCrdtApi";
   import {
@@ -933,7 +934,7 @@
     console.log('[App] Populating CRDT from filesystem before hosting...');
 
     // Collect all files from the tree recursively
-    const files: Array<{ path: string; metadata: { title: string | null; part_of: string | null; contents: string[] | null; extra?: Record<string, unknown> } }> = [];
+    const files: Array<{ path: string; metadata: Partial<FileMetadata> }> = [];
 
     async function collectFiles(node: typeof tree, parentPath: string | null) {
       if (!node || !api) return;
@@ -956,7 +957,7 @@
                   !['title', 'part_of', 'contents', 'attachments', 'audience', 'description'].includes(k)
                 )
               ),
-            },
+            } as FileMetadata['extra'],
           },
         });
       } catch (e) {

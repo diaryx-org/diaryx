@@ -49,7 +49,7 @@ path: string,
 /**
  * New filename (e.g., "new-name.md").
  */
-new_filename: string, } } | { "type": "DuplicateEntry", "params": {
+new_filename: string, } } | { "type": "DuplicateEntry", "params": { 
 /**
  * Path to the entry to duplicate.
  */

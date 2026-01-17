@@ -202,7 +202,7 @@ describe('attachmentService', () => {
       }
 
       const content = '![alt](<path with spaces/image.png>)'
-      const result = await transformAttachmentPaths(content, 'entry.md', mockApi as any)
+      await transformAttachmentPaths(content, 'entry.md', mockApi as any)
 
       expect(mockApi.getAttachmentData).toHaveBeenCalledWith('entry.md', 'path with spaces/image.png')
     })

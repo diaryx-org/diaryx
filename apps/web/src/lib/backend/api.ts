@@ -17,7 +17,7 @@ import type {
   FixSummary,
   ExportPlan,
   ExportedFile,
-  BinaryExportFile,
+  BinaryFileInfo,
   TemplateInfo,
   StorageInfo,
   CreateEntryOptions,
@@ -370,7 +370,7 @@ export function createApi(backend: Backend) {
     },
 
     /** Export binary attachments (returns paths only, use readBinary to get data). */
-    async exportBinaryAttachments(rootPath: string, audience: string): Promise<{ source_path: string; relative_path: string }[]> {
+    async exportBinaryAttachments(rootPath: string, audience: string): Promise<BinaryFileInfo[]> {
       const response = await backend.execute({
         type: 'ExportBinaryAttachments',
         params: { root_path: rootPath, audience },

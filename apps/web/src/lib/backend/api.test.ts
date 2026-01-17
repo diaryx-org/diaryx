@@ -480,7 +480,7 @@ describe('api', () => {
 
   describe('storage operations', () => {
     it('should get storage usage', async () => {
-      const mockInfo = { used: 1024, limit: 10240, attachment_limit: 5120 }
+      const mockInfo = { used: BigInt(1024), limit: BigInt(10240), attachment_limit: BigInt(5120) }
       vi.mocked(mockBackend.execute).mockResolvedValue({
         type: 'StorageInfo',
         data: mockInfo,

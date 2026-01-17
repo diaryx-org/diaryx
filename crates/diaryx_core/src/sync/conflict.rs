@@ -229,21 +229,21 @@ mod tests {
     fn test_conflict_resolution_from_str() {
         assert!(matches!(
             ConflictResolution::from_str("local"),
-            Some(ConflictResolution::KeepLocal)
+            Ok(ConflictResolution::KeepLocal)
         ));
         assert!(matches!(
             ConflictResolution::from_str("keep-remote"),
-            Some(ConflictResolution::KeepRemote)
+            Ok(ConflictResolution::KeepRemote)
         ));
         assert!(matches!(
             ConflictResolution::from_str("BOTH"),
-            Some(ConflictResolution::KeepBoth)
+            Ok(ConflictResolution::KeepBoth)
         ));
         assert!(matches!(
             ConflictResolution::from_str("skip"),
-            Some(ConflictResolution::Skip)
+            Ok(ConflictResolution::Skip)
         ));
-        assert!(ConflictResolution::from_str("invalid").is_none());
+        assert!(ConflictResolution::from_str("invalid").is_err());
     }
 
     #[test]

@@ -194,9 +194,9 @@
 
       <!-- Join Session -->
       <div class="space-y-2">
-        <label class="text-xs font-medium text-muted-foreground">
+        <span class="text-xs font-medium text-muted-foreground">
           Join a Session
-        </label>
+        </span>
         <div class="flex gap-2">
           <Input
             type="text"
@@ -235,9 +235,9 @@
 
       <!-- Join Code Display -->
       <div class="space-y-2">
-        <label class="text-xs font-medium text-muted-foreground">
+        <span class="text-xs font-medium text-muted-foreground">
           Share this code
-        </label>
+        </span>
         <div
           class="flex items-center gap-2 p-3 rounded-md bg-muted border border-border"
         >
@@ -296,9 +296,9 @@
 
       <!-- Session Info -->
       <div class="space-y-2">
-        <label class="text-xs font-medium text-muted-foreground">
+        <span class="text-xs font-medium text-muted-foreground">
           Session Code
-        </label>
+        </span>
         <div class="p-3 rounded-md bg-muted border border-border">
           <code class="text-sm font-mono">
             {joinCode ? formatJoinCode(joinCode) : "---"}

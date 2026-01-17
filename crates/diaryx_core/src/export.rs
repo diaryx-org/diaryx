@@ -234,8 +234,8 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
         // If this is an index file, process children and track which will be filtered
         let mut filtered_contents = Vec::new();
 
-        if frontmatter.is_index() {
-            if let Some(ref index) = index_for_children {
+        if frontmatter.is_index()
+            && let Some(ref index) = index_for_children {
                 let child_audience = effective_audience.as_ref().or(inherited_audience);
 
                 for child_path_str in frontmatter.contents_list() {
@@ -260,7 +260,6 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
                     }
                 }
             }
-        }
 
         // Add this file to included list
         included.push(ExportFile {

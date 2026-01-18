@@ -1,6 +1,6 @@
 /**
  * Workspace Store - Manages workspace tree and validation state
- * 
+ *
  * This store holds state related to the workspace hierarchy,
  * including the file tree, validation results, and expanded nodes.
  */
@@ -71,6 +71,183 @@ let focusMode = $state(
 );
 
 // ============================================================================
+// Tree Merge Utilities
+// ============================================================================
+
+/**
+ * Check if a node is a lazy-loading placeholder (e.g., "... (5 more)")
+ */
+function isPlaceholderNode(node: TreeNode): boolean {
+  return node.name.startsWith('... (');
+}
+
+/**
+ * Check if children array contains only placeholder nodes
+ */
+function hasOnlyPlaceholders(children: TreeNode[]): boolean {
+  return children.length > 0 && children.every(isPlaceholderNode);
+}
+
+/**
+ * Merge a new tree into an existing tree, preserving unchanged nodes.
+ * This prevents unnecessary re-renders by keeping the same object references
+ * for nodes that haven't changed.
+ *
+ * Important: If the old tree had children loaded (beyond depth limit) and the
+ * new tree only has placeholders, we preserve the old children. This ensures
+ * expanded folders stay expanded after tree refresh.
+ */
+function mergeTree(oldNode: TreeNode | null, newNode: TreeNode | null): TreeNode | null {
+  // If either is null, just return the new one
+  if (!oldNode || !newNode) {
+    return newNode;
+  }
+
+  // If paths don't match, this is a different node - use the new one
+  if (oldNode.path !== newNode.path) {
+    return newNode;
+  }
+
+  // Check if the node itself has changed (name change)
+  const nodeChanged = oldNode.name !== newNode.name;
+
+  // IMPORTANT: If old node had real children loaded but new node only has placeholders,
+  // preserve the old children. This happens when tree is refreshed with depth limit
+  // but user had expanded folders beyond that limit.
+  const oldHasRealChildren = oldNode.children.length > 0 && !hasOnlyPlaceholders(oldNode.children);
+  const newHasOnlyPlaceholders = hasOnlyPlaceholders(newNode.children);
+
+  if (oldHasRealChildren && newHasOnlyPlaceholders) {
+    // Keep old children - they were loaded via lazy loading and shouldn't be lost
+    console.log('[mergeTree] Preserving loaded children for:', oldNode.path);
+    if (!nodeChanged) {
+      return oldNode; // Nothing changed, keep old node entirely
+    }
+    // Name changed but keep old children
+    return {
+      ...newNode,
+      children: oldNode.children,
+    };
+  }
+
+  // Build a map of old children by path for quick lookup
+  const oldChildrenMap = new Map<string, TreeNode>();
+  for (const child of oldNode.children) {
+    if (!isPlaceholderNode(child)) {
+      oldChildrenMap.set(child.path, child);
+    }
+  }
+
+  // Check if children have changed
+  let childrenChanged = oldNode.children.length !== newNode.children.length;
+
+  // Merge children, preserving unchanged ones
+  const mergedChildren: TreeNode[] = [];
+  for (const newChild of newNode.children) {
+    // Skip placeholder nodes in comparison
+    if (isPlaceholderNode(newChild)) {
+      // If new tree has a placeholder but old tree had real children at this level,
+      // we need to check if any old children should be preserved
+      continue;
+    }
+
+    const oldChild = oldChildrenMap.get(newChild.path);
+    if (oldChild) {
+      // Recursively merge the child
+      const mergedChild = mergeTree(oldChild, newChild);
+      if (mergedChild !== oldChild) {
+        childrenChanged = true;
+      }
+      mergedChildren.push(mergedChild!);
+    } else {
+      // New child - this is a change
+      childrenChanged = true;
+      mergedChildren.push(newChild);
+    }
+  }
+
+  // Check if new tree has any placeholders (meaning depth was limited)
+  const newTreeHasPlaceholders = newNode.children.some(isPlaceholderNode);
+
+  // Add back any old children that weren't in the new tree but should be preserved
+  // ONLY preserve if the new tree has placeholders - this means the fetch was depth-limited
+  // and some children may be hidden behind placeholders.
+  // If the new tree has NO placeholders, all children were fetched - any missing old
+  // children were deleted and should NOT be preserved.
+  for (const oldChild of oldNode.children) {
+    if (isPlaceholderNode(oldChild)) continue;
+
+    const inNewTree = newNode.children.some(c => c.path === oldChild.path);
+    const alreadyMerged = mergedChildren.some(c => c.path === oldChild.path);
+
+    if (!inNewTree && !alreadyMerged && newTreeHasPlaceholders) {
+      // This child was loaded via lazy loading but not in new tree's depth
+      // The new tree has placeholders, so this child might still exist
+      console.log('[mergeTree] Preserving lazy-loaded child:', oldChild.path);
+      mergedChildren.push(oldChild);
+      childrenChanged = true;
+    }
+  }
+
+  // Re-add placeholder if new tree had one and we have preserved children
+  const newPlaceholder = newNode.children.find(isPlaceholderNode);
+  if (newPlaceholder && mergedChildren.length > 0) {
+    // Don't add placeholder if we have all the children
+    // Only add if there might be more children not yet loaded
+  }
+
+  // Check for removed children (old children not in new tree and not preserved)
+  if (!childrenChanged) {
+    for (const oldChild of oldNode.children) {
+      if (isPlaceholderNode(oldChild)) continue;
+      const stillExists = mergedChildren.some(c => c.path === oldChild.path);
+      if (!stillExists) {
+        childrenChanged = true;
+        break;
+      }
+    }
+  }
+
+  // If nothing changed, return the old node to preserve reference
+  if (!nodeChanged && !childrenChanged) {
+    return oldNode;
+  }
+
+  // Something changed - create a new node with merged children
+  return {
+    ...newNode,
+    children: mergedChildren,
+  };
+}
+
+// ============================================================================
+// Tree Query Utilities
+// ============================================================================
+
+/**
+ * Find the parent node path for a given file path in the tree.
+ * Returns null if not found.
+ */
+function findParentNodePath(treeNode: TreeNode | null, targetPath: string): string | null {
+  if (!treeNode) return null;
+
+  // Check if any of this node's children match the target path
+  for (const child of treeNode.children) {
+    if (child.path === targetPath) {
+      return treeNode.path; // This node is the parent
+    }
+  }
+
+  // Recursively search in children
+  for (const child of treeNode.children) {
+    const result = findParentNodePath(child, targetPath);
+    if (result) return result;
+  }
+
+  return null;
+}
+
+// ============================================================================
 // Store Factory
 // ============================================================================
 
@@ -92,75 +269,114 @@ export function getWorkspaceStore() {
     get showEditorPath() { return showEditorPath; },
     get readableLineLength() { return readableLineLength; },
     get focusMode() { return focusMode; },
-    
+
     // Tree management
     setTree(newTree: TreeNode | null) {
-      tree = newTree;
+      // Debug: log expanded nodes and tree paths
+      console.log('[WorkspaceStore] setTree called');
+      console.log('[WorkspaceStore] expandedNodes:', [...expandedNodes]);
+      if (newTree) {
+        const paths: string[] = [];
+        function collectPaths(node: TreeNode) {
+          paths.push(node.path);
+          node.children.forEach(collectPaths);
+        }
+        collectPaths(newTree);
+        console.log('[WorkspaceStore] tree paths:', paths);
+      }
+
+      // Merge new tree into existing tree to preserve unchanged nodes
+      // This prevents unnecessary re-renders and maintains DOM stability
+      tree = mergeTree(tree, newTree);
     },
 
     // Update a subtree (for lazy loading)
     updateSubtree(nodePath: string, subtree: TreeNode) {
       if (!tree) return;
 
-      // Find the node in the tree and replace its children
-      function findAndUpdate(node: TreeNode): boolean {
+      // Recursively find and update the node, preserving unchanged parts
+      function findAndMerge(node: TreeNode): TreeNode {
         if (node.path === nodePath) {
-          node.children = subtree.children;
-          return true;
+          // Found the target node - merge the subtree children
+          return mergeTree(node, subtree) ?? node;
         }
+
+        // Check if any child paths could contain the target
+        let childrenChanged = false;
+        const updatedChildren: TreeNode[] = [];
         for (const child of node.children) {
-          if (findAndUpdate(child)) return true;
+          const updated = findAndMerge(child);
+          if (updated !== child) {
+            childrenChanged = true;
+          }
+          updatedChildren.push(updated);
         }
-        return false;
+
+        // If no children changed, return the original node
+        if (!childrenChanged) {
+          return node;
+        }
+
+        // Return new node with updated children
+        return { ...node, children: updatedChildren };
       }
 
-      findAndUpdate(tree);
-      tree = { ...tree }; // Trigger reactivity
+      tree = findAndMerge(tree);
     },
-    
+
+    /**
+     * Find the parent node path for a given file path in the current tree.
+     * Returns null if not found.
+     */
+    getParentNodePath(targetPath: string): string | null {
+      return findParentNodePath(tree, targetPath);
+    },
+
     // Node expansion
     toggleNode(path: string) {
+      console.log('[WorkspaceStore] toggleNode:', path);
       if (expandedNodes.has(path)) {
         expandedNodes.delete(path);
       } else {
         expandedNodes.add(path);
       }
       expandedNodes = new Set(expandedNodes); // Trigger reactivity
+      console.log('[WorkspaceStore] expandedNodes after toggle:', [...expandedNodes]);
     },
-    
+
     expandNode(path: string) {
       expandedNodes.add(path);
       expandedNodes = new Set(expandedNodes);
     },
-    
+
     collapseNode(path: string) {
       expandedNodes.delete(path);
       expandedNodes = new Set(expandedNodes);
     },
-    
+
     setExpandedNodes(nodes: Set<string>) {
       expandedNodes = nodes;
     },
-    
+
     // Validation
     setValidationResult(result: ValidationResultWithMeta | null) {
       validationResult = result;
     },
-    
+
     // Workspace CRDT
     setWorkspaceCrdtInitialized(initialized: boolean) {
       workspaceCrdtInitialized = initialized;
     },
-    
+
     setWorkspaceId(id: string | null) {
       workspaceId = id;
     },
-    
+
     // Backend
     setBackend(newBackend: Backend | null) {
       backend = newBackend;
     },
-    
+
     // Display settings
     setShowUnlinkedFiles(show: boolean) {
       showUnlinkedFiles = show;
@@ -168,7 +384,7 @@ export function getWorkspaceStore() {
         localStorage.setItem('diaryx-show-unlinked-files', String(show));
       }
     },
-    
+
     setShowHiddenFiles(show: boolean) {
       showHiddenFiles = show;
       if (typeof window !== 'undefined') {

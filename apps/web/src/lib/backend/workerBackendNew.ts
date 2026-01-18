@@ -225,8 +225,16 @@ export class WorkerBackendNew implements Backend {
   createChildEntry = (parentPath: string): Promise<string> =>
     this.remote!.call('createChildEntry', [parentPath]) as Promise<string>;
 
-  ensureDailyEntry = (): Promise<string> =>
-    this.remote!.call('ensureDailyEntry', []) as Promise<string>;
+  ensureDailyEntry = (
+    workspacePath: string,
+    dailyEntryFolder?: string,
+    template?: string
+  ): Promise<string> =>
+    this.remote!.call('ensureDailyEntry', [
+      workspacePath,
+      dailyEntryFolder,
+      template,
+    ]) as Promise<string>;
 
   getAvailableAudiences = (rootPath: string): Promise<string[]> =>
     this.remote!.call('getAvailableAudiences', [rootPath]) as Promise<string[]>;

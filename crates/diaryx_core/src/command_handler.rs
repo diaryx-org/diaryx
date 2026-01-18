@@ -403,12 +403,139 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 Ok(Response::String(new_path.to_string_lossy().to_string()))
             }
 
-            Command::EnsureDailyEntry => {
-                // This requires config which we don't have access to in the core
-                // Return an error suggesting this should be handled at the Tauri level
-                Err(DiaryxError::Unsupported(
-                    "EnsureDailyEntry requires config which is platform-specific. Use Tauri command.".to_string()
-                ))
+            Command::EnsureDailyEntry {
+                workspace_path,
+                daily_entry_folder,
+                template,
+            } => {
+                use crate::config::Config;
+                use crate::date::date_to_path;
+                use chrono::Local;
+
+                // workspace_path is the root index file (e.g., "workspace/README.md")
+                let workspace_root_path = PathBuf::from(&workspace_path);
+                let workspace_dir = workspace_root_path
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| workspace_root_path.clone());
+
+                let config = Config::with_options(
+                    workspace_dir.clone(),
+                    daily_entry_folder.clone(),
+                    None,             // editor
+                    None,             // default_template
+                    template.clone(), // daily_template
+                );
+
+                // Get today's date
+                let today = Local::now().date_naive();
+                let daily_dir = config.daily_entry_dir();
+                let entry_path = date_to_path(&daily_dir, &today);
+
+                // Check if the entry already exists
+                if self.fs().exists(&entry_path).await {
+                    return Ok(Response::String(entry_path.to_string_lossy().to_string()));
+                }
+
+                // Create parent directories
+                if let Some(parent) = entry_path.parent() {
+                    self.fs().create_dir_all(parent).await?;
+                }
+
+                // Ensure index hierarchy exists
+                self.ensure_daily_index_hierarchy(
+                    &today,
+                    &config,
+                    &workspace_root_path,
+                    daily_entry_folder.as_deref(),
+                )
+                .await?;
+
+                // Get template content
+                let templates_dir = workspace_dir.join("_templates");
+                let template_name = template.as_deref().unwrap_or("daily");
+                let template_path = templates_dir.join(format!("{}.md", template_name));
+
+                let template_content = if self.fs().exists(&template_path).await {
+                    self.fs().read_to_string(&template_path).await.ok()
+                } else {
+                    None
+                };
+
+                // Build context for template variables
+                let title = today.format("%B %d, %Y").to_string(); // e.g., "January 15, 2026"
+                let date_str = today.format("%Y-%m-%d").to_string();
+                let month_index_filename = format!(
+                    "{}_{}.md",
+                    today.format("%Y"),
+                    today.format("%B").to_string().to_lowercase()
+                );
+
+                // Render content (substitute template variables)
+                let content = if let Some(tmpl) = template_content {
+                    tmpl.replace("{{title}}", &title)
+                        .replace("{{date}}", &date_str)
+                        .replace("{{part_of}}", &month_index_filename)
+                } else {
+                    // Built-in daily template
+                    format!(
+                        "---\ntitle: \"{}\"\npart_of: {}\ncreated: {}\n---\n\n## Today\n\n",
+                        title, month_index_filename, date_str
+                    )
+                };
+
+                // Create the file
+                self.fs()
+                    .create_new(&entry_path, &content)
+                    .await
+                    .map_err(|e| DiaryxError::FileWrite {
+                        path: entry_path.clone(),
+                        source: e,
+                    })?;
+
+                // Add entry to month index contents
+                let month_index_path = entry_path.parent().unwrap().join(&month_index_filename);
+                let entry_filename = format!("{}.md", date_str);
+                self.add_to_index_contents(&month_index_path, &entry_filename)
+                    .await?;
+
+                Ok(Response::String(entry_path.to_string_lossy().to_string()))
+            }
+
+            Command::GetAdjacentDailyEntry { path, direction } => {
+                use crate::date::get_adjacent_daily_entry_path;
+
+                let offset = match direction.as_str() {
+                    "prev" | "previous" | "-1" => -1,
+                    "next" | "1" => 1,
+                    _ => {
+                        return Err(DiaryxError::Unsupported(format!(
+                            "Invalid direction '{}'. Use 'prev' or 'next'.",
+                            direction
+                        )));
+                    }
+                };
+
+                let path_buf = PathBuf::from(&path);
+                match get_adjacent_daily_entry_path(&path_buf, offset) {
+                    Some(adjacent_path) => Ok(Response::String(
+                        adjacent_path.to_string_lossy().to_string(),
+                    )),
+                    None => {
+                        // Not a daily entry or couldn't compute adjacent path
+                        Err(DiaryxError::Unsupported(
+                            "Path is not a daily entry or adjacent date cannot be computed."
+                                .to_string(),
+                        ))
+                    }
+                }
+            }
+
+            Command::IsDailyEntry { path } => {
+                use crate::date::is_daily_entry;
+
+                let path_buf = PathBuf::from(&path);
+                Ok(Response::Bool(is_daily_entry(&path_buf)))
             }
 
             // === Workspace Operations ===
@@ -1418,5 +1545,366 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 Ok(Response::Binary(message))
             }
         }
+    }
+
+    // ==================== Daily Entry Helper Methods ====================
+
+    /// Ensure the daily index hierarchy exists for a given date.
+    ///
+    /// When `daily_entry_folder` is Some: Creates daily_index.md -> YYYY_index.md -> YYYY_month.md
+    /// When `daily_entry_folder` is None: Adds YYYY_index.md directly to workspace root
+    ///
+    /// This function detects existing index files and directories with alternate naming conventions
+    /// (e.g., `2026.md` vs `2026_index.md`, `01/` vs `january/`) to avoid creating duplicates.
+    async fn ensure_daily_index_hierarchy(
+        &self,
+        date: &chrono::NaiveDate,
+        config: &crate::config::Config,
+        workspace_root_path: &Path,
+        daily_entry_folder: Option<&str>,
+    ) -> Result<()> {
+        let daily_dir = config.daily_entry_dir();
+        let year = date.format("%Y").to_string();
+
+        // Find or create year directory (always named by year number)
+        let year_dir = daily_dir.join(&year);
+        self.fs().create_dir_all(&year_dir).await?;
+
+        // Find or create year index - check for existing files with alternate names
+        let year_index_path = self
+            .find_or_create_year_index(&year_dir, date, workspace_root_path, daily_entry_folder)
+            .await?;
+
+        // Find or create month directory and index - check for existing with alternate names
+        let (month_dir, month_index_path) = self
+            .find_or_create_month_dir_and_index(&year_dir, date, &year_index_path)
+            .await?;
+
+        // Ensure the month directory exists
+        self.fs().create_dir_all(&month_dir).await?;
+
+        // The paths are used by the caller to create the daily entry
+        let _ = month_index_path;
+
+        Ok(())
+    }
+
+    /// Find an existing year index or create one.
+    /// Checks for common naming patterns: YYYY.md, YYYY_index.md
+    /// Only considers files that are actual indexes (have `contents` property).
+    async fn find_or_create_year_index(
+        &self,
+        year_dir: &Path,
+        date: &chrono::NaiveDate,
+        workspace_root_path: &Path,
+        daily_entry_folder: Option<&str>,
+    ) -> Result<PathBuf> {
+        let year = date.format("%Y").to_string();
+        let daily_dir = year_dir.parent().unwrap_or(year_dir);
+
+        // Check for existing year index files (in order of preference)
+        let candidates = [
+            format!("{}.md", year),       // 2026.md (simpler, user-preferred)
+            format!("{}_index.md", year), // 2026_index.md
+        ];
+
+        for candidate in &candidates {
+            let path = year_dir.join(candidate);
+            if self.is_index_file(&path).await {
+                return Ok(path);
+            }
+        }
+
+        // No existing index found - create one with the simpler naming
+        let year_index_path = year_dir.join(format!("{}.md", year));
+        let workspace_root_filename = workspace_root_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("README.md");
+
+        if let Some(folder) = daily_entry_folder {
+            // With daily_entry_folder: Ensure daily_index.md exists first
+            let daily_index_path = daily_dir.join("daily_index.md");
+
+            if !self.fs().exists(&daily_index_path).await {
+                let part_of = format!("../{}", workspace_root_filename);
+                self.create_daily_index(&daily_index_path, Some(&part_of))
+                    .await?;
+
+                // Add daily_index to workspace root's contents
+                let daily_index_rel = format!("{}/daily_index.md", folder);
+                self.add_to_index_contents(workspace_root_path, &daily_index_rel)
+                    .await?;
+            }
+
+            // Create year index linking to daily_index
+            self.create_year_index(&year_index_path, date, "../daily_index.md")
+                .await?;
+            let year_index_rel = format!("{}/{}.md", year, year);
+            self.add_to_index_contents(&daily_index_path, &year_index_rel)
+                .await?;
+        } else {
+            // Without daily_entry_folder: Link directly to workspace root
+            let part_of = format!("../{}", workspace_root_filename);
+            self.create_year_index(&year_index_path, date, &part_of)
+                .await?;
+            let year_index_rel = format!("{}/{}.md", year, year);
+            self.add_to_index_contents(workspace_root_path, &year_index_rel)
+                .await?;
+        }
+
+        Ok(year_index_path)
+    }
+
+    /// Find an existing month directory and index, or create them.
+    /// Checks for common directory naming patterns: 01, january, 01-january
+    /// Checks for common index naming patterns: YYYY_month.md, month.md
+    /// Only considers files that are actual indexes (have `contents` property).
+    /// Returns (month_dir, month_index_path).
+    async fn find_or_create_month_dir_and_index(
+        &self,
+        year_dir: &Path,
+        date: &chrono::NaiveDate,
+        year_index_path: &Path,
+    ) -> Result<(PathBuf, PathBuf)> {
+        let year = date.format("%Y").to_string();
+        let month_name = date.format("%B").to_string().to_lowercase();
+        let month_num = date.format("%m").to_string();
+
+        // Check for existing month directories (in order of preference)
+        let dir_candidates = [
+            month_num.clone(),                       // 01
+            month_name.clone(),                      // january
+            format!("{}-{}", month_num, month_name), // 01-january
+        ];
+
+        // For each potential directory, check if it exists and has an index file
+        for dir_name in &dir_candidates {
+            let month_dir = year_dir.join(dir_name);
+            if self.fs().exists(&month_dir).await {
+                // Check for index files within this directory
+                let index_candidates = [
+                    format!("{}_{}.md", year, month_name), // 2026_january.md
+                    format!("{}.md", month_name),          // january.md
+                    format!("{}.md", dir_name),            // 01.md or january.md
+                ];
+
+                for index_name in &index_candidates {
+                    let index_path = month_dir.join(index_name);
+                    if self.is_index_file(&index_path).await {
+                        return Ok((month_dir, index_path));
+                    }
+                }
+            }
+        }
+
+        // Also check for month index directly in year_dir (no subdirectory)
+        // e.g., 2026/january.md instead of 2026/01/january.md
+        let flat_index_candidates = [
+            format!("{}_{}.md", year, month_name), // 2026_january.md
+            format!("{}.md", month_name),          // january.md
+        ];
+
+        for index_name in &flat_index_candidates {
+            let index_path = year_dir.join(index_name);
+            if self.is_index_file(&index_path).await {
+                // Index exists at year level - use a subdirectory for daily entries
+                // but the index stays where it is
+                let month_dir = year_dir.join(&month_num);
+                return Ok((month_dir, index_path));
+            }
+        }
+
+        // No existing directory/index found - create with preferred naming
+        let month_dir = year_dir.join(&month_num);
+        let month_index_path = month_dir.join(format!("{}_{}.md", year, month_name));
+
+        // Create the directory
+        self.fs().create_dir_all(&month_dir).await?;
+
+        // Create the index file
+        self.create_month_index_with_parent(&month_index_path, date, year_index_path)
+            .await?;
+
+        // Add month index to year index contents
+        let month_index_rel = format!("{}/{}_{}.md", month_num, year, month_name);
+        self.add_to_index_contents(year_index_path, &month_index_rel)
+            .await?;
+
+        Ok((month_dir, month_index_path))
+    }
+
+    /// Check if a file exists and is an index file (has `contents` property in frontmatter).
+    async fn is_index_file(&self, path: &Path) -> bool {
+        if !self.fs().exists(path).await {
+            return false;
+        }
+
+        // Read the file and check for contents property
+        let content = match self.fs().read_to_string(path).await {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+
+        // Check if frontmatter contains "contents:"
+        if content.starts_with("---\n") || content.starts_with("---\r\n") {
+            // Find the end of frontmatter
+            let rest = &content[4..];
+            if let Some(end_idx) = rest.find("\n---\n").or_else(|| rest.find("\n---\r\n")) {
+                let frontmatter = &rest[..end_idx];
+                return frontmatter.contains("contents:");
+            }
+        }
+
+        false
+    }
+
+    /// Create the root daily index file.
+    async fn create_daily_index(&self, path: &Path, part_of: Option<&str>) -> Result<()> {
+        let part_of_line = match part_of {
+            Some(p) => format!("part_of: {}\n", p),
+            None => String::new(),
+        };
+
+        let content = format!(
+            "---\n\
+            title: Daily Entries\n\
+            {}contents: []\n\
+            ---\n\n\
+            # Daily Entries\n\n\
+            This index contains all daily journal entries organized by year and month.\n",
+            part_of_line
+        );
+
+        self.fs()
+            .write_file(path, &content)
+            .await
+            .map_err(|e| DiaryxError::FileWrite {
+                path: path.to_path_buf(),
+                source: e,
+            })?;
+        Ok(())
+    }
+
+    /// Create a year index file.
+    async fn create_year_index(
+        &self,
+        path: &Path,
+        date: &chrono::NaiveDate,
+        part_of: &str,
+    ) -> Result<()> {
+        let year = date.format("%Y").to_string();
+        let content = format!(
+            "---\n\
+            title: {year}\n\
+            part_of: {part_of}\n\
+            contents: []\n\
+            ---\n\n\
+            # {year}\n\n\
+            Daily entries for {year}.\n"
+        );
+
+        self.fs()
+            .write_file(path, &content)
+            .await
+            .map_err(|e| DiaryxError::FileWrite {
+                path: path.to_path_buf(),
+                source: e,
+            })?;
+        Ok(())
+    }
+
+    /// Create a month index file.
+    async fn create_month_index_with_parent(
+        &self,
+        path: &Path,
+        date: &chrono::NaiveDate,
+        year_index_path: &Path,
+    ) -> Result<()> {
+        let year = date.format("%Y").to_string();
+        let month_name = date.format("%B").to_string();
+        let title = format!("{} {}", month_name, year);
+        let fallback_name = format!("{}.md", year);
+        let year_index_name = year_index_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&fallback_name);
+
+        let content = format!(
+            "---\n\
+            title: {title}\n\
+            part_of: ../{year_index_name}\n\
+            contents: []\n\
+            ---\n\n\
+            # {title}\n\n\
+            Daily entries for {title}.\n"
+        );
+
+        self.fs()
+            .write_file(path, &content)
+            .await
+            .map_err(|e| DiaryxError::FileWrite {
+                path: path.to_path_buf(),
+                source: e,
+            })?;
+        Ok(())
+    }
+
+    /// Add an entry to an index's contents list.
+    async fn add_to_index_contents(&self, index_path: &Path, entry: &str) -> Result<bool> {
+        let content = match self.fs().read_to_string(index_path).await {
+            Ok(c) => c,
+            Err(_) => return Ok(false),
+        };
+
+        // Parse frontmatter
+        if !content.starts_with("---\n") && !content.starts_with("---\r\n") {
+            return Ok(false);
+        }
+
+        let rest = &content[4..];
+        let end_idx = match rest.find("\n---\n").or_else(|| rest.find("\n---\r\n")) {
+            Some(idx) => idx,
+            None => return Ok(false),
+        };
+
+        let frontmatter_str = &rest[..end_idx];
+        let body = &rest[end_idx + 5..];
+
+        // Parse YAML
+        let mut frontmatter: indexmap::IndexMap<String, serde_yaml::Value> =
+            serde_yaml::from_str(frontmatter_str).unwrap_or_default();
+
+        // Get or create contents array
+        let contents = frontmatter
+            .entry("contents".to_string())
+            .or_insert(serde_yaml::Value::Sequence(vec![]));
+
+        if let serde_yaml::Value::Sequence(items) = contents {
+            let entry_value = serde_yaml::Value::String(entry.to_string());
+            if !items.contains(&entry_value) {
+                items.push(entry_value);
+                // Sort for consistent ordering
+                items.sort_by(|a, b| {
+                    let a_str = a.as_str().unwrap_or("");
+                    let b_str = b.as_str().unwrap_or("");
+                    a_str.cmp(b_str)
+                });
+
+                // Reconstruct file
+                let yaml_str = serde_yaml::to_string(&frontmatter)?;
+                let new_content = format!("---\n{}---\n{}", yaml_str, body);
+                self.fs()
+                    .write_file(index_path, &new_content)
+                    .await
+                    .map_err(|e| DiaryxError::FileWrite {
+                        path: index_path.to_path_buf(),
+                        source: e,
+                    })?;
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
     }
 }

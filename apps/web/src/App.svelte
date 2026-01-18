@@ -123,6 +123,9 @@
   // Track whether initial guest sync has completed (to avoid re-opening root on every update)
   let guestInitialSyncDone = $state(false);
 
+  // Track whether the current entry is a daily entry (for prev/next navigation)
+  let isDailyEntry = $state(false);
+
   // Collaboration state - proxied from collaborationStore
   let currentCollaborationPath = $derived(collaborationStore.currentCollaborationPath);
   let collaborationEnabled = $derived(collaborationStore.collaborationEnabled);
@@ -292,7 +295,7 @@
 
       // Expand root and open it by default
       if (tree && !currentEntry) {
-        expandedNodes.add(tree.path);
+        workspaceStore.expandNode(tree.path);
         await openEntry(tree.path);
       }
 
@@ -626,6 +629,11 @@
 
       entryStore.markClean();
       uiStore.clearError();
+
+      // Check if this is a daily entry for prev/next navigation
+      if (api) {
+        isDailyEntry = await api.isDailyEntry(path);
+      }
     } catch (e) {
       uiStore.setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -706,12 +714,8 @@
 
   // Toggle node expansion
   function toggleNode(path: string) {
-    if (expandedNodes.has(path)) {
-      expandedNodes.delete(path);
-    } else {
-      expandedNodes.add(path);
-    }
-    expandedNodes = new Set(expandedNodes); // Trigger reactivity
+    // Use store method to ensure expanded state persists across tree refreshes
+    workspaceStore.toggleNode(path);
   }
 
   // Sidebar toggles
@@ -753,6 +757,16 @@
         showSettingsDialog = true;
       }
     }
+    // Navigate daily entries with Alt+Left/Right
+    if (event.altKey && isDailyEntry) {
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        handlePrevDay();
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        handleNextDay();
+      }
+    }
   }
 
   async function handleCreateChildEntry(parentPath: string) {
@@ -765,6 +779,9 @@
       addFileToCrdt(newPath, entry.frontmatter, parentPath);
 
       await refreshTree();
+      // Also refresh the parent node directly to ensure deep nodes update correctly
+      // (refreshTree only fetches depth 2, so deeper nodes may still have stale data)
+      await loadNodeChildren(parentPath);
       await openEntry(newPath);
       await runValidation();
     } catch (e) {
@@ -794,9 +811,16 @@
   }
 
   async function handleDailyEntry() {
-    if (!api) return;
+    if (!api || !tree) return;
     try {
-      const path = await api.ensureDailyEntry();
+      // Get daily_entry_folder from localStorage settings
+      const dailyEntryFolder = typeof window !== "undefined"
+        ? localStorage.getItem("diaryx-daily-entry-folder") || undefined
+        : undefined;
+
+      // Pass the workspace path and daily_entry_folder to EnsureDailyEntry
+      // The workspace path is the root index file path (e.g., "workspace/README.md")
+      const path = await api.ensureDailyEntry(tree.path, dailyEntryFolder);
       await refreshTree();
       await openEntry(path);
     } catch (e) {
@@ -804,24 +828,75 @@
     }
   }
 
+  // Navigate to the previous day's entry
+  async function handlePrevDay() {
+    if (!api || !currentEntry) return;
+    try {
+      const prevPath = await api.getAdjacentDailyEntry(currentEntry.path, 'prev');
+      if (prevPath) {
+        // Check if entry exists before navigating
+        const exists = await api.fileExists(prevPath);
+        if (exists) {
+          await openEntry(prevPath);
+        } else {
+          // Entry doesn't exist - show a subtle notification
+          uiStore.setError("No entry for previous day");
+        }
+      }
+    } catch (e) {
+      uiStore.setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  // Navigate to the next day's entry
+  async function handleNextDay() {
+    if (!api || !currentEntry) return;
+    try {
+      const nextPath = await api.getAdjacentDailyEntry(currentEntry.path, 'next');
+      if (nextPath) {
+        // Check if entry exists before navigating
+        const exists = await api.fileExists(nextPath);
+        if (exists) {
+          await openEntry(nextPath);
+        } else {
+          // Entry doesn't exist - show a subtle notification
+          uiStore.setError("No entry for next day");
+        }
+      }
+    } catch (e) {
+      uiStore.setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   async function handleRenameEntry(path: string, newFilename: string): Promise<string> {
     if (!api) throw new Error("API not initialized");
+    // Find parent before rename (in case tree structure helps locate it)
+    const parentPath = workspaceStore.getParentNodePath(path);
     const newPath = await api.renameEntry(path, newFilename);
     await refreshTree();
+    // Refresh parent to ensure deep nodes update correctly
+    if (parentPath) {
+      await loadNodeChildren(parentPath);
+    }
     await runValidation();
     return newPath;
   }
 
   async function handleDuplicateEntry(path: string): Promise<string> {
     if (!api) throw new Error("API not initialized");
+    // Find parent before duplicate
+    const parentPath = workspaceStore.getParentNodePath(path);
     const newPath = await api.duplicateEntry(path);
 
     // Update CRDT with new file
     const entry = await api.getEntry(newPath);
-    const parentPath = newPath.split('/').slice(0, -1).join('/');
     addFileToCrdt(newPath, entry.frontmatter, parentPath || null);
 
     await refreshTree();
+    // Refresh parent to ensure deep nodes update correctly
+    if (parentPath) {
+      await loadNodeChildren(parentPath);
+    }
     await runValidation();
     return newPath;
   }
@@ -832,6 +907,9 @@
       `Are you sure you want to delete "${path.split("/").pop()?.replace(".md", "")}"?`,
     );
     if (!confirm) return;
+
+    // Find the parent node BEFORE deleting (while the tree still has the entry)
+    const parentPath = workspaceStore.getParentNodePath(path);
 
     try {
       await api.deleteEntry(path);
@@ -848,6 +926,11 @@
       // Try to refresh the tree - this might fail if workspace state is temporarily inconsistent
       try {
         await refreshTree();
+        // Also refresh the parent node directly to ensure deep nodes update correctly
+        // (refreshTree only fetches depth 2, so deeper nodes may still have stale data)
+        if (parentPath) {
+          await loadNodeChildren(parentPath);
+        }
         await runValidation();
       } catch (refreshError) {
         console.warn("[App] Error refreshing tree after delete:", refreshError);
@@ -856,6 +939,9 @@
           try {
             if (backend) {
               await refreshTree();
+              if (parentPath) {
+                await loadNodeChildren(parentPath);
+              }
               await runValidation();
             }
           } catch (e) {
@@ -1312,9 +1398,8 @@
 
             // Transfer expanded state from old path to new path
             if (expandedNodes.has(oldPath)) {
-              expandedNodes.delete(oldPath);
-              expandedNodes.add(newPath);
-              expandedNodes = expandedNodes; // trigger reactivity
+              workspaceStore.collapseNode(oldPath);
+              workspaceStore.expandNode(newPath);
             }
 
             // CRDT is now automatically updated via backend event subscription
@@ -1629,10 +1714,13 @@
         rightSidebarOpen={!rightSidebarCollapsed}
         {focusMode}
         readonly={editorReadonly}
+        {isDailyEntry}
         onSave={save}
         onToggleLeftSidebar={toggleLeftSidebar}
         onToggleRightSidebar={toggleRightSidebar}
         onOpenCommandPalette={uiStore.openCommandPalette}
+        onPrevDay={handlePrevDay}
+        onNextDay={handleNextDay}
       />
 
       <EditorContent

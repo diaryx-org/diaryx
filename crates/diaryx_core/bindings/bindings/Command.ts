@@ -9,359 +9,385 @@ import type { ValidationResult } from "./ValidationResult";
  *
  * Commands are serializable for cross-runtime usage (WASM, IPC, etc.).
  */
-export type Command = { "type": "GetEntry", "params": { 
+export type Command = { "type": "GetEntry", "params": {
 /**
  * Path to the entry file.
  */
-path: string, } } | { "type": "SaveEntry", "params": { 
+path: string, } } | { "type": "SaveEntry", "params": {
 /**
  * Path to the entry file.
  */
-path: string, 
+path: string,
 /**
  * New markdown content.
  */
-content: string, } } | { "type": "CreateEntry", "params": { 
+content: string, } } | { "type": "CreateEntry", "params": {
 /**
  * Path where the entry should be created.
  */
-path: string, 
+path: string,
 /**
  * Optional creation options.
  */
-options: CreateEntryOptions, } } | { "type": "DeleteEntry", "params": { 
+options: CreateEntryOptions, } } | { "type": "DeleteEntry", "params": {
 /**
  * Path to the entry to delete.
  */
-path: string, } } | { "type": "MoveEntry", "params": { 
+path: string, } } | { "type": "MoveEntry", "params": {
 /**
  * Existing path to the entry file.
  */
-from: string, 
+from: string,
 /**
  * New path for the entry file.
  */
-to: string, } } | { "type": "RenameEntry", "params": { 
+to: string, } } | { "type": "RenameEntry", "params": {
 /**
  * Path to the entry to rename.
  */
-path: string, 
+path: string,
 /**
  * New filename (e.g., "new-name.md").
  */
-new_filename: string, } } | { "type": "DuplicateEntry", "params": { 
+new_filename: string, } } | { "type": "DuplicateEntry", "params": {
 /**
  * Path to the entry to duplicate.
  */
-path: string, } } | { "type": "ConvertToIndex", "params": { 
+path: string, } } | { "type": "ConvertToIndex", "params": {
 /**
  * Path to the leaf file to convert.
  */
-path: string, } } | { "type": "ConvertToLeaf", "params": { 
+path: string, } } | { "type": "ConvertToLeaf", "params": {
 /**
  * Path to the index file to convert.
  */
-path: string, } } | { "type": "CreateChildEntry", "params": { 
+path: string, } } | { "type": "CreateChildEntry", "params": {
 /**
  * Path to the parent entry.
  */
-parent_path: string, } } | { "type": "AttachEntryToParent", "params": { 
+parent_path: string, } } | { "type": "AttachEntryToParent", "params": {
 /**
  * Path to the entry to attach.
  */
-entry_path: string, 
+entry_path: string,
 /**
  * Path to the parent index file.
  */
-parent_path: string, } } | { "type": "EnsureDailyEntry" } | { "type": "FindRootIndex", "params": { 
+parent_path: string, } } | { "type": "EnsureDailyEntry", "params": {
 /**
- * Directory to search in.
+ * Workspace path (directory containing the workspace root index).
  */
-directory: string, } } | { "type": "GetWorkspaceTree", "params": { 
+workspace_path: string,
 /**
- * Optional path to a specific workspace.
+ * Optional subfolder for daily entries (e.g., "Daily" or "Journal/Daily").
+ * If not provided, entries are created in the workspace root.
  */
-path: string | null, 
+daily_entry_folder: string | null,
 /**
- * Optional maximum depth to traverse.
+ * Optional template name to use for new entries.
+ * Falls back to "daily" built-in template if not provided.
  */
-depth: number | null, } } | { "type": "GetFilesystemTree", "params": { 
+template: string | null, } } | { "type": "GetAdjacentDailyEntry", "params": {
 /**
- * Optional path to the workspace directory.
+ * Path to the current daily entry.
  */
-path: string | null, 
+path: string,
 /**
- * Whether to include hidden files.
+ * Direction: "prev" for previous day, "next" for next day.
  */
-show_hidden: boolean, 
-/**
- * Optional maximum depth to traverse.
- */
-depth: number | null, } } | { "type": "CreateWorkspace", "params": { 
-/**
- * Path where the workspace should be created.
- */
-path: string | null, 
-/**
- * Name of the workspace.
- */
-name: string | null, } } | { "type": "GetFrontmatter", "params": { 
-/**
- * Path to the entry file.
- */
-path: string, } } | { "type": "SetFrontmatterProperty", "params": { 
-/**
- * Path to the entry file.
- */
-path: string, 
-/**
- * Property key.
- */
-key: string, 
-/**
- * Property value.
- */
-value: JsonValue, } } | { "type": "RemoveFrontmatterProperty", "params": { 
-/**
- * Path to the entry file.
- */
-path: string, 
-/**
- * Property key to remove.
- */
-key: string, } } | { "type": "SearchWorkspace", "params": { 
-/**
- * Search pattern.
- */
-pattern: string, 
-/**
- * Search options.
- */
-options: SearchOptions, } } | { "type": "ValidateWorkspace", "params": { 
-/**
- * Optional path to workspace.
- */
-path: string | null, } } | { "type": "ValidateFile", "params": { 
-/**
- * Path to the file to validate.
- */
-path: string, } } | { "type": "FixBrokenPartOf", "params": { 
-/**
- * Path to the file with the broken reference.
- */
-path: string, } } | { "type": "FixBrokenContentsRef", "params": { 
-/**
- * Path to the index file.
- */
-index_path: string, 
-/**
- * The broken reference to remove.
- */
-target: string, } } | { "type": "FixBrokenAttachment", "params": { 
-/**
- * Path to the file with the broken attachment.
- */
-path: string, 
-/**
- * The broken attachment reference.
- */
-attachment: string, } } | { "type": "FixNonPortablePath", "params": { 
-/**
- * Path to the file.
- */
-path: string, 
-/**
- * Property name.
- */
-property: string, 
-/**
- * Current value.
- */
-old_value: string, 
-/**
- * New value.
- */
-new_value: string, } } | { "type": "FixUnlistedFile", "params": { 
-/**
- * Path to the index file.
- */
-index_path: string, 
-/**
- * Path to the file to add.
- */
-file_path: string, } } | { "type": "FixOrphanBinaryFile", "params": { 
-/**
- * Path to the index file.
- */
-index_path: string, 
-/**
- * Path to the binary file.
- */
-file_path: string, } } | { "type": "FixMissingPartOf", "params": { 
-/**
- * Path to the file missing part_of.
- */
-file_path: string, 
-/**
- * Path to the index file to reference.
- */
-index_path: string, } } | { "type": "FixAll", "params": { 
-/**
- * The validation result to fix.
- */
-validation_result: ValidationResult, } } | { "type": "FixCircularReference", "params": { 
-/**
- * Path to the file to edit.
- */
-file_path: string, 
-/**
- * The part_of value to remove.
- */
-part_of_value: string, } } | { "type": "GetAvailableParentIndexes", "params": { 
-/**
- * Path to the file that needs a parent.
- */
-file_path: string, 
-/**
- * Workspace root to limit scope.
- */
-workspace_root: string, } } | { "type": "GetAvailableAudiences", "params": { 
-/**
- * Root path to scan.
- */
-root_path: string, } } | { "type": "PlanExport", "params": { 
-/**
- * Root path.
- */
-root_path: string, 
-/**
- * Target audience.
- */
-audience: string, } } | { "type": "ExportToMemory", "params": { 
-/**
- * Root path.
- */
-root_path: string, 
-/**
- * Target audience.
- */
-audience: string, } } | { "type": "ExportToHtml", "params": { 
-/**
- * Root path.
- */
-root_path: string, 
-/**
- * Target audience.
- */
-audience: string, } } | { "type": "ExportBinaryAttachments", "params": { 
-/**
- * Root path.
- */
-root_path: string, 
-/**
- * Target audience.
- */
-audience: string, } } | { "type": "ListTemplates", "params": { 
-/**
- * Optional workspace path.
- */
-workspace_path: string | null, } } | { "type": "GetTemplate", "params": { 
-/**
- * Template name.
- */
-name: string, 
-/**
- * Optional workspace path.
- */
-workspace_path: string | null, } } | { "type": "SaveTemplate", "params": { 
-/**
- * Template name.
- */
-name: string, 
-/**
- * Template content.
- */
-content: string, 
-/**
- * Workspace path.
- */
-workspace_path: string, } } | { "type": "DeleteTemplate", "params": { 
-/**
- * Template name.
- */
-name: string, 
-/**
- * Workspace path.
- */
-workspace_path: string, } } | { "type": "GetAttachments", "params": { 
-/**
- * Path to the entry file.
- */
-path: string, } } | { "type": "UploadAttachment", "params": { 
-/**
- * Path to the entry file.
- */
-entry_path: string, 
-/**
- * Filename for the attachment.
- */
-filename: string, 
-/**
- * Base64 encoded data.
- */
-data_base64: string, } } | { "type": "DeleteAttachment", "params": { 
-/**
- * Path to the entry file.
- */
-entry_path: string, 
-/**
- * Path to the attachment.
- */
-attachment_path: string, } } | { "type": "GetAttachmentData", "params": { 
-/**
- * Path to the entry file.
- */
-entry_path: string, 
-/**
- * Path to the attachment.
- */
-attachment_path: string, } } | { "type": "MoveAttachment", "params": { 
-/**
- * Path to the source entry file.
- */
-source_entry_path: string, 
-/**
- * Path to the target entry file.
- */
-target_entry_path: string, 
-/**
- * Relative path to the attachment (e.g., "_attachments/image.png").
- */
-attachment_path: string, 
-/**
- * Optional new filename (for handling collisions).
- */
-new_filename: string | null, } } | { "type": "GetAncestorAttachments", "params": { 
-/**
- * Path to the entry file.
- */
-path: string, } } | { "type": "FileExists", "params": { 
+direction: string, } } | { "type": "IsDailyEntry", "params": {
 /**
  * Path to check.
  */
-path: string, } } | { "type": "ReadFile", "params": { 
+path: string, } } | { "type": "FindRootIndex", "params": {
+/**
+ * Directory to search in.
+ */
+directory: string, } } | { "type": "GetWorkspaceTree", "params": {
+/**
+ * Optional path to a specific workspace.
+ */
+path: string | null,
+/**
+ * Optional maximum depth to traverse.
+ */
+depth: number | null, } } | { "type": "GetFilesystemTree", "params": {
+/**
+ * Optional path to the workspace directory.
+ */
+path: string | null,
+/**
+ * Whether to include hidden files.
+ */
+show_hidden: boolean,
+/**
+ * Optional maximum depth to traverse.
+ */
+depth: number | null, } } | { "type": "CreateWorkspace", "params": {
+/**
+ * Path where the workspace should be created.
+ */
+path: string | null,
+/**
+ * Name of the workspace.
+ */
+name: string | null, } } | { "type": "GetFrontmatter", "params": {
+/**
+ * Path to the entry file.
+ */
+path: string, } } | { "type": "SetFrontmatterProperty", "params": {
+/**
+ * Path to the entry file.
+ */
+path: string,
+/**
+ * Property key.
+ */
+key: string,
+/**
+ * Property value.
+ */
+value: JsonValue, } } | { "type": "RemoveFrontmatterProperty", "params": {
+/**
+ * Path to the entry file.
+ */
+path: string,
+/**
+ * Property key to remove.
+ */
+key: string, } } | { "type": "SearchWorkspace", "params": {
+/**
+ * Search pattern.
+ */
+pattern: string,
+/**
+ * Search options.
+ */
+options: SearchOptions, } } | { "type": "ValidateWorkspace", "params": {
+/**
+ * Optional path to workspace.
+ */
+path: string | null, } } | { "type": "ValidateFile", "params": {
+/**
+ * Path to the file to validate.
+ */
+path: string, } } | { "type": "FixBrokenPartOf", "params": {
+/**
+ * Path to the file with the broken reference.
+ */
+path: string, } } | { "type": "FixBrokenContentsRef", "params": {
+/**
+ * Path to the index file.
+ */
+index_path: string,
+/**
+ * The broken reference to remove.
+ */
+target: string, } } | { "type": "FixBrokenAttachment", "params": {
+/**
+ * Path to the file with the broken attachment.
+ */
+path: string,
+/**
+ * The broken attachment reference.
+ */
+attachment: string, } } | { "type": "FixNonPortablePath", "params": {
+/**
+ * Path to the file.
+ */
+path: string,
+/**
+ * Property name.
+ */
+property: string,
+/**
+ * Current value.
+ */
+old_value: string,
+/**
+ * New value.
+ */
+new_value: string, } } | { "type": "FixUnlistedFile", "params": {
+/**
+ * Path to the index file.
+ */
+index_path: string,
+/**
+ * Path to the file to add.
+ */
+file_path: string, } } | { "type": "FixOrphanBinaryFile", "params": {
+/**
+ * Path to the index file.
+ */
+index_path: string,
+/**
+ * Path to the binary file.
+ */
+file_path: string, } } | { "type": "FixMissingPartOf", "params": {
+/**
+ * Path to the file missing part_of.
+ */
+file_path: string,
+/**
+ * Path to the index file to reference.
+ */
+index_path: string, } } | { "type": "FixAll", "params": {
+/**
+ * The validation result to fix.
+ */
+validation_result: ValidationResult, } } | { "type": "FixCircularReference", "params": {
+/**
+ * Path to the file to edit.
+ */
+file_path: string,
+/**
+ * The part_of value to remove.
+ */
+part_of_value: string, } } | { "type": "GetAvailableParentIndexes", "params": {
+/**
+ * Path to the file that needs a parent.
+ */
+file_path: string,
+/**
+ * Workspace root to limit scope.
+ */
+workspace_root: string, } } | { "type": "GetAvailableAudiences", "params": {
+/**
+ * Root path to scan.
+ */
+root_path: string, } } | { "type": "PlanExport", "params": {
+/**
+ * Root path.
+ */
+root_path: string,
+/**
+ * Target audience.
+ */
+audience: string, } } | { "type": "ExportToMemory", "params": {
+/**
+ * Root path.
+ */
+root_path: string,
+/**
+ * Target audience.
+ */
+audience: string, } } | { "type": "ExportToHtml", "params": {
+/**
+ * Root path.
+ */
+root_path: string,
+/**
+ * Target audience.
+ */
+audience: string, } } | { "type": "ExportBinaryAttachments", "params": {
+/**
+ * Root path.
+ */
+root_path: string,
+/**
+ * Target audience.
+ */
+audience: string, } } | { "type": "ListTemplates", "params": {
+/**
+ * Optional workspace path.
+ */
+workspace_path: string | null, } } | { "type": "GetTemplate", "params": {
+/**
+ * Template name.
+ */
+name: string,
+/**
+ * Optional workspace path.
+ */
+workspace_path: string | null, } } | { "type": "SaveTemplate", "params": {
+/**
+ * Template name.
+ */
+name: string,
+/**
+ * Template content.
+ */
+content: string,
+/**
+ * Workspace path.
+ */
+workspace_path: string, } } | { "type": "DeleteTemplate", "params": {
+/**
+ * Template name.
+ */
+name: string,
+/**
+ * Workspace path.
+ */
+workspace_path: string, } } | { "type": "GetAttachments", "params": {
+/**
+ * Path to the entry file.
+ */
+path: string, } } | { "type": "UploadAttachment", "params": {
+/**
+ * Path to the entry file.
+ */
+entry_path: string,
+/**
+ * Filename for the attachment.
+ */
+filename: string,
+/**
+ * Base64 encoded data.
+ */
+data_base64: string, } } | { "type": "DeleteAttachment", "params": {
+/**
+ * Path to the entry file.
+ */
+entry_path: string,
+/**
+ * Path to the attachment.
+ */
+attachment_path: string, } } | { "type": "GetAttachmentData", "params": {
+/**
+ * Path to the entry file.
+ */
+entry_path: string,
+/**
+ * Path to the attachment.
+ */
+attachment_path: string, } } | { "type": "MoveAttachment", "params": {
+/**
+ * Path to the source entry file.
+ */
+source_entry_path: string,
+/**
+ * Path to the target entry file.
+ */
+target_entry_path: string,
+/**
+ * Relative path to the attachment (e.g., "_attachments/image.png").
+ */
+attachment_path: string,
+/**
+ * Optional new filename (for handling collisions).
+ */
+new_filename: string | null, } } | { "type": "GetAncestorAttachments", "params": {
+/**
+ * Path to the entry file.
+ */
+path: string, } } | { "type": "FileExists", "params": {
+/**
+ * Path to check.
+ */
+path: string, } } | { "type": "ReadFile", "params": {
 /**
  * Path to read.
  */
-path: string, } } | { "type": "WriteFile", "params": { 
+path: string, } } | { "type": "WriteFile", "params": {
 /**
  * Path to write.
  */
-path: string, 
+path: string,
 /**
  * Content to write.
  */
-content: string, } } | { "type": "DeleteFile", "params": { 
+content: string, } } | { "type": "DeleteFile", "params": {
 /**
  * Path to delete.
  */

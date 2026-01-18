@@ -1,6 +1,6 @@
 /**
  * Typed API wrapper for the unified execute() command pattern.
- * 
+ *
  * This module provides ergonomic, type-safe functions that wrap execute() calls.
  * Usage: `const api = createApi(backend); await api.getEntry(path);`
  */
@@ -129,9 +129,46 @@ export function createApi(backend: Backend) {
     },
 
     /** Ensure today's daily entry exists. Returns the path to the daily entry. */
-    async ensureDailyEntry(): Promise<string> {
-      const response = await backend.execute({ type: 'EnsureDailyEntry' });
+    async ensureDailyEntry(
+      workspacePath: string,
+      dailyEntryFolder?: string,
+      template?: string
+    ): Promise<string> {
+      const response = await backend.execute({
+        type: 'EnsureDailyEntry',
+        params: {
+          workspace_path: workspacePath,
+          daily_entry_folder: dailyEntryFolder ?? null,
+          template: template ?? null,
+        },
+      });
       return expectResponse(response, 'String').data;
+    },
+
+    /** Get the path to an adjacent daily entry. Returns null if not a daily entry. */
+    async getAdjacentDailyEntry(
+      path: string,
+      direction: 'prev' | 'next'
+    ): Promise<string | null> {
+      try {
+        const response = await backend.execute({
+          type: 'GetAdjacentDailyEntry',
+          params: { path, direction },
+        });
+        return expectResponse(response, 'String').data;
+      } catch {
+        // Returns null if not a daily entry
+        return null;
+      }
+    },
+
+    /** Check if a path is a daily entry. */
+    async isDailyEntry(path: string): Promise<boolean> {
+      const response = await backend.execute({
+        type: 'IsDailyEntry',
+        params: { path },
+      });
+      return expectResponse(response, 'Bool').data;
     },
 
     // =========================================================================

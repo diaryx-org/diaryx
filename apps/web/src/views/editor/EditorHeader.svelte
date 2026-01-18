@@ -20,6 +20,8 @@
     Menu,
     Loader2,
     Search,
+    ChevronLeft,
+    ChevronRight,
   } from "@lucide/svelte";
 
   // Mobile state for hiding keyboard shortcut tooltips
@@ -36,10 +38,16 @@
     rightSidebarOpen: boolean;
     focusMode?: boolean;
     readonly?: boolean;
+    /** Whether the current entry is a daily entry (shows prev/next navigation) */
+    isDailyEntry?: boolean;
     onSave: () => void;
     onToggleLeftSidebar: () => void;
     onToggleRightSidebar: () => void;
     onOpenCommandPalette: () => void;
+    /** Navigate to the previous day's entry */
+    onPrevDay?: () => void;
+    /** Navigate to the next day's entry */
+    onNextDay?: () => void;
   }
 
   let {
@@ -53,10 +61,13 @@
     rightSidebarOpen,
     focusMode = false,
     readonly = false,
+    isDailyEntry = false,
     onSave,
     onToggleLeftSidebar,
     onToggleRightSidebar,
     onOpenCommandPalette,
+    onPrevDay,
+    onNextDay,
   }: Props = $props();
 
   // Focus mode: header is invisible when both sidebars are closed
@@ -115,9 +126,51 @@
     <!-- Title and path (conditional based on settings) -->
     {#if showTitle}
       <div class="min-w-0 flex-1">
-        <h2 class="text-lg md:text-xl font-semibold text-foreground truncate">
-          {title}
-        </h2>
+        <div class="flex items-center gap-1">
+          <!-- Prev day button (only for daily entries) -->
+          {#if isDailyEntry && onPrevDay}
+            <Tooltip.Root>
+              <Tooltip.Trigger>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onclick={onPrevDay}
+                  class="size-7 shrink-0"
+                  aria-label="Previous day"
+                >
+                  <ChevronLeft class="size-4" />
+                </Button>
+              </Tooltip.Trigger>
+              {#if !mobileState.isMobile}
+                <Tooltip.Content>Previous day (Alt+Left)</Tooltip.Content>
+              {/if}
+            </Tooltip.Root>
+          {/if}
+
+          <h2 class="text-lg md:text-xl font-semibold text-foreground truncate">
+            {title}
+          </h2>
+
+          <!-- Next day button (only for daily entries) -->
+          {#if isDailyEntry && onNextDay}
+            <Tooltip.Root>
+              <Tooltip.Trigger>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onclick={onNextDay}
+                  class="size-7 shrink-0"
+                  aria-label="Next day"
+                >
+                  <ChevronRight class="size-4" />
+                </Button>
+              </Tooltip.Trigger>
+              {#if !mobileState.isMobile}
+                <Tooltip.Content>Next day (Alt+Right)</Tooltip.Content>
+              {/if}
+            </Tooltip.Root>
+          {/if}
+        </div>
         {#if showPath}
           <p
             class="text-xs md:text-sm text-muted-foreground truncate hidden sm:block"

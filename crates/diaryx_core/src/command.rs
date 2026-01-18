@@ -118,7 +118,34 @@ pub enum Command {
     },
 
     /// Ensure today's daily entry exists.
-    EnsureDailyEntry,
+    /// Returns the path to the daily entry (created if it didn't exist).
+    EnsureDailyEntry {
+        /// Workspace path (directory containing the workspace root index).
+        workspace_path: String,
+        /// Optional subfolder for daily entries (e.g., "Daily" or "Journal/Daily").
+        /// If not provided, entries are created in the workspace root.
+        #[serde(default)]
+        daily_entry_folder: Option<String>,
+        /// Optional template name to use for new entries.
+        /// Falls back to "daily" built-in template if not provided.
+        #[serde(default)]
+        template: Option<String>,
+    },
+
+    /// Get the path to an adjacent daily entry (previous or next day).
+    /// Returns null if the path is not a daily entry.
+    GetAdjacentDailyEntry {
+        /// Path to the current daily entry.
+        path: String,
+        /// Direction: "prev" for previous day, "next" for next day.
+        direction: String,
+    },
+
+    /// Check if a path is a daily entry.
+    IsDailyEntry {
+        /// Path to check.
+        path: String,
+    },
 
     // === Workspace Operations ===
     /// Find the root index file in a directory.

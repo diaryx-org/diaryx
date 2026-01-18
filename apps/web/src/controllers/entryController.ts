@@ -253,10 +253,12 @@ export async function createEntry(
  */
 export async function ensureDailyEntry(
   api: Api,
+  workspacePath: string,
+  dailyEntryFolder?: string,
   onSuccess?: (path: string) => Promise<void>
 ): Promise<string | null> {
   try {
-    const path = await api.ensureDailyEntry();
+    const path = await api.ensureDailyEntry(workspacePath, dailyEntryFolder);
     if (onSuccess) {
       await onSuccess(path);
     }

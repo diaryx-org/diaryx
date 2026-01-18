@@ -37,7 +37,12 @@ impl Config {
     /// Returns daily_entry_folder joined with default_workspace, or just default_workspace
     pub fn daily_entry_dir(&self) -> PathBuf {
         match &self.daily_entry_folder {
-            Some(folder) => self.default_workspace.join(folder),
+            Some(folder) => {
+                // Strip leading slashes to ensure proper path joining
+                // A leading "/" would make this an absolute path instead of relative
+                let normalized = folder.trim_start_matches('/');
+                self.default_workspace.join(normalized)
+            }
             None => self.default_workspace.clone(),
         }
     }

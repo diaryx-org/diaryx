@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import { isTauri, type TreeNode, type EntryData, type ValidationResultWithMeta, type ValidationErrorWithMeta, type ValidationWarningWithMeta, type Api } from "./backend";
   import { Button } from "$lib/components/ui/button";
   import * as Tooltip from "$lib/components/ui/tooltip";
@@ -107,6 +108,32 @@
 
   // Track which nodes are currently loading children
   let loadingNodes = $state(new Set<string>());
+
+  // Scroll position preservation - prevents losing scroll position when tree refreshes
+  let scrollContainer: HTMLDivElement | null = $state(null);
+  let savedScrollTop = $state(0);
+
+  // Save scroll position whenever tree is about to change
+  $effect.pre(() => {
+    // Access tree to create dependency
+    tree;
+    // Save current scroll position before DOM updates
+    if (scrollContainer) {
+      savedScrollTop = scrollContainer.scrollTop;
+    }
+  });
+
+  // Restore scroll position after tree changes and DOM updates
+  $effect(() => {
+    // Access tree to create dependency
+    tree;
+    // After DOM updates, restore scroll position
+    tick().then(() => {
+      if (scrollContainer && savedScrollTop > 0) {
+        scrollContainer.scrollTop = savedScrollTop;
+      }
+    });
+  });
 
   // Check if a node has unloaded children (placeholder "... (N more)" node)
   function hasUnloadedChildren(node: TreeNode): boolean {
@@ -885,7 +912,7 @@
   </div>
 
   <!-- Content Area -->
-  <div class="flex-1 overflow-y-auto px-3 pb-3">
+  <div class="flex-1 overflow-y-auto px-3 pb-3" bind:this={scrollContainer}>
     {#if !tree && isLoading}
       <!-- Loading State - only shown during initial tree load -->
       <div class="flex items-center justify-center py-8">
@@ -1501,7 +1528,7 @@
 
         {#if node.children.length > 0 && expandedNodes.has(node.path)}
           <div class="mt-0.5" role="group">
-            {#each node.children.filter(c => !c.name.startsWith('... (')) as child}
+            {#each node.children.filter(c => !c.name.startsWith('... (')) as child (child.path)}
               {@render treeNode(child, depth + 1)}
             {/each}
           </div>

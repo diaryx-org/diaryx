@@ -283,8 +283,11 @@ export interface Backend {
    * Initialize the backend. Must be called before any other methods.
    * For WASM, this loads data from IndexedDB into the InMemoryFileSystem.
    * For Tauri, this is a no-op.
+   *
+   * @param storageTypeOverride Optional storage type to use instead of the default.
+   *                            Use 'memory' for guest mode (in-memory filesystem).
    */
-  init(): Promise<void>;
+  init(storageTypeOverride?: string): Promise<void>;
 
   /**
    * Check if the backend is ready to use.

@@ -21,6 +21,7 @@ import {
 import type { WebrtcProvider } from 'y-webrtc';
 import type { Api } from '../backend/api';
 import { shareSessionStore } from '@/models/stores/shareSessionStore.svelte';
+import { getClientOwnerId } from '@/models/services/shareService';
 
 // State
 let rustApi: RustCrdtApi | null = null;
@@ -47,6 +48,19 @@ const fileLocks = new Map<string, Promise<void>>();
 // Track pending intervals/timeouts for proper cleanup
 const pendingIntervals: Set<ReturnType<typeof setInterval>> = new Set();
 const pendingTimeouts: Set<ReturnType<typeof setTimeout>> = new Set();
+
+/**
+ * Check if we should skip CRDT operations.
+ *
+ * Guests (both Tauri and web) skip CRDT operations because:
+ * 1. Tauri guests use an in-memory filesystem without CRDT support
+ * 2. Web guests have a separate backend, but rustApi points to the original
+ * 3. Guests sync via Y.js WebSocket, not local CRDT storage
+ * 4. Guest data is ephemeral - no need to persist to local CRDT
+ */
+function shouldSkipCrdtOperations(): boolean {
+  return shareSessionStore.isGuest;
+}
 
 /**
  * Acquire a lock for a specific file path.
@@ -160,23 +174,34 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
 
 /**
  * Ensure workspaceYDoc exists and is loaded with Rust CRDT state.
+ * For guests, we create an empty Y.Doc (state will come from the server).
  */
 async function ensureWorkspaceYDoc(): Promise<void> {
   if (workspaceYDoc) return;
-  if (!rustApi) return;
+
+  const skipCrdt = shouldSkipCrdtOperations();
+
+  // For guests, we don't need rustApi - state comes from the server
+  if (!skipCrdt && !rustApi) return;
 
   workspaceYDoc = new Y.Doc();
 
-  // Load initial state from Rust CRDT
+  // Skip loading from Rust CRDT for guests - they receive state from the server
+  if (skipCrdt) {
+    console.log('[WorkspaceCrdtBridge] Guest mode: created empty Y.Doc (state will sync from server)');
+    return;
+  }
+
+  // Load initial state from Rust CRDT (for hosts)
   try {
-    const fullState = await rustApi.getFullState('workspace');
+    const fullState = await rustApi!.getFullState('workspace');
     console.log('[WorkspaceCrdtBridge] Loading initial state from Rust, bytes:', fullState.length);
     if (fullState.length > 0) {
       Y.applyUpdate(workspaceYDoc, fullState, 'rust');
       const filesMap = workspaceYDoc.getMap('files');
       console.log('[WorkspaceCrdtBridge] Loaded Y.Doc has', filesMap.size, 'files');
     }
-    lastStateVector = await rustApi.getSyncState('workspace');
+    lastStateVector = await rustApi!.getSyncState('workspace');
     console.log('[WorkspaceCrdtBridge] Initial state vector stored, bytes:', lastStateVector.length);
   } catch (error) {
     console.warn('[WorkspaceCrdtBridge] Failed to load workspace state:', error);
@@ -187,15 +212,20 @@ async function ensureWorkspaceYDoc(): Promise<void> {
  * Apply an incremental update to Rust CRDT and notify file changes.
  * Reads the updated files from the Y.Doc and syncs them to Rust.
  * Also writes file content to disk if _body is present (for guests receiving synced files).
+ *
+ * Note: For Tauri guests, CRDT operations are skipped and files are written directly.
  */
 async function applyIncrementalUpdateToRust(_update: Uint8Array): Promise<void> {
-  if (!rustApi || !workspaceYDoc) return;
+  if (!workspaceYDoc) return;
+
+  const skipCrdt = shouldSkipCrdtOperations();
+  if (!skipCrdt && !rustApi) return;
 
   try {
     // Read files from the Y.Doc (which has already had the update applied)
-    // and sync to Rust CRDT
+    // and sync to Rust CRDT (or write directly for Tauri guests)
     const filesMap = workspaceYDoc.getMap('files');
-    console.log('[WorkspaceCrdtBridge] Applying incremental update, files in Y.Doc:', filesMap.size);
+    console.log('[WorkspaceCrdtBridge] Applying incremental update, files in Y.Doc:', filesMap.size, 'skipCrdt:', skipCrdt);
 
     for (const [path, value] of filesMap.entries()) {
       const metadataObj = value as Record<string, unknown>;
@@ -226,7 +256,10 @@ async function applyIncrementalUpdateToRust(_update: Uint8Array): Promise<void> 
         modified_at: metadataObj.modified_at ? BigInt(metadataObj.modified_at as number) : BigInt(Date.now()),
       };
 
-      await rustApi.setFile(path, metadata);
+      // Skip CRDT operations for Tauri guests - files are written directly below
+      if (!skipCrdt && rustApi) {
+        await rustApi.setFile(path, metadata);
+      }
 
       // If we have body content and API is available, write file to disk
       // This is needed for guests who receive synced files but don't have them on disk
@@ -267,16 +300,21 @@ async function applyIncrementalUpdateToRust(_update: Uint8Array): Promise<void> 
  * Sync full Y.Doc state to Rust CRDT (only for initial sync).
  * Use applyIncrementalUpdateToRust() for subsequent updates.
  * Also writes file content to disk if _body is present (for guests receiving synced files).
+ *
+ * Note: For Tauri guests, CRDT operations are skipped and files are written directly.
  */
 async function syncFullStateToRust(): Promise<void> {
-  if (!workspaceYDoc || !rustApi) return;
+  if (!workspaceYDoc) return;
+
+  const skipCrdt = shouldSkipCrdtOperations();
+  if (!skipCrdt && !rustApi) return;
 
   try {
     // Read files directly from the Y.Doc's files map and sync to Rust
     // This is more reliable than applying Y.js updates which may not be
     // interpreted correctly by the Rust CRDT backend
     const filesMap = workspaceYDoc.getMap('files');
-    console.log('[WorkspaceCrdtBridge] Syncing Y.Doc files to Rust, count:', filesMap.size);
+    console.log('[WorkspaceCrdtBridge] Syncing Y.Doc files to Rust, count:', filesMap.size, 'skipCrdt:', skipCrdt);
 
     for (const [path, value] of filesMap.entries()) {
       const metadataObj = value as Record<string, unknown>;
@@ -307,8 +345,11 @@ async function syncFullStateToRust(): Promise<void> {
         modified_at: metadataObj.modified_at ? BigInt(metadataObj.modified_at as number) : BigInt(Date.now()),
       };
 
-      console.log('[WorkspaceCrdtBridge] Syncing file to Rust:', path);
-      await rustApi.setFile(path, metadata);
+      // Skip CRDT operations for Tauri guests - files are written directly below
+      if (!skipCrdt && rustApi) {
+        console.log('[WorkspaceCrdtBridge] Syncing file to Rust:', path);
+        await rustApi.setFile(path, metadata);
+      }
 
       // If we have body content and API is available, write file to disk
       // This is needed for guests who receive synced files but don't have them on disk
@@ -467,20 +508,39 @@ export function setBackendApi(api: Api): void {
 
 /**
  * Get the storage path for a file in guest mode.
- * Guests have isolated storage at guest/{joinCode}/... to avoid overwriting their workspace.
- * Returns the original path for hosts.
+ *
+ * For guests using in-memory storage (web): Returns the original path (no prefix needed).
+ * For guests using OPFS (Tauri, future): Prefixes with guest/{joinCode}/... to isolate storage.
+ * For hosts: Returns the original path.
  */
 function getGuestStoragePath(originalPath: string): string {
   const isGuest = shareSessionStore.isGuest;
   const joinCode = shareSessionStore.joinCode;
-  console.log('[WorkspaceCrdtBridge] getGuestStoragePath:', { originalPath, isGuest, joinCode, mode: shareSessionStore.mode });
+  const usesInMemory = shareSessionStore.usesInMemoryStorage;
 
+  console.log('[WorkspaceCrdtBridge] getGuestStoragePath:', {
+    originalPath,
+    isGuest,
+    joinCode,
+    usesInMemory,
+    mode: shareSessionStore.mode
+  });
+
+  // Hosts don't need path prefixing
   if (!isGuest || !joinCode) {
     return originalPath;
   }
-  // Guest storage is isolated under guest/{joinCode}/
+
+  // Guests using in-memory storage don't need path prefixing
+  // (they have their own isolated filesystem)
+  if (usesInMemory) {
+    console.log('[WorkspaceCrdtBridge] Using original path (in-memory storage):', originalPath);
+    return originalPath;
+  }
+
+  // Guests using OPFS need path prefixing to isolate their storage
   const guestPath = `guest/${joinCode}/${originalPath}`;
-  console.log('[WorkspaceCrdtBridge] Using guest path:', guestPath);
+  console.log('[WorkspaceCrdtBridge] Using guest path (OPFS):', guestPath);
   return guestPath;
 }
 
@@ -488,16 +548,25 @@ function getGuestStoragePath(originalPath: string): string {
  * Convert a guest storage path back to the canonical path.
  * This strips the guest/{joinCode}/ prefix if present.
  * Used when syncing to Y.Doc to ensure consistent keys across host and guest.
+ *
+ * For guests using in-memory storage: paths are already canonical (no prefix).
+ * For guests using OPFS: strips the guest/{joinCode}/ prefix.
  */
 function getCanonicalPath(storagePath: string): string {
   const isGuest = shareSessionStore.isGuest;
   const joinCode = shareSessionStore.joinCode;
+  const usesInMemory = shareSessionStore.usesInMemoryStorage;
 
   if (!isGuest || !joinCode) {
     return storagePath;
   }
 
-  // Strip guest/{joinCode}/ prefix if present
+  // Guests using in-memory storage don't have prefixes
+  if (usesInMemory) {
+    return storagePath;
+  }
+
+  // Strip guest/{joinCode}/ prefix if present (for OPFS guests)
   const guestPrefix = `guest/${joinCode}/`;
   if (storagePath.startsWith(guestPrefix)) {
     const canonicalPath = storagePath.slice(guestPrefix.length);
@@ -570,6 +639,7 @@ export async function startSessionSync(sessionServerUrl: string, sessionCode: st
     doc: workspaceYDoc,
     sessionCode: sessionCode,
     sendInitialState: isHost, // Host sends their state to server
+    ownerId: isHost ? getClientOwnerId() : undefined, // Pass ownerId for hosts (read-only enforcement)
     onStatusChange: (connected) => {
       console.log('[WorkspaceCrdtBridge] Session sync status:', connected);
     },
@@ -944,11 +1014,48 @@ export async function populateCrdtFromFiles(files: Array<{ path: string; metadat
 /**
  * Build a tree from CRDT file metadata.
  * This is used for guests who don't have files on disk but have synced metadata.
+ *
+ * For guests, builds tree from Y.Doc instead of Rust CRDT.
  */
 export async function getTreeFromCrdt(): Promise<TreeNode | null> {
-  if (!rustApi) return null;
+  const skipCrdt = shouldSkipCrdtOperations();
 
-  const files = await rustApi.listFiles(false);
+  let files: [string, FileMetadata][];
+
+  if (skipCrdt) {
+    // For guests: build from Y.Doc instead of Rust CRDT
+    if (!workspaceYDoc) {
+      console.log('[WorkspaceCrdtBridge] getTreeFromCrdt: No Y.Doc available for guest');
+      return null;
+    }
+
+    const filesMap = workspaceYDoc.getMap('files');
+    console.log('[WorkspaceCrdtBridge] Building tree from Y.Doc for guest, files:', filesMap.size);
+
+    files = [];
+    for (const [path, value] of filesMap.entries()) {
+      const metadataObj = value as Record<string, unknown>;
+      if (metadataObj.deleted) continue; // Skip deleted files
+
+      const metadata: FileMetadata = {
+        title: (metadataObj.title as string | null) ?? null,
+        part_of: (metadataObj.part_of as string | null) ?? null,
+        contents: Array.isArray(metadataObj.contents) ? metadataObj.contents as string[] : null,
+        attachments: Array.isArray(metadataObj.attachments) ? metadataObj.attachments as BinaryRef[] : [],
+        deleted: false,
+        audience: Array.isArray(metadataObj.audience) ? metadataObj.audience as string[] : null,
+        description: (metadataObj.description as string | null) ?? null,
+        extra: (metadataObj.extra as FileMetadata['extra']) ?? {},
+        modified_at: metadataObj.modified_at ? BigInt(metadataObj.modified_at as number) : BigInt(Date.now()),
+      };
+      files.push([path, metadata]);
+    }
+  } else {
+    // For hosts: use Rust CRDT
+    if (!rustApi) return null;
+    files = await rustApi.listFiles(false);
+  }
+
   if (files.length === 0) return null;
 
   const fileMap = new Map(files);
@@ -1018,6 +1125,13 @@ export async function setFileMetadata(path: string, metadata: FileMetadata): Pro
   if (!rustApi) {
     throw new Error('Workspace not initialized');
   }
+
+  // Block updates in read-only mode for guests
+  if (isReadOnlyBlocked()) {
+    console.log('[WorkspaceCrdtBridge] Blocked setFileMetadata in read-only session:', path);
+    return;
+  }
+
   await rustApi.setFile(path, metadata);
   console.log('[WorkspaceCrdtBridge] Rust setFile complete, now syncing...');
   // Sync to Y.Doc so session/P2P peers receive the update
@@ -1055,6 +1169,14 @@ function syncFileToYDoc(path: string, metadata: FileMetadata): void {
 }
 
 /**
+ * Check if updates should be blocked due to read-only mode.
+ * Returns true if the user is a guest in a read-only session.
+ */
+function isReadOnlyBlocked(): boolean {
+  return shareSessionStore.isGuest && shareSessionStore.readOnly;
+}
+
+/**
  * Update file body content in the session Y.Doc.
  * This allows live sync of file content changes during share sessions.
  * Called when the editor saves content.
@@ -1062,6 +1184,12 @@ function syncFileToYDoc(path: string, metadata: FileMetadata): void {
 export function updateFileBodyInYDoc(path: string, body: string): void {
   if (!workspaceYDoc || !_sessionCode) {
     return; // No session active
+  }
+
+  // Block updates in read-only mode for guests
+  if (isReadOnlyBlocked()) {
+    console.log('[WorkspaceCrdtBridge] Blocked body update in read-only session:', path);
+    return;
   }
 
   // Convert guest storage path to canonical path for Y.Doc sync
@@ -1113,6 +1241,12 @@ export async function updateFileMetadata(
   console.log('[WorkspaceCrdtBridge] updateFileMetadata called:', path, updates);
   if (!rustApi) {
     throw new Error('Workspace not initialized');
+  }
+
+  // Block updates in read-only mode for guests
+  if (isReadOnlyBlocked()) {
+    console.log('[WorkspaceCrdtBridge] Blocked updateFileMetadata in read-only session:', path);
+    return;
   }
 
   // Acquire lock to prevent concurrent read-modify-write races

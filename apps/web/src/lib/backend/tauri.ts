@@ -293,7 +293,7 @@ export class TauriBackend implements Backend {
       // Custom reviver to handle BigInt deserialization for known fields
       return JSON.parse(responseJson, (key, value) => {
         // Convert numeric timestamps back to BigInt for specific fields
-        if ((key === 'modified_at' || key === 'uploaded_at' || key === 'size' || 
+        if ((key === 'modified_at' || key === 'uploaded_at' || key === 'size' ||
              key === 'timestamp' || key === 'update_id') && typeof value === 'number') {
           return BigInt(value);
         }
@@ -410,5 +410,38 @@ export class TauriBackend implements Backend {
   async writeBinary(path: string, data: Uint8Array): Promise<void> {
     const invoke = this.getInvoke();
     await invoke("write_binary_file", { path, data: Array.from(data) });
+  }
+
+  // --------------------------------------------------------------------------
+  // Guest Mode (for share sessions)
+  // --------------------------------------------------------------------------
+
+  /**
+   * Start guest mode for a share session.
+   * Creates an in-memory filesystem for all operations.
+   * Files synced during the guest session will be stored in memory only.
+   */
+  async startGuestMode(joinCode: string): Promise<void> {
+    const invoke = this.getInvoke();
+    await invoke<void>("start_guest_mode", { joinCode });
+    console.log("[TauriBackend] Guest mode started for session:", joinCode);
+  }
+
+  /**
+   * End guest mode and clear in-memory data.
+   * Returns the app to normal mode with the original workspace.
+   */
+  async endGuestMode(): Promise<void> {
+    const invoke = this.getInvoke();
+    await invoke<void>("end_guest_mode");
+    console.log("[TauriBackend] Guest mode ended");
+  }
+
+  /**
+   * Check if guest mode is currently active.
+   */
+  async isGuestMode(): Promise<boolean> {
+    const invoke = this.getInvoke();
+    return await invoke<boolean>("is_guest_mode");
   }
 }

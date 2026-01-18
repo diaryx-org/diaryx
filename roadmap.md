@@ -23,13 +23,9 @@ Import from Obsidian (add all part_of/contents properties + index files)
 
 ## Other considerations
 
-### Refactor for Backend interface in diaryx_wasm
-
-How much to integrate into diaryx_core?
-
 ### Better documentation
 
-We have just one README file right now.
+~~We have just one README file right now.~~ Working on it!
 
 ### Undo/redo
 

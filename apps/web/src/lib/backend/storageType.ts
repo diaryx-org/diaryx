@@ -1,6 +1,6 @@
 /**
  * Storage type management for the WASM backend.
- * 
+ *
  * Supports three storage backends:
  * - OPFS (default): High-performance origin-private file system
  * - IndexedDB: Fallback for browsers without OPFS support
@@ -13,7 +13,7 @@
 // Types
 // ============================================================================
 
-export type StorageType = 'opfs' | 'indexeddb' | 'filesystem-access';
+export type StorageType = 'opfs' | 'indexeddb' | 'filesystem-access' | 'memory';
 
 const STORAGE_TYPE_KEY = 'diaryx-storage-type';
 const FS_HANDLE_KEY = 'diaryx-fs-handle';
@@ -42,6 +42,10 @@ export function isStorageTypeSupported(type: StorageType): boolean {
         typeof window !== 'undefined' &&
         'showDirectoryPicker' in window
       );
+
+    case 'memory':
+      // In-memory storage is always supported (used for guest mode)
+      return true;
 
     default:
       return false;
@@ -73,7 +77,7 @@ export function getStorageType(): StorageType {
   }
 
   const stored = localStorage.getItem(STORAGE_TYPE_KEY) as StorageType | null;
-  
+
   if (stored && isStorageTypeSupported(stored)) {
     return stored;
   }
@@ -82,7 +86,7 @@ export function getStorageType(): StorageType {
   if (isStorageTypeSupported('opfs')) {
     return 'opfs';
   }
-  
+
   return 'indexeddb';
 }
 

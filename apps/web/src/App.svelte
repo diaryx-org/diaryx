@@ -118,6 +118,9 @@
   // Rust CRDT API instance
   let rustApi: RustCrdtApi | null = $state(null);
 
+  // Track whether initial guest sync has completed (to avoid re-opening root on every update)
+  let guestInitialSyncDone = $state(false);
+
   // Collaboration state - proxied from collaborationStore
   let currentCollaborationPath = $derived(collaborationStore.currentCollaborationPath);
   let collaborationEnabled = $derived(collaborationStore.collaborationEnabled);
@@ -182,6 +185,13 @@
         String(showUnlinkedFiles),
       );
       localStorage.setItem("diaryx-show-hidden-files", String(showHiddenFiles));
+    }
+  });
+
+  // Reset guest initial sync flag when leaving guest mode
+  $effect(() => {
+    if (!shareSessionStore.isGuest) {
+      guestInitialSyncDone = false;
     }
   });
 
@@ -250,9 +260,16 @@
         if (crdtTree) {
           console.log('[App] Setting tree from CRDT:', crdtTree);
           workspaceStore.setTree(crdtTree);
-          console.log('[App] Guest session - opening root entry:', crdtTree.path);
-          workspaceStore.expandNode(crdtTree.path);
-          await openEntry(crdtTree.path);
+
+          // Only open root entry on the first sync, not on every update
+          if (!guestInitialSyncDone) {
+            console.log('[App] Guest session - initial sync, opening root entry:', crdtTree.path);
+            workspaceStore.expandNode(crdtTree.path);
+            await openEntry(crdtTree.path);
+            guestInitialSyncDone = true;
+          } else {
+            console.log('[App] Guest session - incremental sync, tree updated');
+          }
         } else {
           console.log('[App] No CRDT tree available, falling back to filesystem refresh');
           await refreshTree();
@@ -926,20 +943,44 @@
   /**
    * Populate the CRDT with files from the filesystem.
    * Called before hosting a share session to ensure all files are available.
+   * @param audience - If provided, only include files accessible to this audience
    */
-  async function populateCrdtBeforeHost() {
+  async function populateCrdtBeforeHost(audience: string | null = null) {
     if (!api || !tree) {
       console.warn('[App] Cannot populate CRDT: api or tree not available');
       return;
     }
 
-    console.log('[App] Populating CRDT from filesystem before hosting...');
+    console.log('[App] Populating CRDT from filesystem before hosting, audience:', audience);
+
+    // Get filtered file set if audience is specified
+    let allowedPaths: Set<string> | null = null;
+    if (audience) {
+      try {
+        const exportPlan = await api.planExport(tree.path, audience);
+        allowedPaths = new Set(exportPlan.included.map(f => f.source_path));
+        console.log('[App] Filtered to', allowedPaths.size, 'files for audience:', audience);
+      } catch (e) {
+        console.warn('[App] Failed to get export plan, sharing all files:', e);
+      }
+    }
 
     // Collect all files from the tree recursively
     const files: Array<{ path: string; metadata: Partial<FileMetadata> }> = [];
 
     async function collectFiles(node: typeof tree, parentPath: string | null) {
       if (!node || !api) return;
+
+      // Skip files not in allowed paths (if filtering)
+      if (allowedPaths && !allowedPaths.has(node.path)) {
+        console.log('[App] Skipping file not in audience:', node.path);
+        return;
+      }
+
+      // Filter children to only include allowed paths
+      const filteredChildren = allowedPaths
+        ? node.children.filter(c => allowedPaths!.has(c.path))
+        : node.children;
 
       // Get entry data including content
       try {
@@ -950,7 +991,7 @@
           metadata: {
             title: (frontmatter.title as string) || entry.title || node.name,
             part_of: parentPath,
-            contents: node.children.length > 0 ? node.children.map(c => c.path) : null,
+            contents: filteredChildren.length > 0 ? filteredChildren.map(c => c.path) : null,
             // Store file content in extra field for syncing
             extra: {
               _body: entry.content,
@@ -970,13 +1011,13 @@
           metadata: {
             title: node.name,
             part_of: parentPath,
-            contents: node.children.length > 0 ? node.children.map(c => c.path) : null,
+            contents: filteredChildren.length > 0 ? filteredChildren.map(c => c.path) : null,
           },
         });
       }
 
-      // Recurse into children
-      for (const child of node.children) {
+      // Recurse into children (only filtered ones if audience specified)
+      for (const child of filteredChildren) {
         await collectFiles(child, node.path);
       }
     }
@@ -1634,8 +1675,9 @@
         await openEntry(currentEntry.path);
       }
     }}
-    onBeforeHost={populateCrdtBeforeHost}
+    onBeforeHost={async (audience) => await populateCrdtBeforeHost(audience)}
     onOpenEntry={async (path) => await openEntry(path)}
+    {api}
   />
 </div>
 

@@ -2,6 +2,8 @@
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import * as Alert from "$lib/components/ui/alert";
+  import { Switch } from "$lib/components/ui/switch";
+  import NativeSelect from "$lib/components/ui/native-select/native-select.svelte";
   import {
     Users,
     Link,
@@ -12,33 +14,44 @@
     LogOut,
     Radio,
     UserPlus,
+    Lock,
+    LockOpen,
   } from "@lucide/svelte";
   import { shareSessionStore } from "@/models/stores/shareSessionStore.svelte";
   import {
     createShareSession,
     joinShareSession,
     endShareSession,
+    setSessionReadOnly,
   } from "@/models/services/shareService";
   import { workspaceStore } from "@/models/stores/workspaceStore.svelte";
   import { entryStore } from "@/models/stores/entryStore.svelte";
+  import type { Api } from "$lib/backend/api";
 
   // Props
   interface Props {
     onSessionStart?: () => void;
     onSessionEnd?: () => void;
     /** Called before hosting to populate CRDT with current files */
-    onBeforeHost?: () => Promise<void>;
+    onBeforeHost?: (audience: string | null) => Promise<void>;
     /** Called to open an entry by path */
     onOpenEntry?: (path: string) => Promise<void>;
+    /** API instance for loading audiences */
+    api: Api | null;
   }
 
-  let { onSessionStart, onSessionEnd, onBeforeHost, onOpenEntry }: Props = $props();
+  let { onSessionStart, onSessionEnd, onBeforeHost, onOpenEntry, api }: Props = $props();
 
   // Local state
   let joinCodeInput = $state("");
   let copied = $state(false);
   let isCreating = $state(false);
   let isJoining = $state(false);
+
+  // Pre-session config
+  let preSessionReadOnly = $state(false);
+  let selectedAudience = $state("all");
+  let audiences = $state<string[]>([]);
 
   // Get current state from store
   let mode = $derived(shareSessionStore.mode);
@@ -47,6 +60,28 @@
   let connecting = $derived(shareSessionStore.connecting);
   let error = $derived(shareSessionStore.error);
   let peerCount = $derived(shareSessionStore.peerCount);
+  let readOnly = $derived(shareSessionStore.readOnly);
+  let sessionAudience = $derived(shareSessionStore.audience);
+
+  // Load available audiences when component mounts or tree changes
+  $effect(() => {
+    loadAudiences();
+  });
+
+  async function loadAudiences() {
+    if (!api || !workspaceStore.tree) {
+      audiences = [];
+      return;
+    }
+
+    try {
+      const available = await api.getAvailableAudiences(workspaceStore.tree.path);
+      audiences = available;
+    } catch (e) {
+      console.warn("[ShareTab] Failed to load audiences:", e);
+      audiences = [];
+    }
+  }
 
   // Generate a unique workspace ID if none exists
   function getOrCreateWorkspaceId(): string {
@@ -62,21 +97,27 @@
   // Handle creating a session
   async function handleCreateSession() {
     const wsId = getOrCreateWorkspaceId();
+    const audienceToUse = selectedAudience === "all" ? null : selectedAudience;
 
     isCreating = true;
     try {
-      // Populate CRDT with current files before creating session
+      // Populate CRDT with current files before creating session (with audience filter)
       if (onBeforeHost) {
-        console.log("[ShareTab] Populating CRDT before hosting...");
-        await onBeforeHost();
+        console.log("[ShareTab] Populating CRDT before hosting with audience:", audienceToUse);
+        await onBeforeHost(audienceToUse);
       }
-      await createShareSession(wsId);
+      await createShareSession(wsId, preSessionReadOnly, audienceToUse);
       onSessionStart?.();
     } catch (e) {
       console.error("[ShareTab] Failed to create session:", e);
     } finally {
       isCreating = false;
     }
+  }
+
+  // Handle toggling read-only during session (host only)
+  function handleReadOnlyToggle() {
+    setSessionReadOnly(!readOnly);
   }
 
   // Handle joining a session
@@ -164,6 +205,37 @@
         <p class="text-xs text-muted-foreground">
           Share your workspace for real-time editing
         </p>
+      </div>
+
+      <!-- Session Options -->
+      <div class="space-y-3 p-3 rounded-md bg-muted/50 border border-border">
+        <!-- Read-only toggle -->
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            {#if preSessionReadOnly}
+              <Lock class="size-4 text-muted-foreground" />
+            {:else}
+              <LockOpen class="size-4 text-muted-foreground" />
+            {/if}
+            <span class="text-xs font-medium">Read-only mode</span>
+          </div>
+          <Switch bind:checked={preSessionReadOnly} />
+        </div>
+
+        <!-- Audience picker (only show if audiences exist) -->
+        {#if audiences.length > 0}
+          <div class="space-y-1.5">
+            <label for="share-audience-select" class="text-xs font-medium text-muted-foreground">
+              Share audience
+            </label>
+            <NativeSelect bind:value={selectedAudience} class="w-full" id="share-audience-select">
+              <option value="all">All files (no filter)</option>
+              {#each audiences as audience}
+                <option value={audience}>{audience}</option>
+              {/each}
+            </NativeSelect>
+          </div>
+        {/if}
       </div>
 
       <!-- Host Session Button -->
@@ -259,6 +331,27 @@
         </div>
       </div>
 
+      <!-- Audience info (if filtered) -->
+      {#if sessionAudience}
+        <div class="flex items-center gap-2 px-3 py-2 rounded-md bg-secondary/50 border border-border">
+          <span class="text-xs text-muted-foreground">Sharing:</span>
+          <span class="text-xs font-medium">"{sessionAudience}" audience only</span>
+        </div>
+      {/if}
+
+      <!-- Read-only toggle (host can change during session) -->
+      <div class="flex items-center justify-between px-1">
+        <div class="flex items-center gap-2">
+          {#if readOnly}
+            <Lock class="size-4 text-muted-foreground" />
+          {:else}
+            <LockOpen class="size-4 text-muted-foreground" />
+          {/if}
+          <span class="text-xs text-muted-foreground">Read-only mode</span>
+        </div>
+        <Switch checked={readOnly} onCheckedChange={handleReadOnlyToggle} />
+      </div>
+
       <!-- Peer Count -->
       <div class="flex items-center justify-between px-1">
         <span class="text-xs text-muted-foreground">Connected peers</span>
@@ -306,6 +399,14 @@
         </div>
       </div>
 
+      <!-- Read-only indicator -->
+      {#if readOnly}
+        <div class="flex items-center gap-2 px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/20">
+          <Lock class="size-4 text-amber-600" />
+          <span class="text-sm text-amber-600">View-only session</span>
+        </div>
+      {/if}
+
       <!-- Connection Status -->
       <div class="flex items-center gap-2 px-1">
         <div
@@ -326,7 +427,11 @@
 
       <!-- Guest Mode Notice -->
       <p class="text-xs text-muted-foreground text-center">
-        Changes sync in real-time. Your local workspace is not affected.
+        {#if readOnly}
+          View-only mode. You can browse but not edit.
+        {:else}
+          Changes sync in real-time. Your local workspace is not affected.
+        {/if}
       </p>
     </div>
   {/if}

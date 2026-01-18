@@ -5,12 +5,23 @@ updated: 2026-01-02T13:06:25-05:00
 part_of: README.md
 ---
 
-# Important!
+# Instructions for AI agents
 
-Please read the root README.md file for an overview of the codebase.
+## Entry points
 
-# Other instructions for AI agents
+Here is your "table of contents" for this repository. You should always read the root README.md first before doing anything in this codebase. For specific projects, you must read their respective "entry point" files. If you make changes, update these files to reflect the changes you make.
 
-If a user makes a request that requires knowledge of the codebase, please read the linked README files for each crate and app to understand the codebase, and then read the code for more specific information. Update the README files to reflect any changes you make.
+| Project | Entry point |
+|---------|-------------|
+| Entire workspace | README.md |
+| diaryx_core (core logic) | crates/diaryx_core/README.md |
+| Apps (GUI frontend for Diaryx) | apps/README.md |
+| Web app | apps/web/README.md |
+| Tauri app | apps/tauri/README.md |
+| CLI | crates/diaryx/README.md |
+| WASM build (backend for web app) | crates/diaryx_wasm/README.md |
+| Sync server for web app/Tauri | packages/sync-server/README.md |
 
-Because Diaryx is currently in alpha state, good codebase design is more important than backwards compatibility. Don't hesitate to suggest breaking changes if they would improve the codebase's design, reduce code duplication, or otherwise improve the codebase's maintainability.
+Not documented:
+- CI/workflows (read .yml files in .github/workflows if necessary)
+- Pre-commit files. Read `.pre-commit-config.yaml` if necessary.

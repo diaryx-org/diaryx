@@ -20,7 +20,7 @@ use diaryx_core::{
     crdt::{CrdtStorage, SqliteStorage},
     diaryx::Diaryx,
     error::SerializableError,
-    fs::{FileSystem, RealFileSystem, SyncToAsyncFs},
+    fs::{FileSystem, InMemoryFileSystem, RealFileSystem, SyncToAsyncFs},
     workspace::Workspace,
 };
 use serde::{Deserialize, Serialize};
@@ -83,6 +83,36 @@ impl Default for CrdtState {
     }
 }
 
+/// State for guest mode - holds an in-memory filesystem when active.
+///
+/// When a Tauri user joins a share session as a guest, this state holds
+/// the in-memory filesystem that all file operations are routed through.
+/// This prevents guest session files from affecting the user's local workspace.
+pub struct GuestModeState {
+    /// Whether guest mode is currently active
+    pub active: Mutex<bool>,
+    /// The in-memory filesystem used during guest mode
+    pub filesystem: Mutex<Option<InMemoryFileSystem>>,
+    /// The join code of the current guest session
+    pub join_code: Mutex<Option<String>>,
+}
+
+impl GuestModeState {
+    pub fn new() -> Self {
+        Self {
+            active: Mutex::new(false),
+            filesystem: Mutex::new(None),
+            join_code: Mutex::new(None),
+        }
+    }
+}
+
+impl Default for GuestModeState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Helper function to safely acquire a mutex lock without panicking.
 ///
 /// Returns a SerializableError if the mutex is poisoned, instead of panicking.
@@ -132,13 +162,43 @@ pub async fn execute<R: Runtime>(
         std::mem::discriminant(&cmd)
     );
 
-    // Create a Diaryx instance, using CRDT state if available
-    let diaryx = {
-        let crdt_state = app.state::<CrdtState>();
-        let storage_guard = acquire_lock(&crdt_state.storage)?;
+    // Check if we're in guest mode and get the appropriate filesystem
+    // We need to extract data from mutex guards before any async points
+    let guest_state = app.state::<GuestModeState>();
+    let is_guest = *acquire_lock(&guest_state.active)?;
 
-        if let Some(storage) = storage_guard.as_ref() {
-            match Diaryx::with_crdt_load(SyncToAsyncFs::new(RealFileSystem), Arc::clone(storage)) {
+    // Execute command using appropriate filesystem
+    let response = if is_guest {
+        // Guest mode: use in-memory filesystem (no CRDT storage for guests)
+        // Clone the filesystem and release the guard before await
+        let mem_fs = {
+            let fs_guard = acquire_lock(&guest_state.filesystem)?;
+            fs_guard
+                .as_ref()
+                .cloned()
+                .ok_or_else(|| SerializableError {
+                    kind: "GuestModeError".to_string(),
+                    message: "Guest mode active but no filesystem initialized".to_string(),
+                    path: None,
+                })?
+        };
+        log::debug!("[execute] Using in-memory filesystem (guest mode)");
+        let diaryx = Diaryx::new(SyncToAsyncFs::new(mem_fs));
+        diaryx.execute(cmd).await.map_err(|e| {
+            log::error!("[execute] Command execution failed: {:?}", e);
+            e.to_serializable()
+        })?
+    } else {
+        // Normal mode: use real filesystem with optional CRDT support
+        // Extract storage and release guard before await
+        let crdt_state = app.state::<CrdtState>();
+        let storage = {
+            let storage_guard = acquire_lock(&crdt_state.storage)?;
+            storage_guard.as_ref().map(Arc::clone)
+        };
+
+        let diaryx = if let Some(storage) = storage {
+            match Diaryx::with_crdt_load(SyncToAsyncFs::new(RealFileSystem), storage) {
                 Ok(d) => {
                     log::debug!("[execute] Using Diaryx with CRDT support");
                     d
@@ -154,14 +214,13 @@ pub async fn execute<R: Runtime>(
         } else {
             log::debug!("[execute] No CRDT storage configured, using basic Diaryx");
             Diaryx::new(SyncToAsyncFs::new(RealFileSystem))
-        }
-    };
+        };
 
-    // Execute the command
-    let response = diaryx.execute(cmd).await.map_err(|e| {
-        log::error!("[execute] Command execution failed: {:?}", e);
-        e.to_serializable()
-    })?;
+        diaryx.execute(cmd).await.map_err(|e| {
+            log::error!("[execute] Command execution failed: {:?}", e);
+            e.to_serializable()
+        })?
+    };
 
     // Serialize the response to JSON
     let response_json = serde_json::to_string(&response).map_err(|e| {
@@ -2274,4 +2333,77 @@ pub async fn resolve_sync_conflict<R: Runtime>(
     );
 
     Ok(true)
+}
+
+// ============================================================================
+// Guest Mode Commands
+// ============================================================================
+
+/// Start guest mode for a share session.
+///
+/// Creates an in-memory filesystem for all operations. This allows the user
+/// to join a share session without affecting their local workspace files.
+/// All synced files will be stored in memory only.
+#[tauri::command]
+pub async fn start_guest_mode<R: Runtime>(
+    app: AppHandle<R>,
+    join_code: String,
+) -> Result<(), SerializableError> {
+    let guest_state = app.state::<GuestModeState>();
+    let mut active = acquire_lock(&guest_state.active)?;
+    let mut filesystem = acquire_lock(&guest_state.filesystem)?;
+    let mut code = acquire_lock(&guest_state.join_code)?;
+
+    if *active {
+        return Err(SerializableError {
+            kind: "GuestModeError".to_string(),
+            message: "Already in guest mode".to_string(),
+            path: None,
+        });
+    }
+
+    *active = true;
+    *filesystem = Some(InMemoryFileSystem::new());
+    *code = Some(join_code.clone());
+
+    log::info!("[guest_mode] Started guest mode for session: {}", join_code);
+    Ok(())
+}
+
+/// End guest mode and clear in-memory data.
+///
+/// This clears the in-memory filesystem and returns the app to normal mode.
+/// All files from the guest session will be discarded.
+#[tauri::command]
+pub async fn end_guest_mode<R: Runtime>(app: AppHandle<R>) -> Result<(), SerializableError> {
+    let guest_state = app.state::<GuestModeState>();
+    let mut active = acquire_lock(&guest_state.active)?;
+    let mut filesystem = acquire_lock(&guest_state.filesystem)?;
+    let mut code = acquire_lock(&guest_state.join_code)?;
+
+    let was_active = *active;
+    let join_code = code.clone();
+
+    *filesystem = None;
+    *active = false;
+    *code = None;
+
+    if was_active {
+        log::info!(
+            "[guest_mode] Ended guest mode for session: {}",
+            join_code.unwrap_or_else(|| "unknown".to_string())
+        );
+    } else {
+        log::debug!("[guest_mode] end_guest_mode called but guest mode was not active");
+    }
+
+    Ok(())
+}
+
+/// Check if guest mode is currently active.
+#[tauri::command]
+pub fn is_guest_mode<R: Runtime>(app: AppHandle<R>) -> Result<bool, SerializableError> {
+    let guest_state = app.state::<GuestModeState>();
+    let active = acquire_lock(&guest_state.active)?;
+    Ok(*active)
 }

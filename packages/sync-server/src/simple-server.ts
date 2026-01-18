@@ -34,6 +34,7 @@ interface Session {
   documents: Map<string, Y.Doc>;
   connections: Map<string, Set<WebSocket>>; // docName -> connections
   createdAt: Date;
+  readOnly: boolean;
 }
 
 interface ClientInfo {
@@ -188,7 +189,7 @@ function broadcast(docName: string, sessionCode: string | null, update: Uint8Arr
 // Session Management
 // ============================================================================
 
-function createSession(workspaceId: string, ownerId: string, ownerWs: WebSocket): Session {
+function createSession(workspaceId: string, ownerId: string, ownerWs: WebSocket, readOnly: boolean = false): Session {
   const joinCode = generateJoinCode();
   const session: Session = {
     joinCode,
@@ -199,10 +200,24 @@ function createSession(workspaceId: string, ownerId: string, ownerWs: WebSocket)
     documents: new Map(),
     connections: new Map(),
     createdAt: new Date(),
+    readOnly,
   };
   sessions.set(joinCode, session);
-  console.log(`[Server] Created session ${joinCode} for workspace ${workspaceId}`);
+  console.log(`[Server] Created session ${joinCode} for workspace ${workspaceId}, readOnly: ${readOnly}`);
   return session;
+}
+
+function broadcastToGuests(session: Session, message: object, excludeWs?: WebSocket): void {
+  const msgStr = JSON.stringify(message);
+  for (const [, guestWs] of session.guests) {
+    if (guestWs !== excludeWs && guestWs.readyState === WebSocket.OPEN) {
+      guestWs.send(msgStr);
+    }
+  }
+}
+
+function isSessionOwner(session: Session, ws: WebSocket): boolean {
+  return session.ownerWs === ws;
 }
 
 function joinSession(joinCode: string, guestId: string, guestWs: WebSocket): Session | null {
@@ -269,6 +284,8 @@ wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
   if (action === 'create') {
     const workspaceId = url.searchParams.get('workspaceId');
     const ownerId = url.searchParams.get('ownerId') || 'unknown';
+    const readOnlyParam = url.searchParams.get('readOnly');
+    const readOnly = readOnlyParam === 'true';
 
     if (!workspaceId) {
       ws.send(JSON.stringify({ type: 'error', message: 'Missing workspaceId parameter' }));
@@ -276,11 +293,12 @@ wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
       return;
     }
 
-    const session = createSession(workspaceId, ownerId, ws);
+    const session = createSession(workspaceId, ownerId, ws, readOnly);
     ws.send(JSON.stringify({
       type: 'session_created',
       joinCode: session.joinCode,
       workspaceId: session.workspaceId,
+      readOnly: session.readOnly,
     }));
 
     console.log(`[Server] Owner connected to session ${session.joinCode}`);
@@ -293,6 +311,23 @@ wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
           ws.send(JSON.stringify({
             type: 'peers',
             count: getSessionPeerCount(session),
+          }));
+        } else if (msg.type === 'set_read_only') {
+          // Host can toggle read-only during session
+          const newReadOnly = msg.readOnly === true;
+          session.readOnly = newReadOnly;
+          console.log(`[Server] Session ${session.joinCode} readOnly set to ${newReadOnly}`);
+
+          // Broadcast to all guests
+          broadcastToGuests(session, {
+            type: 'read_only_changed',
+            readOnly: newReadOnly,
+          });
+
+          // Confirm to host
+          ws.send(JSON.stringify({
+            type: 'read_only_changed',
+            readOnly: newReadOnly,
           }));
         }
       } catch {
@@ -331,6 +366,7 @@ wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
       type: 'session_joined',
       joinCode: session.joinCode,
       workspaceId: session.workspaceId,
+      readOnly: session.readOnly,
     }));
 
     // Notify owner if connected
@@ -362,6 +398,8 @@ wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
   if (docName) {
     let doc: Y.Doc;
     let effectiveSessionCode: string | null = null;
+    let session: Session | undefined = undefined;
+    let isOwner = false;
 
     if (sessionCode) {
       // Session-scoped document
@@ -370,11 +408,16 @@ wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
         return;
       }
 
-      const session = sessions.get(sessionCode);
+      session = sessions.get(sessionCode);
       if (!session) {
         ws.close(4004, 'Session not found');
         return;
       }
+
+      // Check if this connection is from the owner
+      // The owner passes their ownerId in the URL, guests don't have it
+      const clientId = url.searchParams.get('ownerId');
+      isOwner = clientId !== null && clientId === session.ownerId;
 
       doc = getOrCreateSessionDoc(session, docName);
       addSessionConnection(session, docName, ws);
@@ -400,6 +443,17 @@ wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
       try {
         const update = new Uint8Array(data as ArrayBuffer);
         console.log(`[Server] Received update: ${update.length} bytes on ${docName}`);
+
+        // Enforce read-only: reject updates from guests when session is read-only
+        if (session && session.readOnly && !isOwner) {
+          console.log(`[Server] Rejecting update from guest in read-only session ${sessionCode}`);
+          // Send error message to the guest
+          ws.send(JSON.stringify({
+            type: 'error',
+            message: 'Session is read-only. You cannot make changes.',
+          }));
+          return;
+        }
 
         // Apply to server's Y.Doc
         Y.applyUpdate(doc, update);

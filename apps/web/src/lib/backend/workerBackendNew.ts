@@ -1,6 +1,6 @@
 /**
  * WorkerBackendNew - Main thread proxy for DiaryxBackend in Web Worker.
- * 
+ *
  * Uses the new native storage backends (OPFS/IndexedDB) directly,
  * eliminating the need for InMemoryFileSystem sync.
  */
@@ -16,7 +16,7 @@ import type {
 } from './interface';
 import { BackendEventEmitter } from './eventEmitter';
 import type { WorkerApi } from './wasmWorkerNew';
-import { getStorageType } from './storageType';
+import { getStorageType, type StorageType } from './storageType';
 
 export class WorkerBackendNew implements Backend {
   private worker: Worker | null = null;
@@ -24,34 +24,39 @@ export class WorkerBackendNew implements Backend {
   private eventEmitter = new BackendEventEmitter();
   private _ready = false;
 
-  async init(): Promise<void> {
+  /**
+   * Initialize the backend.
+   * @param storageTypeOverride Optional storage type to use instead of the default.
+   *                            Use 'memory' for guest mode (in-memory filesystem).
+   */
+  async init(storageTypeOverride?: StorageType): Promise<void> {
     // Create the worker
     this.worker = new Worker(
       new URL('./wasmWorkerNew.ts', import.meta.url),
       { type: 'module' }
     );
-    
+
     // Wrap with Comlink
     this.remote = Comlink.wrap<WorkerApi>(this.worker);
-    
+
     // Create message channel for events (future use)
     const { port1, port2 } = new MessageChannel();
-    
+
     // Listen for events from worker
     port1.onmessage = (event) => {
       this.eventEmitter.emit(event.data);
     };
     port1.start();
-    
-    // Initialize the backend with storage type
-    const storageType = getStorageType();
+
+    // Initialize the backend with storage type (use override if provided)
+    const storageType = storageTypeOverride ?? getStorageType();
     console.log(`[WorkerBackendNew] Initializing with storage: ${storageType}`);
-    
+
     if (storageType === 'filesystem-access') {
       // For FSA, we need to get or request the directory handle
       const { getStoredFileSystemHandle, storeFileSystemHandle } = await import('./storageType');
       let handle = await getStoredFileSystemHandle();
-      
+
       if (!handle) {
         // No stored handle - prompt user to select a folder
         // Note: showDirectoryPicker requires user gesture, so this will fail if not triggered by user action
@@ -78,12 +83,12 @@ export class WorkerBackendNew implements Backend {
           }
         }
       }
-      
+
       await this.remote.initWithDirectoryHandle(Comlink.transfer(port2, [port2]), handle!);
     } else {
       await this.remote.init(Comlink.transfer(port2, [port2]), storageType);
     }
-    
+
     this._ready = true;
     console.log('[WorkerBackendNew] Ready');
   }
@@ -142,7 +147,7 @@ export class WorkerBackendNew implements Backend {
     // Custom reviver to handle BigInt deserialization for known fields
     return JSON.parse(responseJson, (key, value) => {
       // Convert numeric timestamps back to BigInt for specific fields
-      if ((key === 'modified_at' || key === 'uploaded_at' || key === 'size' || 
+      if ((key === 'modified_at' || key === 'uploaded_at' || key === 'size' ||
            key === 'timestamp' || key === 'update_id') && typeof value === 'number') {
         return BigInt(value);
       }
@@ -160,11 +165,11 @@ export class WorkerBackendNew implements Backend {
   findRootIndex = (dirPath?: string) => this.remote!.findRootIndex(dirPath);
   getDefaultWorkspacePath = () => this.remote!.getDefaultWorkspacePath();
 
-  getWorkspaceTree = (path?: string, depth?: number) => 
+  getWorkspaceTree = (path?: string, depth?: number) =>
     this.remote!.getWorkspaceTree(path, depth);
-  createWorkspace = (path?: string, name?: string) => 
+  createWorkspace = (path?: string, name?: string) =>
     this.remote!.createWorkspace(path, name);
-  getFilesystemTree = (path?: string, showHidden?: boolean) => 
+  getFilesystemTree = (path?: string, showHidden?: boolean) =>
     this.remote!.getFilesystemTree(path, showHidden);
 
   getEntry = (path: string) => this.remote!.getEntry(path);
@@ -178,10 +183,10 @@ export class WorkerBackendNew implements Backend {
   getFrontmatter = (path: string) => this.remote!.getFrontmatter(path);
   setFrontmatterProperty = (path: string, key: string, value: any) =>
     this.remote!.setFrontmatterProperty(path, key, value);
-  
+
   searchWorkspace = (pattern: string, options?: any) =>
     this.remote!.searchWorkspace(pattern, options);
-  
+
   validateWorkspace = (path?: string) => this.remote!.validateWorkspace(path);
 
   // File operations
@@ -195,7 +200,7 @@ export class WorkerBackendNew implements Backend {
   // =========================================================================
   // Stubs for methods not yet in new backend (delegate via call)
   // =========================================================================
-  
+
   async persist(): Promise<void> {
     // No-op: native storage persists automatically
   }
@@ -210,46 +215,46 @@ export class WorkerBackendNew implements Backend {
 
   attachEntryToParent = (entry: string, parent: string): Promise<string> =>
     this.remote!.call('attachToParent', [entry, parent]) as Promise<string>;
-  
+
   convertToIndex = (path: string): Promise<string> =>
     this.remote!.call('convertToIndex', [path]) as Promise<string>;
-  
+
   convertToLeaf = (path: string): Promise<string> =>
     this.remote!.call('convertToLeaf', [path]) as Promise<string>;
-  
+
   createChildEntry = (parentPath: string): Promise<string> =>
     this.remote!.call('createChildEntry', [parentPath]) as Promise<string>;
-  
+
   ensureDailyEntry = (): Promise<string> =>
     this.remote!.call('ensureDailyEntry', []) as Promise<string>;
 
   getAvailableAudiences = (rootPath: string): Promise<string[]> =>
     this.remote!.call('getAvailableAudiences', [rootPath]) as Promise<string[]>;
-  
+
   planExport = (rootPath: string, audience: string): Promise<any> =>
     this.remote!.call('planExport', [rootPath, audience]) as Promise<any>;
-  
+
   exportToMemory = (rootPath: string, audience: string): Promise<any> =>
     this.remote!.call('exportToMemory', [rootPath, audience]) as Promise<any>;
-  
+
   exportToHtml = (rootPath: string, audience: string): Promise<any> =>
     this.remote!.call('exportToHtml', [rootPath, audience]) as Promise<any>;
-  
+
   exportBinaryAttachments = (rootPath: string, audience: string): Promise<any> =>
     this.remote!.call('exportBinaryAttachments', [rootPath, audience]) as Promise<any>;
 
   getAttachments = (entryPath: string): Promise<string[]> =>
     this.remote!.call('listAttachments', [entryPath]) as Promise<string[]>;
-  
+
   uploadAttachment = (entryPath: string, filename: string, dataBase64: string): Promise<string> =>
     this.remote!.call('uploadAttachment', [entryPath, filename, dataBase64]) as Promise<string>;
-  
+
   deleteAttachment = (entryPath: string, attachmentPath: string): Promise<void> =>
     this.remote!.call('deleteAttachment', [entryPath, attachmentPath]) as Promise<void>;
-  
+
   getStorageUsage = (): Promise<any> =>
     this.remote!.call('getStorageUsage', []) as Promise<any>;
-  
+
   getAttachmentData = (entryPath: string, attachmentPath: string): Promise<Uint8Array> =>
     this.remote!.call('getAttachmentData', [entryPath, attachmentPath]) as Promise<Uint8Array>;
 
@@ -260,17 +265,17 @@ export class WorkerBackendNew implements Backend {
     const wsPath = await this.getDefaultWorkspacePath();
     return this.remote!.call('listTemplates', [wsPath]) as Promise<any>;
   };
-  
+
   getTemplate = async (name: string): Promise<string> => {
     const wsPath = await this.getDefaultWorkspacePath();
     return this.remote!.call('getTemplate', [name, wsPath]) as Promise<string>;
   };
-  
+
   saveTemplate = async (name: string, content: string): Promise<void> => {
     const wsPath = await this.getDefaultWorkspacePath();
     return this.remote!.call('saveTemplate', [name, content, wsPath]) as Promise<void>;
   };
-  
+
   deleteTemplate = async (name: string): Promise<void> => {
     const wsPath = await this.getDefaultWorkspacePath();
     return this.remote!.call('deleteTemplate', [name, wsPath]) as Promise<void>;
@@ -278,28 +283,28 @@ export class WorkerBackendNew implements Backend {
 
   validateFile = (filePath: string): Promise<any> =>
     this.remote!.call('validateFile', [filePath]) as Promise<any>;
-  
+
   fixBrokenPartOf = (filePath: string): Promise<any> =>
     this.remote!.call('fixBrokenPartOf', [filePath]) as Promise<any>;
-  
+
   fixBrokenContentsRef = (indexPath: string, target: string): Promise<any> =>
     this.remote!.call('fixBrokenContentsRef', [indexPath, target]) as Promise<any>;
-  
+
   fixBrokenAttachment = (filePath: string, attachment: string): Promise<any> =>
     this.remote!.call('fixBrokenAttachment', [filePath, attachment]) as Promise<any>;
-  
+
   fixNonPortablePath = (filePath: string, property: string, oldValue: string, newValue: string): Promise<any> =>
     this.remote!.call('fixNonPortablePath', [filePath, property, oldValue, newValue]) as Promise<any>;
-  
+
   fixUnlistedFile = (indexPath: string, filePath: string): Promise<any> =>
     this.remote!.call('fixUnlistedFile', [indexPath, filePath]) as Promise<any>;
-  
+
   fixOrphanBinaryFile = (indexPath: string, filePath: string): Promise<any> =>
     this.remote!.call('fixOrphanBinaryFile', [indexPath, filePath]) as Promise<any>;
-  
+
   fixMissingPartOf = (filePath: string, indexPath: string): Promise<any> =>
     this.remote!.call('fixMissingPartOf', [filePath, indexPath]) as Promise<any>;
-  
+
   fixAll = (validationResult: any): Promise<any> =>
     this.remote!.call('fixAll', [validationResult]) as Promise<any>;
 
@@ -382,3 +387,20 @@ export class WorkerBackendNew implements Backend {
   };
 }
 
+// ============================================================================
+// Factory Functions
+// ============================================================================
+
+/**
+ * Create a new backend for guest mode with in-memory storage.
+ *
+ * This creates a fresh WorkerBackendNew instance that uses in-memory storage,
+ * which is cleared when the session ends. Used for web guests in share sessions.
+ *
+ * @returns A new backend initialized with in-memory storage
+ */
+export async function createGuestBackend(): Promise<WorkerBackendNew> {
+  const backend = new WorkerBackendNew();
+  await backend.init('memory');
+  return backend;
+}

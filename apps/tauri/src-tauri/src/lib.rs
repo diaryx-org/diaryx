@@ -6,7 +6,7 @@
 /// Where all the Tauri `invoke` functions are defined.
 mod commands;
 
-use commands::CrdtState;
+use commands::{CrdtState, GuestModeState};
 
 /// Cloud backup targets (S3, Google Drive, etc.)
 mod cloud;
@@ -47,6 +47,8 @@ pub fn run() {
         .plugin(tauri_plugin_google_auth::init())
         // CRDT state for version history and sync
         .manage(CrdtState::new())
+        // Guest mode state for share sessions
+        .manage(GuestModeState::new())
         .invoke_handler(tauri::generate_handler![
             // ============================================================
             // UNIFIED COMMAND API - All operations go through execute()
@@ -88,6 +90,10 @@ pub fn run() {
             commands::start_import_upload,
             commands::append_import_chunk,
             commands::finish_import_upload,
+            // Guest Mode (for share sessions)
+            commands::start_guest_mode,
+            commands::end_guest_mode,
+            commands::is_guest_mode,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

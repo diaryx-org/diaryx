@@ -2,16 +2,15 @@
 title: Diaryx
 description: Repository for the Diaryx project
 author: adammharris
-version: v0.9.1
+version: v0.10.0
 updated: 2026-01-10T13:50:20-05:00
 contents:
-  - crates/diaryx/README.md
-  - crates/diaryx_core/README.md
-  - crates/diaryx_wasm/README.md
+  - crates/README.md
   - apps/README.md
   - LICENSE.md
-  - roadmap.md
+  - ROADMAP.md
   - AGENTS.md
+  - packages/sync-server/README.md
 audience:
   - public
   - developers

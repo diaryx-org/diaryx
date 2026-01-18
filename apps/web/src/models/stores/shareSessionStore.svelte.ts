@@ -43,6 +43,13 @@ let hostName = $state<string | null>(null);
 // WebSocket connection for session management
 let sessionWs = $state<WebSocket | null>(null);
 
+// Session options
+let readOnly = $state(false);
+let audience = $state<string | null>(null);
+
+// Guest backend type - 'memory' means using in-memory FS (no path prefixing needed)
+let guestBackendType = $state<'memory' | 'opfs' | null>(null);
+
 // ============================================================================
 // Store Factory
 // ============================================================================
@@ -60,12 +67,17 @@ export function getShareSessionStore() {
     get peers() { return peers; },
     get hostName() { return hostName; },
     get sessionWs() { return sessionWs; },
+    get guestBackendType() { return guestBackendType; },
+    get readOnly() { return readOnly; },
+    get audience() { return audience; },
     get isHosting() { return mode === 'hosting'; },
     get isGuest() { return mode === 'guest'; },
     get isIdle() { return mode === 'idle'; },
+    /** True if guest is using in-memory storage (no path prefixing needed) */
+    get usesInMemoryStorage() { return mode === 'guest' && guestBackendType === 'memory'; },
 
     // Start hosting a session
-    startHosting(code: string, wsId: string) {
+    startHosting(code: string, wsId: string, isReadOnly: boolean = false, selectedAudience: string | null = null) {
       mode = 'hosting';
       joinCode = code;
       workspaceId = wsId;
@@ -74,17 +86,31 @@ export function getShareSessionStore() {
       error = null;
       peerCount = 0;
       peers = [];
+      readOnly = isReadOnly;
+      audience = selectedAudience;
     },
 
     // Join as guest
-    startGuest(code: string, wsId: string, host?: string) {
+    startGuest(code: string, wsId: string, host?: string, backendType: 'memory' | 'opfs' = 'memory', isReadOnly: boolean = false) {
       mode = 'guest';
       joinCode = code;
       workspaceId = wsId;
       hostName = host ?? null;
+      guestBackendType = backendType;
       connected = true;
       connecting = false;
       error = null;
+      readOnly = isReadOnly;
+    },
+
+    // Set read-only mode (host can toggle during session)
+    setReadOnly(value: boolean) {
+      readOnly = value;
+    },
+
+    // Set audience filter (only before session starts)
+    setAudience(value: string | null) {
+      audience = value;
     },
 
     // Set connecting state
@@ -146,6 +172,9 @@ export function getShareSessionStore() {
       peers = [];
       hostName = null;
       sessionWs = null;
+      guestBackendType = null;
+      readOnly = false;
+      audience = null;
     },
 
     // Reset to idle (internal use)
@@ -160,6 +189,9 @@ export function getShareSessionStore() {
       peers = [];
       hostName = null;
       sessionWs = null;
+      guestBackendType = null;
+      readOnly = false;
+      audience = null;
     },
   };
 }

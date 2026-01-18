@@ -1,43 +1,21 @@
+---
+title: Diaryx Sync Server
+author: adammharris
+part_of: ../../README.md
+---
+
 # Diaryx Sync Server
 
-A Hocuspocus-based Y.js collaboration server for Diaryx cross-device sync.
+A custom Y.js Websocket server to enable live sync for the Diaryx web (or Tauri) apps.
 
 ## Development
 
 ```bash
 # Install dependencies
-npm install
+bun install
 
 # Start development server
-npm run dev
+bun run dev
 ```
 
 Server runs on `ws://localhost:1234` by default.
-
-## Deployment
-
-Can be deployed to Railway, Render, or Fly.io.
-
-### Environment Variables
-
-- `PORT` - Server port (default: 1234)
-- `DATABASE_PATH` - Path to SQLite database file (default: sync.db)
-
-### Railway
-
-```bash
-railway up
-```
-
-### Render
-
-1. Create a new Web Service
-2. Set build command: `npm install && npm run build`
-3. Set start command: `npm start`
-
-### Fly.io
-
-```bash
-fly launch
-fly deploy
-```

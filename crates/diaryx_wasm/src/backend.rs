@@ -39,7 +39,7 @@ use std::sync::Arc;
 use diaryx_core::crdt::{CrdtStorage, MemoryStorage};
 use diaryx_core::diaryx::Diaryx;
 use diaryx_core::frontmatter;
-use diaryx_core::fs::AsyncFileSystem;
+use diaryx_core::fs::{AsyncFileSystem, InMemoryFileSystem, SyncToAsyncFs};
 use diaryx_core::workspace::Workspace;
 use js_sys::Promise;
 use wasm_bindgen::prelude::*;
@@ -59,6 +59,8 @@ enum StorageBackend {
     IndexedDb(IndexedDbFileSystem),
     /// File System Access API - user-selected directory on their real filesystem
     Fsa(FsaFileSystem),
+    /// In-memory filesystem - used for guest mode in share sessions (web only)
+    InMemory(SyncToAsyncFs<InMemoryFileSystem>),
 }
 
 impl Clone for StorageBackend {
@@ -67,6 +69,7 @@ impl Clone for StorageBackend {
             StorageBackend::Opfs(fs) => StorageBackend::Opfs(fs.clone()),
             StorageBackend::IndexedDb(fs) => StorageBackend::IndexedDb(fs.clone()),
             StorageBackend::Fsa(fs) => StorageBackend::Fsa(fs.clone()),
+            StorageBackend::InMemory(fs) => StorageBackend::InMemory(fs.clone()),
         }
     }
 }
@@ -81,6 +84,7 @@ impl AsyncFileSystem for StorageBackend {
             StorageBackend::Opfs(fs) => fs.read_to_string(path),
             StorageBackend::IndexedDb(fs) => fs.read_to_string(path),
             StorageBackend::Fsa(fs) => fs.read_to_string(path),
+            StorageBackend::InMemory(fs) => fs.read_to_string(path),
         }
     }
 
@@ -93,6 +97,7 @@ impl AsyncFileSystem for StorageBackend {
             StorageBackend::Opfs(fs) => fs.write_file(path, content),
             StorageBackend::IndexedDb(fs) => fs.write_file(path, content),
             StorageBackend::Fsa(fs) => fs.write_file(path, content),
+            StorageBackend::InMemory(fs) => fs.write_file(path, content),
         }
     }
 
@@ -105,6 +110,7 @@ impl AsyncFileSystem for StorageBackend {
             StorageBackend::Opfs(fs) => fs.create_new(path, content),
             StorageBackend::IndexedDb(fs) => fs.create_new(path, content),
             StorageBackend::Fsa(fs) => fs.create_new(path, content),
+            StorageBackend::InMemory(fs) => fs.create_new(path, content),
         }
     }
 
@@ -113,6 +119,7 @@ impl AsyncFileSystem for StorageBackend {
             StorageBackend::Opfs(fs) => fs.delete_file(path),
             StorageBackend::IndexedDb(fs) => fs.delete_file(path),
             StorageBackend::Fsa(fs) => fs.delete_file(path),
+            StorageBackend::InMemory(fs) => fs.delete_file(path),
         }
     }
 
@@ -124,6 +131,7 @@ impl AsyncFileSystem for StorageBackend {
             StorageBackend::Opfs(fs) => fs.list_md_files(dir),
             StorageBackend::IndexedDb(fs) => fs.list_md_files(dir),
             StorageBackend::Fsa(fs) => fs.list_md_files(dir),
+            StorageBackend::InMemory(fs) => fs.list_md_files(dir),
         }
     }
 
@@ -132,6 +140,7 @@ impl AsyncFileSystem for StorageBackend {
             StorageBackend::Opfs(fs) => fs.exists(path),
             StorageBackend::IndexedDb(fs) => fs.exists(path),
             StorageBackend::Fsa(fs) => fs.exists(path),
+            StorageBackend::InMemory(fs) => fs.exists(path),
         }
     }
 
@@ -143,6 +152,7 @@ impl AsyncFileSystem for StorageBackend {
             StorageBackend::Opfs(fs) => fs.create_dir_all(path),
             StorageBackend::IndexedDb(fs) => fs.create_dir_all(path),
             StorageBackend::Fsa(fs) => fs.create_dir_all(path),
+            StorageBackend::InMemory(fs) => fs.create_dir_all(path),
         }
     }
 
@@ -151,6 +161,7 @@ impl AsyncFileSystem for StorageBackend {
             StorageBackend::Opfs(fs) => fs.is_dir(path),
             StorageBackend::IndexedDb(fs) => fs.is_dir(path),
             StorageBackend::Fsa(fs) => fs.is_dir(path),
+            StorageBackend::InMemory(fs) => fs.is_dir(path),
         }
     }
 
@@ -163,6 +174,7 @@ impl AsyncFileSystem for StorageBackend {
             StorageBackend::Opfs(fs) => fs.move_file(from, to),
             StorageBackend::IndexedDb(fs) => fs.move_file(from, to),
             StorageBackend::Fsa(fs) => fs.move_file(from, to),
+            StorageBackend::InMemory(fs) => fs.move_file(from, to),
         }
     }
 
@@ -174,6 +186,7 @@ impl AsyncFileSystem for StorageBackend {
             StorageBackend::Opfs(fs) => fs.read_binary(path),
             StorageBackend::IndexedDb(fs) => fs.read_binary(path),
             StorageBackend::Fsa(fs) => fs.read_binary(path),
+            StorageBackend::InMemory(fs) => fs.read_binary(path),
         }
     }
 
@@ -186,6 +199,7 @@ impl AsyncFileSystem for StorageBackend {
             StorageBackend::Opfs(fs) => fs.write_binary(path, content),
             StorageBackend::IndexedDb(fs) => fs.write_binary(path, content),
             StorageBackend::Fsa(fs) => fs.write_binary(path, content),
+            StorageBackend::InMemory(fs) => fs.write_binary(path, content),
         }
     }
 
@@ -197,6 +211,7 @@ impl AsyncFileSystem for StorageBackend {
             StorageBackend::Opfs(fs) => fs.list_files(dir),
             StorageBackend::IndexedDb(fs) => fs.list_files(dir),
             StorageBackend::Fsa(fs) => fs.list_files(dir),
+            StorageBackend::InMemory(fs) => fs.list_files(dir),
         }
     }
 }
@@ -259,11 +274,35 @@ impl DiaryxBackend {
         match storage_type.to_lowercase().as_str() {
             "opfs" => Self::create_opfs().await,
             "indexeddb" | "indexed_db" => Self::create_indexed_db().await,
+            "memory" | "inmemory" | "in_memory" => Self::create_in_memory(),
             _ => Err(JsValue::from_str(&format!(
                 "Unknown storage type: {}",
                 storage_type
             ))),
         }
+    }
+
+    /// Create a new DiaryxBackend with in-memory storage.
+    ///
+    /// This is used for guest mode in share sessions. Files are stored
+    /// only in memory and are cleared when the session ends.
+    ///
+    /// ## Use Cases
+    /// - Guest mode in share sessions (web)
+    /// - Testing
+    ///
+    /// ## Example
+    /// ```javascript
+    /// const backend = DiaryxBackend.createInMemory();
+    /// // Files are stored in memory only
+    /// ```
+    #[wasm_bindgen(js_name = "createInMemory")]
+    pub fn create_in_memory() -> std::result::Result<DiaryxBackend, JsValue> {
+        let mem_fs = InMemoryFileSystem::new();
+        let async_fs = SyncToAsyncFs::new(mem_fs);
+        let fs = Rc::new(StorageBackend::InMemory(async_fs));
+        let crdt_storage: Arc<dyn CrdtStorage> = Arc::new(MemoryStorage::new());
+        Ok(Self { fs, crdt_storage })
     }
 
     /// Create a new DiaryxBackend from a user-selected directory handle.

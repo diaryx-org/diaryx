@@ -2,6 +2,7 @@
   import type { EntryData } from "./backend";
   import type { RustCrdtApi } from "$lib/crdt/rustCrdtApi";
   import type { CrdtHistoryEntry, FileDiff } from "$lib/backend/generated";
+  import type { Api } from "$lib/backend/api";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import * as Alert from "$lib/components/ui/alert";
@@ -62,8 +63,10 @@
     rustApi?: RustCrdtApi | null;
     onHistoryRestore?: () => void;
     // Share props
-    onBeforeHost?: () => Promise<void>;
+    onBeforeHost?: (audience: string | null) => Promise<void>;
     onOpenEntry?: (path: string) => Promise<void>;
+    // API for share tab
+    api?: Api | null;
   }
 
   let {
@@ -82,6 +85,7 @@
     onHistoryRestore,
     onBeforeHost,
     onOpenEntry,
+    api = null,
   }: Props = $props();
 
   // Tab state: "properties" | "history" | "share"
@@ -446,7 +450,7 @@
         <Tooltip.Content>Collapse panel ({modKey}])</Tooltip.Content>
       {/if}
     </Tooltip.Root>
-    
+
     <!-- Tab Toggle -->
     <div class="flex items-center gap-1 bg-muted rounded-md p-0.5">
       <button
@@ -875,7 +879,7 @@
       {/if}
     {:else if activeTab === "share"}
       <!-- Share Tab -->
-      <ShareTab {onBeforeHost} {onOpenEntry} />
+      <ShareTab {onBeforeHost} {onOpenEntry} {api} />
     {/if}
   </div>
 

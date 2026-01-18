@@ -18,6 +18,8 @@ export interface SimpleSyncBridgeOptions {
   sessionCode?: string;
   /** Send full state to server on connect (for session hosts) */
   sendInitialState?: boolean;
+  /** Owner ID for read-only enforcement (required for hosts) */
+  ownerId?: string;
   /** Callback when connection status changes */
   onStatusChange?: (connected: boolean) => void;
   /** Callback when synced with server */
@@ -31,6 +33,7 @@ export class SimpleSyncBridge {
   private doc: Y.Doc;
   private sessionCode?: string;
   private sendInitialState: boolean;
+  private ownerId?: string;
   private onStatusChange?: (connected: boolean) => void;
   private onSynced?: () => void;
   private updateHandler: ((update: Uint8Array, origin: unknown) => void) | null = null;
@@ -45,6 +48,7 @@ export class SimpleSyncBridge {
     this.doc = options.doc;
     this.sessionCode = options.sessionCode;
     this.sendInitialState = options.sendInitialState ?? false;
+    this.ownerId = options.ownerId;
     this.onStatusChange = options.onStatusChange;
     this.onSynced = options.onSynced;
   }
@@ -56,11 +60,14 @@ export class SimpleSyncBridge {
     if (this.destroyed) return;
     if (this.ws?.readyState === WebSocket.OPEN) return;
 
-    // Build URL with doc name and optional session code
+    // Build URL with doc name, optional session code, and ownerId
     const url = new URL(this.serverUrl);
     url.searchParams.set('doc', this.docName);
     if (this.sessionCode) {
       url.searchParams.set('session', this.sessionCode);
+    }
+    if (this.ownerId) {
+      url.searchParams.set('ownerId', this.ownerId);
     }
 
     console.log(`[SimpleSyncBridge] Connecting to: ${url.toString()}`);

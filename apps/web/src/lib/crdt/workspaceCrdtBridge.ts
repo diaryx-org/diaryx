@@ -48,6 +48,9 @@ let currentUpdateHandler: ((update: Uint8Array, origin: unknown) => void) | null
 // Track the current map observer to prevent duplicate listeners
 let currentMapObserver: ((event: Y.YMapEvent<unknown>, transaction: Y.Transaction) => void) | null = null;
 
+// Track if the host has completed initial setup (to prevent onSynced from triggering redundant syncFullStateToRust)
+let hostInitialSetupComplete = false;
+
 // Per-file mutex to prevent race conditions on concurrent updates
 // Map of path -> Promise that resolves when the lock is released
 const fileLocks = new Map<string, Promise<void>>();
@@ -134,20 +137,23 @@ function setupRemoteUpdateHandler(): void {
 
     console.log('[WorkspaceCrdtBridge] Map changes from server:', event.changes.keys.size, 'keys');
 
-    // Process only the changed keys
-    event.changes.keys.forEach(async (change, path) => {
-      if (change.action === 'delete') {
-        console.log('[WorkspaceCrdtBridge] File deleted:', path);
-        notifyFileChange(path, null);
-        return;
+    // Process changed keys sequentially to avoid race conditions
+    // Using async IIFE with for...of instead of forEach to properly handle async operations
+    (async () => {
+      for (const [path, change] of event.changes.keys) {
+        if (change.action === 'delete') {
+          console.log('[WorkspaceCrdtBridge] File deleted:', path);
+          notifyFileChange(path, null);
+          continue;
+        }
+
+        // Get the updated value
+        const value = filesMap.get(path);
+        if (!value) continue;
+
+        await processFileChange(path, value as Record<string, unknown>);
       }
-
-      // Get the updated value
-      const value = filesMap.get(path);
-      if (!value) return;
-
-      await processFileChange(path, value as Record<string, unknown>);
-    });
+    })();
   };
 
   filesMap.observe(currentMapObserver);
@@ -623,6 +629,9 @@ export async function startSessionSync(sessionServerUrl: string, sessionCode: st
 
   _sessionCode = sessionCode;
 
+  // Reset host setup flag when starting a new session
+  hostInitialSetupComplete = false;
+
   // Disconnect existing bridge if any
   if (syncBridge) {
     syncBridge.destroy();
@@ -661,6 +670,9 @@ export async function startSessionSync(sessionServerUrl: string, sessionCode: st
       filesMap.set(path, metadataObj);
     }
     console.log('[WorkspaceCrdtBridge] Y.Doc now has', filesMap.size, 'files');
+
+    // Mark host setup as complete - prevents onSynced from triggering redundant syncFullStateToRust
+    hostInitialSetupComplete = true;
   }
 
   const workspaceDocName = 'workspace';
@@ -677,7 +689,13 @@ export async function startSessionSync(sessionServerUrl: string, sessionCode: st
       console.log('[WorkspaceCrdtBridge] Session sync status:', connected);
     },
     onSynced: async () => {
-      console.log('[WorkspaceCrdtBridge] Session sync complete');
+      console.log('[WorkspaceCrdtBridge] Session sync complete, hostInitialSetupComplete:', hostInitialSetupComplete);
+      // Skip full state sync for hosts who already set up their state
+      // This prevents the host's editor from being overwritten when receiving first guest update
+      if (hostInitialSetupComplete) {
+        console.log('[WorkspaceCrdtBridge] Host already synced, skipping syncFullStateToRust');
+        return;
+      }
       await syncFullStateToRust();
     },
   });
@@ -695,6 +713,7 @@ export function stopSessionSync(): void {
   console.log('[WorkspaceCrdtBridge] Stopping session sync');
 
   _sessionCode = null;
+  hostInitialSetupComplete = false;
 
   // Remove handlers
   if (workspaceYDoc) {
@@ -963,6 +982,7 @@ export async function destroyWorkspace(): Promise<void> {
 
   rustApi = null;
   initialized = false;
+  hostInitialSetupComplete = false;
   fileChangeCallbacks.clear();
 }
 

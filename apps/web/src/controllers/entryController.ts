@@ -13,7 +13,8 @@
 import { tick } from 'svelte';
 import type { EntryData, TreeNode, Api } from '../lib/backend';
 import type { JsonValue } from '../lib/backend/generated/serde_json/JsonValue';
-import { entryStore, uiStore, collaborationStore } from '../models/stores';
+// FileMetadata type is used by workspaceCrdtBridge imports
+import { entryStore, uiStore, collaborationStore, workspaceStore, shareSessionStore } from '../models/stores';
 import {
   revokeBlobUrls,
   transformAttachmentPaths,
@@ -21,6 +22,16 @@ import {
   updateCrdtFileMetadata,
   addFileToCrdt,
 } from '../models/services';
+import {
+  isDeviceSyncActive,
+  renameFile,
+  deleteFile,
+  renameFileInYDoc,
+  deleteFileInYDoc,
+  syncBodyContent,
+  updateFileBodyInYDoc,
+  getFileMetadata,
+} from '../lib/crdt/workspaceCrdtBridge';
 // Note: Collaboration sync now happens at workspace level via workspaceCrdtBridge
 
 /**
@@ -484,5 +495,254 @@ export async function addProperty(
   } catch (e) {
     uiStore.setError(e instanceof Error ? e.message : String(e));
     return false;
+  }
+}
+
+/**
+ * Rename an entry.
+ *
+ * @param api - API instance
+ * @param path - Current path of the entry
+ * @param newFilename - New filename (with .md extension)
+ * @param onSuccess - Callback after successful rename (e.g., refresh tree)
+ * @returns The new path of the renamed entry
+ */
+export async function renameEntry(
+  api: Api,
+  path: string,
+  newFilename: string,
+  onSuccess?: () => Promise<void>
+): Promise<string> {
+  const newPath = await api.renameEntry(path, newFilename);
+
+  // Sync rename to Rust CRDT for device-to-device sync
+  if (isDeviceSyncActive() || (shareSessionStore.mode !== 'idle' && shareSessionStore.joinCode)) {
+    await renameFile(path, newPath); // Rust CRDT for device sync
+    const metadata = await getFileMetadata(newPath);
+    if (metadata) {
+      renameFileInYDoc(path, newPath, metadata); // Y.js for live share
+    }
+  }
+
+  if (onSuccess) {
+    await onSuccess();
+  }
+
+  return newPath;
+}
+
+/**
+ * Duplicate an entry.
+ *
+ * @param api - API instance
+ * @param path - Path of the entry to duplicate
+ * @param onSuccess - Callback after successful duplication (e.g., refresh tree)
+ * @returns The path of the new duplicated entry
+ */
+export async function duplicateEntry(
+  api: Api,
+  path: string,
+  onSuccess?: () => Promise<void>
+): Promise<string> {
+  const newPath = await api.duplicateEntry(path);
+
+  // Update CRDT with new file - get parent from workspace store
+  const entry = await api.getEntry(newPath);
+  const parentPath = workspaceStore.getParentNodePath(path);
+  addFileToCrdt(newPath, entry.frontmatter, parentPath || null);
+
+  // Sync body content through Rust CRDT for device-to-device sync
+  await syncBodyContent(newPath, entry.content);
+
+  // Additionally update JS Y.Doc for live share sessions (Hocuspocus)
+  if (shareSessionStore.mode !== 'idle' && shareSessionStore.joinCode) {
+    updateFileBodyInYDoc(newPath, entry.content);
+  }
+
+  if (onSuccess) {
+    await onSuccess();
+  }
+
+  return newPath;
+}
+
+/**
+ * Delete an entry with CRDT sync support.
+ * This is an enhanced version that includes CRDT sync.
+ *
+ * @param api - API instance
+ * @param path - Path of the entry to delete
+ * @param currentEntryPath - Path of the currently open entry (to clear if same)
+ * @param onSuccess - Callback after successful deletion (e.g., refresh tree)
+ * @returns True if deletion was confirmed and completed
+ */
+export async function deleteEntryWithSync(
+  api: Api,
+  path: string,
+  currentEntryPath: string | null,
+  onSuccess?: () => Promise<void>
+): Promise<boolean> {
+  const confirm = window.confirm(
+    `Are you sure you want to delete "${path.split('/').pop()?.replace('.md', '')}"?`
+  );
+  if (!confirm) return false;
+
+  try {
+    await api.deleteEntry(path);
+
+    // Sync delete to Rust CRDT for device-to-device sync
+    if (isDeviceSyncActive() || (shareSessionStore.mode !== 'idle' && shareSessionStore.joinCode)) {
+      await deleteFile(path); // Rust CRDT for device sync
+      deleteFileInYDoc(path); // Y.js for live share
+    }
+
+    // If we deleted the currently open entry, clear it
+    if (currentEntryPath === path) {
+      entryStore.setCurrentEntry(null);
+      entryStore.markClean();
+    }
+
+    if (onSuccess) {
+      // Try to refresh - might fail if workspace state is temporarily inconsistent
+      try {
+        await onSuccess();
+      } catch (refreshError) {
+        console.warn('[EntryController] Error refreshing after delete:', refreshError);
+        // Try again after a short delay
+        setTimeout(async () => {
+          try {
+            if (onSuccess) await onSuccess();
+          } catch (e) {
+            console.error('[EntryController] Retry refresh failed:', e);
+          }
+        }, 500);
+      }
+    }
+
+    return true;
+  } catch (e) {
+    uiStore.setError(e instanceof Error ? e.message : String(e));
+    return false;
+  }
+}
+
+/**
+ * Create a child entry with CRDT sync support.
+ *
+ * @param api - API instance
+ * @param parentPath - Path of the parent entry
+ * @param onSuccess - Callback after successful creation (e.g., refresh tree, load children)
+ * @returns The path of the new child entry, or null on failure
+ */
+export async function createChildEntryWithSync(
+  api: Api,
+  parentPath: string,
+  onSuccess?: (newPath: string) => Promise<void>
+): Promise<string | null> {
+  try {
+    const newPath = await api.createChildEntry(parentPath);
+
+    // Update CRDT with new file
+    const entry = await api.getEntry(newPath);
+    addFileToCrdt(newPath, entry.frontmatter, parentPath);
+
+    // Sync body content through Rust CRDT for device-to-device sync
+    await syncBodyContent(newPath, entry.content);
+
+    // Additionally update JS Y.Doc for live share sessions (Hocuspocus)
+    if (shareSessionStore.mode !== 'idle' && shareSessionStore.joinCode) {
+      updateFileBodyInYDoc(newPath, entry.content);
+    }
+
+    if (onSuccess) {
+      await onSuccess(newPath);
+    }
+
+    return newPath;
+  } catch (e) {
+    uiStore.setError(e instanceof Error ? e.message : String(e));
+    return null;
+  }
+}
+
+/**
+ * Create a new entry with CRDT sync support.
+ *
+ * @param api - API instance
+ * @param path - Path for the new entry
+ * @param options - Options including title and template
+ * @param onSuccess - Callback after successful creation
+ * @returns The path of the new entry, or null on failure
+ */
+export async function createEntryWithSync(
+  api: Api,
+  path: string,
+  options: { title: string; template?: string },
+  onSuccess?: () => Promise<void>
+): Promise<string | null> {
+  try {
+    const newPath = await api.createEntry(path, options);
+
+    // Update CRDT with new file
+    const entry = await api.getEntry(newPath);
+    addFileToCrdt(newPath, entry.frontmatter, null);
+
+    // Sync body content through Rust CRDT for device-to-device sync
+    await syncBodyContent(newPath, entry.content);
+
+    // Additionally update JS Y.Doc for live share sessions (Hocuspocus)
+    if (shareSessionStore.mode !== 'idle' && shareSessionStore.joinCode) {
+      updateFileBodyInYDoc(newPath, entry.content);
+    }
+
+    if (onSuccess) {
+      await onSuccess();
+    }
+
+    return newPath;
+  } catch (e) {
+    uiStore.setError(e instanceof Error ? e.message : String(e));
+    return null;
+  } finally {
+    uiStore.closeNewEntryModal();
+  }
+}
+
+/**
+ * Save an entry with CRDT sync support.
+ *
+ * @param api - API instance
+ * @param currentEntry - The current entry being saved
+ * @param editorRef - Reference to the editor component
+ */
+export async function saveEntryWithSync(
+  api: Api,
+  currentEntry: EntryData | null,
+  editorRef: any
+): Promise<void> {
+  if (!currentEntry || !editorRef) return;
+  if (entryStore.isSaving) return; // Prevent concurrent saves
+
+  try {
+    entryStore.setSaving(true);
+    const markdownWithBlobUrls = editorRef.getMarkdown();
+    // Reverse-transform blob URLs back to attachment paths
+    const markdown = reverseBlobUrlsToAttachmentPaths(markdownWithBlobUrls || '');
+
+    // Save to backend
+    await api.saveEntry(currentEntry.path, markdown);
+    entryStore.markClean();
+
+    // Sync body content through Rust CRDT for device-to-device sync
+    await syncBodyContent(currentEntry.path, markdown);
+
+    // Additionally update JS Y.Doc for live share sessions (Hocuspocus)
+    if (shareSessionStore.mode !== 'idle' && shareSessionStore.joinCode) {
+      updateFileBodyInYDoc(currentEntry.path, markdown);
+    }
+  } catch (e) {
+    uiStore.setError(e instanceof Error ? e.message : String(e));
+  } finally {
+    entryStore.setSaving(false);
   }
 }

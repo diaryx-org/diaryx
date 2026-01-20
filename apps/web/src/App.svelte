@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy, tick } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { getBackend, isTauri } from "./lib/backend";
   import { createApi, type Api } from "./lib/backend/api";
   import type { JsonValue } from "./lib/backend/generated/serde_json/JsonValue";
@@ -16,14 +16,8 @@
     onSyncProgress,
     onSyncStatus,
     getTreeFromCrdt,
-    updateFileBodyInYDoc,
-    syncBodyContent,
     isDeviceSyncActive,
     renameFileInYDoc,
-    deleteFileInYDoc,
-    getFileMetadata,
-    renameFile,
-    deleteFile,
   } from "./lib/crdt/workspaceCrdtBridge";
   // Note: YDoc and HocuspocusProvider types are now handled by collaborationStore
   import LeftSidebar from "./lib/LeftSidebar.svelte";
@@ -61,13 +55,8 @@
   import {
     revokeBlobUrls,
     transformAttachmentPaths,
-    reverseBlobUrlsToAttachmentPaths,
-    trackBlobUrl,
-    computeRelativeAttachmentPath,
     initializeWorkspaceCrdt,
     updateCrdtFileMetadata,
-    addFileToCrdt,
-    joinShareSession,
   } from "./models/services";
 
   // Import controllers
@@ -76,6 +65,34 @@
     loadNodeChildren as loadNodeChildrenController,
     runValidation as runValidationController,
     validatePath,
+    openEntry as openEntryController,
+    saveEntryWithSync,
+    createChildEntryWithSync,
+    createEntryWithSync,
+    deleteEntryWithSync,
+    renameEntry as renameEntryController,
+    duplicateEntry as duplicateEntryController,
+    handleValidateWorkspace as validateWorkspaceHandler,
+    handleRefreshTree as refreshTreeHandler,
+    handleDuplicateCurrentEntry as duplicateCurrentEntryHandler,
+    handleRenameCurrentEntry as renameCurrentEntryHandler,
+    handleDeleteCurrentEntry as deleteCurrentEntryHandler,
+    handleMoveCurrentEntry as moveCurrentEntryHandler,
+    handleCreateChildUnderCurrent as createChildUnderCurrentHandler,
+    handleStartShareSession as startShareSessionHandler,
+    handleJoinShareSession as joinShareSessionHandler,
+    handleFindInFile,
+    handleWordCount as wordCountHandler,
+    handleImportFromClipboard as importFromClipboardHandler,
+    handleCopyAsMarkdown as copyAsMarkdownHandler,
+    handleAddAttachment as addAttachmentHandler,
+    handleAttachmentFileSelect as attachmentFileSelectHandler,
+    handleEditorFileDrop as editorFileDropHandler,
+    handleDeleteAttachment as deleteAttachmentHandler,
+    handleAttachmentInsert as attachmentInsertHandler,
+    handleMoveAttachment as moveAttachmentHandler,
+    populateCrdtBeforeHost,
+    handleLinkClick as linkClickHandler,
   } from "./controllers";
 
   // Dynamically import Editor to avoid SSR issues
@@ -138,7 +155,6 @@
   let isDailyEntry = $state(false);
 
   // Collaboration state - proxied from collaborationStore
-  let currentCollaborationPath = $derived(collaborationStore.currentCollaborationPath);
   let collaborationEnabled = $derived(collaborationStore.collaborationEnabled);
   let collaborationServerUrl = $derived(collaborationStore.collaborationServerUrl);
 
@@ -169,7 +185,6 @@
   }
 
   // Attachment state
-  let pendingAttachmentPath = $state("");
   let attachmentError: string | null = $state(null);
   let attachmentFileInput: HTMLInputElement | null = $state(null);
 
@@ -488,7 +503,7 @@
     }
   }
 
-  // Open an entry
+  // Open an entry - thin wrapper that handles auto-save and delegates to controller
   async function openEntry(path: string) {
     if (!api || !backend) return;
 
@@ -498,120 +513,19 @@
       await save();
     }
 
-    try {
-      entryStore.setLoading(true);
+    // Delegate to controller
+    await openEntryController(api, path, tree, collaborationEnabled);
 
-      // Cleanup previous blob URLs
-      revokeBlobUrls();
-
-      const entry = await api.getEntry(path);
-      // Normalize frontmatter to Object
-      entry.frontmatter = normalizeFrontmatter(entry.frontmatter);
-      currentEntry = entry;
-
-      titleError = null; // Clear any title error when switching files
-      console.log("[App] Loaded entry:", currentEntry);
-      console.log("[App] Frontmatter:", currentEntry?.frontmatter);
-      console.log(
-        "[App] Frontmatter keys:",
-        Object.keys(currentEntry?.frontmatter ?? {}),
-      );
-
-      // Transform attachment paths to blob URLs for display
-      if (currentEntry) {
-        displayContent = await transformAttachmentPaths(
-          currentEntry.content,
-          currentEntry.path,
-          api,
-        );
-
-        // Setup Y.js collaboration for this document
-        // Destroy the previous collaboration session to prevent stale data from corrupting other clients.
-        // We use destroyDocument with a delay to let TipTap plugins finish tearing down.
-        // IMPORTANT: Skip destruction if we're re-opening the same file (e.g., from remote sync callback)
-
-        // Calculate what the new collaboration path will be
-        let workspaceDir = tree?.path || "";
-        if (workspaceDir.endsWith("/"))
-          workspaceDir = workspaceDir.slice(0, -1);
-        if (
-          workspaceDir.endsWith("README.md") ||
-          workspaceDir.endsWith("index.md")
-        ) {
-          workspaceDir = workspaceDir.substring(
-            0,
-            workspaceDir.lastIndexOf("/"),
-          );
-        }
-        let newRelativePath = currentEntry.path;
-        if (workspaceDir && currentEntry.path.startsWith(workspaceDir)) {
-          newRelativePath = currentEntry.path.substring(
-            workspaceDir.length + 1,
-          );
-        }
-
-        // Update collaboration path tracking (sync happens at workspace level via workspaceCrdtBridge)
-        if (currentCollaborationPath && currentCollaborationPath !== newRelativePath) {
-          collaborationStore.clearCollaborationSession();
-          await tick();
-        }
-
-        // Track the collaboration path for this entry
-        // Note: Actual sync is handled by workspaceCrdtBridge, not per-document sessions
-        if (collaborationEnabled) {
-          collaborationStore.setCollaborationPath(newRelativePath);
-          console.log("[App] Collaboration path:", newRelativePath);
-        }
-      } else {
-        entryStore.setDisplayContent("");
-        collaborationStore.clearCollaborationSession();
-      }
-
-      entryStore.markClean();
-      uiStore.clearError();
-
-      // Check if this is a daily entry for prev/next navigation
-      if (api) {
-        isDailyEntry = await api.isDailyEntry(path);
-      }
-    } catch (e) {
-      uiStore.setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      entryStore.setLoading(false);
+    // Check if this is a daily entry for prev/next navigation
+    if (api) {
+      isDailyEntry = await api.isDailyEntry(path);
     }
   }
 
-  // Save current entry
+  // Save current entry - delegates to controller with sync support
   async function save() {
     if (!api || !currentEntry || !editorRef) return;
-    if (isSaving) return; // Prevent concurrent saves
-
-    try {
-      entryStore.setSaving(true);
-      const markdownWithBlobUrls = editorRef.getMarkdown();
-      // Reverse-transform blob URLs back to attachment paths
-      const markdown = reverseBlobUrlsToAttachmentPaths(
-        markdownWithBlobUrls || "",
-      );
-
-      // Note: saveEntry expects only the body content, not frontmatter.
-      // Frontmatter is preserved by the backend's save_content() method.
-      // Frontmatter changes are saved separately via setFrontmatterProperty().
-      await api.saveEntry(currentEntry.path, markdown);
-      entryStore.markClean();
-
-      // Sync body content through Rust CRDT for device-to-device sync (reliable path)
-      await syncBodyContent(currentEntry.path, markdown);
-
-      // Additionally update JS Y.Doc for live share sessions (Hocuspocus)
-      if (shareSessionStore.mode !== 'idle' && shareSessionStore.joinCode) {
-        updateFileBodyInYDoc(currentEntry.path, markdown);
-      }
-    } catch (e) {
-      uiStore.setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      entryStore.setSaving(false);
-    }
+    await saveEntryWithSync(api, currentEntry, editorRef);
   }
 
   // Cancel pending auto-save
@@ -739,64 +653,30 @@
     }
   }
 
+  // Create a child entry - delegates to controller with sync support
   async function handleCreateChildEntry(parentPath: string) {
     if (!api) return;
-    try {
-      const newPath = await api.createChildEntry(parentPath);
-
-      // Update CRDT with new file
-      const entry = await api.getEntry(newPath);
-      addFileToCrdt(newPath, entry.frontmatter, parentPath);
-
-      // Sync body content through Rust CRDT for device-to-device sync (reliable path)
-      await syncBodyContent(newPath, entry.content);
-
-      // Additionally update JS Y.Doc for live share sessions (Hocuspocus)
-      if (shareSessionStore.mode !== 'idle' && shareSessionStore.joinCode) {
-        updateFileBodyInYDoc(newPath, entry.content);
-      }
-
+    await createChildEntryWithSync(api, parentPath, async (path) => {
       await refreshTree();
-      // Also refresh the parent node directly to ensure deep nodes update correctly
-      // (refreshTree only fetches depth 2, so deeper nodes may still have stale data)
       await loadNodeChildren(parentPath);
-      await openEntry(newPath);
+      await openEntry(path);
       await runValidation();
-    } catch (e) {
-      uiStore.setError(e instanceof Error ? e.message : String(e));
-    }
+    });
   }
 
+  // Create a new entry - delegates to controller with sync support
   async function createNewEntry(path: string, title: string) {
     if (!api) return;
-    try {
-      // Get default template from settings
-      const defaultTemplate = typeof window !== "undefined"
-        ? localStorage.getItem("diaryx-default-template") || "note"
-        : "note";
-      const newPath = await api.createEntry(path, { title, template: defaultTemplate });
-
-      // Persist to IndexedDB immediately so file survives refresh
-
-      // Update CRDT with new file
-      const entry = await api.getEntry(newPath);
-      addFileToCrdt(newPath, entry.frontmatter, null);
-
-      // Sync body content through Rust CRDT for device-to-device sync (reliable path)
-      await syncBodyContent(newPath, entry.content);
-
-      // Additionally update JS Y.Doc for live share sessions (Hocuspocus)
-      if (shareSessionStore.mode !== 'idle' && shareSessionStore.joinCode) {
-        updateFileBodyInYDoc(newPath, entry.content);
-      }
-
+    // Get default template from settings
+    const defaultTemplate = typeof window !== "undefined"
+      ? localStorage.getItem("diaryx-default-template") || "note"
+      : "note";
+    const newPath = await createEntryWithSync(api, path, { title, template: defaultTemplate }, async () => {
       await refreshTree();
+    });
+    if (newPath) {
       await openEntry(newPath);
       await runValidation();
-    } catch (e) {
-      uiStore.setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      uiStore.closeNewEntryModal();
     }
   }
 
@@ -863,112 +743,45 @@
     }
   }
 
+  // Rename an entry - delegates to controller with sync support
   async function handleRenameEntry(path: string, newFilename: string): Promise<string> {
     if (!api) throw new Error("API not initialized");
-    // Find parent before rename (in case tree structure helps locate it)
     const parentPath = workspaceStore.getParentNodePath(path);
-    const newPath = await api.renameEntry(path, newFilename);
-
-    // Sync rename to Rust CRDT for device-to-device sync
-    // Note: Get metadata from NEW path since file has already been renamed
-    if (isDeviceSyncActive() || (shareSessionStore.mode !== 'idle' && shareSessionStore.joinCode)) {
-      await renameFile(path, newPath);  // Rust CRDT for device sync
-      const metadata = await getFileMetadata(newPath);
-      if (metadata) {
-        renameFileInYDoc(path, newPath, metadata);  // Y.js for live share
+    const newPath = await renameEntryController(api, path, newFilename, async () => {
+      await refreshTree();
+      if (parentPath) {
+        await loadNodeChildren(parentPath);
       }
-    }
-
-    await refreshTree();
-    // Refresh parent to ensure deep nodes update correctly
-    if (parentPath) {
-      await loadNodeChildren(parentPath);
-    }
-    await runValidation();
+      await runValidation();
+    });
     return newPath;
   }
 
+  // Duplicate an entry - delegates to controller with sync support
   async function handleDuplicateEntry(path: string): Promise<string> {
     if (!api) throw new Error("API not initialized");
-    // Find parent before duplicate
     const parentPath = workspaceStore.getParentNodePath(path);
-    const newPath = await api.duplicateEntry(path);
-
-    // Update CRDT with new file
-    const entry = await api.getEntry(newPath);
-    addFileToCrdt(newPath, entry.frontmatter, parentPath || null);
-
-    // Sync body content through Rust CRDT for device-to-device sync (reliable path)
-    await syncBodyContent(newPath, entry.content);
-
-    // Additionally update JS Y.Doc for live share sessions (Hocuspocus)
-    if (shareSessionStore.mode !== 'idle' && shareSessionStore.joinCode) {
-      updateFileBodyInYDoc(newPath, entry.content);
-    }
-
-    await refreshTree();
-    // Refresh parent to ensure deep nodes update correctly
-    if (parentPath) {
-      await loadNodeChildren(parentPath);
-    }
-    await runValidation();
+    const newPath = await duplicateEntryController(api, path, async () => {
+      await refreshTree();
+      if (parentPath) {
+        await loadNodeChildren(parentPath);
+      }
+      await runValidation();
+    });
     return newPath;
   }
 
+  // Delete an entry - delegates to controller with sync support
   async function handleDeleteEntry(path: string) {
     if (!api) return;
-    const confirm = window.confirm(
-      `Are you sure you want to delete "${path.split("/").pop()?.replace(".md", "")}"?`,
-    );
-    if (!confirm) return;
-
-    // Find the parent node BEFORE deleting (while the tree still has the entry)
     const parentPath = workspaceStore.getParentNodePath(path);
-
-    try {
-      await api.deleteEntry(path);
-
-      // Sync delete to Rust CRDT for device-to-device sync
-      if (isDeviceSyncActive() || (shareSessionStore.mode !== 'idle' && shareSessionStore.joinCode)) {
-        await deleteFile(path);  // Rust CRDT for device sync
-        deleteFileInYDoc(path);  // Y.js for live share
+    await deleteEntryWithSync(api, path, currentEntry?.path ?? null, async () => {
+      await refreshTree();
+      if (parentPath) {
+        await loadNodeChildren(parentPath);
       }
-
-      // If we deleted the currently open entry, clear it
-      if (currentEntry?.path === path) {
-        currentEntry = null;
-        isDirty = false;
-      }
-
-      // Try to refresh the tree - this might fail if workspace state is temporarily inconsistent
-      try {
-        await refreshTree();
-        // Also refresh the parent node directly to ensure deep nodes update correctly
-        // (refreshTree only fetches depth 2, so deeper nodes may still have stale data)
-        if (parentPath) {
-          await loadNodeChildren(parentPath);
-        }
-        await runValidation();
-      } catch (refreshError) {
-        console.warn("[App] Error refreshing tree after delete:", refreshError);
-        // Try again after a short delay
-        setTimeout(async () => {
-          try {
-            if (backend) {
-              await refreshTree();
-              if (parentPath) {
-                await loadNodeChildren(parentPath);
-              }
-              await runValidation();
-            }
-          } catch (e) {
-            console.error("[App] Retry tree refresh failed:", e);
-          }
-        }, 500);
-      }
-    } catch (e) {
-      uiStore.setError(e instanceof Error ? e.message : String(e));
-    }
+      await runValidation();
+    });
   }
 
   // Run workspace validation (delegates to controller)
@@ -1046,489 +859,116 @@
   }
 
   // ========================================================================
-  // Command Palette Handlers
+  // Command Palette Handlers - Thin wrappers that delegate to controllers
   // ========================================================================
 
-  // Validation with toast feedback
   async function handleValidateWorkspace() {
-    await runValidation();
-    const result = workspaceStore.validationResult;
-    if (result) {
-      const errorCount = result.errors?.length ?? 0;
-      const warningCount = result.warnings?.length ?? 0;
-      if (errorCount === 0 && warningCount === 0) {
-        toast.success("Workspace is valid", { description: "No issues found" });
-      } else {
-        toast.warning("Validation complete", {
-          description: `${errorCount} error(s), ${warningCount} warning(s) found`,
-        });
-      }
-    }
+    if (!api || !backend) return;
+    await validateWorkspaceHandler(api, tree, backend);
   }
 
-  // Refresh tree with toast
-  async function handleRefreshTree() {
-    await refreshTree();
-    toast.success("Tree refreshed");
+  async function handleRefreshTreeCmd() {
+    await refreshTreeHandler(refreshTree);
   }
 
-  // Duplicate current entry
   async function handleDuplicateCurrentEntry() {
-    if (!api || !currentEntry) {
-      toast.error("No entry selected");
-      return;
-    }
-    try {
-      const newPath = await handleDuplicateEntry(currentEntry.path);
-      await openEntry(newPath);
-      toast.success("Entry duplicated", { description: newPath.split("/").pop() });
-    } catch (e) {
-      toast.error("Failed to duplicate", { description: e instanceof Error ? e.message : String(e) });
-    }
+    if (!api) return;
+    await duplicateCurrentEntryHandler(api, currentEntry, handleDuplicateEntry, openEntry);
   }
 
-  // Rename current entry (prompt for new name)
   async function handleRenameCurrentEntry() {
-    if (!api || !currentEntry) {
-      toast.error("No entry selected");
-      return;
-    }
-    const currentName = currentEntry.path.split("/").pop()?.replace(".md", "") || "";
-    const newName = window.prompt("Enter new name:", currentName);
-    if (!newName || newName === currentName) return;
-
-    try {
-      const newPath = await handleRenameEntry(currentEntry.path, newName + ".md");
-      await openEntry(newPath);
-      toast.success("Entry renamed", { description: newName });
-    } catch (e) {
-      toast.error("Failed to rename", { description: e instanceof Error ? e.message : String(e) });
-    }
+    if (!api) return;
+    await renameCurrentEntryHandler(api, currentEntry, handleRenameEntry, openEntry);
   }
 
-  // Delete current entry
   async function handleDeleteCurrentEntry() {
-    if (!currentEntry) {
-      toast.error("No entry selected");
-      return;
-    }
-    await handleDeleteEntry(currentEntry.path);
+    await deleteCurrentEntryHandler(currentEntry, handleDeleteEntry);
   }
 
-  // Move current entry (prompt for new parent)
   async function handleMoveCurrentEntry() {
-    const entry = currentEntry;
-    const currentTree = tree;
-    if (!api || !entry || !currentTree) {
-      toast.error("No entry selected");
-      return;
-    }
-    // Collect all potential parent paths
-    const allEntries: string[] = [];
-    function collectPaths(node: typeof currentTree) {
-      if (!node) return;
-      // Only index files (with children) can be parents
-      if (node.children.length > 0 || node.path.endsWith("index.md") || node.path.endsWith("README.md")) {
-        allEntries.push(node.path);
-      }
-      node.children.forEach(collectPaths);
-    }
-    collectPaths(currentTree);
-
-    const parentOptions = allEntries
-      .filter(p => p !== entry.path)
-      .map(p => p.split("/").pop()?.replace(".md", "") || p)
-      .join(", ");
-
-    const newParentName = window.prompt(
-      `Move "${entry.path.split("/").pop()?.replace(".md", "")}" to which parent?\n\nAvailable: ${parentOptions}`
-    );
-    if (!newParentName) return;
-
-    // Find the matching parent path
-    const newParentPath = allEntries.find(p =>
-      p.split("/").pop()?.replace(".md", "").toLowerCase() === newParentName.toLowerCase()
-    );
-    if (!newParentPath) {
-      toast.error("Parent not found", { description: `"${newParentName}" is not a valid parent` });
-      return;
-    }
-
-    try {
-      await handleMoveEntry(entry.path, newParentPath);
-      toast.success("Entry moved", { description: `Moved to ${newParentName}` });
-    } catch (e) {
-      toast.error("Failed to move", { description: e instanceof Error ? e.message : String(e) });
-    }
+    if (!api) return;
+    await moveCurrentEntryHandler(api, currentEntry, tree, handleMoveEntry);
   }
 
-  // Create child entry under current
   async function handleCreateChildUnderCurrent() {
-    if (!currentEntry) {
-      toast.error("No entry selected");
-      return;
-    }
-    await handleCreateChildEntry(currentEntry.path);
-    toast.success("Child entry created");
+    await createChildUnderCurrentHandler(currentEntry, handleCreateChildEntry);
   }
 
-  // Start share session
   async function handleStartShareSession() {
-    if (shareSessionStore.mode !== 'idle') {
-      toast.info("Session already active", { description: "End current session first" });
-      return;
-    }
-    // Open right sidebar, navigate to share tab, and trigger session start
-    uiStore.setRightSidebarCollapsed(false);
-    requestedSidebarTab = "share";
-    // Wait for sidebar to render before triggering session start
-    await tick();
-    triggerStartSession = true;
+    await startShareSessionHandler(
+      (collapsed) => uiStore.setRightSidebarCollapsed(collapsed),
+      (tab) => { requestedSidebarTab = tab; },
+      (trigger) => { triggerStartSession = trigger; }
+    );
   }
 
-  // Join share session
-  async function handleJoinShareSession() {
-    if (shareSessionStore.mode !== 'idle') {
-      toast.info("Session already active", { description: "End current session first" });
-      return;
-    }
-    const joinCode = window.prompt("Enter join code:");
-    if (!joinCode?.trim()) return;
-
-    try {
-      workspaceStore.saveTreeState();
-      await joinShareSession(joinCode.trim());
-      toast.success("Joined session", { description: `Code: ${joinCode.trim()}` });
-    } catch (e) {
-      workspaceStore.clearSavedTreeState();
-      toast.error("Failed to join", { description: e instanceof Error ? e.message : String(e) });
-    }
+  async function handleJoinShareSessionCmd() {
+    await joinShareSessionHandler();
   }
 
-  // Find in file (trigger browser's find or show info)
-  function handleFindInFile() {
-    // Use browser's native find functionality
-    if (typeof window !== "undefined") {
-      // Try to trigger the browser's find dialog
-      // This works in most browsers
-      try {
-        // @ts-ignore - execCommand is deprecated but still works
-        document.execCommand('find');
-      } catch {
-        // Fallback: show keyboard shortcut hint
-        toast.info("Find in File", { description: "Use Cmd/Ctrl+F to search" });
-      }
-    }
-  }
-
-  // Word count for current entry
   function handleWordCount() {
-    if (!editorRef || !currentEntry) {
-      toast.error("No entry open");
-      return;
-    }
-    const markdown = editorRef.getMarkdown() || "";
-    const text = markdown.replace(/[#*_`~\[\]()>-]/g, " "); // Remove markdown syntax
-    const words = text.trim().split(/\s+/).filter((w: string) => w.length > 0).length;
-    const characters = text.length;
-    const lines = markdown.split("\n").length;
-
-    toast.info("Word Count", {
-      description: `${words.toLocaleString()} words · ${characters.toLocaleString()} characters · ${lines} lines`,
-      duration: 5000,
-    });
+    wordCountHandler(editorRef, currentEntry);
   }
 
-  // Import from clipboard
   async function handleImportFromClipboard() {
-    if (!api || !tree) {
-      toast.error("Workspace not ready");
-      return;
-    }
-    try {
-      const clipboardText = await navigator.clipboard.readText();
-      if (!clipboardText.trim()) {
-        toast.error("Clipboard is empty");
-        return;
-      }
-
-      // Create a new entry with clipboard content
-      const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      const newPath = `${tree.path.replace(/[^/]+\.md$/, "")}imported-${timestamp}.md`;
-
-      // Check if it has frontmatter, if not add a basic title
-      let content = clipboardText;
-      if (!clipboardText.trim().startsWith("---")) {
-        const title = `Imported ${new Date().toLocaleDateString()}`;
-        content = `---\ntitle: "${title}"\n---\n\n${clipboardText}`;
-      }
-
-      await api.createEntry(newPath, { title: `Imported ${timestamp}` });
-      await api.saveEntry(newPath, content);
-      await refreshTree();
-      await openEntry(newPath);
-      toast.success("Imported from clipboard", { description: `${clipboardText.length} characters` });
-    } catch (e) {
-      toast.error("Failed to import", { description: e instanceof Error ? e.message : String(e) });
-    }
+    if (!api) return;
+    await importFromClipboardHandler(api, tree, refreshTree, openEntry);
   }
 
-  // Copy current entry as markdown
   async function handleCopyAsMarkdown() {
-    if (!editorRef || !currentEntry) {
-      toast.error("No entry open");
-      return;
-    }
-    try {
-      const markdown = editorRef.getMarkdown() || "";
-      // Reverse blob URLs to attachment paths for clean export
-      const cleanMarkdown = reverseBlobUrlsToAttachmentPaths(markdown);
-      await navigator.clipboard.writeText(cleanMarkdown);
-      toast.success("Copied to clipboard", { description: `${cleanMarkdown.length} characters` });
-    } catch (e) {
-      toast.error("Failed to copy", { description: e instanceof Error ? e.message : String(e) });
-    }
+    await copyAsMarkdownHandler(editorRef, currentEntry);
   }
 
-  /**
-   * Populate the CRDT with files from the filesystem.
-   * Called before hosting a share session to ensure all files are available.
-   * @param audience - If provided, only include files accessible to this audience
-   */
-  async function populateCrdtBeforeHost(audience: string | null = null) {
-    if (!api || !tree) {
-      console.warn('[App] Cannot populate CRDT: api or tree not available');
-      return;
-    }
+  // ========================================================================
+  // Attachment Handlers - Thin wrappers that delegate to controllers
+  // ========================================================================
 
-    console.log('[App] Populating CRDT from filesystem before hosting, audience:', audience);
-
-    try {
-      // Use Rust command which handles audience filtering internally
-      const result = await api.initializeWorkspaceCrdt(tree.path, audience ?? undefined);
-      console.log('[App] CRDT populated:', result);
-    } catch (e) {
-      console.error('[App] Failed to populate CRDT:', e);
-    }
+  async function handlePopulateCrdtBeforeHost(audience: string | null = null) {
+    if (!api) return;
+    await populateCrdtBeforeHost(api, tree?.path ?? null, audience);
   }
 
-  // Handle add attachment from context menu
   function handleAddAttachment(entryPath: string) {
-    pendingAttachmentPath = entryPath;
-    attachmentError = null;
-    attachmentFileInput?.click();
+    addAttachmentHandler(entryPath, attachmentFileInput);
   }
 
-  // Handle file selection for attachment
   async function handleAttachmentFileSelect(event: Event) {
-    const input = event.target as HTMLInputElement;
-    const file = input.files?.[0];
-    if (!file || !api || !pendingAttachmentPath) return;
-
-    // Check size limit (10MB for all files)
-    const MAX_SIZE = 10 * 1024 * 1024;
-    if (file.size > MAX_SIZE) {
-      attachmentError = `File too large (${(file.size / 1024 / 1024).toFixed(1)}MB). Maximum is 10MB.`;
-      input.value = "";
-      return;
-    }
-
-    try {
-      // Convert file to base64
-      const dataBase64 = await fileToBase64(file);
-
-      // Upload attachment
-      const attachmentPath = await api.uploadAttachment(
-        pendingAttachmentPath,
-        file.name,
-        dataBase64,
-      );
-
-      // Attachments are synced as part of file metadata via CRDT events
-
-      // Refresh the entry if it's currently open
-      if (currentEntry?.path === pendingAttachmentPath) {
-        const entry = await api.getEntry(pendingAttachmentPath);
-        entry.frontmatter = normalizeFrontmatter(entry.frontmatter);
-        currentEntry = entry;
-
-        // If it's an image, also insert it into the editor at cursor
-        if (file.type.startsWith("image/") && editorRef) {
-          // Get the binary data and create blob URL
-          const data = await api.getAttachmentData(
-            currentEntry.path,
-            attachmentPath,
-          );
-          const blob = new Blob([new Uint8Array(data)], { type: file.type });
-          const blobUrl = URL.createObjectURL(blob);
-
-          // Track for cleanup
-          trackBlobUrl(attachmentPath, blobUrl);
-
-          // Insert image at cursor using Editor's insertImage method
-          editorRef.insertImage(blobUrl, file.name);
-        }
-      }
-
-      attachmentError = null;
-    } catch (e) {
-      attachmentError = e instanceof Error ? e.message : String(e);
-    }
-
-    input.value = "";
-    pendingAttachmentPath = "";
+    if (!api) return;
+    await attachmentFileSelectHandler(event, api, currentEntry, editorRef);
   }
 
-  // Convert file to base64
-  function fileToBase64(file: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const result = reader.result as string;
-        // Extract base64 part from data URL
-        const base64 = result.split(",")[1];
-        resolve(base64);
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-  }
-
-  // Handle file drop in Editor - upload and return blob URL for images
   async function handleEditorFileDrop(
     file: File,
   ): Promise<{ blobUrl: string; attachmentPath: string } | null> {
-    if (!api || !currentEntry) return null;
-
-    // Check size limit (10MB for all files)
-    const MAX_SIZE = 10 * 1024 * 1024;
-    if (file.size > MAX_SIZE) {
-      attachmentError = `File too large (${(file.size / 1024 / 1024).toFixed(1)}MB). Maximum is 10MB.`;
-      return null;
-    }
-
-    try {
-      const dataBase64 = await fileToBase64(file);
-      const attachmentPath = await api.uploadAttachment(
-        currentEntry.path,
-        file.name,
-        dataBase64,
-      );
-
-      // Attachments are synced as part of file metadata via CRDT events
-
-      // Refresh the entry to update attachments list
-      const entry = await api.getEntry(currentEntry.path);
-      entry.frontmatter = normalizeFrontmatter(entry.frontmatter);
-      currentEntry = entry;
-
-      // For images, create blob URL for display in editor
-      if (file.type.startsWith("image/")) {
-        const data = await api.getAttachmentData(
-          currentEntry.path,
-          attachmentPath,
-        );
-        // Use the file's actual MIME type when available, fall back to extension-based lookup
-        const ext = file.name.split(".").pop()?.toLowerCase() || "";
-        const mimeTypes: Record<string, string> = {
-          png: "image/png",
-          jpg: "image/jpeg",
-          jpeg: "image/jpeg",
-          gif: "image/gif",
-          webp: "image/webp",
-          svg: "image/svg+xml",
-          bmp: "image/bmp",
-          ico: "image/x-icon",
-        };
-        const mimeType = file.type || mimeTypes[ext] || "image/png";
-        const blob = new Blob([new Uint8Array(data)], { type: mimeType });
-        const blobUrl = URL.createObjectURL(blob);
-
-        // Track for cleanup
-        trackBlobUrl(attachmentPath, blobUrl);
-
-        return { blobUrl, attachmentPath };
-      }
-
-      // For non-image files, just return the path (no blob URL for editor display)
-      return { blobUrl: "", attachmentPath };
-    } catch (e) {
-      attachmentError = e instanceof Error ? e.message : String(e);
-      return null;
-    }
+    if (!api) return null;
+    return editorFileDropHandler(file, api, currentEntry);
   }
 
-  // Handle delete attachment from RightSidebar
   async function handleDeleteAttachment(attachmentPath: string) {
-    if (!api || !currentEntry) return;
-
-    try {
-      await api.deleteAttachment(currentEntry.path, attachmentPath);
-
-      // Attachments are synced as part of file metadata via CRDT events
-
-      // Refresh current entry to update attachments list
-      const entry = await api.getEntry(currentEntry.path);
-      entry.frontmatter = normalizeFrontmatter(entry.frontmatter);
-      currentEntry = entry;
-      attachmentError = null;
-    } catch (e) {
-      attachmentError = e instanceof Error ? e.message : String(e);
-    }
+    if (!api) return;
+    await deleteAttachmentHandler(attachmentPath, api, currentEntry);
   }
 
-  // Handle attachment selection from inline picker node
   function handleAttachmentInsert(selection: {
     path: string;
     isImage: boolean;
     blobUrl?: string;
     sourceEntryPath: string;
   }) {
-    if (!selection || !editorRef || !currentEntry) return;
-
-    const filename = selection.path.split("/").pop() || selection.path;
-
-    // Calculate relative path from current entry to the attachment
-    // This handles ancestor attachments correctly
-    const relativePath = computeRelativeAttachmentPath(
-      currentEntry.path,
-      selection.sourceEntryPath,
-      selection.path
-    );
-
-    // Always embed mode (link mode removed)
-    if (selection.isImage && selection.blobUrl) {
-      // Track the blob URL for reverse transformation on save
-      trackBlobUrl(relativePath, selection.blobUrl);
-      // Insert image with blob URL
-      editorRef.insertImage(selection.blobUrl, filename);
-    } else {
-      // For non-images or images without blob URL, insert markdown syntax
-      // This will be converted to blob URL by the attachment service when content is displayed
-      const markdown = `![${filename}](${relativePath})`;
-      editorRef.setContent(editorRef.getMarkdown() + `\n${markdown}\n`);
-    }
+    attachmentInsertHandler(selection, editorRef, currentEntry);
   }
 
   // Handle drag-drop: attach entry to new parent
   async function handleMoveEntry(entryPath: string, newParentPath: string) {
     if (!api) return;
-    if (entryPath === newParentPath) return; // Can't attach to self
+    if (entryPath === newParentPath) return;
 
     console.log(
       `[Drag-Drop] entryPath="${entryPath}" -> newParentPath="${newParentPath}"`,
     );
 
     try {
-      // Attach the entry to the new parent
-      // This will:
-      // - Add entry to newParent's `contents`
-      // - Set entry's `part_of` to point to newParent
       await api.attachEntryToParent(entryPath, newParentPath);
-
-      // CRDT is now automatically updated via backend event subscription
-      // (file:moved event triggers CRDT updates)
-
       await refreshTree();
       await runValidation();
     } catch (e) {
@@ -1536,30 +976,13 @@
     }
   }
 
-  // Handle moving an attachment from one entry to another
-  async function handleMoveAttachment(
+  async function handleMoveAttachmentWrapper(
     sourceEntryPath: string,
     targetEntryPath: string,
     attachmentPath: string
   ) {
     if (!api) return;
-    if (sourceEntryPath === targetEntryPath) return;
-
-    try {
-      await api.moveAttachment(sourceEntryPath, targetEntryPath, attachmentPath);
-
-      // Refresh current entry if it was affected
-      if (currentEntry?.path === sourceEntryPath || currentEntry?.path === targetEntryPath) {
-        const entry = await api.getEntry(currentEntry.path);
-        entry.frontmatter = normalizeFrontmatter(entry.frontmatter);
-        currentEntry = entry;
-      }
-
-      toast.success("Attachment moved successfully");
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      toast.error(`Failed to move attachment: ${message}`);
-    }
+    await moveAttachmentHandler(sourceEntryPath, targetEntryPath, attachmentPath, api, currentEntry);
   }
 
   // Handle frontmatter property changes
@@ -1734,85 +1157,10 @@
     );
   }
 
-  /**
-   * Handle link clicks in the editor.
-   * - Relative links (./file.md, ../folder/file.md) navigate to other notes
-   * - External links (http://, https://) open in a new tab
-   * - Broken relative links offer to create the file
-   */
+  // Handle link clicks in the editor - delegates to controller
   async function handleLinkClick(href: string) {
-    if (!href) return;
-
-    // External links - open in new tab
-    if (href.startsWith("http://") || href.startsWith("https://")) {
-      window.open(href, "_blank", "noopener,noreferrer");
-      return;
-    }
-
-    // Relative link - resolve against current file's directory
-    if (!currentEntry) return;
-
-    // Get the directory of the current file
-    const currentDir = currentEntry.path.substring(
-      0,
-      currentEntry.path.lastIndexOf("/"),
-    );
-
-    // Resolve the relative path
-    let targetPath: string;
-    if (href.startsWith("/")) {
-      // Absolute path from workspace root
-      const workspaceRoot =
-        tree?.path?.substring(0, tree.path.lastIndexOf("/")) || "";
-      targetPath = workspaceRoot + href;
-    } else {
-      // Relative path - resolve against current directory
-      const parts = [...currentDir.split("/"), ...href.split("/")];
-      const resolved: string[] = [];
-      for (const part of parts) {
-        if (part === "..") {
-          resolved.pop();
-        } else if (part !== "." && part !== "") {
-          resolved.push(part);
-        }
-      }
-      targetPath = resolved.join("/");
-    }
-
-    // Ensure .md extension
-    if (!targetPath.endsWith(".md")) {
-      targetPath += ".md";
-    }
-
-    // Try to open the entry
-    try {
-      if (api) {
-        // Check if file exists by trying to get it
-        const entry = await api.getEntry(targetPath);
-        if (entry) {
-          await openEntry(targetPath);
-          return;
-        }
-      }
-    } catch {
-      // File doesn't exist - offer to create it
-      const fileName = targetPath.split("/").pop() || "note.md";
-      const create = window.confirm(
-        `"${fileName}" doesn't exist.\n\nWould you like to create it?`,
-      );
-      if (create && api) {
-        try {
-          // Create the file with basic frontmatter
-          const title = fileName.replace(".md", "").replace(/-/g, " ");
-          await api.createEntry(targetPath, { title });
-          await refreshTree();
-          await openEntry(targetPath);
-        } catch (e) {
-          console.error("Failed to create entry:", e);
-          uiStore.setError(e instanceof Error ? e.message : String(e));
-        }
-      }
-    }
+    if (!api) return;
+    await linkClickHandler(href, api, currentEntry, tree, openEntry, refreshTree);
   }
 </script>
 
@@ -1840,14 +1188,14 @@
     if (exportPath) showExportDialog = true;
   }}
   onValidate={handleValidateWorkspace}
-  onRefreshTree={handleRefreshTree}
+  onRefreshTree={handleRefreshTreeCmd}
   onDuplicateEntry={handleDuplicateCurrentEntry}
   onRenameEntry={handleRenameCurrentEntry}
   onDeleteEntry={handleDeleteCurrentEntry}
   onMoveEntry={handleMoveCurrentEntry}
   onCreateChildEntry={handleCreateChildUnderCurrent}
   onStartShare={handleStartShareSession}
-  onJoinSession={handleJoinShareSession}
+  onJoinSession={handleJoinShareSessionCmd}
   onFindInFile={handleFindInFile}
   onWordCount={handleWordCount}
   onImportFromClipboard={handleImportFromClipboard}
@@ -1918,7 +1266,7 @@
       showExportDialog = true;
     }}
     onAddAttachment={handleAddAttachment}
-    onMoveAttachment={handleMoveAttachment}
+    onMoveAttachment={handleMoveAttachmentWrapper}
     onRemoveBrokenPartOf={handleRemoveBrokenPartOf}
     onRemoveBrokenContentsRef={handleRemoveBrokenContentsRef}
     onAttachUnlinkedEntry={handleAttachUnlinkedEntry}
@@ -2014,7 +1362,7 @@
         await openEntry(currentEntry.path);
       }
     }}
-    onBeforeHost={async (audience) => await populateCrdtBeforeHost(audience)}
+    onBeforeHost={async (audience) => await handlePopulateCrdtBeforeHost(audience)}
     onOpenEntry={async (path) => await openEntry(path)}
     {api}
     requestedTab={requestedSidebarTab}

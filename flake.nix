@@ -24,7 +24,15 @@
 
         craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
-        src = craneLib.cleanCargoSource (craneLib.path ./.);
+        src = lib.fileset.toSource {
+          root = ./.;
+          fileset = lib.fileset.unions [
+            # Include all standard Rust/Cargo files (the default)
+            (craneLib.fileset.commonCargoSources ./.)
+            # Explicitly include all Markdown files for documentation
+            (lib.fileset.fileFilter (file: file.hasExt "md") ./.)
+          ];
+        };
 
         commonArgs = {
           inherit src;

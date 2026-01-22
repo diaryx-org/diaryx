@@ -357,6 +357,14 @@ async function processRemoteUpdateForGuests(): Promise<void> {
 const lastKnownBodyContent = new Map<string, string>();
 
 /**
+ * Helper to check if an array-like value has actual content.
+ * Returns true if the value is null, undefined, or an empty array.
+ */
+function isEmptyOrNull(value: unknown[] | null | undefined): boolean {
+  return value == null || (Array.isArray(value) && value.length === 0);
+}
+
+/**
  * Process remote metadata updates for device sync (non-guest hosts).
  *
  * SIMPLIFIED: CRDT is the single source of truth.
@@ -365,6 +373,8 @@ const lastKnownBodyContent = new Map<string, string>();
  * With the BodyDoc architecture, body content is synced via per-file BodySyncBridges.
  * This function handles workspace metadata sync (title, part_of, contents, etc.)
  * and writes updated files to disk.
+ *
+ * SAFETY: Includes guards to prevent data loss when CRDT body is empty but disk has content.
  */
 async function processRemoteMetadataUpdates(): Promise<void> {
   if (!rustApi || !backendApi) return;
@@ -379,6 +389,7 @@ async function processRemoteMetadataUpdates(): Promise<void> {
   const allFiles = await rustApi.listFiles(true); // true = include deleted
   let updatedCount = 0;
   let deletedCount = 0;
+  let preservedCount = 0;
 
   for (const [path, metadata] of allFiles) {
     if (metadata.deleted) {
@@ -397,18 +408,59 @@ async function processRemoteMetadataUpdates(): Promise<void> {
       // File exists - write to disk with CRDT metadata and body
       let body = '';
       try {
-        body = await rustApi.getBodyContent(path);
+        body = await rustApi.getBodyContent(path) || '';
       } catch {
         body = '';
       }
 
-      await writeFileWithFrontmatter(path, metadata, body);
+      // SAFETY: If CRDT body is empty but file exists on disk with content,
+      // preserve disk content instead of overwriting with empty.
+      // NOTE: We do NOT write body back to CRDT here to avoid CRDT duplication
+      // issues when Y.js merges independent operations.
+      if (!body) {
+        try {
+          const diskEntry = await backendApi.getEntry(path);
+          if (diskEntry?.content && diskEntry.content.length > 0) {
+            console.log(`[WorkspaceCrdtBridge] Preserving disk body for ${path} (${diskEntry.content.length} chars)`);
+            body = diskEntry.content;
+            preservedCount++;
+          }
+        } catch {
+          // File doesn't exist on disk - proceed with empty body (new file)
+        }
+      }
+
+      // Merge with disk metadata to preserve local values where CRDT has null/empty
+      let finalMetadata = metadata;
+      try {
+        const diskEntry = await backendApi.getEntry(path);
+        if (diskEntry?.frontmatter) {
+          const fm = diskEntry.frontmatter;
+          // Use disk values as fallback when CRDT values are null or empty arrays
+          finalMetadata = {
+            title: metadata.title ?? (fm.title as string | null) ?? null,
+            part_of: metadata.part_of ?? (fm.part_of as string | null) ?? null,
+            // For arrays, also fall back to disk if CRDT has empty array
+            contents: isEmptyOrNull(metadata.contents) ? (fm.contents as string[] | null) ?? null : metadata.contents,
+            attachments: isEmptyOrNull(metadata.attachments) ? (fm.attachments as any[] | null) ?? [] : metadata.attachments,
+            deleted: metadata.deleted,
+            audience: isEmptyOrNull(metadata.audience) ? (fm.audience as string[] | null) ?? null : metadata.audience,
+            description: metadata.description ?? (fm.description as string | null) ?? null,
+            extra: metadata.extra ?? {},
+            modified_at: metadata.modified_at,
+          };
+        }
+      } catch {
+        // File doesn't exist on disk - use CRDT metadata as-is
+      }
+
+      await writeFileWithFrontmatter(path, finalMetadata, body);
       updatedCount++;
     }
   }
 
-  if (updatedCount > 0 || deletedCount > 0) {
-    console.log(`[WorkspaceCrdtBridge] Synced ${updatedCount} files, deleted ${deletedCount} files`);
+  if (updatedCount > 0 || deletedCount > 0 || preservedCount > 0) {
+    console.log(`[WorkspaceCrdtBridge] Synced ${updatedCount} files, deleted ${deletedCount} files, preserved ${preservedCount} body contents`);
   }
 }
 

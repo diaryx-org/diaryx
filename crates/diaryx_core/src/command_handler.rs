@@ -1326,7 +1326,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .await?;
 
                 // Collect all files with their metadata using iterative tree walk
-                let mut files_to_add: Vec<(String, crate::crdt::FileMetadata)> = Vec::new();
+                // (path, metadata, body_content)
+                let mut files_to_add: Vec<(String, crate::crdt::FileMetadata, String)> = Vec::new();
 
                 // Use a stack for iterative tree traversal
                 let mut stack: Vec<(&crate::workspace::TreeNode, Option<String>)> =
@@ -1477,7 +1478,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         })
                         .collect();
 
-                    // Build extra fields (everything not in core frontmatter + _body)
+                    // Build extra fields (everything not in core frontmatter)
+                    // Note: body content is stored in BodyDocs, NOT in extra._body
                     let mut extra: std::collections::HashMap<String, serde_json::Value> =
                         std::collections::HashMap::new();
                     for (key, value) in &parsed.frontmatter {
@@ -1496,10 +1498,9 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                             }
                         }
                     }
-                    // Include body content in extra._body
-                    if !parsed.body.is_empty() {
-                        extra.insert("_body".to_string(), serde_json::Value::String(parsed.body));
-                    }
+
+                    // Store body content separately for BodyDoc initialization
+                    let body_content = parsed.body;
 
                     // Use file mtime if available, otherwise current time
                     let modified_at =
@@ -1517,7 +1518,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         modified_at,
                     };
 
-                    files_to_add.push((path_str.clone(), metadata));
+                    files_to_add.push((path_str.clone(), metadata, body_content));
 
                     // Add children to stack (in reverse order to process in correct order)
                     for child in node.children.iter().rev() {
@@ -1529,18 +1530,60 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 let file_count = files_to_add.len();
                 let updated_count = files_updated_from_disk.len();
 
-                for (path, metadata) in files_to_add {
-                    if let Err(e) = crdt.set_file(&path, metadata) {
+                for (path, metadata, body) in &files_to_add {
+                    if let Err(e) = crdt.set_file(path, metadata.clone()) {
                         log::warn!(
                             "[InitializeWorkspaceCrdt] Failed to set file {}: {:?}",
                             path,
                             e
                         );
                     }
+
+                    // Initialize BodyDoc with body content from disk
+                    // IMPORTANT: Only set if BodyDoc is empty to avoid CRDT duplication
+                    // when merging with remote state that has the same content
+                    if !body.is_empty() {
+                        // Check if BodyDoc already has content
+                        let existing_content = crdt.get_body_content(path);
+                        let should_set = match &existing_content {
+                            Some(content) => content.is_empty(),
+                            None => true,
+                        };
+
+                        if should_set {
+                            if let Err(e) = crdt.set_body_content(path, body) {
+                                log::warn!(
+                                    "[InitializeWorkspaceCrdt] Failed to initialize body doc for {}: {:?}",
+                                    path,
+                                    e
+                                );
+                            } else {
+                                log::debug!(
+                                    "[InitializeWorkspaceCrdt] Initialized body doc for {} ({} chars)",
+                                    path,
+                                    body.len()
+                                );
+                            }
+                        } else {
+                            log::debug!(
+                                "[InitializeWorkspaceCrdt] Skipping body doc init for {} (already has {} chars)",
+                                path,
+                                existing_content.unwrap_or_default().len()
+                            );
+                        }
+                    }
                 }
 
                 // Save CRDT state
                 crdt.save()?;
+
+                // Save all body docs after initialization
+                if let Err(e) = crdt.save_all_body_docs() {
+                    log::warn!(
+                        "[InitializeWorkspaceCrdt] Failed to save body docs: {:?}",
+                        e
+                    );
+                }
 
                 let msg = if updated_count > 0 {
                     if audience.is_some() {

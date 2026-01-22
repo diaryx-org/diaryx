@@ -69,19 +69,6 @@ const pendingIntervals: Set<ReturnType<typeof setInterval>> = new Set();
 const pendingTimeouts: Set<ReturnType<typeof setTimeout>> = new Set();
 
 /**
- * Check if we should skip CRDT operations.
- *
- * Guests (both Tauri and web) skip CRDT operations because:
- * 1. Tauri guests use an in-memory filesystem without CRDT support
- * 2. Web guests have a separate backend, but rustApi points to the original
- * 3. Guests sync via Y.js WebSocket, not local CRDT storage
- * 4. Guest data is ephemeral - no need to persist to local CRDT
- */
-function shouldSkipCrdtOperations(): boolean {
-  return shareSessionStore.isGuest;
-}
-
-/**
  * Acquire a lock for a specific file path.
  * Returns a release function to call when done.
  * This prevents concurrent read-modify-write races on the same file.
@@ -195,8 +182,9 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
       },
       onRemoteUpdate: async () => {
         // Remote update received - write metadata to disk for device sync
-        // UI notifications are handled by FileSystemEvents from the Rust CRDT
         await processRemoteMetadataUpdates();
+        // Notify UI to refresh tree (FileSystemEvents don't fire for sync-originated changes)
+        notifyFileChange(null, null);
       },
     });
 
@@ -479,17 +467,22 @@ export async function startSessionSync(sessionServerUrl: string, sessionCode: st
       // For guests, write files to disk after initial sync
       if (!isHost) {
         await processRemoteUpdateForGuests();
+        // Notify UI to refresh tree (triggers App.svelte to build tree from CRDT)
+        notifySessionSync();
       }
     },
     onRemoteUpdate: async () => {
       // Remote update received - handle based on host/guest mode
-      // UI notifications are handled by FileSystemEvents from the Rust CRDT
       if (shareSessionStore.isGuest) {
         // Guests: write files to disk (in-memory storage)
         await processRemoteUpdateForGuests();
+        // Notify UI to refresh tree (triggers App.svelte to rebuild)
+        notifySessionSync();
       } else {
         // Hosts: write metadata to disk for device sync
         await processRemoteMetadataUpdates();
+        // Notify UI to refresh tree (FileSystemEvents don't fire for sync-originated changes)
+        notifyFileChange(null, null);
       }
     },
   });
@@ -803,46 +796,15 @@ export async function populateCrdtFromFiles(
  * Build a tree from CRDT file metadata.
  * This is used for guests who don't have files on disk but have synced metadata.
  *
- * For guests, builds tree from Y.Doc instead of Rust CRDT.
+ * Both hosts and guests read from Rust CRDT - the sync mechanism (RustSyncBridge)
+ * updates the Rust CRDT directly, so it contains the synced data for both.
  */
 export async function getTreeFromCrdt(): Promise<TreeNode | null> {
-  const skipCrdt = shouldSkipCrdtOperations();
+  // Both hosts and guests read from Rust CRDT
+  // (sync updates Rust CRDT directly via RustSyncBridge)
+  if (!rustApi) return null;
 
-  let files: [string, FileMetadata][];
-
-  if (skipCrdt) {
-    // For guests: build from Y.Doc instead of Rust CRDT
-    if (!workspaceYDoc) {
-      console.log('[WorkspaceCrdtBridge] getTreeFromCrdt: No Y.Doc available for guest');
-      return null;
-    }
-
-    const filesMap = workspaceYDoc.getMap('files');
-    console.log('[WorkspaceCrdtBridge] Building tree from Y.Doc for guest, files:', filesMap.size);
-
-    files = [];
-    for (const [path, value] of filesMap.entries()) {
-      const metadataObj = value as Record<string, unknown>;
-      if (metadataObj.deleted) continue; // Skip deleted files
-
-      const metadata: FileMetadata = {
-        title: (metadataObj.title as string | null) ?? null,
-        part_of: (metadataObj.part_of as string | null) ?? null,
-        contents: Array.isArray(metadataObj.contents) ? metadataObj.contents as string[] : null,
-        attachments: Array.isArray(metadataObj.attachments) ? metadataObj.attachments as BinaryRef[] : [],
-        deleted: false,
-        audience: Array.isArray(metadataObj.audience) ? metadataObj.audience as string[] : null,
-        description: (metadataObj.description as string | null) ?? null,
-        extra: (metadataObj.extra as FileMetadata['extra']) ?? {},
-        modified_at: metadataObj.modified_at ? BigInt(metadataObj.modified_at as number) : BigInt(Date.now()),
-      };
-      files.push([path, metadata]);
-    }
-  } else {
-    // For hosts: use Rust CRDT
-    if (!rustApi) return null;
-    files = await rustApi.listFiles(false);
-  }
+  const files = await rustApi.listFiles(false);
 
   if (files.length === 0) return null;
 

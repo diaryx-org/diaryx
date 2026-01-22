@@ -12,7 +12,7 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs {
-          inherit system;
+          localSystem = system;
           overlays = [ (import rust-overlay) ];
         };
 
@@ -36,6 +36,8 @@
 
         commonArgs = {
           inherit src;
+          pname = "diaryx";
+          version = "0.11.0";
           strictDeps = true;
 
           buildInputs = [

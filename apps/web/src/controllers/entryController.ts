@@ -22,7 +22,9 @@ import {
 import {
   ensureBodySync,
   closeBodySync,
+  getBodyContentFromCrdt,
 } from '../lib/crdt/workspaceCrdtBridge';
+import { shareSessionStore } from '../models/stores/shareSessionStore.svelte';
 // Note: CRDT sync for entry operations (save, create, delete, rename) is now handled by Rust.
 // TypeScript only manages body sync bridges for real-time collaboration.
 
@@ -86,6 +88,17 @@ export async function openEntry(
     // This is critical for new clients syncing from the server - without this,
     // files would appear empty because the body bridge wasn't created yet.
     await ensureBodySync(path);
+
+    // For guests, body content is in CRDT (not on disk) - read from CRDT after sync
+    if (shareSessionStore.isGuest) {
+      const crdtContent = await getBodyContentFromCrdt(path);
+      if (crdtContent !== null) {
+        console.log('[EntryController] Guest: Using body content from CRDT, length:', crdtContent.length);
+        entry.content = crdtContent;
+      } else {
+        console.log('[EntryController] Guest: No body content in CRDT for:', path);
+      }
+    }
 
     // Transform attachment paths to blob URLs for display
     if (entry) {

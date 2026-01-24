@@ -695,10 +695,38 @@ export async function getTreeFromCrdt(): Promise<TreeNode | null> {
   const fileMap = new Map(files);
   console.log('[WorkspaceCrdtBridge] Building tree from CRDT, files:', files.map(([p]) => p));
 
+  // Helper to resolve relative path against a base file's directory
+  function resolveRelativePath(basePath: string, relativePath: string): string {
+    // Get the directory of the base path
+    const lastSlash = basePath.lastIndexOf('/');
+    const baseDir = lastSlash >= 0 ? basePath.substring(0, lastSlash) : '';
+
+    // Join and normalize the path
+    const parts = baseDir ? baseDir.split('/') : [];
+    for (const segment of relativePath.split('/')) {
+      if (segment === '..') {
+        parts.pop();
+      } else if (segment !== '.' && segment !== '') {
+        parts.push(segment);
+      }
+    }
+    return parts.join('/');
+  }
+
+  // Helper to check if a part_of reference is valid (resolving relative paths)
+  function hasValidPartOf(path: string, partOf: string | null): boolean {
+    if (!partOf) return false;
+    // Try as-is first (absolute path)
+    if (fileMap.has(partOf)) return true;
+    // Try resolving as relative path
+    const resolved = resolveRelativePath(path, partOf);
+    return fileMap.has(resolved);
+  }
+
   // Find root files (files with no part_of, or part_of pointing to non-existent file)
   const rootFiles: string[] = [];
   for (const [path, metadata] of fileMap) {
-    if (!metadata.part_of || !fileMap.has(metadata.part_of)) {
+    if (!hasValidPartOf(path, metadata.part_of)) {
       rootFiles.push(path);
     }
   }
@@ -722,7 +750,12 @@ export async function getTreeFromCrdt(): Promise<TreeNode | null> {
     const children: TreeNode[] = [];
     if (metadata?.contents) {
       for (const childPath of metadata.contents) {
-        if (fileMap.has(childPath)) {
+        // Contents may be relative paths - resolve against parent's directory
+        const absoluteChildPath = resolveRelativePath(originalPath, childPath);
+        if (fileMap.has(absoluteChildPath)) {
+          children.push(buildNode(absoluteChildPath));
+        } else if (fileMap.has(childPath)) {
+          // Fallback: try as-is (in case it's already absolute)
           children.push(buildNode(childPath));
         }
       }
@@ -865,6 +898,22 @@ async function getOrCreateBodyBridge(filePath: string): Promise<SyncTransport | 
           console.log(`[BodySyncBridge] Could not load from disk for ${canonicalPath}:`, diskErr);
         }
       }
+
+      // For guests, read body content from CRDT and notify UI
+      // Guests don't write to disk, so content only exists in the CRDT after sync
+      if (shareSessionStore.isGuest && rustApi) {
+        try {
+          const bodyContent = await rustApi.getBodyContent(canonicalPath);
+          if (bodyContent && bodyContent.length > 0) {
+            console.log(`[BodySyncBridge] Guest: Notifying UI of synced body for ${canonicalPath}, length: ${bodyContent.length}`);
+            notifyBodyChange(canonicalPath, bodyContent);
+          } else {
+            console.log(`[BodySyncBridge] Guest: No body content in CRDT for ${canonicalPath}`);
+          }
+        } catch (err) {
+          console.warn(`[BodySyncBridge] Guest: Failed to read body from CRDT for ${canonicalPath}:`, err);
+        }
+      }
     },
     onContentChange: async (content) => {
       // Skip if this matches our last known content (avoid processing our own echoed changes)
@@ -924,6 +973,28 @@ export async function ensureBodySync(filePath: string): Promise<void> {
   const canonicalPath = getCanonicalPath(filePath);
   console.log('[WorkspaceCrdtBridge] ensureBodySync for:', canonicalPath);
   await getOrCreateBodyBridge(canonicalPath);
+}
+
+/**
+ * Get body content from the CRDT.
+ * This is useful for guests who don't have files on disk but need to read
+ * body content that was synced into the CRDT.
+ *
+ * @param filePath - The file path (can be storage path - will be converted to canonical)
+ * @returns The body content, or null if not available
+ */
+export async function getBodyContentFromCrdt(filePath: string): Promise<string | null> {
+  if (!rustApi) {
+    return null;
+  }
+  const canonicalPath = getCanonicalPath(filePath);
+  try {
+    const content = await rustApi.getBodyContent(canonicalPath);
+    return content || null;
+  } catch (err) {
+    console.warn('[WorkspaceCrdtBridge] Failed to get body content from CRDT:', err);
+    return null;
+  }
 }
 
 /**

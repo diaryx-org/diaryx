@@ -1736,6 +1736,8 @@ function handleFileSystemEvent(event: FileSystemEvent): void {
       break;
 
     case 'FileDeleted':
+      // Close body sync bridge for deleted file (cleanup)
+      closeBodySync(event.path);
       // File deleted - notify UI with null metadata
       notifyFileChange(event.path, null);
       // Trigger tree refresh for all users

@@ -17,6 +17,29 @@ use crate::fs::AsyncFileSystem;
 #[cfg(feature = "crdt")]
 use crate::crdt::FileMetadata;
 
+#[cfg(feature = "crdt")]
+use std::path::Component;
+
+/// Normalize a path by resolving a relative path against a base directory.
+/// Handles `.` and `..` components without filesystem access.
+/// Returns a forward-slash-separated path string suitable for CRDT keys.
+#[cfg(feature = "crdt")]
+fn normalize_contents_path(base_dir: &Path, relative: &str) -> String {
+    let joined = base_dir.join(relative);
+    let mut normalized: Vec<String> = Vec::new();
+    for component in joined.components() {
+        match component {
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::CurDir => {}
+            Component::Normal(s) => normalized.push(s.to_string_lossy().to_string()),
+            Component::RootDir | Component::Prefix(_) => {}
+        }
+    }
+    normalized.join("/")
+}
+
 impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     // =========================================================================
     // Path Conversion Helpers (Phase 1)
@@ -2111,13 +2134,20 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
 
+                    // Get the directory of the current file for resolving relative paths
+                    let file_dir = Path::new(&path_str).parent().unwrap_or(Path::new(""));
+
                     let contents: Option<Vec<String>> = parsed
                         .frontmatter
                         .get("contents")
                         .and_then(|v| v.as_sequence())
                         .map(|seq| {
                             seq.iter()
-                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                .filter_map(|v| v.as_str())
+                                .map(|relative_path| {
+                                    // Resolve relative path to absolute (matching fileMap keys)
+                                    normalize_contents_path(file_dir, relative_path)
+                                })
                                 .collect()
                         });
 

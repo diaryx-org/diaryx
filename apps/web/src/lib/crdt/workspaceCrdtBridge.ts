@@ -1749,6 +1749,8 @@ function handleFileSystemEvent(event: FileSystemEvent): void {
       break;
 
     case 'FileRenamed':
+      // Close body sync bridge for old path (cleanup)
+      closeBodySync(event.old_path);
       // File renamed - notify both old and new paths
       notifyFileChange(event.old_path, null);
       notifyFileChange(event.new_path, null);
@@ -1761,6 +1763,13 @@ function handleFileSystemEvent(event: FileSystemEvent): void {
       break;
 
     case 'FileMoved':
+      // Close body sync bridge for old path (cleanup)
+      if (event.old_parent !== undefined) {
+        const filename = event.path.split('/').pop();
+        if (filename) {
+          closeBodySync(event.old_parent + '/' + filename);
+        }
+      }
       // File moved - notify the new path
       notifyFileChange(event.path, null);
       // Trigger tree refresh for all users

@@ -131,6 +131,12 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             }
 
             Command::SaveEntry { path, content } => {
+                log::debug!(
+                    "[CommandHandler] SaveEntry: input path='{}', content_preview='{}'",
+                    path,
+                    content.chars().take(50).collect::<String>()
+                );
+
                 // Save to filesystem (CrdtFs automatically updates body CRDT via its write hook)
                 self.entry().save_content(&path, &content).await?;
 
@@ -138,6 +144,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 #[cfg(feature = "crdt")]
                 {
                     let canonical_path = self.get_canonical_path(&path);
+                    log::debug!(
+                        "[CommandHandler] SaveEntry: canonical_path='{}' (from input path='{}')",
+                        canonical_path,
+                        path
+                    );
 
                     // Track for echo detection
                     self.track_content_for_sync(&canonical_path, &content);
@@ -150,7 +161,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     }
 
                     log::debug!(
-                        "[CommandHandler] SaveEntry: saved {} with CRDT sync",
+                        "[CommandHandler] SaveEntry: completed for canonical_path='{}'",
                         canonical_path
                     );
                 }

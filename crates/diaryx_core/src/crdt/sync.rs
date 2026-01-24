@@ -412,21 +412,22 @@ impl SyncProtocol {
             match sync_msg {
                 SyncMessage::SyncStep1(remote_sv) => {
                     // Remote is requesting updates they don't have
+                    // Respond with SyncStep2 (our diff based on their state vector)
+                    // NOTE: We do NOT include our own SyncStep1 here to avoid infinite
+                    // ping-pong loops. The SyncStep1 should only be sent when INITIATING
+                    // sync, not when responding. The server already sent us its SyncStep1
+                    // in the initial handshake.
                     let step2_response = self.create_sync_step2(&remote_sv)?;
 
-                    // Also send our state vector back so they can send us what we're missing
-                    let our_sv = self.workspace.encode_state_vector();
-                    let our_step1 = SyncMessage::SyncStep1(our_sv).encode();
-
-                    // Combine responses
-                    let mut combined = step2_response;
-                    combined.extend_from_slice(&our_step1);
-
-                    // Append to existing response if any
-                    if let Some(ref mut existing) = response {
-                        existing.extend_from_slice(&combined);
-                    } else {
-                        response = Some(combined);
+                    // Only send if we have actual content to send
+                    if step2_response.len() > 2 {
+                        // More than just the message header
+                        // Append to existing response if any
+                        if let Some(ref mut existing) = response {
+                            existing.extend_from_slice(&step2_response);
+                        } else {
+                            response = Some(step2_response);
+                        }
                     }
                 }
                 SyncMessage::SyncStep2(update) => {
@@ -551,23 +552,22 @@ impl BodySyncProtocol {
         for sync_msg in messages {
             match sync_msg {
                 SyncMessage::SyncStep1(remote_sv) => {
+                    // Respond with SyncStep2 (our diff based on their state vector)
+                    // NOTE: We do NOT include our own SyncStep1 here to avoid infinite
+                    // ping-pong loops. The SyncStep1 should only be sent when INITIATING
+                    // sync, not when responding. The server already sent us its SyncStep1
+                    // in the initial handshake.
                     let step2_response = self.create_sync_step2(&remote_sv)?;
 
-                    // Also send our state vector
-                    let txn = self.doc.transact();
-                    let our_sv = txn.state_vector().encode_v1();
-                    drop(txn);
-
-                    let our_step1 = SyncMessage::SyncStep1(our_sv).encode();
-
-                    let mut combined = step2_response;
-                    combined.extend_from_slice(&our_step1);
-
-                    // Append to existing response if any
-                    if let Some(ref mut existing) = response {
-                        existing.extend_from_slice(&combined);
-                    } else {
-                        response = Some(combined);
+                    // Only send if we have actual content to send
+                    if step2_response.len() > 2 {
+                        // More than just the message header
+                        // Append to existing response if any
+                        if let Some(ref mut existing) = response {
+                            existing.extend_from_slice(&step2_response);
+                        } else {
+                            response = Some(step2_response);
+                        }
                     }
                 }
                 SyncMessage::SyncStep2(update) => {

@@ -253,6 +253,12 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
         crdt_metadata: Option<&FileMetadata>,
     ) -> Result<()> {
         let storage_path = self.get_storage_path(canonical_path);
+        log::debug!(
+            "[SyncHandler] handle_remote_body_update: canonical_path='{}', storage_path='{:?}', body_preview='{}'",
+            canonical_path,
+            storage_path,
+            body.chars().take(50).collect::<String>()
+        );
 
         // Get or construct metadata for frontmatter
         let metadata = if let Some(m) = crdt_metadata {

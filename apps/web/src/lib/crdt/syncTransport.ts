@@ -18,8 +18,10 @@ export interface SyncTransportOptions {
   serverUrl: string;
   /** Type of document to sync. */
   docType: 'workspace' | 'body';
-  /** Document name (e.g., "workspace" or file path). */
+  /** Document name (e.g., "workspace" for workspace sync, or file path for body sync). */
   docName: string;
+  /** Workspace ID (required for body sync to properly route messages). */
+  workspaceId?: string;
   /** Backend for executing Rust commands. */
   backend: Backend;
   /** Whether to write changes to disk. */
@@ -186,6 +188,7 @@ export class SyncTransport {
           console.warn('[SyncTransport] Body sync requires content');
           return;
         }
+        console.log(`[SyncTransport] sendLocalChanges: doc_name='${this.options.docName}', content_preview='${content.substring(0, 50)}'`);
         response = await this.options.backend.execute({
           type: 'CreateBodyUpdate' as any,
           params: {
@@ -210,11 +213,23 @@ export class SyncTransport {
   private buildUrl(): string {
     let url = this.options.serverUrl;
 
-    // Add doc name to URL
-    if (!url.includes('?')) {
-      url += `?doc=${encodeURIComponent(this.options.docName)}`;
+    // For body sync, use workspace ID as doc and file path as file parameter
+    // This ensures the sync server routes to the correct body doc handler
+    if (this.options.docType === 'body' && this.options.workspaceId) {
+      // Body sync URL format: /sync?doc=workspace_id&file=file_path
+      if (!url.includes('?')) {
+        url += `?doc=${encodeURIComponent(this.options.workspaceId)}`;
+      } else {
+        url += `&doc=${encodeURIComponent(this.options.workspaceId)}`;
+      }
+      url += `&file=${encodeURIComponent(this.options.docName)}`;
     } else {
-      url += `&doc=${encodeURIComponent(this.options.docName)}`;
+      // Workspace sync or body sync without workspace ID (fallback)
+      if (!url.includes('?')) {
+        url += `?doc=${encodeURIComponent(this.options.docName)}`;
+      } else {
+        url += `&doc=${encodeURIComponent(this.options.docName)}`;
+      }
     }
 
     // Add auth token if provided
@@ -306,6 +321,7 @@ export class SyncTransport {
   }
 
   private async handleBodyMessage(message: Uint8Array): Promise<void> {
+    console.log(`[SyncTransport] handleBodyMessage: doc_name='${this.options.docName}', ${message.length} bytes`);
     const response = await this.options.backend.execute({
       type: 'HandleBodySyncMessage' as any,
       params: {

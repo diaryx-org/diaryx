@@ -164,6 +164,12 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
     /// The `doc_name` is the canonical file path (e.g., "workspace/notes.md").
     /// The `content` is used only for echo detection tracking.
     pub fn emit_body_update(&self, doc_name: &str, content: &str) -> Result<()> {
+        log::debug!(
+            "[SyncManager] emit_body_update: doc_name='{}', content_preview='{}'",
+            doc_name,
+            content.chars().take(50).collect::<String>()
+        );
+
         // Track for echo detection (don't update CRDT - it's already updated)
         {
             let mut last_known = self.last_known_content.write().unwrap();
@@ -176,9 +182,18 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         // Encode current state as update (without calling set_body again!)
         let update = body_doc.encode_state_as_update();
         if update.is_empty() {
+            log::debug!(
+                "[SyncManager] emit_body_update: update is empty for doc_name='{}'",
+                doc_name
+            );
             return Ok(());
         }
 
+        log::debug!(
+            "[SyncManager] emit_body_update: sending {} bytes for doc_name='{}'",
+            update.len(),
+            doc_name
+        );
         let message = SyncMessage::Update(update).encode();
         self.emit_event(FileSystemEvent::send_sync_message(doc_name, message, true));
         Ok(())
@@ -422,7 +437,7 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         write_to_disk: bool,
     ) -> Result<BodySyncResult> {
         log::debug!(
-            "[SyncManager] handle_body_message: {} for {}, write_to_disk: {}",
+            "[SyncManager] handle_body_message: {} bytes for doc_name='{}', write_to_disk: {}",
             message.len(),
             doc_name,
             write_to_disk
@@ -472,6 +487,14 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         } else {
             false
         };
+
+        log::debug!(
+            "[SyncManager] handle_body_message result: doc_name='{}', content_changed={}, is_echo={}, content_after_preview='{}'",
+            doc_name,
+            content_changed,
+            is_echo,
+            content_after.chars().take(50).collect::<String>()
+        );
 
         // Write to disk if content changed and not an echo
         if write_to_disk && content_changed && !is_echo {

@@ -245,6 +245,22 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
     /// - CRDT updates are disabled globally
     /// - The path is marked as a sync write (to prevent feedback loops)
     fn update_crdt_for_file(&self, path: &Path, content: &str) {
+        self.update_crdt_for_file_internal(path, content, false);
+    }
+
+    /// Update CRDT for a newly created file.
+    ///
+    /// This clears any stale state from storage before creating the body doc,
+    /// preventing concatenation with old content from deleted files.
+    fn update_crdt_for_new_file(&self, path: &Path, content: &str) {
+        self.update_crdt_for_file_internal(path, content, true);
+    }
+
+    /// Internal implementation for CRDT updates.
+    ///
+    /// If `is_new_file` is true, any existing body doc storage is deleted first
+    /// to prevent stale state from being merged with new content.
+    fn update_crdt_for_file_internal(&self, path: &Path, content: &str, is_new_file: bool) {
         if !self.is_enabled() {
             return;
         }
@@ -256,6 +272,13 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
         }
 
         let path_str = path.to_string_lossy().to_string();
+        let body = frontmatter::extract_body(content);
+        log::debug!(
+            "[CrdtFs] update_crdt_for_file_internal: path_str='{}', is_new_file={}, body_preview='{}'",
+            path_str,
+            is_new_file,
+            body.chars().take(50).collect::<String>()
+        );
         let metadata = self.extract_metadata(content);
 
         // Update workspace CRDT
@@ -265,7 +288,17 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
 
         // Update body doc
         let body = frontmatter::extract_body(content);
-        let body_doc = self.body_doc_manager.get_or_create(&path_str);
+
+        // For new files, delete any stale storage and create a fresh doc
+        // to prevent concatenation with old content from deleted files
+        let body_doc = if is_new_file {
+            // Delete stale storage first, then create fresh doc
+            let _ = self.body_doc_manager.delete(&path_str);
+            self.body_doc_manager.create(&path_str)
+        } else {
+            self.body_doc_manager.get_or_create(&path_str)
+        };
+
         let _ = body_doc.set_body(body);
     }
 
@@ -369,8 +402,9 @@ impl<FS: AsyncFileSystem + Send + Sync> AsyncFileSystem for CrdtFs<FS> {
             let result = self.inner.create_new(path, content).await;
 
             // Update CRDT if creation succeeded and enabled
+            // Use new file variant to clear any stale state from storage
             if result.is_ok() {
-                self.update_crdt_for_file(path, content);
+                self.update_crdt_for_new_file(path, content);
             }
 
             // Clear local write marker
@@ -533,8 +567,9 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for CrdtFs<FS> {
             let result = self.inner.create_new(path, content).await;
 
             // Update CRDT if creation succeeded and enabled
+            // Use new file variant to clear any stale state from storage
             if result.is_ok() {
-                self.update_crdt_for_file(path, content);
+                self.update_crdt_for_new_file(path, content);
             }
 
             // Clear local write marker

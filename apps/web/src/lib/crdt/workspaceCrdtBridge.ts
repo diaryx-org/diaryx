@@ -829,9 +829,11 @@ async function getOrCreateBodyBridge(filePath: string): Promise<SyncTransport | 
 
   // Create new bridge using SyncTransport
   // Hosts write to disk via Rust (writeToDisk: true), guests don't
+  // IMPORTANT: workspaceId is required for proper body sync routing on the server
   const bridge = createBodySyncTransport({
     serverUrl: _serverUrl,
     docName: bodyDocName,
+    workspaceId: _workspaceId, // Required for body sync URL: /sync?doc=workspace_id&file=file_path
     backend: _backend,
     writeToDisk: !shareSessionStore.isGuest, // Hosts write to disk, guests don't
     sessionCode: shareSessionStore.joinCode ?? undefined,

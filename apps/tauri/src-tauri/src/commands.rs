@@ -190,17 +190,23 @@ pub async fn execute<R: Runtime>(
         })?
     } else {
         // Normal mode: use real filesystem with optional CRDT support
-        // Extract storage and release guard before await
+        // Extract storage and workspace path, release guards before await
         let crdt_state = app.state::<CrdtState>();
-        let storage = {
+        let (storage, workspace_path) = {
             let storage_guard = acquire_lock(&crdt_state.storage)?;
-            storage_guard.as_ref().map(Arc::clone)
+            let ws_guard = acquire_lock(&crdt_state.workspace_path)?;
+            (storage_guard.as_ref().map(Arc::clone), ws_guard.clone())
         };
 
         let diaryx = if let Some(storage) = storage {
             match Diaryx::with_crdt_load(SyncToAsyncFs::new(RealFileSystem), storage) {
                 Ok(d) => {
                     log::debug!("[execute] Using Diaryx with CRDT support");
+                    // Set workspace root for sync handler to write files to correct location
+                    if let Some(ref ws_path) = workspace_path {
+                        log::debug!("[execute] Setting workspace root: {:?}", ws_path);
+                        d.set_workspace_root(ws_path.clone());
+                    }
                     d
                 }
                 Err(e) => {
@@ -1652,7 +1658,8 @@ pub async fn append_import_chunk(
 
 /// Finish a chunked upload and import the zip file
 #[tauri::command]
-pub async fn finish_import_upload(
+pub async fn finish_import_upload<R: Runtime>(
+    app: AppHandle<R>,
     session_id: String,
     workspace_path: Option<String>,
 ) -> Result<ImportResult, SerializableError> {
@@ -1829,6 +1836,39 @@ pub async fn finish_import_upload(
         files_imported,
         files_skipped
     );
+
+    // Populate CRDT
+    log::info!("[Import] Populating CRDT state...");
+    let crdt_state = app.state::<CrdtState>();
+    let storage = {
+        let storage_guard = acquire_lock(&crdt_state.storage)?;
+        storage_guard.as_ref().map(Arc::clone)
+    };
+
+    if let Some(storage) = storage {
+        let diaryx = Diaryx::with_crdt_load(SyncToAsyncFs::new(RealFileSystem), storage)
+            .unwrap_or_else(|e| {
+                log::warn!("[Import] Failed to load CRDT state: {:?}", e);
+                Diaryx::new(SyncToAsyncFs::new(RealFileSystem))
+            });
+
+        // Initialize CRDT by scanning workspace
+        let cmd = Command::InitializeWorkspaceCrdt {
+            workspace_path: workspace.to_string_lossy().to_string(),
+            audience: None,
+        };
+
+        match diaryx.execute(cmd).await {
+            Ok(response) => {
+                log::info!("[Import] CRDT populated successfully: {:?}", response);
+            }
+            Err(e) => {
+                log::error!("[Import] Failed to populate CRDT: {:?}", e);
+            }
+        }
+    } else {
+        log::warn!("[Import] CRDT storage not available, skipping population");
+    }
 
     Ok(ImportResult {
         success: true,
@@ -2406,4 +2446,115 @@ pub fn is_guest_mode<R: Runtime>(app: AppHandle<R>) -> Result<bool, Serializable
     let guest_state = app.state::<GuestModeState>();
     let active = acquire_lock(&guest_state.active)?;
     Ok(*active)
+}
+
+// ============================================================================
+// WebSocket Sync Commands
+// ============================================================================
+
+use crate::websocket_sync::{SyncConfig, SyncTransport};
+
+/// State for WebSocket sync connections.
+/// Uses tokio::sync::Mutex to allow holding across await points.
+pub struct WebSocketSyncState {
+    pub transport: tokio::sync::Mutex<Option<SyncTransport>>,
+}
+
+impl WebSocketSyncState {
+    pub fn new() -> Self {
+        Self {
+            transport: tokio::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl Default for WebSocketSyncState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Start WebSocket sync connection.
+///
+/// Connects to the specified sync server and begins real-time sync.
+#[tauri::command]
+pub async fn start_websocket_sync<R: Runtime>(
+    app: AppHandle<R>,
+    server_url: String,
+    doc_name: String,
+    auth_token: Option<String>,
+) -> Result<(), SerializableError> {
+    log::info!(
+        "[start_websocket_sync] Starting sync to {} with doc {}",
+        server_url,
+        doc_name
+    );
+
+    let ws_state = app.state::<WebSocketSyncState>();
+    let mut transport_guard = ws_state.transport.lock().await;
+
+    // Disconnect existing connection if any
+    if let Some(ref mut transport) = *transport_guard {
+        transport.disconnect().await;
+    }
+
+    // Create new transport
+    let config = SyncConfig {
+        server_url,
+        doc_name,
+        auth_token,
+        write_to_disk: true,
+    };
+
+    let mut transport = SyncTransport::new(config);
+    transport.connect().await.map_err(|e| SerializableError {
+        kind: "SyncError".to_string(),
+        message: format!("Failed to connect: {}", e),
+        path: None,
+    })?;
+
+    *transport_guard = Some(transport);
+    Ok(())
+}
+
+/// Stop WebSocket sync connection.
+#[tauri::command]
+pub async fn stop_websocket_sync<R: Runtime>(app: AppHandle<R>) -> Result<(), SerializableError> {
+    log::info!("[stop_websocket_sync] Stopping sync");
+
+    let ws_state = app.state::<WebSocketSyncState>();
+    let mut transport_guard = ws_state.transport.lock().await;
+
+    if let Some(ref mut transport) = *transport_guard {
+        transport.disconnect().await;
+    }
+    *transport_guard = None;
+
+    Ok(())
+}
+
+/// Get WebSocket sync status.
+#[tauri::command]
+pub async fn get_websocket_sync_status<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<WebSocketSyncStatusResponse, SerializableError> {
+    let ws_state = app.state::<WebSocketSyncState>();
+    let transport_guard = ws_state.transport.lock().await;
+
+    let (connected, status) = if let Some(ref transport) = *transport_guard {
+        let status = transport.status().await;
+        let connected = transport.is_running();
+        (connected, Some(format!("{:?}", status)))
+    } else {
+        (false, None)
+    };
+
+    Ok(WebSocketSyncStatusResponse { connected, status })
+}
+
+/// WebSocket sync status response.
+#[derive(Debug, Serialize)]
+pub struct WebSocketSyncStatusResponse {
+    pub connected: bool,
+    pub status: Option<String>,
 }

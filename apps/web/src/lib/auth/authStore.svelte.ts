@@ -8,7 +8,7 @@
  * - Auto-connect to sync server when logged in
  */
 
-import { AuthService, createAuthService, type User, type Workspace, type Device, AuthError } from './authService';
+import { AuthService, createAuthService, type User, type Workspace, type Device, AuthError, type UserHasDataResponse } from './authService';
 import { setAuthToken, setCollaborationServer, setCollaborationWorkspaceId } from '../crdt';
 import { collaborationStore } from '@/models/stores/collaborationStore.svelte';
 
@@ -381,4 +381,21 @@ function getDeviceName(): string {
   }
 
   return 'Web Browser';
+}
+
+/**
+ * Check if user has synced data on the server.
+ * Returns null if not authenticated or server URL not configured.
+ */
+export async function checkUserHasData(): Promise<UserHasDataResponse | null> {
+  const token = getToken();
+  const url = state.serverUrl;
+  if (!token || !url || !authService) return null;
+
+  try {
+    return await authService.checkUserHasData(token);
+  } catch (err) {
+    console.error('[AuthStore] Failed to check user data:', err);
+    return null;
+  }
 }

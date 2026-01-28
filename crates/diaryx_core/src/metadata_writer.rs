@@ -2,6 +2,16 @@
 //!
 //! This module provides functions to convert `FileMetadata` (from CRDT sync)
 //! into YAML frontmatter format and write files with proper structure.
+//!
+//! # Link Formats
+//!
+//! When writing `part_of` and `contents` to frontmatter, this module creates
+//! portable markdown links in the format: `[Title](/workspace/path.md)`
+//!
+//! These links are:
+//! - **Clickable** in editors like Obsidian
+//! - **Unambiguous** with workspace-root paths
+//! - **Self-documenting** with human-readable titles
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -9,16 +19,20 @@ use std::path::Path;
 use crate::error::{DiaryxError, Result};
 use crate::frontmatter;
 use crate::fs::AsyncFileSystem;
+use crate::link_parser;
 
 /// Metadata structure for file frontmatter.
 /// This mirrors the CRDT FileMetadata but with simpler types for serialization.
+///
+/// When serialized to YAML, `part_of` and `contents` are formatted as markdown links
+/// with workspace-root paths: `[Title](/path/to/file.md)`
 #[derive(Debug, Clone, Default)]
 pub struct FrontmatterMetadata {
     /// Display title from frontmatter
     pub title: Option<String>,
-    /// Relative path to parent index file (will be converted from absolute)
+    /// Markdown link to parent index file (e.g., `[Parent](/folder/index.md)`)
     pub part_of: Option<String>,
-    /// Relative paths to child files
+    /// Markdown links to child files (e.g., `[Child](/folder/child.md)`)
     pub contents: Option<Vec<String>>,
     /// Binary attachment paths
     pub attachments: Option<Vec<String>>,
@@ -32,7 +46,49 @@ pub struct FrontmatterMetadata {
 
 impl FrontmatterMetadata {
     /// Parse from a JSON value (typically from CRDT FileMetadata).
+    ///
+    /// Note: This basic version doesn't convert paths. For writing files to disk
+    /// with proper markdown links, use `from_json_with_markdown_links`.
     pub fn from_json(value: &serde_json::Value) -> Self {
+        Self::from_json_with_file_path(value, None)
+    }
+
+    /// Parse from a JSON value with the canonical file path.
+    ///
+    /// This method formats `part_of` and `contents` as markdown links with
+    /// workspace-root paths: `[Title](/path/to/file.md)`
+    ///
+    /// # Arguments
+    /// * `value` - The JSON value containing FileMetadata
+    /// * `canonical_file_path` - The canonical path of the file being written (e.g., "folder/index.md")
+    pub fn from_json_with_file_path(
+        value: &serde_json::Value,
+        _canonical_file_path: Option<&str>,
+    ) -> Self {
+        // Use the markdown links version with a path_to_title fallback for titles
+        Self::from_json_with_markdown_links(value, link_parser::path_to_title)
+    }
+
+    /// Parse from a JSON value, formatting links with titles from a resolver function.
+    ///
+    /// This method formats `part_of` and `contents` as markdown links with
+    /// workspace-root paths: `[Title](/path/to/file.md)`
+    ///
+    /// # Arguments
+    /// * `value` - The JSON value containing FileMetadata
+    /// * `title_resolver` - A function that returns a display title for a canonical path
+    ///
+    /// # Example
+    /// ```ignore
+    /// let metadata = FrontmatterMetadata::from_json_with_markdown_links(
+    ///     &json_value,
+    ///     |path| crdt.get_file(path).and_then(|m| m.title).unwrap_or_else(|| path_to_title(path))
+    /// );
+    /// ```
+    pub fn from_json_with_markdown_links<F>(value: &serde_json::Value, title_resolver: F) -> Self
+    where
+        F: Fn(&str) -> String,
+    {
         let obj = value.as_object();
 
         let title = obj
@@ -43,9 +99,10 @@ impl FrontmatterMetadata {
         let part_of = obj
             .and_then(|o| o.get("part_of"))
             .and_then(|v| v.as_str())
-            .map(|s| {
-                // Convert absolute path to relative (just filename)
-                s.split('/').next_back().unwrap_or(s).to_string()
+            .map(|canonical_path| {
+                // Format as markdown link with workspace-root path
+                let link_title = title_resolver(canonical_path);
+                link_parser::format_link(canonical_path, &link_title)
             });
 
         let contents = obj
@@ -53,7 +110,12 @@ impl FrontmatterMetadata {
             .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
+                    .filter_map(|v| v.as_str())
+                    .map(|canonical_path| {
+                        // Format as markdown link with workspace-root path
+                        let link_title = title_resolver(canonical_path);
+                        link_parser::format_link(canonical_path, &link_title)
+                    })
                     .collect()
             });
 
@@ -232,13 +294,37 @@ fn yaml_value(value: &serde_json::Value) -> String {
 }
 
 /// Write a file with metadata as YAML frontmatter and body content.
+///
+/// Note: This function doesn't convert canonical paths to relative paths.
+/// For proper path conversion, use `write_file_with_metadata_and_canonical_path`.
 pub async fn write_file_with_metadata<FS: AsyncFileSystem>(
     fs: &FS,
     path: &Path,
     metadata: &serde_json::Value,
     body: &str,
 ) -> Result<()> {
-    let fm = FrontmatterMetadata::from_json(metadata);
+    write_file_with_metadata_and_canonical_path(fs, path, metadata, body, None).await
+}
+
+/// Write a file with metadata as YAML frontmatter and body content.
+///
+/// When `canonical_path` is provided, `contents` and `part_of` paths in the metadata
+/// are converted from canonical (workspace-relative) paths to file-relative paths.
+///
+/// # Arguments
+/// * `fs` - The filesystem to write to
+/// * `path` - The storage path to write the file to
+/// * `metadata` - The JSON metadata (typically from CRDT FileMetadata)
+/// * `body` - The body content of the file
+/// * `canonical_path` - The canonical path of the file (e.g., "folder/index.md") for path conversion
+pub async fn write_file_with_metadata_and_canonical_path<FS: AsyncFileSystem>(
+    fs: &FS,
+    path: &Path,
+    metadata: &serde_json::Value,
+    body: &str,
+    canonical_path: Option<&str>,
+) -> Result<()> {
+    let fm = FrontmatterMetadata::from_json_with_file_path(metadata, canonical_path);
     let yaml = fm.to_yaml();
 
     // Combine frontmatter and body
@@ -334,10 +420,17 @@ mod tests {
 
         let fm = FrontmatterMetadata::from_json(&json);
         assert_eq!(fm.title, Some("Test Title".to_string()));
-        assert_eq!(fm.part_of, Some("parent.md".to_string())); // Converted to relative
+        // Now formatted as markdown link with workspace-root path
+        assert_eq!(
+            fm.part_of,
+            Some("[Parent](/workspace/parent.md)".to_string())
+        );
         assert_eq!(
             fm.contents,
-            Some(vec!["child1.md".to_string(), "child2.md".to_string()])
+            Some(vec![
+                "[Child1](/child1.md)".to_string(),
+                "[Child2](/child2.md)".to_string()
+            ])
         );
         assert_eq!(fm.description, Some("A test file".to_string()));
         assert!(fm.extra.contains_key("custom_key"));
@@ -348,8 +441,8 @@ mod tests {
     fn test_frontmatter_metadata_to_yaml() {
         let fm = FrontmatterMetadata {
             title: Some("Test Title".to_string()),
-            part_of: Some("parent.md".to_string()),
-            contents: Some(vec!["child1.md".to_string()]),
+            part_of: Some("[Parent Index](/folder/parent.md)".to_string()),
+            contents: Some(vec!["[Child](/folder/child.md)".to_string()]),
             audience: None,
             description: Some("A description".to_string()),
             attachments: None,
@@ -358,9 +451,10 @@ mod tests {
 
         let yaml = fm.to_yaml();
         assert!(yaml.contains("title: Test Title"));
-        assert!(yaml.contains("part_of: parent.md"));
+        // Markdown links are quoted in YAML because they contain special characters
+        assert!(yaml.contains("part_of: \"[Parent Index](/folder/parent.md)\""));
         assert!(yaml.contains("contents:"));
-        assert!(yaml.contains("  - child1.md"));
+        assert!(yaml.contains("  - \"[Child](/folder/child.md)\""));
         assert!(yaml.contains("description: A description"));
     }
 
@@ -405,5 +499,90 @@ mod tests {
             "None contents should not be written, got: {}",
             yaml
         );
+    }
+
+    #[test]
+    fn test_from_json_with_markdown_links_formats_part_of() {
+        let json = serde_json::json!({
+            "title": "Child File",
+            "part_of": "folder/parent.md",
+        });
+
+        let fm = FrontmatterMetadata::from_json_with_file_path(&json, Some("folder/child.md"));
+        // Now formatted as markdown link with workspace-root path
+        assert_eq!(fm.part_of, Some("[Parent](/folder/parent.md)".to_string()));
+    }
+
+    #[test]
+    fn test_from_json_with_markdown_links_formats_contents() {
+        let json = serde_json::json!({
+            "title": "Parent Index",
+            "contents": ["folder/child1.md", "folder/sub/child2.md"],
+        });
+
+        let fm = FrontmatterMetadata::from_json_with_file_path(&json, Some("folder/index.md"));
+        // Contents formatted as markdown links with workspace-root paths
+        assert_eq!(
+            fm.contents,
+            Some(vec![
+                "[Child1](/folder/child1.md)".to_string(),
+                "[Child2](/folder/sub/child2.md)".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn test_from_json_with_custom_title_resolver() {
+        let json = serde_json::json!({
+            "title": "Index",
+            "part_of": "root/parent.md",
+            "contents": ["root/child.md"],
+        });
+
+        // Use a custom title resolver that returns a fixed title
+        let fm = FrontmatterMetadata::from_json_with_markdown_links(&json, |path| {
+            if path == "root/parent.md" {
+                "My Custom Parent Title".to_string()
+            } else if path == "root/child.md" {
+                "My Custom Child Title".to_string()
+            } else {
+                link_parser::path_to_title(path)
+            }
+        });
+
+        assert_eq!(
+            fm.part_of,
+            Some("[My Custom Parent Title](/root/parent.md)".to_string())
+        );
+        assert_eq!(
+            fm.contents,
+            Some(vec!["[My Custom Child Title](/root/child.md)".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_yaml_string_quotes_markdown_links() {
+        // Markdown links contain [ and ] which require quoting
+        let link = "[Title](/path/to/file.md)";
+        let quoted = yaml_string(link);
+        assert_eq!(quoted, "\"[Title](/path/to/file.md)\"");
+    }
+
+    #[test]
+    fn test_roundtrip_markdown_link_to_yaml() {
+        let fm = FrontmatterMetadata {
+            title: Some("Test Entry".to_string()),
+            part_of: Some("[Parent Index](/Folder/index.md)".to_string()),
+            contents: Some(vec!["[Child Entry](/Folder/child.md)".to_string()]),
+            audience: None,
+            description: None,
+            attachments: None,
+            extra: HashMap::new(),
+        };
+
+        let yaml = fm.to_yaml();
+        // The markdown links should be properly quoted
+        assert!(yaml.contains("part_of: \"[Parent Index](/Folder/index.md)\""));
+        assert!(yaml.contains("  - \"[Child Entry](/Folder/child.md)\""));
     }
 }

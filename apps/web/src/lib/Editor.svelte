@@ -8,7 +8,7 @@
   import TaskItem from "@tiptap/extension-task-item";
   import Placeholder from "@tiptap/extension-placeholder";
   import CodeBlock from "@tiptap/extension-code-block";
-  import Highlight from "@tiptap/extension-highlight";
+  import { ColoredHighlightMark } from "./extensions/ColoredHighlightMark";
   import Typography from "@tiptap/extension-typography";
   import Image from "@tiptap/extension-image";
   // FloatingMenu extension for block formatting
@@ -25,6 +25,8 @@
 
   // Custom extension for inline attachment picker node
   import { AttachmentPickerNode } from "./extensions/AttachmentPickerNode";
+  // Custom extension for Discord-style spoiler syntax
+  import { SpoilerMark } from "./extensions/SpoilerMark";
   import type { Api } from "$lib/backend/api";
 
   interface Props {
@@ -49,6 +51,8 @@
       blobUrl?: string;
       sourceEntryPath: string;
     }) => void;
+    // Formatting options
+    enableSpoilers?: boolean;
   }
 
   let {
@@ -63,6 +67,7 @@
     entryPath = "",
     api = null,
     onAttachmentInsert,
+    enableSpoilers = true,
   }: Props = $props();
 
   let element: HTMLDivElement;
@@ -84,6 +89,7 @@
   // This avoids constantly recreating the editor (which can lead to blank content/races).
   let lastReadonly: boolean | null = null;
   let lastPlaceholder: string | null = null;
+  let lastEnableSpoilers: boolean | null = null;
 
   function destroyEditor() {
     editor?.destroy();
@@ -114,6 +120,9 @@
         //transformPastedText: true,
         //transformCopiedText: true,
       }),
+      // Always load SpoilerMark to ensure consistent parsing (tokenizer stays registered in marked.js)
+      // Pass enabled option to control visual behavior
+      SpoilerMark.configure({ enabled: enableSpoilers }),
       Link.configure({
         openOnClick: false,
         HTMLAttributes: {
@@ -163,7 +172,7 @@
           class: "editor-code-block",
         },
       }),
-      Highlight,
+      ColoredHighlightMark,
       Typography,
       Image.configure({
         inline: true,
@@ -464,6 +473,7 @@
         editorInitialized = true;
         lastReadonly = readonly;
         lastPlaceholder = placeholder;
+        lastEnableSpoilers = enableSpoilers;
       }
       return;
     }
@@ -480,6 +490,7 @@
       editorInitialized = true;
       lastReadonly = readonly;
       lastPlaceholder = placeholder;
+      lastEnableSpoilers = enableSpoilers;
     }
   });
 
@@ -494,7 +505,7 @@
     destroyEditor();
   });
 
-  // Rebuild editor when readonly or placeholder changes
+  // Rebuild editor when readonly, placeholder, or enableSpoilers changes
   $effect(() => {
     if (!element) return;
     // Skip if we haven't done initial creation yet
@@ -502,13 +513,15 @@
 
     const needsRebuild =
       readonly !== lastReadonly ||
-      placeholder !== lastPlaceholder;
+      placeholder !== lastPlaceholder ||
+      enableSpoilers !== lastEnableSpoilers;
 
     if (!needsRebuild) return;
 
     // Update tracking for what we're about to build
     lastReadonly = readonly;
     lastPlaceholder = placeholder;
+    lastEnableSpoilers = enableSpoilers;
 
     createEditor();
   });
@@ -575,13 +588,14 @@
 
 <!-- BubbleMenu for inline formatting (appears when text is selected) -->
 {#if !readonly}
-  <BubbleMenuComponent {editor} bind:element={bubbleMenuElement} />
+  <BubbleMenuComponent {editor} bind:element={bubbleMenuElement} {enableSpoilers} />
 {/if}
 
 <style global>
   :global(.editor-content) {
     outline: none;
     min-height: 100%;
+    padding-bottom: 50vh;
   }
 
   :global(.editor-content > * + *) {
@@ -715,6 +729,129 @@
     height: auto;
     border-radius: 6px;
     margin: 0.5em 0;
+  }
+
+  /* Spoiler mark styles */
+  :global(.spoiler-mark) {
+    border-radius: 4px;
+    padding: 0 2px;
+    transition: all 0.2s ease;
+  }
+
+  :global(.spoiler-hidden) {
+    background: var(--foreground);
+    color: transparent;
+    user-select: none;
+    cursor: pointer;
+  }
+
+  :global(.spoiler-revealed) {
+    background: var(--muted);
+    color: var(--foreground);
+    cursor: pointer;
+  }
+
+  /* When spoilers are disabled, show || around the text */
+  :global(.spoiler-disabled)::before {
+    content: "||";
+    opacity: 0.5;
+  }
+
+  :global(.spoiler-disabled)::after {
+    content: "||";
+    opacity: 0.5;
+  }
+
+  :global(.spoiler-hidden:hover) {
+    opacity: 0.8;
+  }
+
+  /* Colored highlight mark styles */
+  :global(.highlight-mark) {
+    border-radius: 2px;
+    padding: 0 2px;
+  }
+
+  /* Light mode highlight colors */
+  :global(.highlight-red) {
+    background: oklch(0.92 0.12 25);
+  }
+
+  :global(.highlight-orange) {
+    background: oklch(0.93 0.1 60);
+  }
+
+  :global(.highlight-yellow) {
+    background: oklch(0.95 0.12 95);
+  }
+
+  :global(.highlight-green) {
+    background: oklch(0.92 0.08 145);
+  }
+
+  :global(.highlight-cyan) {
+    background: oklch(0.92 0.08 195);
+  }
+
+  :global(.highlight-blue) {
+    background: oklch(0.88 0.1 250);
+  }
+
+  :global(.highlight-violet) {
+    background: oklch(0.9 0.1 300);
+  }
+
+  :global(.highlight-pink) {
+    background: oklch(0.93 0.1 350);
+  }
+
+  :global(.highlight-brown) {
+    background: oklch(0.88 0.06 60);
+  }
+
+  :global(.highlight-grey) {
+    background: oklch(0.9 0 0);
+  }
+
+  /* Dark mode highlight colors */
+  :global(.dark .highlight-red) {
+    background: oklch(0.35 0.12 25);
+  }
+
+  :global(.dark .highlight-orange) {
+    background: oklch(0.38 0.1 60);
+  }
+
+  :global(.dark .highlight-yellow) {
+    background: oklch(0.42 0.12 95);
+  }
+
+  :global(.dark .highlight-green) {
+    background: oklch(0.38 0.08 145);
+  }
+
+  :global(.dark .highlight-cyan) {
+    background: oklch(0.38 0.08 195);
+  }
+
+  :global(.dark .highlight-blue) {
+    background: oklch(0.35 0.1 250);
+  }
+
+  :global(.dark .highlight-violet) {
+    background: oklch(0.38 0.1 300);
+  }
+
+  :global(.dark .highlight-pink) {
+    background: oklch(0.4 0.1 350);
+  }
+
+  :global(.dark .highlight-brown) {
+    background: oklch(0.38 0.06 60);
+  }
+
+  :global(.dark .highlight-grey) {
+    background: oklch(0.4 0 0);
   }
 
   /* Collaborative cursor styles */

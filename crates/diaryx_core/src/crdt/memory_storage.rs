@@ -169,18 +169,17 @@ impl CrdtStorage for MemoryStorage {
             // Apply base state if it exists
             if let Some(state) = &base_state
                 && let Ok(update) = Update::decode_v1(state)
+                && let Err(e) = txn.apply_update(update)
             {
-                if let Err(e) = txn.apply_update(update) {
-                    log::warn!("Failed to apply base state for {}: {}", name, e);
-                }
+                log::warn!("Failed to apply base state for {}: {}", name, e);
             }
 
             // Apply incremental updates up to the specified ID
             for update_data in doc_updates {
-                if let Ok(update) = Update::decode_v1(&update_data) {
-                    if let Err(e) = txn.apply_update(update) {
-                        log::warn!("Failed to apply incremental update for {}: {}", name, e);
-                    }
+                if let Ok(update) = Update::decode_v1(&update_data)
+                    && let Err(e) = txn.apply_update(update)
+                {
+                    log::warn!("Failed to apply incremental update for {}: {}", name, e);
                 }
             }
         }

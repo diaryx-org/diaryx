@@ -41,6 +41,7 @@ use std::sync::{Arc, RwLock};
 use crate::crdt::{BodyDocManager, FileMetadata, WorkspaceCrdt};
 use crate::frontmatter;
 use crate::fs::{AsyncFileSystem, BoxFuture};
+use crate::link_parser;
 
 /// A filesystem decorator that automatically updates the CRDT on file operations.
 ///
@@ -180,6 +181,12 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
     /// Extract FileMetadata from file content, including the filename.
     ///
     /// Parses frontmatter and converts known fields to FileMetadata.
+    /// Paths in `part_of` and `contents` are converted to canonical
+    /// (workspace-relative) paths for consistent CRDT storage.
+    ///
+    /// Supports multiple link formats:
+    /// - Markdown links: `[Title](/path/file.md)` or `[Title](../file.md)`
+    /// - Plain paths: `/path/file.md`, `../file.md`, `file.md`
     fn extract_metadata(&self, path: &Path, content: &str) -> FileMetadata {
         let mut metadata = match frontmatter::parse_or_empty(content) {
             Ok(parsed) => self.frontmatter_to_metadata(&parsed.frontmatter),
@@ -192,6 +199,27 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
             .and_then(|n| n.to_str())
             .unwrap_or("")
             .to_string();
+
+        // Convert part_of to canonical path using link_parser
+        // This handles markdown links, root paths, and relative paths
+        if let Some(ref part_of) = metadata.part_of {
+            let parsed = link_parser::parse_link(part_of);
+            let canonical = link_parser::to_canonical(&parsed, path);
+            metadata.part_of = Some(canonical);
+        }
+
+        // Convert contents to canonical paths using link_parser
+        if let Some(ref contents) = metadata.contents {
+            metadata.contents = Some(
+                contents
+                    .iter()
+                    .map(|link_str| {
+                        let parsed = link_parser::parse_link(link_str);
+                        link_parser::to_canonical(&parsed, path)
+                    })
+                    .collect(),
+            );
+        }
 
         metadata
     }
@@ -227,10 +255,10 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
         fm: &indexmap::IndexMap<String, serde_yaml::Value>,
     ) -> FileMetadata {
         // Try to convert via JSON for automatic field mapping
-        if let Ok(json_value) = serde_json::to_value(fm) {
-            if let Ok(metadata) = serde_json::from_value::<FileMetadata>(json_value) {
-                return metadata;
-            }
+        if let Ok(json_value) = serde_json::to_value(fm)
+            && let Ok(metadata) = serde_json::from_value::<FileMetadata>(json_value)
+        {
+            return metadata;
         }
 
         // Fallback: manual extraction of known fields
@@ -242,23 +270,23 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
         if let Some(part_of) = fm.get("part_of") {
             metadata.part_of = part_of.as_str().map(String::from);
         }
-        if let Some(contents) = fm.get("contents") {
-            if let Some(seq) = contents.as_sequence() {
-                metadata.contents = Some(
-                    seq.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect(),
-                );
-            }
+        if let Some(contents) = fm.get("contents")
+            && let Some(seq) = contents.as_sequence()
+        {
+            metadata.contents = Some(
+                seq.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect(),
+            );
         }
-        if let Some(audience) = fm.get("audience") {
-            if let Some(seq) = audience.as_sequence() {
-                metadata.audience = Some(
-                    seq.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect(),
-                );
-            }
+        if let Some(audience) = fm.get("audience")
+            && let Some(seq) = audience.as_sequence()
+        {
+            metadata.audience = Some(
+                seq.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect(),
+            );
         }
         if let Some(description) = fm.get("description") {
             metadata.description = description.as_str().map(String::from);
@@ -276,10 +304,10 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
             "modified_at",
         ];
         for (key, value) in fm {
-            if !known_fields.contains(&key.as_str()) {
-                if let Ok(json_value) = serde_json::to_value(value) {
-                    metadata.extra.insert(key.clone(), json_value);
-                }
+            if !known_fields.contains(&key.as_str())
+                && let Ok(json_value) = serde_json::to_value(value)
+            {
+                metadata.extra.insert(key.clone(), json_value);
             }
         }
 
@@ -371,37 +399,36 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
             None => return,
         };
 
-        if let Some(ref parent_path) = old_metadata.part_of {
-            if let Some(mut parent) = self.workspace_crdt.get_file(parent_path) {
-                if let Some(ref mut contents) = parent.contents {
-                    // Find old filename in contents
-                    let old_filename = std::path::Path::new(old_path)
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or(old_path);
+        if let Some(ref parent_path) = old_metadata.part_of
+            && let Some(mut parent) = self.workspace_crdt.get_file(parent_path)
+            && let Some(ref mut contents) = parent.contents
+        {
+            // Find old filename in contents
+            let old_filename = std::path::Path::new(old_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(old_path);
 
-                    if let Some(idx) = contents
-                        .iter()
-                        .position(|e| e == old_filename || e == old_path)
-                    {
-                        match new_path {
-                            Some(np) => {
-                                // Rename: replace with new filename
-                                let new_filename = std::path::Path::new(np)
-                                    .file_name()
-                                    .and_then(|n| n.to_str())
-                                    .unwrap_or(np);
-                                contents[idx] = new_filename.to_string();
-                            }
-                            None => {
-                                // Delete: remove from contents
-                                contents.remove(idx);
-                            }
-                        }
-                        parent.modified_at = chrono::Utc::now().timestamp_millis();
-                        let _ = self.workspace_crdt.set_file(parent_path, parent);
+            if let Some(idx) = contents
+                .iter()
+                .position(|e| e == old_filename || e == old_path)
+            {
+                match new_path {
+                    Some(np) => {
+                        // Rename: replace with new filename
+                        let new_filename = std::path::Path::new(np)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or(np);
+                        contents[idx] = new_filename.to_string();
+                    }
+                    None => {
+                        // Delete: remove from contents
+                        contents.remove(idx);
                     }
                 }
+                parent.modified_at = chrono::Utc::now().timestamp_millis();
+                let _ = self.workspace_crdt.set_file(parent_path, parent);
             }
         }
     }
@@ -575,14 +602,11 @@ impl<FS: AsyncFileSystem + Send + Sync> AsyncFileSystem for CrdtFs<FS> {
                         }
 
                         // Also update filename if it changed
-                        if let Some(meta) = self.workspace_crdt.get_file(&doc_id) {
-                            if meta.filename != new_filename {
-                                if let Err(e) =
-                                    self.workspace_crdt.rename_file(&doc_id, &new_filename)
-                                {
-                                    log::warn!("Failed to rename file during move in CRDT: {}", e);
-                                }
-                            }
+                        if let Some(meta) = self.workspace_crdt.get_file(&doc_id)
+                            && meta.filename != new_filename
+                            && let Err(e) = self.workspace_crdt.rename_file(&doc_id, &new_filename)
+                        {
+                            log::warn!("Failed to rename file during move in CRDT: {}", e);
                         }
                     }
 
@@ -996,6 +1020,151 @@ mod tests {
         assert!(
             fs.workspace_crdt.get_file("test2.md").is_none(),
             "CRDT should not have been updated for sync write"
+        );
+    }
+
+    // =========================================================================
+    // Link Parser Integration Tests
+    // =========================================================================
+
+    #[test]
+    fn test_markdown_link_part_of_converts_to_canonical() {
+        let fs = create_test_crdt_fs();
+        // Write a file with markdown link in part_of
+        let content =
+            "---\ntitle: Child\npart_of: \"[Parent Index](/Folder/parent.md)\"\n---\nContent";
+
+        futures_lite::future::block_on(async {
+            fs.write_file(Path::new("Folder/child.md"), content)
+                .await
+                .unwrap();
+        });
+
+        // Check CRDT stores canonical path (without leading /)
+        let metadata = fs.workspace_crdt.get_file("Folder/child.md").unwrap();
+        assert_eq!(metadata.part_of, Some("Folder/parent.md".to_string()));
+    }
+
+    #[test]
+    fn test_relative_part_of_converts_to_canonical() {
+        let fs = create_test_crdt_fs();
+        // Write a file with relative path in part_of
+        let content = "---\ntitle: Child\npart_of: ../index.md\n---\nContent";
+
+        futures_lite::future::block_on(async {
+            fs.write_file(Path::new("Folder/Sub/child.md"), content)
+                .await
+                .unwrap();
+        });
+
+        // Check CRDT stores canonical path
+        let metadata = fs.workspace_crdt.get_file("Folder/Sub/child.md").unwrap();
+        assert_eq!(metadata.part_of, Some("Folder/index.md".to_string()));
+    }
+
+    #[test]
+    fn test_plain_part_of_at_root_stays_canonical() {
+        let fs = create_test_crdt_fs();
+        // Write a file at root with plain filename part_of
+        let content = "---\ntitle: Child\npart_of: index.md\n---\nContent";
+
+        futures_lite::future::block_on(async {
+            fs.write_file(Path::new("child.md"), content).await.unwrap();
+        });
+
+        // Check CRDT stores canonical path
+        let metadata = fs.workspace_crdt.get_file("child.md").unwrap();
+        assert_eq!(metadata.part_of, Some("index.md".to_string()));
+    }
+
+    #[test]
+    fn test_markdown_link_contents_converts_to_canonical() {
+        let fs = create_test_crdt_fs();
+        // Write a file with markdown links in contents
+        let content = r#"---
+title: Parent Index
+contents:
+  - "[Child 1](/Folder/child1.md)"
+  - "[Child 2](/Folder/Sub/child2.md)"
+---
+Content"#;
+
+        futures_lite::future::block_on(async {
+            fs.write_file(Path::new("Folder/index.md"), content)
+                .await
+                .unwrap();
+        });
+
+        // Check CRDT stores canonical paths (without leading /)
+        let metadata = fs.workspace_crdt.get_file("Folder/index.md").unwrap();
+        assert_eq!(
+            metadata.contents,
+            Some(vec![
+                "Folder/child1.md".to_string(),
+                "Folder/Sub/child2.md".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn test_relative_contents_converts_to_canonical() {
+        let fs = create_test_crdt_fs();
+        // Write a file with relative paths in contents
+        let content = r#"---
+title: Parent Index
+contents:
+  - child1.md
+  - Sub/child2.md
+---
+Content"#;
+
+        futures_lite::future::block_on(async {
+            fs.write_file(Path::new("Folder/index.md"), content)
+                .await
+                .unwrap();
+        });
+
+        // Check CRDT stores canonical paths
+        let metadata = fs.workspace_crdt.get_file("Folder/index.md").unwrap();
+        assert_eq!(
+            metadata.contents,
+            Some(vec![
+                "Folder/child1.md".to_string(),
+                "Folder/Sub/child2.md".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn test_mixed_format_links_all_convert_to_canonical() {
+        let fs = create_test_crdt_fs();
+        // Write a file with mixed link formats
+        let content = r#"---
+title: Parent Index
+part_of: "[Root](/README.md)"
+contents:
+  - child1.md
+  - "[Child 2](/Folder/Sub/child2.md)"
+  - ../sibling.md
+---
+Content"#;
+
+        futures_lite::future::block_on(async {
+            fs.write_file(Path::new("Folder/index.md"), content)
+                .await
+                .unwrap();
+        });
+
+        // Check CRDT stores all paths as canonical
+        let metadata = fs.workspace_crdt.get_file("Folder/index.md").unwrap();
+        assert_eq!(metadata.part_of, Some("README.md".to_string()));
+        assert_eq!(
+            metadata.contents,
+            Some(vec![
+                "Folder/child1.md".to_string(),
+                "Folder/Sub/child2.md".to_string(),
+                "sibling.md".to_string(),
+            ])
         );
     }
 }

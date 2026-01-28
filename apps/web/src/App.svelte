@@ -46,12 +46,16 @@
     getThemeStore,
     shareSessionStore
   } from "./models/stores";
+  import { getFormattingStore } from "./lib/stores/formattingStore.svelte";
 
   // Import auth
   import { initAuth, getDefaultWorkspace, verifyMagicLink, setServerUrl } from "./lib/auth";
 
   // Initialize theme store immediately
   getThemeStore();
+
+  // Initialize formatting store
+  const formattingStore = getFormattingStore();
 
   // Import services
   import {
@@ -569,7 +573,7 @@
         ) {
           console.log("[App] Default workspace missing, creating...");
           try {
-            await api.createWorkspace("workspace", "My Journal");
+            await api.createWorkspace(".", "My Journal");
           } catch (createErr) {
             console.error("[App] Failed to create default workspace:", createErr);
           }
@@ -1441,6 +1445,7 @@
         onAttachmentInsert={handleAttachmentInsert}
         onFileDrop={handleEditorFileDrop}
         onLinkClick={handleLinkClick}
+        enableSpoilers={formattingStore.enableSpoilers}
       />
     {:else}
       <EditorEmptyState

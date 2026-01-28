@@ -211,23 +211,20 @@ export class TauriBackend implements Backend {
 
   /**
    * Get the workspace path from config, falling back to platform default.
-   * This is the path to the workspace index file (e.g., ~/diaryx/index.md).
+   * This can be either a directory path or a path to the root index file.
+   * Callers should use api.findRootIndex() to resolve directories to actual root files.
    */
   getWorkspacePath(): string {
-    // Use config's default_workspace if available
+    // Use config's default_workspace if available - return as-is
+    // (could be directory like "/Users/.../journal" or file like "/Users/.../journal/README.md")
     if (this.config?.default_workspace) {
-      // Append /index.md if it's a directory path
-      const ws = this.config.default_workspace;
-      if (!ws.endsWith('.md')) {
-        return `${ws}/index.md`;
-      }
-      return ws;
+      return this.config.default_workspace;
     }
-    // Fall back to app paths
+    // Fall back to app paths - return the directory, caller will find root file
     if (this.appPaths?.default_workspace) {
-      return `${this.appPaths.default_workspace}/index.md`;
+      return this.appPaths.default_workspace;
     }
-    // Last resort fallback
+    // Last resort fallback (for WASM/web, this is handled differently)
     return "workspace/index.md";
   }
 

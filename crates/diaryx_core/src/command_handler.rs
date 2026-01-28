@@ -13,6 +13,7 @@ use crate::diaryx::{Diaryx, json_to_yaml, yaml_to_json};
 use crate::error::{DiaryxError, Result};
 use crate::frontmatter;
 use crate::fs::AsyncFileSystem;
+use crate::link_parser;
 
 #[cfg(feature = "crdt")]
 use crate::crdt::FileMetadata;
@@ -23,9 +24,32 @@ use std::path::Component;
 /// Normalize a path by resolving a relative path against a base directory.
 /// Handles `.` and `..` components without filesystem access.
 /// Returns a forward-slash-separated path string suitable for CRDT keys.
+/// Also handles corrupted absolute paths by stripping the workspace base path if found.
 #[cfg(feature = "crdt")]
-fn normalize_contents_path(base_dir: &Path, relative: &str) -> String {
-    let joined = base_dir.join(relative);
+fn normalize_contents_path(base_dir: &Path, relative: &str, workspace_base: &Path) -> String {
+    // First, check if this looks like a corrupted absolute path
+    // (e.g., "Users/adamharris/Documents/journal/Archive/file.md" - absolute path with leading / stripped)
+    let cleaned_relative = {
+        // Try to find the workspace base path within the relative path and strip it
+        let workspace_str = workspace_base.to_string_lossy();
+        let workspace_without_root = workspace_str.trim_start_matches('/');
+
+        if relative.starts_with(workspace_without_root) {
+            // This is a corrupted absolute path - strip the workspace prefix
+            let stripped = relative
+                .strip_prefix(workspace_without_root)
+                .unwrap_or(relative);
+            stripped.trim_start_matches('/')
+        } else if relative.starts_with(&*workspace_str) {
+            // Full absolute path starting with /
+            let stripped = relative.strip_prefix(&*workspace_str).unwrap_or(relative);
+            stripped.trim_start_matches('/')
+        } else {
+            relative
+        }
+    };
+
+    let joined = base_dir.join(cleaned_relative);
     let mut normalized: Vec<String> = Vec::new();
     for component in joined.components() {
         match component {
@@ -49,18 +73,29 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     /// Delegates to sync_manager if available, otherwise returns the path unchanged.
     #[cfg(feature = "crdt")]
     fn get_canonical_path(&self, storage_path: &str) -> String {
-        if let Some(ref sync_manager) = self.sync_manager() {
+        if let Some(sync_manager) = self.sync_manager() {
             sync_manager.get_canonical_path(storage_path)
         } else {
             storage_path.to_string()
         }
     }
 
+    /// Get the canonical path from a storage path (non-CRDT version).
+    /// Simply normalizes the path by stripping leading slashes and "./" prefixes.
+    #[cfg(not(feature = "crdt"))]
+    fn get_canonical_path(&self, storage_path: &str) -> String {
+        storage_path
+            .trim_start_matches("./")
+            .trim_start_matches('/')
+            .to_string()
+    }
+
     /// Get the storage path from a canonical path.
     /// Delegates to sync_manager if available, otherwise returns the path unchanged.
     #[cfg(feature = "crdt")]
+    #[allow(dead_code)]
     fn get_storage_path(&self, canonical_path: &str) -> PathBuf {
-        if let Some(ref sync_manager) = self.sync_manager() {
+        if let Some(sync_manager) = self.sync_manager() {
             sync_manager.get_storage_path(canonical_path)
         } else {
             PathBuf::from(canonical_path)
@@ -70,7 +105,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     /// Track content for echo detection in the sync manager.
     #[cfg(feature = "crdt")]
     fn track_content_for_sync(&self, canonical_path: &str, content: &str) {
-        if let Some(ref sync_manager) = self.sync_manager() {
+        if let Some(sync_manager) = self.sync_manager() {
             sync_manager.track_content(canonical_path, content);
         }
     }
@@ -78,31 +113,97 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     /// Track metadata for echo detection in the sync manager.
     #[cfg(feature = "crdt")]
     fn track_metadata_for_sync(&self, canonical_path: &str, metadata: &FileMetadata) {
-        if let Some(ref sync_manager) = self.sync_manager() {
+        if let Some(sync_manager) = self.sync_manager() {
             sync_manager.track_metadata(canonical_path, metadata);
         }
     }
 
-    /// Compute the relative path from a parent to a child.
-    /// Used for updating parent's contents array.
+    /// Emit a workspace sync update to be sent via WebSocket.
+    ///
+    /// This helper simplifies the sync emission pattern used across commands.
+    /// It logs a warning if emission fails but doesn't propagate the error.
     #[cfg(feature = "crdt")]
-    fn compute_relative_path(&self, parent_path: &str, child_path: &str) -> String {
-        let parent = Path::new(parent_path);
-        let child = Path::new(child_path);
-
-        // Get the parent's directory
-        let parent_dir = parent.parent().unwrap_or(Path::new(""));
-
-        // Try to strip the parent's directory from the child path
-        if let Ok(relative) = child.strip_prefix(parent_dir) {
-            relative.to_string_lossy().to_string()
-        } else {
-            // Fall back to just the filename
-            child
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| child_path.to_string())
+    fn emit_workspace_sync(&self, operation: &str) {
+        if let Some(sync_manager) = self.sync_manager()
+            && let Err(e) = sync_manager.emit_workspace_update()
+        {
+            log::warn!("Failed to emit workspace sync for {}: {}", operation, e);
         }
+    }
+
+    /// Get the path to store in a parent's contents array.
+    ///
+    /// The CRDT stores canonical (workspace-relative) paths for contents arrays.
+    /// This ensures consistent storage regardless of how the path was created,
+    /// and allows metadata_writer to format them as markdown links when syncing to disk.
+    #[cfg(feature = "crdt")]
+    fn contents_path(&self, child_canonical_path: &str) -> String {
+        // Store canonical paths directly - no relative path computation needed
+        // The metadata_writer will format these as markdown links: [Title](/path/to/file.md)
+        child_canonical_path.to_string()
+    }
+
+    /// Format a canonical path as a link for frontmatter.
+    ///
+    /// Uses the configured link format (see [`link_format`]).
+    ///
+    /// # Arguments
+    /// * `canonical_path` - The canonical path of the target file
+    /// * `from_canonical_path` - The canonical path of the file containing this link
+    ///
+    /// The title is resolved from:
+    /// 1. CRDT metadata (if available and has a title)
+    /// 2. Fallback: generated from the filename using `path_to_title`
+    #[cfg(feature = "crdt")]
+    fn format_link_for_file(&self, canonical_path: &str, from_canonical_path: &str) -> String {
+        let title = self.resolve_title(canonical_path);
+        let format = self.link_format();
+        link_parser::format_link_with_format(canonical_path, &title, format, from_canonical_path)
+    }
+
+    /// Format a canonical path as a link (simple version without source file context).
+    ///
+    /// For formats that require a source file (relative formats), this falls back
+    /// to MarkdownRoot format.
+    #[cfg(feature = "crdt")]
+    #[allow(dead_code)]
+    fn format_link(&self, canonical_path: &str) -> String {
+        let title = self.resolve_title(canonical_path);
+        // For simple format_link, always use MarkdownRoot since we don't have context
+        link_parser::format_link(canonical_path, &title)
+    }
+
+    /// Resolve a display title for a canonical path.
+    ///
+    /// Looks up the title from CRDT metadata if available,
+    /// otherwise generates one from the filename.
+    #[cfg(feature = "crdt")]
+    fn resolve_title(&self, canonical_path: &str) -> String {
+        if let Some(crdt_ops) = self.crdt()
+            && let Some(metadata) = crdt_ops.get_file(canonical_path)
+            && let Some(title) = metadata.title
+        {
+            return title;
+        }
+        link_parser::path_to_title(canonical_path)
+    }
+
+    /// Format a canonical path as a link for frontmatter (non-CRDT version).
+    ///
+    /// Uses the configured link format.
+    #[cfg(not(feature = "crdt"))]
+    fn format_link_for_file(&self, canonical_path: &str, from_canonical_path: &str) -> String {
+        let title = link_parser::path_to_title(canonical_path);
+        let format = self.link_format();
+        link_parser::format_link_with_format(canonical_path, &title, format, from_canonical_path)
+    }
+
+    /// Format a canonical path as a link (non-CRDT version, simple).
+    #[cfg(not(feature = "crdt"))]
+    #[allow(dead_code)]
+    fn format_link(&self, canonical_path: &str) -> String {
+        let title = link_parser::path_to_title(canonical_path);
+        link_parser::format_link(canonical_path, &title)
     }
 
     // =========================================================================
@@ -177,10 +278,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     self.track_content_for_sync(&canonical_path, &content);
 
                     // Emit body sync message to be sent via WebSocket
-                    if let Some(ref sync_manager) = self.sync_manager() {
-                        if let Err(e) = sync_manager.emit_body_update(&canonical_path, &content) {
-                            log::warn!("Failed to emit body sync for {}: {}", canonical_path, e);
-                        }
+                    if let Some(sync_manager) = self.sync_manager()
+                        && let Err(e) = sync_manager.emit_body_update(&canonical_path, &content)
+                    {
+                        log::warn!("Failed to emit body sync for {}: {}", canonical_path, e);
                     }
 
                     log::debug!(
@@ -200,6 +301,78 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             }
 
             Command::SetFrontmatterProperty { path, key, value } => {
+                // Handle part_of and contents specially - format as markdown links
+                // CrdtFs.write_file extracts metadata from frontmatter automatically
+                #[cfg(feature = "crdt")]
+                {
+                    let canonical_path = self.get_canonical_path(&path);
+
+                    if key == "part_of" {
+                        // Parse the value, convert to canonical, format as markdown link
+                        if let serde_json::Value::String(ref s) = value {
+                            let parsed = link_parser::parse_link(s);
+                            let file_path = Path::new(&canonical_path);
+                            let canonical_target = link_parser::to_canonical(&parsed, file_path);
+
+                            // Format as markdown link for file
+                            let formatted =
+                                self.format_link_for_file(&canonical_target, &canonical_path);
+
+                            // Write formatted link to file - CrdtFs extracts metadata automatically
+                            let yaml_value = Value::String(formatted);
+                            self.entry()
+                                .set_frontmatter_property(&path, &key, yaml_value)
+                                .await?;
+
+                            // Track for echo detection (read metadata that CrdtFs already set)
+                            if let Some(crdt_ops) = self.crdt()
+                                && let Some(metadata) = crdt_ops.get_file(&canonical_path)
+                            {
+                                self.track_metadata_for_sync(&canonical_path, &metadata);
+                            }
+
+                            // Emit workspace sync message
+                            self.emit_workspace_sync("SetFrontmatterProperty");
+                            return Ok(Response::Ok);
+                        }
+                    } else if key == "contents" {
+                        // Handle contents array - format each item as markdown link
+                        if let serde_json::Value::Array(ref arr) = value {
+                            let file_path = Path::new(&canonical_path);
+                            let mut formatted_links: Vec<Value> = Vec::new();
+
+                            for item in arr {
+                                if let serde_json::Value::String(s) = item {
+                                    let parsed = link_parser::parse_link(s);
+                                    let canonical_target =
+                                        link_parser::to_canonical(&parsed, file_path);
+                                    let formatted = self
+                                        .format_link_for_file(&canonical_target, &canonical_path);
+                                    formatted_links.push(Value::String(formatted));
+                                }
+                            }
+
+                            // Write formatted links to file - CrdtFs extracts metadata automatically
+                            let yaml_value = Value::Sequence(formatted_links);
+                            self.entry()
+                                .set_frontmatter_property(&path, &key, yaml_value)
+                                .await?;
+
+                            // Track for echo detection (read metadata that CrdtFs already set)
+                            if let Some(crdt_ops) = self.crdt()
+                                && let Some(metadata) = crdt_ops.get_file(&canonical_path)
+                            {
+                                self.track_metadata_for_sync(&canonical_path, &metadata);
+                            }
+
+                            // Emit workspace sync message
+                            self.emit_workspace_sync("SetFrontmatterProperty");
+                            return Ok(Response::Ok);
+                        }
+                    }
+                }
+
+                // Default: just set the property as-is
                 let yaml_value = json_to_yaml(value);
                 self.entry()
                     .set_frontmatter_property(&path, &key, yaml_value)
@@ -208,9 +381,30 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             }
 
             Command::RemoveFrontmatterProperty { path, key } => {
+                // Remove property from frontmatter - CrdtFs extracts metadata automatically
                 self.entry()
                     .remove_frontmatter_property(&path, &key)
                     .await?;
+
+                // CrdtFs handles CRDT updates automatically via write_file hook.
+                // We only need to track for echo detection and emit sync.
+                #[cfg(feature = "crdt")]
+                {
+                    if key == "part_of" || key == "contents" {
+                        let canonical_path = self.get_canonical_path(&path);
+
+                        // Track for echo detection (read metadata that CrdtFs already set)
+                        if let Some(crdt_ops) = self.crdt()
+                            && let Some(metadata) = crdt_ops.get_file(&canonical_path)
+                        {
+                            self.track_metadata_for_sync(&canonical_path, &metadata);
+                        }
+
+                        // Emit workspace sync message
+                        self.emit_workspace_sync("RemoveFrontmatterProperty");
+                    }
+                }
+
                 Ok(Response::Ok)
             }
 
@@ -257,7 +451,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
             // === Validation Operations ===
             Command::ValidateWorkspace { path } => {
-                let root_path = path.unwrap_or_else(|| "workspace/index.md".to_string());
+                let root_path = path.ok_or_else(|| DiaryxError::InvalidPath {
+                    path: PathBuf::new(),
+                    message: "ValidateWorkspace requires a root index path".to_string(),
+                })?;
                 // Use depth limit of 2 to match tree view (TREE_INITIAL_DEPTH in App.svelte)
                 // This significantly improves performance for large workspaces
                 let result = self
@@ -282,12 +479,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .await;
 
                 #[cfg(feature = "crdt")]
-                if result.success {
-                    if let Some(ref sync_manager) = self.sync_manager() {
-                        if let Err(e) = sync_manager.emit_workspace_update() {
-                            log::warn!("Failed to emit workspace sync for FixBrokenPartOf: {}", e);
-                        }
-                    }
+                if result.success
+                    && let Some(sync_manager) = self.sync_manager()
+                    && let Err(e) = sync_manager.emit_workspace_update()
+                {
+                    log::warn!("Failed to emit workspace sync for FixBrokenPartOf: {}", e);
                 }
 
                 Ok(Response::FixResult(result))
@@ -301,15 +497,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .await;
 
                 #[cfg(feature = "crdt")]
-                if result.success {
-                    if let Some(ref sync_manager) = self.sync_manager() {
-                        if let Err(e) = sync_manager.emit_workspace_update() {
-                            log::warn!(
-                                "Failed to emit workspace sync for FixBrokenContentsRef: {}",
-                                e
-                            );
-                        }
-                    }
+                if result.success
+                    && let Some(sync_manager) = self.sync_manager()
+                    && let Err(e) = sync_manager.emit_workspace_update()
+                {
+                    log::warn!(
+                        "Failed to emit workspace sync for FixBrokenContentsRef: {}",
+                        e
+                    );
                 }
 
                 Ok(Response::FixResult(result))
@@ -482,6 +677,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 });
 
                 // Create the file with basic frontmatter
+                // CrdtFs.create_new extracts metadata from frontmatter automatically
                 let content = format!("---\ntitle: {}\n---\n\n# {}\n\n", title, title);
                 self.fs()
                     .create_new(Path::new(&path), &content)
@@ -491,79 +687,45 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         source: e,
                     })?;
 
-                // Set part_of if provided
-                let part_of_value = options.part_of.clone();
-                if let Some(ref parent) = part_of_value {
+                // Set part_of if provided - format based on configured link format
+                // CrdtFs.write_file (via set_frontmatter_property) extracts updated metadata
+                if let Some(ref parent) = options.part_of {
+                    #[cfg(feature = "crdt")]
+                    let formatted_link = {
+                        let canonical_path = self.get_canonical_path(&path);
+                        let canonical_parent = self.get_canonical_path(parent);
+                        self.format_link_for_file(&canonical_parent, &canonical_path)
+                    };
+                    #[cfg(not(feature = "crdt"))]
+                    let formatted_link = {
+                        let canonical_path = &path;
+                        self.format_link_for_file(parent, canonical_path)
+                    };
                     self.entry()
-                        .set_frontmatter_property(&path, "part_of", Value::String(parent.clone()))
+                        .set_frontmatter_property(&path, "part_of", Value::String(formatted_link))
                         .await?;
                 }
 
-                // Add to workspace CRDT if enabled
+                // CrdtFs handles CRDT updates automatically via create_new and write_file hooks.
+                // We only need to track for echo detection and emit sync.
                 #[cfg(feature = "crdt")]
                 {
                     let canonical_path = self.get_canonical_path(&path);
 
-                    if let Some(crdt_ops) = self.crdt() {
-                        // Create metadata for the new file
-                        let mut metadata = FileMetadata::new(Some(title.clone()));
-                        metadata.part_of = part_of_value.clone();
-                        metadata.modified_at = chrono::Utc::now().timestamp_millis();
-
-                        // Set file in workspace CRDT
-                        if let Err(e) = crdt_ops.set_file(&canonical_path, metadata.clone()) {
-                            log::warn!("Failed to add {} to workspace CRDT: {}", canonical_path, e);
-                        }
-
-                        // Update parent's contents if applicable
-                        if let Some(ref parent_path) = part_of_value {
-                            let canonical_parent = self.get_canonical_path(parent_path);
-                            if let Some(mut parent_meta) = crdt_ops.get_file(&canonical_parent) {
-                                // Compute relative path from parent to new file
-                                let relative_path =
-                                    self.compute_relative_path(&canonical_parent, &canonical_path);
-                                let mut contents = parent_meta.contents.unwrap_or_default();
-                                if !contents.contains(&relative_path) {
-                                    contents.push(relative_path);
-                                    parent_meta.contents = Some(contents);
-                                    parent_meta.modified_at = chrono::Utc::now().timestamp_millis();
-                                    if let Err(e) =
-                                        crdt_ops.set_file(&canonical_parent, parent_meta.clone())
-                                    {
-                                        log::warn!(
-                                            "Failed to update parent contents in CRDT: {}",
-                                            e
-                                        );
-                                    }
-                                    // Track parent metadata for echo detection
-                                    self.track_metadata_for_sync(&canonical_parent, &parent_meta);
-                                }
-                            }
-                        }
-
-                        // Track for echo detection
+                    // Track for echo detection (read metadata that CrdtFs already set)
+                    if let Some(crdt_ops) = self.crdt()
+                        && let Some(metadata) = crdt_ops.get_file(&canonical_path)
+                    {
                         self.track_metadata_for_sync(&canonical_path, &metadata);
-
-                        // Emit workspace sync message to be sent via WebSocket
-                        log::debug!(
-                            "[CommandHandler] CreateEntry: about to emit workspace sync, sync_manager exists: {}",
-                            self.sync_manager().is_some()
-                        );
-                        if let Some(ref sync_manager) = self.sync_manager() {
-                            if let Err(e) = sync_manager.emit_workspace_update() {
-                                log::warn!("Failed to emit workspace sync for CreateEntry: {}", e);
-                            }
-                        } else {
-                            log::warn!(
-                                "[CommandHandler] CreateEntry: sync_manager is None, cannot emit workspace sync"
-                            );
-                        }
-
-                        log::debug!(
-                            "[CommandHandler] CreateEntry: created {} with CRDT sync",
-                            canonical_path
-                        );
                     }
+
+                    // Emit workspace sync message
+                    self.emit_workspace_sync("CreateEntry");
+
+                    log::debug!(
+                        "[CommandHandler] CreateEntry: created {} (CrdtFs handled CRDT)",
+                        canonical_path
+                    );
                 }
 
                 Ok(Response::String(path))
@@ -573,91 +735,27 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 path,
                 hard_delete: _hard_delete,
             } => {
-                #[cfg(feature = "crdt")]
-                {
-                    // If soft delete (not hard_delete), mark as deleted in CRDT
-                    if !_hard_delete {
-                        let canonical_path = self.get_canonical_path(&path);
-
-                        if let Some(crdt_ops) = self.crdt() {
-                            // Get existing metadata or create new
-                            let mut metadata = crdt_ops
-                                .get_file(&canonical_path)
-                                .unwrap_or_else(|| FileMetadata::default());
-
-                            // Update parent's contents to remove the deleted file
-                            if let Some(ref parent_path) = metadata.part_of {
-                                if let Some(mut parent) = crdt_ops.get_file(parent_path) {
-                                    if let Some(ref mut contents) = parent.contents {
-                                        // Find the deleted file in contents by filename
-                                        let filename = std::path::Path::new(&canonical_path)
-                                            .file_name()
-                                            .and_then(|n| n.to_str())
-                                            .unwrap_or(&canonical_path);
-
-                                        if let Some(idx) = contents
-                                            .iter()
-                                            .position(|e| e == filename || e == &canonical_path)
-                                        {
-                                            contents.remove(idx);
-                                            parent.modified_at =
-                                                chrono::Utc::now().timestamp_millis();
-                                            if let Err(e) = crdt_ops.set_file(parent_path, parent) {
-                                                log::warn!(
-                                                    "Failed to update parent contents for delete: {}",
-                                                    e
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Mark as deleted
-                            metadata.deleted = true;
-                            metadata.modified_at = chrono::Utc::now().timestamp_millis();
-
-                            if let Err(e) = crdt_ops.set_file(&canonical_path, metadata.clone()) {
-                                log::warn!(
-                                    "Failed to mark {} as deleted in CRDT: {}",
-                                    canonical_path,
-                                    e
-                                );
-                            } else {
-                                // Track for echo detection
-                                self.track_metadata_for_sync(&canonical_path, &metadata);
-
-                                // Emit workspace sync message to be sent via WebSocket
-                                if let Some(ref sync_manager) = self.sync_manager() {
-                                    if let Err(e) = sync_manager.emit_workspace_update() {
-                                        log::warn!(
-                                            "Failed to emit workspace sync for DeleteEntry: {}",
-                                            e
-                                        );
-                                    }
-                                }
-
-                                log::debug!(
-                                    "[CommandHandler] DeleteEntry: soft deleted {} via CRDT",
-                                    canonical_path
-                                );
-
-                                return Ok(Response::Ok);
-                            }
-                        }
-                    }
-                }
-
-                // Hard delete: Use Workspace::delete_entry which handles contents cleanup
+                // Use Workspace::delete_entry which handles contents cleanup
+                // CrdtFs.delete_file marks as deleted and updates parent contents automatically
                 let ws = self.workspace().inner();
                 ws.delete_entry(Path::new(&path)).await?;
 
-                // Delete body doc CRDT
+                // Delete body doc CRDT and emit sync
                 #[cfg(feature = "crdt")]
-                if let Some(body_manager) = self.body_doc_manager() {
-                    if let Err(e) = body_manager.delete(&path) {
+                {
+                    if let Some(body_manager) = self.body_doc_manager()
+                        && let Err(e) = body_manager.delete(&path)
+                    {
                         log::warn!("Failed to delete body doc for {}: {}", path, e);
                     }
+
+                    // Emit workspace sync message
+                    self.emit_workspace_sync("DeleteEntry");
+
+                    log::debug!(
+                        "[CommandHandler] DeleteEntry: deleted {} (CrdtFs handled CRDT)",
+                        path
+                    );
                 }
 
                 Ok(Response::Ok)
@@ -674,15 +772,15 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 // Migrate body doc CRDT to new path
                 #[cfg(feature = "crdt")]
-                if let Some(body_manager) = self.body_doc_manager() {
-                    if let Err(e) = body_manager.rename(&from, &to) {
-                        log::warn!(
-                            "Failed to migrate body doc on move {} -> {}: {}",
-                            from,
-                            to,
-                            e
-                        );
-                    }
+                if let Some(body_manager) = self.body_doc_manager()
+                    && let Err(e) = body_manager.rename(&from, &to)
+                {
+                    log::warn!(
+                        "Failed to migrate body doc on move {} -> {}: {}",
+                        from,
+                        to,
+                        e
+                    );
                 }
 
                 Ok(Response::String(to))
@@ -698,194 +796,70 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     return Ok(Response::String(to_path_str));
                 }
 
-                // Use move_entry logic for consistency
+                // Use move_entry which goes through CrdtFs.move_file
+                // CrdtFs handles: marking old as deleted, creating new entry, updating parent contents
                 let ws = self.workspace().inner();
                 ws.move_entry(&from_path, &to_path).await?;
 
-                // Update workspace CRDT
+                // Migrate body doc and emit sync
                 #[cfg(feature = "crdt")]
                 {
                     let canonical_old = self.get_canonical_path(&path);
                     let canonical_new = self.get_canonical_path(&to_path_str);
 
-                    if let Some(crdt_ops) = self.crdt() {
-                        // Get old metadata
-                        if let Some(mut metadata) = crdt_ops.get_file(&canonical_old) {
-                            // Mark old entry as deleted
-                            let mut old_metadata = metadata.clone();
-                            old_metadata.deleted = true;
-                            old_metadata.modified_at = chrono::Utc::now().timestamp_millis();
-                            if let Err(e) = crdt_ops.set_file(&canonical_old, old_metadata.clone())
-                            {
-                                log::warn!("Failed to mark old path as deleted in CRDT: {}", e);
-                            }
-
-                            // Create new entry with same metadata
-                            metadata.deleted = false;
-                            metadata.modified_at = chrono::Utc::now().timestamp_millis();
-                            if let Err(e) = crdt_ops.set_file(&canonical_new, metadata.clone()) {
-                                log::warn!("Failed to create new path in CRDT: {}", e);
-                            }
-
-                            // Update parent's contents array
-                            if let Some(ref parent_path) = metadata.part_of {
-                                let canonical_parent = self.get_canonical_path(parent_path);
-                                if let Some(mut parent_meta) = crdt_ops.get_file(&canonical_parent)
-                                {
-                                    if let Some(ref mut contents) = parent_meta.contents {
-                                        let old_rel = self.compute_relative_path(
-                                            &canonical_parent,
-                                            &canonical_old,
-                                        );
-                                        let new_rel = self.compute_relative_path(
-                                            &canonical_parent,
-                                            &canonical_new,
-                                        );
-                                        if let Some(pos) =
-                                            contents.iter().position(|c| c == &old_rel)
-                                        {
-                                            contents[pos] = new_rel;
-                                            parent_meta.modified_at =
-                                                chrono::Utc::now().timestamp_millis();
-                                            if let Err(e) = crdt_ops
-                                                .set_file(&canonical_parent, parent_meta.clone())
-                                            {
-                                                log::warn!(
-                                                    "Failed to update parent contents in CRDT: {}",
-                                                    e
-                                                );
-                                            }
-                                            self.track_metadata_for_sync(
-                                                &canonical_parent,
-                                                &parent_meta,
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Track for echo detection
-                            self.track_metadata_for_sync(&canonical_old, &old_metadata);
-                            self.track_metadata_for_sync(&canonical_new, &metadata);
-
-                            // Emit workspace sync message to be sent via WebSocket
-                            if let Some(ref sync_manager) = self.sync_manager() {
-                                if let Err(e) = sync_manager.emit_workspace_update() {
-                                    log::warn!(
-                                        "Failed to emit workspace sync for RenameEntry: {}",
-                                        e
-                                    );
-                                }
-                            }
-
-                            log::debug!(
-                                "[CommandHandler] RenameEntry: renamed {} -> {} with CRDT sync",
-                                canonical_old,
-                                canonical_new
-                            );
-                        }
-                    }
-
                     // Migrate body doc CRDT to new path
-                    if let Some(body_manager) = self.body_doc_manager() {
-                        if let Err(e) = body_manager.rename(&path, &to_path_str) {
-                            log::warn!(
-                                "Failed to migrate body doc on rename {} -> {}: {}",
-                                path,
-                                to_path_str,
-                                e
-                            );
-                        }
+                    if canonical_old != canonical_new
+                        && let Some(body_manager) = self.body_doc_manager()
+                        && let Err(e) = body_manager.rename(&canonical_old, &canonical_new)
+                    {
+                        log::warn!(
+                            "Failed to migrate body doc on rename {} -> {}: {}",
+                            canonical_old,
+                            canonical_new,
+                            e
+                        );
                     }
-                }
 
-                // Handle body doc rename when crdt feature is disabled
-                #[cfg(not(feature = "crdt"))]
-                {
-                    let _ = (&path, &to_path_str); // Suppress unused warnings
+                    // Emit workspace sync message
+                    self.emit_workspace_sync("RenameEntry");
+
+                    log::debug!(
+                        "[CommandHandler] RenameEntry: renamed {} -> {} (CrdtFs handled CRDT)",
+                        canonical_old,
+                        canonical_new
+                    );
                 }
 
                 Ok(Response::String(to_path_str))
             }
 
             Command::DuplicateEntry { path } => {
+                // workspace.duplicate_entry uses fs.write_file which goes through CrdtFs
+                // CrdtFs extracts metadata from frontmatter automatically
                 let ws = self.workspace().inner();
                 let new_path = ws.duplicate_entry(Path::new(&path)).await?;
                 let new_path_str = new_path.to_string_lossy().to_string();
 
-                // Add to workspace CRDT if enabled
+                // CrdtFs handles CRDT updates automatically via write_file hooks.
+                // We only need to track for echo detection and emit sync.
                 #[cfg(feature = "crdt")]
                 {
                     let canonical_path = self.get_canonical_path(&new_path_str);
 
-                    if let Some(crdt_ops) = self.crdt() {
-                        // Read the duplicated file to get its metadata
-                        let (title, part_of) =
-                            match self.entry().get_frontmatter(&new_path_str).await {
-                                Ok(fm) => {
-                                    let title =
-                                        fm.get("title").and_then(|v| v.as_str()).map(String::from);
-                                    let part_of = fm
-                                        .get("part_of")
-                                        .and_then(|v| v.as_str())
-                                        .map(String::from);
-                                    (title, part_of)
-                                }
-                                Err(_) => (None, None),
-                            };
-
-                        // Create metadata for the duplicated file
-                        let mut metadata = FileMetadata::new(title);
-                        metadata.part_of = part_of.clone();
-                        metadata.modified_at = chrono::Utc::now().timestamp_millis();
-
-                        // Set file in workspace CRDT
-                        if let Err(e) = crdt_ops.set_file(&canonical_path, metadata.clone()) {
-                            log::warn!("Failed to add {} to workspace CRDT: {}", canonical_path, e);
-                        }
-
-                        // Update parent's contents if applicable
-                        if let Some(ref parent_path) = part_of {
-                            let canonical_parent = self.get_canonical_path(parent_path);
-                            if let Some(mut parent_meta) = crdt_ops.get_file(&canonical_parent) {
-                                let relative_path =
-                                    self.compute_relative_path(&canonical_parent, &canonical_path);
-                                let mut contents = parent_meta.contents.unwrap_or_default();
-                                if !contents.contains(&relative_path) {
-                                    contents.push(relative_path);
-                                    parent_meta.contents = Some(contents);
-                                    parent_meta.modified_at = chrono::Utc::now().timestamp_millis();
-                                    if let Err(e) =
-                                        crdt_ops.set_file(&canonical_parent, parent_meta.clone())
-                                    {
-                                        log::warn!(
-                                            "Failed to update parent contents in CRDT: {}",
-                                            e
-                                        );
-                                    }
-                                    self.track_metadata_for_sync(&canonical_parent, &parent_meta);
-                                }
-                            }
-                        }
-
-                        // Track for echo detection
+                    // Track for echo detection (read metadata that CrdtFs already set)
+                    if let Some(crdt_ops) = self.crdt()
+                        && let Some(metadata) = crdt_ops.get_file(&canonical_path)
+                    {
                         self.track_metadata_for_sync(&canonical_path, &metadata);
-
-                        // Emit workspace sync message
-                        if let Some(ref sync_manager) = self.sync_manager() {
-                            if let Err(e) = sync_manager.emit_workspace_update() {
-                                log::warn!(
-                                    "Failed to emit workspace sync for DuplicateEntry: {}",
-                                    e
-                                );
-                            }
-                        }
-
-                        log::debug!(
-                            "[CommandHandler] DuplicateEntry: duplicated {} with CRDT sync",
-                            canonical_path
-                        );
                     }
+
+                    // Emit workspace sync message
+                    self.emit_workspace_sync("DuplicateEntry");
+
+                    log::debug!(
+                        "[CommandHandler] DuplicateEntry: duplicated {} (CrdtFs handled CRDT)",
+                        canonical_path
+                    );
                 }
 
                 Ok(Response::String(new_path_str))
@@ -900,34 +874,54 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     return Ok(Response::String(path));
                 }
 
-                // Add empty contents array
+                // Add empty contents array to frontmatter
+                // CrdtFs.write_file extracts contents: [] from frontmatter automatically
                 self.entry()
                     .set_frontmatter_property(&path, "contents", Value::Sequence(vec![]))
                     .await?;
 
-                // Emit workspace sync for hierarchy change
+                // CrdtFs handles CRDT updates automatically via write_file hook.
+                // We only need to track for echo detection and emit sync.
                 #[cfg(feature = "crdt")]
-                if let Some(ref sync_manager) = self.sync_manager() {
-                    if let Err(e) = sync_manager.emit_workspace_update() {
-                        log::warn!("Failed to emit workspace sync for ConvertToIndex: {}", e);
+                {
+                    let canonical_path = self.get_canonical_path(&path);
+
+                    // Track for echo detection (read metadata that CrdtFs already set)
+                    if let Some(crdt_ops) = self.crdt()
+                        && let Some(metadata) = crdt_ops.get_file(&canonical_path)
+                    {
+                        self.track_metadata_for_sync(&canonical_path, &metadata);
                     }
+
+                    // Emit workspace sync for hierarchy change
+                    self.emit_workspace_sync("ConvertToIndex");
                 }
 
                 Ok(Response::String(path))
             }
 
             Command::ConvertToLeaf { path } => {
-                // Remove contents property if it exists
+                // Remove contents property from frontmatter
+                // CrdtFs.write_file detects absence of contents property automatically
                 self.entry()
                     .remove_frontmatter_property(&path, "contents")
                     .await?;
 
-                // Emit workspace sync for hierarchy change
+                // CrdtFs handles CRDT updates automatically via write_file hook.
+                // We only need to track for echo detection and emit sync.
                 #[cfg(feature = "crdt")]
-                if let Some(ref sync_manager) = self.sync_manager() {
-                    if let Err(e) = sync_manager.emit_workspace_update() {
-                        log::warn!("Failed to emit workspace sync for ConvertToLeaf: {}", e);
+                {
+                    let canonical_path = self.get_canonical_path(&path);
+
+                    // Track for echo detection (read metadata that CrdtFs already set)
+                    if let Some(crdt_ops) = self.crdt()
+                        && let Some(metadata) = crdt_ops.get_file(&canonical_path)
+                    {
+                        self.track_metadata_for_sync(&canonical_path, &metadata);
                     }
+
+                    // Emit workspace sync for hierarchy change
+                    self.emit_workspace_sync("ConvertToLeaf");
                 }
 
                 Ok(Response::String(path))
@@ -935,85 +929,34 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
             Command::CreateChildEntry { parent_path } => {
                 let ws = self.workspace().inner();
+                // workspace.create_child_entry:
+                // 1. Converts parent to index if needed (moves parent.md to parent/parent.md)
+                // 2. Creates child file with frontmatter (title, part_of)
+                // 3. Updates parent's contents array
+                // All file writes go through CrdtFs which extracts metadata from frontmatter
                 let new_path = ws.create_child_entry(Path::new(&parent_path), None).await?;
                 let new_path_str = new_path.to_string_lossy().to_string();
 
-                // Add to workspace CRDT if enabled
+                // CrdtFs handles CRDT updates automatically via create_new and write_file hooks.
+                // We only need to track for echo detection and emit sync.
                 #[cfg(feature = "crdt")]
                 {
                     let canonical_child = self.get_canonical_path(&new_path_str);
-                    let canonical_parent = self.get_canonical_path(&parent_path);
 
-                    if let Some(crdt_ops) = self.crdt() {
-                        // Read the newly created file to get its title
-                        let title = match self.entry().get_frontmatter(&new_path_str).await {
-                            Ok(fm) => fm
-                                .get("title")
-                                .and_then(|v| v.as_str())
-                                .map(String::from)
-                                .unwrap_or_else(|| "New Entry".to_string()),
-                            Err(_) => "New Entry".to_string(),
-                        };
-
-                        // Create metadata for the new child file
-                        let mut metadata = FileMetadata::new(Some(title));
-                        metadata.part_of = Some(canonical_parent.clone());
-                        metadata.modified_at = chrono::Utc::now().timestamp_millis();
-
-                        // Set file in workspace CRDT
-                        if let Err(e) = crdt_ops.set_file(&canonical_child, metadata.clone()) {
-                            log::warn!(
-                                "Failed to add {} to workspace CRDT: {}",
-                                canonical_child,
-                                e
-                            );
-                        }
-
-                        // Update parent's contents array
-                        if let Some(mut parent_meta) = crdt_ops.get_file(&canonical_parent) {
-                            let relative_path =
-                                self.compute_relative_path(&canonical_parent, &canonical_child);
-                            let mut contents = parent_meta.contents.unwrap_or_default();
-                            if !contents.contains(&relative_path) {
-                                contents.push(relative_path);
-                                parent_meta.contents = Some(contents);
-                                parent_meta.modified_at = chrono::Utc::now().timestamp_millis();
-                                if let Err(e) =
-                                    crdt_ops.set_file(&canonical_parent, parent_meta.clone())
-                                {
-                                    log::warn!("Failed to update parent contents in CRDT: {}", e);
-                                }
-                                // Track parent metadata for echo detection
-                                self.track_metadata_for_sync(&canonical_parent, &parent_meta);
-                            }
-                        }
-
-                        // Track child for echo detection
+                    // Track for echo detection (read metadata that CrdtFs already set)
+                    if let Some(crdt_ops) = self.crdt()
+                        && let Some(metadata) = crdt_ops.get_file(&canonical_child)
+                    {
                         self.track_metadata_for_sync(&canonical_child, &metadata);
-
-                        // Emit workspace sync message to be sent via WebSocket
-                        log::debug!(
-                            "[CommandHandler] CreateChildEntry: about to emit workspace sync, sync_manager exists: {}",
-                            self.sync_manager().is_some()
-                        );
-                        if let Some(ref sync_manager) = self.sync_manager() {
-                            if let Err(e) = sync_manager.emit_workspace_update() {
-                                log::warn!(
-                                    "Failed to emit workspace sync for CreateChildEntry: {}",
-                                    e
-                                );
-                            }
-                        } else {
-                            log::warn!(
-                                "[CommandHandler] CreateChildEntry: sync_manager is None, cannot emit workspace sync"
-                            );
-                        }
-
-                        log::debug!(
-                            "[CommandHandler] CreateChildEntry: created {} with CRDT sync",
-                            canonical_child
-                        );
                     }
+
+                    // Emit workspace sync message
+                    self.emit_workspace_sync("CreateChildEntry");
+
+                    log::debug!(
+                        "[CommandHandler] CreateChildEntry: created {} (CrdtFs handled CRDT)",
+                        canonical_child
+                    );
                 }
 
                 Ok(Response::String(new_path_str))
@@ -1023,6 +966,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 entry_path,
                 parent_path,
             } => {
+                // workspace.attach_and_move_entry_to_parent uses move operations via CrdtFs
+                // CrdtFs handles: marking old deleted, creating new entry, updating parent contents
                 let ws = self.workspace().inner();
                 let new_path = ws
                     .attach_and_move_entry_to_parent(
@@ -1032,117 +977,34 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .await?;
                 let new_path_str = new_path.to_string_lossy().to_string();
 
-                // Update workspace CRDT if enabled
+                // CrdtFs handles CRDT updates automatically via move_file hooks.
+                // We only need to migrate body doc and emit sync.
                 #[cfg(feature = "crdt")]
                 {
                     let canonical_old = self.get_canonical_path(&entry_path);
                     let canonical_new = self.get_canonical_path(&new_path_str);
-                    let canonical_new_parent = self.get_canonical_path(&parent_path);
 
-                    if let Some(crdt_ops) = self.crdt() {
-                        // Get the old entry's metadata to preserve title etc.
-                        let old_metadata = crdt_ops.get_file(&canonical_old);
-
-                        // Mark old path as deleted
-                        if let Some(mut old_meta) = old_metadata.clone() {
-                            // Remove from old parent's contents if it had one
-                            if let Some(ref old_parent) = old_meta.part_of {
-                                let canonical_old_parent = self.get_canonical_path(old_parent);
-                                if let Some(mut old_parent_meta) =
-                                    crdt_ops.get_file(&canonical_old_parent)
-                                {
-                                    if let Some(ref mut contents) = old_parent_meta.contents {
-                                        let old_rel = self.compute_relative_path(
-                                            &canonical_old_parent,
-                                            &canonical_old,
-                                        );
-                                        contents.retain(|c| c != &old_rel);
-                                        old_parent_meta.modified_at =
-                                            chrono::Utc::now().timestamp_millis();
-                                        if let Err(e) = crdt_ops.set_file(
-                                            &canonical_old_parent,
-                                            old_parent_meta.clone(),
-                                        ) {
-                                            log::warn!(
-                                                "Failed to update old parent contents in CRDT: {}",
-                                                e
-                                            );
-                                        }
-                                        self.track_metadata_for_sync(
-                                            &canonical_old_parent,
-                                            &old_parent_meta,
-                                        );
-                                    }
-                                }
-                            }
-
-                            old_meta.deleted = true;
-                            old_meta.modified_at = chrono::Utc::now().timestamp_millis();
-                            if let Err(e) = crdt_ops.set_file(&canonical_old, old_meta.clone()) {
-                                log::warn!("Failed to mark old path as deleted in CRDT: {}", e);
-                            }
-                            self.track_metadata_for_sync(&canonical_old, &old_meta);
-                        }
-
-                        // Create new entry with updated part_of
-                        let title =
-                            old_metadata
-                                .as_ref()
-                                .and_then(|m| m.title.clone())
-                                .or_else(|| {
-                                    // Fallback: read from file
-                                    None
-                                });
-                        let mut new_meta = FileMetadata::new(title);
-                        new_meta.part_of = Some(canonical_new_parent.clone());
-                        new_meta.modified_at = chrono::Utc::now().timestamp_millis();
-
-                        if let Err(e) = crdt_ops.set_file(&canonical_new, new_meta.clone()) {
-                            log::warn!("Failed to add new path to CRDT: {}", e);
-                        }
-                        self.track_metadata_for_sync(&canonical_new, &new_meta);
-
-                        // Add to new parent's contents
-                        if let Some(mut new_parent_meta) = crdt_ops.get_file(&canonical_new_parent)
-                        {
-                            let new_rel =
-                                self.compute_relative_path(&canonical_new_parent, &canonical_new);
-                            let mut contents = new_parent_meta.contents.unwrap_or_default();
-                            if !contents.contains(&new_rel) {
-                                contents.push(new_rel);
-                                new_parent_meta.contents = Some(contents);
-                                new_parent_meta.modified_at = chrono::Utc::now().timestamp_millis();
-                                if let Err(e) = crdt_ops
-                                    .set_file(&canonical_new_parent, new_parent_meta.clone())
-                                {
-                                    log::warn!(
-                                        "Failed to update new parent contents in CRDT: {}",
-                                        e
-                                    );
-                                }
-                                self.track_metadata_for_sync(
-                                    &canonical_new_parent,
-                                    &new_parent_meta,
-                                );
-                            }
-                        }
-
-                        // Emit workspace sync message
-                        if let Some(ref sync_manager) = self.sync_manager() {
-                            if let Err(e) = sync_manager.emit_workspace_update() {
-                                log::warn!(
-                                    "Failed to emit workspace sync for AttachEntryToParent: {}",
-                                    e
-                                );
-                            }
-                        }
-
-                        log::debug!(
-                            "[CommandHandler] AttachEntryToParent: moved {} -> {} with CRDT sync",
+                    // Migrate body doc CRDT to new path
+                    if canonical_old != canonical_new
+                        && let Some(body_manager) = self.body_doc_manager()
+                        && let Err(e) = body_manager.rename(&canonical_old, &canonical_new)
+                    {
+                        log::warn!(
+                            "Failed to migrate body doc on attach {} -> {}: {}",
                             canonical_old,
-                            canonical_new
+                            canonical_new,
+                            e
                         );
                     }
+
+                    // Emit workspace sync message
+                    self.emit_workspace_sync("AttachEntryToParent");
+
+                    log::debug!(
+                        "[CommandHandler] AttachEntryToParent: moved {} -> {} (CrdtFs handled CRDT)",
+                        canonical_old,
+                        canonical_new
+                    );
                 }
 
                 Ok(Response::String(new_path_str))
@@ -1264,11 +1126,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                         // Update month index contents in CRDT
                         if let Some(mut parent_meta) = crdt_ops.get_file(&canonical_parent) {
-                            let relative_path =
-                                self.compute_relative_path(&canonical_parent, &canonical_path);
+                            let contents_entry = self.contents_path(&canonical_path);
                             let mut contents = parent_meta.contents.unwrap_or_default();
-                            if !contents.contains(&relative_path) {
-                                contents.push(relative_path);
+                            if !contents.contains(&contents_entry) {
+                                contents.push(contents_entry);
                                 parent_meta.contents = Some(contents);
                                 parent_meta.modified_at = chrono::Utc::now().timestamp_millis();
                                 if let Err(e) =
@@ -1287,13 +1148,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         self.track_metadata_for_sync(&canonical_path, &metadata);
 
                         // Emit workspace sync message
-                        if let Some(ref sync_manager) = self.sync_manager() {
-                            if let Err(e) = sync_manager.emit_workspace_update() {
-                                log::warn!(
-                                    "Failed to emit workspace sync for EnsureDailyEntry: {}",
-                                    e
-                                );
-                            }
+                        if let Some(sync_manager) = self.sync_manager()
+                            && let Err(e) = sync_manager.emit_workspace_update()
+                        {
+                            log::warn!("Failed to emit workspace sync for EnsureDailyEntry: {}", e);
                         }
 
                         log::debug!(
@@ -1362,15 +1220,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .await;
 
                 #[cfg(feature = "crdt")]
-                if result.success {
-                    if let Some(ref sync_manager) = self.sync_manager() {
-                        if let Err(e) = sync_manager.emit_workspace_update() {
-                            log::warn!(
-                                "Failed to emit workspace sync for FixBrokenAttachment: {}",
-                                e
-                            );
-                        }
-                    }
+                if result.success
+                    && let Some(sync_manager) = self.sync_manager()
+                    && let Err(e) = sync_manager.emit_workspace_update()
+                {
+                    log::warn!(
+                        "Failed to emit workspace sync for FixBrokenAttachment: {}",
+                        e
+                    );
                 }
 
                 Ok(Response::FixResult(result))
@@ -1389,15 +1246,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .await;
 
                 #[cfg(feature = "crdt")]
-                if result.success {
-                    if let Some(ref sync_manager) = self.sync_manager() {
-                        if let Err(e) = sync_manager.emit_workspace_update() {
-                            log::warn!(
-                                "Failed to emit workspace sync for FixNonPortablePath: {}",
-                                e
-                            );
-                        }
-                    }
+                if result.success
+                    && let Some(sync_manager) = self.sync_manager()
+                    && let Err(e) = sync_manager.emit_workspace_update()
+                {
+                    log::warn!(
+                        "Failed to emit workspace sync for FixNonPortablePath: {}",
+                        e
+                    );
                 }
 
                 Ok(Response::FixResult(result))
@@ -1414,12 +1270,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .await;
 
                 #[cfg(feature = "crdt")]
-                if result.success {
-                    if let Some(ref sync_manager) = self.sync_manager() {
-                        if let Err(e) = sync_manager.emit_workspace_update() {
-                            log::warn!("Failed to emit workspace sync for FixUnlistedFile: {}", e);
-                        }
-                    }
+                if result.success
+                    && let Some(sync_manager) = self.sync_manager()
+                    && let Err(e) = sync_manager.emit_workspace_update()
+                {
+                    log::warn!("Failed to emit workspace sync for FixUnlistedFile: {}", e);
                 }
 
                 Ok(Response::FixResult(result))
@@ -1436,15 +1291,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .await;
 
                 #[cfg(feature = "crdt")]
-                if result.success {
-                    if let Some(ref sync_manager) = self.sync_manager() {
-                        if let Err(e) = sync_manager.emit_workspace_update() {
-                            log::warn!(
-                                "Failed to emit workspace sync for FixOrphanBinaryFile: {}",
-                                e
-                            );
-                        }
-                    }
+                if result.success
+                    && let Some(sync_manager) = self.sync_manager()
+                    && let Err(e) = sync_manager.emit_workspace_update()
+                {
+                    log::warn!(
+                        "Failed to emit workspace sync for FixOrphanBinaryFile: {}",
+                        e
+                    );
                 }
 
                 Ok(Response::FixResult(result))
@@ -1461,12 +1315,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .await;
 
                 #[cfg(feature = "crdt")]
-                if result.success {
-                    if let Some(ref sync_manager) = self.sync_manager() {
-                        if let Err(e) = sync_manager.emit_workspace_update() {
-                            log::warn!("Failed to emit workspace sync for FixMissingPartOf: {}", e);
-                        }
-                    }
+                if result.success
+                    && let Some(sync_manager) = self.sync_manager()
+                    && let Err(e) = sync_manager.emit_workspace_update()
+                {
+                    log::warn!("Failed to emit workspace sync for FixMissingPartOf: {}", e);
                 }
 
                 Ok(Response::FixResult(result))
@@ -1482,12 +1335,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     + warning_fixes.iter().filter(|r| !r.success).count();
 
                 #[cfg(feature = "crdt")]
-                if total_fixed > 0 {
-                    if let Some(ref sync_manager) = self.sync_manager() {
-                        if let Err(e) = sync_manager.emit_workspace_update() {
-                            log::warn!("Failed to emit workspace sync for FixAll: {}", e);
-                        }
-                    }
+                if total_fixed > 0
+                    && let Some(sync_manager) = self.sync_manager()
+                    && let Err(e) = sync_manager.emit_workspace_update()
+                {
+                    log::warn!("Failed to emit workspace sync for FixAll: {}", e);
                 }
 
                 Ok(Response::FixSummary(crate::command::FixSummary {
@@ -1509,15 +1361,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .await;
 
                 #[cfg(feature = "crdt")]
-                if result.success {
-                    if let Some(ref sync_manager) = self.sync_manager() {
-                        if let Err(e) = sync_manager.emit_workspace_update() {
-                            log::warn!(
-                                "Failed to emit workspace sync for FixCircularReference: {}",
-                                e
-                            );
-                        }
-                    }
+                if result.success
+                    && let Some(sync_manager) = self.sync_manager()
+                    && let Err(e) = sync_manager.emit_workspace_update()
+                {
+                    log::warn!(
+                        "Failed to emit workspace sync for FixCircularReference: {}",
+                        e
+                    );
                 }
 
                 Ok(Response::FixResult(result))
@@ -1996,7 +1847,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             } => {
                 let entry = PathBuf::from(&entry_path);
                 let entry_dir = entry.parent().unwrap_or_else(|| Path::new("."));
-                let full_path = entry_dir.join(&attachment_path);
+                // Parse markdown link to extract the actual path
+                let parsed = link_parser::parse_link(&attachment_path);
+                let canonical = link_parser::to_canonical(&parsed, &entry);
+                let full_path = entry_dir.join(&canonical);
 
                 // Delete the file if it exists
                 if self.fs().exists(&full_path).await {
@@ -2024,8 +1878,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 let entry = PathBuf::from(&entry_path);
                 let entry_dir = entry.parent().unwrap_or_else(|| Path::new("."));
+                // Parse markdown link to extract the actual path
+                let parsed = link_parser::parse_link(&attachment_path);
+                let canonical = link_parser::to_canonical(&parsed, &entry);
                 // Normalize the path to handle .. components (important for inherited attachments)
-                let full_path = normalize_path(&entry_dir.join(&attachment_path));
+                let full_path = normalize_path(&entry_dir.join(&canonical));
 
                 let data =
                     self.fs()
@@ -2048,7 +1905,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 // Resolve source paths
                 let source_entry = PathBuf::from(&source_entry_path);
                 let source_dir = source_entry.parent().unwrap_or_else(|| Path::new("."));
-                let source_attachment_path = source_dir.join(&attachment_path);
+                // Parse markdown link to extract the actual path
+                let parsed = link_parser::parse_link(&attachment_path);
+                let canonical = link_parser::to_canonical(&parsed, &source_entry);
+                let source_attachment_path = source_dir.join(&canonical);
 
                 // Get the original filename
                 let original_filename = source_attachment_path
@@ -2149,6 +2009,21 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 // Find root index file
                 let root_path = PathBuf::from(&workspace_path);
+                // base_path is the workspace root directory - all CRDT paths should be relative to this
+                let base_path = if root_path.extension().is_some_and(|ext| ext == "md") {
+                    // workspace_path is a file, use its parent directory as base
+                    root_path
+                        .parent()
+                        .map(|p| p.to_path_buf())
+                        .unwrap_or_else(|| root_path.clone())
+                } else {
+                    root_path.clone()
+                };
+                log::info!(
+                    "[InitializeWorkspaceCrdt] workspace_path={:?}, base_path={:?}",
+                    workspace_path,
+                    base_path
+                );
                 let root_index = if root_path.extension().is_some_and(|ext| ext == "md") {
                     root_path.clone()
                 } else {
@@ -2178,9 +2053,18 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 };
 
                 // Build tree
+                log::info!(
+                    "[InitializeWorkspaceCrdt] Building tree from root_index={:?}",
+                    root_index
+                );
                 let tree = ws
                     .build_tree_with_depth(&root_index, None, &mut HashSet::new())
                     .await?;
+                log::info!(
+                    "[InitializeWorkspaceCrdt] Tree built: root={:?}, children={}",
+                    tree.path,
+                    tree.children.len()
+                );
 
                 // Collect all files with their metadata using iterative tree walk
                 let mut files_to_add: Vec<(String, crate::crdt::FileMetadata)> = Vec::new();
@@ -2196,59 +2080,88 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 let mut files_updated_from_disk: Vec<String> = Vec::new();
 
                 while let Some((node, parent_path)) = stack.pop() {
-                    let path_str = node.path.to_string_lossy().to_string();
+                    // Keep absolute path for filesystem operations (reading files)
+                    let absolute_path = node.path.to_string_lossy().to_string();
+
+                    // Convert absolute path to workspace-relative for CRDT storage
+                    // This ensures paths are portable across machines
+                    let canonical_path = node.path
+                        .strip_prefix(&base_path)
+                        .map(|p| p.to_string_lossy().replace('\\', "/"))
+                        .unwrap_or_else(|_| {
+                            log::warn!(
+                                "[InitializeWorkspaceCrdt] Failed to strip prefix {:?} from {:?}, using absolute path",
+                                base_path, node.path
+                            );
+                            absolute_path.clone().replace('\\', "/")
+                        });
+
+                    log::debug!(
+                        "[InitializeWorkspaceCrdt] Processing: absolute={}, canonical={}, children={}",
+                        absolute_path,
+                        canonical_path,
+                        node.children.len()
+                    );
 
                     // Skip files not in allowed set (if audience filtering is active)
-                    if let Some(ref allowed) = allowed_paths {
-                        if !allowed.contains(&node.path) {
-                            log::debug!(
-                                "[InitializeWorkspaceCrdt] Skipping {} (not in audience)",
-                                path_str
-                            );
-                            continue;
-                        }
+                    if let Some(ref allowed) = allowed_paths
+                        && !allowed.contains(&node.path)
+                    {
+                        log::debug!(
+                            "[InitializeWorkspaceCrdt] Skipping {} (not in audience)",
+                            canonical_path
+                        );
+                        continue;
                     }
 
                     // Get file modification time from filesystem
                     let file_mtime = self.fs().get_modified_time(&node.path).await;
 
-                    // Get existing CRDT entry for reconciliation
-                    let existing_crdt_entry = crdt.get_file(&path_str);
+                    // Get existing CRDT entry for reconciliation (use canonical path)
+                    let existing_crdt_entry = crdt.get_file(&canonical_path);
+                    log::debug!(
+                        "[InitializeWorkspaceCrdt] CRDT lookup for '{}': {:?}",
+                        canonical_path,
+                        existing_crdt_entry
+                            .as_ref()
+                            .map(|e| (e.deleted, e.modified_at))
+                    );
 
                     // Reconciliation logic: compare file mtime vs CRDT modified_at
                     // If CRDT has newer or equal timestamp, skip updating from file
-                    if let Some(crdt_entry) = &existing_crdt_entry {
-                        if !crdt_entry.deleted {
-                            // If we have file mtime, compare timestamps
-                            // If no file mtime available (OPFS/web), trust the CRDT if it has data
-                            let should_keep_crdt = match file_mtime {
-                                Some(fmtime) => crdt_entry.modified_at >= fmtime,
-                                None => true, // No mtime available, trust existing CRDT entry
-                            };
+                    if let Some(crdt_entry) = &existing_crdt_entry
+                        && !crdt_entry.deleted
+                    {
+                        // If we have file mtime, compare timestamps
+                        // If no file mtime available (OPFS/web), trust the CRDT if it has data
+                        let should_keep_crdt = match file_mtime {
+                            Some(fmtime) => crdt_entry.modified_at >= fmtime,
+                            None => true, // No mtime available, trust existing CRDT entry
+                        };
 
-                            if should_keep_crdt {
-                                log::debug!(
-                                    "[InitializeWorkspaceCrdt] Keeping CRDT version for {} (CRDT: {}, file: {:?})",
-                                    path_str,
-                                    crdt_entry.modified_at,
-                                    file_mtime
-                                );
-                                // Add children to stack to continue tree traversal
-                                for child in node.children.iter().rev() {
-                                    stack.push((child, Some(path_str.clone())));
-                                }
-                                continue;
+                        if should_keep_crdt {
+                            log::debug!(
+                                "[InitializeWorkspaceCrdt] Keeping CRDT version for {} (CRDT: {}, file: {:?})",
+                                canonical_path,
+                                crdt_entry.modified_at,
+                                file_mtime
+                            );
+                            // Add children to stack to continue tree traversal
+                            for child in node.children.iter().rev() {
+                                stack.push((child, Some(canonical_path.clone())));
                             }
+                            continue;
                         }
                     }
 
                     // File is newer or no CRDT entry exists - read and update
-                    let content = match self.entry().read_raw(&path_str).await {
+                    // Use absolute_path for filesystem operations
+                    let content = match self.entry().read_raw(&absolute_path).await {
                         Ok(c) => c,
                         Err(e) => {
                             log::warn!(
                                 "[InitializeWorkspaceCrdt] Could not read {}: {:?}",
-                                path_str,
+                                absolute_path,
                                 e
                             );
                             continue;
@@ -2261,7 +2174,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         Err(e) => {
                             log::warn!(
                                 "[InitializeWorkspaceCrdt] Parse error for {}: {:?}",
-                                path_str,
+                                canonical_path,
                                 e
                             );
                             continue;
@@ -2270,10 +2183,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                     // Track if this was an update from disk (existing CRDT entry with older timestamp)
                     if existing_crdt_entry.is_some() {
-                        files_updated_from_disk.push(path_str.clone());
+                        files_updated_from_disk.push(canonical_path.clone());
                         log::info!(
                             "[InitializeWorkspaceCrdt] Updating {} from disk (file is newer)",
-                            path_str
+                            canonical_path
                         );
                     }
 
@@ -2285,7 +2198,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         .map(|s| s.to_string());
 
                     // Get the directory of the current file for resolving relative paths
-                    let file_dir = Path::new(&path_str).parent().unwrap_or(Path::new(""));
+                    // Use canonical_path so contents paths are also workspace-relative
+                    let file_dir = Path::new(&canonical_path).parent().unwrap_or(Path::new(""));
 
                     let contents: Option<Vec<String>> = parsed
                         .frontmatter
@@ -2295,8 +2209,20 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                             seq.iter()
                                 .filter_map(|v| v.as_str())
                                 .map(|relative_path| {
-                                    // Resolve relative path to absolute (matching fileMap keys)
-                                    normalize_contents_path(file_dir, relative_path)
+                                    // Resolve relative path to canonical (matching fileMap keys)
+                                    // Also fixes corrupted absolute paths from previous sync issues
+                                    let resolved = normalize_contents_path(
+                                        file_dir,
+                                        relative_path,
+                                        &base_path,
+                                    );
+                                    log::debug!(
+                                        "[InitializeWorkspaceCrdt] contents: {} + {} -> {}",
+                                        file_dir.display(),
+                                        relative_path,
+                                        resolved
+                                    );
+                                    resolved
                                 })
                                 .collect()
                         });
@@ -2355,10 +2281,9 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                             "description",
                         ]
                         .contains(&key.as_str())
+                            && let Ok(json) = serde_json::to_value(value)
                         {
-                            if let Ok(json) = serde_json::to_value(value) {
-                                extra.insert(key.clone(), json);
-                            }
+                            extra.insert(key.clone(), json);
                         }
                     }
 
@@ -2366,8 +2291,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     let modified_at =
                         file_mtime.unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
 
-                    // Extract filename from path
-                    let filename = std::path::Path::new(&path_str)
+                    // Extract filename from path (canonical_path works here - same filename)
+                    let filename = std::path::Path::new(&canonical_path)
                         .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("")
@@ -2386,11 +2311,13 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         modified_at,
                     };
 
-                    files_to_add.push((path_str.clone(), metadata));
+                    // Store with canonical (workspace-relative) path as CRDT key
+                    files_to_add.push((canonical_path.clone(), metadata));
 
                     // Add children to stack (in reverse order to process in correct order)
+                    // Pass canonical_path as parent so children also use relative paths
                     for child in node.children.iter().rev() {
-                        stack.push((child, Some(path_str.clone())));
+                        stack.push((child, Some(canonical_path.clone())));
                     }
                 }
 
@@ -2584,10 +2511,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 crdt.set_file(&path, file_metadata)?;
 
                 // Emit workspace sync (observe_updates should handle this, but emit explicitly for safety)
-                if let Some(ref sync_manager) = self.sync_manager() {
-                    if let Err(e) = sync_manager.emit_workspace_update() {
-                        log::warn!("Failed to emit workspace sync for SetCrdtFile: {}", e);
-                    }
+                if let Some(sync_manager) = self.sync_manager()
+                    && let Err(e) = sync_manager.emit_workspace_update()
+                {
+                    log::warn!("Failed to emit workspace sync for SetCrdtFile: {}", e);
                 }
 
                 Ok(Response::Ok)
@@ -2635,10 +2562,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 crdt.set_body_content(&doc_name, &content)?;
 
                 // Emit body sync message
-                if let Some(ref sync_manager) = self.sync_manager() {
-                    if let Err(e) = sync_manager.emit_body_update(&doc_name, &content) {
-                        log::warn!("Failed to emit body sync for SetBodyContent: {}", e);
-                    }
+                if let Some(sync_manager) = self.sync_manager()
+                    && let Err(e) = sync_manager.emit_body_update(&doc_name, &content)
+                {
+                    log::warn!("Failed to emit body sync for SetBodyContent: {}", e);
                 }
 
                 Ok(Response::Ok)
@@ -2747,30 +2674,31 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     crdt.handle_sync_message_with_changes(&doc_name, &message)?;
 
                 // If write_to_disk is enabled and we have changed files, write them
-                if write_to_disk && !changed_files.is_empty() {
-                    if let Some(handler) = self.sync_handler() {
-                        // Get file metadata for changed files from the CRDT
-                        let files_to_sync: Vec<(String, crate::crdt::FileMetadata)> = changed_files
-                            .iter()
-                            .filter_map(|path| crdt.get_file(path).map(|m| (path.clone(), m)))
-                            .collect();
+                if write_to_disk
+                    && !changed_files.is_empty()
+                    && let Some(handler) = self.sync_handler()
+                {
+                    // Get file metadata for changed files from the CRDT
+                    let files_to_sync: Vec<(String, crate::crdt::FileMetadata)> = changed_files
+                        .iter()
+                        .filter_map(|path| crdt.get_file(path).map(|m| (path.clone(), m)))
+                        .collect();
 
-                        if !files_to_sync.is_empty() {
-                            let body_mgr_ref = self.body_doc_manager().map(|arc| arc.as_ref());
-                            // Note: This path doesn't track renames, pass empty vec
-                            handler
-                                .handle_remote_metadata_update(
-                                    files_to_sync,
-                                    Vec::new(),
-                                    body_mgr_ref,
-                                    true,
-                                )
-                                .await?;
-                            log::debug!(
-                                "HandleSyncMessage: wrote {} changed files to disk",
-                                changed_files.len()
-                            );
-                        }
+                    if !files_to_sync.is_empty() {
+                        let body_mgr_ref = self.body_doc_manager().map(|arc| arc.as_ref());
+                        // Note: This path doesn't track renames, pass empty vec
+                        handler
+                            .handle_remote_metadata_update(
+                                files_to_sync,
+                                Vec::new(),
+                                body_mgr_ref,
+                                true,
+                            )
+                            .await?;
+                        log::debug!(
+                            "HandleSyncMessage: wrote {} changed files to disk",
+                            changed_files.len()
+                        );
                     }
                 }
 
@@ -2825,23 +2753,21 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     crdt.apply_update_tracking_changes(&update, crate::crdt::UpdateOrigin::Remote)?;
 
                 // If we have a sync handler and write_to_disk is enabled, write only changed files
-                if write_to_disk {
-                    if let Some(handler) = sync_handler {
-                        // Only get metadata for files that actually changed
-                        let files: Vec<(String, crate::crdt::FileMetadata)> = changed_paths
-                            .iter()
-                            .filter_map(|path| crdt.get_file(path).map(|m| (path.clone(), m)))
-                            .collect();
-                        let body_mgr_ref = body_manager.map(|arc| arc.as_ref());
-                        let files_synced = handler
-                            .handle_remote_metadata_update(files, renames, body_mgr_ref, true)
-                            .await?;
-                        log::debug!(
-                            "ApplyRemoteWorkspaceUpdateWithEffects: synced {} files (out of {} changed)",
-                            files_synced,
-                            changed_paths.len()
-                        );
-                    }
+                if write_to_disk && let Some(handler) = sync_handler {
+                    // Only get metadata for files that actually changed
+                    let files: Vec<(String, crate::crdt::FileMetadata)> = changed_paths
+                        .iter()
+                        .filter_map(|path| crdt.get_file(path).map(|m| (path.clone(), m)))
+                        .collect();
+                    let body_mgr_ref = body_manager.map(|arc| arc.as_ref());
+                    let files_synced = handler
+                        .handle_remote_metadata_update(files, renames, body_mgr_ref, true)
+                        .await?;
+                    log::debug!(
+                        "ApplyRemoteWorkspaceUpdateWithEffects: synced {} files (out of {} changed)",
+                        files_synced,
+                        changed_paths.len()
+                    );
                 }
 
                 Ok(Response::UpdateId(update_id))
@@ -2864,21 +2790,19 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 let update_id = doc.apply_update(&update, crate::crdt::UpdateOrigin::Remote)?;
 
                 // If write_to_disk is enabled, write the body to disk
-                if write_to_disk {
-                    if let Some(handler) = self.sync_handler() {
-                        let body = doc.get_body();
-                        let crdt = self.crdt();
-                        let metadata = crdt.and_then(|c| c.get_file(&doc_name));
+                if write_to_disk && let Some(handler) = self.sync_handler() {
+                    let body = doc.get_body();
+                    let crdt = self.crdt();
+                    let metadata = crdt.and_then(|c| c.get_file(&doc_name));
 
-                        handler
-                            .handle_remote_body_update(&doc_name, &body, metadata.as_ref())
-                            .await?;
+                    handler
+                        .handle_remote_body_update(&doc_name, &body, metadata.as_ref())
+                        .await?;
 
-                        log::debug!(
-                            "ApplyRemoteBodyUpdateWithEffects: wrote body to disk for {}",
-                            doc_name
-                        );
-                    }
+                    log::debug!(
+                        "ApplyRemoteBodyUpdateWithEffects: wrote body to disk for {}",
+                        doc_name
+                    );
                 }
 
                 Ok(Response::UpdateId(update_id))
@@ -3356,9 +3280,26 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     }
 
     /// Create the root daily index file.
+    ///
+    /// `part_of` can be a relative path (e.g., `../README.md`) which will be
+    /// converted to a canonical path and formatted based on the configured link format.
     async fn create_daily_index(&self, path: &Path, part_of: Option<&str>) -> Result<()> {
+        // Convert part_of to link if provided
         let part_of_line = match part_of {
-            Some(p) => format!("part_of: {}\n", p),
+            Some(p) => {
+                // Get canonical path of the file being created for resolving relative paths
+                let canonical_path = self.get_canonical_path(&path.to_string_lossy());
+                let parsed = link_parser::parse_link(p);
+                let canonical_parent =
+                    link_parser::to_canonical(&parsed, Path::new(&canonical_path));
+                let formatted_link = self.format_link_for_file(&canonical_parent, &canonical_path);
+                // Quote if it contains special characters (markdown links do)
+                if formatted_link.contains('[') || formatted_link.contains(':') {
+                    format!("part_of: \"{}\"\n", formatted_link)
+                } else {
+                    format!("part_of: {}\n", formatted_link)
+                }
+            }
             None => String::new(),
         };
 
@@ -3383,6 +3324,9 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     }
 
     /// Create a year index file.
+    ///
+    /// `part_of` can be a relative path (e.g., `../daily_index.md`) which will be
+    /// converted to a canonical path and formatted based on the configured link format.
     async fn create_year_index(
         &self,
         path: &Path,
@@ -3390,10 +3334,24 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         part_of: &str,
     ) -> Result<()> {
         let year = date.format("%Y").to_string();
+
+        // Convert part_of to link using configured format
+        let canonical_path = self.get_canonical_path(&path.to_string_lossy());
+        let parsed = link_parser::parse_link(part_of);
+        let canonical_parent = link_parser::to_canonical(&parsed, Path::new(&canonical_path));
+        let formatted_link = self.format_link_for_file(&canonical_parent, &canonical_path);
+
+        // Quote if it contains special characters (markdown links do)
+        let part_of_value = if formatted_link.contains('[') || formatted_link.contains(':') {
+            format!("\"{}\"", formatted_link)
+        } else {
+            formatted_link
+        };
+
         let content = format!(
             "---\n\
             title: {year}\n\
-            part_of: {part_of}\n\
+            part_of: {part_of_value}\n\
             contents: []\n\
             ---\n\n\
             # {year}\n\n\
@@ -3411,6 +3369,9 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     }
 
     /// Create a month index file.
+    ///
+    /// The `year_index_path` is used to compute the part_of link, which is formatted
+    /// based on the configured link format.
     async fn create_month_index_with_parent(
         &self,
         path: &Path,
@@ -3420,16 +3381,23 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         let year = date.format("%Y").to_string();
         let month_name = date.format("%B").to_string();
         let title = format!("{} {}", month_name, year);
-        let fallback_name = format!("{}.md", year);
-        let year_index_name = year_index_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(&fallback_name);
+
+        // Convert year_index_path to canonical and format as link
+        let canonical_path = self.get_canonical_path(&path.to_string_lossy());
+        let canonical_year_index = self.get_canonical_path(&year_index_path.to_string_lossy());
+        let formatted_link = self.format_link_for_file(&canonical_year_index, &canonical_path);
+
+        // Quote if it contains special characters (markdown links do)
+        let part_of_value = if formatted_link.contains('[') || formatted_link.contains(':') {
+            format!("\"{}\"", formatted_link)
+        } else {
+            formatted_link
+        };
 
         let content = format!(
             "---\n\
             title: {title}\n\
-            part_of: ../{year_index_name}\n\
+            part_of: {part_of_value}\n\
             contents: []\n\
             ---\n\n\
             # {title}\n\n\
@@ -3447,6 +3415,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     }
 
     /// Add an entry to an index's contents list.
+    ///
+    /// The `entry` parameter is a relative path from the index file's directory
+    /// (e.g., "2024/2024.md" for a child in a subdirectory). It will be converted
+    /// to a canonical path and formatted based on the configured link format.
     async fn add_to_index_contents(&self, index_path: &Path, entry: &str) -> Result<bool> {
         let content = match self.fs().read_to_string(index_path).await {
             Ok(c) => c,
@@ -3471,20 +3443,50 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         let mut frontmatter: indexmap::IndexMap<String, serde_yaml::Value> =
             serde_yaml::from_str(frontmatter_str).unwrap_or_default();
 
+        // Convert relative entry path to canonical and format as link
+        let index_canonical = self.get_canonical_path(&index_path.to_string_lossy());
+        let parsed = link_parser::parse_link(entry);
+        let entry_canonical = link_parser::to_canonical(&parsed, Path::new(&index_canonical));
+        let formatted_entry = self.format_link_for_file(&entry_canonical, &index_canonical);
+
         // Get or create contents array
         let contents = frontmatter
             .entry("contents".to_string())
             .or_insert(serde_yaml::Value::Sequence(vec![]));
 
         if let serde_yaml::Value::Sequence(items) = contents {
-            let entry_value = serde_yaml::Value::String(entry.to_string());
-            if !items.contains(&entry_value) {
+            let entry_value = serde_yaml::Value::String(formatted_entry.clone());
+            // Check if any existing entry refers to the same canonical path
+            let entry_exists = items.iter().any(|item| {
+                if let Some(s) = item.as_str() {
+                    let parsed_existing = link_parser::parse_link(s);
+                    let canonical_existing =
+                        link_parser::to_canonical(&parsed_existing, Path::new(&index_canonical));
+                    canonical_existing == entry_canonical
+                } else {
+                    false
+                }
+            });
+
+            if !entry_exists {
                 items.push(entry_value);
-                // Sort for consistent ordering
+                // Sort for consistent ordering (by canonical path for stability)
                 items.sort_by(|a, b| {
-                    let a_str = a.as_str().unwrap_or("");
-                    let b_str = b.as_str().unwrap_or("");
-                    a_str.cmp(b_str)
+                    let a_canonical = a
+                        .as_str()
+                        .map(|s| {
+                            let parsed = link_parser::parse_link(s);
+                            link_parser::to_canonical(&parsed, Path::new(&index_canonical))
+                        })
+                        .unwrap_or_default();
+                    let b_canonical = b
+                        .as_str()
+                        .map(|s| {
+                            let parsed = link_parser::parse_link(s);
+                            link_parser::to_canonical(&parsed, Path::new(&index_canonical))
+                        })
+                        .unwrap_or_default();
+                    a_canonical.cmp(&b_canonical)
                 });
 
                 // Reconstruct file

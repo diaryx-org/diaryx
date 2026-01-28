@@ -38,6 +38,8 @@ export interface SyncTransportOptions {
   onContentChange?: (content: string) => void;
   /** Callback when workspace files change (for workspace sync). */
   onFilesChanged?: (changedFiles: string[]) => void;
+  /** Callback for sync progress updates. */
+  onProgress?: (completed: number, total: number) => void;
 }
 
 /**
@@ -89,6 +91,20 @@ export class SyncTransport {
 
       this.ws.onmessage = async (event) => {
         if (this.destroyed) return;
+
+        // Handle text messages (JSON control messages) separately from binary
+        if (typeof event.data === 'string') {
+          try {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'sync_progress') {
+              this.options.onProgress?.(msg.completed, msg.total);
+            }
+            // Other control messages can be handled here
+          } catch (e) {
+            console.warn('[SyncTransport] Failed to parse control message:', e);
+          }
+          return;
+        }
 
         const message = new Uint8Array(event.data as ArrayBuffer);
         await this.handleMessage(message);

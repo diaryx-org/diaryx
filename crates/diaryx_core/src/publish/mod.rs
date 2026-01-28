@@ -21,6 +21,7 @@ use crate::error::{DiaryxError, Result};
 use crate::export::{ExportPlan, Exporter};
 use crate::frontmatter;
 use crate::fs::AsyncFileSystem;
+use crate::link_parser;
 use crate::workspace::Workspace;
 
 /// Publisher for converting workspace to HTML (async-first)
@@ -252,9 +253,12 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
 
         let mut links = Vec::new();
         for child_ref in contents {
+            // Parse markdown link to extract the actual path
+            let parsed = link_parser::parse_link(&child_ref);
+            let canonical = link_parser::to_canonical(&parsed, current_path);
             let child_path = current_dir
-                .map(|d| d.join(&child_ref))
-                .unwrap_or_else(|| PathBuf::from(&child_ref));
+                .map(|d| d.join(&canonical))
+                .unwrap_or_else(|| PathBuf::from(&canonical));
 
             // Try to find the HTML filename for this path
             let href = path_to_filename
@@ -262,11 +266,12 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
                 .cloned()
                 .unwrap_or_else(|| self.path_to_html_filename(&child_path));
 
-            // Try to get the title from the file
+            // Try to get the title from the file, or use parsed title if available
             let title = self
                 .get_title_from_file(&child_path)
                 .await
-                .unwrap_or_else(|| self.filename_to_title(&child_ref));
+                .or_else(|| parsed.title.clone())
+                .unwrap_or_else(|| self.filename_to_title(&canonical));
 
             links.push(NavLink { href, title });
         }
@@ -283,19 +288,24 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
         let part_of = frontmatter::get_string(fm, "part_of")?;
         let current_dir = current_path.parent();
 
+        // Parse markdown link to extract the actual path
+        let parsed = link_parser::parse_link(part_of);
+        let canonical = link_parser::to_canonical(&parsed, current_path);
         let parent_path = current_dir
-            .map(|d| d.join(part_of))
-            .unwrap_or_else(|| PathBuf::from(part_of));
+            .map(|d| d.join(&canonical))
+            .unwrap_or_else(|| PathBuf::from(&canonical));
 
         let href = path_to_filename
             .get(&parent_path)
             .cloned()
             .unwrap_or_else(|| self.path_to_html_filename(&parent_path));
 
+        // Use parsed title if available, otherwise try to read from file
         let title = self
             .get_title_from_file(&parent_path)
             .await
-            .unwrap_or_else(|| self.filename_to_title(part_of));
+            .or_else(|| parsed.title.clone())
+            .unwrap_or_else(|| self.filename_to_title(&canonical));
 
         Some(NavLink { href, title })
     }

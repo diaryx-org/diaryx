@@ -5,17 +5,21 @@
     Italic,
     Strikethrough,
     Code,
-    Highlighter,
     Link as LinkIcon,
     Unlink,
+    EyeOff,
   } from "@lucide/svelte";
+  import HighlightColorPicker from "./HighlightColorPicker.svelte";
+  import type { HighlightColor } from "$lib/extensions/ColoredHighlightMark";
 
   interface Props {
     editor: Editor | null;
     element?: HTMLDivElement;
+    /** Whether spoiler functionality is enabled */
+    enableSpoilers?: boolean;
   }
 
-  let { editor, element = $bindable() }: Props = $props();
+  let { editor, element = $bindable(), enableSpoilers = true }: Props = $props();
 
   // Track active states reactively
   let isBoldActive = $state(false);
@@ -23,7 +27,9 @@
   let isStrikeActive = $state(false);
   let isCodeActive = $state(false);
   let isHighlightActive = $state(false);
+  let currentHighlightColor = $state<HighlightColor | null>(null);
   let isLinkActive = $state(false);
+  let isSpoilerActive = $state(false);
 
   function updateActiveStates() {
     if (!editor) return;
@@ -31,8 +37,16 @@
     isItalicActive = editor.isActive("italic");
     isStrikeActive = editor.isActive("strike");
     isCodeActive = editor.isActive("code");
-    isHighlightActive = editor.isActive("highlight");
+    isHighlightActive = editor.isActive("coloredHighlight");
+    // Get the current highlight color from the editor state
+    if (isHighlightActive) {
+      const attrs = editor.getAttributes("coloredHighlight");
+      currentHighlightColor = (attrs.color as HighlightColor) || "yellow";
+    } else {
+      currentHighlightColor = null;
+    }
     isLinkActive = editor.isActive("link");
+    isSpoilerActive = editor.isActive("spoiler");
   }
 
   function handleBold() {
@@ -55,8 +69,8 @@
     updateActiveStates();
   }
 
-  function handleHighlight() {
-    editor?.chain().focus().toggleHighlight().run();
+  function handleSpoiler() {
+    editor?.chain().focus().toggleSpoiler().run();
     updateActiveStates();
   }
 
@@ -169,20 +183,24 @@
     <Code class="size-4" />
   </button>
 
-  <button
-    type="button"
-    class="toolbar-button"
-    class:active={isHighlightActive}
-    onmousedown={(e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      handleHighlight();
-    }}
-    title="Highlight"
-    aria-pressed={isHighlightActive}
-  >
-    <Highlighter class="size-4" />
-  </button>
+  <HighlightColorPicker {editor} isActive={isHighlightActive} currentColor={currentHighlightColor} />
+
+  {#if enableSpoilers}
+    <button
+      type="button"
+      class="toolbar-button"
+      class:active={isSpoilerActive}
+      onmousedown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        handleSpoiler();
+      }}
+      title="Spoiler"
+      aria-pressed={isSpoilerActive}
+    >
+      <EyeOff class="size-4" />
+    </button>
+  {/if}
 
   <button
     type="button"

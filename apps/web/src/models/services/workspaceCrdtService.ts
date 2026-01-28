@@ -4,7 +4,6 @@ import {
   setWorkspaceId,
   setInitializing,
   updateFileMetadata as updateFileInCrdt,
-  addToContents,
   getWorkspaceStats,
   setCollaborationWorkspaceId,
   type FileMetadata,
@@ -106,6 +105,11 @@ export function resetCrdtState(): void {
 
 /**
  * Update file metadata in the CRDT.
+ *
+ * NOTE: This function does NOT update `part_of` or `contents` in the CRDT.
+ * Those fields are handled exclusively by Rust commands (SetFrontmatterProperty, etc.)
+ * which parse markdown links and store canonical paths. If we passed frontmatter values
+ * directly, we'd overwrite the canonical paths with unparsed markdown links.
  */
 export async function updateCrdtFileMetadata(
   path: string,
@@ -115,6 +119,7 @@ export async function updateCrdtFileMetadata(
 
   try {
     // Build extra fields with proper typing
+    // Exclude part_of, contents, attachments - these are handled by Rust
     const extraFields: Record<string, JsonValue | undefined> = {};
     for (const [key, value] of Object.entries(frontmatter)) {
       if (!['title', 'part_of', 'contents', 'attachments', 'audience', 'description'].includes(key)) {
@@ -122,14 +127,13 @@ export async function updateCrdtFileMetadata(
       }
     }
 
+    // Update CRDT with metadata fields that don't require link parsing.
+    // part_of and contents are intentionally omitted - Rust handles those with proper
+    // markdown link parsing to extract canonical paths for CRDT storage.
     await updateFileInCrdt(path, {
       title: (frontmatter.title as string) ?? null,
-      part_of: (frontmatter.part_of as string) ?? null,
-      // Keep contents as relative paths (as stored in frontmatter)
-      // The CRDT uses relative paths consistently - don't convert to full paths
-      contents: frontmatter.contents
-        ? (frontmatter.contents as string[])
-        : null,
+      // part_of: intentionally omitted - Rust handles via SetFrontmatterProperty
+      // contents: intentionally omitted - Rust handles via SetFrontmatterProperty
       audience: (frontmatter.audience as string[]) ?? null,
       description: (frontmatter.description as string) ?? null,
       extra: extraFields,
@@ -141,16 +145,24 @@ export async function updateCrdtFileMetadata(
 
 /**
  * Add a new file to the CRDT.
+ *
+ * NOTE: This function is primarily for test compatibility. In production,
+ * file creation should go through Rust commands (CreateEntry, CreateChildEntry)
+ * which handle part_of/contents with proper markdown link formatting.
+ *
+ * This function does NOT set part_of or contents in the CRDT to avoid
+ * conflicts with Rust's link parsing. Use Rust commands for hierarchy operations.
  */
 export async function addFileToCrdt(
   path: string,
   frontmatter: Record<string, unknown>,
-  parentPath: string | null,
+  _parentPath: string | null, // Ignored - Rust handles hierarchy via commands
 ): Promise<void> {
   if (!isInitialized) return;
 
   try {
     // Build extra fields with proper typing
+    // Exclude part_of, contents - these should be set by Rust commands
     const extraFields: Record<string, JsonValue | undefined> = {};
     for (const [key, value] of Object.entries(frontmatter)) {
       if (!['title', 'part_of', 'contents', 'attachments', 'audience', 'description'].includes(key)) {
@@ -158,46 +170,21 @@ export async function addFileToCrdt(
       }
     }
 
-    const metadata: FileMetadata = {
-      filename: path.split('/').pop() ?? '',
+    // Only update non-hierarchy metadata.
+    // part_of and contents are handled by Rust commands with proper link formatting.
+    await updateFileInCrdt(path, {
       title: (frontmatter.title as string) ?? null,
-      // Use absolute path to parent (per CRDT spec: part_of is absolute, contents is relative)
-      part_of: parentPath ?? (frontmatter.part_of as string) ?? null,
-      // Keep contents as relative paths (as stored in frontmatter)
-      // The CRDT uses relative paths consistently - don't convert to full paths
-      contents: frontmatter.contents
-        ? (frontmatter.contents as string[])
-        : null,
-      attachments: ((frontmatter.attachments as string[]) ?? []).map((p): BinaryRef => ({
-        path: p,
-        source: 'local',
-        hash: '',
-        mime_type: '',
-        size: BigInt(0),
-        uploaded_at: null,
-        deleted: false,
-      })),
-      deleted: false,
+      // part_of: intentionally omitted - Rust handles
+      // contents: intentionally omitted - Rust handles
       audience: (frontmatter.audience as string[]) ?? null,
       description: (frontmatter.description as string) ?? null,
       extra: extraFields,
-      modified_at: BigInt(Date.now()),
-    };
+    });
 
-    await updateFileInCrdt(path, metadata);
-
-    // Add to parent's contents if parent exists
-    if (parentPath) {
-      // Calculate relative path (just the filename if inside parent dir, or fully relative)
-      let relativePath = path;
-      if (path.startsWith(parentPath + '/')) {
-        relativePath = path.substring(parentPath.length + 1);
-      } else {
-        const lastSlash = path.lastIndexOf('/');
-        relativePath = lastSlash >= 0 ? path.substring(lastSlash + 1) : path;
-      }
-      await addToContents(parentPath, relativePath);
-    }
+    // NOTE: We intentionally do NOT call addToContents here.
+    // Parent-child relationships should be established via Rust commands
+    // (CreateEntry, CreateChildEntry, AttachEntryToParent) which handle
+    // markdown link formatting for part_of/contents properties.
   } catch (e) {
     console.error('[WorkspaceCrdtService] Failed to add file:', e);
   }

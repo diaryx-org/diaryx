@@ -48,6 +48,7 @@ dotenvy = "0.15"
 
 # Live sync (WebSocket transport)
 tokio-tungstenite = "0.23"
+futures-util = "0.3"
 url = "2"
 
 [features]

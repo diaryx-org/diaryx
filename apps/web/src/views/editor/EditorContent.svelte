@@ -30,6 +30,8 @@
       blobUrl?: string;
       sourceEntryPath: string;
     }) => void;
+    // Formatting options
+    enableSpoilers?: boolean;
   }
 
   let {
@@ -46,6 +48,7 @@
     entryPath,
     api,
     onAttachmentInsert,
+    enableSpoilers = true,
   }: Props = $props();
 </script>
 
@@ -81,6 +84,7 @@
           {entryPath}
           {api}
           {onAttachmentInsert}
+          {enableSpoilers}
         />
       {/key}
     {:else}

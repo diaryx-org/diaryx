@@ -12,35 +12,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_yaml::Value;
 use ts_rs::TS;
 
-/// Deserializes a value that should be a string, but may be an array or other type.
-/// - String: returned as-is
-/// - Array: takes the first element if it's a string
-/// - Number/Bool: converted to string
-/// - Null/None: returns None
-fn deserialize_string_lenient<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value: Option<Value> = Option::deserialize(deserializer)?;
-    match value {
-        None => Ok(None),
-        Some(Value::String(s)) => Ok(Some(s)),
-        Some(Value::Number(n)) => Ok(Some(n.to_string())),
-        Some(Value::Bool(b)) => Ok(Some(b.to_string())),
-        Some(Value::Null) => Ok(None),
-        Some(Value::Sequence(seq)) => {
-            // Take the first string element from the array
-            for item in seq {
-                if let Value::String(s) = item {
-                    return Ok(Some(s));
-                }
-            }
-            Ok(None)
-        }
-        Some(Value::Mapping(_)) => Ok(None), // Can't convert a mapping to string
-        Some(Value::Tagged(_)) => Ok(None),  // Tagged YAML values are rare, skip them
-    }
-}
+use crate::link_parser;
 
 /// Normalize a path by resolving `.` and `..` components without filesystem access.
 /// This is necessary for web/WASM where the virtual filesystem doesn't handle `..` in paths.
@@ -70,6 +42,36 @@ fn normalize_path(path: &Path) -> PathBuf {
     }
 
     normalized.iter().collect()
+}
+
+/// Deserializes a value that should be a string, but may be an array or other type.
+/// - String: returned as-is
+/// - Array: takes the first element if it's a string
+/// - Number/Bool: converted to string
+/// - Null/None: returns None
+fn deserialize_string_lenient<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: Option<Value> = Option::deserialize(deserializer)?;
+    match value {
+        None => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s)),
+        Some(Value::Number(n)) => Ok(Some(n.to_string())),
+        Some(Value::Bool(b)) => Ok(Some(b.to_string())),
+        Some(Value::Null) => Ok(None),
+        Some(Value::Sequence(seq)) => {
+            // Take the first string element from the array
+            for item in seq {
+                if let Value::String(s) = item {
+                    return Ok(Some(s));
+                }
+            }
+            Ok(None)
+        }
+        Some(Value::Mapping(_)) => Ok(None), // Can't convert a mapping to string
+        Some(Value::Tagged(_)) => Ok(None),  // Tagged YAML values are rare, skip them
+    }
 }
 
 /// Represents an index file's frontmatter
@@ -186,17 +188,34 @@ impl IndexFile {
         self.path.parent()
     }
 
-    /// Resolve a relative path from this index's location.
+    /// Resolve a path reference from this index's location.
+    ///
+    /// Handles multiple formats:
+    /// - Markdown links: `[Title](/path/file.md)` or `[Title](../file.md)`
+    /// - Plain paths with `/` prefix (workspace-root): `/path/file.md`
+    /// - Plain relative paths: `../file.md` or `./file.md`
+    /// - Plain ambiguous paths: `path/file.md` (treated as relative)
+    ///
+    /// Returns an absolute path resolved against this index file's location.
     /// The path is normalized to handle `..` and `.` components,
     /// which is necessary for web/WASM where the virtual filesystem
     /// doesn't automatically resolve these.
-    pub fn resolve_path(&self, relative: &str) -> PathBuf {
-        let joined = self
-            .directory()
-            .map(|dir| dir.join(relative))
-            .unwrap_or_else(|| PathBuf::from(relative));
+    pub fn resolve_path(&self, path_ref: &str) -> PathBuf {
+        // Parse the link to extract the actual path and determine type
+        let parsed = link_parser::parse_link(path_ref);
 
-        normalize_path(&joined)
+        match parsed.path_type {
+            link_parser::PathType::WorkspaceRoot => {
+                // Workspace-root paths are already canonical (workspace-relative).
+                // Return as PathBuf directly - callers operate relative to workspace root.
+                PathBuf::from(&parsed.path)
+            }
+            link_parser::PathType::Relative | link_parser::PathType::Ambiguous => {
+                // Resolve relative to current file's directory
+                let dir = self.directory().unwrap_or_else(|| std::path::Path::new(""));
+                normalize_path(&dir.join(&parsed.path))
+            }
+        }
     }
 }
 

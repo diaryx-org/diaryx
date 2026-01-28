@@ -6,6 +6,8 @@ audience:
   - public
   - developers
 part_of: ../README.md
+contents:
+  - docs/tiptap-custom-extensions.md
 ---
 
 # Diaryx Web
@@ -195,6 +197,12 @@ The WASM module is built from `crates/diaryx_wasm`:
 cd ../../crates/diaryx_wasm
 wasm-pack build --target web --out-dir ../../apps/web/src/lib/wasm
 ```
+
+## Developer Guides
+
+| Guide | Description |
+| ----- | ----------- |
+| [TipTap Custom Extensions](docs/tiptap-custom-extensions.md) | Creating custom TipTap extensions with markdown support |
 
 ## Live Demo
 

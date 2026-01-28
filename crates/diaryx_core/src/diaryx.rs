@@ -109,6 +109,11 @@ pub(crate) fn json_to_yaml(json: serde_json::Value) -> Value {
 /// operations through sub-module accessors.
 pub struct Diaryx<FS: AsyncFileSystem> {
     fs: FS,
+    /// The workspace root directory (for computing canonical paths and link formatting).
+    /// Uses RwLock for interior mutability since `set_workspace_root` takes `&self`.
+    workspace_root: std::sync::RwLock<Option<PathBuf>>,
+    /// Link format for part_of and contents properties.
+    link_format: crate::link_parser::LinkFormat,
     /// CRDT workspace document (optional, requires `crdt` feature).
     /// Wrapped in Arc to allow sharing between backend and command execution.
     #[cfg(feature = "crdt")]
@@ -130,6 +135,8 @@ impl<FS: AsyncFileSystem> Diaryx<FS> {
     pub fn new(fs: FS) -> Self {
         Self {
             fs,
+            workspace_root: std::sync::RwLock::new(None),
+            link_format: crate::link_parser::LinkFormat::default(),
             #[cfg(feature = "crdt")]
             workspace_crdt: None,
             #[cfg(feature = "crdt")]
@@ -139,6 +146,21 @@ impl<FS: AsyncFileSystem> Diaryx<FS> {
             #[cfg(feature = "crdt")]
             sync_manager: None,
         }
+    }
+
+    /// Set the link format for part_of and contents properties.
+    pub fn set_link_format(&mut self, format: crate::link_parser::LinkFormat) {
+        self.link_format = format;
+    }
+
+    /// Get the workspace root directory.
+    pub fn workspace_root(&self) -> Option<PathBuf> {
+        self.workspace_root.read().unwrap().clone()
+    }
+
+    /// Get the link format.
+    pub fn link_format(&self) -> crate::link_parser::LinkFormat {
+        self.link_format
     }
 
     /// Create a new Diaryx instance with CRDT support.
@@ -159,6 +181,8 @@ impl<FS: AsyncFileSystem> Diaryx<FS> {
         ));
         Self {
             fs,
+            workspace_root: std::sync::RwLock::new(None),
+            link_format: crate::link_parser::LinkFormat::default(),
             workspace_crdt: Some(workspace_crdt),
             body_doc_manager: Some(body_doc_manager),
             sync_handler: Some(sync_handler),
@@ -185,6 +209,8 @@ impl<FS: AsyncFileSystem> Diaryx<FS> {
         ));
         Ok(Self {
             fs,
+            workspace_root: std::sync::RwLock::new(None),
+            link_format: crate::link_parser::LinkFormat::default(),
             workspace_crdt: Some(workspace_crdt),
             body_doc_manager: Some(body_doc_manager),
             sync_handler: Some(sync_handler),
@@ -215,6 +241,8 @@ impl<FS: AsyncFileSystem> Diaryx<FS> {
         ));
         Self {
             fs,
+            workspace_root: std::sync::RwLock::new(None),
+            link_format: crate::link_parser::LinkFormat::default(),
             workspace_crdt: Some(workspace_crdt),
             body_doc_manager: Some(body_doc_manager),
             sync_handler: Some(sync_handler),
@@ -301,6 +329,24 @@ impl<FS: AsyncFileSystem> Diaryx<FS> {
     ) {
         if let Some(ref sync_manager) = self.sync_manager {
             sync_manager.set_event_callback(callback);
+        }
+    }
+
+    /// Set the workspace root directory for the sync handler.
+    ///
+    /// When set, canonical paths (e.g., "Archive/file.md") are resolved relative
+    /// to this root when writing to disk during sync operations. This is essential
+    /// for Tauri/native apps where files should be written to a specific workspace
+    /// directory, not the current working directory.
+    ///
+    /// Call this after creating the Diaryx instance, typically in initialize_app().
+    #[cfg(feature = "crdt")]
+    pub fn set_workspace_root(&self, root: std::path::PathBuf) {
+        // Store in the RwLock for link formatting
+        *self.workspace_root.write().unwrap() = Some(root.clone());
+        // Also set on sync_handler for path resolution during sync
+        if let Some(ref sync_handler) = self.sync_handler {
+            sync_handler.set_workspace_root(root);
         }
     }
 }
@@ -590,8 +636,19 @@ pub struct WorkspaceOps<'a, FS: AsyncFileSystem> {
 
 impl<'a, FS: AsyncFileSystem> WorkspaceOps<'a, FS> {
     /// Get access to the underlying Workspace struct for full functionality.
+    ///
+    /// If a workspace root has been set (via `set_workspace_root`), the returned
+    /// Workspace will have link formatting enabled with the configured link format.
     pub fn inner(&self) -> crate::workspace::Workspace<&'a FS> {
-        crate::workspace::Workspace::new(&self.diaryx.fs)
+        if let Some(root) = self.diaryx.workspace_root() {
+            crate::workspace::Workspace::with_link_format(
+                &self.diaryx.fs,
+                root,
+                self.diaryx.link_format,
+            )
+        } else {
+            crate::workspace::Workspace::new(&self.diaryx.fs)
+        }
     }
 }
 

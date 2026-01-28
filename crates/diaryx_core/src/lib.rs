@@ -47,6 +47,9 @@ pub mod template;
 /// Validate (check workspace link integrity)
 pub mod validate;
 
+/// Portable path link parsing and formatting for part_of/contents properties
+pub mod link_parser;
+
 /// Utility functions (date parsing, path calculations)
 pub mod utils;
 

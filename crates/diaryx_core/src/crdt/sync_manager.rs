@@ -288,7 +288,7 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         // (The TypeScript version used a 300ms debounce, but we can track this more precisely)
         let sync_complete = !self.workspace_synced.swap(true, Ordering::SeqCst);
         if sync_complete {
-            log::info!("[SyncManager] Workspace sync complete");
+            log::debug!("[SyncManager] Workspace sync complete");
             self.initial_sync_complete.store(true, Ordering::SeqCst);
         }
 

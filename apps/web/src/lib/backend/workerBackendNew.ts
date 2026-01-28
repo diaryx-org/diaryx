@@ -126,10 +126,11 @@ export class WorkerBackendNew implements Backend {
 
   /**
    * Get the workspace path.
-   * For WASM, this is always "workspace" (virtual path in OPFS/IndexedDB).
+   * For WASM, this is "." (OPFS root = diaryx/).
+   * Returns the directory - callers should use api.findRootIndex() to get the actual root file.
    */
   getWorkspacePath(): string {
-    return "workspace/index.md";
+    return ".";
   }
 
   /**
@@ -137,7 +138,7 @@ export class WorkerBackendNew implements Backend {
    */
   getConfig(): Config | null {
     return {
-      default_workspace: "workspace",
+      default_workspace: ".",
     };
   }
 

@@ -14,6 +14,7 @@
 
   // Import modular settings components
   import DisplaySettings from "./settings/DisplaySettings.svelte";
+  import FormattingSettings from "./settings/FormattingSettings.svelte";
   import WorkspaceSettings from "./settings/WorkspaceSettings.svelte";
   import StorageSettings from "./settings/StorageSettings.svelte";
   import SyncSettings from "./settings/SyncSettings.svelte";
@@ -99,6 +100,7 @@
           bind:readableLineLength
           bind:focusMode
         />
+        <FormattingSettings />
       </div>
     </Tabs.Content>
 

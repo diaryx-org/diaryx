@@ -6,10 +6,13 @@
 /// Where all the Tauri `invoke` functions are defined.
 mod commands;
 
-use commands::{CrdtState, GuestModeState};
+use commands::{CrdtState, GuestModeState, WebSocketSyncState};
 
 /// Cloud backup targets (S3, Google Drive, etc.)
 mod cloud;
+
+/// WebSocket sync transport for real-time sync
+mod websocket_sync;
 
 /// Run function used by Tauri clients. Builds Tauri plugins and invokable commands.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -49,6 +52,8 @@ pub fn run() {
         .manage(CrdtState::new())
         // Guest mode state for share sessions
         .manage(GuestModeState::new())
+        // WebSocket sync state
+        .manage(WebSocketSyncState::new())
         .invoke_handler(tauri::generate_handler![
             // ============================================================
             // UNIFIED COMMAND API - All operations go through execute()
@@ -94,6 +99,10 @@ pub fn run() {
             commands::start_guest_mode,
             commands::end_guest_mode,
             commands::is_guest_mode,
+            // WebSocket Sync
+            commands::start_websocket_sync,
+            commands::stop_websocket_sync,
+            commands::get_websocket_sync_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -36,6 +36,11 @@ export interface MagicLinkResponse {
   dev_link?: string;
 }
 
+export interface UserHasDataResponse {
+  has_data: boolean;
+  file_count: number;
+}
+
 export class AuthError extends Error {
   constructor(
     message: string,
@@ -183,6 +188,23 @@ export class AuthService {
    */
   async getStatus(): Promise<{ status: string; version: string; active_connections: number }> {
     const response = await fetch(`${this.serverUrl}/api/status`);
+    return response.json();
+  }
+
+  /**
+   * Check if user has synced data on the server.
+   */
+  async checkUserHasData(authToken: string): Promise<UserHasDataResponse> {
+    const response = await fetch(`${this.serverUrl}/api/user/has-data`, {
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      throw new AuthError('Failed to check user data', response.status);
+    }
+
     return response.json();
   }
 }

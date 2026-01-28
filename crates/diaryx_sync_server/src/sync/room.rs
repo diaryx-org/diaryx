@@ -17,6 +17,7 @@ pub enum ControlMessage {
     PeerLeft { guest_id: String, peer_count: usize },
     ReadOnlyChanged { read_only: bool },
     SessionEnded,
+    SyncProgress { completed: usize, total: usize },
 }
 
 /// Session context for a share session
@@ -181,6 +182,12 @@ impl SyncState {
         let mapping = self.session_to_workspace.read().await;
         let workspace_id = mapping.get(session_code)?;
 
+        let rooms = self.rooms.read().await;
+        rooms.get(workspace_id).cloned()
+    }
+
+    /// Get an existing room by workspace ID (does not create if not found)
+    pub async fn get_room(&self, workspace_id: &str) -> Option<Arc<SyncRoom>> {
         let rooms = self.rooms.read().await;
         rooms.get(workspace_id).cloned()
     }
@@ -666,5 +673,11 @@ impl SyncRoom {
     pub async fn get_body_content(&self, file_path: &str) -> Option<String> {
         let body_docs = self.body_docs.read().await;
         body_docs.get(file_path).map(|doc| doc.get_body())
+    }
+
+    /// Get the number of files in the workspace (for user data check)
+    pub async fn get_file_count(&self) -> usize {
+        let workspace = self.workspace.read().await;
+        workspace.file_count()
     }
 }

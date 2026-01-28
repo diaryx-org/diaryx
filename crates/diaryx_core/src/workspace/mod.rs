@@ -28,23 +28,140 @@ use serde_yaml::Value;
 use crate::config::Config;
 use crate::error::{DiaryxError, Result};
 use crate::fs::AsyncFileSystem;
+use crate::link_parser::{self, LinkFormat};
 
 /// Workspace operations (async-first).
 ///
 /// All methods are async and use `AsyncFileSystem` for filesystem access.
 pub struct Workspace<FS: AsyncFileSystem> {
     fs: FS,
+    /// The workspace root directory path (for computing canonical paths)
+    root_path: Option<PathBuf>,
+    /// Link format for part_of and contents properties
+    link_format: LinkFormat,
 }
 
 impl<FS: AsyncFileSystem> Workspace<FS> {
-    /// Create a new workspace
+    /// Create a new workspace without link formatting (legacy mode).
+    /// Links will be written as relative paths.
     pub fn new(fs: FS) -> Self {
-        Self { fs }
+        Self {
+            fs,
+            root_path: None,
+            link_format: LinkFormat::PlainRelative,
+        }
+    }
+
+    /// Create a new workspace with link formatting enabled.
+    ///
+    /// # Arguments
+    /// * `fs` - The filesystem to use
+    /// * `root_path` - The workspace root directory (for computing canonical paths)
+    /// * `link_format` - How to format part_of and contents links
+    pub fn with_link_format(fs: FS, root_path: PathBuf, link_format: LinkFormat) -> Self {
+        Self {
+            fs,
+            root_path: Some(root_path),
+            link_format,
+        }
     }
 
     /// Get a reference to the underlying filesystem
     pub fn fs_ref(&self) -> &FS {
         &self.fs
+    }
+
+    /// Get the canonical path (workspace-relative) for a filesystem path.
+    /// Returns the path as-is if no root_path is configured.
+    ///
+    /// The canonical path:
+    /// - Has no leading `/` or `./`
+    /// - Uses forward slashes
+    /// - Is relative to the workspace root
+    fn get_canonical_path(&self, path: &Path) -> String {
+        let raw = if let Some(ref root) = self.root_path {
+            // Strip the root path prefix to get workspace-relative path
+            path.strip_prefix(root)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .replace('\\', "/") // Normalize to forward slashes
+        } else {
+            path.to_string_lossy().replace('\\', "/")
+        };
+
+        // Normalize: strip leading "./" or "/" to get clean canonical path
+        raw.trim_start_matches("./")
+            .trim_start_matches('/')
+            .to_string()
+    }
+
+    /// Resolve a title for a canonical path by reading the file's frontmatter.
+    /// Falls back to a formatted filename if the file can't be read.
+    async fn resolve_title(&self, canonical_path: &str) -> String {
+        if let Some(ref root) = self.root_path {
+            let full_path = root.join(canonical_path);
+            if let Ok(content) = self.fs.read_to_string(&full_path).await {
+                // Try to extract title from frontmatter
+                if let Some(title) = Self::extract_title_from_content(&content) {
+                    return title;
+                }
+            }
+        }
+        // Fallback: convert filename to title
+        link_parser::path_to_title(canonical_path)
+    }
+
+    /// Extract title from file content's frontmatter
+    fn extract_title_from_content(content: &str) -> Option<String> {
+        if !content.starts_with("---\n") && !content.starts_with("---\r\n") {
+            return None;
+        }
+        let rest = &content[4..];
+        let end_idx = rest.find("\n---\n").or_else(|| rest.find("\n---\r\n"))?;
+        let frontmatter_str = &rest[..end_idx];
+
+        // Simple extraction - look for "title: " line
+        for line in frontmatter_str.lines() {
+            let trimmed = line.trim();
+            if let Some(title) = trimmed.strip_prefix("title:") {
+                let title = title.trim().trim_matches('"').trim_matches('\'');
+                if !title.is_empty() {
+                    return Some(title.to_string());
+                }
+            }
+        }
+        None
+    }
+
+    /// Format a link for frontmatter based on configured link format.
+    ///
+    /// # Arguments
+    /// * `target_canonical` - The canonical path of the target file
+    /// * `from_canonical` - The canonical path of the file containing the link
+    #[allow(dead_code)]
+    async fn format_link(&self, target_canonical: &str, from_canonical: &str) -> String {
+        let title = self.resolve_title(target_canonical).await;
+        link_parser::format_link_with_format(
+            target_canonical,
+            &title,
+            self.link_format,
+            from_canonical,
+        )
+    }
+
+    /// Format a link synchronously (when title is already known).
+    fn format_link_sync(
+        &self,
+        target_canonical: &str,
+        title: &str,
+        from_canonical: &str,
+    ) -> String {
+        link_parser::format_link_with_format(
+            target_canonical,
+            title,
+            self.link_format,
+            from_canonical,
+        )
     }
 
     /// Parse a markdown file and extract index frontmatter
@@ -705,17 +822,24 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         path.strip_prefix("./").unwrap_or(path)
     }
 
-    /// Add an entry to an index's contents list
+    /// Add an entry to an index's contents list (using raw entry string).
+    /// For formatted links, use `add_to_index_contents_canonical` instead.
     pub async fn add_to_index_contents(&self, index_path: &Path, entry: &str) -> Result<bool> {
         // Normalize the entry path (strip leading ./)
         let normalized_entry = Self::normalize_contents_path(entry);
 
+        // Parse the new entry to get its canonical path for comparison
+        let parsed_entry = link_parser::parse_link(normalized_entry);
+        let entry_canonical = link_parser::to_canonical(&parsed_entry, index_path);
+
         match self.get_frontmatter_property(index_path, "contents").await {
             Ok(Some(Value::Sequence(mut items))) => {
-                // Check if entry already exists (comparing normalized forms)
+                // Check if entry already exists (comparing canonical paths)
                 let already_exists = items.iter().any(|item| {
                     if let Some(s) = item.as_str() {
-                        Self::normalize_contents_path(s) == normalized_entry
+                        let parsed = link_parser::parse_link(s);
+                        let existing_canonical = link_parser::to_canonical(&parsed, index_path);
+                        existing_canonical == entry_canonical
                     } else {
                         false
                     }
@@ -749,18 +873,94 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         }
     }
 
-    /// Remove an entry from an index's contents list
+    /// Add an entry to an index's contents list using a canonical path.
+    /// This formats the link according to the configured link_format.
+    pub async fn add_to_index_contents_canonical(
+        &self,
+        index_path: &Path,
+        entry_canonical: &str,
+        title: &str,
+    ) -> Result<bool> {
+        let index_canonical = self.get_canonical_path(index_path);
+
+        // Format the entry based on link format
+        let formatted_entry = if self.root_path.is_some() {
+            self.format_link_sync(entry_canonical, title, &index_canonical)
+        } else {
+            // Fallback: just use the canonical path
+            entry_canonical.to_string()
+        };
+
+        // Extract canonical path from existing entries for comparison
+        let entry_for_comparison = entry_canonical;
+
+        match self.get_frontmatter_property(index_path, "contents").await {
+            Ok(Some(Value::Sequence(mut items))) => {
+                // Check if entry already exists (comparing canonical paths)
+                let already_exists = items.iter().any(|item| {
+                    if let Some(s) = item.as_str() {
+                        // Parse the existing item to get its canonical path
+                        let parsed = link_parser::parse_link(s);
+                        let existing_canonical =
+                            link_parser::to_canonical(&parsed, Path::new(&index_canonical));
+                        existing_canonical == entry_for_comparison
+                    } else {
+                        false
+                    }
+                });
+
+                if !already_exists {
+                    items.push(Value::String(formatted_entry));
+                    // Sort contents for consistent ordering
+                    items.sort_by(|a, b| {
+                        let a_str = a.as_str().unwrap_or("");
+                        let b_str = b.as_str().unwrap_or("");
+                        a_str.cmp(b_str)
+                    });
+                    self.set_frontmatter_property(index_path, "contents", Value::Sequence(items))
+                        .await?;
+                    return Ok(true);
+                }
+                Ok(false)
+            }
+            Ok(None) => {
+                // Create contents with just this entry
+                let items = vec![Value::String(formatted_entry)];
+                self.set_frontmatter_property(index_path, "contents", Value::Sequence(items))
+                    .await?;
+                Ok(true)
+            }
+            _ => {
+                // Contents exists but isn't a sequence, or error reading - skip
+                Ok(false)
+            }
+        }
+    }
+
+    /// Remove an entry from an index's contents list.
+    ///
+    /// The `entry` can be:
+    /// - A plain filename: `new-entry.md`
+    /// - A relative path: `subdir/file.md`
+    /// - A markdown link: `[Title](/path/to/file.md)`
+    ///
+    /// This properly handles markdown links in the contents list by comparing
+    /// canonical paths.
     async fn remove_from_index_contents(&self, index_path: &Path, entry: &str) -> Result<bool> {
-        // Normalize the entry path for comparison
-        let normalized_entry = Self::normalize_contents_path(entry);
+        // Parse the entry to remove to get its canonical form
+        let parsed_entry = link_parser::parse_link(entry);
+        let entry_canonical = link_parser::to_canonical(&parsed_entry, index_path);
 
         match self.get_frontmatter_property(index_path, "contents").await {
             Ok(Some(Value::Sequence(mut items))) => {
                 let before_len = items.len();
-                // Remove entries that match when normalized
+                // Remove entries that match when comparing canonical paths
                 items.retain(|item| {
                     if let Some(s) = item.as_str() {
-                        Self::normalize_contents_path(s) != normalized_entry
+                        // Parse the existing item to get its canonical path
+                        let parsed = link_parser::parse_link(s);
+                        let existing_canonical = link_parser::to_canonical(&parsed, index_path);
+                        existing_canonical != entry_canonical
                     } else {
                         true
                     }
@@ -878,7 +1078,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             path: to_path.to_path_buf(),
             message: "No parent directory for destination path".to_string(),
         })?;
-        let new_file_name = to_path
+        let _new_file_name = to_path
             .file_name()
             .and_then(|n| n.to_str())
             .ok_or_else(|| DiaryxError::InvalidPath {
@@ -905,14 +1105,23 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
 
         // Add to new parent's contents and update part_of (if new parent has an index)
         if let Ok(Some(new_index_path)) = self.find_any_index_in_dir(new_parent).await {
+            // Add with proper formatting
+            let to_path_canonical = self.get_canonical_path(to_path);
+            let title = self.resolve_title(&to_path_canonical).await;
             let _ = self
-                .add_to_index_contents(&new_index_path, &new_file_name)
+                .add_to_index_contents_canonical(&new_index_path, &to_path_canonical, &title)
                 .await;
 
-            // Update moved entry's part_of
-            let rel_part_of = relative_path_from_file_to_target(to_path, &new_index_path);
+            // Update moved entry's part_of with proper formatting
+            let part_of_value = if self.root_path.is_some() {
+                let new_index_canonical = self.get_canonical_path(&new_index_path);
+                let parent_title = self.resolve_title(&new_index_canonical).await;
+                self.format_link_sync(&new_index_canonical, &parent_title, &to_path_canonical)
+            } else {
+                relative_path_from_file_to_target(to_path, &new_index_path)
+            };
             let _ = self
-                .set_frontmatter_property(to_path, "part_of", Value::String(rel_part_of))
+                .set_frontmatter_property(to_path, "part_of", Value::String(part_of_value))
                 .await;
         }
 
@@ -1036,14 +1245,23 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         let child_filename = self.generate_unique_child_name(parent_dir).await;
         let child_path = parent_dir.join(&child_filename);
 
-        // Calculate relative path from child to parent
-        let parent_rel = relative_path_from_file_to_target(&child_path, &effective_parent);
+        // Format part_of link based on configured format
+        let display_title = title.unwrap_or("New Entry");
+        let part_of_value = if self.root_path.is_some() {
+            // Use link formatting - resolve parent's title for the link display
+            let child_canonical = self.get_canonical_path(&child_path);
+            let parent_canonical = self.get_canonical_path(&effective_parent);
+            let parent_title = self.resolve_title(&parent_canonical).await;
+            self.format_link_sync(&parent_canonical, &parent_title, &child_canonical)
+        } else {
+            // Fallback: use relative path
+            relative_path_from_file_to_target(&child_path, &effective_parent)
+        };
 
         // Create child file with frontmatter
-        let display_title = title.unwrap_or("New Entry");
         let content = format!(
-            "---\ntitle: {}\npart_of: {}\n---\n\n# {}\n\n",
-            display_title, parent_rel, display_title
+            "---\ntitle: \"{}\"\npart_of: \"{}\"\n---\n\n# {}\n\n",
+            display_title, part_of_value, display_title
         );
 
         self.fs
@@ -1054,8 +1272,9 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 source: e,
             })?;
 
-        // Add to parent's contents
-        self.add_to_index_contents(&effective_parent, &child_filename)
+        // Add to parent's contents (using formatted link)
+        let child_canonical = self.get_canonical_path(&child_path);
+        self.add_to_index_contents_canonical(&effective_parent, &child_canonical, display_title)
             .await?;
 
         Ok(child_path)
@@ -1125,11 +1344,19 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             }
 
             // Update all children's part_of to point to new index
+            // Update children's part_of to point to renamed parent
+            let new_file_canonical = self.get_canonical_path(&new_file_path);
+            let new_file_title = self.resolve_title(&new_file_canonical).await;
             for child_path in &children_paths {
-                use crate::path_utils::relative_path_from_file_to_target;
-                let new_part_of = relative_path_from_file_to_target(child_path, &new_file_path);
+                let part_of_value = if self.root_path.is_some() {
+                    let child_canonical = self.get_canonical_path(child_path);
+                    self.format_link_sync(&new_file_canonical, &new_file_title, &child_canonical)
+                } else {
+                    use crate::path_utils::relative_path_from_file_to_target;
+                    relative_path_from_file_to_target(child_path, &new_file_path)
+                };
                 let _ = self
-                    .set_frontmatter_property(child_path, "part_of", Value::String(new_part_of))
+                    .set_frontmatter_property(child_path, "part_of", Value::String(part_of_value))
                     .await;
             }
 
@@ -1140,15 +1367,19 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     .and_then(|n| n.to_str())
                     .unwrap_or_default();
 
-                // Calculate relative paths for old and new entries
+                // Remove old entry
                 let old_rel = format!("{}/{}.md", old_dir_name, old_dir_name);
-                let new_rel = format!("{}/{}", new_dir_name, new_filename);
-
                 let _ = self
                     .remove_from_index_contents(&grandparent_index, &old_rel)
                     .await;
+
+                // Add new entry with proper formatting
                 let _ = self
-                    .add_to_index_contents(&grandparent_index, &new_rel)
+                    .add_to_index_contents_canonical(
+                        &grandparent_index,
+                        &new_file_canonical,
+                        &new_file_title,
+                    )
                     .await;
             }
 
@@ -1189,11 +1420,16 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
 
             // Update parent's contents if it exists
             if let Ok(Some(parent_index)) = self.find_any_index_in_dir(parent).await {
+                // Remove old entry
                 let _ = self
                     .remove_from_index_contents(&parent_index, &old_filename)
                     .await;
+
+                // Add new entry with proper formatting
+                let new_path_canonical = self.get_canonical_path(&new_path);
+                let title = self.resolve_title(&new_path_canonical).await;
                 let _ = self
-                    .add_to_index_contents(&parent_index, new_filename)
+                    .add_to_index_contents_canonical(&parent_index, &new_path_canonical, &title)
                     .await;
             }
 
@@ -1466,11 +1702,37 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         {
             use crate::path_utils::{normalize_path, relative_path_from_file_to_target};
 
-            // Resolve the old relative path to absolute (from the original location)
-            let target_path = normalize_path(&parent.join(&old_part_of));
+            // Parse the markdown link to get the path and type
+            let parsed = link_parser::parse_link(&old_part_of);
 
-            // Calculate new relative path from the new location
-            let new_part_of = relative_path_from_file_to_target(&new_path, &target_path);
+            // Resolve target path based on path type
+            let target_path = match parsed.path_type {
+                link_parser::PathType::WorkspaceRoot => {
+                    // Workspace-root path: canonical is already workspace-relative
+                    if let Some(ref root) = self.root_path {
+                        normalize_path(&root.join(&parsed.path))
+                    } else {
+                        // No workspace root: path is already workspace-relative
+                        PathBuf::from(&parsed.path)
+                    }
+                }
+                link_parser::PathType::Relative | link_parser::PathType::Ambiguous => {
+                    // Relative path: resolve against old file's parent directory
+                    normalize_path(&parent.join(&parsed.path))
+                }
+            };
+
+            // Format the new part_of link
+            let new_part_of = if self.root_path.is_some() {
+                // Use markdown link format
+                let target_canonical = self.get_canonical_path(&target_path);
+                let new_path_canonical = self.get_canonical_path(&new_path);
+                let target_title = self.resolve_title(&target_canonical).await;
+                self.format_link_sync(&target_canonical, &target_title, &new_path_canonical)
+            } else {
+                // Fallback: plain relative path
+                relative_path_from_file_to_target(&new_path, &target_path)
+            };
 
             let _ = self
                 .set_frontmatter_property(&new_path, "part_of", Value::String(new_part_of))
@@ -1479,11 +1741,17 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
 
         // Update parent's contents to point to new location
         if let Ok(Some(parent_index)) = self.find_any_index_in_dir(parent).await {
+            // Remove old entry (works with both plain paths and markdown links)
             let _ = self
                 .remove_from_index_contents(&parent_index, &old_filename)
                 .await;
-            let new_rel = format!("{}/{}", file_stem, new_filename);
-            let _ = self.add_to_index_contents(&parent_index, &new_rel).await;
+
+            // Add new entry with proper formatting
+            let new_path_canonical = self.get_canonical_path(&new_path);
+            let title = self.resolve_title(&new_path_canonical).await;
+            let _ = self
+                .add_to_index_contents_canonical(&parent_index, &new_path_canonical, &title)
+                .await;
         }
 
         Ok(new_path)
@@ -1559,11 +1827,37 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         {
             use crate::path_utils::{normalize_path, relative_path_from_file_to_target};
 
-            // Resolve the old relative path to absolute (from the original location)
-            let target_path = normalize_path(&current_dir.join(&old_part_of));
+            // Parse the markdown link to get the path and type
+            let parsed = link_parser::parse_link(&old_part_of);
 
-            // Calculate new relative path from the new location
-            let new_part_of = relative_path_from_file_to_target(&new_path, &target_path);
+            // Resolve target path based on path type
+            let target_path = match parsed.path_type {
+                link_parser::PathType::WorkspaceRoot => {
+                    // Workspace-root path: canonical is already workspace-relative
+                    if let Some(ref root) = self.root_path {
+                        normalize_path(&root.join(&parsed.path))
+                    } else {
+                        // No workspace root: path is already workspace-relative
+                        PathBuf::from(&parsed.path)
+                    }
+                }
+                link_parser::PathType::Relative | link_parser::PathType::Ambiguous => {
+                    // Relative path: resolve against old file's directory
+                    normalize_path(&current_dir.join(&parsed.path))
+                }
+            };
+
+            // Format the new part_of link
+            let new_part_of = if self.root_path.is_some() {
+                // Use markdown link format
+                let target_canonical = self.get_canonical_path(&target_path);
+                let new_path_canonical = self.get_canonical_path(&new_path);
+                let target_title = self.resolve_title(&target_canonical).await;
+                self.format_link_sync(&target_canonical, &target_title, &new_path_canonical)
+            } else {
+                // Fallback: plain relative path
+                relative_path_from_file_to_target(&new_path, &target_path)
+            };
 
             let _ = self
                 .set_frontmatter_property(&new_path, "part_of", Value::String(new_part_of))
@@ -1572,12 +1866,17 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
 
         // Update grandparent's contents
         if let Ok(Some(grandparent_index)) = self.find_any_index_in_dir(parent_of_dir).await {
+            // Remove old entry (works with both plain paths and markdown links)
             let old_rel = format!("{}/{}.md", dir_name, dir_name);
             let _ = self
                 .remove_from_index_contents(&grandparent_index, &old_rel)
                 .await;
+
+            // Add new entry with proper formatting
+            let new_path_canonical = self.get_canonical_path(&new_path);
+            let title = self.resolve_title(&new_path_canonical).await;
             let _ = self
-                .add_to_index_contents(&grandparent_index, &new_filename)
+                .add_to_index_contents_canonical(&grandparent_index, &new_path_canonical, &title)
                 .await;
         }
 

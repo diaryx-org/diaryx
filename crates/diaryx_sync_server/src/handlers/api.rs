@@ -34,12 +34,20 @@ pub struct WorkspaceResponse {
     pub name: String,
 }
 
+/// User has data response
+#[derive(Debug, Serialize)]
+pub struct UserHasDataResponse {
+    pub has_data: bool,
+    pub file_count: usize,
+}
+
 /// Create API routes
 pub fn api_routes(state: ApiState) -> Router {
     Router::new()
         .route("/status", get(get_status))
         .route("/workspaces", get(list_workspaces))
         .route("/workspaces/{workspace_id}", get(get_workspace))
+        .route("/user/has-data", get(check_user_has_data))
         .with_state(state)
 }
 
@@ -96,4 +104,36 @@ async fn get_workspace(
         name: workspace.name,
     })
     .into_response()
+}
+
+/// GET /api/user/has-data - Check if user has synced data on the server
+async fn check_user_has_data(
+    State(state): State<ApiState>,
+    RequireAuth(auth): RequireAuth,
+) -> impl IntoResponse {
+    // Get user's workspaces
+    let workspaces = state
+        .repo
+        .get_user_workspaces(&auth.user.id)
+        .unwrap_or_default();
+
+    // Look for the default workspace
+    let default_ws = workspaces.into_iter().find(|w| w.name == "default");
+
+    if let Some(ws) = default_ws {
+        // Check if room exists and has files
+        if let Some(room) = state.sync_state.get_room(&ws.id).await {
+            let count = room.get_file_count().await;
+            return Json(UserHasDataResponse {
+                has_data: count > 0,
+                file_count: count,
+            });
+        }
+    }
+
+    // No workspace or room found - user has no data
+    Json(UserHasDataResponse {
+        has_data: false,
+        file_count: 0,
+    })
 }

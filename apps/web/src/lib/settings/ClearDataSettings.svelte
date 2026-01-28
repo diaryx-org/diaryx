@@ -88,6 +88,8 @@
       "diaryx-device-name",
       // Theme
       "diaryx-theme",
+      // Formatting
+      "diaryx-enable-spoilers",
       // Cloud backup credentials
       "diaryx_s3_access_key",
       "diaryx_s3_secret_key",

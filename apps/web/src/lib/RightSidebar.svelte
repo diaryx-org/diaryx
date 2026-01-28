@@ -527,7 +527,7 @@
                   <!-- Array editor -->
                   <div class="space-y-1">
                     <div class="flex flex-wrap gap-1">
-                      {#each value as item, index}
+                      {#each value as item, i}
                         <span
                           class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-secondary text-secondary-foreground group/tag"
                         >
@@ -535,7 +535,7 @@
                           <button
                             type="button"
                             class="opacity-0 group-hover/tag:opacity-100 hover:text-destructive transition-opacity"
-                            onclick={() => handleArrayItemRemove(key, index)}
+                            onclick={() => handleArrayItemRemove(key, i)}
                             aria-label="Remove item"
                           >
                             <X class="size-3" />

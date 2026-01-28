@@ -54,6 +54,10 @@ pub struct GuestConfig {
 /// - Emitting FileSystemEvents for UI updates
 pub struct SyncHandler<FS: AsyncFileSystem> {
     fs: FS,
+    /// Workspace root directory for converting canonical paths to absolute paths.
+    /// When set, canonical paths (e.g., "Archive/file.md") are resolved relative to this root.
+    /// When not set, paths are used as-is (relative to current working directory).
+    workspace_root: RwLock<Option<PathBuf>>,
     /// Guest configuration, if operating in guest mode.
     guest_config: RwLock<Option<GuestConfig>>,
     /// Optional callback for emitting filesystem events.
@@ -65,9 +69,27 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
     pub fn new(fs: FS) -> Self {
         Self {
             fs,
+            workspace_root: RwLock::new(None),
             guest_config: RwLock::new(None),
             event_callback: None,
         }
+    }
+
+    /// Set the workspace root directory.
+    ///
+    /// When set, canonical paths (e.g., "Archive/file.md") are resolved relative
+    /// to this root when writing to disk. This is essential for Tauri/native apps
+    /// where files should be written to a specific workspace directory, not the
+    /// current working directory.
+    pub fn set_workspace_root(&self, root: PathBuf) {
+        log::debug!("[SyncHandler] Setting workspace root: {:?}", root);
+        let mut wr = self.workspace_root.write().unwrap();
+        *wr = Some(root);
+    }
+
+    /// Get the workspace root directory, if set.
+    pub fn get_workspace_root(&self) -> Option<PathBuf> {
+        self.workspace_root.read().unwrap().clone()
     }
 
     /// Set the event callback for emitting filesystem events.
@@ -91,34 +113,62 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
 
     /// Get the storage path for a canonical path.
     ///
-    /// For guests using OPFS: prefixes with `guest/{join_code}/`
-    /// For guests using in-memory storage or hosts: returns the path as-is
+    /// Converts a canonical path (relative to workspace root) to an absolute
+    /// storage path on disk.
+    ///
+    /// - If workspace_root is set: returns workspace_root.join(canonical_path)
+    /// - For guests using OPFS: prefixes with `guest/{join_code}/`
+    /// - Otherwise: returns the path as-is (relative to cwd)
     pub fn get_storage_path(&self, canonical_path: &str) -> PathBuf {
         let gc = self.guest_config.read().unwrap();
-        match &*gc {
+        let base_path = match &*gc {
             Some(config) if config.uses_opfs => {
                 PathBuf::from(format!("guest/{}/{}", config.join_code, canonical_path))
             }
             _ => PathBuf::from(canonical_path),
+        };
+
+        // If workspace root is set, resolve the path relative to it
+        let wr = self.workspace_root.read().unwrap();
+        match &*wr {
+            Some(root) => root.join(&base_path),
+            None => base_path,
         }
     }
 
     /// Get the canonical path from a storage path.
     ///
-    /// Strips the `guest/{join_code}/` prefix if present for OPFS guests.
+    /// Converts an absolute or storage path to a workspace-relative canonical path.
+    /// - Strips the workspace root prefix if set (e.g., `/Users/adam/diaryx/README.md` → `README.md`)
+    /// - Strips the `guest/{join_code}/` prefix if present for OPFS guests
     pub fn get_canonical_path(&self, storage_path: &str) -> String {
-        let gc = self.guest_config.read().unwrap();
-        match &*gc {
-            Some(config) if config.uses_opfs => {
-                let prefix = format!("guest/{}/", config.join_code);
-                if storage_path.starts_with(&prefix) {
-                    storage_path[prefix.len()..].to_string()
-                } else {
-                    storage_path.to_string()
-                }
+        use std::path::Path;
+
+        // Strip workspace root if set
+        let stripped = {
+            let wr = self.workspace_root.read().unwrap();
+            if let Some(root) = &*wr {
+                Path::new(storage_path)
+                    .strip_prefix(root)
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| storage_path.to_string())
+            } else {
+                storage_path.to_string()
             }
-            _ => storage_path.to_string(),
+        };
+
+        // Strip guest prefix if in guest mode
+        let gc = self.guest_config.read().unwrap();
+        if let Some(config) = &*gc
+            && config.uses_opfs
+        {
+            let prefix = format!("guest/{}/", config.join_code);
+            if stripped.starts_with(&prefix) {
+                return stripped[prefix.len()..].to_string();
+            }
         }
+
+        stripped
     }
 
     /// Emit a filesystem event to the registered callback.
@@ -189,14 +239,14 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
                     );
 
                     // Ensure parent directory exists
-                    if let Some(parent) = new_storage.parent() {
-                        if let Err(e) = self.fs.create_dir_all(parent).await {
-                            log::warn!(
-                                "SyncHandler: Failed to create parent directory for {:?}: {}",
-                                new_storage,
-                                e
-                            );
-                        }
+                    if let Some(parent) = new_storage.parent()
+                        && let Err(e) = self.fs.create_dir_all(parent).await
+                    {
+                        log::warn!(
+                            "SyncHandler: Failed to create parent directory for {:?}: {}",
+                            new_storage,
+                            e
+                        );
                     }
 
                     // Mark sync write to prevent CRDT feedback loop
@@ -233,19 +283,19 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
                                 .unwrap_or(serde_json::Value::Object(Default::default()));
 
                             // Read existing body content
-                            let body = match self.read_disk_body(&new_storage).await {
-                                Ok(b) => b,
-                                Err(_) => String::new(),
-                            };
+                            let body: String =
+                                self.read_disk_body(&new_storage).await.unwrap_or_default();
 
                             self.fs.mark_sync_write_start(&new_storage);
-                            if let Err(e) = metadata_writer::write_file_with_metadata(
-                                &self.fs,
-                                &new_storage,
-                                &metadata_json,
-                                &body,
-                            )
-                            .await
+                            if let Err(e) =
+                                metadata_writer::write_file_with_metadata_and_canonical_path(
+                                    &self.fs,
+                                    &new_storage,
+                                    &metadata_json,
+                                    &body,
+                                    Some(new_canonical),
+                                )
+                                .await
                             {
                                 log::warn!(
                                     "SyncHandler: Failed to update metadata after rename {:?}: {}",
@@ -282,19 +332,19 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
                             .unwrap_or(serde_json::Value::Object(Default::default()));
 
                         // Read existing body content
-                        let body = match self.read_disk_body(&new_storage).await {
-                            Ok(b) => b,
-                            Err(_) => String::new(),
-                        };
+                        let body: String =
+                            self.read_disk_body(&new_storage).await.unwrap_or_default();
 
                         self.fs.mark_sync_write_start(&new_storage);
-                        if let Err(e) = metadata_writer::write_file_with_metadata(
-                            &self.fs,
-                            &new_storage,
-                            &metadata_json,
-                            &body,
-                        )
-                        .await
+                        if let Err(e) =
+                            metadata_writer::write_file_with_metadata_and_canonical_path(
+                                &self.fs,
+                                &new_storage,
+                                &metadata_json,
+                                &body,
+                                Some(new_canonical),
+                            )
+                            .await
                         {
                             log::warn!(
                                 "SyncHandler: Failed to update metadata for {:?}: {}",
@@ -428,11 +478,12 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
                     // When CrdtFs sees this marker, it will skip generating a new CRDT update
                     self.fs.mark_sync_write_start(&storage_path);
 
-                    if let Err(e) = metadata_writer::write_file_with_metadata(
+                    if let Err(e) = metadata_writer::write_file_with_metadata_and_canonical_path(
                         &self.fs,
                         &storage_path,
                         &metadata_json,
                         &final_body,
+                        Some(&canonical_path),
                     )
                     .await
                     {
@@ -502,10 +553,9 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
             m.clone()
         } else if self.fs.exists(&storage_path).await {
             // Try to read existing frontmatter
-            match self.read_disk_frontmatter(&storage_path).await {
-                Ok(disk_fm) => disk_fm,
-                Err(_) => FileMetadata::default(),
-            }
+            self.read_disk_frontmatter(&storage_path)
+                .await
+                .unwrap_or_default()
         } else {
             FileMetadata::default()
         };
@@ -526,11 +576,12 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
         // Mark sync write start to prevent CRDT feedback loop
         self.fs.mark_sync_write_start(&storage_path);
 
-        let write_result = metadata_writer::write_file_with_metadata(
+        let write_result = metadata_writer::write_file_with_metadata_and_canonical_path(
             &self.fs,
             &storage_path,
             &metadata_json,
             body,
+            Some(canonical_path),
         )
         .await;
 
@@ -632,19 +683,15 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
                         seq.iter()
                             .filter_map(|v| {
                                 // Handle both string and object formats
-                                if let Some(s) = v.as_str() {
-                                    Some(super::types::BinaryRef {
-                                        path: s.to_string(),
-                                        source: "local".to_string(),
-                                        hash: String::new(),
-                                        mime_type: String::new(),
-                                        size: 0,
-                                        uploaded_at: None,
-                                        deleted: false,
-                                    })
-                                } else {
-                                    None
-                                }
+                                v.as_str().map(|s| super::types::BinaryRef {
+                                    path: s.to_string(),
+                                    source: "local".to_string(),
+                                    hash: String::new(),
+                                    mime_type: String::new(),
+                                    size: 0,
+                                    uploaded_at: None,
+                                    deleted: false,
+                                })
                             })
                             .collect()
                     })
@@ -702,9 +749,28 @@ mod tests {
     fn test_get_storage_path_host() {
         let handler = create_test_handler();
 
-        // Host mode - no prefix
+        // Host mode - no prefix, no workspace root
         let path = handler.get_storage_path("notes/hello.md");
         assert_eq!(path, PathBuf::from("notes/hello.md"));
+    }
+
+    #[test]
+    fn test_get_storage_path_with_workspace_root() {
+        let handler = create_test_handler();
+
+        // Set workspace root
+        handler.set_workspace_root(PathBuf::from("/Users/test/diaryx"));
+
+        // Path should be relative to workspace root
+        let path = handler.get_storage_path("notes/hello.md");
+        assert_eq!(path, PathBuf::from("/Users/test/diaryx/notes/hello.md"));
+
+        // Nested paths should also work
+        let path = handler.get_storage_path("Archive/2024/journal.md");
+        assert_eq!(
+            path,
+            PathBuf::from("/Users/test/diaryx/Archive/2024/journal.md")
+        );
     }
 
     #[test]

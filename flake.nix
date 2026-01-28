@@ -64,6 +64,7 @@
             packages = with pkgs; [
               rustc
               cargo
+              cargo-tauri
               rust-analyzer
               clippy
               rustfmt

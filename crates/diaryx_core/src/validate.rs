@@ -18,6 +18,7 @@ use ts_rs::TS;
 
 use crate::error::Result;
 use crate::fs::AsyncFileSystem;
+use crate::link_parser;
 use crate::utils::path::relative_path_from_file_to_target;
 use crate::workspace::Workspace;
 
@@ -762,7 +763,8 @@ impl<FS: AsyncFileSystem> Validator<FS> {
 
             // Check all contents references
             for child_ref in index.frontmatter.contents_list() {
-                let child_path = normalize_path(&dir.join(child_ref));
+                // Use index.resolve_path which handles markdown links and relative paths
+                let child_path = index.resolve_path(child_ref);
 
                 if !self.ws.fs_ref().exists(&child_path).await {
                     result.errors.push(ValidationError::BrokenContentsRef {
@@ -799,8 +801,8 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                         suggested: compute_suggested_portable_path(part_of, dir),
                     });
                 } else {
-                    // Portable path - check if file exists
-                    let parent_path = normalize_path(&dir.join(part_of));
+                    // Use index.resolve_path which handles markdown links and relative paths
+                    let parent_path = index.resolve_path(part_of);
                     if !self.ws.fs_ref().exists(&parent_path).await {
                         result.errors.push(ValidationError::BrokenPartOf {
                             file: path.to_path_buf(),
@@ -812,7 +814,8 @@ impl<FS: AsyncFileSystem> Validator<FS> {
 
             // Add attachments to visited set so they're not reported as orphans
             for attachment in index.frontmatter.attachments_list() {
-                let attachment_path = normalize_path(&dir.join(attachment));
+                // Use index.resolve_path which handles markdown links and relative paths
+                let attachment_path = index.resolve_path(attachment);
                 if self.ws.fs_ref().exists(&attachment_path).await {
                     visited.insert(attachment_path);
                 }
@@ -861,7 +864,9 @@ impl<FS: AsyncFileSystem> Validator<FS> {
             let listed_files: HashSet<String> = contents_list
                 .iter()
                 .filter_map(|p| {
-                    Path::new(p)
+                    // Parse markdown link to extract the actual path
+                    let parsed = link_parser::parse_link(p);
+                    Path::new(&parsed.path)
                         .file_name()
                         .and_then(|n| n.to_str())
                         .map(|s| s.to_string())
@@ -870,7 +875,8 @@ impl<FS: AsyncFileSystem> Validator<FS> {
 
             // Check all contents references
             for child_ref in contents_list {
-                let child_path = normalize_path(&dir.join(child_ref));
+                // Use index.resolve_path which handles markdown links and relative paths
+                let child_path = index.resolve_path(child_ref);
 
                 if !self.ws.fs_ref().exists(&child_path).await {
                     result.errors.push(ValidationError::BrokenContentsRef {
@@ -891,8 +897,8 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                         suggested: compute_suggested_portable_path(part_of, dir),
                     });
                 } else {
-                    // Portable path - check if file exists
-                    let parent_path = normalize_path(&dir.join(part_of));
+                    // Use index.resolve_path which handles markdown links and relative paths
+                    let parent_path = index.resolve_path(part_of);
                     if !self.ws.fs_ref().exists(&parent_path).await {
                         result.errors.push(ValidationError::BrokenPartOf {
                             file: path.clone(),
@@ -932,7 +938,8 @@ impl<FS: AsyncFileSystem> Validator<FS> {
 
             // Check attachments if present
             for attachment in index.frontmatter.attachments_list() {
-                let attachment_path = normalize_path(&dir.join(attachment));
+                // Use index.resolve_path which handles markdown links and relative paths
+                let attachment_path = index.resolve_path(attachment);
 
                 // Check if attachment exists
                 if !self.ws.fs_ref().exists(&attachment_path).await {

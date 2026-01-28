@@ -50,6 +50,7 @@ use super::storage::{CrdtStorage, StorageResult};
 use super::types::{CrdtUpdate, FileMetadata, UpdateOrigin};
 use crate::error::DiaryxError;
 use crate::fs::FileSystemEvent;
+use crate::link_parser;
 
 /// The name of the Y.Map containing file metadata.
 const FILES_MAP_NAME: &str = "files";
@@ -130,15 +131,15 @@ impl WorkspaceCrdt {
             // This is critical for WASM where updates are stored but snapshots may not be saved
             let updates = storage.get_all_updates(&doc_name)?;
             for crdt_update in updates {
-                if let Ok(update) = Update::decode_v1(&crdt_update.data) {
-                    if let Err(e) = txn.apply_update(update) {
-                        log::warn!(
-                            "Failed to apply stored update {} for {}: {}",
-                            crdt_update.update_id,
-                            doc_name,
-                            e
-                        );
-                    }
+                if let Ok(update) = Update::decode_v1(&crdt_update.data)
+                    && let Err(e) = txn.apply_update(update)
+                {
+                    log::warn!(
+                        "Failed to apply stored update {} for {}: {}",
+                        crdt_update.update_id,
+                        doc_name,
+                        e
+                    );
                 }
             }
         }
@@ -546,16 +547,15 @@ impl WorkspaceCrdt {
                 if let Some((_, child_meta)) = all_files
                     .iter()
                     .find(|(id, m)| id == child_id && !m.deleted)
-                {
-                    if let Some(found) = self.find_by_path_recursive(
+                    && let Some(found) = self.find_by_path_recursive(
                         child_id,
                         child_meta,
                         path_components,
                         depth + 1,
                         all_files,
-                    ) {
-                        return Some(found);
-                    }
+                    )
+                {
+                    return Some(found);
                 }
             }
         }
@@ -663,36 +663,30 @@ impl WorkspaceCrdt {
 
             // Convert part_of path to doc_id
             if let Some(ref parent_path) = metadata.part_of {
-                // Try to find the parent in our path_to_id mapping
-                if let Some(parent_id) = path_to_id.get(parent_path) {
+                // Parse markdown link to extract the actual path
+                let parsed = link_parser::parse_link(parent_path);
+                // to_canonical returns a workspace-relative canonical path
+                let canonical = link_parser::to_canonical(&parsed, std::path::Path::new(&old_path));
+
+                // Try to find the parent in our path_to_id mapping using the canonical path
+                if let Some(parent_id) = path_to_id.get(&canonical) {
                     metadata.part_of = Some(parent_id.clone());
-                } else {
-                    // Parent might be a relative path - try to resolve it
-                    let parent_dir = std::path::Path::new(&old_path).parent();
-                    if let Some(dir) = parent_dir {
-                        let absolute_parent = dir.join(parent_path);
-                        let absolute_str = absolute_parent.to_string_lossy().to_string();
-                        if let Some(parent_id) = path_to_id.get(&absolute_str) {
-                            metadata.part_of = Some(parent_id.clone());
-                        }
-                        // If still not found, leave as-is (will be cleaned up later)
-                    }
                 }
+                // If not found, leave as-is (will be cleaned up later)
             }
 
             // Convert contents paths to doc_ids
             if let Some(ref contents) = metadata.contents {
-                let parent_dir = std::path::Path::new(&old_path).parent();
                 let new_contents: Vec<String> = contents
                     .iter()
                     .filter_map(|rel_path| {
-                        // Resolve relative path to absolute
-                        let abs_path = if let Some(dir) = parent_dir {
-                            dir.join(rel_path).to_string_lossy().to_string()
-                        } else {
-                            rel_path.clone()
-                        };
-                        path_to_id.get(&abs_path).cloned()
+                        // Parse markdown link to extract the actual path
+                        let parsed = link_parser::parse_link(rel_path);
+                        // to_canonical returns a workspace-relative canonical path
+                        let canonical =
+                            link_parser::to_canonical(&parsed, std::path::Path::new(&old_path));
+                        // Use canonical directly - it's already resolved
+                        path_to_id.get(&canonical).cloned()
                     })
                     .collect();
                 metadata.contents = if new_contents.is_empty() {
@@ -861,15 +855,17 @@ impl WorkspaceCrdt {
 
         // Also detect files that were previously deleted but are now restored
         for (path, metadata) in &files_after {
-            if let Some(old_meta) = files_before.get(path) {
-                if old_meta.deleted && !metadata.deleted && !changed_paths.contains(path) {
-                    changed_paths.push(path.clone());
-                }
+            if let Some(old_meta) = files_before.get(path)
+                && old_meta.deleted
+                && !metadata.deleted
+                && !changed_paths.contains(path)
+            {
+                changed_paths.push(path.clone());
             }
         }
 
         // Detect deleted files (both newly deleted and already-deleted files that need disk cleanup)
-        for (path, _old_meta) in &files_before {
+        for path in files_before.keys() {
             let is_deleted = files_after.get(path).map(|m| m.deleted).unwrap_or(true);
             // Include if: file is now deleted (whether or not it was before)
             // This ensures disk cleanup happens even if CRDT state was persisted from a previous session
@@ -889,12 +885,14 @@ impl WorkspaceCrdt {
 
         // Detect metadata changes
         for (path, new_meta) in &files_after {
-            if let Some(old_meta) = files_before.get(path) {
-                if old_meta != new_meta && !new_meta.deleted && !old_meta.deleted {
-                    // Only add if not already in the list
-                    if !changed_paths.contains(path) {
-                        changed_paths.push(path.clone());
-                    }
+            if let Some(old_meta) = files_before.get(path)
+                && old_meta != new_meta
+                && !new_meta.deleted
+                && !old_meta.deleted
+            {
+                // Only add if not already in the list
+                if !changed_paths.contains(path) {
+                    changed_paths.push(path.clone());
                 }
             }
         }
@@ -1083,14 +1081,15 @@ impl WorkspaceCrdt {
 
         // Detect restored files (was deleted, now not deleted)
         for (path, metadata) in after {
-            if let Some(old_meta) = before.get(path) {
-                if old_meta.deleted && !metadata.deleted {
-                    self.emit_event(FileSystemEvent::file_created_with_metadata(
-                        PathBuf::from(path),
-                        Some(self.metadata_to_frontmatter(metadata)),
-                        metadata.part_of.as_ref().map(PathBuf::from),
-                    ));
-                }
+            if let Some(old_meta) = before.get(path)
+                && old_meta.deleted
+                && !metadata.deleted
+            {
+                self.emit_event(FileSystemEvent::file_created_with_metadata(
+                    PathBuf::from(path),
+                    Some(self.metadata_to_frontmatter(metadata)),
+                    metadata.part_of.as_ref().map(PathBuf::from),
+                ));
             }
         }
 
@@ -1126,13 +1125,15 @@ impl WorkspaceCrdt {
 
         // Detect metadata changes (file exists in both, metadata differs, not deleted)
         for (path, new_meta) in after {
-            if let Some(old_meta) = before.get(path) {
-                if old_meta != new_meta && !new_meta.deleted && !old_meta.deleted {
-                    self.emit_event(FileSystemEvent::metadata_changed(
-                        PathBuf::from(path),
-                        self.metadata_to_frontmatter(new_meta),
-                    ));
-                }
+            if let Some(old_meta) = before.get(path)
+                && old_meta != new_meta
+                && !new_meta.deleted
+                && !old_meta.deleted
+            {
+                self.emit_event(FileSystemEvent::metadata_changed(
+                    PathBuf::from(path),
+                    self.metadata_to_frontmatter(new_meta),
+                ));
             }
         }
     }

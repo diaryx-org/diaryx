@@ -1800,6 +1800,7 @@ dependencies = [
  "dotenvy",
  "env_logger",
  "futures",
+ "futures-util",
  "log",
  "pathdiff",
  "reqwest",

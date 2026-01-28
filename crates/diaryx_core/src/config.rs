@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use crate::error::{DiaryxError, Result};
 use crate::fs::{AsyncFileSystem, FileSystem, SyncToAsyncFs};
+use crate::link_parser::LinkFormat;
 
 /// `Config` is a data structure that represents the parts of Diaryx that the user can configure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +31,15 @@ pub struct Config {
     /// Falls back to "daily" built-in template if not set
     #[serde(skip_serializing_if = "Option::is_none")]
     pub daily_template: Option<String>,
+
+    /// Format for `part_of` and `contents` links in frontmatter
+    /// Defaults to MarkdownRoot for portable, clickable links
+    #[serde(default, skip_serializing_if = "is_default_link_format")]
+    pub link_format: LinkFormat,
+}
+
+fn is_default_link_format(format: &LinkFormat) -> bool {
+    *format == LinkFormat::default()
 }
 
 impl Config {
@@ -60,6 +70,7 @@ impl Config {
             editor: None,
             default_template: None,
             daily_template: None,
+            link_format: LinkFormat::default(),
         }
     }
 
@@ -77,6 +88,7 @@ impl Config {
             editor,
             default_template,
             daily_template,
+            link_format: LinkFormat::default(),
         }
     }
 
@@ -180,6 +192,7 @@ impl Default for Config {
             editor: None,
             default_template: None,
             daily_template: None,
+            link_format: LinkFormat::default(),
         }
     }
 }
@@ -241,6 +254,7 @@ impl Config {
             editor: None,
             default_template: None,
             daily_template: None,
+            link_format: LinkFormat::default(),
         };
 
         config.save()?;
@@ -263,6 +277,7 @@ impl Default for Config {
             editor: None,
             default_template: None,
             daily_template: None,
+            link_format: LinkFormat::default(),
         }
     }
 }

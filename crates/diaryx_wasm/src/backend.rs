@@ -852,6 +852,11 @@ impl DiaryxBackend {
         // This enables SendSyncMessage events to be emitted after CRDT updates
         diaryx.set_sync_event_callback(create_event_bridge());
 
+        // Set workspace root for link formatting
+        // In WASM with OPFS, paths are already workspace-relative (the OPFS root IS the workspace)
+        // Using empty path means all paths are treated as canonical (no prefix stripping needed)
+        diaryx.set_workspace_root(std::path::PathBuf::from(""));
+
         // Execute the command
         let result = diaryx
             .execute(cmd)
@@ -894,6 +899,11 @@ impl DiaryxBackend {
         // Set the sync manager's event callback to forward events to JS
         // This enables SendSyncMessage events to be emitted after CRDT updates
         diaryx.set_sync_event_callback(create_event_bridge());
+
+        // Set workspace root for link formatting
+        // In WASM with OPFS, paths are already workspace-relative (the OPFS root IS the workspace)
+        // Using empty path means all paths are treated as canonical (no prefix stripping needed)
+        diaryx.set_workspace_root(std::path::PathBuf::from(""));
 
         // Execute the command
         let result = diaryx

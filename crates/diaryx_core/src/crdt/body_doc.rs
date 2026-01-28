@@ -93,29 +93,28 @@ impl BodyDoc {
             // Try to load base snapshot from storage
             if let Some(state) = storage.load_doc(&doc_name)?
                 && let Ok(update) = Update::decode_v1(&state)
+                && let Err(e) = txn.apply_update(update)
             {
-                if let Err(e) = txn.apply_update(update) {
-                    log::warn!(
-                        "Failed to apply stored snapshot for body doc {}: {}",
-                        doc_name,
-                        e
-                    );
-                }
+                log::warn!(
+                    "Failed to apply stored snapshot for body doc {}: {}",
+                    doc_name,
+                    e
+                );
             }
 
             // Apply all incremental updates from storage
             // This is critical for WASM where updates are stored but snapshots may not be saved
             let updates = storage.get_all_updates(&doc_name)?;
             for crdt_update in updates {
-                if let Ok(update) = Update::decode_v1(&crdt_update.data) {
-                    if let Err(e) = txn.apply_update(update) {
-                        log::warn!(
-                            "Failed to apply stored update {} for body doc {}: {}",
-                            crdt_update.update_id,
-                            doc_name,
-                            e
-                        );
-                    }
+                if let Ok(update) = Update::decode_v1(&crdt_update.data)
+                    && let Err(e) = txn.apply_update(update)
+                {
+                    log::warn!(
+                        "Failed to apply stored update {} for body doc {}: {}",
+                        crdt_update.update_id,
+                        doc_name,
+                        e
+                    );
                 }
             }
         }

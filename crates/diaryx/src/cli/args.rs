@@ -257,6 +257,13 @@ pub enum Commands {
         #[command(subcommand)]
         command: AttachmentCommands,
     },
+
+    /// Sync workspace with remote server
+    #[command(alias = "sy")]
+    Sync {
+        #[command(subcommand)]
+        command: SyncCommands,
+    },
 }
 
 #[derive(Subcommand, Clone)]
@@ -838,5 +845,70 @@ pub enum AttachmentCommands {
     List {
         /// Path to the entry file (supports fuzzy matching)
         entry: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SyncCommands {
+    /// Authenticate via magic link flow
+    Login {
+        /// Email address to authenticate with
+        email: String,
+
+        /// Sync server URL (default: https://sync.diaryx.org)
+        #[arg(short, long)]
+        server: Option<String>,
+    },
+
+    /// Complete login by verifying magic link token
+    Verify {
+        /// Verification token from magic link email
+        token: String,
+
+        /// Optional device name for this login session
+        #[arg(long)]
+        device_name: Option<String>,
+    },
+
+    /// Clear stored credentials
+    Logout,
+
+    /// Show sync status (logged in, connected, file counts)
+    Status,
+
+    /// Start continuous sync (foreground WebSocket connection)
+    Start {
+        /// Run in background (not yet implemented)
+        #[arg(short, long)]
+        background: bool,
+    },
+
+    /// One-shot push of local changes
+    Push {
+        /// Force push (not yet implemented)
+        #[arg(short, long)]
+        force: bool,
+    },
+
+    /// One-shot pull of remote changes
+    Pull {
+        /// Force pull (not yet implemented)
+        #[arg(short, long)]
+        force: bool,
+    },
+
+    /// Configure sync settings
+    Config {
+        /// Set sync server URL
+        #[arg(long)]
+        server: Option<String>,
+
+        /// Set workspace ID
+        #[arg(long)]
+        workspace_id: Option<String>,
+
+        /// Show current sync configuration
+        #[arg(long)]
+        show: bool,
     },
 }

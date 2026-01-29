@@ -107,6 +107,48 @@ fn read_var_byte_array(data: &[u8]) -> Option<(Vec<u8>, usize)> {
     Some((data[len_bytes..total].to_vec(), total))
 }
 
+// ===========================================================================
+// Multiplexed body sync message framing
+// ===========================================================================
+
+/// Frame a sync message with file path prefix for multiplexed transport.
+///
+/// Format: `[varUint(pathLen)] [pathBytes (UTF-8)] [message]`
+///
+/// This allows multiple files to share a single WebSocket connection,
+/// with each message prefixed by the file path it belongs to.
+///
+/// # Example
+///
+/// ```ignore
+/// let framed = frame_body_message("/workspace/file.md", &sync_message);
+/// // framed = [18] ["/workspace/file.md"] [sync_message...]
+/// ```
+pub fn frame_body_message(file_path: &str, message: &[u8]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(file_path.len() + message.len() + 8);
+    write_var_byte_array(&mut buf, file_path.as_bytes());
+    buf.extend_from_slice(message);
+    buf
+}
+
+/// Unframe a multiplexed body message.
+///
+/// Returns `(file_path, message)` or `None` if the message is invalid.
+/// The message is returned as an owned `Vec<u8>` to avoid lifetime issues.
+///
+/// # Example
+///
+/// ```ignore
+/// if let Some((path, msg)) = unframe_body_message(&data) {
+///     // Route msg to the handler for `path`
+/// }
+/// ```
+pub fn unframe_body_message(data: &[u8]) -> Option<(String, Vec<u8>)> {
+    let (path_bytes, consumed) = read_var_byte_array(data)?;
+    let file_path = String::from_utf8(path_bytes).ok()?;
+    Some((file_path, data[consumed..].to_vec()))
+}
+
 /// Message type bytes for the Y-sync protocol.
 mod msg_type {
     /// Sync message (SyncStep1, SyncStep2, Update)

@@ -152,6 +152,49 @@ You can also validate specific files or directories:
 > diaryx workspace validate notes/ --recursive
 ```
 
+## Sync
+
+Diaryx can sync your workspace with a remote server for backup and multi-device access:
+
+```bash
+# Login with magic link authentication
+> diaryx sync login your-email@example.com
+Logging in to sync server...
+Check your email for a magic link!
+
+# Verify the magic link token
+> diaryx sync verify <TOKEN_FROM_EMAIL>
+Successfully logged in!
+
+# Check sync status
+> diaryx sync status
+Sync Status
+===========
+Server: https://sync.diaryx.org
+Account: your-email@example.com (logged in)
+Workspace ID: abc-123-def
+
+# Start continuous sync
+> diaryx sync start
+Connecting to sync server...
+Sync is running. Press Ctrl+C to stop.
+
+# Or do one-shot operations
+> diaryx sync push    # Push local changes
+> diaryx sync pull    # Pull remote changes
+```
+
+### Sync Commands
+
+- `diaryx sync login <email>` - Authenticate via magic link
+- `diaryx sync verify <token>` - Complete authentication
+- `diaryx sync logout` - Clear credentials
+- `diaryx sync status` - Show sync status
+- `diaryx sync start` - Start continuous sync
+- `diaryx sync push` - One-shot push local changes
+- `diaryx sync pull` - One-shot pull remote changes
+- `diaryx sync config` - Configure sync settings
+
 ## roadmap
 
 See [the roadmap document here](../../roadmap.md).

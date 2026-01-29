@@ -9,8 +9,10 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
+use diaryx_core::crdt::{frame_body_message, unframe_body_message};
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
@@ -27,6 +29,8 @@ pub struct WsQuery {
     pub guest_id: Option<String>,
     /// File path (for body doc sync - if present, routes to body doc handler)
     pub file: Option<String>,
+    /// Multiplexed mode (for body sync - uses single connection for all files)
+    pub multiplexed: Option<bool>,
 }
 
 /// Shared state for WebSocket handler
@@ -51,6 +55,13 @@ enum ConnectionMode {
         workspace_id: String,
         file_path: String,
     },
+    /// Authenticated user sync for multiplexed body docs (doc + token + multiplexed=true)
+    /// Uses a single WebSocket for all body syncs, with message framing to identify files.
+    AuthenticatedMultiplexedBody {
+        user_id: String,
+        device_id: String,
+        workspace_id: String,
+    },
     /// Session guest (session code) - workspace metadata only
     SessionGuest {
         session_code: String,
@@ -64,6 +75,13 @@ enum ConnectionMode {
         guest_id: String,
         workspace_id: String,
         file_path: String,
+        read_only: bool,
+    },
+    /// Session guest for multiplexed body docs (session code + multiplexed=true)
+    SessionGuestMultiplexedBody {
+        session_code: String,
+        guest_id: String,
+        workspace_id: String,
         read_only: bool,
     },
 }
@@ -100,8 +118,17 @@ pub async fn ws_handler(
             .clone()
             .unwrap_or_else(|| format!("guest-{}", uuid::Uuid::new_v4()));
 
+        // Check if this is a multiplexed body connection
+        if query.multiplexed == Some(true) {
+            ConnectionMode::SessionGuestMultiplexedBody {
+                session_code,
+                guest_id,
+                workspace_id: session.workspace_id,
+                read_only: session.read_only,
+            }
+        }
         // Check if this is a body doc connection
-        if let Some(file_path) = &query.file {
+        else if let Some(file_path) = &query.file {
             ConnectionMode::SessionGuestBody {
                 session_code,
                 guest_id,
@@ -157,8 +184,21 @@ pub async fn ws_handler(
             workspace_id
         };
 
+        // Check if this is a multiplexed body connection
+        if query.multiplexed == Some(true) {
+            info!(
+                "WebSocket upgrade (multiplexed body): user={}, workspace={}",
+                auth.user.email, workspace_id
+            );
+
+            ConnectionMode::AuthenticatedMultiplexedBody {
+                user_id: auth.user.id,
+                device_id: auth.session.device_id,
+                workspace_id,
+            }
+        }
         // Check if this is a body doc connection
-        if let Some(file_path) = &query.file {
+        else if let Some(file_path) = &query.file {
             info!(
                 "WebSocket upgrade (body): user={}, workspace={}, file={}",
                 auth.user.email, workspace_id, file_path
@@ -256,6 +296,44 @@ pub async fn ws_handler(
             })
             .into_response()
         }
+        ConnectionMode::AuthenticatedMultiplexedBody {
+            user_id,
+            device_id,
+            workspace_id,
+        } => ws
+            .on_upgrade(move |socket| {
+                handle_multiplexed_body_socket(
+                    socket,
+                    state,
+                    user_id,
+                    device_id,
+                    workspace_id,
+                    false, // not read-only
+                )
+            })
+            .into_response(),
+        ConnectionMode::SessionGuestMultiplexedBody {
+            session_code,
+            guest_id,
+            workspace_id,
+            read_only,
+        } => {
+            info!(
+                "WebSocket upgrade (multiplexed body): session={}, guest={}, workspace={}",
+                session_code, guest_id, workspace_id
+            );
+            ws.on_upgrade(move |socket| {
+                handle_multiplexed_body_socket(
+                    socket,
+                    state,
+                    guest_id.clone(),
+                    guest_id,
+                    workspace_id,
+                    read_only,
+                )
+            })
+            .into_response()
+        }
     }
 }
 
@@ -279,6 +357,9 @@ async fn handle_authenticated_socket(
         workspace_id.clone(),
         room.clone(),
     );
+
+    // Subscribe to control messages for progress updates
+    let mut control_rx = room.subscribe_control();
 
     info!(
         "WebSocket connected: user={}, workspace={}, connections={}",
@@ -332,6 +413,32 @@ async fn handle_authenticated_socket(
                 if let Err(e) = ws_tx.send(Message::Binary(broadcast_msg.into())).await {
                     error!("Failed to send broadcast: {}", e);
                     break;
+                }
+            }
+
+            // Handle control messages (progress updates, etc.)
+            result = control_rx.recv() => {
+                match result {
+                    Ok(control_msg) => {
+                        // Convert to JSON and send as text message
+                        match serde_json::to_string(&control_msg) {
+                            Ok(json) => {
+                                if let Err(e) = ws_tx.send(Message::Text(json.into())).await {
+                                    error!("Failed to send control message: {}", e);
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Failed to serialize control message: {}", e);
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("Control message receiver lagged {} messages", n);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        break;
+                    }
                 }
             }
 
@@ -730,6 +837,134 @@ async fn handle_session_body_socket(
     info!(
         "Session body sync disconnected: session={}, file={}, guest={}",
         session_code, file_path, guest_id
+    );
+
+    // Maybe remove the room if no more connections
+    state.sync_state.maybe_remove_room(&workspace_id).await;
+}
+
+/// Handle a multiplexed body document WebSocket connection.
+///
+/// This handler uses a single WebSocket for all body syncs in a workspace.
+/// Messages are framed with the file path prefix to identify which file
+/// they belong to.
+///
+/// Message framing format: `[varUint(pathLen)] [pathBytes (UTF-8)] [message]`
+async fn handle_multiplexed_body_socket(
+    socket: WebSocket,
+    state: WsState,
+    user_id: String,
+    device_id: String,
+    workspace_id: String,
+    _read_only: bool,
+) {
+    let (mut ws_tx, mut ws_rx) = socket.split();
+
+    // Get or create the sync room
+    let room = state.sync_state.get_or_create_room(&workspace_id).await;
+
+    // Generate a unique client ID
+    let client_id = format!("{}:{}", user_id, device_id);
+
+    info!(
+        "Multiplexed body sync connected: workspace={}, user={}",
+        workspace_id, user_id
+    );
+
+    // Subscribe to ALL body broadcasts (not filtered by file)
+    let mut body_rx = room.subscribe_all_bodies();
+
+    // Track which files this client is subscribed to
+    let mut subscribed_files: HashSet<String> = HashSet::new();
+
+    // Handle bidirectional communication
+    loop {
+        tokio::select! {
+            // Handle incoming messages from client
+            Some(msg) = ws_rx.next() => {
+                match msg {
+                    Ok(Message::Binary(data)) => {
+                        // Unframe to get file path
+                        let Some((file_path, sync_msg)) = unframe_body_message(&data) else {
+                            warn!("Invalid multiplexed body message from {}", client_id);
+                            continue;
+                        };
+
+                        // Auto-subscribe on first message for a file
+                        if !subscribed_files.contains(&file_path) {
+                            // Track subscription in the room
+                            room.subscribe_body(&file_path, &client_id).await;
+                            subscribed_files.insert(file_path.clone());
+                            debug!(
+                                "Client {} auto-subscribed to body: {}",
+                                client_id, file_path
+                            );
+                        }
+
+                        // Route to existing handler
+                        if let Some(response) = room.handle_body_message(&file_path, &sync_msg).await {
+                            // Frame response with file path
+                            let framed = frame_body_message(&file_path, &response);
+                            if let Err(e) = ws_tx.send(Message::Binary(framed.into())).await {
+                                error!("Failed to send multiplexed body response: {}", e);
+                                break;
+                            }
+                        }
+                    }
+                    Ok(Message::Ping(data)) => {
+                        if let Err(e) = ws_tx.send(Message::Pong(data)).await {
+                            error!("Failed to send pong: {}", e);
+                            break;
+                        }
+                    }
+                    Ok(Message::Close(_)) => {
+                        debug!("Client requested close");
+                        break;
+                    }
+                    Err(e) => {
+                        error!("WebSocket error: {}", e);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+
+            // Handle broadcast messages from other clients
+            result = body_rx.recv() => {
+                match result {
+                    Ok((file_path, msg)) => {
+                        // Only forward if client subscribed to this file
+                        if subscribed_files.contains(&file_path) {
+                            let framed = frame_body_message(&file_path, &msg);
+                            if let Err(e) = ws_tx.send(Message::Binary(framed.into())).await {
+                                error!("Failed to send multiplexed body broadcast: {}", e);
+                                break;
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("Multiplexed body broadcast receiver lagged {} messages", n);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        break;
+                    }
+                }
+            }
+
+            else => break,
+        }
+    }
+
+    // Cleanup: unsubscribe from all files
+    for file_path in &subscribed_files {
+        room.unsubscribe_body(file_path, &client_id).await;
+    }
+
+    info!(
+        "Multiplexed body sync disconnected: workspace={}, user={}, files={}",
+        workspace_id,
+        user_id,
+        subscribed_files.len()
     );
 
     // Maybe remove the room if no more connections

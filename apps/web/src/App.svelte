@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { getBackend, isTauri, type TreeNode } from "./lib/backend";
+  import { getBackend, isTauri } from "./lib/backend";
   import { createApi, type Api } from "./lib/backend/api";
   import type { JsonValue } from "./lib/backend/generated/serde_json/JsonValue";
   // New Rust CRDT module imports
@@ -18,7 +18,6 @@
     getTreeFromCrdt,
     initEventSubscription,
     waitForInitialSync,
-    proactivelySyncBodies,
     getCanonicalPath,
   } from "./lib/crdt/workspaceCrdtBridge";
   // Note: YDoc and HocuspocusProvider types are now handled by collaborationStore
@@ -197,20 +196,6 @@
     return frontmatter;
   }
 
-  // Helper to collect all file paths from a tree node
-  function collectFilePaths(node: TreeNode | null, paths: string[] = []): string[] {
-    if (!node) return paths;
-    if (node.path.endsWith('.md')) {
-      paths.push(node.path);
-    }
-    if (node.children) {
-      for (const child of node.children) {
-        collectFilePaths(child, paths);
-      }
-    }
-    return paths;
-  }
-
   // Attachment state
   let attachmentError: string | null = $state(null);
   let attachmentFileInput: HTMLInputElement | null = $state(null);
@@ -324,18 +309,9 @@
 
       await refreshTree();
 
-      // Proactively sync body docs for all files in the tree
-      // This ensures file content is available when users open files
-      if (tree && !workspaceCrdtDisabled) {
-        const filePaths = collectFilePaths(tree);
-        if (filePaths.length > 0) {
-          console.log(`[App] Proactively syncing ${filePaths.length} body docs in background`);
-          // Run in background - don't block initialization
-          proactivelySyncBodies(filePaths, 3).catch((e) => {
-            console.warn('[App] Proactive body sync failed:', e);
-          });
-        }
-      }
+      // Note: With multiplexed body sync, we no longer need to proactively
+      // sync all files. Files are subscribed on-demand when opened, using a
+      // single WebSocket connection for all body syncs.
 
       // Register callback to refresh tree when session data is received
       onSessionSync(async () => {
@@ -352,32 +328,10 @@
               console.log('[App] Guest session - initial sync, opening root entry:', crdtTree.path);
               workspaceStore.expandNode(crdtTree.path);
 
-              // Collect all file paths for body sync
-              const filePaths = collectFilePaths(crdtTree);
-
-              // Sync the root file's body FIRST before opening it
-              // This ensures content is available when the entry opens
-              if (filePaths.length > 0) {
-                const rootPath = crdtTree.path;
-                console.log(`[App] Guest: Syncing root body first: ${rootPath}`);
-                try {
-                  await proactivelySyncBodies([rootPath], 1);
-                } catch (e) {
-                  console.warn('[App] Guest root body sync failed:', e);
-                }
-              }
-
+              // With multiplexed body sync, the root entry's body will be
+              // synced on-demand when opened via ensureBodySync
               await openEntry(crdtTree.path);
               guestInitialSyncDone = true;
-
-              // Proactively sync body docs for remaining files in the tree (guests)
-              const remainingPaths = filePaths.filter((p) => p !== crdtTree.path);
-              if (remainingPaths.length > 0) {
-                console.log(`[App] Guest: Proactively syncing ${remainingPaths.length} remaining body docs in background`);
-                proactivelySyncBodies(remainingPaths, 3).catch((e) => {
-                  console.warn('[App] Guest proactive body sync failed:', e);
-                });
-              }
             } else {
               console.log('[App] Guest session - incremental sync, tree updated');
             }

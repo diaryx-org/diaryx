@@ -1639,4 +1639,150 @@ This is the projects index.
         assert_ne!(different_format, markdown_root_link);
         assert_eq!(different_format, "../Folder/file.md");
     }
+
+    // =========================================================================
+    // Regression tests for CRDT sync corruption bug
+    // =========================================================================
+    // These tests ensure that markdown links with spaces (which use angle brackets)
+    // are parsed correctly and the extracted path can be used safely with Path operations.
+    // The bug was that markdown link strings were passed directly to Path::new() which
+    // would split the link at '/' characters inside the link syntax, corrupting the data.
+
+    #[test]
+    fn test_parse_markdown_link_extracts_clean_path_for_normalization() {
+        // This is the exact case that caused the CRDT sync corruption bug.
+        // The markdown link contains angle brackets because the path has spaces.
+        // When this was passed to Path::new() directly, it got corrupted.
+        let raw_value = "[Archived documents](</Archive/Archived documents.md>)";
+        let parsed = parse_link(raw_value);
+
+        // The parsed path should be clean - no markdown syntax
+        assert_eq!(parsed.path, "Archive/Archived documents.md");
+        assert_eq!(parsed.title, Some("Archived documents".to_string()));
+        assert_eq!(parsed.path_type, PathType::WorkspaceRoot);
+
+        // Verify the path can be safely used with std::path::Path
+        // This should NOT split the path incorrectly
+        let path = std::path::Path::new(&parsed.path);
+        let components: Vec<_> = path.components().collect();
+        assert_eq!(components.len(), 2); // "Archive" and "Archived documents.md"
+    }
+
+    #[test]
+    fn test_parse_markdown_link_with_multiple_spaces_in_path() {
+        // Another case with spaces in multiple path components
+        let raw_value = "[Creative Writing](</Creative Writing/Creative Writing.md>)";
+        let parsed = parse_link(raw_value);
+
+        assert_eq!(parsed.path, "Creative Writing/Creative Writing.md");
+        assert_eq!(parsed.title, Some("Creative Writing".to_string()));
+
+        // Verify path components are correct
+        let path = std::path::Path::new(&parsed.path);
+        let components: Vec<_> = path.components().collect();
+        assert_eq!(components.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_various_frontmatter_contents_formats() {
+        // Test all formats that might appear in frontmatter contents arrays
+        let test_cases = [
+            // Plain relative paths (preserved as-is)
+            ("./Archive/file.md", "./Archive/file.md", PathType::Relative),
+            ("../parent.md", "../parent.md", PathType::Relative),
+            ("child.md", "child.md", PathType::Ambiguous),
+            // Workspace-root paths (leading / stripped)
+            (
+                "/Archive/file.md",
+                "Archive/file.md",
+                PathType::WorkspaceRoot,
+            ),
+            // Markdown links without angle brackets
+            (
+                "[Title](/Archive/file.md)",
+                "Archive/file.md",
+                PathType::WorkspaceRoot,
+            ),
+            ("[Title](../parent.md)", "../parent.md", PathType::Relative),
+            // Markdown links with angle brackets (paths with spaces)
+            (
+                "[Archived documents](</Archive/Archived documents.md>)",
+                "Archive/Archived documents.md",
+                PathType::WorkspaceRoot,
+            ),
+            (
+                "[My File](<../My Folder/my file.md>)",
+                "../My Folder/my file.md",
+                PathType::Relative,
+            ),
+        ];
+
+        for (input, expected_path, expected_type) in test_cases {
+            let parsed = parse_link(input);
+            assert_eq!(parsed.path, expected_path, "Failed for input: {}", input);
+            assert_eq!(
+                parsed.path_type, expected_type,
+                "Wrong path type for input: {}",
+                input
+            );
+        }
+    }
+
+    #[test]
+    fn test_roundtrip_markdown_link_with_spaces() {
+        // Ensure we can parse a markdown link and format it back correctly
+        let original = "[Archived documents](</Archive/Archived documents.md>)";
+        let parsed = parse_link(original);
+        let title = parsed.title.clone().unwrap();
+        let formatted = format_link(&parsed.path, &title);
+
+        // Should produce the same output
+        assert_eq!(formatted, original);
+    }
+
+    #[test]
+    fn test_path_extraction_does_not_include_markdown_syntax() {
+        // Verify that none of the markdown syntax leaks into the parsed path
+        let test_cases = [
+            "[Title](/path.md)",
+            "[Title](</path with spaces.md>)",
+            "[Title](<../relative path.md>)",
+        ];
+
+        for input in test_cases {
+            let parsed = parse_link(input);
+            // Path should not contain any markdown link characters
+            assert!(
+                !parsed.path.contains('['),
+                "Path contains '[' for input: {}",
+                input
+            );
+            assert!(
+                !parsed.path.contains(']'),
+                "Path contains ']' for input: {}",
+                input
+            );
+            assert!(
+                !parsed.path.contains('<'),
+                "Path contains '<' for input: {}",
+                input
+            );
+            assert!(
+                !parsed.path.contains('>'),
+                "Path contains '>' for input: {}",
+                input
+            );
+            // Should not start or end with parentheses from markdown syntax
+            assert!(
+                !parsed.path.starts_with('('),
+                "Path starts with '(' for input: {}",
+                input
+            );
+            assert!(
+                !parsed.path.ends_with(')'),
+                "Path ends with ')' for input: {}",
+                input
+            );
+        }
+    }
 }

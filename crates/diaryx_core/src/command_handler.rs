@@ -312,7 +312,24 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         if let serde_json::Value::String(ref s) = value {
                             let parsed = link_parser::parse_link(s);
                             let file_path = Path::new(&canonical_path);
-                            let canonical_target = link_parser::to_canonical(&parsed, file_path);
+                            // Only resolve relative paths. If the path is already
+                            // canonical (WorkspaceRoot) or looks like a canonical path
+                            // (contains '/' but doesn't start with '.'), use it as-is.
+                            let canonical_target =
+                                if parsed.path_type == link_parser::PathType::WorkspaceRoot {
+                                    // Already a workspace-root path, use as-is
+                                    parsed.path.clone()
+                                } else if parsed.path_type == link_parser::PathType::Ambiguous
+                                    && parsed.path.contains('/')
+                                    && !parsed.path.starts_with('.')
+                                {
+                                    // Looks like an already-canonical path (e.g., "Folder/file.md")
+                                    // Don't resolve it relative to the current file
+                                    parsed.path.clone()
+                                } else {
+                                    // Relative path - resolve against current file
+                                    link_parser::to_canonical(&parsed, file_path)
+                                };
 
                             // Format as markdown link for file
                             let formatted =
@@ -344,8 +361,25 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                             for item in arr {
                                 if let serde_json::Value::String(s) = item {
                                     let parsed = link_parser::parse_link(s);
-                                    let canonical_target =
-                                        link_parser::to_canonical(&parsed, file_path);
+                                    // Only resolve relative paths. If the path is already
+                                    // canonical (WorkspaceRoot) or looks like a canonical path
+                                    // (contains '/' but doesn't start with '.'), use it as-is.
+                                    let canonical_target = if parsed.path_type
+                                        == link_parser::PathType::WorkspaceRoot
+                                    {
+                                        // Already a workspace-root path, use as-is
+                                        parsed.path.clone()
+                                    } else if parsed.path_type == link_parser::PathType::Ambiguous
+                                        && parsed.path.contains('/')
+                                        && !parsed.path.starts_with('.')
+                                    {
+                                        // Looks like an already-canonical path (e.g., "Folder/file.md")
+                                        // Don't resolve it relative to the current file
+                                        parsed.path.clone()
+                                    } else {
+                                        // Relative path - resolve against current file
+                                        link_parser::to_canonical(&parsed, file_path)
+                                    };
                                     let formatted = self
                                         .format_link_for_file(&canonical_target, &canonical_path);
                                     formatted_links.push(Value::String(formatted));
@@ -2259,18 +2293,25 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         .map(|seq| {
                             seq.iter()
                                 .filter_map(|v| v.as_str())
-                                .map(|relative_path| {
+                                .map(|raw_value| {
+                                    // Parse the value - it could be a plain path or a markdown link
+                                    // e.g., "./file.md" or "[Title](</path/file.md>)"
+                                    // This extracts the canonical path from either format
+                                    let parsed_link = link_parser::parse_link(raw_value);
+                                    let path_to_normalize = &parsed_link.path;
+
                                     // Resolve relative path to canonical (matching fileMap keys)
                                     // Also fixes corrupted absolute paths from previous sync issues
                                     let resolved = normalize_contents_path(
                                         file_dir,
-                                        relative_path,
+                                        path_to_normalize,
                                         &base_path,
                                     );
                                     log::debug!(
-                                        "[InitializeWorkspaceCrdt] contents: {} + {} -> {}",
+                                        "[InitializeWorkspaceCrdt] contents: {} + {} (from '{}') -> {}",
                                         file_dir.display(),
-                                        relative_path,
+                                        path_to_normalize,
+                                        raw_value,
                                         resolved
                                     );
                                     resolved
@@ -3818,5 +3859,191 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         }
 
         Ok(false)
+    }
+}
+
+#[cfg(all(test, feature = "crdt"))]
+mod tests {
+    use super::*;
+
+    // =========================================================================
+    // normalize_contents_path tests
+    // =========================================================================
+
+    #[test]
+    fn test_normalize_contents_path_plain_relative() {
+        let base_dir = Path::new("Archive");
+        let workspace_base = Path::new("/Users/test/journal");
+
+        let result = normalize_contents_path(base_dir, "./file.md", workspace_base);
+        assert_eq!(result, "Archive/file.md");
+    }
+
+    #[test]
+    fn test_normalize_contents_path_parent_relative() {
+        let base_dir = Path::new("Archive/Sub");
+        let workspace_base = Path::new("/Users/test/journal");
+
+        let result = normalize_contents_path(base_dir, "../file.md", workspace_base);
+        assert_eq!(result, "Archive/file.md");
+    }
+
+    #[test]
+    fn test_normalize_contents_path_plain_filename() {
+        let base_dir = Path::new("Archive");
+        let workspace_base = Path::new("/Users/test/journal");
+
+        let result = normalize_contents_path(base_dir, "child.md", workspace_base);
+        assert_eq!(result, "Archive/child.md");
+    }
+
+    #[test]
+    fn test_normalize_contents_path_with_spaces() {
+        // This tests the case that was causing corruption
+        // The path has spaces, which is fine for normalize_contents_path
+        // as long as it receives the CLEAN path, not a markdown link
+        let base_dir = Path::new("Archive");
+        let workspace_base = Path::new("/Users/test/journal");
+
+        let result = normalize_contents_path(base_dir, "Archived documents.md", workspace_base);
+        assert_eq!(result, "Archive/Archived documents.md");
+    }
+
+    #[test]
+    fn test_normalize_contents_path_strips_corrupted_absolute() {
+        // Test that corrupted absolute paths are cleaned up
+        let base_dir = Path::new("");
+        let workspace_base = Path::new("/Users/test/journal");
+
+        // This simulates a corrupted absolute path (without leading /)
+        let result = normalize_contents_path(
+            base_dir,
+            "Users/test/journal/Archive/file.md",
+            workspace_base,
+        );
+        assert_eq!(result, "Archive/file.md");
+    }
+
+    // =========================================================================
+    // Integration test: parse_link + normalize_contents_path
+    // =========================================================================
+    // This tests the fix for the CRDT sync corruption bug where markdown links
+    // in frontmatter contents were passed directly to normalize_contents_path,
+    // corrupting the path.
+
+    #[test]
+    fn test_parse_then_normalize_markdown_link_with_spaces() {
+        // This is the exact scenario that was causing corruption
+        let raw_frontmatter_value = "[Archived documents](</Archive/Archived documents.md>)";
+        let base_dir = Path::new("");
+        let workspace_base = Path::new("/Users/test/journal");
+
+        // Step 1: Parse the markdown link to extract the clean path
+        let parsed = link_parser::parse_link(raw_frontmatter_value);
+        assert_eq!(parsed.path, "Archive/Archived documents.md");
+
+        // Step 2: Normalize the extracted path (not the raw markdown link!)
+        let result = normalize_contents_path(base_dir, &parsed.path, workspace_base);
+        assert_eq!(result, "Archive/Archived documents.md");
+
+        // Verify the path is clean and usable
+        let path = Path::new(&result);
+        let components: Vec<_> = path.components().collect();
+        assert_eq!(components.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_then_normalize_various_formats() {
+        // Use root directory as base to test relative path resolution
+        let base_dir = Path::new("");
+        let workspace_base = Path::new("/Users/test/journal");
+
+        // Test cases: (raw_value, expected_canonical_path)
+        // Note: normalize_contents_path joins base_dir with the path, so we use
+        // base_dir = "" to get the canonical path directly.
+        let test_cases = [
+            // Plain paths (relative to root)
+            ("./child.md", "child.md"),
+            ("Sub/file.md", "Sub/file.md"),
+            // Markdown links with workspace-root paths
+            ("[Child](/Archive/child.md)", "Archive/child.md"),
+            // Markdown links with angle brackets (spaces in path)
+            ("[My File](</Archive/My File.md>)", "Archive/My File.md"),
+            (
+                "[Creative Writing](</Creative Writing/index.md>)",
+                "Creative Writing/index.md",
+            ),
+        ];
+
+        for (raw_value, expected) in test_cases {
+            let parsed = link_parser::parse_link(raw_value);
+            let result = normalize_contents_path(base_dir, &parsed.path, workspace_base);
+            assert_eq!(
+                result, expected,
+                "Failed for input '{}': got '{}', expected '{}'",
+                raw_value, result, expected
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_then_normalize_relative_paths_from_subdir() {
+        // Test relative path resolution from a subdirectory
+        let base_dir = Path::new("Archive");
+        let workspace_base = Path::new("/Users/test/journal");
+
+        let test_cases = [
+            // Relative paths from Archive/
+            ("./child.md", "Archive/child.md"),
+            ("../sibling.md", "sibling.md"),
+            ("Sub/file.md", "Archive/Sub/file.md"),
+            // Markdown links with relative paths
+            ("[Parent](../parent.md)", "parent.md"),
+            ("[Child](<./child file.md>)", "Archive/child file.md"),
+        ];
+
+        for (raw_value, expected) in test_cases {
+            let parsed = link_parser::parse_link(raw_value);
+            let result = normalize_contents_path(base_dir, &parsed.path, workspace_base);
+            assert_eq!(
+                result, expected,
+                "Failed for input '{}': got '{}', expected '{}'",
+                raw_value, result, expected
+            );
+        }
+    }
+
+    #[test]
+    fn test_bug_regression_markdown_link_not_passed_directly() {
+        // This test explicitly verifies that the bug cannot happen:
+        // If someone accidentally passes a markdown link directly to
+        // normalize_contents_path, it would produce garbage output.
+        // After the fix, we always parse first, so this should never happen.
+
+        let base_dir = Path::new("");
+        let workspace_base = Path::new("/Users/test/journal");
+
+        // What the BUG did: pass markdown link directly
+        // This produces WRONG output because Path splits at '/'
+        let buggy_result = normalize_contents_path(
+            base_dir,
+            "[Archived documents](</Archive/Archived documents.md>)",
+            workspace_base,
+        );
+        // The buggy result would include markdown syntax fragments
+        assert!(
+            buggy_result.contains('[') || buggy_result.contains('<'),
+            "This test shows what the bug produced: {}",
+            buggy_result
+        );
+
+        // What the FIX does: parse first, then normalize
+        let parsed =
+            link_parser::parse_link("[Archived documents](</Archive/Archived documents.md>)");
+        let correct_result = normalize_contents_path(base_dir, &parsed.path, workspace_base);
+        // The correct result is a clean path
+        assert_eq!(correct_result, "Archive/Archived documents.md");
+        assert!(!correct_result.contains('['));
+        assert!(!correct_result.contains('<'));
     }
 }

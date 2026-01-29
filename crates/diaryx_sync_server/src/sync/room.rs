@@ -222,6 +222,8 @@ pub struct SyncRoom {
     last_responses: RwLock<HashMap<u64, Vec<u8>>>,
     /// Clients subscribed to specific body docs (file_path -> connection_ids)
     body_subscriptions: RwLock<HashMap<String, HashSet<String>>>,
+    /// Files synced counter for progress tracking (reset on new sync session)
+    files_synced: AtomicUsize,
 }
 
 impl SyncRoom {
@@ -257,6 +259,7 @@ impl SyncRoom {
             is_read_only: AtomicBool::new(false),
             last_responses: RwLock::new(HashMap::new()),
             body_subscriptions: RwLock::new(HashMap::new()),
+            files_synced: AtomicUsize::new(0),
         })
     }
 
@@ -285,6 +288,7 @@ impl SyncRoom {
             is_read_only: AtomicBool::new(false),
             last_responses: RwLock::new(HashMap::new()),
             body_subscriptions: RwLock::new(HashMap::new()),
+            files_synced: AtomicUsize::new(0),
         }
     }
 
@@ -399,6 +403,9 @@ impl SyncRoom {
         for sync_msg in sync_messages {
             match sync_msg {
                 SyncMessage::SyncStep1(state_vector) => {
+                    // Client is initiating sync - reset progress counter
+                    self.files_synced.store(0, Ordering::SeqCst);
+
                     // Client is initiating sync, respond with our diff
                     // Handle empty/invalid state vectors by sending full state
                     let workspace = self.workspace.read().await;
@@ -437,20 +444,70 @@ impl SyncRoom {
                     }
                 }
                 SyncMessage::SyncStep2(diff) => {
-                    // Client sent us their diff, apply it
+                    // Client sent us their diff, apply it and track changed files
                     let workspace = self.workspace.write().await;
-                    if let Err(e) = workspace.apply_update(&diff, UpdateOrigin::Remote) {
-                        warn!("Failed to apply sync step 2: {}", e);
+                    match workspace.apply_update_tracking_changes(&diff, UpdateOrigin::Remote) {
+                        Ok((_, changed_files, _)) => {
+                            // Update progress counter and broadcast
+                            if !changed_files.is_empty() {
+                                let newly_synced = changed_files.len();
+                                let total_synced =
+                                    self.files_synced.fetch_add(newly_synced, Ordering::SeqCst)
+                                        + newly_synced;
+                                let total_files = workspace.file_count();
+
+                                debug!(
+                                    "Sync progress: {}/{} files (SyncStep2, {} new)",
+                                    total_synced, total_files, newly_synced
+                                );
+
+                                self.broadcast_control_message(ControlMessage::SyncProgress {
+                                    completed: total_synced,
+                                    total: total_files,
+                                })
+                                .await;
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to apply sync step 2: {}", e);
+                        }
                     }
                 }
                 SyncMessage::Update(update) => {
-                    // Apply the update
+                    // Apply the update and track changed files
+                    let changed_count;
+                    let total_files;
                     {
                         let workspace = self.workspace.write().await;
-                        if let Err(e) = workspace.apply_update(&update, UpdateOrigin::Remote) {
-                            warn!("Failed to apply update: {}", e);
-                            continue;
+                        match workspace.apply_update_tracking_changes(&update, UpdateOrigin::Remote)
+                        {
+                            Ok((_, changed_files, _)) => {
+                                changed_count = changed_files.len();
+                                total_files = workspace.file_count();
+                            }
+                            Err(e) => {
+                                warn!("Failed to apply update: {}", e);
+                                continue;
+                            }
                         }
+                    }
+
+                    // Update progress counter and broadcast if files changed
+                    if changed_count > 0 {
+                        let total_synced =
+                            self.files_synced.fetch_add(changed_count, Ordering::SeqCst)
+                                + changed_count;
+
+                        debug!(
+                            "Sync progress: {}/{} files (Update, {} new)",
+                            total_synced, total_files, changed_count
+                        );
+
+                        self.broadcast_control_message(ControlMessage::SyncProgress {
+                            completed: total_synced,
+                            total: total_files,
+                        })
+                        .await;
                     }
 
                     // Broadcast to other clients
@@ -528,6 +585,16 @@ impl SyncRoom {
             .or_default()
             .insert(client_id.to_string());
 
+        self.body_broadcast_tx.subscribe()
+    }
+
+    /// Subscribe to ALL body broadcasts (for multiplexed connections).
+    ///
+    /// Returns receiver that gets ALL body updates. The caller is responsible
+    /// for filtering based on which files the client is subscribed to.
+    /// This is used by multiplexed body sync to receive updates for all files
+    /// over a single WebSocket connection.
+    pub fn subscribe_all_bodies(&self) -> broadcast::Receiver<(String, Vec<u8>)> {
         self.body_broadcast_tx.subscribe()
     }
 

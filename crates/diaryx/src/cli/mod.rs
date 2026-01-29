@@ -33,6 +33,9 @@ mod search;
 /// diaryx sort command (sorting frontmatter properties)
 mod sort;
 
+/// Sync commands for remote synchronization
+mod sync;
+
 /// Template management
 mod template;
 
@@ -230,6 +233,10 @@ pub fn run_cli() {
         Commands::Attachment { command } => {
             let current_dir = std::env::current_dir().unwrap_or_default();
             attachment::handle_attachment_command(command, &ws, &app_sync, &current_dir);
+        }
+
+        Commands::Sync { command } => {
+            sync::handle_sync_command(command, cli.workspace);
         }
     }
 }

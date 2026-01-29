@@ -60,12 +60,19 @@ pub struct GoogleAuthConfig {
 ///
 /// This stores the SQLite storage backend shared across all execute() calls,
 /// allowing CRDT state to persist across commands.
+///
+/// The `diaryx` field caches a fully-initialized Diaryx instance, avoiding
+/// expensive CRDT state reload from SQLite on every command. This is critical
+/// for performance - without caching, each command would take seconds to load.
 pub struct CrdtState {
     /// Path to the active workspace
     pub workspace_path: Mutex<Option<PathBuf>>,
     /// CRDT storage backend (shared across calls)
     /// Note: CrdtStorage trait already requires Send + Sync
     pub storage: Mutex<Option<Arc<dyn CrdtStorage>>>,
+    /// Cached Diaryx instance with CRDT support.
+    /// Wrapped in Arc to allow sharing the same instance across command invocations.
+    pub diaryx: Mutex<Option<Arc<Diaryx<SyncToAsyncFs<RealFileSystem>>>>>,
 }
 
 impl CrdtState {
@@ -73,6 +80,7 @@ impl CrdtState {
         Self {
             workspace_path: Mutex::new(None),
             storage: Mutex::new(None),
+            diaryx: Mutex::new(None),
         }
     }
 }
@@ -190,36 +198,59 @@ pub async fn execute<R: Runtime>(
         })?
     } else {
         // Normal mode: use real filesystem with optional CRDT support
-        // Extract storage and workspace path, release guards before await
+        // Try to use cached Diaryx instance for performance
         let crdt_state = app.state::<CrdtState>();
-        let (storage, workspace_path) = {
-            let storage_guard = acquire_lock(&crdt_state.storage)?;
-            let ws_guard = acquire_lock(&crdt_state.workspace_path)?;
-            (storage_guard.as_ref().map(Arc::clone), ws_guard.clone())
+
+        // First, try to get cached diaryx (fast path)
+        let cached_diaryx = {
+            let diaryx_guard = acquire_lock(&crdt_state.diaryx)?;
+            diaryx_guard.as_ref().map(Arc::clone)
         };
 
-        let diaryx = if let Some(storage) = storage {
-            match Diaryx::with_crdt_load(SyncToAsyncFs::new(RealFileSystem), storage) {
-                Ok(d) => {
-                    log::debug!("[execute] Using Diaryx with CRDT support");
-                    // Set workspace root for sync handler to write files to correct location
-                    if let Some(ref ws_path) = workspace_path {
-                        log::debug!("[execute] Setting workspace root: {:?}", ws_path);
-                        d.set_workspace_root(ws_path.clone());
-                    }
-                    d
-                }
-                Err(e) => {
-                    log::warn!(
-                        "[execute] Failed to load CRDT state: {:?}, using without CRDT",
-                        e
-                    );
-                    Diaryx::new(SyncToAsyncFs::new(RealFileSystem))
-                }
-            }
+        let diaryx = if let Some(cached) = cached_diaryx {
+            log::trace!("[execute] Using cached Diaryx instance");
+            cached
         } else {
-            log::debug!("[execute] No CRDT storage configured, using basic Diaryx");
-            Diaryx::new(SyncToAsyncFs::new(RealFileSystem))
+            // No cached instance - need to create one (slow path, only happens once)
+            log::debug!("[execute] No cached Diaryx, creating new instance");
+            let (storage, workspace_path) = {
+                let storage_guard = acquire_lock(&crdt_state.storage)?;
+                let ws_guard = acquire_lock(&crdt_state.workspace_path)?;
+                (storage_guard.as_ref().map(Arc::clone), ws_guard.clone())
+            };
+
+            let new_diaryx = if let Some(storage) = storage {
+                match Diaryx::with_crdt_load(SyncToAsyncFs::new(RealFileSystem), storage) {
+                    Ok(d) => {
+                        log::debug!("[execute] Created Diaryx with CRDT support");
+                        // Set workspace root for sync handler to write files to correct location
+                        if let Some(ref ws_path) = workspace_path {
+                            log::debug!("[execute] Setting workspace root: {:?}", ws_path);
+                            d.set_workspace_root(ws_path.clone());
+                        }
+                        Arc::new(d)
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[execute] Failed to load CRDT state: {:?}, using without CRDT",
+                            e
+                        );
+                        Arc::new(Diaryx::new(SyncToAsyncFs::new(RealFileSystem)))
+                    }
+                }
+            } else {
+                log::debug!("[execute] No CRDT storage configured, using basic Diaryx");
+                Arc::new(Diaryx::new(SyncToAsyncFs::new(RealFileSystem)))
+            };
+
+            // Cache the new instance for future commands
+            {
+                let mut diaryx_guard = acquire_lock(&crdt_state.diaryx)?;
+                *diaryx_guard = Some(Arc::clone(&new_diaryx));
+                log::debug!("[execute] Cached Diaryx instance for future commands");
+            }
+
+            new_diaryx
         };
 
         diaryx.execute(cmd).await.map_err(|e| {
@@ -2557,4 +2588,150 @@ pub async fn get_websocket_sync_status<R: Runtime>(
 pub struct WebSocketSyncStatusResponse {
     pub connected: bool,
     pub status: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use diaryx_core::crdt::SqliteStorage;
+    use std::time::Instant;
+
+    /// Performance test to verify CRDT caching works.
+    ///
+    /// This test validates that:
+    /// 1. First command execution (cold start) loads CRDT from storage
+    /// 2. Subsequent commands reuse the cached Diaryx instance and are fast
+    #[tokio::test]
+    async fn test_crdt_caching_performance() {
+        // Setup: create temp directory with SQLite storage and files
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("crdt.sqlite");
+        let workspace_path = temp_dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace_path).unwrap();
+
+        // Create SQLite storage
+        let storage = Arc::new(SqliteStorage::open(&db_path).unwrap());
+
+        // Create workspace with ~50 test files to simulate real usage
+        let diaryx_setup = Diaryx::with_crdt(
+            SyncToAsyncFs::new(RealFileSystem),
+            Arc::clone(&storage) as Arc<dyn CrdtStorage>,
+        );
+        diaryx_setup.set_workspace_root(workspace_path.clone());
+
+        // Create index file
+        let index_path = workspace_path.join("index.md");
+        std::fs::write(&index_path, "---\ntitle: Test Workspace\n---\n# Test\n").unwrap();
+
+        // Create 50 test files to simulate a real workspace
+        for i in 0..50 {
+            let file_path = workspace_path.join(format!("note_{}.md", i));
+            std::fs::write(
+                &file_path,
+                format!(
+                    "---\ntitle: Note {}\n---\n# Note {}\n\nContent for note {}.\n",
+                    i, i, i
+                ),
+            )
+            .unwrap();
+        }
+
+        // Initialize workspace CRDT (populate with files)
+        let cmd = Command::InitializeWorkspaceCrdt {
+            workspace_path: workspace_path.to_string_lossy().to_string(),
+            audience: None,
+        };
+        let _ = diaryx_setup.execute(cmd).await;
+        drop(diaryx_setup);
+
+        // Setup CrdtState like Tauri does
+        let crdt_state = CrdtState {
+            workspace_path: Mutex::new(Some(workspace_path.clone())),
+            storage: Mutex::new(Some(Arc::clone(&storage) as Arc<dyn CrdtStorage>)),
+            diaryx: Mutex::new(None), // Start with no cached instance
+        };
+
+        // Helper to execute a command using the CrdtState (simulating execute() logic)
+        async fn execute_with_state(
+            state: &CrdtState,
+            cmd: Command,
+        ) -> Result<diaryx_core::command::Response, diaryx_core::error::DiaryxError> {
+            // Try cached diaryx first
+            let cached = {
+                let guard = state.diaryx.lock().unwrap();
+                guard.as_ref().map(Arc::clone)
+            };
+
+            let diaryx = if let Some(cached) = cached {
+                cached
+            } else {
+                // Load from storage (slow path)
+                let storage = {
+                    let guard = state.storage.lock().unwrap();
+                    guard.as_ref().map(Arc::clone)
+                };
+                let ws_path = {
+                    let guard = state.workspace_path.lock().unwrap();
+                    guard.clone()
+                };
+
+                let new = if let Some(storage) = storage {
+                    Arc::new(Diaryx::with_crdt_load(
+                        SyncToAsyncFs::new(RealFileSystem),
+                        storage,
+                    )?)
+                } else {
+                    Arc::new(Diaryx::new(SyncToAsyncFs::new(RealFileSystem)))
+                };
+
+                if let Some(ref ws) = ws_path {
+                    new.set_workspace_root(ws.clone());
+                }
+
+                // Cache it
+                {
+                    let mut guard = state.diaryx.lock().unwrap();
+                    *guard = Some(Arc::clone(&new));
+                }
+                new
+            };
+
+            diaryx.execute(cmd).await
+        }
+
+        // Test 1: First command should work (may take time to load CRDT)
+        let first_cmd = Command::GetEntry {
+            path: index_path.to_string_lossy().to_string(),
+        };
+        let start = Instant::now();
+        let result = execute_with_state(&crdt_state, first_cmd).await;
+        let first_duration = start.elapsed();
+        assert!(result.is_ok(), "First command should succeed");
+        println!("First command (cold): {:?}", first_duration);
+
+        // Test 2: Subsequent commands should be fast (cached)
+        let mut total_warm_duration = std::time::Duration::ZERO;
+        for i in 0..10 {
+            let cmd = Command::GetEntry {
+                path: workspace_path
+                    .join(format!("note_{}.md", i % 50))
+                    .to_string_lossy()
+                    .to_string(),
+            };
+            let start = Instant::now();
+            let result = execute_with_state(&crdt_state, cmd).await;
+            total_warm_duration += start.elapsed();
+            assert!(result.is_ok(), "Subsequent command {} should succeed", i);
+        }
+        let avg_warm_duration = total_warm_duration / 10;
+        println!("Average warm command: {:?}", avg_warm_duration);
+
+        // Assert: warm commands should be significantly faster than 100ms each
+        // (Before fix: each command could take 10+ seconds due to CRDT reload)
+        assert!(
+            avg_warm_duration.as_millis() < 100,
+            "Cached commands should complete in <100ms, got {:?}",
+            avg_warm_duration
+        );
+    }
 }

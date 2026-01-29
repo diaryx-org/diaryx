@@ -63,7 +63,9 @@ pub use memory_storage::MemoryStorage;
 #[cfg(all(not(target_arch = "wasm32"), feature = "crdt-sqlite"))]
 pub use sqlite_storage::SqliteStorage;
 pub use storage::{CrdtStorage, StorageResult};
-pub use sync::{BodySyncProtocol, SyncMessage, SyncProtocol};
+pub use sync::{
+    BodySyncProtocol, SyncMessage, SyncProtocol, frame_body_message, unframe_body_message,
+};
 pub use sync_handler::{GuestConfig, SyncHandler};
 pub use sync_manager::{BodySyncResult, RustSyncManager, SyncMessageResult};
 pub use types::{BinaryRef, CrdtUpdate, FileMetadata, UpdateOrigin};

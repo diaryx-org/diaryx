@@ -204,7 +204,20 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
         // This handles markdown links, root paths, and relative paths
         if let Some(ref part_of) = metadata.part_of {
             let parsed = link_parser::parse_link(part_of);
-            let canonical = link_parser::to_canonical(&parsed, path);
+            // Only resolve relative paths. If the path is already canonical
+            // (WorkspaceRoot) or looks like a canonical path (contains '/' but
+            // doesn't start with '.'), use it as-is to avoid path doubling.
+            let canonical = if parsed.path_type == link_parser::PathType::WorkspaceRoot {
+                parsed.path.clone()
+            } else if parsed.path_type == link_parser::PathType::Ambiguous
+                && parsed.path.contains('/')
+                && !parsed.path.starts_with('.')
+            {
+                // Already looks canonical (e.g., "Folder/file.md")
+                parsed.path.clone()
+            } else {
+                link_parser::to_canonical(&parsed, path)
+            };
             metadata.part_of = Some(canonical);
         }
 
@@ -215,7 +228,20 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
                     .iter()
                     .map(|link_str| {
                         let parsed = link_parser::parse_link(link_str);
-                        link_parser::to_canonical(&parsed, path)
+                        // Only resolve relative paths. If the path is already canonical
+                        // (WorkspaceRoot) or looks like a canonical path (contains '/' but
+                        // doesn't start with '.'), use it as-is to avoid path doubling.
+                        if parsed.path_type == link_parser::PathType::WorkspaceRoot {
+                            parsed.path.clone()
+                        } else if parsed.path_type == link_parser::PathType::Ambiguous
+                            && parsed.path.contains('/')
+                            && !parsed.path.starts_with('.')
+                        {
+                            // Already looks canonical (e.g., "Folder/file.md")
+                            parsed.path.clone()
+                        } else {
+                            link_parser::to_canonical(&parsed, path)
+                        }
                     })
                     .collect(),
             );

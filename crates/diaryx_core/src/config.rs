@@ -36,6 +36,25 @@ pub struct Config {
     /// Defaults to MarkdownRoot for portable, clickable links
     #[serde(default, skip_serializing_if = "is_default_link_format")]
     pub link_format: LinkFormat,
+
+    // ========================================================================
+    // Sync configuration
+    // ========================================================================
+    /// Sync server URL (e.g., "https://sync.diaryx.org")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sync_server_url: Option<String>,
+
+    /// Session token for authenticated sync
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sync_session_token: Option<String>,
+
+    /// Email address used for sync authentication
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sync_email: Option<String>,
+
+    /// Workspace ID for sync (identifies the remote workspace)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sync_workspace_id: Option<String>,
 }
 
 fn is_default_link_format(format: &LinkFormat) -> bool {
@@ -71,6 +90,10 @@ impl Config {
             default_template: None,
             daily_template: None,
             link_format: LinkFormat::default(),
+            sync_server_url: None,
+            sync_session_token: None,
+            sync_email: None,
+            sync_workspace_id: None,
         }
     }
 
@@ -89,6 +112,10 @@ impl Config {
             default_template,
             daily_template,
             link_format: LinkFormat::default(),
+            sync_server_url: None,
+            sync_session_token: None,
+            sync_email: None,
+            sync_workspace_id: None,
         }
     }
 
@@ -193,6 +220,10 @@ impl Default for Config {
             default_template: None,
             daily_template: None,
             link_format: LinkFormat::default(),
+            sync_server_url: None,
+            sync_session_token: None,
+            sync_email: None,
+            sync_workspace_id: None,
         }
     }
 }
@@ -255,6 +286,10 @@ impl Config {
             default_template: None,
             daily_template: None,
             link_format: LinkFormat::default(),
+            sync_server_url: None,
+            sync_session_token: None,
+            sync_email: None,
+            sync_workspace_id: None,
         };
 
         config.save()?;
@@ -278,6 +313,10 @@ impl Default for Config {
             default_template: None,
             daily_template: None,
             link_format: LinkFormat::default(),
+            sync_server_url: None,
+            sync_session_token: None,
+            sync_email: None,
+            sync_workspace_id: None,
         }
     }
 }

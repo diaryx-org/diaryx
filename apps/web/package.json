@@ -5,8 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build:wasm": "../../scripts/build-wasm.sh",
-    "build": "bun run build:wasm && vite build",
+    "build": "../../scripts/build-wasm.sh && vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest",

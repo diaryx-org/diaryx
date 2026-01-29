@@ -119,8 +119,8 @@
 
       <!-- Label (hidden on mobile) -->
       <span class="hidden sm:inline text-xs">
-        {#if syncStatus === 'syncing' && progressPercent !== null}
-          {progressPercent}%
+        {#if syncStatus === 'syncing' && syncProgress && syncProgress.total > 0}
+          {syncProgress.completed}/{syncProgress.total}
         {:else if authState.isAuthenticated}
           Synced
         {:else}

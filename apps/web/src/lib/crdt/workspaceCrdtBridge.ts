@@ -26,6 +26,7 @@ import type { Backend, FileSystemEvent } from '../backend/interface';
 import { crdt_update_file_index, isStorageReady } from '$lib/storage/sqliteStorageBridge.js';
 import type { Api } from '../backend/api';
 import { shareSessionStore } from '@/models/stores/shareSessionStore.svelte';
+import { collaborationStore } from '@/models/stores/collaborationStore.svelte';
 import { getToken } from '$lib/auth/authStore.svelte';
 // New Rust sync helpers - progressively replacing TypeScript implementations
 import * as syncHelpers from './syncHelpers';
@@ -188,6 +189,22 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
         notifyFileChange(null, null);
         await updateFileIndexFromCrdt();
         markInitialSyncComplete();
+
+        // Auto-sync body content for all files in background
+        // This ensures files are ready when user opens them
+        try {
+          const allFiles = await getAllFiles();
+          const filePaths = Array.from(allFiles.keys());
+          if (filePaths.length > 0) {
+            console.log(`[WorkspaceCrdtBridge] Auto-syncing ${filePaths.length} body docs in background`);
+            // Don't wait for completion since this runs in background
+            proactivelySyncBodies(filePaths, { concurrency: 5, waitForComplete: false }).catch(e => {
+              console.warn('[WorkspaceCrdtBridge] Background body sync error:', e);
+            });
+          }
+        } catch (e) {
+          console.warn('[WorkspaceCrdtBridge] Failed to start background body sync:', e);
+        }
       },
       onFilesChanged: () => notifyFileChange(null, null),
       onProgress: (completed, total) => {
@@ -566,6 +583,21 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
             notifyFileChange(null, null);
             await updateFileIndexFromCrdt();
             markInitialSyncComplete();
+
+            // Auto-sync body content for all files in background
+            try {
+              const allFiles = await getAllFiles();
+              const filePaths = Array.from(allFiles.keys());
+              if (filePaths.length > 0) {
+                console.log(`[WorkspaceCrdtBridge] Auto-syncing ${filePaths.length} body docs in background (init)`);
+                // Don't wait for completion since this runs in background
+                proactivelySyncBodies(filePaths, { concurrency: 5, waitForComplete: false }).catch(e => {
+                  console.warn('[WorkspaceCrdtBridge] Background body sync error (init):', e);
+                });
+              }
+            } catch (e) {
+              console.warn('[WorkspaceCrdtBridge] Failed to start background body sync (init):', e);
+            }
           },
           onFilesChanged: () => notifyFileChange(null, null),
           onProgress: (completed, total) => {
@@ -929,6 +961,14 @@ async function subscribeToBodyViaMultiplexed(canonicalPath: string): Promise<voi
       sessionCode: shareSessionStore.joinCode ?? undefined,
       onStatusChange: (connected) => {
         console.log('[MultiplexedBodySync] Status:', connected ? 'connected' : 'disconnected');
+        notifySyncStatus(connected ? 'syncing' : 'idle');
+      },
+      onProgress: (completed, total) => {
+        notifySyncProgress(completed, total);
+      },
+      onSyncComplete: (filesSynced) => {
+        console.log(`[MultiplexedBodySync] Sync complete: ${filesSynced} files`);
+        notifySyncStatus('synced');
       },
     });
     await multiplexedBodySync.connect();
@@ -967,6 +1007,8 @@ async function subscribeToBodyViaMultiplexed(canonicalPath: string): Promise<voi
     canonicalPath,
     async (message: Uint8Array) => {
       // Handle incoming sync message via Rust
+      console.log(`[BodySync] Calling HandleBodySyncMessage for ${canonicalPath}, write_to_disk=${!shareSessionStore.isGuest}, message_len=${message.length}`);
+
       const response = await _backend!.execute({
         type: 'HandleBodySyncMessage' as any,
         params: {
@@ -976,8 +1018,20 @@ async function subscribeToBodyViaMultiplexed(canonicalPath: string): Promise<voi
         },
       } as any);
 
+      console.log(`[BodySync] HandleBodySyncMessage response for ${canonicalPath}:`, {
+        responseType: response.type,
+        hasData: !!(response as any).data,
+      });
+
       if ((response.type as string) === 'BodySyncResult') {
         const result = response as any;
+        console.log(`[BodySync] BodySyncResult for ${canonicalPath}:`, {
+          hasContent: !!result.data?.content,
+          contentLen: result.data?.content?.length ?? 0,
+          isEcho: result.data?.is_echo,
+          hasResponse: !!result.data?.response?.length,
+          responseLen: result.data?.response?.length ?? 0,
+        });
 
         // Send response if Rust returns one
         if (result.data?.response && result.data.response.length > 0) {
@@ -985,6 +1039,8 @@ async function subscribeToBodyViaMultiplexed(canonicalPath: string): Promise<voi
         }
 
         // Handle content change (if not an echo)
+        // Note: Rust HandleBodySyncMessage already writes to disk when write_to_disk=true,
+        // so we only need to notify the UI here (no saveEntry call to avoid sync loop)
         if (result.data?.content && !result.data?.is_echo) {
           // Skip if this matches our last known content
           if (_backend && await syncHelpers.isEcho(_backend, canonicalPath, result.data.content)) {
@@ -996,6 +1052,7 @@ async function subscribeToBodyViaMultiplexed(canonicalPath: string): Promise<voi
           if (_backend) {
             await syncHelpers.trackContent(_backend, canonicalPath, result.data.content);
           }
+
           notifyBodyChange(canonicalPath, result.data.content);
         }
       }
@@ -1004,22 +1061,31 @@ async function subscribeToBodyViaMultiplexed(canonicalPath: string): Promise<voi
       // onSynced callback
       console.log(`[MultiplexedBodySync] ${canonicalPath} synced`);
 
-      // AFTER sync completes, check if CRDT is still empty.
-      // If so, load from disk (hosts only).
+      // For hosts: handle uploading scenario (CRDT empty, disk has content)
+      // Note: Downloading scenario (CRDT has content) is already handled by Rust
+      // HandleBodySyncMessage with write_to_disk=true, so no saveEntry needed here
       if (backendApi && !shareSessionStore.isGuest && rustApi && _backend) {
         try {
-          const contentAfterSync = await rustApi.getBodyContent(canonicalPath);
-          if (!contentAfterSync || contentAfterSync.length === 0) {
-            console.log(`[MultiplexedBodySync] CRDT still empty after sync for ${canonicalPath}, loading from disk...`);
-            const entry = await backendApi.getEntry(canonicalPath);
-            if (entry && entry.content && entry.content.length > 0) {
-              console.log(`[MultiplexedBodySync] Loading ${entry.content.length} chars from disk into CRDT for ${canonicalPath}`);
-              await syncHelpers.trackContent(_backend, canonicalPath, entry.content);
-              await rustApi.setBodyContent(canonicalPath, entry.content);
+          const crdtContent = await rustApi.getBodyContent(canonicalPath);
+
+          if (crdtContent && crdtContent.length > 0) {
+            // CRDT has content - Rust already wrote to disk, just notify UI
+            console.log(`[MultiplexedBodySync] ${canonicalPath} synced with ${crdtContent.length} chars`);
+            await syncHelpers.trackContent(_backend, canonicalPath, crdtContent);
+            notifyBodyChange(canonicalPath, crdtContent);
+          } else {
+            // CRDT is empty - try loading from disk (uploading scenario)
+            const entry = await backendApi.getEntry(canonicalPath).catch(() => null);
+            const diskContent = entry?.content || '';
+
+            if (diskContent && diskContent.length > 0) {
+              console.log(`[MultiplexedBodySync] Loading ${diskContent.length} chars from disk into CRDT for ${canonicalPath}`);
+              await syncHelpers.trackContent(_backend, canonicalPath, diskContent);
+              await rustApi.setBodyContent(canonicalPath, diskContent);
             }
           }
-        } catch (diskErr) {
-          console.log(`[MultiplexedBodySync] Could not load from disk for ${canonicalPath}:`, diskErr);
+        } catch (err) {
+          console.warn(`[MultiplexedBodySync] Error syncing body for ${canonicalPath}:`, err);
         }
       }
 
@@ -1114,20 +1180,52 @@ export async function getBodyContentFromCrdt(filePath: string): Promise<string |
 }
 
 /**
+ * Options for proactive body sync.
+ */
+export interface ProactiveSyncOptions {
+  /** How many body syncs to run in parallel (default 3) */
+  concurrency?: number;
+  /** Callback for progress updates during subscription phase */
+  onProgress?: (completed: number, total: number) => void;
+  /** Whether to wait for sync_complete from server (default true) */
+  waitForComplete?: boolean;
+  /** Timeout for waiting for sync_complete in ms (default 120000 = 2 minutes) */
+  syncTimeout?: number;
+}
+
+/**
  * Proactively sync body docs for multiple files.
  * Call this after the tree loads to pre-fetch body content for all files,
  * so they're ready when the user opens them.
  *
  * @param filePaths Array of file paths to sync bodies for
- * @param concurrency How many body syncs to run in parallel (default 3)
+ * @param optionsOrConcurrency Options object, or concurrency number for backward compatibility
  */
-export async function proactivelySyncBodies(filePaths: string[], concurrency = 3): Promise<void> {
+export async function proactivelySyncBodies(
+  filePaths: string[],
+  optionsOrConcurrency?: number | ProactiveSyncOptions
+): Promise<void> {
   if (!_workspaceId || !_serverUrl || !rustApi) {
     console.log('[WorkspaceCrdtBridge] proactivelySyncBodies skipped - not in sync mode');
     return;
   }
 
+  // Handle backward compatibility: number arg means concurrency
+  const options = typeof optionsOrConcurrency === 'number'
+    ? { concurrency: optionsOrConcurrency }
+    : optionsOrConcurrency ?? {};
+  const concurrency = options.concurrency ?? 3;
+  const onProgress = options.onProgress;
+  const waitForComplete = options.waitForComplete ?? true;
+  const syncTimeout = options.syncTimeout ?? 120000; // 2 minutes default
+
   console.log(`[WorkspaceCrdtBridge] Proactively syncing ${filePaths.length} body docs with concurrency ${concurrency}`);
+
+  let completed = 0;
+  const total = filePaths.length;
+
+  // Report initial progress
+  onProgress?.(completed, total);
 
   // Process in batches to avoid overwhelming the server
   for (let i = 0; i < filePaths.length; i += concurrency) {
@@ -1136,18 +1234,34 @@ export async function proactivelySyncBodies(filePaths: string[], concurrency = 3
       batch.map(async (path) => {
         try {
           const canonicalPath = getCanonicalPath(path);
-          // Only sync if not already connected
-          if (!bodyBridges.has(canonicalPath)) {
+          // Only sync if not already subscribed via multiplexed sync or legacy bridges
+          if (!multiplexedBodySync?.isSubscribed(canonicalPath) && !bodyBridges.has(canonicalPath)) {
             await getOrCreateBodyBridge(canonicalPath);
           }
         } catch (e) {
           console.warn(`[WorkspaceCrdtBridge] Failed to sync body for ${path}:`, e);
+        } finally {
+          completed++;
+          onProgress?.(completed, total);
         }
       })
     );
   }
 
-  console.log(`[WorkspaceCrdtBridge] Proactive body sync complete for ${filePaths.length} files`);
+  console.log(`[WorkspaceCrdtBridge] All ${filePaths.length} body subscriptions sent`);
+
+  // Wait for sync_complete from server (arrives after 3-second quiet period)
+  if (waitForComplete && multiplexedBodySync) {
+    console.log(`[WorkspaceCrdtBridge] Waiting for body sync to complete (timeout: ${syncTimeout}ms)...`);
+    const success = await multiplexedBodySync.waitForAllSyncs(syncTimeout);
+    if (success) {
+      console.log(`[WorkspaceCrdtBridge] Body sync complete for ${filePaths.length} files`);
+    } else {
+      console.warn(`[WorkspaceCrdtBridge] Body sync timed out after ${syncTimeout}ms`);
+    }
+  } else {
+    console.log(`[WorkspaceCrdtBridge] Proactive body sync complete for ${filePaths.length} files (not waiting for server)`);
+  }
 }
 
 /**
@@ -1781,6 +1895,15 @@ export function onSyncStatus(callback: SyncStatusCallback): () => void {
  */
 function notifySyncStatus(status: 'idle' | 'connecting' | 'syncing' | 'synced' | 'error', error?: string): void {
   console.log('[WorkspaceCrdtBridge] Notifying sync status:', status, error ? `(${error})` : '');
+
+  // Update collaborationStore for SyncStatusIndicator
+  collaborationStore.setSyncStatus(status);
+  if (error) {
+    collaborationStore.setSyncError(error);
+  } else if (status === 'synced' || status === 'idle') {
+    collaborationStore.setSyncProgress(null); // Clear progress when done
+  }
+
   for (const callback of syncStatusCallbacks) {
     try {
       callback(status, error);
@@ -1794,6 +1917,9 @@ function notifySyncStatus(status: 'idle' | 'connecting' | 'syncing' | 'synced' |
  * Notify all sync progress callbacks.
  */
 function notifySyncProgress(completed: number, total: number): void {
+  // Update collaborationStore for SyncStatusIndicator
+  collaborationStore.setSyncProgress({ completed, total });
+
   for (const callback of syncProgressCallbacks) {
     try {
       callback(completed, total);
@@ -2028,21 +2154,24 @@ function handleFileSystemEvent(event: FileSystemEvent): void {
       const { doc_name, message, is_body } = event as any;
       const bytes = new Uint8Array(message);
 
+      console.log(`[WorkspaceCrdtBridge] SendSyncMessage received: doc=${doc_name}, is_body=${is_body}, bytes=${bytes.length}`);
+
       if (is_body) {
         // Send via multiplexed body sync
-        // Ensure we're subscribed first (async, fire-and-forget)
+        // The send() method now queues messages if not connected, so we always try to send
         (async () => {
           try {
             // Ensure subscription exists
             await getOrCreateBodyBridge(doc_name);
 
-            if (multiplexedBodySync?.isConnected) {
-              multiplexedBodySync.send(doc_name, bytes);
-              console.log('[WorkspaceCrdtBridge] Sent body sync for', doc_name, bytes.length, 'bytes');
-            } else {
-              // No server URL configured or not in sync mode - that's OK, just local
-              console.log('[WorkspaceCrdtBridge] Body sync skipped (not connected):', doc_name);
+            if (!multiplexedBodySync) {
+              console.warn('[WorkspaceCrdtBridge] multiplexedBodySync is null, message dropped for:', doc_name);
+              return;
             }
+
+            // send() will queue the message if not connected
+            multiplexedBodySync.send(doc_name, bytes);
+            console.log('[WorkspaceCrdtBridge] Body sync message sent/queued for', doc_name, bytes.length, 'bytes, connected:', multiplexedBodySync.isConnected);
           } catch (err) {
             console.warn('[WorkspaceCrdtBridge] Failed to send body sync for', doc_name, err);
           }

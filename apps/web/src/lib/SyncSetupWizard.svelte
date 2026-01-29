@@ -486,6 +486,39 @@
         });
       }
 
+      // For load_server mode, proactively sync body content for ALL files
+      // This downloads the actual file content from the server, not just metadata
+      if (initMode === 'load_server') {
+        console.log("[SyncWizard] Starting body content download...");
+        syncStatusText = "Downloading file contents...";
+
+        try {
+          const allFiles = await getAllFiles();
+          const filePaths = Array.from(allFiles.keys());
+
+          if (filePaths.length > 0) {
+            console.log(`[SyncWizard] Downloading body content for ${filePaths.length} files`);
+            await proactivelySyncBodies(filePaths, {
+              concurrency: 5,
+              onProgress: (completed, total) => {
+                syncCompleted = completed;
+                syncTotal = total;
+                if (total > 0) {
+                  importProgress = Math.round((completed / total) * 100);
+                  // Update status when all subscriptions are sent
+                  if (completed === total) {
+                    syncStatusText = "Receiving file contents...";
+                  }
+                }
+              }
+            });
+            console.log("[SyncWizard] Body content download complete");
+          }
+        } catch (e) {
+          console.warn("[SyncWizard] Body sync error (continuing anyway):", e);
+        }
+      }
+
       // For sync_local and merge modes, proactively sync body content
       // This uploads the actual file content to the server, not just metadata
       if (initMode === 'sync_local' || initMode === 'merge') {
@@ -498,8 +531,20 @@
 
           if (filePaths.length > 0) {
             console.log(`[SyncWizard] Syncing body content for ${filePaths.length} files`);
-            // Use concurrency of 5 for faster uploads
-            await proactivelySyncBodies(filePaths, 5);
+            await proactivelySyncBodies(filePaths, {
+              concurrency: 5,
+              onProgress: (completed, total) => {
+                syncCompleted = completed;
+                syncTotal = total;
+                if (total > 0) {
+                  importProgress = Math.round((completed / total) * 100);
+                  // Update status when all subscriptions are sent
+                  if (completed === total) {
+                    syncStatusText = "Syncing file contents...";
+                  }
+                }
+              }
+            });
             console.log("[SyncWizard] Body content sync complete");
           }
         } catch (e) {
@@ -885,19 +930,18 @@
             <Progress value={importProgress} class="h-2" />
             <p class="text-xs text-muted-foreground text-center">
               {#if syncStatusText}
+                {syncStatusText}
                 {#if syncTotal > 0}
-                  {syncStatusText} ({syncCompleted} of {syncTotal})
-                {:else}
-                  {syncStatusText}
+                  ({syncCompleted} of {syncTotal} files)
                 {/if}
               {:else if initMode === 'import'}
                 Importing files...
               {:else if initMode === 'load_server'}
                 Downloading from server...
               {:else if initMode === 'sync_local'}
-                Uploading files...
+                Uploading to server...
               {:else if initMode === 'merge'}
-                Syncing files...
+                Merging files...
               {:else}
                 Initializing workspace...
               {/if}

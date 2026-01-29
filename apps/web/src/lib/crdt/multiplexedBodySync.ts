@@ -25,6 +25,10 @@ export interface MultiplexedBodySyncOptions {
   sessionCode?: string;
   /** Callback when connection status changes. */
   onStatusChange?: (connected: boolean) => void;
+  /** Callback for sync progress updates from server. */
+  onProgress?: (completed: number, total: number) => void;
+  /** Callback when sync_complete is received from server. */
+  onSyncComplete?: (filesSynced: number) => void;
 }
 
 /**
@@ -35,6 +39,10 @@ interface FileSubscription {
   onMessage: (msg: Uint8Array) => Promise<void>;
   /** Called when initial sync completes for this file. */
   onSynced?: () => void;
+  /** Promise that resolves when this file's sync is complete. */
+  syncedPromise?: Promise<void>;
+  /** Resolver for the synced promise. */
+  syncedResolver?: () => void;
 }
 
 /**
@@ -56,6 +64,9 @@ export class MultiplexedBodySync {
 
   /** Pending SyncStep1 sends for files subscribed while disconnected */
   private pendingSubscriptions = new Set<string>();
+
+  /** Pending messages to send when connection is established */
+  private pendingMessages = new Map<string, Uint8Array[]>();
 
   constructor(options: MultiplexedBodySyncOptions) {
     this.options = options;
@@ -83,10 +94,46 @@ export class MultiplexedBodySync {
         await this.sendSyncStep1(filePath);
       }
       this.pendingSubscriptions.clear();
+
+      // Flush any queued messages that were waiting for connection
+      if (this.pendingMessages.size > 0) {
+        console.log(`[MultiplexedBodySync] Flushing ${this.pendingMessages.size} queued file(s)`);
+        for (const [filePath, messages] of this.pendingMessages) {
+          for (const msg of messages) {
+            const framed = this.frameMessage(filePath, msg);
+            this.ws!.send(framed);
+            console.log(`[MultiplexedBodySync] Sent queued message for ${filePath}, ${msg.length} bytes`);
+          }
+        }
+        this.pendingMessages.clear();
+      }
     };
 
     this.ws.onmessage = async (event) => {
       if (this.destroyed) return;
+
+      // Handle text messages (JSON control messages) separately from binary
+      if (typeof event.data === 'string') {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'sync_progress') {
+            console.log(`[MultiplexedBodySync] Sync progress: ${msg.completed}/${msg.total}`);
+            this.options.onProgress?.(msg.completed, msg.total);
+          } else if (msg.type === 'sync_complete') {
+            console.log(`[MultiplexedBodySync] Sync complete: ${msg.files_synced} files`);
+            this.options.onSyncComplete?.(msg.files_synced);
+            // Notify all subscribed files that sync is complete
+            for (const [, callbacks] of this.fileCallbacks) {
+              callbacks.onSynced?.();
+              callbacks.syncedResolver?.();
+            }
+          }
+        } catch (e) {
+          console.warn('[MultiplexedBodySync] Failed to parse control message:', e);
+        }
+        return;
+      }
+
       const data = new Uint8Array(event.data as ArrayBuffer);
 
       // Unframe: read file path prefix
@@ -119,13 +166,25 @@ export class MultiplexedBodySync {
   /**
    * Subscribe to sync for a specific file.
    * Sends initial SyncStep1 when subscribed.
+   * Returns immediately - use waitForSync() to wait for completion.
    */
   async subscribe(
     filePath: string,
     onMessage: (msg: Uint8Array) => Promise<void>,
     onSynced?: () => void
   ): Promise<void> {
-    this.fileCallbacks.set(filePath, { onMessage, onSynced });
+    // Create a promise that resolves when this file's sync completes
+    let syncedResolver: () => void;
+    const syncedPromise = new Promise<void>((resolve) => {
+      syncedResolver = resolve;
+    });
+
+    this.fileCallbacks.set(filePath, {
+      onMessage,
+      onSynced,
+      syncedPromise,
+      syncedResolver: syncedResolver!,
+    });
 
     // Send initial SyncStep1 for this file
     if (this.isConnected) {
@@ -133,6 +192,56 @@ export class MultiplexedBodySync {
     } else {
       // Queue for when we connect
       this.pendingSubscriptions.add(filePath);
+    }
+
+    // Returns immediately - caller can use waitForSync() to wait for completion
+  }
+
+  /**
+   * Wait for a specific file's sync to complete.
+   * Returns immediately if already synced or not subscribed.
+   */
+  async waitForSync(filePath: string, timeoutMs = 30000): Promise<boolean> {
+    const callbacks = this.fileCallbacks.get(filePath);
+    if (!callbacks?.syncedPromise) {
+      return true; // Not subscribed or already synced
+    }
+
+    try {
+      await Promise.race([
+        callbacks.syncedPromise,
+        new Promise<void>((_, reject) =>
+          setTimeout(() => reject(new Error('Sync timeout')), timeoutMs)
+        ),
+      ]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Wait for all subscribed files' sync to complete.
+   */
+  async waitForAllSyncs(timeoutMs = 60000): Promise<boolean> {
+    const promises = Array.from(this.fileCallbacks.values())
+      .filter((cb) => cb.syncedPromise)
+      .map((cb) => cb.syncedPromise!);
+
+    if (promises.length === 0) {
+      return true;
+    }
+
+    try {
+      await Promise.race([
+        Promise.all(promises),
+        new Promise<void>((_, reject) =>
+          setTimeout(() => reject(new Error('Sync timeout')), timeoutMs)
+        ),
+      ]);
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -153,15 +262,22 @@ export class MultiplexedBodySync {
 
   /**
    * Send a sync message for a specific file.
+   * If not connected, queues the message to be sent when connection is established.
    */
   send(filePath: string, message: Uint8Array): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      console.warn('[MultiplexedBodySync] Not connected, cannot send message');
+      // Queue message for when connected
+      if (!this.pendingMessages.has(filePath)) {
+        this.pendingMessages.set(filePath, []);
+      }
+      this.pendingMessages.get(filePath)!.push(message);
+      console.log(`[MultiplexedBodySync] Queued message for ${filePath} (not connected), ${message.length} bytes`);
       return;
     }
 
     const framed = this.frameMessage(filePath, message);
     this.ws.send(framed);
+    console.log(`[MultiplexedBodySync] Sent message for ${filePath}, ${message.length} bytes`);
   }
 
   /**
@@ -193,6 +309,7 @@ export class MultiplexedBodySync {
     }
     this.fileCallbacks.clear();
     this.pendingSubscriptions.clear();
+    this.pendingMessages.clear();
     this.options.onStatusChange?.(false);
   }
 

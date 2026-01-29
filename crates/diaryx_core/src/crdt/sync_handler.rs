@@ -541,11 +541,12 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
         crdt_metadata: Option<&FileMetadata>,
     ) -> Result<()> {
         let storage_path = self.get_storage_path(canonical_path);
-        log::debug!(
-            "[SyncHandler] handle_remote_body_update: canonical_path='{}', storage_path='{:?}', body_preview='{}'",
+        log::info!(
+            "[SyncHandler] handle_remote_body_update START: canonical_path='{}', storage_path='{:?}', body_len={}, body_preview='{}'",
             canonical_path,
             storage_path,
-            body.chars().take(50).collect::<String>()
+            body.len(),
+            body.chars().take(100).collect::<String>()
         );
 
         // Get or construct metadata for frontmatter
@@ -587,6 +588,21 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
 
         // Clear sync write marker (even on failure)
         self.fs.mark_sync_write_end(&storage_path);
+
+        if let Err(ref e) = write_result {
+            log::error!(
+                "[SyncHandler] handle_remote_body_update FAILED: canonical_path='{}', error='{}'",
+                canonical_path,
+                e
+            );
+        } else {
+            log::info!(
+                "[SyncHandler] handle_remote_body_update SUCCESS: canonical_path='{}', storage_path='{:?}', body_len={}",
+                canonical_path,
+                storage_path,
+                body.len()
+            );
+        }
 
         write_result?;
 

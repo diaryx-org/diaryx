@@ -2529,12 +2529,44 @@ pub async fn start_websocket_sync<R: Runtime>(
         transport.disconnect().await;
     }
 
-    // Create new transport
+    // Get CRDT storage and workspace path from app state
+    let crdt_state = app.state::<CrdtState>();
+    let storage = {
+        let storage_guard = crdt_state.storage.lock().map_err(|e| SerializableError {
+            kind: "SyncError".to_string(),
+            message: format!("Failed to acquire storage lock: {}", e),
+            path: None,
+        })?;
+        storage_guard.clone().ok_or_else(|| SerializableError {
+            kind: "SyncError".to_string(),
+            message: "CRDT storage not initialized".to_string(),
+            path: None,
+        })?
+    };
+    let workspace_path = {
+        let path_guard = crdt_state
+            .workspace_path
+            .lock()
+            .map_err(|e| SerializableError {
+                kind: "SyncError".to_string(),
+                message: format!("Failed to acquire workspace path lock: {}", e),
+                path: None,
+            })?;
+        path_guard.clone().ok_or_else(|| SerializableError {
+            kind: "SyncError".to_string(),
+            message: "Workspace path not set".to_string(),
+            path: None,
+        })?
+    };
+
+    // Create new transport with CRDT storage
     let config = SyncConfig {
         server_url,
         doc_name,
         auth_token,
         write_to_disk: true,
+        storage,
+        workspace_root: workspace_path,
     };
 
     let mut transport = SyncTransport::new(config);

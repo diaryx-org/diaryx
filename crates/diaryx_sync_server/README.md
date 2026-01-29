@@ -266,5 +266,22 @@ cargo run -p diaryx_sync_server
 ### Testing
 
 ```bash
+# Run all tests (unit + E2E)
 cargo test -p diaryx_sync_server
+
+# Run only E2E integration tests
+cargo test -p diaryx_sync_server --test e2e_sync -- --nocapture
 ```
+
+#### E2E Test Suite
+
+The `tests/e2e_sync.rs` file contains comprehensive end-to-end integration tests that verify the full sync pipeline with real WebSocket connections to an in-memory test server:
+
+- **test_basic_push_pull**: Client A pushes files, Client B pulls and verifies identical state
+- **test_bidirectional_sync**: Two clients sync their unique files to share all data
+- **test_incremental_update**: Verifies incremental updates propagate correctly
+- **test_large_workspace**: Tests sync with 100+ files for scalability
+- **test_metadata_consistency**: Verifies complex metadata (contents, part_of, audience) survives sync
+- **test_body_content_integrity**: Tests unicode, special characters, and large (>100KB) files
+- **test_empty_update_detection**: Ensures no unnecessary updates when state is identical
+- **test_concurrent_modifications**: Verifies CRDT merging with concurrent changes

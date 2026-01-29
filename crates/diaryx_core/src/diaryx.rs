@@ -21,7 +21,7 @@
 //! let tree = diaryx.workspace().inner().get_tree("workspace/").await?;
 //! ```
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 #[cfg(feature = "crdt")]
 use std::sync::Arc;
 
@@ -388,6 +388,20 @@ pub struct EntryOps<'a, FS: AsyncFileSystem> {
 }
 
 impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
+    // -------------------- Path Resolution --------------------
+
+    /// Resolve a path relative to the workspace root (if set).
+    ///
+    /// If workspace_root is set, joins the path with the root.
+    /// Otherwise, returns the path as-is.
+    fn resolve_path(&self, path: &str) -> PathBuf {
+        let wr = self.diaryx.workspace_root.read().unwrap();
+        match &*wr {
+            Some(root) => root.join(path),
+            None => PathBuf::from(path),
+        }
+    }
+
     // -------------------- Frontmatter Methods --------------------
 
     /// Get all frontmatter properties for a file.
@@ -496,24 +510,25 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
 
     /// Read the raw file content (including frontmatter).
     pub async fn read_raw(&self, path: &str) -> Result<String> {
-        let path_buf = PathBuf::from(path);
+        let resolved = self.resolve_path(path);
         self.diaryx
             .fs
-            .read_to_string(Path::new(path))
+            .read_to_string(&resolved)
             .await
             .map_err(|e| DiaryxError::FileRead {
-                path: path_buf,
+                path: resolved,
                 source: e,
             })
     }
 
     /// Read the raw file content, returning empty string if file doesn't exist.
     async fn read_raw_or_empty(&self, path: &str) -> Result<String> {
-        match self.diaryx.fs.read_to_string(Path::new(path)).await {
+        let resolved = self.resolve_path(path);
+        match self.diaryx.fs.read_to_string(&resolved).await {
             Ok(content) => Ok(content),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
             Err(e) => Err(DiaryxError::FileRead {
-                path: PathBuf::from(path),
+                path: resolved,
                 source: e,
             }),
         }
@@ -522,12 +537,13 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
     /// Write a parsed file back to disk.
     async fn write_parsed(&self, path: &str, parsed: &frontmatter::ParsedFile) -> Result<()> {
         let content = frontmatter::serialize(&parsed.frontmatter, &parsed.body)?;
+        let resolved = self.resolve_path(path);
         self.diaryx
             .fs
-            .write_file(Path::new(path), &content)
+            .write_file(&resolved, &content)
             .await
             .map_err(|e| DiaryxError::FileWrite {
-                path: PathBuf::from(path),
+                path: resolved,
                 source: e,
             })
     }

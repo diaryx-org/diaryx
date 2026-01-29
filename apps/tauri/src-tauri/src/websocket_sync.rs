@@ -7,26 +7,33 @@
 //!
 //! The sync transport handles:
 //! - WebSocket lifecycle (connect, disconnect, reconnect)
-//! - Y-sync protocol message routing
+//! - Y-sync protocol message routing for both workspace metadata AND body content
 //! - Exponential backoff for reconnection
 //!
-//! All sync logic is delegated to `diaryx_core` via the command handler.
+//! ## Two-Connection Sync
+//!
+//! Sync uses two WebSocket connections:
+//! 1. **Metadata connection**: Syncs file metadata (title, part_of, contents, etc.)
+//! 2. **Body connection**: Syncs file content (markdown body) via multiplexed protocol
+//!
+//! All sync logic is delegated to `diaryx_core` via the RustSyncManager.
 
-use diaryx_core::Response;
-use diaryx_core::command::Command;
-use diaryx_core::diaryx::Diaryx;
+use diaryx_core::crdt::{
+    BodyDocManager, CrdtStorage, RustSyncManager, SyncHandler, WorkspaceCrdt, frame_body_message,
+    unframe_body_message,
+};
 use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
 use futures_util::{SinkExt, StreamExt};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tauri::async_runtime::Mutex;
-use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 use url::Url;
 
 /// Sync transport configuration.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SyncConfig {
     /// Server URL (e.g., wss://sync.diaryx.org/sync)
     pub server_url: String,
@@ -36,6 +43,10 @@ pub struct SyncConfig {
     pub auth_token: Option<String>,
     /// Whether to write changes to disk
     pub write_to_disk: bool,
+    /// CRDT storage backend (shared with main app)
+    pub storage: Arc<dyn CrdtStorage>,
+    /// Workspace root path for file operations
+    pub workspace_root: PathBuf,
 }
 
 /// Status of the sync connection.
@@ -75,12 +86,14 @@ enum ControlMessage {
 }
 
 /// WebSocket sync transport.
+///
+/// Manages two WebSocket connections:
+/// 1. Metadata connection for workspace CRDT
+/// 2. Body connection for file content CRDTs (multiplexed)
 pub struct SyncTransport {
     config: SyncConfig,
     status: Arc<Mutex<SyncStatus>>,
     running: Arc<AtomicBool>,
-    /// Channel to send messages to the WebSocket task.
-    tx: Option<mpsc::UnboundedSender<Vec<u8>>>,
     /// Handle to the background task.
     task_handle: Option<tauri::async_runtime::JoinHandle<()>>,
 }
@@ -92,7 +105,6 @@ impl SyncTransport {
             config,
             status: Arc::new(Mutex::new(SyncStatus::Disconnected)),
             running: Arc::new(AtomicBool::new(false)),
-            tx: None,
             task_handle: None,
         }
     }
@@ -122,17 +134,13 @@ impl SyncTransport {
         self.running.store(true, Ordering::Relaxed);
         *self.status.lock().await = SyncStatus::Connecting;
 
-        // Create channel for sending messages to WebSocket
-        let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        self.tx = Some(tx);
-
         let config = self.config.clone();
         let status = Arc::clone(&self.status);
         let running = Arc::clone(&self.running);
 
         // Spawn the WebSocket task
         let handle = tauri::async_runtime::spawn(async move {
-            run_sync_loop(config, status, running, rx).await;
+            run_sync_loop(config, status, running).await;
         });
 
         self.task_handle = Some(handle);
@@ -144,7 +152,6 @@ impl SyncTransport {
         log::info!("[SyncTransport] Disconnecting");
 
         self.running.store(false, Ordering::Relaxed);
-        self.tx = None;
 
         if let Some(handle) = self.task_handle.take() {
             handle.abort();
@@ -152,15 +159,122 @@ impl SyncTransport {
 
         *self.status.lock().await = SyncStatus::Disconnected;
     }
+}
 
-    /// Send a message to the server.
-    pub fn send(&self, message: Vec<u8>) -> Result<(), String> {
-        if let Some(ref tx) = self.tx {
-            tx.send(message).map_err(|e| format!("Send failed: {}", e))
-        } else {
-            Err("Not connected".to_string())
+/// Create the RustSyncManager from config.
+fn create_sync_manager(config: &SyncConfig) -> Arc<RustSyncManager<SyncToAsyncFs<RealFileSystem>>> {
+    let workspace_crdt = Arc::new(
+        WorkspaceCrdt::load(Arc::clone(&config.storage))
+            .unwrap_or_else(|_| WorkspaceCrdt::new(Arc::clone(&config.storage))),
+    );
+    let body_manager = Arc::new(BodyDocManager::new(Arc::clone(&config.storage)));
+    let fs = SyncToAsyncFs::new(RealFileSystem);
+    let sync_handler = Arc::new(SyncHandler::new(fs));
+    sync_handler.set_workspace_root(config.workspace_root.clone());
+
+    Arc::new(RustSyncManager::new(
+        workspace_crdt,
+        body_manager,
+        sync_handler,
+    ))
+}
+
+/// Import existing local files into the body CRDTs.
+///
+/// This is needed for first-time sync when local files exist but body CRDTs are empty.
+fn import_local_bodies(
+    workspace_root: &PathBuf,
+    workspace_crdt: &WorkspaceCrdt,
+    body_manager: &BodyDocManager,
+) -> usize {
+    use std::fs;
+
+    let mut imported = 0;
+
+    // Walk the workspace directory
+    fn walk_dir(
+        dir: &std::path::Path,
+        workspace_root: &std::path::Path,
+        workspace_crdt: &WorkspaceCrdt,
+        body_manager: &BodyDocManager,
+        imported: &mut usize,
+    ) {
+        let entries = match fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+
+            // Skip hidden files/directories
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.starts_with('.') {
+                    continue;
+                }
+            }
+
+            if path.is_dir() {
+                walk_dir(
+                    &path,
+                    workspace_root,
+                    workspace_crdt,
+                    body_manager,
+                    imported,
+                );
+            } else if path.extension().map(|e| e == "md").unwrap_or(false) {
+                // Get relative path from workspace root
+                let rel_path = match path.strip_prefix(workspace_root) {
+                    Ok(p) => p.to_string_lossy().to_string(),
+                    Err(_) => continue,
+                };
+
+                // Only process files that exist in workspace CRDT (metadata was already synced)
+                if workspace_crdt.get_file(&rel_path).is_none() {
+                    continue;
+                }
+
+                // Check if body doc already has content
+                let body_doc = body_manager.get_or_create(&rel_path);
+                if !body_doc.get_body().is_empty() {
+                    continue;
+                }
+
+                // Read file content and populate body CRDT
+                let content = match fs::read_to_string(&path) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+
+                let parsed = match diaryx_core::frontmatter::parse_or_empty(&content) {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                };
+
+                // Set body content in CRDT
+                if body_doc.set_body(&parsed.body).is_ok() {
+                    *imported += 1;
+                }
+            }
         }
     }
+
+    walk_dir(
+        workspace_root,
+        workspace_root,
+        workspace_crdt,
+        body_manager,
+        &mut imported,
+    );
+
+    if imported > 0 {
+        log::info!(
+            "[SyncTransport] Imported {} local file bodies into CRDT",
+            imported
+        );
+    }
+
+    imported
 }
 
 /// Run the sync loop (background task).
@@ -168,116 +282,104 @@ async fn run_sync_loop(
     config: SyncConfig,
     status: Arc<Mutex<SyncStatus>>,
     running: Arc<AtomicBool>,
-    mut rx: mpsc::UnboundedReceiver<Vec<u8>>,
 ) {
     let mut reconnect_attempts: u32 = 0;
     let max_reconnect_attempts: u32 = 10;
 
+    // Create sync manager with shared CRDT storage
+    let sync_manager = create_sync_manager(&config);
+
+    // Import local file bodies into CRDTs before syncing
+    {
+        let workspace_crdt = Arc::new(
+            WorkspaceCrdt::load(Arc::clone(&config.storage))
+                .unwrap_or_else(|_| WorkspaceCrdt::new(Arc::clone(&config.storage))),
+        );
+        let body_manager = Arc::new(BodyDocManager::new(Arc::clone(&config.storage)));
+        import_local_bodies(&config.workspace_root, &workspace_crdt, &body_manager);
+    }
+
+    // Build WebSocket URLs
+    let metadata_url = match build_websocket_url(&config, false) {
+        Ok(url) => url,
+        Err(e) => {
+            log::error!("[SyncTransport] Invalid metadata URL: {}", e);
+            *status.lock().await = SyncStatus::Error { message: e };
+            return;
+        }
+    };
+
+    let body_url = match build_websocket_url(&config, true) {
+        Ok(url) => url,
+        Err(e) => {
+            log::error!("[SyncTransport] Invalid body URL: {}", e);
+            *status.lock().await = SyncStatus::Error { message: e };
+            return;
+        }
+    };
+
     while running.load(Ordering::Relaxed) {
-        // Build WebSocket URL
-        let ws_url = match build_websocket_url(&config) {
-            Ok(url) => url,
-            Err(e) => {
-                log::error!("[SyncTransport] Invalid URL: {}", e);
-                *status.lock().await = SyncStatus::Error { message: e };
-                break;
-            }
-        };
+        log::info!("[SyncTransport] Connecting to metadata: {}", metadata_url);
+        log::info!("[SyncTransport] Connecting to body: {}", body_url);
 
-        log::info!("[SyncTransport] Connecting to {}", ws_url);
+        // Connect to both WebSockets
+        let metadata_ws = tokio_tungstenite::connect_async(&metadata_url).await;
+        let body_ws = tokio_tungstenite::connect_async(&body_url).await;
 
-        // Connect to WebSocket
-        match tokio_tungstenite::connect_async(&ws_url).await {
-            Ok((ws_stream, _response)) => {
-                log::info!("[SyncTransport] Connected");
+        match (metadata_ws, body_ws) {
+            (Ok((metadata_stream, _)), Ok((body_stream, _))) => {
+                log::info!("[SyncTransport] Connected to both sync endpoints");
                 reconnect_attempts = 0;
                 *status.lock().await = SyncStatus::Connected;
 
-                let (mut write, mut read) = ws_stream.split();
+                // Step 1: Run metadata initial sync to populate file list
+                log::info!("[SyncTransport] Running metadata initial sync...");
+                let (metadata_stream, initial_success) = run_metadata_initial_sync(
+                    metadata_stream,
+                    Arc::clone(&sync_manager),
+                    config.clone(),
+                    Arc::clone(&status),
+                    Arc::clone(&running),
+                )
+                .await;
 
-                // Create Diaryx instance for handling sync messages
-                let diaryx = create_diaryx();
-
-                // Send sync step 1 to initiate handshake
-                if let Some(ref diaryx) = diaryx {
-                    match send_sync_step1(diaryx, &mut write).await {
-                        Ok(_) => log::info!("[SyncTransport] Sent sync step 1"),
-                        Err(e) => log::error!("[SyncTransport] Failed to send sync step 1: {}", e),
-                    }
+                if !initial_success {
+                    log::warn!("[SyncTransport] Metadata initial sync failed, will retry");
+                    continue;
                 }
 
-                // Main message loop
-                loop {
-                    if !running.load(Ordering::Relaxed) {
-                        log::info!("[SyncTransport] Stopping (running = false)");
-                        break;
-                    }
+                log::info!("[SyncTransport] Metadata initial sync complete, starting body sync");
 
-                    tokio::select! {
-                        // Receive message from server
-                        msg = read.next() => {
-                            match msg {
-                                Some(Ok(Message::Binary(data))) => {
-                                    if let Some(ref diaryx) = diaryx {
-                                        handle_server_message(diaryx, &data, &config, &mut write, &status).await;
-                                    }
-                                }
-                                Some(Ok(Message::Text(text))) => {
-                                    // Handle JSON control messages from server
-                                    if let Ok(ctrl_msg) = serde_json::from_str::<ControlMessage>(&text) {
-                                        match ctrl_msg {
-                                            ControlMessage::SyncProgress { completed, total } => {
-                                                *status.lock().await = SyncStatus::Syncing { completed, total };
-                                                log::debug!("[SyncTransport] Sync progress: {}/{}", completed, total);
-                                            }
-                                            ControlMessage::SyncComplete { files_synced } => {
-                                                *status.lock().await = SyncStatus::Synced;
-                                                log::info!("[SyncTransport] Sync complete: {} files synced", files_synced);
-                                            }
-                                            ControlMessage::PeerJoined { guest_id, peer_count } => {
-                                                log::info!("[SyncTransport] Peer joined: {} (total: {})", guest_id, peer_count);
-                                            }
-                                            ControlMessage::PeerLeft { guest_id, peer_count } => {
-                                                log::info!("[SyncTransport] Peer left: {} (total: {})", guest_id, peer_count);
-                                            }
-                                            ControlMessage::Other => {
-                                                log::debug!("[SyncTransport] Received unknown control message");
-                                            }
-                                        }
-                                    } else {
-                                        log::warn!("[SyncTransport] Failed to parse control message: {}", text);
-                                    }
-                                }
-                                Some(Ok(Message::Close(_))) => {
-                                    log::info!("[SyncTransport] Server closed connection");
-                                    break;
-                                }
-                                Some(Err(e)) => {
-                                    log::error!("[SyncTransport] WebSocket error: {}", e);
-                                    break;
-                                }
-                                None => {
-                                    log::info!("[SyncTransport] Stream ended");
-                                    break;
-                                }
-                                _ => {}
-                            }
-                        }
+                // Step 2: Now run both loops concurrently with join (not select)
+                // This ensures both stay alive until BOTH complete naturally
+                let metadata_future = run_metadata_sync_loop(
+                    metadata_stream,
+                    Arc::clone(&sync_manager),
+                    config.clone(),
+                    Arc::clone(&status),
+                    Arc::clone(&running),
+                );
 
-                        // Send message from queue
-                        outgoing = rx.recv() => {
-                            if let Some(data) = outgoing {
-                                if let Err(e) = write.send(Message::Binary(data.into())).await {
-                                    log::error!("[SyncTransport] Failed to send: {}", e);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
+                let body_future = run_body_sync(
+                    body_stream,
+                    Arc::clone(&sync_manager),
+                    config.clone(),
+                    Arc::clone(&running),
+                );
+
+                // Run both until BOTH complete (not just one)
+                let (metadata_result, body_result) = tokio::join!(metadata_future, body_future);
+                log::info!(
+                    "[SyncTransport] Both sync loops ended (metadata: {:?}, body: {:?})",
+                    metadata_result,
+                    body_result
+                );
             }
-            Err(e) => {
-                log::error!("[SyncTransport] Connection failed: {}", e);
+            (Err(e), _) => {
+                log::error!("[SyncTransport] Metadata connection failed: {}", e);
+            }
+            (_, Err(e)) => {
+                log::error!("[SyncTransport] Body connection failed: {}", e);
             }
         }
 
@@ -312,12 +414,338 @@ async fn run_sync_loop(
     log::info!("[SyncTransport] Sync loop ended");
 }
 
+/// Run the metadata initial sync handshake.
+///
+/// This function performs the initial SyncStep1/SyncStep2 handshake to populate
+/// the workspace CRDT with the file list from the server. It returns when:
+/// - SyncComplete is received (success)
+/// - A long timeout occurs (120s) with no activity (failure)
+/// - An error occurs (failure)
+///
+/// Returns the stream (for reuse) and a success flag.
+async fn run_metadata_initial_sync<S>(
+    ws_stream: S,
+    sync_manager: Arc<RustSyncManager<SyncToAsyncFs<RealFileSystem>>>,
+    config: SyncConfig,
+    status: Arc<Mutex<SyncStatus>>,
+    running: Arc<AtomicBool>,
+) -> (S, bool)
+where
+    S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
+        + SinkExt<Message>
+        + Unpin,
+    <S as futures_util::Sink<Message>>::Error: std::fmt::Display,
+{
+    let (mut write, mut read) = ws_stream.split();
+
+    // Send SyncStep1 to initiate handshake
+    let step1 = sync_manager.create_workspace_sync_step1();
+    if let Err(e) = write.send(Message::Binary(step1.into())).await {
+        log::error!("[SyncTransport] Failed to send metadata SyncStep1: {}", e);
+        let stream = read.reunite(write).expect("reunite failed");
+        return (stream, false);
+    }
+    log::info!("[SyncTransport] Sent metadata SyncStep1 (initial)");
+
+    // Use a longer timeout - large workspaces can take minutes to sync
+    // This timeout resets on each message received
+    let activity_timeout = Duration::from_secs(120);
+    let mut total_files_received: usize = 0;
+
+    loop {
+        if !running.load(Ordering::Relaxed) {
+            let stream = read.reunite(write).expect("reunite failed");
+            return (stream, false);
+        }
+
+        tokio::select! {
+            msg = read.next() => {
+                match msg {
+                    Some(Ok(Message::Binary(data))) => {
+                        match sync_manager.handle_workspace_message(&data, config.write_to_disk).await {
+                            Ok(result) => {
+                                if let Some(response) = result.response {
+                                    if let Err(e) = write.send(Message::Binary(response.into())).await {
+                                        log::error!("[SyncTransport] Failed to send metadata response: {}", e);
+                                    }
+                                }
+                                if !result.changed_files.is_empty() {
+                                    total_files_received += result.changed_files.len();
+                                    log::debug!(
+                                        "[SyncTransport] Initial metadata sync: +{} files (total: {})",
+                                        result.changed_files.len(),
+                                        total_files_received
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                log::error!("[SyncTransport] Failed to handle metadata message: {:?}", e);
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Text(text))) => {
+                        if let Ok(ctrl_msg) = serde_json::from_str::<ControlMessage>(&text) {
+                            match ctrl_msg {
+                                ControlMessage::SyncProgress { completed, total } => {
+                                    *status.lock().await = SyncStatus::Syncing { completed, total };
+                                    log::info!("[SyncTransport] Initial sync progress: {}/{}", completed, total);
+                                }
+                                ControlMessage::SyncComplete { files_synced } => {
+                                    *status.lock().await = SyncStatus::Synced;
+                                    log::info!(
+                                        "[SyncTransport] Initial metadata sync complete: {} files synced",
+                                        files_synced
+                                    );
+                                    // Initial handshake complete - this is the success condition
+                                    let stream = read.reunite(write).expect("reunite failed");
+                                    return (stream, true);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) => {
+                        log::info!("[SyncTransport] Metadata connection closed during initial sync");
+                        let stream = read.reunite(write).expect("reunite failed");
+                        return (stream, false);
+                    }
+                    Some(Err(e)) => {
+                        log::error!("[SyncTransport] Metadata WebSocket error during initial sync: {}", e);
+                        let stream = read.reunite(write).expect("reunite failed");
+                        return (stream, false);
+                    }
+                    None => {
+                        log::info!("[SyncTransport] Metadata stream ended during initial sync");
+                        let stream = read.reunite(write).expect("reunite failed");
+                        return (stream, false);
+                    }
+                    _ => {}
+                }
+            }
+            _ = tokio::time::sleep(activity_timeout) => {
+                // Timeout with no activity - this is a failure
+                // We must wait for SyncComplete to ensure body sync has the full file list
+                log::error!(
+                    "[SyncTransport] Initial metadata sync timed out after {}s with no SyncComplete (received {} files)",
+                    activity_timeout.as_secs(),
+                    total_files_received
+                );
+                let stream = read.reunite(write).expect("reunite failed");
+                return (stream, false);
+            }
+        }
+    }
+}
+
+/// Run the ongoing metadata sync loop (after initial handshake).
+///
+/// This handles ongoing sync messages (broadcasts, live updates) after the
+/// initial handshake has completed.
+async fn run_metadata_sync_loop<S>(
+    ws_stream: S,
+    sync_manager: Arc<RustSyncManager<SyncToAsyncFs<RealFileSystem>>>,
+    config: SyncConfig,
+    status: Arc<Mutex<SyncStatus>>,
+    running: Arc<AtomicBool>,
+) -> &'static str
+where
+    S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
+        + SinkExt<Message>
+        + Unpin,
+    <S as futures_util::Sink<Message>>::Error: std::fmt::Display,
+{
+    let (mut write, mut read) = ws_stream.split();
+
+    while running.load(Ordering::Relaxed) {
+        tokio::select! {
+            msg = read.next() => {
+                match msg {
+                    Some(Ok(Message::Binary(data))) => {
+                        match sync_manager.handle_workspace_message(&data, config.write_to_disk).await {
+                            Ok(result) => {
+                                if let Some(response) = result.response {
+                                    if let Err(e) = write.send(Message::Binary(response.into())).await {
+                                        log::error!("[SyncTransport] Failed to send metadata response: {}", e);
+                                    }
+                                }
+                                if !result.changed_files.is_empty() {
+                                    log::info!("[SyncTransport] Metadata changed: {:?}", result.changed_files);
+                                }
+                            }
+                            Err(e) => {
+                                log::error!("[SyncTransport] Failed to handle metadata message: {:?}", e);
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Text(text))) => {
+                        if let Ok(ctrl_msg) = serde_json::from_str::<ControlMessage>(&text) {
+                            match ctrl_msg {
+                                ControlMessage::SyncProgress { completed, total } => {
+                                    *status.lock().await = SyncStatus::Syncing { completed, total };
+                                    log::debug!("[SyncTransport] Sync progress: {}/{}", completed, total);
+                                }
+                                ControlMessage::SyncComplete { files_synced } => {
+                                    *status.lock().await = SyncStatus::Synced;
+                                    log::info!("[SyncTransport] Sync complete: {} files", files_synced);
+                                }
+                                ControlMessage::PeerJoined { guest_id, peer_count } => {
+                                    log::info!("[SyncTransport] Peer joined: {} (total: {})", guest_id, peer_count);
+                                }
+                                ControlMessage::PeerLeft { guest_id, peer_count } => {
+                                    log::info!("[SyncTransport] Peer left: {} (total: {})", guest_id, peer_count);
+                                }
+                                ControlMessage::Other => {}
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) => {
+                        log::info!("[SyncTransport] Metadata connection closed by server");
+                        return "closed";
+                    }
+                    Some(Err(e)) => {
+                        log::error!("[SyncTransport] Metadata WebSocket error: {}", e);
+                        return "error";
+                    }
+                    None => {
+                        log::info!("[SyncTransport] Metadata stream ended");
+                        return "ended";
+                    }
+                    _ => {}
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_secs(30)) => {
+                // Send ping to keep connection alive
+                if let Err(e) = write.send(Message::Ping(vec![].into())).await {
+                    log::error!("[SyncTransport] Failed to send ping: {}", e);
+                    return "ping_failed";
+                }
+            }
+        }
+    }
+
+    "stopped"
+}
+
+/// Run the body sync loop (multiplexed).
+///
+/// This loads the file list from the workspace CRDT (which should now be populated
+/// after the initial metadata sync) and syncs body content for all files.
+async fn run_body_sync<S>(
+    ws_stream: S,
+    sync_manager: Arc<RustSyncManager<SyncToAsyncFs<RealFileSystem>>>,
+    config: SyncConfig,
+    running: Arc<AtomicBool>,
+) -> &'static str
+where
+    S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
+        + SinkExt<Message>
+        + Unpin,
+    <S as futures_util::Sink<Message>>::Error: std::fmt::Display,
+{
+    let (mut write, mut read) = ws_stream.split();
+
+    // Get list of files from workspace CRDT
+    // NOTE: This now runs AFTER metadata initial sync, so the file list should be populated
+    let workspace_crdt = WorkspaceCrdt::load(Arc::clone(&config.storage))
+        .unwrap_or_else(|_| WorkspaceCrdt::new(Arc::clone(&config.storage)));
+    let files = workspace_crdt.list_files();
+
+    // Send SyncStep1 for all known files
+    log::info!(
+        "[SyncTransport] Sending body SyncStep1 for {} files",
+        files.len()
+    );
+    for (file_path, _metadata) in &files {
+        if !running.load(Ordering::Relaxed) {
+            return "stopped";
+        }
+        let step1 = sync_manager.create_body_sync_step1(file_path);
+        let framed = frame_body_message(file_path, &step1);
+        if let Err(e) = write.send(Message::Binary(framed.into())).await {
+            log::warn!(
+                "[SyncTransport] Failed to send body SyncStep1 for {}: {}",
+                file_path,
+                e
+            );
+        }
+    }
+    log::info!(
+        "[SyncTransport] Sent body SyncStep1 for {} files",
+        files.len()
+    );
+
+    while running.load(Ordering::Relaxed) {
+        tokio::select! {
+            msg = read.next() => {
+                match msg {
+                    Some(Ok(Message::Binary(data))) => {
+                        // Unframe the multiplexed message
+                        if let Some((file_path, body_msg)) = unframe_body_message(&data) {
+                            match sync_manager.handle_body_message(&file_path, &body_msg, config.write_to_disk).await {
+                                Ok(result) => {
+                                    if let Some(response) = result.response {
+                                        let framed = frame_body_message(&file_path, &response);
+                                        if let Err(e) = write.send(Message::Binary(framed.into())).await {
+                                            log::error!("[SyncTransport] Failed to send body response: {}", e);
+                                        }
+                                    }
+                                    if result.content.is_some() && !result.is_echo {
+                                        log::info!("[SyncTransport] Body synced: {}", file_path);
+                                    }
+                                }
+                                Err(e) => {
+                                    log::error!("[SyncTransport] Failed to handle body message for {}: {:?}", file_path, e);
+                                }
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Text(text))) => {
+                        // Handle JSON control messages (same format as metadata)
+                        if let Ok(ctrl_msg) = serde_json::from_str::<ControlMessage>(&text) {
+                            if let ControlMessage::SyncComplete { files_synced } = ctrl_msg {
+                                log::info!("[SyncTransport] Body sync complete: {} files", files_synced);
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) => {
+                        log::info!("[SyncTransport] Body connection closed by server");
+                        return "closed";
+                    }
+                    Some(Err(e)) => {
+                        log::error!("[SyncTransport] Body WebSocket error: {}", e);
+                        return "error";
+                    }
+                    None => {
+                        log::info!("[SyncTransport] Body stream ended");
+                        return "ended";
+                    }
+                    _ => {}
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_secs(30)) => {
+                // Send ping to keep connection alive
+                if let Err(e) = write.send(Message::Ping(vec![].into())).await {
+                    log::error!("[SyncTransport] Failed to send ping: {}", e);
+                    return "ping_failed";
+                }
+            }
+        }
+    }
+
+    "stopped"
+}
+
 /// Build WebSocket URL with query parameters.
-fn build_websocket_url(config: &SyncConfig) -> Result<String, String> {
+fn build_websocket_url(config: &SyncConfig, multiplexed: bool) -> Result<String, String> {
     let mut url = Url::parse(&config.server_url).map_err(|e| format!("Invalid URL: {}", e))?;
 
     // Add doc parameter
     url.query_pairs_mut().append_pair("doc", &config.doc_name);
+
+    // Add multiplexed flag for body sync
+    if multiplexed {
+        url.query_pairs_mut().append_pair("multiplexed", "true");
+    }
 
     // Add auth token if provided
     if let Some(ref token) = config.auth_token {
@@ -327,116 +755,38 @@ fn build_websocket_url(config: &SyncConfig) -> Result<String, String> {
     Ok(url.to_string())
 }
 
-/// Create a Diaryx instance with CRDT enabled.
-fn create_diaryx() -> Option<Diaryx<SyncToAsyncFs<RealFileSystem>>> {
-    // For now, create a basic instance without CRDT storage
-    // The calling code should provide the proper instance with CRDT state
-    Some(Diaryx::new(SyncToAsyncFs::new(RealFileSystem)))
-}
-
-/// Send sync step 1 to initiate handshake.
-async fn send_sync_step1<S>(
-    diaryx: &Diaryx<SyncToAsyncFs<RealFileSystem>>,
-    write: &mut futures_util::stream::SplitSink<S, Message>,
-) -> Result<(), String>
-where
-    S: futures_util::Sink<Message> + Unpin,
-    <S as futures_util::Sink<Message>>::Error: std::fmt::Display,
-{
-    let cmd = Command::CreateWorkspaceSyncStep1;
-    let response = diaryx
-        .execute(cmd)
-        .await
-        .map_err(|e| format!("Execute failed: {:?}", e))?;
-
-    if let Response::Binary(data) = response {
-        if !data.is_empty() {
-            write
-                .send(Message::Binary(data.into()))
-                .await
-                .map_err(|e| format!("Send failed: {}", e))?;
-        }
-    }
-
-    Ok(())
-}
-
-/// Handle incoming message from server.
-async fn handle_server_message<S>(
-    diaryx: &Diaryx<SyncToAsyncFs<RealFileSystem>>,
-    data: &[u8],
-    config: &SyncConfig,
-    write: &mut futures_util::stream::SplitSink<S, Message>,
-    _status: &Arc<Mutex<SyncStatus>>,
-) where
-    S: futures_util::Sink<Message> + Unpin,
-    <S as futures_util::Sink<Message>>::Error: std::fmt::Display,
-{
-    let cmd = Command::HandleWorkspaceSyncMessage {
-        message: data.to_vec(),
-        write_to_disk: config.write_to_disk,
-    };
-
-    match diaryx.execute(cmd).await {
-        Ok(Response::WorkspaceSyncResult {
-            response,
-            changed_files,
-            sync_complete,
-        }) => {
-            // Send response if any
-            if let Some(response_data) = response {
-                if !response_data.is_empty() {
-                    if let Err(e) = write.send(Message::Binary(response_data.into())).await {
-                        log::error!("[SyncTransport] Failed to send response: {}", e);
-                    }
-                }
-            }
-
-            // NOTE: We intentionally do NOT set status to Synced based on Rust's sync_complete flag.
-            // The Rust flag fires after receiving just one message (initial handshake), but that's
-            // BEFORE the client has finished sending its local data to the server.
-            // Instead, we rely on the server's sync_complete JSON message (handled in Message::Text)
-            // which indicates the server has received all our data.
-            if sync_complete {
-                log::debug!(
-                    "[SyncTransport] Rust sync_complete flag set (waiting for server confirmation)"
-                );
-            }
-
-            // Log changed files
-            if !changed_files.is_empty() {
-                log::info!(
-                    "[SyncTransport] {} files changed: {:?}",
-                    changed_files.len(),
-                    changed_files
-                );
-            }
-        }
-        Ok(_) => {
-            log::warn!("[SyncTransport] Unexpected response type");
-        }
-        Err(e) => {
-            log::error!("[SyncTransport] Failed to handle message: {:?}", e);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use diaryx_core::crdt::MemoryStorage;
 
-    #[test]
-    fn test_build_websocket_url() {
-        let config = SyncConfig {
+    fn create_test_config() -> SyncConfig {
+        SyncConfig {
             server_url: "wss://sync.diaryx.org/sync".to_string(),
             doc_name: "workspace123".to_string(),
             auth_token: Some("token123".to_string()),
             write_to_disk: true,
-        };
+            storage: Arc::new(MemoryStorage::new()),
+            workspace_root: PathBuf::from("/tmp/test"),
+        }
+    }
 
-        let url = build_websocket_url(&config).unwrap();
+    #[test]
+    fn test_build_websocket_url_metadata() {
+        let config = create_test_config();
+        let url = build_websocket_url(&config, false).unwrap();
         assert!(url.contains("doc=workspace123"));
         assert!(url.contains("token=token123"));
+        assert!(!url.contains("multiplexed"));
+    }
+
+    #[test]
+    fn test_build_websocket_url_body() {
+        let config = create_test_config();
+        let url = build_websocket_url(&config, true).unwrap();
+        assert!(url.contains("doc=workspace123"));
+        assert!(url.contains("token=token123"));
+        assert!(url.contains("multiplexed=true"));
     }
 
     #[test]

@@ -443,10 +443,10 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         message: &[u8],
         write_to_disk: bool,
     ) -> Result<BodySyncResult> {
-        log::debug!(
-            "[SyncManager] handle_body_message: {} bytes for doc_name='{}', write_to_disk: {}",
-            message.len(),
+        log::info!(
+            "[SyncManager] handle_body_message START: doc='{}', message_len={}, write_to_disk={}",
             doc_name,
+            message.len(),
             write_to_disk
         );
 
@@ -456,6 +456,11 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         // Get the body doc to apply updates
         let body_doc = self.body_manager.get_or_create(doc_name);
         let content_before = body_doc.get_body();
+        log::info!(
+            "[SyncManager] handle_body_message: doc='{}', content_before_len={}",
+            doc_name,
+            content_before.len()
+        );
 
         // Handle the message via the protocol
         let response = {
@@ -469,20 +474,48 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
 
         // Apply updates to the body doc
         let messages = SyncMessage::decode_all(message)?;
-        for sync_msg in messages {
+        log::info!(
+            "[SyncManager] handle_body_message: doc='{}', decoded {} messages",
+            doc_name,
+            messages.len()
+        );
+        for (i, sync_msg) in messages.iter().enumerate() {
             match sync_msg {
                 SyncMessage::SyncStep2(update) | SyncMessage::Update(update) => {
+                    log::info!(
+                        "[SyncManager] handle_body_message: doc='{}', msg[{}] = {:?}, update_len={}",
+                        doc_name,
+                        i,
+                        if matches!(sync_msg, SyncMessage::SyncStep2(_)) {
+                            "SyncStep2"
+                        } else {
+                            "Update"
+                        },
+                        update.len()
+                    );
                     if !update.is_empty() {
-                        body_doc.apply_update(&update, UpdateOrigin::Remote)?;
+                        body_doc.apply_update(update, UpdateOrigin::Remote)?;
                     }
                 }
-                SyncMessage::SyncStep1(_) => {
+                SyncMessage::SyncStep1(sv) => {
+                    log::info!(
+                        "[SyncManager] handle_body_message: doc='{}', msg[{}] = SyncStep1, sv_len={}",
+                        doc_name,
+                        i,
+                        sv.len()
+                    );
                     // SyncStep1 is handled by the protocol, no update to apply
                 }
             }
         }
 
         let content_after = body_doc.get_body();
+        log::info!(
+            "[SyncManager] handle_body_message: doc='{}', content_after_len={}, content_after_preview='{}'",
+            doc_name,
+            content_after.len(),
+            content_after.chars().take(100).collect::<String>()
+        );
 
         // Check if content changed
         let content_changed = content_before != content_after;
@@ -490,17 +523,26 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         // Check if this is an echo of our own update
         let is_echo = if content_changed {
             let last_known = self.last_known_content.read().unwrap();
-            last_known.get(doc_name) == Some(&content_after)
+            let tracked_content = last_known.get(doc_name);
+            let echo_check = tracked_content == Some(&content_after);
+            log::info!(
+                "[SyncManager] handle_body_message echo check: doc='{}', has_tracked_content={}, tracked_len={}, echo_check={}",
+                doc_name,
+                tracked_content.is_some(),
+                tracked_content.map(|s| s.len()).unwrap_or(0),
+                echo_check
+            );
+            echo_check
         } else {
             false
         };
 
-        log::debug!(
-            "[SyncManager] handle_body_message result: doc_name='{}', content_changed={}, is_echo={}, content_after_preview='{}'",
+        log::info!(
+            "[SyncManager] handle_body_message RESULT: doc='{}', content_changed={}, is_echo={}, write_to_disk={}",
             doc_name,
             content_changed,
             is_echo,
-            content_after.chars().take(50).collect::<String>()
+            write_to_disk
         );
 
         // Write to disk if content changed and not an echo

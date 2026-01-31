@@ -96,20 +96,20 @@ jobs:
       - name: Setup Nix cache
         uses: DeterminateSystems/magic-nix-cache-action@main
 
-      - name: Install dependencies
+      - name: Install dependencies and build WASM
         run: |
           cd apps/web
-          nix develop --command bun install
+          nix develop --command bash -c "bun install && ../../scripts/build-wasm.sh"
 
       - name: Type check
         run: |
           cd apps/web
           nix develop --command bun run check
 
-      - name: Build (includes WASM)
+      - name: Build
         run: |
           cd apps/web
-          nix develop --command bun run build
+          nix develop --command vite build
 
       - name: Upload web build artifact
         uses: actions/upload-artifact@v4

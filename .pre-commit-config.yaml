@@ -41,3 +41,11 @@ repos:
         language: system
         files: ^apps/web/.*\.(svelte|ts)$
         pass_filenames: false
+
+      # Update AGENTS.md workspace index when READMEs change
+      - id: update-agents-index
+        name: Update AGENTS.md index
+        entry: ./scripts/update-agents-index.sh
+        language: system
+        files: ^(crates|apps)/.*README\.md$|^README\.md$
+        pass_filenames: false

@@ -173,10 +173,9 @@ src/
 │   │   └── api.test.ts
 │   ├── crdt/
 │   │   ├── workspaceCrdtBridge.test.ts
-│   │   └── collaborationBridge.test.ts
+│   │   └── syncTransport.test.ts
 │   └── components/
-│       ├── AttachmentPicker.test.ts
-│       └── Editor.test.ts
+│       └── AttachmentPicker.test.ts
 e2e/
 ├── workspace.spec.ts               # Workspace navigation tests
 ├── editor.spec.ts                  # Editor functionality tests

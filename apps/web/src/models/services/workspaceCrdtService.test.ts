@@ -212,10 +212,10 @@ describe('workspaceCrdtService', () => {
         custom_field: 'custom value',
       })
 
+      // Note: part_of and contents are intentionally omitted - Rust handles those
+      // via SetFrontmatterProperty with proper markdown link parsing
       expect(updateFileMetadata).toHaveBeenCalledWith('test.md', {
         title: 'Test Title',
-        part_of: 'parent.md',
-        contents: ['child1.md', 'child2.md'],
         audience: ['developers'],
         description: 'A test file',
         extra: {
@@ -236,10 +236,9 @@ describe('workspaceCrdtService', () => {
 
       await updateCrdtFileMetadata('test.md', {})
 
+      // Note: part_of and contents are intentionally omitted - Rust handles those
       expect(updateFileMetadata).toHaveBeenCalledWith('test.md', {
         title: null,
-        part_of: null,
-        contents: null,
         audience: null,
         description: null,
         extra: {},
@@ -270,11 +269,14 @@ describe('workspaceCrdtService', () => {
         attachments: ['image.png'],
       }, 'folder/index.md')
 
+      // Note: part_of is intentionally omitted and addToContents is not called.
+      // Parent-child relationships should be established via Rust commands
+      // (CreateEntry, CreateChildEntry, AttachEntryToParent) which handle
+      // markdown link formatting for part_of/contents properties.
       expect(updateFileMetadata).toHaveBeenCalledWith('folder/test.md', expect.objectContaining({
         title: 'Test',
-        part_of: 'folder/index.md',
       }))
-      expect(addToContents).toHaveBeenCalledWith('folder/index.md', 'test.md')
+      expect(addToContents).not.toHaveBeenCalled()
     })
 
     it('should handle file in parent directory', async () => {
@@ -291,7 +293,11 @@ describe('workspaceCrdtService', () => {
         title: 'Child',
       }, 'folder/index.md')
 
-      expect(addToContents).toHaveBeenCalledWith('folder/index.md', 'child.md')
+      // addToContents is not called - Rust commands handle hierarchy
+      expect(updateFileMetadata).toHaveBeenCalledWith('folder/index.md/child.md', expect.objectContaining({
+        title: 'Child',
+      }))
+      expect(addToContents).not.toHaveBeenCalled()
     })
 
     it('should add file without parent', async () => {

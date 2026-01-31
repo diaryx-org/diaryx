@@ -119,7 +119,7 @@ describe('api', () => {
 
       expect(mockBackend.execute).toHaveBeenCalledWith({
         type: 'DeleteEntry',
-        params: { path: 'test.md' },
+        params: { path: 'test.md', hard_delete: false },
       })
     })
   })

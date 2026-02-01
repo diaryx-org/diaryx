@@ -124,6 +124,22 @@ impl FileMetadata {
         self.contents.as_ref().is_some_and(|c| !c.is_empty())
     }
 
+    /// Check if two FileMetadata are semantically equal (ignoring `modified_at`).
+    ///
+    /// This is used for change detection during sync to avoid false positives
+    /// when `modified_at` timestamps differ but content is the same.
+    pub fn is_content_equal(&self, other: &Self) -> bool {
+        self.filename == other.filename
+            && self.title == other.title
+            && self.part_of == other.part_of
+            && self.contents == other.contents
+            && self.attachments == other.attachments
+            && self.deleted == other.deleted
+            && self.audience == other.audience
+            && self.description == other.description
+            && self.extra == other.extra
+    }
+
     /// Convert a title to a normalized filename.
     ///
     /// Rules:

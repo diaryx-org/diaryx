@@ -676,15 +676,8 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
     pub fn is_metadata_echo(&self, path: &str, metadata: &FileMetadata) -> bool {
         let last_known = self.last_known_metadata.read().unwrap();
         if let Some(known) = last_known.get(path) {
-            // Compare all fields except modified_at
-            known.title == metadata.title
-                && known.part_of == metadata.part_of
-                && known.contents == metadata.contents
-                && known.attachments == metadata.attachments
-                && known.deleted == metadata.deleted
-                && known.audience == metadata.audience
-                && known.description == metadata.description
-                && known.extra == metadata.extra
+            // Use is_content_equal which compares all fields except modified_at
+            known.is_content_equal(metadata)
         } else {
             false
         }

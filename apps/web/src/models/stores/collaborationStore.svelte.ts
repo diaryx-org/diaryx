@@ -27,6 +27,11 @@ let syncStatus = $state<SyncStatus>('not_configured');
 let syncProgress = $state<{ total: number; completed: number } | null>(null);
 let syncError = $state<string | null>(null);
 
+// Body sync status (tracked separately from metadata sync)
+export type BodySyncStatus = 'idle' | 'syncing' | 'synced';
+let bodySyncStatus = $state<BodySyncStatus>('idle');
+let bodySyncProgress = $state<{ total: number; completed: number } | null>(null);
+
 // Server configuration
 function getInitialServerUrl(): string | null {
   if (typeof window !== 'undefined') {
@@ -60,6 +65,27 @@ export function getCollaborationStore() {
     get syncStatus() { return syncStatus; },
     get syncProgress() { return syncProgress; },
     get syncError() { return syncError; },
+    get bodySyncStatus() { return bodySyncStatus; },
+    get bodySyncProgress() { return bodySyncProgress; },
+    /**
+     * Effective sync status that only shows 'synced' when BOTH metadata AND body are synced.
+     * Use this in UI components to accurately represent sync completion.
+     */
+    get effectiveSyncStatus(): SyncStatus {
+      // If there's an error, show error
+      if (syncStatus === 'error') return 'error';
+      // If not configured, show not configured
+      if (syncStatus === 'not_configured') return 'not_configured';
+      // If either is connecting, show connecting
+      if (syncStatus === 'connecting') return 'connecting';
+      // If either is syncing, show syncing
+      if (syncStatus === 'syncing' || bodySyncStatus === 'syncing') return 'syncing';
+      // Only show synced if both metadata and body are synced
+      if (syncStatus === 'synced' && bodySyncStatus === 'synced') return 'synced';
+      // Otherwise show idle (metadata synced but body not yet synced)
+      if (syncStatus === 'synced' && bodySyncStatus === 'idle') return 'syncing';
+      return syncStatus;
+    },
 
     // Y.Doc management
     setYDoc(ydoc: YDoc | null) {
@@ -114,11 +140,60 @@ export function getCollaborationStore() {
       syncProgress = progress;
     },
 
-    setSyncError(error: string | null) {
-      syncError = error;
-      if (error) {
+    setSyncError(error: string | null | unknown) {
+      // Defensive string conversion - error might be an object from Rust
+      if (error === null || error === undefined) {
+        syncError = null;
+      } else if (typeof error === 'string') {
+        syncError = error;
+      } else if (error instanceof Error) {
+        syncError = error.message;
+      } else if (typeof error === 'object') {
+        // Try to extract message from object, fallback to JSON stringify
+        const errObj = error as Record<string, unknown>;
+        if (typeof errObj.message === 'string') {
+          syncError = errObj.message;
+        } else if (typeof errObj.error === 'string') {
+          syncError = errObj.error;
+        } else {
+          try {
+            syncError = JSON.stringify(error);
+          } catch {
+            syncError = 'Unknown error';
+          }
+        }
+      } else {
+        syncError = String(error);
+      }
+      if (syncError) {
         syncStatus = 'error';
       }
+    },
+
+    // Body sync status methods
+    setBodySyncStatus(status: BodySyncStatus) {
+      bodySyncStatus = status;
+    },
+
+    setBodySyncProgress(progress: { total: number; completed: number } | null) {
+      bodySyncProgress = progress;
+      // Auto-update body sync status based on progress
+      if (progress) {
+        if (progress.completed < progress.total) {
+          bodySyncStatus = 'syncing';
+        } else {
+          bodySyncStatus = 'synced';
+        }
+      }
+    },
+
+    /**
+     * Reset body sync status to idle.
+     * Call when starting a new sync session or when body sync is not needed.
+     */
+    resetBodySyncStatus() {
+      bodySyncStatus = 'idle';
+      bodySyncProgress = null;
     },
 
     // Server URL

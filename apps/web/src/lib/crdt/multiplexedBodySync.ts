@@ -45,6 +45,10 @@ interface FileSubscription {
   syncedPromise?: Promise<void>;
   /** Resolver for the synced promise. */
   syncedResolver?: () => void;
+  /** Whether this file has received actual sync data (SyncStep2). */
+  receivedData: boolean;
+  /** Whether this file has been marked synced (via sync_complete or data received). */
+  synced: boolean;
 }
 
 /**
@@ -124,10 +128,16 @@ export class MultiplexedBodySync {
           } else if (msg.type === 'sync_complete') {
             console.log(`[MultiplexedBodySync] Sync complete: ${msg.files_synced} files`);
             this.options.onSyncComplete?.(msg.files_synced);
-            // Notify all subscribed files that sync is complete
-            for (const [, callbacks] of this.fileCallbacks) {
-              callbacks.onSynced?.();
-              callbacks.syncedResolver?.();
+            // Mark all subscribed files as synced and notify
+            // Note: Files that haven't received data will still be marked synced
+            // (they may have no remote changes, which is valid)
+            for (const [filePath, callbacks] of this.fileCallbacks) {
+              if (!callbacks.synced) {
+                callbacks.synced = true;
+                console.log(`[MultiplexedBodySync] Marking ${filePath} synced (receivedData: ${callbacks.receivedData})`);
+                callbacks.onSynced?.();
+                callbacks.syncedResolver?.();
+              }
             }
           }
         } catch (e) {
@@ -148,6 +158,8 @@ export class MultiplexedBodySync {
       // Route to file-specific callback
       const callbacks = this.fileCallbacks.get(unframed.filePath);
       if (callbacks) {
+        // Mark that this file has received actual sync data
+        callbacks.receivedData = true;
         await callbacks.onMessage(unframed.message);
       } else if (this.options.onUnsubscribedMessage) {
         // Handle messages for files we're not actively subscribed to
@@ -197,6 +209,8 @@ export class MultiplexedBodySync {
       onSynced,
       syncedPromise,
       syncedResolver: syncedResolver!,
+      receivedData: false,
+      synced: false,
     });
 
     // Send initial SyncStep1 for this file
@@ -305,6 +319,36 @@ export class MultiplexedBodySync {
    */
   get subscriptionCount(): number {
     return this.fileCallbacks.size;
+  }
+
+  /**
+   * Get sync status for a specific file.
+   * Returns null if not subscribed.
+   */
+  getFileSyncStatus(filePath: string): { receivedData: boolean; synced: boolean } | null {
+    const callbacks = this.fileCallbacks.get(filePath);
+    if (!callbacks) return null;
+    return {
+      receivedData: callbacks.receivedData,
+      synced: callbacks.synced,
+    };
+  }
+
+  /**
+   * Get counts of files by sync status.
+   */
+  getSyncStatusCounts(): { total: number; synced: number; receivedData: number } {
+    let synced = 0;
+    let receivedData = 0;
+    for (const callbacks of this.fileCallbacks.values()) {
+      if (callbacks.synced) synced++;
+      if (callbacks.receivedData) receivedData++;
+    }
+    return {
+      total: this.fileCallbacks.size,
+      synced,
+      receivedData,
+    };
   }
 
   /**

@@ -883,10 +883,10 @@ impl WorkspaceCrdt {
             }
         }
 
-        // Detect metadata changes
+        // Detect metadata changes (ignoring modified_at to prevent false positives during sync)
         for (path, new_meta) in &files_after {
             if let Some(old_meta) = files_before.get(path)
-                && old_meta != new_meta
+                && !old_meta.is_content_equal(new_meta)
                 && !new_meta.deleted
                 && !old_meta.deleted
             {

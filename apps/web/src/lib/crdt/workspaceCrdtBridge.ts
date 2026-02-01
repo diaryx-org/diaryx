@@ -141,6 +141,9 @@ const syncStatusCallbacks = new Set<SyncStatusCallback>();
  * Set the server URL for workspace sync.
  * For Tauri: Uses native Rust sync client for better performance.
  * For WASM/web: Creates and connects a SyncTransport.
+ *
+ * IMPORTANT: setBackend() must be called before this function.
+ * If backend is null, sync operations will fail silently or throw.
  */
 export async function setWorkspaceServer(url: string | null): Promise<void> {
   const previousUrl = serverUrl;
@@ -153,11 +156,21 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
     previousUrl,
     initialized,
     hasRustApi: !!rustApi,
+    hasBackend: !!_backend,
     hasNativeSync: _backend?.hasNativeSync?.() ?? false,
   });
 
   // Skip if URL hasn't changed or not initialized
   if (previousUrl === url || !initialized || !rustApi) {
+    return;
+  }
+
+  // Validate backend is initialized before proceeding with sync setup
+  if (url && !_backend) {
+    console.error('[WorkspaceCrdtBridge] CRITICAL: setWorkspaceServer called with URL but _backend is null!');
+    console.error('[WorkspaceCrdtBridge] Call setBackend() before setWorkspaceServer() to avoid silent failures.');
+    // Don't throw to avoid breaking existing code, but log prominently
+    notifySyncStatus('error', 'Sync initialization failed: backend not configured');
     return;
   }
 
@@ -244,12 +257,28 @@ function handleNativeSyncEvent(event: SyncEvent): void {
   switch (event.type) {
     case 'status-changed':
       // Map status to our internal status type
-      const isConnected = event.status.metadata === 'connected' && event.status.body === 'connected';
+      // Track metadata and body status separately for accurate UI representation
+      const metadataConnected = event.status.metadata === 'connected';
+      const bodyConnected = event.status.body === 'connected';
       const isConnecting = event.status.metadata === 'connecting' || event.status.body === 'connecting';
-      if (isConnected) {
+
+      // Update body sync status based on native sync state
+      if (bodyConnected) {
+        collaborationStore.setBodySyncStatus('synced');
+      } else if (event.status.body === 'connecting') {
+        collaborationStore.setBodySyncStatus('syncing');
+      } else {
+        collaborationStore.setBodySyncStatus('idle');
+      }
+
+      // Update metadata sync status
+      if (metadataConnected && bodyConnected) {
         notifySyncStatus('synced');
       } else if (isConnecting) {
         notifySyncStatus('connecting');
+      } else if (metadataConnected) {
+        // Metadata connected but body not yet - show syncing
+        notifySyncStatus('syncing');
       } else {
         notifySyncStatus('idle');
       }
@@ -315,6 +344,9 @@ async function disconnectExistingSync(): Promise<void> {
 
   // Close all body sync bridges (multiplexed and legacy)
   closeAllBodyBridges();
+
+  // Reset body sync status since we're disconnecting
+  collaborationStore.resetBodySyncStatus();
 
   // Disconnect browser sync bridge if any
   if (syncBridge) {
@@ -1112,14 +1144,20 @@ async function subscribeToBodyViaMultiplexed(canonicalPath: string): Promise<voi
       sessionCode: shareSessionStore.joinCode ?? undefined,
       onStatusChange: (connected) => {
         console.log('[MultiplexedBodySync] Status:', connected ? 'connected' : 'disconnected');
-        notifySyncStatus(connected ? 'syncing' : 'idle');
+        // Body sync status is separate from metadata sync status
+        if (!connected) {
+          collaborationStore.setBodySyncStatus('idle');
+        }
       },
       onProgress: (completed, total) => {
+        // Update body sync progress separately
+        collaborationStore.setBodySyncProgress({ completed, total });
         notifySyncProgress(completed, total);
       },
       onSyncComplete: (filesSynced) => {
         console.log(`[MultiplexedBodySync] Sync complete: ${filesSynced} files`);
-        notifySyncStatus('synced');
+        // Mark body sync as complete
+        collaborationStore.setBodySyncStatus('synced');
       },
       // Handle messages for files we're not actively subscribed to
       // This ensures updates from other clients (e.g., Tauri) are applied even if the file isn't open
@@ -1424,10 +1462,14 @@ export async function proactivelySyncBodies(
 
   console.log(`[WorkspaceCrdtBridge] Proactively syncing ${filePaths.length} body docs with concurrency ${concurrency}`);
 
+  // Mark body sync as in progress
+  collaborationStore.setBodySyncStatus('syncing');
+
   let completed = 0;
   const total = filePaths.length;
 
   // Report initial progress
+  collaborationStore.setBodySyncProgress({ completed, total });
   onProgress?.(completed, total);
 
   // Process in batches to avoid overwhelming the server
@@ -1996,20 +2038,45 @@ export function onSyncStatus(callback: SyncStatusCallback): () => void {
 /**
  * Notify all sync status callbacks.
  */
-function notifySyncStatus(status: 'idle' | 'connecting' | 'syncing' | 'synced' | 'error', error?: string): void {
-  console.log('[WorkspaceCrdtBridge] Notifying sync status:', status, error ? `(${error})` : '');
+function notifySyncStatus(status: 'idle' | 'connecting' | 'syncing' | 'synced' | 'error', error?: unknown): void {
+  // Convert error to string if it's not already (defensive handling for Rust objects)
+  let errorStr: string | undefined;
+  if (error !== undefined && error !== null) {
+    if (typeof error === 'string') {
+      errorStr = error;
+    } else if (error instanceof Error) {
+      errorStr = error.message;
+    } else if (typeof error === 'object') {
+      const errObj = error as Record<string, unknown>;
+      if (typeof errObj.message === 'string') {
+        errorStr = errObj.message;
+      } else if (typeof errObj.error === 'string') {
+        errorStr = errObj.error;
+      } else {
+        try {
+          errorStr = JSON.stringify(error);
+        } catch {
+          errorStr = 'Unknown error';
+        }
+      }
+    } else {
+      errorStr = String(error);
+    }
+  }
+
+  console.log('[WorkspaceCrdtBridge] Notifying sync status:', status, errorStr ? `(${errorStr})` : '');
 
   // Update collaborationStore for SyncStatusIndicator
   collaborationStore.setSyncStatus(status);
-  if (error) {
-    collaborationStore.setSyncError(error);
+  if (errorStr) {
+    collaborationStore.setSyncError(errorStr);
   } else if (status === 'synced' || status === 'idle') {
     collaborationStore.setSyncProgress(null); // Clear progress when done
   }
 
   for (const callback of syncStatusCallbacks) {
     try {
-      callback(status, error);
+      callback(status, errorStr);
     } catch (err) {
       console.error('[WorkspaceCrdtBridge] Sync status callback error:', err);
     }

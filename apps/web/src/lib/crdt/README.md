@@ -38,11 +38,26 @@ For the web app, sync uses JavaScript WebSockets via `SyncTransport`. The flow i
 2. Local CRDT changes emit `SendSyncMessage` events from Rust
 3. `workspaceCrdtBridge.ts` handles these events and sends them via `syncBridge.sendRawMessage()`
 
+## Sync Status Tracking
+
+Sync status is tracked at two levels to ensure accurate UI representation:
+
+1. **Metadata sync** (`syncStatus`): Tracks workspace metadata (file list, titles, hierarchy)
+2. **Body sync** (`bodySyncStatus`): Tracks file content synchronization
+
+The `effectiveSyncStatus` getter in `collaborationStore` combines these, only showing "synced" when BOTH metadata AND body content are fully synchronized. This prevents UI issues where the indicator shows completion before file content has actually downloaded.
+
+### Per-file tracking
+
+`MultiplexedBodySync` tracks per-file sync completion via:
+- `receivedData`: Whether actual sync data was received for this file
+- `synced`: Whether the file has been marked as synced (via `sync_complete` or data receipt)
+
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `multiplexedBodySync.ts` | Multiplexed body document sync |
+| `multiplexedBodySync.ts` | Multiplexed body document sync with per-file tracking |
 | `rustCrdtApi.ts` | TypeScript API for Rust CRDT |
 | `syncHelpers.ts` | Sync utility functions |
 | `syncTransport.ts` | WebSocket transport layer |

@@ -498,20 +498,37 @@
 
           if (filePaths.length > 0) {
             console.log(`[SyncWizard] Downloading body content for ${filePaths.length} files`);
+
+            // Two-phase progress:
+            // Phase 1 (0-50%): Sending subscriptions
+            // Phase 2 (50-100%): Waiting for server to send content
+            let subscriptionsSent = false;
+
             await proactivelySyncBodies(filePaths, {
               concurrency: 5,
+              waitForComplete: true, // Wait for actual body sync completion
+              syncTimeout: 120000, // 2 minute timeout
               onProgress: (completed, total) => {
                 syncCompleted = completed;
                 syncTotal = total;
                 if (total > 0) {
-                  importProgress = Math.round((completed / total) * 100);
-                  // Update status when all subscriptions are sent
-                  if (completed === total) {
+                  // Phase 1: subscriptions being sent (0-50%)
+                  const subscriptionProgress = Math.round((completed / total) * 50);
+                  importProgress = subscriptionProgress;
+
+                  if (completed === total && !subscriptionsSent) {
+                    subscriptionsSent = true;
                     syncStatusText = "Receiving file contents...";
+                    // Phase 2 starts - we wait for server's sync_complete
+                    // Progress jumps to 50% as we wait
+                    importProgress = 50;
                   }
                 }
               }
             });
+
+            // If we get here, body sync completed successfully
+            importProgress = 100;
             console.log("[SyncWizard] Body content download complete");
           }
         } catch (e) {
@@ -531,20 +548,36 @@
 
           if (filePaths.length > 0) {
             console.log(`[SyncWizard] Syncing body content for ${filePaths.length} files`);
+
+            // Two-phase progress:
+            // Phase 1 (0-50%): Sending subscriptions and uploading
+            // Phase 2 (50-100%): Waiting for server confirmation
+            let subscriptionsSent = false;
+
             await proactivelySyncBodies(filePaths, {
               concurrency: 5,
+              waitForComplete: true, // Wait for actual sync completion
+              syncTimeout: 120000, // 2 minute timeout
               onProgress: (completed, total) => {
                 syncCompleted = completed;
                 syncTotal = total;
                 if (total > 0) {
-                  importProgress = Math.round((completed / total) * 100);
-                  // Update status when all subscriptions are sent
-                  if (completed === total) {
+                  // Phase 1: subscriptions being sent (0-50%)
+                  const subscriptionProgress = Math.round((completed / total) * 50);
+                  importProgress = subscriptionProgress;
+
+                  if (completed === total && !subscriptionsSent) {
+                    subscriptionsSent = true;
                     syncStatusText = "Syncing file contents...";
+                    // Phase 2 starts - waiting for server confirmation
+                    importProgress = 50;
                   }
                 }
               }
             });
+
+            // If we get here, body sync completed successfully
+            importProgress = 100;
             console.log("[SyncWizard] Body content sync complete");
           }
         } catch (e) {
@@ -558,7 +591,10 @@
         });
       }
 
-      importProgress = 100;
+      // Final progress (in case body sync was skipped)
+      if (importProgress < 100) {
+        importProgress = 100;
+      }
 
       // Cleanup subscriptions before closing
       cleanupSyncSubscriptions();

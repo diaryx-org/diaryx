@@ -30,10 +30,23 @@
   let { onOpenWizard }: Props = $props();
 
   // Reactive state from stores
-  let syncStatus = $derived(collaborationStore.syncStatus);
+  // Use effectiveSyncStatus which considers BOTH metadata AND body sync
+  let syncStatus = $derived(collaborationStore.effectiveSyncStatus);
+  let bodySyncStatus = $derived(collaborationStore.bodySyncStatus);
   let syncProgress = $derived(collaborationStore.syncProgress);
+  let bodySyncProgress = $derived(collaborationStore.bodySyncProgress);
   let syncError = $derived(collaborationStore.syncError);
   let authState = $derived(getAuthState());
+
+  // Combined progress: show body sync progress when metadata is synced but body is still syncing
+  let displayProgress = $derived(() => {
+    // If body sync has progress and metadata is synced, show body sync progress
+    if (bodySyncProgress && collaborationStore.syncStatus === 'synced') {
+      return bodySyncProgress;
+    }
+    // Otherwise show metadata sync progress
+    return syncProgress;
+  });
 
   // Status display config
   const statusConfig: Record<SyncStatus, {
@@ -85,13 +98,6 @@
 
   let config = $derived(statusConfig[syncStatus]);
   let StatusIcon = $derived(config.icon);
-
-  // Show progress percentage if syncing
-  let progressPercent = $derived(
-    syncProgress && syncProgress.total > 0
-      ? Math.round((syncProgress.completed / syncProgress.total) * 100)
-      : null
-  );
 </script>
 
 <Popover.Root>
@@ -119,10 +125,12 @@
 
       <!-- Label (hidden on mobile) -->
       <span class="hidden sm:inline text-xs">
-        {#if syncStatus === 'syncing' && syncProgress && syncProgress.total > 0}
-          {syncProgress.completed}/{syncProgress.total}
-        {:else if authState.isAuthenticated}
+        {#if syncStatus === 'syncing' && displayProgress() && displayProgress()!.total > 0}
+          {displayProgress()!.completed}/{displayProgress()!.total}
+        {:else if authState.isAuthenticated && syncStatus === 'synced'}
           Synced
+        {:else if authState.isAuthenticated}
+          Sync
         {:else}
           Sync
         {/if}
@@ -141,11 +149,16 @@
       </div>
 
       <!-- Progress bar when syncing -->
-      {#if syncStatus === 'syncing' && syncProgress}
+      {#if syncStatus === 'syncing' && displayProgress()}
+        {@const progress = displayProgress()!}
+        {@const percent = progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0}
         <div class="space-y-1">
-          <Progress value={progressPercent || 0} class="h-2" />
+          <Progress value={percent} class="h-2" />
           <p class="text-xs text-muted-foreground">
-            {syncProgress.completed} of {syncProgress.total} files
+            {progress.completed} of {progress.total} files
+            {#if bodySyncStatus === 'syncing' && collaborationStore.syncStatus === 'synced'}
+              (downloading content)
+            {/if}
           </p>
         </div>
       {/if}

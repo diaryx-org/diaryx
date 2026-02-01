@@ -270,6 +270,9 @@ pub struct TreeNode {
     pub path: PathBuf,
     /// `contents` property list
     pub children: Vec<TreeNode>,
+    /// Additional frontmatter properties for display (populated by --properties flag)
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub properties: HashMap<String, String>,
 }
 
 /// Helper function to format a tree node for display
@@ -284,6 +287,19 @@ pub fn format_tree_node(node: &TreeNode, prefix: &str) -> String {
         result.push_str(" - ");
         result.push_str(desc);
     }
+
+    // Add properties if present
+    if !node.properties.is_empty() {
+        let props: Vec<String> = node
+            .properties
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect();
+        result.push_str(" [");
+        result.push_str(&props.join(", "));
+        result.push(']');
+    }
+
     result.push('\n');
 
     // Add children

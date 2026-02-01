@@ -8,7 +8,7 @@ TEMP_FILE="$AGENTS_FILE.tmp"
 TREE_FILE="$AGENTS_FILE.tree"
 
 # Generate full workspace tree
-diaryx workspace info --depth 0 "$REPO_ROOT/README.md" > "$TREE_FILE"
+diaryx workspace info --depth 0 "$REPO_ROOT/README.md" --properties title,description,path > "$TREE_FILE"
 
 # Get line numbers for markers
 BEGIN_LINE=$(grep -n '<!-- BEGIN:WORKSPACE_INDEX -->' "$AGENTS_FILE" | cut -d: -f1)

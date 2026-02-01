@@ -600,6 +600,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 description: None,
                 path: root_path.to_path_buf(),
                 children: Vec::new(),
+                properties: std::collections::HashMap::new(),
             });
         }
         visited.insert(canonical);
@@ -631,6 +632,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 description: None,
                 path: root_path.to_path_buf(),
                 children: Vec::new(),
+                properties: std::collections::HashMap::new(),
             });
         } else {
             let next_depth = max_depth.map(|d| d.saturating_sub(1));
@@ -664,6 +666,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                                 description: None,
                                 path: absolute_child_path,
                                 children: Vec::new(),
+                                properties: std::collections::HashMap::new(),
                             });
                         }
                     }
@@ -677,6 +680,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             description: index.frontmatter.description,
             path: root_path.to_path_buf(),
             children,
+            properties: std::collections::HashMap::new(),
         })
     }
 
@@ -758,6 +762,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     description: None,
                     path: node_path.clone(),
                     children: Vec::new(),
+                    properties: std::collections::HashMap::new(),
                 });
             } else {
                 let next_depth = max_depth.map(|d| d.saturating_sub(1));
@@ -805,6 +810,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                             description: file_desc,
                             path: entry,
                             children: Vec::new(),
+                            properties: std::collections::HashMap::new(),
                         });
                     }
                 }
@@ -816,6 +822,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             description,
             path: node_path,
             children,
+            properties: std::collections::HashMap::new(),
         })
     }
 
@@ -832,6 +839,19 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             result.push_str(" - ");
             result.push_str(desc);
         }
+
+        // Add properties if present (for root node)
+        if !node.properties.is_empty() {
+            let props: Vec<String> = node
+                .properties
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect();
+            result.push_str(" [");
+            result.push_str(&props.join(", "));
+            result.push(']');
+        }
+
         result.push('\n');
 
         // Add children
@@ -856,6 +876,100 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         result
     }
 
+    /// Format tree for display with custom delimiter-separated properties.
+    ///
+    /// Properties are output as values only (not key=value), in the order specified
+    /// by the `properties` list, separated by `delimiter`.
+    pub fn format_tree_with_delimiter(
+        &self,
+        node: &TreeNode,
+        prefix: &str,
+        properties: &[String],
+        delimiter: &str,
+    ) -> String {
+        let mut result = String::new();
+
+        // Add the current node (root has no connector)
+        result.push_str(prefix);
+
+        // Collect property values in order specified
+        let prop_values: Vec<&str> = properties
+            .iter()
+            .filter_map(|key| node.properties.get(key).map(|v| v.as_str()))
+            .collect();
+
+        // Join with delimiter
+        result.push_str(&prop_values.join(delimiter));
+        result.push('\n');
+
+        // Add children
+        let child_count = node.children.len();
+        for (i, child) in node.children.iter().enumerate() {
+            let is_last_child = i == child_count - 1;
+            let connector = if is_last_child {
+                "└── "
+            } else {
+                "├── "
+            };
+            let child_prefix = if is_last_child { "    " } else { "│   " };
+
+            result.push_str(prefix);
+            result.push_str(connector);
+            result.push_str(&self.format_tree_node_with_delimiter(
+                child,
+                &format!("{}{}", prefix, child_prefix),
+                properties,
+                delimiter,
+            ));
+        }
+
+        result
+    }
+
+    /// Format a tree node with custom delimiter-separated properties (recursive helper).
+    fn format_tree_node_with_delimiter(
+        &self,
+        node: &TreeNode,
+        prefix: &str,
+        properties: &[String],
+        delimiter: &str,
+    ) -> String {
+        let mut result = String::new();
+
+        // Collect property values in order specified
+        let prop_values: Vec<&str> = properties
+            .iter()
+            .filter_map(|key| node.properties.get(key).map(|v| v.as_str()))
+            .collect();
+
+        // Join with delimiter
+        result.push_str(&prop_values.join(delimiter));
+        result.push('\n');
+
+        // Add children
+        let child_count = node.children.len();
+        for (i, child) in node.children.iter().enumerate() {
+            let is_last_child = i == child_count - 1;
+            let connector = if is_last_child {
+                "└── "
+            } else {
+                "├── "
+            };
+            let child_prefix = if is_last_child { "    " } else { "│   " };
+
+            result.push_str(prefix);
+            result.push_str(connector);
+            result.push_str(&self.format_tree_node_with_delimiter(
+                child,
+                &format!("{}{}", prefix, child_prefix),
+                properties,
+                delimiter,
+            ));
+        }
+
+        result
+    }
+
     /// Get workspace info as formatted string
     pub async fn workspace_info(&self, root_path: &Path) -> Result<String> {
         self.workspace_info_with_depth(root_path, None).await
@@ -873,6 +987,119 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             .build_tree_with_depth(root_path, max_depth, &mut visited)
             .await?;
         Ok(self.format_tree(&tree, "").trim_end().to_string())
+    }
+
+    /// Get workspace info as formatted string with depth limit and property extraction.
+    ///
+    /// `max_depth` of None means unlimited.
+    /// `properties` is a list of frontmatter property names to extract and display.
+    /// `delimiter` is the separator between property values (e.g., " - ").
+    ///
+    /// Special virtual properties:
+    /// - `filename`: The actual file name (e.g., `README.md`)
+    /// - `path`: Workspace-relative file path
+    pub async fn workspace_info_with_properties(
+        &self,
+        root_path: &Path,
+        max_depth: Option<usize>,
+        properties: &[String],
+        delimiter: &str,
+    ) -> Result<String> {
+        let mut visited = HashSet::new();
+        let mut tree = self
+            .build_tree_with_depth(root_path, max_depth, &mut visited)
+            .await?;
+
+        // Determine workspace root (parent directory of root index file)
+        let workspace_root = root_path.parent().unwrap_or(Path::new("."));
+
+        // Extract properties from frontmatter for each node
+        self.populate_tree_properties(&mut tree, properties, workspace_root)
+            .await;
+
+        Ok(self
+            .format_tree_with_delimiter(&tree, "", properties, delimiter)
+            .trim_end()
+            .to_string())
+    }
+
+    /// Recursively populate properties for a tree node and its children
+    async fn populate_tree_properties(
+        &self,
+        node: &mut TreeNode,
+        properties: &[String],
+        workspace_root: &Path,
+    ) {
+        // Extract properties for this node
+        node.properties = self
+            .extract_properties(&node.path, properties, workspace_root)
+            .await;
+
+        // Recursively process children
+        for child in &mut node.children {
+            Box::pin(self.populate_tree_properties(child, properties, workspace_root)).await;
+        }
+    }
+
+    /// Extract specified properties from a file's frontmatter.
+    ///
+    /// Handles virtual properties:
+    /// - `filename`: The actual file name
+    /// - `path`: Workspace-relative file path
+    async fn extract_properties(
+        &self,
+        path: &Path,
+        property_names: &[String],
+        workspace_root: &Path,
+    ) -> std::collections::HashMap<String, String> {
+        let mut result = std::collections::HashMap::new();
+
+        for name in property_names {
+            let value = match name.as_str() {
+                // Virtual properties
+                "filename" => path.file_name().and_then(|n| n.to_str()).map(String::from),
+                "path" => {
+                    // Get workspace-relative path
+                    let rel_path = path
+                        .strip_prefix(workspace_root)
+                        .unwrap_or(path)
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    Some(rel_path)
+                }
+
+                // Frontmatter properties
+                _ => match self.get_frontmatter_property(path, name).await {
+                    Ok(Some(Value::String(s))) => Some(s),
+                    Ok(Some(Value::Number(n))) => Some(n.to_string()),
+                    Ok(Some(Value::Bool(b))) => Some(b.to_string()),
+                    Ok(Some(Value::Sequence(seq))) => {
+                        // Join sequence values with ", "
+                        let strings: Vec<String> = seq
+                            .iter()
+                            .filter_map(|v| match v {
+                                Value::String(s) => Some(s.clone()),
+                                Value::Number(n) => Some(n.to_string()),
+                                Value::Bool(b) => Some(b.to_string()),
+                                _ => None,
+                            })
+                            .collect();
+                        if strings.is_empty() {
+                            None
+                        } else {
+                            Some(strings.join(", "))
+                        }
+                    }
+                    _ => None,
+                },
+            };
+
+            if let Some(v) = value {
+                result.insert(name.clone(), v);
+            }
+        }
+
+        result
     }
 
     // ==================== Frontmatter Helper Methods ====================
@@ -2179,14 +2406,17 @@ mod tests {
                     description: None,
                     path: PathBuf::from("child1.md"),
                     children: vec![],
+                    properties: std::collections::HashMap::new(),
                 },
                 TreeNode {
                     name: "Child 2".to_string(),
                     description: Some("Child desc".to_string()),
                     path: PathBuf::from("child2.md"),
                     children: vec![],
+                    properties: std::collections::HashMap::new(),
                 },
             ],
+            properties: std::collections::HashMap::new(),
         };
 
         let fs = make_test_fs();

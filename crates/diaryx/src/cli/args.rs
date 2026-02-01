@@ -570,6 +570,15 @@ pub enum WorkspaceCommands {
         /// Maximum depth to display (default: 3, use 0 for unlimited)
         #[arg(short, long, default_value = "3")]
         depth: usize,
+
+        /// Comma-separated frontmatter properties to display (default: title,description)
+        /// Virtual properties: filename (file name), path (full path)
+        #[arg(short, long, value_delimiter = ',')]
+        properties: Option<Vec<String>>,
+
+        /// Delimiter between property values (default: " - ")
+        #[arg(long, default_value = " - ")]
+        delimiter: String,
     },
 
     /// Initialize a new workspace in the current or specified directory

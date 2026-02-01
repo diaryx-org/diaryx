@@ -8,14 +8,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use diaryx_core::config::Config;
 use diaryx_core::crdt::{
-    BodyDocManager, CrdtStorage, RustSyncManager, SqliteStorage, SyncHandler, SyncMessage,
-    WorkspaceCrdt, frame_body_message, unframe_body_message,
+    BodyDocManager, RustSyncManager, SyncHandler, SyncMessage, WorkspaceCrdt, frame_body_message,
+    unframe_body_message,
 };
 use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
+use super::CrdtContext;
 use super::progress;
 
 const DEFAULT_SYNC_SERVER: &str = "https://sync.diaryx.org";
@@ -208,30 +209,17 @@ pub fn handle_start(config: &Config, workspace_root: &Path) {
     println!("  Local path: {}", workspace_root.display());
     println!();
 
-    // Initialize CRDT storage
-    let crdt_dir = workspace_root.join(".diaryx");
-    if !crdt_dir.exists() {
-        if let Err(e) = std::fs::create_dir_all(&crdt_dir) {
-            eprintln!("Failed to create .diaryx directory: {}", e);
-            return;
-        }
-    }
-
-    let crdt_db = crdt_dir.join("crdt.db");
-    let storage: Arc<dyn CrdtStorage> = match SqliteStorage::open(&crdt_db) {
-        Ok(s) => Arc::new(s),
+    // Initialize CRDT context
+    let ctx = match CrdtContext::load_or_create(workspace_root) {
+        Ok(ctx) => ctx,
         Err(e) => {
-            eprintln!("Failed to open CRDT database: {}", e);
+            eprintln!("{}", e);
             return;
         }
     };
 
-    // Create CRDT components
-    let workspace_crdt = Arc::new(
-        WorkspaceCrdt::load(Arc::clone(&storage))
-            .unwrap_or_else(|_| WorkspaceCrdt::new(storage.clone())),
-    );
-    let body_manager = Arc::new(BodyDocManager::new(Arc::clone(&storage)));
+    let workspace_crdt = ctx.workspace_crdt;
+    let body_manager = ctx.body_manager;
 
     // Check if CRDT is empty and import existing files
     let existing_files = workspace_crdt.list_files();
@@ -330,29 +318,17 @@ pub fn handle_push(config: &Config, workspace_root: &Path) {
 
     println!("Pushing local changes...");
 
-    // Initialize CRDT storage (create directory if needed)
-    let crdt_dir = workspace_root.join(".diaryx");
-    if !crdt_dir.exists() {
-        if let Err(e) = std::fs::create_dir_all(&crdt_dir) {
-            eprintln!("Failed to create .diaryx directory: {}", e);
-            return;
-        }
-    }
-
-    let crdt_db = crdt_dir.join("crdt.db");
-    let storage: Arc<dyn CrdtStorage> = match SqliteStorage::open(&crdt_db) {
-        Ok(s) => Arc::new(s),
+    // Initialize CRDT context
+    let ctx = match CrdtContext::load_or_create(workspace_root) {
+        Ok(ctx) => ctx,
         Err(e) => {
-            eprintln!("Failed to open CRDT database: {}", e);
+            eprintln!("{}", e);
             return;
         }
     };
 
-    let workspace_crdt = Arc::new(
-        WorkspaceCrdt::load(Arc::clone(&storage))
-            .unwrap_or_else(|_| WorkspaceCrdt::new(storage.clone())),
-    );
-    let body_manager = Arc::new(BodyDocManager::new(Arc::clone(&storage)));
+    let workspace_crdt = ctx.workspace_crdt;
+    let body_manager = ctx.body_manager;
 
     // Import existing files if CRDT is empty
     let existing_files = workspace_crdt.list_files();
@@ -420,29 +396,17 @@ pub fn handle_pull(config: &Config, workspace_root: &Path) {
 
     println!("Pulling remote changes...");
 
-    // Initialize CRDT storage
-    let crdt_dir = workspace_root.join(".diaryx");
-    if !crdt_dir.exists() {
-        if let Err(e) = std::fs::create_dir_all(&crdt_dir) {
-            eprintln!("Failed to create .diaryx directory: {}", e);
-            return;
-        }
-    }
-
-    let crdt_db = crdt_dir.join("crdt.db");
-    let storage: Arc<dyn CrdtStorage> = match SqliteStorage::open(&crdt_db) {
-        Ok(s) => Arc::new(s),
+    // Initialize CRDT context
+    let ctx = match CrdtContext::load_or_create(workspace_root) {
+        Ok(ctx) => ctx,
         Err(e) => {
-            eprintln!("Failed to open CRDT database: {}", e);
+            eprintln!("{}", e);
             return;
         }
     };
 
-    let workspace_crdt = Arc::new(
-        WorkspaceCrdt::load(Arc::clone(&storage))
-            .unwrap_or_else(|_| WorkspaceCrdt::new(storage.clone())),
-    );
-    let body_manager = Arc::new(BodyDocManager::new(Arc::clone(&storage)));
+    let workspace_crdt = ctx.workspace_crdt;
+    let body_manager = ctx.body_manager;
     let fs = SyncToAsyncFs::new(RealFileSystem);
     let sync_handler = Arc::new(SyncHandler::new(fs));
     sync_handler.set_workspace_root(workspace_root.to_path_buf());
@@ -1050,7 +1014,9 @@ async fn do_one_shot_body_sync(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use diaryx_core::crdt::{BodyDocManager, FileMetadata, MemoryStorage, WorkspaceCrdt};
+    use diaryx_core::crdt::{
+        BodyDocManager, CrdtStorage, FileMetadata, MemoryStorage, WorkspaceCrdt,
+    };
     use std::sync::Arc;
     use tempfile::TempDir;
 

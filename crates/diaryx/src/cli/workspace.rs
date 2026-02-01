@@ -27,8 +27,22 @@ pub fn handle_workspace_command(
     let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     match command {
-        WorkspaceCommands::Info { path, depth } => {
-            handle_info(workspace_override, ws, &config, &current_dir, path, depth);
+        WorkspaceCommands::Info {
+            path,
+            depth,
+            properties,
+            delimiter,
+        } => {
+            handle_info(
+                workspace_override,
+                ws,
+                &config,
+                &current_dir,
+                path,
+                depth,
+                properties,
+                delimiter,
+            );
             true // errors are printed to stderr
         }
 
@@ -1482,6 +1496,8 @@ fn handle_info(
     current_dir: &Path,
     path: Option<String>,
     max_depth: usize,
+    properties: Option<Vec<String>>,
+    delimiter: String,
 ) {
     // If a path is provided, resolve it (supports "." for local index)
     let root_path = if let Some(ref p) = path {
@@ -1546,7 +1562,13 @@ fn handle_info(
         Some(max_depth)
     };
 
-    match block_on(ws.workspace_info_with_depth(&root_path, depth_limit)) {
+    // Default properties: title, description
+    let props = properties.unwrap_or_else(|| vec!["title".to_string(), "description".to_string()]);
+
+    let result =
+        block_on(ws.workspace_info_with_properties(&root_path, depth_limit, &props, &delimiter));
+
+    match result {
         Ok(tree_output) => {
             println!("{}", tree_output);
         }

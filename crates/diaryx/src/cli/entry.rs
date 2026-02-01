@@ -3,12 +3,103 @@
 use std::path::Path;
 
 use diaryx_core::config::Config;
+use diaryx_core::crdt::FileMetadata;
 use diaryx_core::date::parse_date;
-
-use crate::editor::launch_editor;
+use diaryx_core::frontmatter;
 
 use crate::cli::CliDiaryxAppSync;
+use crate::cli::sync::CrdtContext;
 use crate::cli::util::{load_config, resolve_paths};
+use crate::editor::launch_editor;
+
+/// Sync file changes to the local CRDT after editing.
+///
+/// This updates the workspace CRDT with any changes made to the file.
+/// Only syncs if the CRDT database already exists (user has used sync before).
+///
+/// Returns true if changes were synced, false otherwise.
+fn sync_to_crdt(workspace_root: &Path, file_path: &Path, original_content: &str) -> bool {
+    // Only sync if CRDT database already exists (user has used sync before)
+    let ctx = match CrdtContext::load(workspace_root) {
+        Some(ctx) => ctx,
+        None => return false, // No CRDT initialized, skip silently
+    };
+
+    // Read current content
+    let current_content = match std::fs::read_to_string(file_path) {
+        Ok(content) => content,
+        Err(_) => return false,
+    };
+
+    if current_content == original_content {
+        return false; // No changes
+    }
+
+    // Get relative path for CRDT key (always use forward slashes for consistency)
+    let rel_path = match file_path.strip_prefix(workspace_root) {
+        Ok(p) => p
+            .iter()
+            .map(|c| c.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/"),
+        Err(_) => return false,
+    };
+
+    // Parse frontmatter and body
+    let (fm, body) = match frontmatter::parse_or_empty(&current_content) {
+        Ok(parsed) => (parsed.frontmatter, parsed.body),
+        Err(_) => return false,
+    };
+
+    // Extract filename from path
+    let filename = file_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+
+    // Build FileMetadata from frontmatter
+    let metadata = FileMetadata {
+        filename,
+        title: fm.get("title").and_then(|v| v.as_str()).map(String::from),
+        part_of: fm.get("part_of").and_then(|v| v.as_str()).map(String::from),
+        contents: fm.get("contents").and_then(|v| {
+            v.as_sequence().map(|seq| {
+                seq.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+        }),
+        attachments: vec![],
+        deleted: false,
+        audience: fm.get("audience").and_then(|v| {
+            v.as_sequence().map(|seq| {
+                seq.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+        }),
+        description: fm
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        extra: std::collections::HashMap::new(),
+        modified_at: chrono::Utc::now().timestamp_millis(),
+    };
+
+    // Update workspace CRDT (metadata)
+    if let Err(e) = ctx.workspace_crdt.set_file(&rel_path, metadata) {
+        eprintln!("Warning: Could not update CRDT metadata: {}", e);
+    }
+
+    // Update body document
+    let body_doc = ctx.body_manager.get_or_create(&rel_path);
+    if let Err(e) = body_doc.set_body(&body) {
+        eprintln!("Warning: Could not update CRDT body: {}", e);
+    }
+
+    true
+}
 
 /// Handle the 'today' command
 /// Returns true on success, false on error
@@ -23,12 +114,18 @@ pub fn handle_today(app: &CliDiaryxAppSync, template: Option<String>) -> bool {
             match app.ensure_dated_entry_with_template(&date, &config, template.as_deref()) {
                 Ok(path) => {
                     println!("Opening: {}", path.display());
+
+                    // Read content before opening editor
+                    let original_content = std::fs::read_to_string(&path).unwrap_or_default();
+
                     if let Err(e) = launch_editor(&path, &config) {
                         eprintln!("✗ Error launching editor: {}", e);
                         return false;
                     }
-                    // Note: touch_updated is on async DiaryxApp, not DiaryxAppSync
-                    // TODO: Add touch_updated to DiaryxAppSync or migrate to async
+
+                    // Sync changes to CRDT after editor closes
+                    sync_to_crdt(&config.default_workspace, &path, &original_content);
+
                     true
                 }
                 Err(e) => {
@@ -57,12 +154,18 @@ pub fn handle_yesterday(app: &CliDiaryxAppSync, template: Option<String>) -> boo
             match app.ensure_dated_entry_with_template(&date, &config, template.as_deref()) {
                 Ok(path) => {
                     println!("Opening: {}", path.display());
+
+                    // Read content before opening editor
+                    let original_content = std::fs::read_to_string(&path).unwrap_or_default();
+
                     if let Err(e) = launch_editor(&path, &config) {
                         eprintln!("✗ Error launching editor: {}", e);
                         return false;
                     }
-                    // Note: touch_updated is on async DiaryxApp, not DiaryxAppSync
-                    // TODO: Add touch_updated to DiaryxAppSync or migrate to async
+
+                    // Sync changes to CRDT after editor closes
+                    sync_to_crdt(&config.default_workspace, &path, &original_content);
+
                     true
                 }
                 Err(e) => {
@@ -101,6 +204,7 @@ pub fn handle_open(app: &CliDiaryxAppSync, path_or_date: &str) -> bool {
     }
 
     let mut had_error = false;
+    let workspace_root = &config.default_workspace;
 
     // For single files that don't exist, check if this was meant as a date
     if paths.len() == 1 && !paths[0].exists() {
@@ -109,12 +213,18 @@ pub fn handle_open(app: &CliDiaryxAppSync, path_or_date: &str) -> bool {
             match app.ensure_dated_entry(&date, &config) {
                 Ok(path) => {
                     println!("Opening: {}", path.display());
+
+                    // Read content before opening editor
+                    let original_content = std::fs::read_to_string(&path).unwrap_or_default();
+
                     if let Err(e) = launch_editor(&path, &config) {
                         eprintln!("✗ Error launching editor: {}", e);
                         return false;
                     }
-                    // Note: touch_updated is on async DiaryxApp, not DiaryxAppSync
-                    // TODO: Add touch_updated to DiaryxAppSync or migrate to async
+
+                    // Sync changes to CRDT after editor closes
+                    sync_to_crdt(workspace_root, &path, &original_content);
+
                     return true;
                 }
                 Err(e) => {
@@ -140,12 +250,16 @@ pub fn handle_open(app: &CliDiaryxAppSync, path_or_date: &str) -> bool {
             println!("Opening: {}", path.display());
         }
 
+        // Read content before opening editor
+        let original_content = std::fs::read_to_string(path).unwrap_or_default();
+
         if let Err(e) = launch_editor(path, &config) {
             eprintln!("✗ Error launching editor for {}: {}", path.display(), e);
             had_error = true;
+        } else {
+            // Sync changes to CRDT after editor closes (only if editor succeeded)
+            sync_to_crdt(workspace_root, path, &original_content);
         }
-        // Note: touch_updated is on async DiaryxApp, not DiaryxAppSync
-        // TODO: Add touch_updated to DiaryxAppSync or migrate to async
     }
 
     !had_error

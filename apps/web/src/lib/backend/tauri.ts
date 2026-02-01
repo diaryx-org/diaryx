@@ -9,6 +9,9 @@ import type {
   Command,
   Response,
   Config,
+  SyncStatus,
+  SyncEvent,
+  SyncEventCallback,
 } from "./interface";
 
 import { BackendError } from "./interface";
@@ -101,20 +104,37 @@ function handleError(error: unknown): never {
 // TauriBackend Implementation
 // ============================================================================
 
+// Type for Tauri event unlisten function
+type UnlistenFn = () => void;
+
+// Type for Tauri listen function
+type ListenFn = <T>(
+  event: string,
+  handler: (event: { payload: T }) => void,
+) => Promise<UnlistenFn>;
+
 export class TauriBackend implements Backend {
   private ready = false;
   private invoke: InvokeFn | null = null;
+  private listen: ListenFn | null = null;
   private appPaths: AppPaths | null = null;
   private config: Config | null = null;
   private eventEmitter = new BackendEventEmitter();
+
+  // Sync event listeners
+  private syncEventCallbacks = new Set<SyncEventCallback>();
+  private syncEventUnlisteners: UnlistenFn[] = [];
 
   async init(): Promise<void> {
     // Step 1: Dynamically import Tauri API
     console.log("[TauriBackend] Step 1: Importing Tauri API...");
     let tauriCore;
+    let tauriEvent;
     try {
       tauriCore = await import("@tauri-apps/api/core");
+      tauriEvent = await import("@tauri-apps/api/event");
       this.invoke = tauriCore.invoke;
+      this.listen = tauriEvent.listen;
       console.log("[TauriBackend] Step 1 complete: Tauri API imported");
     } catch (e) {
       console.error(
@@ -440,5 +460,214 @@ export class TauriBackend implements Backend {
   async isGuestMode(): Promise<boolean> {
     const invoke = this.getInvoke();
     return await invoke<boolean>("is_guest_mode");
+  }
+
+  // --------------------------------------------------------------------------
+  // Native Sync (Tauri-specific)
+  // --------------------------------------------------------------------------
+
+  /**
+   * Check if native sync is available.
+   * Always true for Tauri.
+   */
+  hasNativeSync(): boolean {
+    return true;
+  }
+
+  /**
+   * Start native WebSocket sync to a server.
+   * Uses the Rust sync client for efficient native sync.
+   *
+   * @param serverUrl The WebSocket server URL
+   * @param docName The document name for sync
+   * @param authToken Optional JWT auth token
+   */
+  async startSync(
+    serverUrl: string,
+    docName: string,
+    authToken?: string,
+  ): Promise<void> {
+    const invoke = this.getInvoke();
+    console.log(
+      "[TauriBackend] Starting native sync:",
+      serverUrl,
+      docName,
+      authToken ? "(with auth)" : "(no auth)",
+    );
+
+    // Set up event listeners before starting sync
+    await this.setupSyncEventListeners();
+
+    await invoke("start_websocket_sync", {
+      serverUrl,
+      docName,
+      authToken: authToken ?? null,
+    });
+
+    console.log("[TauriBackend] Native sync started");
+  }
+
+  /**
+   * Stop native WebSocket sync.
+   */
+  async stopSync(): Promise<void> {
+    const invoke = this.getInvoke();
+    console.log("[TauriBackend] Stopping native sync");
+
+    // Remove event listeners
+    this.cleanupSyncEventListeners();
+
+    await invoke("stop_websocket_sync", {});
+
+    console.log("[TauriBackend] Native sync stopped");
+  }
+
+  /**
+   * Get native sync status.
+   */
+  async getSyncStatus(): Promise<SyncStatus> {
+    const invoke = this.getInvoke();
+    const result = await invoke<{
+      connected: boolean;
+      running: boolean;
+      status?: {
+        metadata: string;
+        body: string;
+      };
+    }>("get_websocket_sync_status", {});
+
+    return {
+      connected: result.connected,
+      running: result.running,
+      status: result.status
+        ? {
+            metadata: result.status.metadata as
+              | "disconnected"
+              | "connecting"
+              | "connected",
+            body: result.status.body as
+              | "disconnected"
+              | "connecting"
+              | "connected",
+          }
+        : undefined,
+    };
+  }
+
+  /**
+   * Subscribe to native sync events.
+   */
+  onSyncEvent(callback: SyncEventCallback): () => void {
+    this.syncEventCallbacks.add(callback);
+    return () => this.syncEventCallbacks.delete(callback);
+  }
+
+  /**
+   * Set up Tauri event listeners for sync events.
+   */
+  private async setupSyncEventListeners(): Promise<void> {
+    if (!this.listen) {
+      console.warn("[TauriBackend] Cannot set up sync events: listen not available");
+      return;
+    }
+
+    // Clean up any existing listeners first
+    this.cleanupSyncEventListeners();
+
+    const listen = this.listen;
+
+    // Listen for status changes
+    const unlistenStatus = await listen<{ metadata: string; body: string }>(
+      "sync-status-changed",
+      (event) => {
+        const syncEvent: SyncEvent = {
+          type: "status-changed",
+          status: {
+            metadata: event.payload.metadata as
+              | "disconnected"
+              | "connecting"
+              | "connected",
+            body: event.payload.body as
+              | "disconnected"
+              | "connecting"
+              | "connected",
+          },
+        };
+        this.notifySyncEvent(syncEvent);
+      },
+    );
+    this.syncEventUnlisteners.push(unlistenStatus);
+
+    // Listen for files changed
+    const unlistenFiles = await listen<string[]>("sync-files-changed", (event) => {
+      const syncEvent: SyncEvent = {
+        type: "files-changed",
+        paths: event.payload,
+      };
+      this.notifySyncEvent(syncEvent);
+    });
+    this.syncEventUnlisteners.push(unlistenFiles);
+
+    // Listen for body changed
+    const unlistenBody = await listen<string>("sync-body-changed", (event) => {
+      const syncEvent: SyncEvent = {
+        type: "body-changed",
+        path: event.payload,
+      };
+      this.notifySyncEvent(syncEvent);
+    });
+    this.syncEventUnlisteners.push(unlistenBody);
+
+    // Listen for progress
+    const unlistenProgress = await listen<{ completed: number; total: number }>(
+      "sync-progress",
+      (event) => {
+        const syncEvent: SyncEvent = {
+          type: "progress",
+          completed: event.payload.completed,
+          total: event.payload.total,
+        };
+        this.notifySyncEvent(syncEvent);
+      },
+    );
+    this.syncEventUnlisteners.push(unlistenProgress);
+
+    // Listen for errors
+    const unlistenError = await listen<string>("sync-error", (event) => {
+      const syncEvent: SyncEvent = {
+        type: "error",
+        message: event.payload,
+      };
+      this.notifySyncEvent(syncEvent);
+    });
+    this.syncEventUnlisteners.push(unlistenError);
+
+    console.log(
+      "[TauriBackend] Sync event listeners set up:",
+      this.syncEventUnlisteners.length,
+    );
+  }
+
+  /**
+   * Clean up sync event listeners.
+   */
+  private cleanupSyncEventListeners(): void {
+    for (const unlisten of this.syncEventUnlisteners) {
+      unlisten();
+    }
+    this.syncEventUnlisteners = [];
+  }
+
+  /**
+   * Notify all sync event callbacks.
+   */
+  private notifySyncEvent(event: SyncEvent): void {
+    for (const callback of this.syncEventCallbacks) {
+      try {
+        callback(event);
+      } catch (e) {
+        console.error("[TauriBackend] Sync event callback error:", e);
+      }
+    }
   }
 }

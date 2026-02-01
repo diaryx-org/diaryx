@@ -11,9 +11,6 @@ use commands::{CrdtState, GuestModeState, WebSocketSyncState};
 /// Cloud backup targets (S3, Google Drive, etc.)
 mod cloud;
 
-/// WebSocket sync transport for real-time sync
-mod websocket_sync;
-
 /// Run function used by Tauri clients. Builds Tauri plugins and invokable commands.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

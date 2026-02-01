@@ -22,7 +22,7 @@ import type { RustCrdtApi } from './rustCrdtApi';
 import { SyncTransport, createWorkspaceSyncTransport } from './syncTransport';
 import { MultiplexedBodySync } from './multiplexedBodySync';
 import type { FileMetadata, BinaryRef } from '../backend/generated';
-import type { Backend, FileSystemEvent } from '../backend/interface';
+import type { Backend, FileSystemEvent, SyncEvent } from '../backend/interface';
 import { crdt_update_file_index, isStorageReady } from '$lib/storage/sqliteStorageBridge.js';
 import type { Api } from '../backend/api';
 import { shareSessionStore } from '@/models/stores/shareSessionStore.svelte';
@@ -53,6 +53,10 @@ let rustApi: RustCrdtApi | null = null;
 let syncBridge: SyncTransport | null = null;
 let backendApi: Api | null = null;
 let _backend: Backend | null = null;
+
+// Native sync state (Tauri only)
+let _nativeSyncActive = false;
+let _nativeSyncUnsubscribe: (() => void) | null = null;
 
 let serverUrl: string | null = null;
 let _workspaceId: string | null = null;
@@ -135,7 +139,8 @@ const syncStatusCallbacks = new Set<SyncStatusCallback>();
 
 /**
  * Set the server URL for workspace sync.
- * Creates and connects a SyncTransport if the URL is set.
+ * For Tauri: Uses native Rust sync client for better performance.
+ * For WASM/web: Creates and connects a SyncTransport.
  */
 export async function setWorkspaceServer(url: string | null): Promise<void> {
   const previousUrl = serverUrl;
@@ -148,6 +153,7 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
     previousUrl,
     initialized,
     hasRustApi: !!rustApi,
+    hasNativeSync: _backend?.hasNativeSync?.() ?? false,
   });
 
   // Skip if URL hasn't changed or not initialized
@@ -155,68 +161,194 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
     return;
   }
 
-  // Disconnect existing bridge if any
-  if (syncBridge) {
-    console.log('[WorkspaceCrdtBridge] Disconnecting existing sync bridge');
-    syncBridge.destroy();
-    syncBridge = null;
-  }
+  // Disconnect existing sync (native or browser-based)
+  await disconnectExistingSync();
 
-  // Create new bridge if URL is set
+  // Create new sync if URL is set
   if (url && _backend) {
     // Reset initial sync tracking since we're starting a new sync connection
-    // This is important when transitioning from local-only mode to sync mode
     _initialSyncComplete = false;
     _initialSyncResolvers = [];
 
     const workspaceDocName = _workspaceId ? `${_workspaceId}:workspace` : 'workspace';
-    const wsUrl = toWebSocketUrl(url);
-    console.log('[WorkspaceCrdtBridge] Creating SyncTransport for workspace:', wsUrl, 'docName:', workspaceDocName);
 
-    syncBridge = createWorkspaceSyncTransport({
-      serverUrl: wsUrl,
-      docName: workspaceDocName,
-      backend: _backend,
-      authToken: getToken() ?? undefined,
-      writeToDisk: true, // Rust handles disk writes automatically
-      onStatusChange: (connected) => {
-        console.log('[WorkspaceCrdtBridge] Connection status:', connected);
-        notifySyncStatus(connected ? 'syncing' : 'idle');
-      },
-      onSynced: async () => {
-        console.log('[WorkspaceCrdtBridge] Initial sync complete (via setWorkspaceServer)');
+    // Check if backend supports native sync (Tauri)
+    if (_backend.hasNativeSync?.() && _backend.startSync) {
+      console.log('[WorkspaceCrdtBridge] Using native sync (Tauri):', url, 'docName:', workspaceDocName);
+
+      // Set up event listener for native sync events
+      if (_backend.onSyncEvent) {
+        _nativeSyncUnsubscribe = _backend.onSyncEvent((event: SyncEvent) => {
+          handleNativeSyncEvent(event);
+        });
+      }
+
+      // Notify connecting status
+      notifySyncStatus('connecting');
+
+      try {
+        await _backend.startSync(url, workspaceDocName, getToken() ?? undefined);
+        _nativeSyncActive = true;
+        console.log('[WorkspaceCrdtBridge] Native sync started successfully');
+      } catch (e) {
+        console.error('[WorkspaceCrdtBridge] Native sync failed to start:', e);
+        notifySyncStatus('error', e instanceof Error ? e.message : String(e));
+        _nativeSyncActive = false;
+      }
+    } else {
+      // Use browser WebSocket (WASM/web)
+      const wsUrl = toWebSocketUrl(url);
+      console.log('[WorkspaceCrdtBridge] Using browser sync (WASM):', wsUrl, 'docName:', workspaceDocName);
+
+      syncBridge = createWorkspaceSyncTransport({
+        serverUrl: wsUrl,
+        docName: workspaceDocName,
+        backend: _backend,
+        authToken: getToken() ?? undefined,
+        writeToDisk: true, // Rust handles disk writes automatically
+        onStatusChange: (connected) => {
+          console.log('[WorkspaceCrdtBridge] Connection status:', connected);
+          notifySyncStatus(connected ? 'syncing' : 'idle');
+        },
+        onSynced: async () => {
+          console.log('[WorkspaceCrdtBridge] Initial sync complete (via setWorkspaceServer)');
+          notifySyncStatus('synced');
+          notifyFileChange(null, null);
+          await updateFileIndexFromCrdt();
+          markInitialSyncComplete();
+
+          // Auto-sync body content for all files in background
+          await autoSyncBodiesInBackground();
+        },
+        onFilesChanged: () => notifyFileChange(null, null),
+        onProgress: (completed, total) => {
+          console.log('[WorkspaceCrdtBridge] Sync progress:', completed, '/', total);
+          notifySyncProgress(completed, total);
+        },
+      });
+
+      // Notify connecting status
+      notifySyncStatus('connecting');
+
+      await syncBridge.connect();
+    }
+  }
+}
+
+/**
+ * Handle native sync events from Tauri.
+ */
+function handleNativeSyncEvent(event: SyncEvent): void {
+  console.log('[WorkspaceCrdtBridge] Native sync event:', event.type, event);
+
+  switch (event.type) {
+    case 'status-changed':
+      // Map status to our internal status type
+      const isConnected = event.status.metadata === 'connected' && event.status.body === 'connected';
+      const isConnecting = event.status.metadata === 'connecting' || event.status.body === 'connecting';
+      if (isConnected) {
         notifySyncStatus('synced');
-        notifyFileChange(null, null);
-        await updateFileIndexFromCrdt();
+      } else if (isConnecting) {
+        notifySyncStatus('connecting');
+      } else {
+        notifySyncStatus('idle');
+      }
+      break;
+
+    case 'files-changed':
+      console.log('[WorkspaceCrdtBridge] Native sync: files changed:', event.paths);
+      // Mark initial sync complete when we receive first files-changed event
+      if (!_initialSyncComplete) {
         markInitialSyncComplete();
+        updateFileIndexFromCrdt();
+        // Auto-sync body content in background
+        autoSyncBodiesInBackground();
+      }
+      notifyFileChange(null, null);
+      break;
 
-        // Auto-sync body content for all files in background
-        // This ensures files are ready when user opens them
-        try {
-          const allFiles = await getAllFiles();
-          const filePaths = Array.from(allFiles.keys());
-          if (filePaths.length > 0) {
-            console.log(`[WorkspaceCrdtBridge] Auto-syncing ${filePaths.length} body docs in background`);
-            // Don't wait for completion since this runs in background
-            proactivelySyncBodies(filePaths, { concurrency: 5, waitForComplete: false }).catch(e => {
-              console.warn('[WorkspaceCrdtBridge] Background body sync error:', e);
-            });
+    case 'body-changed':
+      console.log('[WorkspaceCrdtBridge] Native sync: body changed:', event.path);
+      // The body content is already in the CRDT, fetch it and notify
+      if (rustApi) {
+        rustApi.getBodyContent(event.path).then(content => {
+          if (content) {
+            notifyBodyChange(event.path, content);
           }
-        } catch (e) {
-          console.warn('[WorkspaceCrdtBridge] Failed to start background body sync:', e);
-        }
-      },
-      onFilesChanged: () => notifyFileChange(null, null),
-      onProgress: (completed, total) => {
-        console.log('[WorkspaceCrdtBridge] Sync progress:', completed, '/', total);
-        notifySyncProgress(completed, total);
-      },
-    });
+        }).catch(e => {
+          console.warn('[WorkspaceCrdtBridge] Failed to get body content:', e);
+        });
+      }
+      break;
 
-    // Notify connecting status
-    notifySyncStatus('connecting');
+    case 'progress':
+      notifySyncProgress(event.completed, event.total);
+      break;
 
-    await syncBridge.connect();
+    case 'error':
+      console.error('[WorkspaceCrdtBridge] Native sync error:', event.message);
+      notifySyncStatus('error', event.message);
+      break;
+  }
+}
+
+/**
+ * Disconnect existing sync (native or browser-based).
+ */
+async function disconnectExistingSync(): Promise<void> {
+  // Stop native sync if active
+  if (_nativeSyncActive && _backend?.stopSync) {
+    console.log('[WorkspaceCrdtBridge] Stopping native sync');
+    try {
+      await _backend.stopSync();
+    } catch (e) {
+      console.warn('[WorkspaceCrdtBridge] Error stopping native sync:', e);
+    }
+    _nativeSyncActive = false;
+  }
+
+  // Unsubscribe from native sync events
+  if (_nativeSyncUnsubscribe) {
+    _nativeSyncUnsubscribe();
+    _nativeSyncUnsubscribe = null;
+  }
+
+  // Close all body sync bridges (multiplexed and legacy)
+  closeAllBodyBridges();
+
+  // Disconnect browser sync bridge if any
+  if (syncBridge) {
+    console.log('[WorkspaceCrdtBridge] Disconnecting browser sync bridge');
+    syncBridge.destroy();
+    syncBridge = null;
+  }
+}
+
+/**
+ * Auto-sync body content for all files in background.
+ *
+ * NOTE: When native sync is active (Tauri), this is a no-op because
+ * the native SyncClient handles body sync internally.
+ */
+async function autoSyncBodiesInBackground(): Promise<void> {
+  // Skip if native sync is active - it handles body sync internally
+  if (_nativeSyncActive) {
+    console.log('[WorkspaceCrdtBridge] autoSyncBodiesInBackground skipped (native sync active)');
+    return;
+  }
+
+  try {
+    const allFiles = await getAllFiles();
+    const filePaths = Array.from(allFiles.keys());
+    if (filePaths.length > 0) {
+      console.log(`[WorkspaceCrdtBridge] Auto-syncing ${filePaths.length} body docs in background`);
+      // Don't wait for completion since this runs in background
+      proactivelySyncBodies(filePaths, { concurrency: 5, waitForComplete: false }).catch(e => {
+        console.warn('[WorkspaceCrdtBridge] Background body sync error:', e);
+      });
+    }
+  } catch (e) {
+    console.warn('[WorkspaceCrdtBridge] Failed to start background body sync:', e);
   }
 }
 
@@ -566,47 +698,58 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
         await syncBridge.connect();
       } else if (serverUrl && rustApi && _backend) {
         const workspaceDocName = _workspaceId ? `${_workspaceId}:workspace` : 'workspace';
-        const wsUrl = toWebSocketUrl(serverUrl);
-        console.log('[WorkspaceCrdtBridge] Creating SyncTransport during init:', wsUrl, 'docName:', workspaceDocName);
 
-        syncBridge = createWorkspaceSyncTransport({
-          serverUrl: wsUrl,
-          docName: workspaceDocName,
-          backend: _backend,
-          authToken: getToken() ?? undefined,
-          writeToDisk: true, // Rust handles disk writes automatically
-          onStatusChange: (connected) => {
-            console.log('[WorkspaceCrdtBridge] Connection status:', connected);
-          },
-          onSynced: async () => {
-            console.log('[WorkspaceCrdtBridge] Initial sync complete');
-            notifyFileChange(null, null);
-            await updateFileIndexFromCrdt();
-            markInitialSyncComplete();
+        // Check if backend supports native sync (Tauri)
+        if (_backend.hasNativeSync?.() && _backend.startSync) {
+          console.log('[WorkspaceCrdtBridge] Using native sync during init (Tauri):', serverUrl, 'docName:', workspaceDocName);
 
-            // Auto-sync body content for all files in background
-            try {
-              const allFiles = await getAllFiles();
-              const filePaths = Array.from(allFiles.keys());
-              if (filePaths.length > 0) {
-                console.log(`[WorkspaceCrdtBridge] Auto-syncing ${filePaths.length} body docs in background (init)`);
-                // Don't wait for completion since this runs in background
-                proactivelySyncBodies(filePaths, { concurrency: 5, waitForComplete: false }).catch(e => {
-                  console.warn('[WorkspaceCrdtBridge] Background body sync error (init):', e);
-                });
-              }
-            } catch (e) {
-              console.warn('[WorkspaceCrdtBridge] Failed to start background body sync (init):', e);
-            }
-          },
-          onFilesChanged: () => notifyFileChange(null, null),
-          onProgress: (completed, total) => {
-            console.log('[WorkspaceCrdtBridge] Sync progress (init):', completed, '/', total);
-            notifySyncProgress(completed, total);
-          },
-        });
+          // Set up event listener for native sync events
+          if (_backend.onSyncEvent) {
+            _nativeSyncUnsubscribe = _backend.onSyncEvent((event: SyncEvent) => {
+              handleNativeSyncEvent(event);
+            });
+          }
 
-        await syncBridge.connect();
+          try {
+            await _backend.startSync(serverUrl, workspaceDocName, getToken() ?? undefined);
+            _nativeSyncActive = true;
+            console.log('[WorkspaceCrdtBridge] Native sync started successfully (init)');
+          } catch (e) {
+            console.error('[WorkspaceCrdtBridge] Native sync failed to start (init):', e);
+            _nativeSyncActive = false;
+          }
+        } else {
+          // Use browser WebSocket (WASM/web)
+          const wsUrl = toWebSocketUrl(serverUrl);
+          console.log('[WorkspaceCrdtBridge] Creating SyncTransport during init:', wsUrl, 'docName:', workspaceDocName);
+
+          syncBridge = createWorkspaceSyncTransport({
+            serverUrl: wsUrl,
+            docName: workspaceDocName,
+            backend: _backend,
+            authToken: getToken() ?? undefined,
+            writeToDisk: true, // Rust handles disk writes automatically
+            onStatusChange: (connected) => {
+              console.log('[WorkspaceCrdtBridge] Connection status:', connected);
+            },
+            onSynced: async () => {
+              console.log('[WorkspaceCrdtBridge] Initial sync complete');
+              notifyFileChange(null, null);
+              await updateFileIndexFromCrdt();
+              markInitialSyncComplete();
+
+              // Auto-sync body content for all files in background
+              await autoSyncBodiesInBackground();
+            },
+            onFilesChanged: () => notifyFileChange(null, null),
+            onProgress: (completed, total) => {
+              console.log('[WorkspaceCrdtBridge] Sync progress (init):', completed, '/', total);
+              notifySyncProgress(completed, total);
+            },
+          });
+
+          await syncBridge.connect();
+        }
       }
     } else {
       console.log('[WorkspaceCrdtBridge] Sync skipped: local-only mode (no workspaceId)');
@@ -643,8 +786,8 @@ export async function destroyWorkspace(): Promise<void> {
   // Close all body sync bridges first
   closeAllBodyBridges();
 
-  syncBridge?.destroy();
-  syncBridge = null;
+  // Disconnect existing sync (native or browser-based)
+  await disconnectExistingSync();
 
   // Clear pending intervals/timeouts to prevent memory leaks
   for (const interval of pendingIntervals) {
@@ -676,6 +819,11 @@ export function isWorkspaceInitialized(): boolean {
  * Check if workspace is connected to server.
  */
 export function isWorkspaceConnected(): boolean {
+  // Check native sync first (Tauri)
+  if (_nativeSyncActive) {
+    return true;
+  }
+  // Fall back to browser sync bridge
   return syncBridge?.isSynced ?? false;
 }
 
@@ -882,13 +1030,7 @@ export async function setFileMetadata(path: string, metadata: FileMetadata): Pro
   }
 
   await rustApi.setFile(path, metadata);
-  console.log('[WorkspaceCrdtBridge] Rust setFile complete, now syncing...');
-
-  // Send changes to server via RustSyncBridge
-  // Note: sendLocalChanges() internally checks connection state
-  if (syncBridge) {
-    await syncBridge.sendLocalChanges();
-  }
+  // Sync happens automatically via SendSyncMessage events from Rust
 
   console.log('[WorkspaceCrdtBridge] setFileMetadata complete:', path);
   notifyFileChange(path, metadata);
@@ -911,8 +1053,17 @@ function isReadOnlyBlocked(): boolean {
  * Uses locking to prevent race conditions when multiple callers
  * (e.g., proactive sync and entry opening) try to subscribe to
  * the same file simultaneously.
+ *
+ * NOTE: When native sync is active (Tauri), this is a no-op because
+ * the native SyncClient handles body sync internally.
  */
 async function getOrCreateBodyBridge(filePath: string): Promise<void> {
+  // Skip if native sync is active - it handles body sync internally
+  if (_nativeSyncActive) {
+    console.log('[WorkspaceCrdtBridge] getOrCreateBodyBridge skipped (native sync active):', filePath);
+    return;
+  }
+
   if (!rustApi || !_serverUrl || !_workspaceId || !_backend) {
     // Missing config - caller should handle local-only mode before calling this
     return;
@@ -1176,8 +1327,17 @@ export function closeBodySync(filePath: string): void {
  * are received even before the user starts editing. Without this,
  * files opened from sync would appear empty because the body bridge
  * wasn't created yet.
+ *
+ * NOTE: When native sync is active (Tauri), this is a no-op because
+ * the native SyncClient handles body sync internally.
  */
 export async function ensureBodySync(filePath: string): Promise<void> {
+  // Skip if native sync is active - it handles body sync internally
+  if (_nativeSyncActive) {
+    console.log('[WorkspaceCrdtBridge] ensureBodySync skipped (native sync active):', filePath);
+    return;
+  }
+
   if (!_workspaceId || !_serverUrl || !rustApi) {
     console.log('[WorkspaceCrdtBridge] ensureBodySync skipped - not in sync mode:', {
       hasWorkspaceId: !!_workspaceId,
@@ -1232,6 +1392,9 @@ export interface ProactiveSyncOptions {
  * Call this after the tree loads to pre-fetch body content for all files,
  * so they're ready when the user opens them.
  *
+ * NOTE: When native sync is active (Tauri), this is a no-op because
+ * the native SyncClient handles body sync internally.
+ *
  * @param filePaths Array of file paths to sync bodies for
  * @param optionsOrConcurrency Options object, or concurrency number for backward compatibility
  */
@@ -1239,6 +1402,12 @@ export async function proactivelySyncBodies(
   filePaths: string[],
   optionsOrConcurrency?: number | ProactiveSyncOptions
 ): Promise<void> {
+  // Skip if native sync is active - it handles body sync internally
+  if (_nativeSyncActive) {
+    console.log('[WorkspaceCrdtBridge] proactivelySyncBodies skipped (native sync active)');
+    return;
+  }
+
   if (!_workspaceId || !_serverUrl || !rustApi) {
     console.log('[WorkspaceCrdtBridge] proactivelySyncBodies skipped - not in sync mode');
     return;
@@ -1321,76 +1490,6 @@ function closeAllBodyBridges(): void {
 }
 
 /**
- * Sync body content through a per-file body sync bridge.
- *
- * This function uses a separate WebSocket connection and Y.Doc per file,
- * preventing large file bodies from bloating the workspace CRDT.
- *
- * @param path - The file path (will be converted to canonical path for sync)
- * @param content - The body content to sync
- */
-export async function syncBodyContent(path: string, content: string): Promise<void> {
-  if (!rustApi) {
-    console.warn('[WorkspaceCrdtBridge] Cannot sync body - rustApi not initialized');
-    return;
-  }
-
-  // Block updates in read-only mode for guests
-  if (isReadOnlyBlocked()) {
-    console.log('[WorkspaceCrdtBridge] Blocked body sync in read-only session:', path);
-    return;
-  }
-
-  const canonicalPath = getCanonicalPath(path);
-
-  try {
-    // Track the content we're syncing for echo detection (in Rust)
-    if (_backend) {
-      await syncHelpers.trackContent(_backend, canonicalPath, content);
-    }
-
-    // ALWAYS set content in CRDT first, before connecting to server.
-    // This ensures our content is in the CRDT when sync starts, so the
-    // Y.js merge algorithm can properly merge local and remote content
-    // instead of server content simply overwriting an empty local state.
-    await rustApi.setBodyContent(canonicalPath, content);
-
-    // In local-only mode (no workspaceId), we're done
-    if (!_workspaceId) {
-      return;
-    }
-
-    console.log('[WorkspaceCrdtBridge] Syncing body content:', canonicalPath, 'length:', content.length);
-
-    // Ensure we're subscribed to this file via multiplexed sync
-    await getOrCreateBodyBridge(canonicalPath);
-
-    // Send body update via multiplexed sync (if connected)
-    if (multiplexedBodySync?.isConnected && _backend) {
-      // Create an update message from Rust
-      const response = await _backend.execute({
-        type: 'CreateBodyUpdate' as any,
-        params: {
-          doc_name: canonicalPath,
-          content,
-        },
-      } as any);
-
-      if ((response.type as string) === 'Binary' && (response as any).data && (response as any).data.length > 0) {
-        multiplexedBodySync.send(canonicalPath, new Uint8Array((response as any).data));
-        console.log('[WorkspaceCrdtBridge] Body sync via multiplexed connection complete:', canonicalPath);
-      } else {
-        console.log('[WorkspaceCrdtBridge] Body stored locally (no update needed):', canonicalPath);
-      }
-    } else {
-      console.log('[WorkspaceCrdtBridge] Body stored locally (not connected):', canonicalPath);
-    }
-  } catch (err) {
-    console.error('[WorkspaceCrdtBridge] Failed to sync body content:', err);
-  }
-}
-
-/**
  * Update specific fields of file metadata.
  * Uses a per-file lock to prevent race conditions on concurrent updates.
  */
@@ -1457,13 +1556,7 @@ export async function updateFileMetadata(
     console.log('[WorkspaceCrdtBridge] Updating file metadata:', path, updated);
     await rustApi.setFile(path, updated);
     console.log('[WorkspaceCrdtBridge] File metadata updated successfully:', path);
-
-    // Send changes to server via RustSyncBridge
-    // Note: sendLocalChanges() internally checks connection state
-    if (syncBridge) {
-      await syncBridge.sendLocalChanges();
-    }
-
+    // Sync happens automatically via SendSyncMessage events from Rust
 
     notifyFileChange(path, updated);
   } finally {
@@ -1508,11 +1601,7 @@ export async function purgeFile(path: string): Promise<void> {
   };
 
   await rustApi.setFile(path, metadata);
-
-  // Send changes to server
-  if (syncBridge) {
-    await syncBridge.sendLocalChanges();
-  }
+  // Sync happens automatically via SendSyncMessage events from Rust
 
   notifyFileChange(path, null);
 }
@@ -1542,12 +1631,7 @@ export async function addToContents(parentPath: string, childPath: string): Prom
         modified_at: BigInt(Date.now()),
       };
       await rustApi.setFile(parentPath, updated);
-
-      // Send changes to server via RustSyncBridge
-      if (syncBridge?.isConnected) {
-        await syncBridge.sendLocalChanges();
-      }
-
+      // Sync happens automatically via SendSyncMessage events from Rust
 
       notifyFileChange(parentPath, updated);
     }
@@ -1578,12 +1662,7 @@ export async function removeFromContents(parentPath: string, childPath: string):
         modified_at: BigInt(Date.now()),
       };
       await rustApi.setFile(parentPath, updated);
-
-      // Send changes to server via RustSyncBridge
-      if (syncBridge?.isConnected) {
-        await syncBridge.sendLocalChanges();
-      }
-
+      // Sync happens automatically via SendSyncMessage events from Rust
 
       notifyFileChange(parentPath, updated);
     }
@@ -1674,12 +1753,7 @@ export async function addAttachment(filePath: string, attachment: BinaryRef): Pr
       modified_at: BigInt(Date.now()),
     };
     await rustApi.setFile(filePath, updated);
-
-    // Send changes to server via RustSyncBridge
-    if (syncBridge?.isConnected) {
-      await syncBridge.sendLocalChanges();
-    }
-
+    // Sync happens automatically via SendSyncMessage events from Rust
 
     notifyFileChange(filePath, updated);
   } finally {
@@ -1706,12 +1780,7 @@ export async function removeAttachment(filePath: string, attachmentPath: string)
       modified_at: BigInt(Date.now()),
     };
     await rustApi.setFile(filePath, updated);
-
-    // Send changes to server via RustSyncBridge
-    if (syncBridge?.isConnected) {
-      await syncBridge.sendLocalChanges();
-    }
-
+    // Sync happens automatically via SendSyncMessage events from Rust
 
     notifyFileChange(filePath, updated);
   } finally {
@@ -2185,6 +2254,17 @@ function handleFileSystemEvent(event: FileSystemEvent): void {
     case 'SendSyncMessage': {
       // Rust is requesting that we send a sync message over WebSocket.
       // This happens after CRDT updates (SaveEntry, CreateEntry, DeleteEntry, RenameEntry).
+      //
+      // For native sync (Tauri): Skip this event - the native sync client (TokioTransport)
+      // handles WebSocket communication directly via the event bridge set up in start_websocket_sync.
+      //
+      // For browser sync (WASM/web): Forward to JavaScript WebSocket bridges.
+      if (_nativeSyncActive) {
+        // Native sync handles this internally via the event bridge
+        console.log('[WorkspaceCrdtBridge] SendSyncMessage skipped (native sync active)');
+        break;
+      }
+
       const { doc_name, message, is_body } = event as any;
       const bytes = new Uint8Array(message);
 
@@ -2243,10 +2323,12 @@ export function isEventSubscriptionActive(): boolean {
 export function debugSync(): void {
   console.log('=== Sync Debug ===');
   console.log('serverUrl:', serverUrl);
+  console.log('nativeSyncActive:', _nativeSyncActive);
   console.log('syncBridge:', syncBridge ? 'exists' : 'null');
   console.log('syncBridge.synced:', syncBridge?.isSynced);
   console.log('initialized:', initialized);
   console.log('rustApi:', rustApi ? 'exists' : 'null');
+  console.log('hasNativeSync:', _backend?.hasNativeSync?.() ?? false);
 
   if (rustApi) {
     console.log('Fetching Rust CRDT state...');

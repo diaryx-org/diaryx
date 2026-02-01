@@ -28,11 +28,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use super::body_doc_manager::BodyDocManager;
-use super::sync::{BodySyncProtocol, SyncMessage};
+use super::sync::SyncMessage;
 use super::sync_handler::SyncHandler;
 use super::types::{FileMetadata, UpdateOrigin};
 use super::workspace_doc::WorkspaceCrdt;
-use crate::error::{DiaryxError, Result};
+use crate::error::Result;
 use crate::fs::{AsyncFileSystem, FileSystemEvent};
 
 /// Result of handling a sync message.
@@ -76,8 +76,7 @@ pub struct RustSyncManager<FS: AsyncFileSystem> {
     workspace_synced: AtomicBool,
     workspace_message_count: Mutex<u32>,
 
-    // Per-file body sync protocols
-    body_protocols: RwLock<HashMap<String, BodySyncProtocol>>,
+    // Per-file body sync tracking (which docs have completed initial sync)
     body_synced: RwLock<HashSet<String>>,
 
     // Echo detection - tracks last known content to detect our own updates
@@ -110,7 +109,6 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
             sync_handler,
             workspace_synced: AtomicBool::new(false),
             workspace_message_count: Mutex::new(0),
-            body_protocols: RwLock::new(HashMap::new()),
             body_synced: RwLock::new(HashSet::new()),
             last_known_content: RwLock::new(HashMap::new()),
             last_known_metadata: RwLock::new(HashMap::new()),
@@ -127,6 +125,14 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
     pub fn set_event_callback(&self, callback: Arc<dyn Fn(&FileSystemEvent) + Send + Sync>) {
         let mut cb = self.event_callback.write().unwrap();
         *cb = Some(callback);
+    }
+
+    /// Clear the event callback.
+    ///
+    /// Call this when stopping sync to prevent sending to a disconnected channel.
+    pub fn clear_event_callback(&self) {
+        let mut cb = self.event_callback.write().unwrap();
+        *cb = None;
     }
 
     /// Emit a filesystem event via the callback.
@@ -428,33 +434,21 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
 
     /// Initialize body sync for a document.
     ///
-    /// Creates or retrieves the sync protocol for the given document name.
+    /// Ensures the body document exists and is ready for sync.
     pub fn init_body_sync(&self, doc_name: &str) {
-        let mut protocols = self.body_protocols.write().unwrap();
-        if !protocols.contains_key(doc_name) {
-            // Try to load existing state from storage
-            let body_doc = self.body_manager.get_or_create(doc_name);
-            let state = body_doc.encode_state_as_update();
-
-            let protocol = if state.is_empty() {
-                BodySyncProtocol::new(doc_name.to_string())
-            } else {
-                BodySyncProtocol::from_state(doc_name.to_string(), &state)
-                    .unwrap_or_else(|_| BodySyncProtocol::new(doc_name.to_string()))
-            };
-
-            protocols.insert(doc_name.to_string(), protocol);
-            log::debug!("[SyncManager] Initialized body sync for: {}", doc_name);
-        }
+        // Ensure the body doc exists (loads from storage if available)
+        let _ = self.body_manager.get_or_create(doc_name);
+        log::debug!("[SyncManager] Initialized body sync for: {}", doc_name);
     }
 
     /// Close body sync for a document.
     pub fn close_body_sync(&self, doc_name: &str) {
-        let mut protocols = self.body_protocols.write().unwrap();
-        protocols.remove(doc_name);
-
         let mut synced = self.body_synced.write().unwrap();
         synced.remove(doc_name);
+
+        // Also clear the last-sent state vector
+        let mut sv_map = self.last_sent_body_sv.write().unwrap();
+        sv_map.remove(doc_name);
 
         log::debug!("[SyncManager] Closed body sync for: {}", doc_name);
     }
@@ -478,10 +472,10 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
             write_to_disk
         );
 
-        // Ensure protocol exists
+        // Ensure body doc exists
         self.init_body_sync(doc_name);
 
-        // Get the body doc to apply updates
+        // Get the body doc - this is the SINGLE source of truth
         let body_doc = self.body_manager.get_or_create(doc_name);
         let content_before = body_doc.get_body();
         log::info!(
@@ -490,25 +484,45 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
             content_before.len()
         );
 
-        // Handle the message via the protocol
-        let response = {
-            let mut protocols = self.body_protocols.write().unwrap();
-            let protocol = protocols
-                .get_mut(doc_name)
-                .ok_or_else(|| DiaryxError::Crdt("Body protocol not found".to_string()))?;
-
-            protocol.handle_message(message)?
-        };
-
-        // Apply updates to the body doc
+        // Decode and process all messages, building response and applying updates
         let messages = SyncMessage::decode_all(message)?;
         log::info!(
             "[SyncManager] handle_body_message: doc='{}', decoded {} messages",
             doc_name,
             messages.len()
         );
+
+        let mut response: Option<Vec<u8>> = None;
+
         for (i, sync_msg) in messages.iter().enumerate() {
             match sync_msg {
+                SyncMessage::SyncStep1(remote_sv) => {
+                    // Respond with SyncStep2 containing our diff based on their state vector
+                    log::info!(
+                        "[SyncManager] handle_body_message: doc='{}', msg[{}] = SyncStep1, sv_len={}",
+                        doc_name,
+                        i,
+                        remote_sv.len()
+                    );
+
+                    // Generate SyncStep2 response using body_doc directly
+                    if let Ok(diff) = body_doc.encode_diff(remote_sv) {
+                        if diff.len() > 2 {
+                            // More than just empty update header
+                            let step2 = SyncMessage::SyncStep2(diff).encode();
+                            log::info!(
+                                "[SyncManager] handle_body_message: doc='{}', sending SyncStep2 response, {} bytes",
+                                doc_name,
+                                step2.len()
+                            );
+                            if let Some(ref mut existing) = response {
+                                existing.extend_from_slice(&step2);
+                            } else {
+                                response = Some(step2);
+                            }
+                        }
+                    }
+                }
                 SyncMessage::SyncStep2(update) | SyncMessage::Update(update) => {
                     log::info!(
                         "[SyncManager] handle_body_message: doc='{}', msg[{}] = {:?}, update_len={}",
@@ -524,15 +538,6 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
                     if !update.is_empty() {
                         body_doc.apply_update(update, UpdateOrigin::Remote)?;
                     }
-                }
-                SyncMessage::SyncStep1(sv) => {
-                    log::info!(
-                        "[SyncManager] handle_body_message: doc='{}', msg[{}] = SyncStep1, sv_len={}",
-                        doc_name,
-                        i,
-                        sv.len()
-                    );
-                    // SyncStep1 is handled by the protocol, no update to apply
                 }
             }
         }
@@ -612,15 +617,10 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
     pub fn create_body_sync_step1(&self, doc_name: &str) -> Vec<u8> {
         self.init_body_sync(doc_name);
 
-        let protocols = self.body_protocols.read().unwrap();
-        if let Some(protocol) = protocols.get(doc_name) {
-            protocol.create_sync_step1()
-        } else {
-            // Fallback: create from body doc directly
-            let body_doc = self.body_manager.get_or_create(doc_name);
-            let sv = body_doc.encode_state_vector();
-            SyncMessage::SyncStep1(sv).encode()
-        }
+        // Use body_doc directly - it's the single source of truth
+        let body_doc = self.body_manager.get_or_create(doc_name);
+        let sv = body_doc.encode_state_vector();
+        SyncMessage::SyncStep1(sv).encode()
     }
 
     /// Create an update message for local body changes.
@@ -718,10 +718,10 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         self.initial_sync_complete.load(Ordering::SeqCst)
     }
 
-    /// Get list of active body syncs.
+    /// Get list of body docs that have completed initial sync.
     pub fn get_active_syncs(&self) -> Vec<String> {
-        let protocols = self.body_protocols.read().unwrap();
-        protocols.keys().cloned().collect()
+        let synced = self.body_synced.read().unwrap();
+        synced.iter().cloned().collect()
     }
 
     // =========================================================================
@@ -758,11 +758,6 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         }
 
         {
-            let mut protocols = self.body_protocols.write().unwrap();
-            protocols.clear();
-        }
-
-        {
             let mut synced = self.body_synced.write().unwrap();
             synced.clear();
         }
@@ -775,6 +770,11 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         {
             let mut last_known = self.last_known_metadata.write().unwrap();
             last_known.clear();
+        }
+
+        {
+            let mut sv_map = self.last_sent_body_sv.write().unwrap();
+            sv_map.clear();
         }
 
         {

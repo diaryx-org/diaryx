@@ -13,8 +13,11 @@ attachments:
   - '[sqlite_storage.rs](/crates/diaryx_core/src/crdt/sqlite_storage.rs)'
   - '[storage.rs](/crates/diaryx_core/src/crdt/storage.rs)'
   - '[sync.rs](/crates/diaryx_core/src/crdt/sync.rs)'
+  - '[sync_client.rs](/crates/diaryx_core/src/crdt/sync_client.rs)'
   - '[sync_handler.rs](/crates/diaryx_core/src/crdt/sync_handler.rs)'
   - '[sync_manager.rs](/crates/diaryx_core/src/crdt/sync_manager.rs)'
+  - '[tokio_transport.rs](/crates/diaryx_core/src/crdt/tokio_transport.rs)'
+  - '[transport.rs](/crates/diaryx_core/src/crdt/transport.rs)'
   - '[types.rs](/crates/diaryx_core/src/crdt/types.rs)'
   - '[workspace_doc.rs](/crates/diaryx_core/src/crdt/workspace_doc.rs)'
 exclude:
@@ -36,6 +39,9 @@ diaryx_core = { version = "...", features = ["crdt"] }
 
 # For SQLite-based persistent storage (native only)
 diaryx_core = { version = "...", features = ["crdt", "crdt-sqlite"] }
+
+# For native WebSocket sync client (CLI, Tauri)
+diaryx_core = { version = "...", features = ["native-sync"] }
 ```
 
 ## Architecture
@@ -276,6 +282,66 @@ let result = diaryx.execute(Command::GetHistory {
     doc_type: "workspace".to_string(),
     doc_name: None,
 });
+```
+
+## Unified Sync Client
+
+The `SyncClient` provides a unified interface for WebSocket-based real-time sync
+across all platforms. It uses a `SyncTransport` trait for platform abstraction:
+
+```text
+┌────────────────────┐    ┌────────────────────┐
+│ TokioTransport     │    │ CallbackTransport  │
+│ (tokio-tungstenite)│    │ (JS WebSocket)     │
+│ #[cfg(native)]     │    │ #[cfg(wasm32)]     │
+└─────────┬──────────┘    └─────────┬──────────┘
+          │                         │
+          └────────────┬────────────┘
+                       ▼
+          ┌──────────────────────┐
+          │   SyncClient<T>      │
+          │   - Reconnection     │
+          │   - Dual connections │
+          │   - Message routing  │
+          └──────────────────────┘
+                       │
+                       ▼
+          ┌──────────────────────┐
+          │   RustSyncManager    │
+          └──────────────────────┘
+```
+
+### Native (CLI/Tauri)
+
+Use `TokioTransport` for native WebSocket connections (requires `native-sync` feature):
+
+```rust,ignore
+use diaryx_core::crdt::{SyncClient, SyncClientConfig, TokioTransport};
+
+let transport_meta = TokioTransport::new();
+let transport_body = TokioTransport::new();
+
+let config = SyncClientConfig::new(
+    "wss://sync.example.com/sync".to_string(),
+    "workspace-id".to_string(),
+    PathBuf::from("/path/to/workspace"),
+).with_auth("token".to_string());
+
+let client = SyncClient::new(config, transport_meta, transport_body, sync_manager);
+client.start().await?;
+```
+
+### WASM (Web)
+
+For WASM, use `CallbackTransport` which routes messages through JavaScript:
+
+```rust,ignore
+// In diaryx_wasm
+use CallbackTransport;
+
+let transport = CallbackTransport::new();
+// Messages are injected via inject_sync_message() from JS
+// Outgoing messages are polled via poll_outgoing_messages()
 ```
 
 ## Relationship to Cloud Sync

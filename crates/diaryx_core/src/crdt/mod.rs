@@ -8,8 +8,12 @@ mod memory_storage;
 mod sqlite_storage;
 mod storage;
 mod sync;
+mod sync_client;
 mod sync_handler;
 mod sync_manager;
+#[cfg(all(not(target_arch = "wasm32"), feature = "native-sync"))]
+mod tokio_transport;
+mod transport;
 mod types;
 mod workspace_doc;
 
@@ -23,7 +27,14 @@ pub use storage::{CrdtStorage, StorageResult};
 pub use sync::{
     BodySyncProtocol, SyncMessage, SyncProtocol, frame_body_message, unframe_body_message,
 };
+pub use sync_client::{
+    OutgoingSender, OutgoingSyncMessage, SyncClient, SyncClientConfig, SyncEvent, SyncEventBridge,
+    SyncEventCallback, create_sync_event_bridge,
+};
 pub use sync_handler::{GuestConfig, SyncHandler};
 pub use sync_manager::{BodySyncResult, RustSyncManager, SyncMessageResult};
+#[cfg(all(not(target_arch = "wasm32"), feature = "native-sync"))]
+pub use tokio_transport::TokioTransport;
+pub use transport::{ConnectionStatus, MessageCallback, StatusCallback, SyncConfig, SyncTransport};
 pub use types::{BinaryRef, CrdtUpdate, FileMetadata, UpdateOrigin};
 pub use workspace_doc::WorkspaceCrdt;

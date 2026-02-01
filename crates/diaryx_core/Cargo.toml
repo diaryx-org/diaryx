@@ -43,6 +43,12 @@ dirs = "6.0"
 glob = "0.3"
 rusqlite = { version = "0.34", features = ["bundled"], optional = true }
 
+# Native sync dependencies (native-sync feature)
+tokio = { version = "1", features = ["sync", "time", "macros", "rt"], optional = true }
+tokio-tungstenite = { version = "0.26", optional = true }
+url = { version = "2", optional = true }
+futures-util = { version = "0.3", optional = true }
+
 # WASM-specific dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Add wasm-bindgen when we need JS interop
@@ -61,6 +67,11 @@ crdt-sqlite = ["crdt", "dep:rusqlite"]
 
 # Placeholder feature for workspace crates that currently enable it.
 live-sync = []
+
+# Enable native sync transport (tokio-tungstenite WebSocket)
+# This provides TokioTransport and SyncClient for CLI and native apps.
+# Not available on WASM - use CallbackTransport instead.
+native-sync = ["crdt", "dep:tokio", "dep:tokio-tungstenite", "dep:url", "dep:futures-util"]
 
 # Default features for the library
 default = []

@@ -2483,18 +2483,24 @@ pub fn is_guest_mode<R: Runtime>(app: AppHandle<R>) -> Result<bool, Serializable
 // WebSocket Sync Commands
 // ============================================================================
 
-use crate::websocket_sync::{OutgoingSyncMessage, SyncConfig, SyncTransport};
+use diaryx_core::crdt::{
+    ConnectionStatus, SyncClient, SyncClientConfig, SyncEvent, TokioTransport,
+    create_sync_event_bridge,
+};
+
+/// Type alias for the SyncClient used by Tauri.
+type TauriSyncClient = SyncClient<TokioTransport, SyncToAsyncFs<RealFileSystem>>;
 
 /// State for WebSocket sync connections.
 /// Uses tokio::sync::Mutex to allow holding across await points.
 pub struct WebSocketSyncState {
-    pub transport: tokio::sync::Mutex<Option<SyncTransport>>,
+    pub client: tokio::sync::Mutex<Option<TauriSyncClient>>,
 }
 
 impl WebSocketSyncState {
     pub fn new() -> Self {
         Self {
-            transport: tokio::sync::Mutex::new(None),
+            client: tokio::sync::Mutex::new(None),
         }
     }
 }
@@ -2508,6 +2514,7 @@ impl Default for WebSocketSyncState {
 /// Start WebSocket sync connection.
 ///
 /// Connects to the specified sync server and begins real-time sync.
+/// Uses the unified SyncClient from diaryx_core for cross-platform compatibility.
 #[tauri::command]
 pub async fn start_websocket_sync<R: Runtime>(
     app: AppHandle<R>,
@@ -2521,28 +2528,30 @@ pub async fn start_websocket_sync<R: Runtime>(
         doc_name
     );
 
-    let ws_state = app.state::<WebSocketSyncState>();
-    let mut transport_guard = ws_state.transport.lock().await;
+    // Get CRDT state from app
+    let crdt_state = app.state::<CrdtState>();
 
-    // Disconnect existing connection if any
-    if let Some(ref mut transport) = *transport_guard {
-        transport.disconnect().await;
+    let ws_state = app.state::<WebSocketSyncState>();
+    let mut client_guard = ws_state.client.lock().await;
+
+    // Stop existing client if any, clearing the event callback FIRST
+    // to prevent the old event bridge from sending to a dropped receiver.
+    if client_guard.is_some() {
+        // Clear the event callback before stopping the client
+        if let Some(ref diaryx) = *crdt_state.diaryx.lock().unwrap() {
+            if let Some(sync_manager) = diaryx.sync_manager() {
+                log::info!(
+                    "[start_websocket_sync] Clearing old event callback before stopping client"
+                );
+                sync_manager.clear_event_callback();
+            }
+        }
+        // Now stop the old client
+        if let Some(ref client) = *client_guard {
+            client.stop().await;
+        }
     }
 
-    // Get CRDT storage and workspace path from app state
-    let crdt_state = app.state::<CrdtState>();
-    let storage = {
-        let storage_guard = crdt_state.storage.lock().map_err(|e| SerializableError {
-            kind: "SyncError".to_string(),
-            message: format!("Failed to acquire storage lock: {}", e),
-            path: None,
-        })?;
-        storage_guard.clone().ok_or_else(|| SerializableError {
-            kind: "SyncError".to_string(),
-            message: "CRDT storage not initialized".to_string(),
-            path: None,
-        })?
-    };
     let workspace_path = {
         let path_guard = crdt_state
             .workspace_path
@@ -2559,7 +2568,7 @@ pub async fn start_websocket_sync<R: Runtime>(
         })?
     };
 
-    // Extract sync_manager from cached Diaryx instance (if available).
+    // Extract sync_manager from cached Diaryx instance.
     // This ensures the WebSocket sync uses the same CRDT instances as command execution,
     // preventing state divergence between the two.
     let sync_manager = {
@@ -2571,87 +2580,126 @@ pub async fn start_websocket_sync<R: Runtime>(
         diaryx_guard
             .as_ref()
             .and_then(|d| d.sync_manager().cloned())
+            .ok_or_else(|| SerializableError {
+                kind: "SyncError".to_string(),
+                message: "No sync_manager available - CRDT not initialized".to_string(),
+                path: None,
+            })?
     };
 
-    if sync_manager.is_some() {
-        log::info!("[start_websocket_sync] Using sync_manager from cached Diaryx instance");
-    } else {
-        log::warn!(
-            "[start_websocket_sync] No cached Diaryx or sync_manager available, will create new one"
-        );
+    log::info!("[start_websocket_sync] Using sync_manager from cached Diaryx instance");
+
+    // Create SyncClient configuration
+    let mut config =
+        SyncClientConfig::new(server_url.clone(), doc_name.clone(), workspace_path.clone());
+
+    if let Some(token) = auth_token {
+        config = config.with_auth(token);
     }
 
-    // Create new transport with CRDT storage
-    let config = SyncConfig {
-        server_url,
-        doc_name,
-        auth_token,
-        write_to_disk: true,
-        storage,
-        workspace_root: workspace_path,
-        sync_manager,
-    };
+    // Create transports for metadata and body connections
+    let metadata_transport = TokioTransport::new();
+    let body_transport = TokioTransport::new();
 
-    let mut transport = SyncTransport::new(config);
-    transport.connect().await.map_err(|e| SerializableError {
+    // Create the unified SyncClient
+    let client = SyncClient::new(
+        config,
+        metadata_transport,
+        body_transport,
+        sync_manager.clone(),
+    );
+
+    // Set up event callback to emit Tauri events for frontend
+    let app_handle = app.clone();
+    client.set_event_callback(Arc::new(move |event| match &event {
+        SyncEvent::StatusChanged(status) => {
+            log::info!("[start_websocket_sync] Status changed: {:?}", status);
+            let _ = app_handle.emit("sync-status-changed", status);
+        }
+        SyncEvent::FilesChanged { paths } => {
+            log::info!("[start_websocket_sync] Files changed: {:?}", paths);
+            let _ = app_handle.emit("sync-files-changed", paths);
+        }
+        SyncEvent::BodyChanged { path, content: _ } => {
+            log::debug!("[start_websocket_sync] Body changed: {}", path);
+            let _ = app_handle.emit("sync-body-changed", path);
+        }
+        SyncEvent::Progress { completed, total } => {
+            log::debug!("[start_websocket_sync] Progress: {}/{}", completed, total);
+            let _ = app_handle.emit(
+                "sync-progress",
+                serde_json::json!({ "completed": completed, "total": total }),
+            );
+        }
+        SyncEvent::Error { message } => {
+            log::error!("[start_websocket_sync] Sync error: {}", message);
+            let _ = app_handle.emit("sync-error", message);
+        }
+        _ => {}
+    }));
+
+    // Start the sync client BEFORE setting up the event bridge.
+    // This ensures that if start() fails, we don't leave a dangling sender
+    // on the sync_manager's event callback.
+    client.start().await.map_err(|e| SerializableError {
         kind: "SyncError".to_string(),
-        message: format!("Failed to connect: {}", e),
+        message: format!("Failed to start sync: {}", e),
         path: None,
     })?;
 
-    // Get the outgoing sender to connect local edits to the WebSocket
-    let outgoing_tx = transport.get_outgoing_sender();
+    // Store the client first, then set up the event bridge.
+    // This ensures the receiver (in the client) is stored before we
+    // register the sender (in the event bridge) with the sync_manager.
+    *client_guard = Some(client);
 
-    *transport_guard = Some(transport);
-
-    // Set up event callback on the cached Diaryx instance to send local edits
-    // to the WebSocket via the outgoing channel
-    if let Some(tx) = outgoing_tx {
-        let cached_diaryx = {
-            let diaryx_guard = crdt_state.diaryx.lock().map_err(|e| SerializableError {
-                kind: "SyncError".to_string(),
-                message: format!("Failed to acquire diaryx lock: {}", e),
-                path: None,
-            })?;
-            diaryx_guard.as_ref().map(Arc::clone)
-        };
-
-        if let Some(diaryx) = cached_diaryx {
-            log::info!("[start_websocket_sync] Setting up event callback for local edit sync");
-            let tx_clone = tx.clone();
-            diaryx.set_sync_event_callback(Arc::new(move |event| {
-                if let diaryx_core::fs::FileSystemEvent::SendSyncMessage {
-                    doc_name,
-                    message,
-                    is_body,
-                } = event
-                {
-                    let outgoing = OutgoingSyncMessage {
-                        doc_name: doc_name.clone(),
-                        message: message.clone(),
-                        is_body: *is_body,
-                    };
-                    if let Err(e) = tx_clone.send(outgoing) {
-                        log::warn!(
-                            "[start_websocket_sync] Failed to send outgoing message for {}: {}",
-                            doc_name,
-                            e
-                        );
-                    } else {
-                        log::debug!(
-                            "[start_websocket_sync] Queued outgoing {} message for {}, {} bytes",
-                            if *is_body { "body" } else { "metadata" },
-                            doc_name,
-                            message.len()
-                        );
-                    }
-                }
-            }));
-        } else {
-            log::warn!("[start_websocket_sync] No cached Diaryx instance to set up event callback");
-        }
+    // Now wire up the event bridge AFTER the client is successfully started and stored.
+    // When the sync_manager emits SendSyncMessage events (from local changes),
+    // the bridge forwards them to the SyncClient's outgoing message queue.
+    if let Some(ref client) = *client_guard {
+        let outgoing_sender = client.outgoing_sender();
+        let event_bridge = create_sync_event_bridge(outgoing_sender);
+        sync_manager.set_event_callback(event_bridge);
+        log::info!(
+            "[start_websocket_sync] Event bridge connected: local CRDT changes will be sent via WebSocket"
+        );
     }
 
+    // Drop the guard before spawning the background task
+    drop(client_guard);
+
+    // Spawn a background task to process outgoing messages.
+    // This periodically drains the outgoing message queue and sends them via WebSocket.
+    let app_handle_bg = app.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(50));
+        loop {
+            interval.tick().await;
+
+            // Get state and try to lock the client
+            let ws_state = app_handle_bg.state::<WebSocketSyncState>();
+            let guard = ws_state.client.lock().await;
+            if let Some(ref client) = *guard {
+                if !client.is_running() {
+                    log::debug!("[start_websocket_sync] Background task: client stopped, exiting");
+                    break;
+                }
+                let count = client.process_outgoing().await;
+                if count > 0 {
+                    log::debug!(
+                        "[start_websocket_sync] Background task: sent {} outgoing messages",
+                        count
+                    );
+                }
+            } else {
+                // Client was removed, stop the background task
+                log::debug!("[start_websocket_sync] Background task: client removed, exiting");
+                break;
+            }
+            drop(guard);
+        }
+    });
+
+    log::info!("[start_websocket_sync] Sync started successfully");
     Ok(())
 }
 
@@ -2660,14 +2708,25 @@ pub async fn start_websocket_sync<R: Runtime>(
 pub async fn stop_websocket_sync<R: Runtime>(app: AppHandle<R>) -> Result<(), SerializableError> {
     log::info!("[stop_websocket_sync] Stopping sync");
 
-    let ws_state = app.state::<WebSocketSyncState>();
-    let mut transport_guard = ws_state.transport.lock().await;
-
-    if let Some(ref mut transport) = *transport_guard {
-        transport.disconnect().await;
+    // Clear the event callback on the sync_manager BEFORE dropping the client.
+    // This prevents the old event bridge from trying to send to a disconnected channel.
+    let crdt_state = app.state::<CrdtState>();
+    if let Some(ref diaryx) = *crdt_state.diaryx.lock().unwrap() {
+        if let Some(sync_manager) = diaryx.sync_manager() {
+            log::info!("[stop_websocket_sync] Clearing sync_manager event callback");
+            sync_manager.clear_event_callback();
+        }
     }
-    *transport_guard = None;
 
+    let ws_state = app.state::<WebSocketSyncState>();
+    let mut client_guard = ws_state.client.lock().await;
+
+    if let Some(ref client) = *client_guard {
+        client.stop().await;
+    }
+    *client_guard = None;
+
+    log::info!("[stop_websocket_sync] Sync stopped");
     Ok(())
 }
 
@@ -2677,18 +2736,21 @@ pub async fn get_websocket_sync_status<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<WebSocketSyncStatusResponse, SerializableError> {
     let ws_state = app.state::<WebSocketSyncState>();
-    let transport_guard = ws_state.transport.lock().await;
+    let client_guard = ws_state.client.lock().await;
 
-    if let Some(ref transport) = *transport_guard {
-        let status = transport.status().await;
-        let connected = transport.is_running();
+    if let Some(ref client) = *client_guard {
+        let status = client.status();
+        let connected = client.is_connected();
+        let running = client.is_running();
         Ok(WebSocketSyncStatusResponse {
             connected,
+            running,
             status: Some(status),
         })
     } else {
         Ok(WebSocketSyncStatusResponse {
             connected: false,
+            running: false,
             status: None,
         })
     }
@@ -2697,8 +2759,12 @@ pub async fn get_websocket_sync_status<R: Runtime>(
 /// WebSocket sync status response.
 #[derive(Debug, Serialize)]
 pub struct WebSocketSyncStatusResponse {
+    /// Whether both metadata and body connections are established.
     pub connected: bool,
-    pub status: Option<crate::websocket_sync::SyncStatus>,
+    /// Whether the sync client is running (may be reconnecting).
+    pub running: bool,
+    /// Detailed connection status.
+    pub status: Option<ConnectionStatus>,
 }
 
 #[cfg(test)]

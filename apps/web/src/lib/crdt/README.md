@@ -17,7 +17,26 @@ exclude:
 
 # CRDT
 
-CRDT synchronization bridge connecting the Rust WASM CRDT to the sync server.
+CRDT synchronization bridge connecting the Rust CRDT to the sync server.
+
+## Platform-specific Sync
+
+The sync layer supports two modes depending on the platform:
+
+### Native Sync (Tauri)
+For the Tauri desktop app, sync uses the native Rust `SyncClient` with `TokioTransport`. This provides:
+- Direct WebSocket connections from Rust
+- Better performance (no JS↔Rust bridge overhead for sync messages)
+- Automatic reconnection via the Rust sync client
+- Event bridge connects local CRDT changes to the WebSocket
+
+The `Backend.startSync()` / `stopSync()` methods are used to control native sync.
+
+### Browser Sync (WASM/Web)
+For the web app, sync uses JavaScript WebSockets via `SyncTransport`. The flow is:
+1. Frontend creates `SyncTransport` (browser WebSocket)
+2. Local CRDT changes emit `SendSyncMessage` events from Rust
+3. `workspaceCrdtBridge.ts` handles these events and sends them via `syncBridge.sendRawMessage()`
 
 ## Files
 

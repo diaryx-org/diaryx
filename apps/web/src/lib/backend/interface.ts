@@ -463,7 +463,91 @@ export interface Backend {
    * Get the number of active event subscriptions.
    */
   eventSubscriberCount?(): number;
+
+  // --------------------------------------------------------------------------
+  // Native Sync (Tauri only)
+  // --------------------------------------------------------------------------
+
+  /**
+   * Start native WebSocket sync to a server.
+   * Only available in Tauri - uses the native Rust sync client.
+   *
+   * @param serverUrl The WebSocket server URL (will be converted to ws:// if http://)
+   * @param docName The document name for sync (e.g., "workspace" or "workspaceId:workspace")
+   * @param authToken Optional JWT auth token
+   */
+  startSync?(serverUrl: string, docName: string, authToken?: string): Promise<void>;
+
+  /**
+   * Stop native WebSocket sync.
+   * Only available in Tauri.
+   */
+  stopSync?(): Promise<void>;
+
+  /**
+   * Get native sync status.
+   * Only available in Tauri.
+   *
+   * @returns Sync status with connected, running, and detailed status info
+   */
+  getSyncStatus?(): Promise<SyncStatus>;
+
+  /**
+   * Check if native sync is available.
+   * Returns true for Tauri, false for WASM/web.
+   */
+  hasNativeSync?(): boolean;
+
+  /**
+   * Subscribe to native sync events.
+   * Only available in Tauri.
+   *
+   * @param callback Function called with each sync event
+   * @returns Unsubscribe function
+   */
+  onSyncEvent?(callback: SyncEventCallback): () => void;
 }
+
+// ============================================================================
+// Sync Types
+// ============================================================================
+
+/**
+ * Sync status returned by getSyncStatus().
+ */
+export interface SyncStatus {
+  /** Whether both metadata and body connections are established */
+  connected: boolean;
+  /** Whether the sync client is running (may be reconnecting) */
+  running: boolean;
+  /** Detailed connection status */
+  status?: ConnectionStatus;
+}
+
+/**
+ * Detailed connection status for sync.
+ */
+export interface ConnectionStatus {
+  /** Metadata WebSocket connection state */
+  metadata: 'disconnected' | 'connecting' | 'connected';
+  /** Body sync WebSocket connection state */
+  body: 'disconnected' | 'connecting' | 'connected';
+}
+
+/**
+ * Sync events emitted by native sync.
+ */
+export type SyncEvent =
+  | { type: 'status-changed'; status: ConnectionStatus }
+  | { type: 'files-changed'; paths: string[] }
+  | { type: 'body-changed'; path: string }
+  | { type: 'progress'; completed: number; total: number }
+  | { type: 'error'; message: string };
+
+/**
+ * Callback type for sync event subscriptions.
+ */
+export type SyncEventCallback = (event: SyncEvent) => void;
 
 // ============================================================================
 // Error Types

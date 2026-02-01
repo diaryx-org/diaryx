@@ -192,49 +192,6 @@ export class SyncTransport {
     }
     this.ws?.send(bytes);
   }
-
-  /**
-   * Send local changes to the server.
-   */
-  async sendLocalChanges(content?: string): Promise<void> {
-    if (!this.isConnected) {
-      console.warn('[SyncTransport] Not connected, cannot send changes');
-      return;
-    }
-
-    try {
-      let response: any;
-
-      if (this.options.docType === 'workspace') {
-        response = await this.options.backend.execute({
-          type: 'CreateWorkspaceUpdate' as any,
-          params: {
-            since_state_vector: null,
-          },
-        } as any);
-      } else {
-        if (content === undefined) {
-          console.warn('[SyncTransport] Body sync requires content');
-          return;
-        }
-        console.log(`[SyncTransport] sendLocalChanges: doc_name='${this.options.docName}', content_preview='${content.substring(0, 50)}'`);
-        response = await this.options.backend.execute({
-          type: 'CreateBodyUpdate' as any,
-          params: {
-            doc_name: this.options.docName,
-            content,
-          },
-        } as any);
-      }
-
-      if (response.type === 'Binary' && response.data && response.data.length > 0) {
-        this.ws?.send(new Uint8Array(response.data));
-      }
-    } catch (error) {
-      console.error('[SyncTransport] Error sending local changes:', error);
-    }
-  }
-
   // =========================================================================
   // Private Methods
   // =========================================================================

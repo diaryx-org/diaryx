@@ -59,20 +59,25 @@ pub struct FileMetadata {
     /// Document ID of parent file (e.g., "abc123-uuid"), or None for root files.
     /// Note: For backward compatibility during migration, this may temporarily
     /// contain absolute paths which will be converted to doc_ids.
+    #[serde(default)]
     pub part_of: Option<String>,
 
     /// Document IDs of child files.
     /// Note: For backward compatibility during migration, this may temporarily
     /// contain relative paths which will be converted to doc_ids.
+    #[serde(default)]
     pub contents: Option<Vec<String>>,
 
     /// Binary attachment references
+    #[serde(default)]
     pub attachments: Vec<BinaryRef>,
 
     /// Soft deletion tombstone - if true, file is considered deleted
+    #[serde(default)]
     pub deleted: bool,
 
     /// Visibility/access control tags
+    #[serde(default)]
     pub audience: Option<Vec<String>>,
 
     /// File description from frontmatter
@@ -80,9 +85,11 @@ pub struct FileMetadata {
     pub description: Option<String>,
 
     /// Additional frontmatter properties not covered by other fields
+    #[serde(default)]
     pub extra: HashMap<String, serde_json::Value>,
 
     /// Unix timestamp of last modification (milliseconds)
+    #[serde(default)]
     pub modified_at: i64,
 }
 

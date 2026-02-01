@@ -35,3 +35,28 @@ Backend abstraction layer supporting both WASM and Tauri environments.
 | `workerBackendNew.ts` | Worker-based backend |
 
 The `generated/` directory contains TypeScript types generated from Rust.
+
+## Native Sync (Tauri only)
+
+The `TauriBackend` provides native sync methods that use the Rust sync client:
+
+```typescript
+// Check if native sync is available
+if (backend.hasNativeSync?.()) {
+  // Start native sync (uses Rust TokioTransport + SyncClient)
+  await backend.startSync(serverUrl, docName, authToken);
+
+  // Subscribe to sync events
+  const unsubscribe = backend.onSyncEvent?.((event) => {
+    console.log('Sync event:', event.type, event);
+  });
+
+  // Get sync status
+  const status = await backend.getSyncStatus?.();
+
+  // Stop sync
+  await backend.stopSync?.();
+}
+```
+
+Event types: `status-changed`, `files-changed`, `body-changed`, `progress`, `error`

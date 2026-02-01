@@ -2,11 +2,13 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-02-01T02:40:55Z
+updated: 2026-02-01T08:06:05Z
 part_of: '[README](/README.md)'
 ---
 
 # Instructions for AI agents
+
+Always read the relevant docs before making changes, and update the relevant docs after making changes. A tree is shown below for reference, with the title, description, and filepath of each file shown.
 
 ## Workspace Overview
 
@@ -54,6 +56,7 @@ README - Repository for the Diaryx project - README.md
 │   │   │   │   ├── Storage - Storage abstraction layer - apps/web/src/lib/storage/README.md
 │   │   │   │   ├── Lib Stores - Svelte stores for UI preferences - apps/web/src/lib/stores/README.md
 │   │   │   │   └── diaryx_wasm - WASM bindings for diaryx_core - apps/web/src/lib/wasm/README.md
+│   │   │   │       └── diaryx_wasm src - Source code for WASM bindings - crates/diaryx_wasm/src/README.md
 │   │   │   ├── Models - Stores and services for application state - apps/web/src/models/README.md
 │   │   │   │   ├── Services - Business logic services - apps/web/src/models/services/README.md
 │   │   │   │   └── Stores - Svelte stores for reactive state - apps/web/src/models/stores/README.md
@@ -62,7 +65,7 @@ README - Repository for the Diaryx project - README.md
 │   │   │   │   ├── Layout Views - Layout components - apps/web/src/views/layout/README.md
 │   │   │   │   ├── Shared Views - Shared view components - apps/web/src/views/shared/README.md
 │   │   │   │   └── Sidebar Views - Sidebar components - apps/web/src/views/sidebar/README.md
-│   │   │   └── License - PolyForm Shield License 1.0.0 - apps/web/src/LICENSE.md
+│   │   │   └── LICENSE - PolyForm Shield License 1.0.0 - apps/web/src/LICENSE.md
 │   │   └── TipTap Custom Extensions - Guide to creating custom TipTap extensions with markdown support - apps/web/docs/tiptap-custom-extensions.md
 │   └── tauri - Web app + native backend - apps/tauri/README.md
 ├── LICENSE - PolyForm Shield License 1.0.0 - LICENSE.md

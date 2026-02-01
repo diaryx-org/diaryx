@@ -1,0 +1,48 @@
+---
+title: Settings
+description: Settings panel components
+part_of: '[README](/apps/web/src/lib/README.md)'
+attachments:
+  - '[index.ts](/apps/web/src/lib/settings/index.ts)'
+  - '[AccountSettings.svelte](/apps/web/src/lib/settings/AccountSettings.svelte)'
+  - '[BackupSettings.svelte](/apps/web/src/lib/settings/BackupSettings.svelte)'
+  - '[ClearDataSettings.svelte](/apps/web/src/lib/settings/ClearDataSettings.svelte)'
+  - '[CloudBackupSettings.svelte](/apps/web/src/lib/settings/CloudBackupSettings.svelte)'
+  - '[DebugInfo.svelte](/apps/web/src/lib/settings/DebugInfo.svelte)'
+  - '[DisplaySettings.svelte](/apps/web/src/lib/settings/DisplaySettings.svelte)'
+  - '[FormattingSettings.svelte](/apps/web/src/lib/settings/FormattingSettings.svelte)'
+  - '[GoogleDriveSettings.svelte](/apps/web/src/lib/settings/GoogleDriveSettings.svelte)'
+  - '[ImportSettings.svelte](/apps/web/src/lib/settings/ImportSettings.svelte)'
+  - '[LinkSettings.svelte](/apps/web/src/lib/settings/LinkSettings.svelte)'
+  - '[S3BackupSettings.svelte](/apps/web/src/lib/settings/S3BackupSettings.svelte)'
+  - '[StorageSettings.svelte](/apps/web/src/lib/settings/StorageSettings.svelte)'
+  - '[SyncSettings.svelte](/apps/web/src/lib/settings/SyncSettings.svelte)'
+  - '[TemplateSettings.svelte](/apps/web/src/lib/settings/TemplateSettings.svelte)'
+  - '[WorkspaceSettings.svelte](/apps/web/src/lib/settings/WorkspaceSettings.svelte)'
+exclude:
+  - '*.lock'
+---
+
+# Settings
+
+Settings panel components for the settings dialog.
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `AccountSettings.svelte` | Account and login settings |
+| `BackupSettings.svelte` | Local backup settings |
+| `ClearDataSettings.svelte` | Clear data controls |
+| `CloudBackupSettings.svelte` | Cloud backup configuration |
+| `DebugInfo.svelte` | Debug information display |
+| `DisplaySettings.svelte` | Display preferences |
+| `FormattingSettings.svelte` | Text formatting options |
+| `GoogleDriveSettings.svelte` | Google Drive integration |
+| `ImportSettings.svelte` | Import from file |
+| `LinkSettings.svelte` | Link format settings |
+| `S3BackupSettings.svelte` | S3 backup configuration |
+| `StorageSettings.svelte` | Storage backend settings |
+| `SyncSettings.svelte` | Sync server settings |
+| `TemplateSettings.svelte` | Template management |
+| `WorkspaceSettings.svelte` | Workspace configuration |

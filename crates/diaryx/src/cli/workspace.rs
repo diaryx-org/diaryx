@@ -543,23 +543,6 @@ fn handle_validate(
                         println!("  {} Unlinked: {}", icon, path.display());
                     }
                 }
-                ValidationWarning::UnlistedFile { index, file } => {
-                    if fix {
-                        let result = block_on(fixer.fix_unlisted_file(index, file));
-                        if result.success {
-                            println!(
-                                "  ✓ Fixed: Added '{}' to {}",
-                                file.display(),
-                                index.display()
-                            );
-                            fixed_count += 1;
-                        } else {
-                            println!("  ⚠ Unlisted file: {} (failed to add)", file.display());
-                        }
-                    } else {
-                        println!("  ⚠ Unlisted file: {}", file.display());
-                    }
-                }
                 ValidationWarning::NonPortablePath {
                     file,
                     property,
@@ -815,23 +798,6 @@ fn report_and_fix_validation(
         }
         for warn in &result.warnings {
             match warn {
-                ValidationWarning::UnlistedFile { index, file } => {
-                    if fix {
-                        let fix_result = block_on(fixer.fix_unlisted_file(index, file));
-                        if fix_result.success {
-                            println!(
-                                "  ✓ Fixed: Added '{}' to {}",
-                                file.display(),
-                                index.display()
-                            );
-                            fixed_count += 1;
-                        } else {
-                            println!("  ⚠ Unlisted file: {} (failed to add)", file.display());
-                        }
-                    } else {
-                        println!("  ⚠ Unlisted file: {}", file.display());
-                    }
-                }
                 ValidationWarning::NonPortablePath {
                     file,
                     property,

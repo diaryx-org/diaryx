@@ -273,13 +273,6 @@ pub enum ValidationWarning {
         /// (which should be added to contents instead of the directory path)
         index_file: Option<PathBuf>,
     },
-    /// A markdown file exists in the directory but is not listed in the index's contents.
-    UnlistedFile {
-        /// The index file that should contain this file
-        index: PathBuf,
-        /// The unlisted file path
-        file: PathBuf,
-    },
     /// Circular reference detected in workspace hierarchy.
     CircularReference {
         /// The files involved in the cycle
@@ -337,7 +330,6 @@ impl ValidationWarning {
             Self::OrphanFile { .. } => "Not in any index contents",
             Self::UnlinkedEntry { is_dir: true, .. } => "Unlinked directory",
             Self::UnlinkedEntry { is_dir: false, .. } => "Unlinked file",
-            Self::UnlistedFile { .. } => "Not listed in index",
             Self::CircularReference { .. } => "Circular reference detected",
             Self::NonPortablePath { .. } => "Non-portable path",
             Self::MultipleIndexes { .. } => "Multiple indexes in directory",
@@ -371,7 +363,6 @@ impl ValidationWarning {
                 // Directories need an index file inside to be linkable
                 if *is_dir { index_file.is_some() } else { true }
             }
-            Self::UnlistedFile { .. } => true,
             Self::NonPortablePath { .. } => true,
             Self::CircularReference {
                 suggested_file,
@@ -390,7 +381,6 @@ impl ValidationWarning {
             Self::OrphanBinaryFile { file, .. } => Some(file),
             Self::MissingPartOf { file, .. } => Some(file),
             Self::UnlinkedEntry { path, .. } => Some(path),
-            Self::UnlistedFile { file, .. } => Some(file),
             Self::CircularReference { files, .. } => files.first().map(|p| p.as_path()),
             Self::NonPortablePath { file, .. } => Some(file),
             Self::MultipleIndexes { directory, .. } => Some(directory),
@@ -419,7 +409,6 @@ impl ValidationWarning {
                 | Self::OrphanBinaryFile { .. }
                 | Self::MissingPartOf { .. }
                 | Self::UnlinkedEntry { .. }
-                | Self::UnlistedFile { .. }
         )
     }
 }
@@ -567,6 +556,36 @@ impl<FS: AsyncFileSystem> Validator<FS> {
         }
     }
 
+    /// Collect exclude patterns from an index and all its ancestors via part_of chain.
+    /// Returns patterns that should apply to files in the index's directory.
+    async fn collect_exclude_patterns(&self, index_path: &Path) -> Vec<String> {
+        let mut patterns = Vec::new();
+        let mut visited = HashSet::new();
+        let mut current_path = index_path.to_path_buf();
+
+        // Traverse up the part_of chain
+        while !visited.contains(&current_path) {
+            visited.insert(current_path.clone());
+
+            if let Ok(index) = self.ws.parse_index(&current_path).await {
+                // Add this index's exclude patterns
+                patterns.extend(index.frontmatter.exclude_list().iter().cloned());
+
+                // Follow part_of to parent
+                if let Some(ref part_of) = index.frontmatter.part_of {
+                    let parent_path = index.resolve_path(part_of);
+                    current_path = parent_path;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        patterns
+    }
+
     /// Validate all links starting from a workspace root index.
     ///
     /// Checks:
@@ -592,14 +611,6 @@ impl<FS: AsyncFileSystem> Validator<FS> {
             .await
             .map(|c| c.link_format)
             .ok();
-
-        // Get exclude patterns from the root index file
-        let exclude_patterns: Vec<String> = self
-            .ws
-            .parse_index(root_path)
-            .await
-            .map(|idx| idx.frontmatter.exclude_list().to_vec())
-            .unwrap_or_default();
 
         // Get the workspace root directory (parent of root index file)
         // This is needed to resolve workspace-relative paths correctly
@@ -717,32 +728,33 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                     let suggested_index = find_nearest_index(&entry);
                     let extension = entry.extension().and_then(|e| e.to_str());
 
+                    // Collect exclude patterns from the nearest index and its ancestors
+                    let local_exclude_patterns = if let Some(ref idx) = suggested_index {
+                        self.collect_exclude_patterns(idx).await
+                    } else {
+                        Vec::new()
+                    };
+
+                    let filename = entry.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    let is_excluded = local_exclude_patterns.iter().any(|pattern| {
+                        matches_glob_pattern(pattern, filename)
+                            || matches_glob_pattern(pattern, entry.to_str().unwrap_or(""))
+                    });
+
                     if extension == Some("md") {
                         // Markdown file not in hierarchy
-                        result.warnings.push(ValidationWarning::OrphanFile {
-                            file: entry.clone(),
-                            suggested_index,
-                        });
-                    } else if extension.is_some() {
-                        // Check if file matches any exclude pattern
-                        let filename = entry.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                        let is_excluded = exclude_patterns.iter().any(|pattern| {
-                            // Match against filename
-                            matches_glob_pattern(pattern, filename)
-                                // Also match against relative path from workspace root
-                                || matches_glob_pattern(
-                                    pattern,
-                                    entry.to_str().unwrap_or(""),
-                                )
-                        });
-
                         if !is_excluded {
-                            // Binary file not referenced by any attachments
-                            result.warnings.push(ValidationWarning::OrphanBinaryFile {
+                            result.warnings.push(ValidationWarning::OrphanFile {
                                 file: entry.clone(),
                                 suggested_index,
                             });
                         }
+                    } else if extension.is_some() && !is_excluded {
+                        // Binary file not referenced by any attachments
+                        result.warnings.push(ValidationWarning::OrphanBinaryFile {
+                            file: entry.clone(),
+                            suggested_index,
+                        });
                     }
                 }
             }
@@ -1116,6 +1128,9 @@ impl<FS: AsyncFileSystem> Validator<FS> {
             {
                 let this_filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
+                // Collect exclude patterns from this index and all ancestors
+                let inherited_exclude_patterns = self.collect_exclude_patterns(&path).await;
+
                 // Collect all attachments referenced by this index
                 // Parse markdown links to extract the actual path
                 let referenced_attachments: HashSet<String> = index
@@ -1170,10 +1185,22 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                                     }
                                     // Check if this markdown file is in contents
                                     if !listed_files.contains(fname) {
-                                        result.warnings.push(ValidationWarning::UnlistedFile {
-                                            index: path.clone(),
-                                            file: entry_path,
-                                        });
+                                        // Check if file matches any exclude pattern (inherited from ancestors)
+                                        let is_excluded =
+                                            inherited_exclude_patterns.iter().any(|pattern| {
+                                                matches_glob_pattern(pattern, fname)
+                                                    || matches_glob_pattern(
+                                                        pattern,
+                                                        entry_path.to_str().unwrap_or(""),
+                                                    )
+                                            });
+
+                                        if !is_excluded {
+                                            result.warnings.push(ValidationWarning::OrphanFile {
+                                                file: entry_path,
+                                                suggested_index: Some(path.clone()),
+                                            });
+                                        }
                                     }
                                 }
                             }
@@ -1182,9 +1209,9 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                                 if let Some(fname) = filename
                                     && !referenced_attachments.contains(fname)
                                 {
-                                    // Check if file matches any exclude pattern from this index
+                                    // Check if file matches any exclude pattern (inherited from ancestors)
                                     let is_excluded =
-                                        index.frontmatter.exclude_list().iter().any(|pattern| {
+                                        inherited_exclude_patterns.iter().any(|pattern| {
                                             matches_glob_pattern(pattern, fname)
                                                 || matches_glob_pattern(
                                                     pattern,
@@ -1862,9 +1889,6 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
     /// Returns `None` if the warning type cannot be automatically fixed.
     pub async fn fix_warning(&self, warning: &ValidationWarning) -> Option<FixResult> {
         match warning {
-            ValidationWarning::UnlistedFile { index, file } => {
-                Some(self.fix_unlisted_file(index, file).await)
-            }
             ValidationWarning::NonPortablePath {
                 file,
                 property,
@@ -2540,6 +2564,90 @@ contents:
         assert!(
             orphan_warnings.contains(&"config.json".to_string()),
             "config.json should trigger a warning, got warnings: {:?}",
+            orphan_warnings
+        );
+    }
+
+    #[test]
+    fn test_exclude_patterns_suppress_unlisted_markdown_warnings() {
+        // Test that exclude patterns suppress OrphanFile warnings for markdown files
+        let fs = make_test_fs();
+
+        // Create a subdirectory structure - OrphanFile warnings are generated
+        // when scanning files in the same directory as an index file
+        fs.create_dir_all(Path::new("docs")).unwrap();
+
+        // Root index that lists the docs folder
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents:\n  - docs/README.md\n---\n",
+        )
+        .unwrap();
+
+        // Docs index with exclude patterns and one listed file
+        fs.write_file(
+            Path::new("docs/README.md"),
+            "---\ntitle: Docs\npart_of: ../README.md\ncontents:\n  - included.md\nexclude:\n  - \"LICENSE.md\"\n  - \"CHANGELOG.md\"\n---\n",
+        )
+        .unwrap();
+
+        // Create the included file (so it's listed in contents)
+        fs.write_file(
+            Path::new("docs/included.md"),
+            "---\ntitle: Included\npart_of: README.md\n---\n# Included",
+        )
+        .unwrap();
+
+        // Create some markdown files that should be excluded
+        fs.write_file(
+            Path::new("docs/LICENSE.md"),
+            "---\ntitle: License\n---\n# License",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("docs/CHANGELOG.md"),
+            "---\ntitle: Changelog\n---\n# Changelog",
+        )
+        .unwrap();
+
+        // Create a markdown file that should NOT be excluded
+        fs.write_file(
+            Path::new("docs/notes.md"),
+            "---\ntitle: Notes\n---\n# Notes",
+        )
+        .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+        // Check warnings - should only have OrphanFile for notes.md
+        let orphan_warnings: Vec<_> = result
+            .warnings
+            .iter()
+            .filter_map(|w| {
+                if let ValidationWarning::OrphanFile { file, .. } = w {
+                    Some(file.file_name()?.to_str()?.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(
+            !orphan_warnings.contains(&"LICENSE.md".to_string()),
+            "LICENSE.md should be excluded, got warnings: {:?}",
+            orphan_warnings
+        );
+        assert!(
+            !orphan_warnings.contains(&"CHANGELOG.md".to_string()),
+            "CHANGELOG.md should be excluded, got warnings: {:?}",
+            orphan_warnings
+        );
+        assert!(
+            orphan_warnings.contains(&"notes.md".to_string()),
+            "notes.md should trigger a warning, got warnings: {:?}",
             orphan_warnings
         );
     }

@@ -1,9 +1,17 @@
 ---
 title: Cloud Sync
 description: Bidirectional file synchronization with cloud storage
-part_of: '[README](/crates/diaryx_core/README.md)'
+part_of: '[README](/crates/diaryx_core/src/README.md)'
 audience:
 - developers
+attachments:
+  - '[mod.rs](/crates/diaryx_core/src/cloud/mod.rs)'
+  - '[change.rs](/crates/diaryx_core/src/cloud/change.rs)'
+  - '[conflict.rs](/crates/diaryx_core/src/cloud/conflict.rs)'
+  - '[engine.rs](/crates/diaryx_core/src/cloud/engine.rs)'
+  - '[manifest.rs](/crates/diaryx_core/src/cloud/manifest.rs)'
+exclude:
+  - '*.lock'
 ---
 
 # Cloud Sync

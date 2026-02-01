@@ -1,9 +1,24 @@
 ---
 title: CRDT Synchronization
 description: Conflict-free replicated data types for real-time collaboration
-part_of: '[README](/crates/diaryx_core/README.md)'
+part_of: '[README](/crates/diaryx_core/src/README.md)'
 audience:
 - developers
+attachments:
+  - '[mod.rs](/crates/diaryx_core/src/crdt/mod.rs)'
+  - '[body_doc.rs](/crates/diaryx_core/src/crdt/body_doc.rs)'
+  - '[body_doc_manager.rs](/crates/diaryx_core/src/crdt/body_doc_manager.rs)'
+  - '[history.rs](/crates/diaryx_core/src/crdt/history.rs)'
+  - '[memory_storage.rs](/crates/diaryx_core/src/crdt/memory_storage.rs)'
+  - '[sqlite_storage.rs](/crates/diaryx_core/src/crdt/sqlite_storage.rs)'
+  - '[storage.rs](/crates/diaryx_core/src/crdt/storage.rs)'
+  - '[sync.rs](/crates/diaryx_core/src/crdt/sync.rs)'
+  - '[sync_handler.rs](/crates/diaryx_core/src/crdt/sync_handler.rs)'
+  - '[sync_manager.rs](/crates/diaryx_core/src/crdt/sync_manager.rs)'
+  - '[types.rs](/crates/diaryx_core/src/crdt/types.rs)'
+  - '[workspace_doc.rs](/crates/diaryx_core/src/crdt/workspace_doc.rs)'
+exclude:
+  - '*.lock'
 ---
 
 # CRDT Synchronization

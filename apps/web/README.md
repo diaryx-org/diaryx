@@ -7,7 +7,22 @@ audience:
 - developers
 part_of: '[README](/apps/README.md)'
 contents:
-- '[Tiptap Custom Extensions](/apps/web/docs/tiptap-custom-extensions.md)'
+  - '[README](/apps/web/src/README.md)'
+  - '[Tiptap Custom Extensions](/apps/web/docs/tiptap-custom-extensions.md)'
+attachments:
+  - '[package.json](/apps/web/package.json)'
+  - '[vite.config.ts](/apps/web/vite.config.ts)'
+  - '[svelte.config.js](/apps/web/svelte.config.js)'
+  - '[tsconfig.json](/apps/web/tsconfig.json)'
+  - '[vitest.config.ts](/apps/web/vitest.config.ts)'
+  - '[playwright.config.ts](/apps/web/playwright.config.ts)'
+  - '[components.json](/apps/web/components.json)'
+  - '[index.html](/apps/web/index.html)'
+exclude:
+  - '*.lock'
+  - 'node_modules/**'
+  - 'dist/**'
+  - 'e2e/**'
 ---
 
 # Diaryx Web

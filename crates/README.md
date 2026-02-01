@@ -7,8 +7,8 @@ contents:
 - '[README](/crates/diaryx_core/README.md)'
 - '[README](/crates/diaryx_wasm/README.md)'
 - '[README](/crates/diaryx_sync_server/README.md)'
-attachments:
-- LICENSE.md
+exclude:
+  - 'LICENSE.md'
 part_of: '[README](/README.md)'
 ---
 

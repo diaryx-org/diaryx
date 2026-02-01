@@ -5,6 +5,13 @@ author: adammharris
 audience:
 - public
 part_of: '[README](/crates/README.md)'
+contents:
+  - '[README](/crates/diaryx/src/README.md)'
+attachments:
+  - '[Cargo.toml](/crates/diaryx/Cargo.toml)'
+  - '[build.rs](/crates/diaryx/build.rs)'
+exclude:
+  - '*.lock'
 ---
 
 # Diaryx CLI
@@ -129,13 +136,24 @@ Summary: 3 issue(s) fixed, 5 files checked
 
 ### Validation Warnings
 
-- **OrphanFile** - Markdown file not in any index's contents
-- **UnlistedFile** - File in directory but not in index's contents
+- **OrphanFile** - Markdown file not in any index's `contents`
 - **MissingPartOf** - Non-index file has no `part_of` property
 - **NonPortablePath** - Path contains absolute or `.`/`..` components
-- **OrphanBinaryFile** - Binary file not in any attachments
+- **OrphanBinaryFile** - Binary file not in any index's `attachments`
 - **MultipleIndexes** - Multiple index files in same directory
 - **CircularReference** - Circular reference in hierarchy
+
+### Exclude Patterns
+
+Use the `exclude` frontmatter property to suppress warnings for specific files:
+
+```yaml
+exclude:
+  - "LICENSE.md"    # Exact match
+  - "*.lock"        # Glob pattern
+```
+
+Patterns are inherited up the `part_of` hierarchy.
 
 You can also validate specific files or directories:
 

@@ -6,8 +6,12 @@ audience:
 - public
 part_of: '[README](/crates/README.md)'
 contents:
-- '[README](/crates/diaryx_core/src/crdt/README.md)'
-- '[README](/crates/diaryx_core/src/cloud/README.md)'
+  - '[README](/crates/diaryx_core/src/README.md)'
+attachments:
+  - '[Cargo.toml](/crates/diaryx_core/Cargo.toml)'
+  - '[build.rs](/crates/diaryx_core/build.rs)'
+exclude:
+  - '*.lock'
 ---
 
 # Diaryx Core Library
@@ -213,14 +217,31 @@ if result.is_ok() {
 
 #### Validation Warnings
 
-- `OrphanFile` - A markdown file not referenced by any index
+- `OrphanFile` - A markdown file not referenced by any index's `contents`
 - `UnlinkedEntry` - A file/directory not in the contents hierarchy
-- `UnlistedFile` - A markdown file in a directory but not in the index's contents
 - `CircularReference` - Circular reference detected in workspace hierarchy
 - `NonPortablePath` - A path contains absolute paths or `.`/`..` components
 - `MultipleIndexes` - Multiple index files in the same directory
-- `OrphanBinaryFile` - A binary file not referenced by any attachments
+- `OrphanBinaryFile` - A binary file not referenced by any index's `attachments`
 - `MissingPartOf` - A non-index file has no `part_of` property
+
+#### Exclude Patterns
+
+Index files can define `exclude` patterns to suppress `OrphanFile` and `OrphanBinaryFile` warnings for specific files:
+
+```yaml
+---
+title: Docs
+contents:
+  - guide.md
+exclude:
+  - "LICENSE.md"        # Exact filename
+  - "*.lock"            # Glob pattern
+  - "build/**"          # Recursive glob
+---
+```
+
+Exclude patterns are **inherited** up the `part_of` hierarchy. If a parent index excludes `*.lock` files, that pattern also applies to all child directories.
 
 ### ValidationFixer
 

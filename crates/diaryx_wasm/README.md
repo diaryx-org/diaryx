@@ -4,6 +4,15 @@ description: WASM bindings for diaryx_core
 part_of: '[README](/crates/README.md)'
 audience:
 - developers
+contents:
+  - '[README](/crates/diaryx_wasm/src/README.md)'
+attachments:
+  - '[Cargo.toml](/crates/diaryx_wasm/Cargo.toml)'
+  - '[build.rs](/crates/diaryx_wasm/build.rs)'
+exclude:
+  - '*.lock'
+  - '*.db'
+  - 'pkg/**'
 ---
 
 # diaryx_wasm
@@ -86,14 +95,23 @@ validation.fix_missing_part_of("workspace/orphan.md", "workspace/index.md");
 
 #### Validation Warnings
 
-- `OrphanFile` - Markdown file not in any index's contents
+- `OrphanFile` - Markdown file not in any index's `contents`
 - `UnlinkedEntry` - File/directory not in contents hierarchy
-- `UnlistedFile` - File in directory but not in index's contents
 - `CircularReference` - Circular reference in hierarchy
 - `NonPortablePath` - Path contains absolute or `.`/`..` components
 - `MultipleIndexes` - Multiple index files in same directory
-- `OrphanBinaryFile` - Binary file not in any attachments
+- `OrphanBinaryFile` - Binary file not in any index's `attachments`
 - `MissingPartOf` - Non-index file has no `part_of`
+
+#### Exclude Patterns
+
+Use `exclude` in frontmatter to suppress warnings. Patterns inherit up the `part_of` chain:
+
+```yaml
+exclude:
+  - "LICENSE.md"
+  - "*.lock"
+```
 
 ### Legacy API
 

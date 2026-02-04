@@ -25,7 +25,9 @@ pub use memory_storage::MemoryStorage;
 pub use sqlite_storage::SqliteStorage;
 pub use storage::{CrdtStorage, StorageResult};
 pub use sync::{
-    BodySyncProtocol, SyncMessage, SyncProtocol, frame_body_message, unframe_body_message,
+    BodySyncProtocol, DocIdKind, SyncMessage, SyncProtocol, format_body_doc_id,
+    format_workspace_doc_id, frame_body_message, frame_message_v2, parse_doc_id,
+    unframe_body_message, unframe_message_v2,
 };
 pub use sync_client::{
     OutgoingSender, OutgoingSyncMessage, SyncClient, SyncClientConfig, SyncEvent, SyncEventBridge,

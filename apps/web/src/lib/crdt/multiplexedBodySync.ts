@@ -487,6 +487,79 @@ export class MultiplexedBodySync {
   }
 
   // =========================================================================
+  // v2 Wire Format (siphonophore)
+  // These methods are available for v2 protocol migration but not yet used.
+  // =========================================================================
+
+  /**
+   * Frame a message for v2 protocol with fixed u8 length prefix.
+   *
+   * Format: `[u8: doc_id_len] [doc_id_bytes] [payload]`
+   *
+   * @param docId - The document ID (e.g., "body:ws123/journal/2024.md")
+   * @param message - The sync message payload
+   * @returns Framed message ready to send over WebSocket
+   * @internal Reserved for v2 protocol migration
+   */
+  protected frameMessageV2(docId: string, message: Uint8Array): Uint8Array {
+    const docIdBytes = new TextEncoder().encode(docId);
+    const len = Math.min(docIdBytes.length, 255);
+    const result = new Uint8Array(1 + len + message.length);
+    result[0] = len;
+    result.set(docIdBytes.subarray(0, len), 1);
+    result.set(message, 1 + len);
+    return result;
+  }
+
+  /**
+   * Unframe a v2 message with fixed u8 length prefix.
+   *
+   * @param data - The framed message data
+   * @returns Object with docId (null if invalid) and message payload
+   * @internal Reserved for v2 protocol migration
+   */
+  protected unframeMessageV2(data: Uint8Array): {
+    docId: string | null;
+    message: Uint8Array;
+  } {
+    if (data.length < 1) {
+      return { docId: null, message: new Uint8Array(0) };
+    }
+    const len = data[0];
+    if (data.length < 1 + len) {
+      return { docId: null, message: new Uint8Array(0) };
+    }
+    const docId = new TextDecoder().decode(data.slice(1, 1 + len));
+    return { docId, message: data.slice(1 + len) };
+  }
+
+  /**
+   * Format a body document ID for the v2 protocol.
+   *
+   * @param filePath - The file path within the workspace
+   * @returns The formatted doc ID (e.g., "body:ws123/journal/2024.md")
+   * @internal Reserved for v2 protocol migration
+   */
+  protected formatBodyDocIdV2(filePath: string): string {
+    return `body:${this.options.workspaceId}/${filePath}`;
+  }
+
+  /**
+   * Parse a v2 document ID to extract file path.
+   *
+   * @param docId - The document ID to parse
+   * @returns The file path if it's a body doc for this workspace, null otherwise
+   * @internal Reserved for v2 protocol migration
+   */
+  protected parseBodyDocIdV2(docId: string): string | null {
+    const prefix = `body:${this.options.workspaceId}/`;
+    if (docId.startsWith(prefix)) {
+      return docId.slice(prefix.length);
+    }
+    return null;
+  }
+
+  // =========================================================================
   // Private Methods
   // =========================================================================
 

@@ -16,6 +16,11 @@ export {
   createBodySyncTransport,
   type SyncTransportOptions,
 } from './syncTransport';
+export {
+  UnifiedSyncTransport,
+  createUnifiedSyncTransport,
+  type UnifiedSyncTransportOptions,
+} from './unifiedSyncTransport';
 // Export sync helpers (low-level Rust command wrappers) with namespace to avoid conflicts
 export * as syncHelpers from './syncHelpers';
 

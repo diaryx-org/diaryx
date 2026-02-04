@@ -149,6 +149,128 @@ pub fn unframe_body_message(data: &[u8]) -> Option<(String, Vec<u8>)> {
     Some((file_path, data[consumed..].to_vec()))
 }
 
+// ===========================================================================
+// v2 Wire Format (siphonophore - fixed u8 length prefix)
+// ===========================================================================
+
+/// Frame a message for v2 protocol with fixed u8 length prefix.
+///
+/// Format: `[u8: doc_id_len] [doc_id_bytes] [payload]`
+///
+/// This is used for the siphonophore-based /sync2 endpoint which uses
+/// a simpler framing format than the v1 varUint encoding.
+///
+/// # Example
+///
+/// ```ignore
+/// let framed = frame_message_v2("body:ws123/journal/2024.md", &sync_message);
+/// // framed = [28] ["body:ws123/journal/2024.md"] [sync_message...]
+/// ```
+pub fn frame_message_v2(doc_id: &str, message: &[u8]) -> Vec<u8> {
+    let id_bytes = doc_id.as_bytes();
+    let len = id_bytes.len().min(255) as u8;
+    let mut buf = Vec::with_capacity(1 + len as usize + message.len());
+    buf.push(len);
+    buf.extend_from_slice(&id_bytes[..len as usize]);
+    buf.extend_from_slice(message);
+    buf
+}
+
+/// Unframe a v2 message with fixed u8 length prefix.
+///
+/// Returns `(doc_id, payload)` or `None` if the message is invalid.
+///
+/// # Example
+///
+/// ```ignore
+/// if let Some((doc_id, msg)) = unframe_message_v2(&data) {
+///     match parse_doc_id(&doc_id) {
+///         Some(DocIdKind::Workspace(id)) => { /* handle workspace */ }
+///         Some(DocIdKind::Body { workspace_id, file_path }) => { /* handle body */ }
+///         None => { /* invalid doc_id */ }
+///     }
+/// }
+/// ```
+pub fn unframe_message_v2(data: &[u8]) -> Option<(String, Vec<u8>)> {
+    let len = *data.first()? as usize;
+    if data.len() < 1 + len {
+        return None;
+    }
+    let doc_id = std::str::from_utf8(&data[1..1 + len]).ok()?.to_string();
+    Some((doc_id, data[1 + len..].to_vec()))
+}
+
+/// Format a workspace document ID for the v2 protocol.
+///
+/// # Example
+///
+/// ```ignore
+/// let doc_id = format_workspace_doc_id("abc123");
+/// assert_eq!(doc_id, "workspace:abc123");
+/// ```
+pub fn format_workspace_doc_id(workspace_id: &str) -> String {
+    format!("workspace:{}", workspace_id)
+}
+
+/// Format a body document ID for the v2 protocol.
+///
+/// # Example
+///
+/// ```ignore
+/// let doc_id = format_body_doc_id("abc123", "journal/2024.md");
+/// assert_eq!(doc_id, "body:abc123/journal/2024.md");
+/// ```
+pub fn format_body_doc_id(workspace_id: &str, file_path: &str) -> String {
+    format!("body:{}/{}", workspace_id, file_path)
+}
+
+/// Parsed document ID kind for v2 protocol routing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DocIdKind {
+    /// Workspace metadata CRDT document.
+    Workspace(String),
+    /// Body content CRDT document for a specific file.
+    Body {
+        /// The workspace ID this body belongs to.
+        workspace_id: String,
+        /// The file path within the workspace.
+        file_path: String,
+    },
+}
+
+/// Parse a v2 document ID into its components.
+///
+/// Returns `None` if the doc_id doesn't match the expected format.
+///
+/// # Example
+///
+/// ```ignore
+/// assert_eq!(
+///     parse_doc_id("workspace:abc123"),
+///     Some(DocIdKind::Workspace("abc123".to_string()))
+/// );
+/// assert_eq!(
+///     parse_doc_id("body:abc123/journal/2024.md"),
+///     Some(DocIdKind::Body {
+///         workspace_id: "abc123".to_string(),
+///         file_path: "journal/2024.md".to_string(),
+///     })
+/// );
+/// ```
+pub fn parse_doc_id(doc_id: &str) -> Option<DocIdKind> {
+    if let Some(id) = doc_id.strip_prefix("workspace:") {
+        Some(DocIdKind::Workspace(id.to_string()))
+    } else if let Some(rest) = doc_id.strip_prefix("body:") {
+        let (ws_id, path) = rest.split_once('/')?;
+        Some(DocIdKind::Body {
+            workspace_id: ws_id.to_string(),
+            file_path: path.to_string(),
+        })
+    } else {
+        None
+    }
+}
+
 /// Message type bytes for the Y-sync protocol.
 mod msg_type {
     /// Sync message (SyncStep1, SyncStep2, Update)
@@ -896,5 +1018,131 @@ mod tests {
     fn test_short_message() {
         let result = SyncMessage::decode(&[0]).unwrap();
         assert!(result.is_none());
+    }
+
+    // =========================================================================
+    // v2 Wire Format Tests
+    // =========================================================================
+
+    #[test]
+    fn test_frame_message_v2_basic() {
+        let doc_id = "workspace:abc123";
+        let payload = vec![0, 0, 1, 0]; // Typical SyncStep1
+        let framed = frame_message_v2(doc_id, &payload);
+
+        // First byte is length (16)
+        assert_eq!(framed[0], 16);
+        // Next 16 bytes are the doc_id
+        assert_eq!(&framed[1..17], doc_id.as_bytes());
+        // Rest is payload
+        assert_eq!(&framed[17..], &payload);
+    }
+
+    #[test]
+    fn test_unframe_message_v2_basic() {
+        let doc_id = "body:abc123/journal/2024.md";
+        let payload = vec![1, 2, 3, 4, 5];
+        let framed = frame_message_v2(doc_id, &payload);
+
+        let (parsed_id, parsed_payload) = unframe_message_v2(&framed).unwrap();
+        assert_eq!(parsed_id, doc_id);
+        assert_eq!(parsed_payload, payload);
+    }
+
+    #[test]
+    fn test_unframe_message_v2_empty_payload() {
+        let doc_id = "workspace:test";
+        let framed = frame_message_v2(doc_id, &[]);
+
+        let (parsed_id, parsed_payload) = unframe_message_v2(&framed).unwrap();
+        assert_eq!(parsed_id, doc_id);
+        assert!(parsed_payload.is_empty());
+    }
+
+    #[test]
+    fn test_unframe_message_v2_too_short() {
+        // Empty data
+        assert!(unframe_message_v2(&[]).is_none());
+        // Length says 10 bytes but only 5 provided
+        assert!(unframe_message_v2(&[10, 1, 2, 3, 4, 5]).is_none());
+    }
+
+    #[test]
+    fn test_format_workspace_doc_id() {
+        assert_eq!(format_workspace_doc_id("abc123"), "workspace:abc123");
+        assert_eq!(format_workspace_doc_id("test-ws"), "workspace:test-ws");
+    }
+
+    #[test]
+    fn test_format_body_doc_id() {
+        assert_eq!(
+            format_body_doc_id("abc123", "journal/2024.md"),
+            "body:abc123/journal/2024.md"
+        );
+        assert_eq!(
+            format_body_doc_id("ws", "notes/deep/file.md"),
+            "body:ws/notes/deep/file.md"
+        );
+    }
+
+    #[test]
+    fn test_parse_doc_id_workspace() {
+        let result = parse_doc_id("workspace:abc123");
+        assert_eq!(result, Some(DocIdKind::Workspace("abc123".to_string())));
+    }
+
+    #[test]
+    fn test_parse_doc_id_body() {
+        let result = parse_doc_id("body:abc123/journal/2024.md");
+        assert_eq!(
+            result,
+            Some(DocIdKind::Body {
+                workspace_id: "abc123".to_string(),
+                file_path: "journal/2024.md".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_doc_id_body_nested_path() {
+        // Ensure nested paths work (only first / splits workspace from path)
+        let result = parse_doc_id("body:ws/a/b/c/d.md");
+        assert_eq!(
+            result,
+            Some(DocIdKind::Body {
+                workspace_id: "ws".to_string(),
+                file_path: "a/b/c/d.md".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_doc_id_invalid() {
+        assert!(parse_doc_id("invalid:format").is_none());
+        assert!(parse_doc_id("workspace").is_none());
+        assert!(parse_doc_id("body").is_none());
+        assert!(parse_doc_id("body:no_slash").is_none()); // Body needs workspace/path format
+        assert!(parse_doc_id("random_string").is_none());
+    }
+
+    #[test]
+    fn test_v2_roundtrip_with_sync_message() {
+        // Test that v2 framing works with actual sync messages
+        let workspace = create_sync_protocol();
+        let step1 = workspace.create_sync_step1();
+
+        let doc_id = format_workspace_doc_id("test-workspace");
+        let framed = frame_message_v2(&doc_id, &step1);
+
+        let (parsed_doc_id, parsed_payload) = unframe_message_v2(&framed).unwrap();
+        assert_eq!(parsed_doc_id, doc_id);
+        assert_eq!(parsed_payload, step1);
+
+        // Verify the payload is still a valid sync message
+        let decoded = SyncMessage::decode(&parsed_payload).unwrap().unwrap();
+        match decoded {
+            SyncMessage::SyncStep1(_) => {} // Expected
+            _ => panic!("Expected SyncStep1 after roundtrip"),
+        }
     }
 }

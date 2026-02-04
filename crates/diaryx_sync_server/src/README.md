@@ -34,4 +34,5 @@ This directory contains the source code for the Diaryx sync server.
 - `db/` - SQLite database schema and repository
 - `email/` - SMTP email sending
 - `handlers/` - HTTP route handlers
-- `sync/` - WebSocket sync room management
+- `sync/` - WebSocket sync room management (v1)
+- `sync_v2/` - Siphonophore-based sync implementation (experimental)

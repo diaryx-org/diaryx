@@ -8,8 +8,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use diaryx_core::config::Config;
 use diaryx_core::crdt::{
-    BodyDocManager, RustSyncManager, SyncHandler, SyncMessage, WorkspaceCrdt, frame_body_message,
-    unframe_body_message,
+    BodyDocManager, DocIdKind, RustSyncManager, SyncHandler, SyncMessage, WorkspaceCrdt,
+    format_body_doc_id, format_workspace_doc_id, frame_body_message, frame_message_v2,
+    parse_doc_id, unframe_body_message, unframe_message_v2,
 };
 use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
 use futures_util::{SinkExt, StreamExt};
@@ -1068,6 +1069,350 @@ async fn send_focus_message(
 
     ws.close(None).await?;
     Ok(())
+}
+
+// ===========================================================================
+// v2 Protocol (Siphonophore) - Single WebSocket Connection
+// ===========================================================================
+
+/// Run the v2 sync loop with a single WebSocket connection to /sync2.
+///
+/// This uses the siphonophore wire format:
+/// - Binary messages: `[u8: doc_id_len] [doc_id] [y-sync payload]`
+/// - Text messages: JSON control messages (unchanged)
+///
+/// Doc ID format:
+/// - Workspace: `workspace:{workspace_id}`
+/// - Body: `body:{workspace_id}/{file_path}`
+#[allow(dead_code)]
+async fn run_sync_loop_v2(
+    url: &str,
+    workspace_id: &str,
+    sync_manager: Arc<RustSyncManager<SyncToAsyncFs<RealFileSystem>>>,
+    workspace_crdt: Arc<WorkspaceCrdt>,
+    running: Arc<AtomicBool>,
+) {
+    println!("Connecting to sync server (v2 protocol)...");
+    progress::show_progress(10);
+
+    // Connect to single /sync2 WebSocket
+    let mut ws = match connect_async(url).await {
+        Ok((ws, _)) => {
+            println!("Connected to sync server");
+            progress::show_progress(30);
+            ws
+        }
+        Err(e) => {
+            eprintln!("Failed to connect: {}", e);
+            progress::show_error(30);
+            return;
+        }
+    };
+
+    // Send workspace SyncStep1
+    let ws_doc_id = format_workspace_doc_id(workspace_id);
+    let ws_step1 = sync_manager.create_workspace_sync_step1();
+    let ws_framed = frame_message_v2(&ws_doc_id, &ws_step1);
+    if let Err(e) = ws.send(Message::Binary(ws_framed.into())).await {
+        eprintln!("Failed to send workspace SyncStep1: {}", e);
+        return;
+    }
+
+    // Send body SyncStep1 for all known files
+    let files = workspace_crdt.list_files();
+    let file_count = files.len();
+    let mut sent = 0;
+
+    const BATCH_SIZE: usize = 50;
+    for (file_path, _metadata) in files {
+        if !running.load(Ordering::SeqCst) {
+            break;
+        }
+        let body_doc_id = format_body_doc_id(workspace_id, &file_path);
+        let body_step1 = sync_manager.create_body_sync_step1(&file_path);
+        let body_framed = frame_message_v2(&body_doc_id, &body_step1);
+        if let Err(e) = ws.send(Message::Binary(body_framed.into())).await {
+            eprintln!("Failed to send body SyncStep1 for {}: {}", file_path, e);
+        }
+        sent += 1;
+
+        if sent % BATCH_SIZE == 0 {
+            print!("\r\x1b[K  Sending state: {}/{} files", sent, file_count);
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    if sent > 0 {
+        println!("\r\x1b[K  Sent state for {} files", sent);
+    }
+
+    progress::show_progress(50);
+    println!();
+    println!("Sync is running. Press Ctrl+C to stop.");
+    println!();
+
+    // Track sync completion
+    let workspace_synced = Arc::new(AtomicBool::new(false));
+    let body_synced = Arc::new(AtomicBool::new(file_count == 0));
+
+    // Message loop
+    while running.load(Ordering::SeqCst) {
+        tokio::select! {
+            msg = ws.next() => {
+                match msg {
+                    Some(Ok(Message::Binary(data))) => {
+                        // Unframe v2 message
+                        if let Some((doc_id, payload)) = unframe_message_v2(&data) {
+                            match parse_doc_id(&doc_id) {
+                                Some(DocIdKind::Workspace(_)) => {
+                                    // Handle workspace message
+                                    match sync_manager.handle_workspace_message(&payload, true).await {
+                                        Ok(result) => {
+                                            if let Some(response) = result.response {
+                                                let framed = frame_message_v2(&doc_id, &response);
+                                                if let Err(e) = ws.send(Message::Binary(framed.into())).await {
+                                                    eprintln!("Failed to send workspace response: {}", e);
+                                                }
+                                            }
+                                            if !result.changed_files.is_empty() {
+                                                for file in &result.changed_files {
+                                                    println!("  Synced: {}", file);
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            eprintln!("Error handling workspace message: {}", e);
+                                        }
+                                    }
+                                }
+                                Some(DocIdKind::Body { file_path, .. }) => {
+                                    // Handle body message
+                                    match sync_manager.handle_body_message(&file_path, &payload, true).await {
+                                        Ok(result) => {
+                                            if let Some(response) = result.response {
+                                                let framed = frame_message_v2(&doc_id, &response);
+                                                if let Err(e) = ws.send(Message::Binary(framed.into())).await {
+                                                    eprintln!("Failed to send body response: {}", e);
+                                                }
+                                            }
+                                            if result.content.is_some() && !result.is_echo {
+                                                println!("\r\x1b[K  Body synced: {}", file_path);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            eprintln!("Error handling body message for {}: {}", file_path, e);
+                                        }
+                                    }
+                                }
+                                None => {
+                                    log::debug!("Unknown doc_id format: {}", doc_id);
+                                }
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Text(text))) => {
+                        // Handle JSON control messages
+                        if let Ok(ctrl_msg) = serde_json::from_str::<ControlMessage>(&text) {
+                            match ctrl_msg {
+                                ControlMessage::SyncProgress { completed, total } => {
+                                    if total > 0 {
+                                        let percent = ((completed as f64 / total as f64) * 100.0) as u8;
+                                        let scaled = 50 + (percent / 2);
+                                        progress::show_progress(scaled);
+                                        print!("\r\x1b[K  Progress: {}/{} files ({}%)", completed, total, percent);
+                                        use std::io::Write;
+                                        let _ = std::io::stdout().flush();
+                                    }
+                                }
+                                ControlMessage::SyncComplete { files_synced } => {
+                                    workspace_synced.store(true, Ordering::SeqCst);
+                                    body_synced.store(true, Ordering::SeqCst);
+                                    println!("\r\x1b[K  Sync complete ({} files)", files_synced);
+                                    progress::show_progress(100);
+                                    println!("Watching for changes...");
+                                    progress::show_indeterminate();
+                                }
+                                ControlMessage::PeerJoined { peer_count } => {
+                                    println!("\r\x1b[K  Peer joined ({} connected)", peer_count);
+                                }
+                                ControlMessage::PeerLeft { peer_count } => {
+                                    println!("\r\x1b[K  Peer left ({} connected)", peer_count);
+                                }
+                                ControlMessage::FocusListChanged { files } => {
+                                    if !files.is_empty() {
+                                        log::debug!("Focus list changed: {} files", files.len());
+                                    }
+                                }
+                                ControlMessage::Other => {}
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) => {
+                        println!("\r\x1b[KConnection closed by server");
+                        break;
+                    }
+                    Some(Ok(Message::Pong(_))) => {
+                        // Connection alive
+                    }
+                    Some(Err(e)) => {
+                        eprintln!("\r\x1b[KWebSocket error: {}", e);
+                        break;
+                    }
+                    None => break,
+                    _ => {}
+                }
+            }
+            _ = tokio::time::sleep(tokio::time::Duration::from_secs(30)) => {
+                // Send ping to keep connection alive
+                if let Err(e) = ws.send(Message::Ping(vec![].into())).await {
+                    eprintln!("Failed to send ping: {}", e);
+                    break;
+                }
+            }
+        }
+    }
+
+    // Close connection gracefully
+    let _ = ws.close(None).await;
+}
+
+/// Perform one-shot v2 sync (push or pull).
+#[allow(dead_code)]
+async fn do_one_shot_sync_v2(
+    url: &str,
+    workspace_id: &str,
+    workspace_crdt: &WorkspaceCrdt,
+    body_manager: &BodyDocManager,
+    pull: bool,
+) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    use std::collections::HashSet;
+
+    let (mut ws, _) = connect_async(url).await?;
+
+    // Send workspace SyncStep1
+    let ws_doc_id = format_workspace_doc_id(workspace_id);
+    let sv = workspace_crdt.encode_state_vector();
+    let step1 = SyncMessage::SyncStep1(sv).encode();
+    let framed = frame_message_v2(&ws_doc_id, &step1);
+    ws.send(Message::Binary(framed.into())).await?;
+
+    // Get list of files to sync
+    let files: Vec<String> = workspace_crdt
+        .list_files()
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect();
+    let file_count = files.len();
+
+    // Send body SyncStep1 for all files
+    for file_path in &files {
+        let body_doc_id = format_body_doc_id(workspace_id, file_path);
+        let sv = body_manager
+            .get_sync_state(file_path)
+            .unwrap_or_else(Vec::new);
+        let step1 = SyncMessage::SyncStep1(sv).encode();
+        let framed = frame_message_v2(&body_doc_id, &step1);
+        ws.send(Message::Binary(framed.into())).await?;
+    }
+
+    let mut push_count = 0;
+    let mut pull_count = 0;
+    let mut ws_sent_step2 = false;
+    let mut ws_received_step2 = false;
+    let mut body_files_sent_step2: HashSet<String> = HashSet::new();
+    let mut body_files_received_step2: HashSet<String> = HashSet::new();
+
+    // Timeout based on file count
+    let timeout_secs = (10 + file_count / 100).min(60) as u64;
+    let timeout = tokio::time::Duration::from_secs(timeout_secs);
+    let deadline = tokio::time::Instant::now() + timeout;
+
+    loop {
+        tokio::select! {
+            biased;
+
+            msg = ws.next() => {
+                match msg {
+                    Some(Ok(Message::Binary(data))) => {
+                        if let Some((doc_id, payload)) = unframe_message_v2(&data) {
+                            match parse_doc_id(&doc_id) {
+                                Some(DocIdKind::Workspace(_)) => {
+                                    let messages = SyncMessage::decode_all(&payload)?;
+                                    for sync_msg in messages {
+                                        match sync_msg {
+                                            SyncMessage::SyncStep1(remote_sv) => {
+                                                let diff = workspace_crdt.encode_diff(&remote_sv)?;
+                                                if diff.len() > 2 {
+                                                    push_count = 1;
+                                                }
+                                                let step2 = SyncMessage::SyncStep2(diff).encode();
+                                                let framed = frame_message_v2(&doc_id, &step2);
+                                                ws.send(Message::Binary(framed.into())).await?;
+                                                ws_sent_step2 = true;
+                                            }
+                                            SyncMessage::SyncStep2(update) | SyncMessage::Update(update) => {
+                                                ws_received_step2 = true;
+                                                if update.len() > 2 {
+                                                    let (_, changed_files, _) = workspace_crdt
+                                                        .apply_update_tracking_changes(&update, diaryx_core::crdt::UpdateOrigin::Sync)?;
+                                                    pull_count += changed_files.len();
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Some(DocIdKind::Body { file_path, .. }) => {
+                                    let messages = SyncMessage::decode_all(&payload)?;
+                                    for sync_msg in messages {
+                                        match sync_msg {
+                                            SyncMessage::SyncStep1(remote_sv) => {
+                                                let diff = body_manager.get_diff(&file_path, &remote_sv)?;
+                                                if diff.len() > 2 {
+                                                    push_count += 1;
+                                                }
+                                                let step2 = SyncMessage::SyncStep2(diff).encode();
+                                                let framed = frame_message_v2(&doc_id, &step2);
+                                                ws.send(Message::Binary(framed.into())).await?;
+                                                body_files_sent_step2.insert(file_path.clone());
+                                            }
+                                            SyncMessage::SyncStep2(update) | SyncMessage::Update(update) => {
+                                                body_files_received_step2.insert(file_path.clone());
+                                                if update.len() > 2 {
+                                                    let body_doc = body_manager.get_or_create(&file_path);
+                                                    body_doc.apply_update(&update, diaryx_core::crdt::UpdateOrigin::Sync)?;
+                                                    pull_count += 1;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                None => {}
+                            }
+                        }
+
+                        // Check if sync is complete
+                        let ws_complete = ws_sent_step2 && ws_received_step2;
+                        let body_complete = body_files_sent_step2.len() >= file_count
+                            && body_files_received_step2.len() >= file_count;
+                        if ws_complete && (file_count == 0 || body_complete) {
+                            break;
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Err(e)) => return Err(e.into()),
+                    _ => {}
+                }
+            }
+            _ = tokio::time::sleep_until(deadline) => {
+                break;
+            }
+        }
+    }
+
+    ws.close(None).await?;
+    Ok(if pull { pull_count } else { push_count })
 }
 
 #[cfg(test)]

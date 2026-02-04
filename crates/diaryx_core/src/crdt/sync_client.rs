@@ -303,6 +303,12 @@ pub enum SyncEvent {
         /// Error message.
         message: String,
     },
+    /// Focus list changed - files that other clients are focused on.
+    /// Clients should subscribe to sync these files.
+    FocusListChanged {
+        /// Paths of files that any client is focused on.
+        files: Vec<String>,
+    },
 }
 
 /// Unified sync client for dual-connection sync.
@@ -649,6 +655,11 @@ impl<T: SyncTransport, FS: AsyncFileSystem + Send + Sync + 'static> SyncClient<T
         // Update status to connected
         self.set_status(ConnectionStatus::Connected);
 
+        // NOTE: We no longer auto-subscribe to all body docs here.
+        // Instead, clients use focus_files() to indicate which files they're working on,
+        // and the server broadcasts focus_list_changed to all clients.
+        // Clients should subscribe to files in the focus list.
+
         Ok(())
     }
 
@@ -735,6 +746,203 @@ impl<T: SyncTransport, FS: AsyncFileSystem + Send + Sync + 'static> SyncClient<T
     /// Reset reconnection attempt counter.
     pub fn reset_reconnect(&self) {
         self.reconnect_attempts.store(0, Ordering::SeqCst);
+    }
+
+    // ========================================================================
+    // Focus-Based Sync APIs
+    // ========================================================================
+
+    /// Focus on specific files.
+    ///
+    /// Notifies the server that this client is focused on these files.
+    /// The server broadcasts the updated focus list to all connected clients,
+    /// who should then subscribe to sync those files.
+    ///
+    /// # Arguments
+    ///
+    /// * `files` - List of file paths to focus on
+    pub async fn focus_files(&self, files: &[String]) -> Result<()> {
+        if !self.body_connected.load(Ordering::SeqCst) {
+            log::warn!("[SyncClient] Cannot focus files: body not connected");
+            return Ok(());
+        }
+
+        if files.is_empty() {
+            return Ok(());
+        }
+
+        let msg = serde_json::json!({
+            "type": "focus",
+            "files": files
+        });
+        let text = msg.to_string();
+        self.body_transport.send_text(&text).await?;
+
+        log::debug!("[SyncClient] Sent focus for {} files", files.len());
+        Ok(())
+    }
+
+    /// Unfocus specific files.
+    ///
+    /// Notifies the server that this client is no longer focused on these files.
+    /// If no other clients are focused on the files, they will be removed from
+    /// the global focus list.
+    ///
+    /// # Arguments
+    ///
+    /// * `files` - List of file paths to unfocus
+    pub async fn unfocus_files(&self, files: &[String]) -> Result<()> {
+        if !self.body_connected.load(Ordering::SeqCst) {
+            log::warn!("[SyncClient] Cannot unfocus files: body not connected");
+            return Ok(());
+        }
+
+        if files.is_empty() {
+            return Ok(());
+        }
+
+        let msg = serde_json::json!({
+            "type": "unfocus",
+            "files": files
+        });
+        let text = msg.to_string();
+        self.body_transport.send_text(&text).await?;
+
+        log::debug!("[SyncClient] Sent unfocus for {} files", files.len());
+        Ok(())
+    }
+
+    /// Subscribe to body sync for specific files.
+    ///
+    /// For each file, loads content from disk (if not already loaded)
+    /// and sends SyncStep1 to initiate sync.
+    ///
+    /// This should be called in response to `FocusListChanged` events
+    /// to subscribe to files that other clients are working on.
+    ///
+    /// # Arguments
+    ///
+    /// * `files` - List of file paths to subscribe to
+    pub async fn subscribe_bodies(&self, files: &[String]) -> Result<()> {
+        if !self.body_connected.load(Ordering::SeqCst) {
+            log::warn!("[SyncClient] Cannot subscribe bodies: not connected");
+            return Ok(());
+        }
+
+        log::info!(
+            "[SyncClient] Subscribing to {} body docs from focus list",
+            files.len()
+        );
+
+        for doc_name in files {
+            // Skip if state hasn't changed since last sync
+            if !self.sync_manager.body_state_changed(doc_name) {
+                log::debug!("[SyncClient] Skipping unchanged body doc: {}", doc_name);
+                continue;
+            }
+
+            // Load content from disk before creating SyncStep1
+            if let Err(e) = self.sync_manager.ensure_body_content_loaded(doc_name).await {
+                log::warn!(
+                    "[SyncClient] Failed to load body content for {}: {:?}",
+                    doc_name,
+                    e
+                );
+            }
+
+            // Create and send SyncStep1
+            let step1 = self.sync_manager.create_body_sync_step1(doc_name);
+            let framed = frame_body_message(doc_name, &step1);
+            if let Err(e) = self.body_transport.send(&framed).await {
+                log::warn!(
+                    "[SyncClient] Failed to subscribe body {}: {:?}",
+                    doc_name,
+                    e
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Subscribe to body sync for all files in workspace.
+    ///
+    /// This is a convenience method that subscribes to all files at once.
+    /// It should only be used when you need to sync all files (e.g., initial sync
+    /// or when recovering from a disconnect).
+    ///
+    /// For focus-based sync, prefer using `subscribe_bodies()` with the files
+    /// from the `FocusListChanged` event.
+    pub async fn subscribe_all_bodies(&self) -> Result<()> {
+        if !self.body_connected.load(Ordering::SeqCst) {
+            log::warn!("[SyncClient] Cannot subscribe bodies: not connected");
+            return Ok(());
+        }
+
+        let file_paths = self.sync_manager.get_all_file_paths();
+        log::info!(
+            "[SyncClient] Subscribing to {} body docs (loading content from disk)",
+            file_paths.len()
+        );
+
+        // Track how many files we loaded content for
+        let mut loaded_count = 0;
+        let mut empty_count = 0;
+        let mut skipped_count = 0;
+
+        // Process in batches of 20 to avoid overwhelming the server
+        const BATCH_SIZE: usize = 20;
+        #[allow(unused_variables)]
+        for (batch_idx, chunk) in file_paths.chunks(BATCH_SIZE).enumerate() {
+            for doc_name in chunk {
+                // Skip if state hasn't changed since last sync (optimization for reconnect)
+                if !self.sync_manager.body_state_changed(doc_name) {
+                    log::debug!("[SyncClient] Skipping unchanged body doc: {}", doc_name);
+                    skipped_count += 1;
+                    continue;
+                }
+
+                // IMPORTANT: Load content from disk before creating SyncStep1
+                // This ensures we have content to sync (not just an empty state vector)
+                match self.sync_manager.ensure_body_content_loaded(doc_name).await {
+                    Ok(true) => loaded_count += 1,
+                    Ok(false) => empty_count += 1,
+                    Err(e) => {
+                        log::warn!(
+                            "[SyncClient] Failed to load body content for {}: {:?}",
+                            doc_name,
+                            e
+                        );
+                    }
+                }
+
+                // Now create SyncStep1 with the populated state
+                let step1 = self.sync_manager.create_body_sync_step1(doc_name);
+                let framed = frame_body_message(doc_name, &step1);
+                if let Err(e) = self.body_transport.send(&framed).await {
+                    log::warn!(
+                        "[SyncClient] Failed to subscribe body {}: {:?}",
+                        doc_name,
+                        e
+                    );
+                }
+            }
+            // Small delay between batches to avoid overwhelming the server
+            // Only available in native builds with tokio; WASM doesn't need this
+            // since it uses CallbackTransport which has its own flow control.
+            #[cfg(feature = "native-sync")]
+            if batch_idx < file_paths.len() / BATCH_SIZE {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        }
+
+        log::info!(
+            "[SyncClient] Body subscription complete: loaded {} files, {} already had content or empty, {} skipped (unchanged)",
+            loaded_count,
+            empty_count,
+            skipped_count
+        );
+        Ok(())
     }
 }
 

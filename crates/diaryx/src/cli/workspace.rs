@@ -3,6 +3,7 @@
 use diaryx_core::config::Config;
 use diaryx_core::entry::{DiaryxAppSync, prettify_filename, slugify};
 use diaryx_core::fs::{FileSystem, RealFileSystem, SyncToAsyncFs};
+use diaryx_core::link_parser::LinkFormat;
 use diaryx_core::template::TemplateContext;
 use diaryx_core::validate::ValidationFixer;
 use diaryx_core::workspace::Workspace;
@@ -10,9 +11,7 @@ use serde_yaml::Value;
 use std::path::{Path, PathBuf};
 
 use crate::cli::args::WorkspaceCommands;
-use crate::cli::util::{
-    LinkFormatter, calculate_relative_path, rename_file_with_refs, resolve_paths,
-};
+use crate::cli::util::{format_workspace_link, rename_file_with_refs, resolve_paths};
 use crate::cli::{CliDiaryxAppSync, CliWorkspace, block_on};
 use crate::editor::launch_editor;
 
@@ -143,7 +142,7 @@ pub fn handle_workspace_command(
                 let (parent, child) =
                     resolve_parent_child(ws, &current_dir, &parent_or_child, child);
                 if let (Some(p), Some(c)) = (parent, child) {
-                    handle_remove(app, cfg, &p, &c, dry_run);
+                    handle_remove(app, ws, cfg, &p, &c, dry_run);
                     true
                 } else {
                     false
@@ -204,6 +203,30 @@ pub fn handle_workspace_command(
                 yes,
             );
             true
+        }
+
+        WorkspaceCommands::Combine {
+            source,
+            target,
+            yes,
+            dry_run,
+        } => {
+            if let Some(ref cfg) = config {
+                handle_combine(
+                    workspace_override,
+                    ws,
+                    &config,
+                    &current_dir,
+                    &source,
+                    &target,
+                    yes,
+                    dry_run,
+                );
+                true
+            } else {
+                eprintln!("✗ No config found. Run 'diaryx init' first");
+                false
+            }
         }
     }
 }
@@ -705,6 +728,108 @@ fn handle_validate(
     true
 }
 
+/// Handle the 'workspace combine' command
+#[allow(clippy::too_many_arguments)]
+fn handle_combine(
+    workspace_override: Option<PathBuf>,
+    ws: &CliWorkspace,
+    config: &Option<Config>,
+    current_dir: &Path,
+    source: &str,
+    target: &str,
+    yes: bool,
+    dry_run: bool,
+) {
+    // 1. Resolve workspace root
+    let root_path = if let Some(override_path) = workspace_override {
+        override_path
+    } else if let Ok(Some(detected)) = block_on(ws.detect_workspace(current_dir)) {
+        detected
+    } else if let Some(cfg) = config {
+        if let Ok(Some(root)) = block_on(ws.find_root_index_in_dir(&cfg.default_workspace)) {
+            root
+        } else {
+            eprintln!("✗ No workspace found");
+            return;
+        }
+    } else {
+        eprintln!("✗ No workspace found");
+        return;
+    };
+
+    // We need a workspace instance with the correct root for linking
+    // Re-create workspace with detected root
+    // Note: CliWorkspace wraps a core Workspace, but we might need to verify if it has root set correctly.
+    // The `ws` passed in is created in main.
+    // Let's assume `ws` is good enough, but we might need to ensure it has the root set if we use it for combining.
+    // Actually `ws` in `run_cli` is initialized with `Workspace::new` or similar.
+    // `handle_workspace_command` receives `ws: &CliWorkspace`.
+    // The core `Workspace` has `with_link_format`.
+    // Let's check `ws` definition. `type CliWorkspace = Workspace<SyncToAsyncFs<RealFileSystem>>;`
+
+    // 2. Resolve source and target paths to absolute paths
+    // They can be relative to current dir or absolute
+    let source_path = current_dir.join(source);
+    let target_path = current_dir.join(target);
+
+    // 3. Confirm action
+    if !yes && !dry_run {
+        println!("This will:");
+        println!("  1. Move all contents from '{}' to '{}'", source, target);
+        println!("  2. Append the body text of source to target");
+        println!("  3. DELETE the source file '{}'", source);
+        println!();
+
+        use std::io::{self, Write};
+        print!("Continue? [y/N] ");
+        io::stdout().flush().ok();
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).ok();
+
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("Aborted.");
+            return;
+        }
+    }
+
+    if dry_run {
+        println!("(Dry run) Would combine '{}' into '{}'", source, target);
+        return;
+    }
+
+    // 4. Perform combine
+    println!("Combining indices...");
+
+    // Create a new workspace instance with the correctly resolved root path
+    // This allows combine_indices to correctly resolve workspace-relative paths
+    // even if the original ws was created without knowing the root.
+    // We try to get the link format from config or default to MarkdownRoot
+    let link_format = if let Some(cfg) = config {
+        cfg.link_format
+    } else {
+        LinkFormat::MarkdownRoot
+    };
+
+    // Since CliWorkspace is a type alias for Workspace<SyncToAsyncFs<RealFileSystem>>,
+    // we can construct a new one using the same filesystem implementation.
+    // The original ws has the filesystem we want to reuse (cloning it is cheap as it wraps unit struct/Arc).
+    let ws_with_root = diaryx_core::workspace::Workspace::with_link_format(
+        ws.fs_ref().clone(),
+        root_path.parent().unwrap_or(Path::new(".")).to_path_buf(), // root_path is the README file, we want the directory
+        link_format,
+    );
+
+    match block_on(ws_with_root.combine_indices(&source_path, &target_path)) {
+        Ok(_) => {
+            println!("✓ Successfully combined '{}' into '{}'", source, target);
+        }
+        Err(e) => {
+            eprintln!("✗ Failed to combine indices: {}", e);
+        }
+    }
+}
+
 /// Helper function to report validation results and optionally fix issues
 fn report_and_fix_validation(
     fixer: &ValidationFixer<SyncToAsyncFs<RealFileSystem>>,
@@ -1170,7 +1295,7 @@ fn handle_mv(
     }
 
     // Use shared utility for workspace-aware rename/move
-    let result = rename_file_with_refs(app, source_path, &dest_path, dry_run);
+    let result = rename_file_with_refs(app, Some(ws), source_path, &dest_path, dry_run);
 
     // If --new-index is specified and move succeeded, create/use index as parent
     if result.success && !dry_run {
@@ -1256,7 +1381,7 @@ fn set_new_index_as_parent(
         if let Ok(Some(parent_index)) = block_on(ws.find_any_index_in_dir(file_dir)) {
             // Don't set parent if it's the same as the new index
             if parent_index != index_path {
-                let relative_parent = calculate_relative_path(&index_path, &parent_index);
+                let relative_parent = format_workspace_link(ws, &index_path, &parent_index, None);
                 if let Err(e) = app.set_frontmatter_property(
                     &index_str,
                     "part_of",
@@ -1267,7 +1392,7 @@ fn set_new_index_as_parent(
 
                 // Add new index to parent's contents
                 let parent_str = parent_index.to_string_lossy();
-                let relative_index = calculate_relative_path(&parent_index, &index_path);
+                let relative_index = format_workspace_link(ws, &parent_index, &index_path, None);
 
                 if let Ok(Some(serde_yaml::Value::Sequence(mut items))) =
                     app.get_frontmatter_property(&parent_str, "contents")
@@ -1294,7 +1419,7 @@ fn set_new_index_as_parent(
     }
 
     // Add file to index's contents
-    let relative_file = calculate_relative_path(&index_path, file_path);
+    let relative_file = format_workspace_link(ws, &index_path, file_path, None);
     match app.get_frontmatter_property(&index_str, "contents") {
         Ok(Some(serde_yaml::Value::Sequence(mut items))) => {
             let file_value = serde_yaml::Value::String(relative_file.clone());
@@ -1339,7 +1464,7 @@ fn set_new_index_as_parent(
 
     // Set part_of in the moved file
     let file_str = file_path.to_string_lossy();
-    let relative_index = calculate_relative_path(file_path, &index_path);
+    let relative_index = format_workspace_link(ws, file_path, &index_path, None);
     if let Err(e) = app.set_frontmatter_property(
         &file_str,
         "part_of",
@@ -1754,7 +1879,8 @@ fn handle_add_recursive(
         {
             // Check if root index is already in parent's contents
             let parent_str = parent_index.to_string_lossy();
-            let relative_root = calculate_relative_path(&parent_index, &root_plan.index_path);
+            let relative_root =
+                format_workspace_link(ws, &parent_index, &root_plan.index_path, None);
 
             let already_linked = match app.get_frontmatter_property(&parent_str, "contents") {
                 Ok(Some(serde_yaml::Value::Sequence(items))) => items.iter().any(|item| {
@@ -1809,7 +1935,8 @@ fn handle_add_recursive(
 
                 // Set part_of in root index
                 let root_str = root_plan.index_path.to_string_lossy();
-                let relative_parent = calculate_relative_path(&root_plan.index_path, &parent_index);
+                let relative_parent =
+                    format_workspace_link(ws, &root_plan.index_path, &parent_index, None);
                 if let Err(e) = app.set_frontmatter_property(
                     &root_str,
                     "part_of",
@@ -1967,13 +2094,13 @@ fn execute_dir_plan(
 
     // Add files
     for file in &dir_plan.files {
-        let relative = calculate_relative_path(&dir_plan.index_path, file);
+        let relative = format_workspace_link(ws, &dir_plan.index_path, file, None);
         if !contents.contains(&relative) {
             contents.push(relative.clone());
 
             // Set part_of in the file
             let file_str = file.to_string_lossy();
-            let relative_to_index = calculate_relative_path(file, &dir_plan.index_path);
+            let relative_to_index = format_workspace_link(ws, file, &dir_plan.index_path, None);
             if let Err(e) = app.set_frontmatter_property(
                 &file_str,
                 "part_of",
@@ -1988,14 +2115,14 @@ fn execute_dir_plan(
     for subdir in &dir_plan.subdirs {
         // Find the index in the subdirectory
         if let Ok(Some(subdir_index)) = block_on(ws.find_any_index_in_dir(subdir)) {
-            let relative = calculate_relative_path(&dir_plan.index_path, &subdir_index);
+            let relative = format_workspace_link(ws, &dir_plan.index_path, &subdir_index, None);
             if !contents.contains(&relative) {
                 contents.push(relative.clone());
 
                 // Set part_of in the subdirectory index
                 let subdir_str = subdir_index.to_string_lossy();
                 let relative_to_parent =
-                    calculate_relative_path(&subdir_index, &dir_plan.index_path);
+                    format_workspace_link(ws, &subdir_index, &dir_plan.index_path, None);
                 if let Err(e) = app.set_frontmatter_property(
                     &subdir_str,
                     "part_of",
@@ -2017,14 +2144,14 @@ fn execute_dir_plan(
             let subdir_index = subdir.join(format!("{}_index.md", subdir_name));
 
             if subdir_index.exists() {
-                let relative = calculate_relative_path(&dir_plan.index_path, &subdir_index);
+                let relative = format_workspace_link(ws, &dir_plan.index_path, &subdir_index, None);
                 if !contents.contains(&relative) {
                     contents.push(relative.clone());
 
                     // Set part_of in the subdirectory index
                     let subdir_str = subdir_index.to_string_lossy();
                     let relative_to_parent =
-                        calculate_relative_path(&subdir_index, &dir_plan.index_path);
+                        format_workspace_link(ws, &subdir_index, &dir_plan.index_path, None);
                     if let Err(e) = app.set_frontmatter_property(
                         &subdir_str,
                         "part_of",
@@ -2186,7 +2313,7 @@ fn handle_add_with_new_index(
     // Build initial contents list
     let contents: Vec<String> = all_files
         .iter()
-        .map(|f| calculate_relative_path(&index_path, f))
+        .map(|f| format_workspace_link(ws, &index_path, f, None))
         .collect();
 
     let contents_yaml: Vec<serde_yaml::Value> = contents
@@ -2221,7 +2348,7 @@ fn handle_add_with_new_index(
 
     // Add part_of to new index if there's a parent
     if let Some(ref parent) = parent_index {
-        let relative_parent = calculate_relative_path(&index_path, parent);
+        let relative_parent = format_workspace_link(ws, &index_path, parent, None);
         if let Err(e) = app.set_frontmatter_property(
             &index_str,
             "part_of",
@@ -2232,7 +2359,7 @@ fn handle_add_with_new_index(
 
         // Add new index to parent's contents
         let parent_str = parent.to_string_lossy();
-        let relative_index = calculate_relative_path(parent, &index_path);
+        let relative_index = format_workspace_link(ws, parent, &index_path, None);
 
         match app.get_frontmatter_property(&parent_str, "contents") {
             Ok(Some(serde_yaml::Value::Sequence(mut items))) => {
@@ -2274,7 +2401,7 @@ fn handle_add_with_new_index(
     // Update part_of in all added files
     for file_path in &all_files {
         let file_str = file_path.to_string_lossy();
-        let relative_to_index = calculate_relative_path(file_path, &index_path);
+        let relative_to_index = format_workspace_link(ws, file_path, &index_path, None);
 
         if let Err(e) = app.set_frontmatter_property(
             &file_str,
@@ -2354,28 +2481,13 @@ fn handle_add(
         return;
     }
 
-    // Create link formatter from workspace config
-    let formatter = LinkFormatter::from_path(ws, parent_path);
-
     let multiple = child_paths.len() > 1;
     let mut confirm_all = yes;
 
     for child_path in &child_paths {
         // Format links according to workspace config, with fallback to relative paths
-        let (contents_link, part_of_link) = if let Some(ref fmt) = formatter {
-            (
-                fmt.format_contents_link(parent_path, child_path, None)
-                    .unwrap_or_else(|| calculate_relative_path(parent_path, child_path)),
-                fmt.format_part_of_link(child_path, parent_path, None)
-                    .unwrap_or_else(|| calculate_relative_path(child_path, parent_path)),
-            )
-        } else {
-            // Fallback to simple relative paths if workspace config not available
-            (
-                calculate_relative_path(parent_path, child_path),
-                calculate_relative_path(child_path, parent_path),
-            )
-        };
+        let contents_link = format_workspace_link(ws, parent_path, child_path, None);
+        let part_of_link = format_workspace_link(ws, child_path, parent_path, None);
 
         if dry_run {
             println!(
@@ -2671,6 +2783,7 @@ fn handle_create(
 /// Removes a child from a parent's hierarchy (does not delete the file)
 fn handle_remove(
     app: &CliDiaryxAppSync,
+    ws: &CliWorkspace,
     config: &Config,
     parent: &str,
     child: &str,
@@ -2707,7 +2820,7 @@ fn handle_remove(
     let child_path = &child_paths[0];
 
     // Calculate relative path from parent to child
-    let relative_child = calculate_relative_path(parent_path, child_path);
+    let relative_child = format_workspace_link(ws, parent_path, child_path, None);
 
     if dry_run {
         println!(

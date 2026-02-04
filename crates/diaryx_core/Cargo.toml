@@ -24,7 +24,8 @@ toml = "0.9.8"
 thiserror.workspace = true
 
 # CRDT support
-yrs = { version = "0.25", optional = true }
+# The "sync" feature makes Subscription Send+Sync, enabling thread-safe observers
+yrs = { version = "0.25", optional = true, features = ["sync"] }
 uuid = { version = "1", features = ["v4", "js"], optional = true }
 
 # TypeScript bindings generation

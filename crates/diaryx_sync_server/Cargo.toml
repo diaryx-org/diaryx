@@ -25,6 +25,7 @@ rusqlite = { version = "0.34", features = ["bundled"] }
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 
 # Email
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "builder", "pool"] }
@@ -34,6 +35,7 @@ rand = "0.8"
 base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
 chrono = { workspace = true }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # Logging
 tracing = "0.1"

@@ -54,6 +54,13 @@ impl FileSystem for MockFileSystem {
             .get(path)
             .cloned()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "File not found"))
+            .and_then(|content| {
+                if content == "<DIR>" {
+                    Err(io::Error::new(io::ErrorKind::Other, "Is a directory"))
+                } else {
+                    Ok(content)
+                }
+            })
     }
 
     fn write_file(&self, path: &Path, content: &str) -> io::Result<()> {
@@ -82,6 +89,17 @@ impl FileSystem for MockFileSystem {
         Ok(())
     }
 
+    fn list_files(&self, dir: &Path) -> io::Result<Vec<PathBuf>> {
+        let files = self.files.lock().unwrap();
+        let mut result = Vec::new();
+        for path in files.keys() {
+            if path.parent() == Some(dir) {
+                result.push(path.clone());
+            }
+        }
+        Ok(result)
+    }
+
     fn list_md_files(&self, dir: &Path) -> io::Result<Vec<PathBuf>> {
         let files = self.files.lock().unwrap();
         let mut result = Vec::new();
@@ -93,14 +111,19 @@ impl FileSystem for MockFileSystem {
         Ok(result)
     }
 
-    fn create_dir_all(&self, _path: &Path) -> io::Result<()> {
-        // Mock implementation - directories are implicit
+    fn create_dir_all(&self, path: &Path) -> io::Result<()> {
+        let mut files = self.files.lock().unwrap();
+        files.insert(path.to_path_buf(), "<DIR>".to_string());
         Ok(())
     }
 
-    fn is_dir(&self, _path: &Path) -> bool {
-        // Mock implementation - assume any non-file path could be a directory
-        false
+    fn is_dir(&self, path: &Path) -> bool {
+        self.files
+            .lock()
+            .unwrap()
+            .get(path)
+            .map(|content| content == "<DIR>")
+            .unwrap_or(false)
     }
 
     fn move_file(&self, from: &Path, to: &Path) -> io::Result<()> {

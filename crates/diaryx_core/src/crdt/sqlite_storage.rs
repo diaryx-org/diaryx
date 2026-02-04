@@ -495,6 +495,12 @@ impl CrdtStorage for SqliteStorage {
         tx.commit()?;
         Ok(())
     }
+
+    fn clear_updates(&self, name: &str) -> StorageResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM updates WHERE doc_name = ?", params![name])?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -744,5 +750,38 @@ mod tests {
         // Empty batch should return empty vec
         let ids = storage.batch_append_updates(&[]).unwrap();
         assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn test_sqlite_clear_updates() {
+        let storage = SqliteStorage::in_memory().unwrap();
+
+        // Add some updates and a doc snapshot
+        storage.save_doc("test", b"snapshot").unwrap();
+        storage
+            .append_update("test", b"update1", UpdateOrigin::Local)
+            .unwrap();
+        storage
+            .append_update("test", b"update2", UpdateOrigin::Remote)
+            .unwrap();
+
+        // Verify updates exist
+        assert_eq!(storage.get_all_updates("test").unwrap().len(), 2);
+
+        // Clear updates
+        storage.clear_updates("test").unwrap();
+
+        // Updates should be gone but snapshot should remain
+        assert!(storage.get_all_updates("test").unwrap().is_empty());
+        assert!(storage.load_doc("test").unwrap().is_some());
+    }
+
+    #[test]
+    fn test_sqlite_clear_updates_nonexistent() {
+        let storage = SqliteStorage::in_memory().unwrap();
+
+        // Clearing updates for nonexistent doc should not error
+        let result = storage.clear_updates("nonexistent");
+        assert!(result.is_ok());
     }
 }

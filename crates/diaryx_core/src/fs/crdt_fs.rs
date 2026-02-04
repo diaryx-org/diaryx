@@ -103,6 +103,19 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
         }
     }
 
+    /// Normalize a path to a canonical form for CRDT storage.
+    ///
+    /// Strips leading "./" and "/" prefixes to ensure consistent keys
+    /// across the CRDT. This matches how `InitializeWorkspaceCrdt` derives
+    /// canonical paths from the workspace tree.
+    fn normalize_crdt_path(path: &Path) -> String {
+        let path_str = path.to_string_lossy();
+        path_str
+            .trim_start_matches("./")
+            .trim_start_matches('/')
+            .to_string()
+    }
+
     /// Check if CRDT updates are enabled.
     pub fn is_enabled(&self) -> bool {
         self.enabled.load(Ordering::SeqCst)
@@ -249,7 +262,8 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
     /// with all existing tests and functionality. The migration to doc-IDs
     /// will be triggered explicitly via migrate_to_doc_ids().
     fn path_to_doc_id(&self, path: &Path, _metadata: &FileMetadata) -> Option<String> {
-        let path_str = path.to_string_lossy().to_string();
+        // Normalize the path to a canonical form for CRDT storage
+        let normalized = Self::normalize_crdt_path(path);
 
         // For backward compatibility, always use path as the key
         // The doc-ID based system is opt-in via explicit migration
@@ -260,7 +274,7 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
         //
         // But for now, maintain compatibility with existing code
 
-        Some(path_str)
+        Some(normalized)
     }
 
     /// Convert frontmatter to FileMetadata.
@@ -268,10 +282,46 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
         &self,
         fm: &indexmap::IndexMap<String, serde_yaml::Value>,
     ) -> FileMetadata {
+        // Helper to parse the frontmatter "updated" value into a timestamp (ms)
+        fn parse_updated_value(value: &serde_yaml::Value) -> Option<i64> {
+            if let Some(num) = value.as_i64() {
+                return Some(num);
+            }
+
+            if let Some(num) = value.as_f64() {
+                return Some(num as i64);
+            }
+
+            if let Some(raw) = value.as_str() {
+                // Try numeric string first
+                if let Ok(num) = raw.parse::<i64>() {
+                    return Some(num);
+                }
+
+                // Try RFC3339/ISO8601 timestamp
+                if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(raw) {
+                    return Some(parsed.timestamp_millis());
+                }
+            }
+
+            None
+        }
+
         // Try to convert via JSON for automatic field mapping
         if let Ok(json_value) = serde_json::to_value(fm)
             && let Ok(metadata) = serde_json::from_value::<FileMetadata>(json_value)
         {
+            let mut metadata = metadata;
+
+            if let Some(updated) = fm.get("updated").and_then(parse_updated_value) {
+                metadata.modified_at = updated;
+            }
+
+            // Only default to "now" if modified_at is missing/zero
+            if metadata.modified_at == 0 {
+                metadata.modified_at = chrono::Utc::now().timestamp_millis();
+            }
+
             return metadata;
         }
 
@@ -316,6 +366,7 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
             "attachments",
             "deleted",
             "modified_at",
+            "updated",
         ];
         for (key, value) in fm {
             if !known_fields.contains(&key.as_str())
@@ -325,7 +376,11 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
             }
         }
 
-        metadata.modified_at = chrono::Utc::now().timestamp_millis();
+        if let Some(updated) = fm.get("updated").and_then(parse_updated_value) {
+            metadata.modified_at = updated;
+        } else if metadata.modified_at == 0 {
+            metadata.modified_at = chrono::Utc::now().timestamp_millis();
+        }
         metadata
     }
 
@@ -362,6 +417,16 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
         }
 
         let path_str = path.to_string_lossy().to_string();
+
+        // Skip temporary files created by the metadata writer's safe write process
+        // These files should never be synced to the server
+        if path_str.ends_with(".tmp") || path_str.ends_with(".bak") {
+            log::debug!(
+                "CrdtFs: Skipping CRDT update for temporary file: {}",
+                path_str
+            );
+            return;
+        }
         let body = frontmatter::extract_body(content);
         log::debug!(
             "[CrdtFs] update_crdt_for_file_internal: path_str='{}', is_new_file={}, body_preview='{}'",
@@ -379,8 +444,18 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
             .unwrap_or(path_str.clone());
 
         // Update workspace CRDT with the doc_key (doc_id or path)
-        if let Err(e) = self.workspace_crdt.set_file(&doc_key, metadata) {
-            log::warn!("Failed to update CRDT for {}: {}", doc_key, e);
+        log::info!("[CrdtFs] BEFORE set_file: doc_key={}", doc_key);
+        if let Err(e) = self.workspace_crdt.set_file(&doc_key, metadata.clone()) {
+            log::warn!("[CrdtFs] set_file FAILED: {}: {}", doc_key, e);
+        } else {
+            log::info!("[CrdtFs] set_file SUCCESS: {}", doc_key);
+            // Verify write by reading back (debug only)
+            let verify = self.workspace_crdt.get_file(&doc_key);
+            log::info!(
+                "[CrdtFs] set_file VERIFY: {} -> {:?}",
+                doc_key,
+                verify.is_some()
+            );
         }
 
         // Update body doc using the same key
@@ -491,15 +566,33 @@ impl<FS: AsyncFileSystem + Send + Sync> AsyncFileSystem for CrdtFs<FS> {
 
     fn create_new<'a>(&'a self, path: &'a Path, content: &'a str) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
+            log::info!(
+                "[CrdtFs] create_new CALLED: path='{}', enabled={}, content_len={}",
+                path.display(),
+                self.is_enabled(),
+                content.len()
+            );
+
             // Mark local write in progress
             self.mark_local_write_start(path);
 
             // Create in inner filesystem
             let result = self.inner.create_new(path, content).await;
 
+            log::info!(
+                "[CrdtFs] create_new RESULT: path='{}', success={}, err={:?}",
+                path.display(),
+                result.is_ok(),
+                result.as_ref().err()
+            );
+
             // Update CRDT if creation succeeded and enabled
             // Use new file variant to clear any stale state from storage
             if result.is_ok() {
+                log::info!(
+                    "[CrdtFs] create_new calling update_crdt_for_new_file: path='{}'",
+                    path.display()
+                );
                 self.update_crdt_for_new_file(path, content);
             }
 
@@ -520,7 +613,7 @@ impl<FS: AsyncFileSystem + Send + Sync> AsyncFileSystem for CrdtFs<FS> {
 
             // Mark as deleted in CRDT if deletion succeeded and enabled
             if result.is_ok() && self.is_enabled() {
-                let path_str = path.to_string_lossy().to_string();
+                let path_str = Self::normalize_crdt_path(path);
 
                 // Update parent's contents to remove the deleted file
                 self.update_parent_contents(&path_str, None);
@@ -568,7 +661,8 @@ impl<FS: AsyncFileSystem + Send + Sync> AsyncFileSystem for CrdtFs<FS> {
 
             // Update CRDT if move succeeded
             if result.is_ok() && self.is_enabled() {
-                let from_str = from.to_string_lossy().to_string();
+                let from_str = Self::normalize_crdt_path(from);
+                let to_str = Self::normalize_crdt_path(to);
 
                 // Find the doc_id for the file being moved
                 if let Some(doc_id) = self.workspace_crdt.find_by_path(from) {
@@ -625,7 +719,6 @@ impl<FS: AsyncFileSystem + Send + Sync> AsyncFileSystem for CrdtFs<FS> {
                     }
 
                     // Update parent's contents list (replace old path with new path)
-                    let to_str = to.to_string_lossy().to_string();
                     self.update_parent_contents(&from_str, Some(&to_str));
                 } else {
                     // Fallback for legacy path-based entries: use old delete+create behavior
@@ -633,7 +726,6 @@ impl<FS: AsyncFileSystem + Send + Sync> AsyncFileSystem for CrdtFs<FS> {
                         "CrdtFs: No doc_id found for {:?}, using legacy move behavior",
                         from
                     );
-                    let to_str = to.to_string_lossy().to_string();
                     self.update_parent_contents(&from_str, Some(&to_str));
 
                     if let Err(e) = self.workspace_crdt.delete_file(&from_str) {
@@ -710,15 +802,33 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for CrdtFs<FS> {
 
     fn create_new<'a>(&'a self, path: &'a Path, content: &'a str) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
+            log::info!(
+                "[CrdtFs] create_new CALLED: path='{}', enabled={}, content_len={}",
+                path.display(),
+                self.is_enabled(),
+                content.len()
+            );
+
             // Mark local write in progress
             self.mark_local_write_start(path);
 
             // Create in inner filesystem
             let result = self.inner.create_new(path, content).await;
 
+            log::info!(
+                "[CrdtFs] create_new RESULT: path='{}', success={}, err={:?}",
+                path.display(),
+                result.is_ok(),
+                result.as_ref().err()
+            );
+
             // Update CRDT if creation succeeded and enabled
             // Use new file variant to clear any stale state from storage
             if result.is_ok() {
+                log::info!(
+                    "[CrdtFs] create_new calling update_crdt_for_new_file: path='{}'",
+                    path.display()
+                );
                 self.update_crdt_for_new_file(path, content);
             }
 
@@ -739,7 +849,7 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for CrdtFs<FS> {
 
             // Mark as deleted in CRDT if deletion succeeded and enabled
             if result.is_ok() && self.is_enabled() {
-                let path_str = path.to_string_lossy().to_string();
+                let path_str = Self::normalize_crdt_path(path);
 
                 // Update parent's contents to remove the deleted file
                 self.update_parent_contents(&path_str, None);
@@ -787,7 +897,8 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for CrdtFs<FS> {
 
             // Update CRDT if move succeeded
             if result.is_ok() && self.is_enabled() {
-                let from_str = from.to_string_lossy().to_string();
+                let from_str = Self::normalize_crdt_path(from);
+                let to_str = Self::normalize_crdt_path(to);
 
                 // Find the doc_id for the file being moved
                 if let Some(doc_id) = self.workspace_crdt.find_by_path(from) {
@@ -847,7 +958,6 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for CrdtFs<FS> {
                     }
 
                     // Update parent's contents list (replace old path with new path)
-                    let to_str = to.to_string_lossy().to_string();
                     self.update_parent_contents(&from_str, Some(&to_str));
                 } else {
                     // Fallback for legacy path-based entries: use old delete+create behavior
@@ -855,7 +965,6 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for CrdtFs<FS> {
                         "CrdtFs: No doc_id found for {:?}, using legacy move behavior",
                         from
                     );
-                    let to_str = to.to_string_lossy().to_string();
                     self.update_parent_contents(&from_str, Some(&to_str));
 
                     if let Err(e) = self.workspace_crdt.delete_file(&from_str) {

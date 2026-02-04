@@ -507,12 +507,28 @@
 
       let workspacePath: string;
       try {
-        workspacePath = await api.findRootIndex(workspaceDir);
+        const foundRoot = await api.findRootIndex(workspaceDir);
+        if (!foundRoot) {
+          throw new Error("Root index not found");
+        }
+        workspacePath = foundRoot;
         console.log("[App] Found root index at:", workspacePath);
       } catch (e) {
         console.warn("[App] Could not find root index:", e);
-        // Fall back to default - will trigger workspace creation
-        workspacePath = `${workspaceDir}/index.md`;
+        try {
+          console.log("[App] Default workspace missing, creating...");
+          await api.createWorkspace(".", "My Journal");
+          const createdRoot = await api.findRootIndex(workspaceDir);
+          if (!createdRoot) {
+            throw new Error("Root index not found after workspace creation");
+          }
+          workspacePath = createdRoot;
+          console.log("[App] Created workspace root index at:", workspacePath);
+        } catch (createErr) {
+          console.error("[App] Failed to create default workspace:", createErr);
+          // Fall back to default - will trigger workspace creation
+          workspacePath = `${workspaceDir}/index.md`;
+        }
       }
 
       // Ensure local workspace exists (creates index.md if needed)

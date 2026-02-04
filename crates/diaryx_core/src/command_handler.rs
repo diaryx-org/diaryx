@@ -277,12 +277,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     // Track for echo detection
                     self.track_content_for_sync(&canonical_path, &content);
 
-                    // Emit body sync message to be sent via WebSocket
-                    if let Some(sync_manager) = self.sync_manager()
-                        && let Err(e) = sync_manager.emit_body_update(&canonical_path, &content)
-                    {
-                        log::warn!("Failed to emit body sync for {}: {}", canonical_path, e);
-                    }
+                    // Note: Body sync messages are now automatically emitted via the Yrs observer
+                    // pattern when set_body() is called. No manual emit_body_update needed.
 
                     log::debug!(
                         "[CommandHandler] SaveEntry: completed for canonical_path='{}'",
@@ -2097,11 +2093,22 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 use std::collections::HashSet;
 
                 // Check CRDT is enabled first
-                if self.crdt().is_none() {
-                    return Err(DiaryxError::Unsupported(
-                        "CRDT not enabled for this instance".to_string(),
-                    ));
-                }
+                let crdt = match self.crdt() {
+                    Some(c) => c,
+                    None => {
+                        return Err(DiaryxError::Unsupported(
+                            "CRDT not enabled for this instance".to_string(),
+                        ));
+                    }
+                };
+
+                // Log initial CRDT state for debugging sync issues
+                let initial_files: Vec<_> = crdt.list_files().into_iter().collect();
+                log::info!(
+                    "[InitializeWorkspaceCrdt] INITIAL CRDT state: {} files: {:?}",
+                    initial_files.len(),
+                    initial_files.iter().take(10).collect::<Vec<_>>()
+                );
 
                 let ws = self.workspace().inner();
 
@@ -2171,9 +2178,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 let mut stack: Vec<(&crate::workspace::TreeNode, Option<String>)> =
                     vec![(&tree, None)];
 
-                // Get CRDT for reconciliation checks
-                let crdt = self.crdt().unwrap(); // Safe - checked above
-
                 // Track files updated from disk (file was newer than CRDT)
                 let mut files_updated_from_disk: Vec<String> = Vec::new();
 
@@ -2217,12 +2221,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                     // Get existing CRDT entry for reconciliation (use canonical path)
                     let existing_crdt_entry = crdt.get_file(&canonical_path);
-                    log::debug!(
-                        "[InitializeWorkspaceCrdt] CRDT lookup for '{}': {:?}",
+                    log::info!(
+                        "[InitializeWorkspaceCrdt] CRDT lookup for '{}': exists={}, deleted={:?}",
                         canonical_path,
-                        existing_crdt_entry
-                            .as_ref()
-                            .map(|e| (e.deleted, e.modified_at))
+                        existing_crdt_entry.is_some(),
+                        existing_crdt_entry.as_ref().map(|e| e.deleted)
                     );
 
                     // Reconciliation logic: compare file mtime vs CRDT modified_at
@@ -2677,12 +2680,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 })?;
                 crdt.set_body_content(&doc_name, &content)?;
 
-                // Emit body sync message
-                if let Some(sync_manager) = self.sync_manager()
-                    && let Err(e) = sync_manager.emit_body_update(&doc_name, &content)
-                {
-                    log::warn!("Failed to emit body sync for SetBodyContent: {}", e);
-                }
+                // Note: Body sync messages are now automatically emitted via the Yrs observer
+                // pattern when set_body() is called. No manual emit_body_update needed.
 
                 Ok(Response::Ok)
             }
@@ -2969,6 +2968,22 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     changed_files: result.changed_files,
                     sync_complete: result.sync_complete,
                 })
+            }
+
+            #[cfg(feature = "crdt")]
+            Command::HandleCrdtState { state } => {
+                let sync_manager = self.sync_manager().ok_or_else(|| {
+                    DiaryxError::Unsupported(
+                        "SyncManager not enabled for this instance".to_string(),
+                    )
+                })?;
+
+                let file_count = sync_manager.handle_crdt_state(&state)?;
+                log::info!(
+                    "[CommandHandler] HandleCrdtState: applied state, {} files in workspace",
+                    file_count
+                );
+                Ok(Response::Ok)
             }
 
             #[cfg(feature = "crdt")]

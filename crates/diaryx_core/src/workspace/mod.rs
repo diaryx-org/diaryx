@@ -403,6 +403,165 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         Ok(None)
     }
 
+    /// Combine two index files by moving contents from source to target and deleting source.
+    /// Also appends the body of source to target.
+    pub async fn combine_indices(&self, source_path: &Path, target_path: &Path) -> Result<()> {
+        // 1. Parse both indices
+        let source_index = self.parse_index(source_path).await?;
+        let target_index = self.parse_index(target_path).await?;
+
+        // Ensure both are valid indices (though parse_index should error if not valid markdown/frontmatter)
+        if !source_index.frontmatter.is_index() {
+            return Err(DiaryxError::YamlParse {
+                path: source_path.to_path_buf(),
+                message: "Source is not an index file (missing contents)".to_string(),
+            });
+        }
+        if !target_index.frontmatter.is_index() {
+            return Err(DiaryxError::YamlParse {
+                path: target_path.to_path_buf(),
+                message: "Target is not an index file (missing contents)".to_string(),
+            });
+        }
+
+        // 2. Prepare new contents for target
+        let mut new_target_contents = target_index
+            .frontmatter
+            .contents
+            .clone()
+            .unwrap_or_default();
+
+        // Get workspace root for path formatting
+        // (Use configured root if available, else derive from target path)
+        let workspace_root = self
+            .root_path
+            .clone()
+            .unwrap_or_else(|| target_path.parent().unwrap_or(Path::new(".")).to_path_buf());
+
+        // Get target's canonical path to format links relative to it
+        let target_canonical = self.get_canonical_path(target_path);
+
+        // 3. Process source children
+        if let Some(ref source_contents) = source_index.frontmatter.contents {
+            for child_ref in source_contents {
+                // Resolve child to absolute path
+                let child_path = source_index.resolve_path(child_ref);
+
+                // Construct absolute path (resolve_path returns workspace-relative for root paths,
+                // or file-relative otherwise. It's inconsistent in return type slightly - see resolve_path docs.
+                // Actually resolve_path returns PathBuf. Let's look at resolve_path implementation.
+                // It returns a PathBuf. If it's workspace-relative (from /), it's returned as such (relative).
+                // If it's relative, it's joined with directory.
+                // Wait, resolve_path implementation says:
+                // "Returns an absolute path resolved against this index file's location."
+                // BUT implementation of WorkspaceRoot case returns `PathBuf::from(&parsed.path)` which is NOT absolute
+                // if it's just the string from the link without workspace root.
+                // Let's re-read resolve_path carefully.
+                // "Returns an absolute path resolved against this index file's location." -> implementation seems to try to do that.
+                // BUT for WorkspaceRoot it says "Return as PathBuf directly - callers operate relative to workspace root."
+                // So result might be "Folder/file.md" (relative to workspace root).
+
+                let mut absolute_child_path = if child_path.is_absolute() {
+                    child_path
+                } else {
+                    // It's relative to workspace root
+                    workspace_root.join(&child_path)
+                };
+
+                // Verification: Check if the file exists.
+                // If not, it might be because the path resolution logic misidentified a workspace-root path
+                // as a relative path (e.g. "Daily/2026/01.md" inside "Daily/2026/index.md" resolves to
+                // "Daily/2026/Daily/2026/01.md").
+                if !self.fs.exists(&absolute_child_path).await {
+                    let fallback_path = workspace_root.join(child_ref);
+                    if self.fs.exists(&fallback_path).await {
+                        log::info!(
+                            "Resolved '{}' using fallback workspace-root strategy to {:?}",
+                            child_ref,
+                            fallback_path
+                        );
+                        absolute_child_path = fallback_path;
+                    } else {
+                        // If it still doesn't exist, we will likely error on write, but let's proceed
+                        // to attempt write so the error is consistent (or maybe just warn?)
+                        // For now, proceed, but let's log.
+                        log::warn!(
+                            "Child path '{}' resolved to {:?} which does not exist",
+                            child_ref,
+                            absolute_child_path
+                        );
+                    }
+                }
+
+                // Now we need to update the child's part_of to point to the target
+                // We need to format the link from child to target
+                let child_canonical = self.get_canonical_path(&absolute_child_path);
+
+                // Update child's part_of
+                // Format link FROM child TO target
+                let part_of_link = self.format_link(&target_canonical, &child_canonical).await;
+
+                self.set_frontmatter_property(
+                    &absolute_child_path,
+                    "part_of",
+                    Value::String(part_of_link),
+                )
+                .await?;
+
+                // Add child to target contents
+                // Format link FROM target TO child
+                let child_link = self.format_link(&child_canonical, &target_canonical).await;
+                new_target_contents.push(child_link);
+            }
+        }
+
+        // 4. Update target index with new contents and appended body
+        let mut target_frontmatter = target_index.frontmatter.clone();
+        target_frontmatter.contents = Some(new_target_contents);
+
+        // Append body
+        let new_body = if source_index.body.trim().is_empty() {
+            target_index.body
+        } else if target_index.body.trim().is_empty() {
+            source_index.body
+        } else {
+            format!("{}\n\n{}", target_index.body.trim_end(), source_index.body)
+        };
+
+        // We need to write back the target file.
+        // We can use reconstruct_file-like logic here,
+        // but `Workspace` doesn't have `reconstruct_file` directly exposed or easily reusable
+        // without `IndexMap` which `IndexFrontmatter` isn't.
+        // `IndexFrontmatter` derives `Serialize` so we can convert it to YAML.
+
+        let yaml_str =
+            serde_yaml::to_string(&target_frontmatter).map_err(|e| DiaryxError::YamlParse {
+                path: target_path.to_path_buf(),
+                message: e.to_string(),
+            })?;
+
+        let content = format!("---\n{}---\n{}", yaml_str, new_body);
+
+        self.fs
+            .write_file(target_path, &content)
+            .await
+            .map_err(|e| DiaryxError::FileWrite {
+                path: target_path.to_path_buf(),
+                source: e,
+            })?;
+
+        // 5. Delete source index file
+        self.fs
+            .delete_file(source_path)
+            .await
+            .map_err(|e| DiaryxError::FileWrite {
+                path: source_path.to_path_buf(),
+                source: e,
+            })?;
+
+        Ok(())
+    }
+
     // ==================== Workspace Config Methods ====================
 
     /// Get the workspace configuration from the root index file's frontmatter.

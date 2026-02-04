@@ -3,26 +3,26 @@ title: web
 description: Svelte + Tiptap frontend for Diaryx
 author: adammharris
 audience:
-- public
-- developers
-part_of: '[README](/apps/README.md)'
+  - public
+  - developers
+part_of: "[README](/apps/README.md)"
 contents:
-  - '[README](/apps/web/src/README.md)'
-  - '[Tiptap Custom Extensions](/apps/web/docs/tiptap-custom-extensions.md)'
+  - "[README](/apps/web/src/README.md)"
+  - "[Tiptap Custom Extensions](/apps/web/docs/tiptap-custom-extensions.md)"
 attachments:
-  - '[package.json](/apps/web/package.json)'
-  - '[vite.config.ts](/apps/web/vite.config.ts)'
-  - '[svelte.config.js](/apps/web/svelte.config.js)'
-  - '[tsconfig.json](/apps/web/tsconfig.json)'
-  - '[vitest.config.ts](/apps/web/vitest.config.ts)'
-  - '[playwright.config.ts](/apps/web/playwright.config.ts)'
-  - '[components.json](/apps/web/components.json)'
-  - '[index.html](/apps/web/index.html)'
+  - "[package.json](/apps/web/package.json)"
+  - "[vite.config.ts](/apps/web/vite.config.ts)"
+  - "[svelte.config.js](/apps/web/svelte.config.js)"
+  - "[tsconfig.json](/apps/web/tsconfig.json)"
+  - "[vitest.config.ts](/apps/web/vitest.config.ts)"
+  - "[playwright.config.ts](/apps/web/playwright.config.ts)"
+  - "[components.json](/apps/web/components.json)"
+  - "[index.html](/apps/web/index.html)"
 exclude:
-  - '*.lock'
-  - 'node_modules/**'
-  - 'dist/**'
-  - 'e2e/**'
+  - "*.lock"
+  - "node_modules/**"
+  - "dist/**"
+  - "e2e/**"
 ---
 
 # Diaryx Web
@@ -118,6 +118,29 @@ await backend.fixUnlistedFile("workspace/index.md", "workspace/new-file.md");
 - `NonPortablePath` - Path contains absolute or `.`/`..` components
 - `MultipleIndexes` - Multiple index files in same directory
 - `OrphanBinaryFile` - Binary file not in any attachments
+
+## E2E Sync Test
+
+The sync E2E test expects a running sync server (default `http://127.0.0.1:3030`).
+The test relies on the dev-mode magic link response (`dev_link`), so the sync server
+must be running without SMTP configured.
+
+When initializing with **Load from server**, the wizard clears the local workspace
+before downloading so local-only files are removed.
+The sync workspace transfer test validates entries via the CRDT state first
+(metadata + body content), then falls back to file APIs, because browser clients
+may not materialize files on disk during a load-from-server flow.
+
+When running E2E tests in parallel across browsers, each project uses its own sync
+server port by default to avoid conflicts (chromium: base port, webkit: base+1,
+firefox: base+2). Set `SYNC_SERVER_URL` to override this behavior.
+
+Environment variables:
+
+- `SYNC_SERVER_URL` (optional): override the sync server URL (disables per-project ports)
+- `SYNC_SERVER_HOST` (optional): host for the auto-started sync server (default `127.0.0.1`)
+- `SYNC_SERVER_PORT` (optional): base port for the auto-started sync server (default `3030`)
+- `SYNC_E2E_START_SERVER` (optional): set to `0` to skip auto-starting the sync server
 - `MissingPartOf` - Non-index file has no `part_of`
 
 ## Project Structure
@@ -195,7 +218,9 @@ e2e/
 ├── workspace.spec.ts               # Workspace navigation tests
 ├── editor.spec.ts                  # Editor functionality tests
 ├── attachments.spec.ts             # Attachment handling tests
-└── share.spec.ts                   # Share session tests
+├── share.spec.ts                   # Share session tests
+├── sync.spec.ts                    # Sync smoke test
+└── sync-workspace.spec.ts          # Sync workspace transfer test
 ```
 
 ### Configuration
@@ -214,8 +239,8 @@ wasm-pack build --target web --out-dir ../../apps/web/src/lib/wasm
 
 ## Developer Guides
 
-| Guide | Description |
-| ----- | ----------- |
+| Guide                                                        | Description                                             |
+| ------------------------------------------------------------ | ------------------------------------------------------- |
 | [TipTap Custom Extensions](docs/tiptap-custom-extensions.md) | Creating custom TipTap extensions with markdown support |
 
 ## Live Demo

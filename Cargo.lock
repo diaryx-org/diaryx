@@ -1931,6 +1931,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "serde_yaml",
  "tempfile",
  "tokio",
  "tokio-tungstenite 0.26.2",
@@ -1938,6 +1939,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "zip 2.4.2",
 ]
 
 [[package]]

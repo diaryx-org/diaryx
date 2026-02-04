@@ -94,6 +94,15 @@ pub struct RustSyncManager<FS: AsyncFileSystem> {
 
     // Callback to emit filesystem events (for SendSyncMessage)
     event_callback: RwLock<Option<Arc<dyn Fn(&FileSystemEvent) + Send + Sync>>>,
+
+    // Cached state vectors after last successful sync (SyncStep2 received).
+    // Used to skip sending SyncStep1 when local state hasn't changed since last sync.
+    last_synced_workspace_sv: RwLock<Option<Vec<u8>>>,
+    last_synced_body_svs: RwLock<HashMap<String, Vec<u8>>>,
+
+    // Files this client is focused on (for focus-based sync).
+    // Used to track which files to re-focus on reconnect.
+    focused_files: RwLock<HashSet<String>>,
 }
 
 impl<FS: AsyncFileSystem> RustSyncManager<FS> {
@@ -115,6 +124,9 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
             last_sent_body_sv: RwLock::new(HashMap::new()),
             initial_sync_complete: AtomicBool::new(false),
             event_callback: RwLock::new(None),
+            last_synced_workspace_sv: RwLock::new(None),
+            last_synced_body_svs: RwLock::new(HashMap::new()),
+            focused_files: RwLock::new(HashSet::new()),
         }
     }
 
@@ -122,9 +134,45 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
     ///
     /// This callback is used to emit SendSyncMessage events to TypeScript,
     /// which then sends the bytes over WebSocket to the sync server.
+    ///
+    /// **Important**: This also sets up the body sync observer callback on the body_manager,
+    /// so that local body changes automatically emit sync messages via the Yrs observer pattern.
     pub fn set_event_callback(&self, callback: Arc<dyn Fn(&FileSystemEvent) + Send + Sync>) {
-        let mut cb = self.event_callback.write().unwrap();
-        *cb = Some(callback);
+        log::debug!("[SyncManager] set_event_callback called, setting up body sync observer");
+        {
+            let mut cb = self.event_callback.write().unwrap();
+            *cb = Some(callback.clone());
+        }
+
+        // Set up body sync callback using the Yrs observer pattern.
+        // When body docs are mutated locally, the observer automatically emits
+        // the update bytes as a sync message.
+        self.setup_body_sync_observer(callback);
+    }
+
+    /// Set up the body sync observer callback.
+    ///
+    /// This uses the Yrs observer pattern: when any body doc is mutated locally,
+    /// the observer automatically receives the exact update bytes and emits them
+    /// as a sync message via the event callback.
+    fn setup_body_sync_observer(
+        &self,
+        event_callback: Arc<dyn Fn(&FileSystemEvent) + Send + Sync>,
+    ) {
+        let sync_callback = Arc::new(move |doc_name: &str, update: &[u8]| {
+            log::debug!(
+                "[SyncManager] Body observer: doc='{}', update_len={}",
+                doc_name,
+                update.len()
+            );
+
+            // Wrap the update in a SyncMessage and emit via the event callback
+            let message = SyncMessage::Update(update.to_vec()).encode();
+            let event = FileSystemEvent::send_sync_message(doc_name, message, true);
+            event_callback(&event);
+        });
+
+        self.body_manager.set_sync_callback(sync_callback);
     }
 
     /// Clear the event callback.
@@ -289,20 +337,44 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
             }
         }
 
-        // Write changed files to disk if requested
-        if write_to_disk && (!all_changed_files.is_empty() || !all_renames.is_empty()) {
-            let files_to_sync: Vec<_> = all_changed_files
-                .iter()
-                .filter_map(|path| {
-                    self.workspace_crdt.get_file(path).and_then(|meta| {
-                        // Filter out metadata echoes to prevent feedback loops
+        // Filter metadata echoes and dedupe paths before emitting change events or syncing to disk.
+        let mut filtered_changed_files: Vec<String> = Vec::new();
+        if !all_changed_files.is_empty() {
+            let mut seen = HashSet::new();
+            for path in &all_changed_files {
+                if !seen.insert(path.clone()) {
+                    continue;
+                }
+
+                match self.workspace_crdt.get_file(path) {
+                    Some(meta) => {
                         if self.is_metadata_echo(path, &meta) {
                             log::debug!("[SyncManager] Skipping metadata echo for: {}", path);
-                            None
-                        } else {
-                            Some((path.clone(), meta))
+                            continue;
                         }
-                    })
+                    }
+                    None => {
+                        // Keep paths that no longer exist in the CRDT (e.g., deletes).
+                    }
+                }
+
+                filtered_changed_files.push(path.clone());
+            }
+        }
+
+        // Write changed files to disk if requested
+        if write_to_disk && (!filtered_changed_files.is_empty() || !all_renames.is_empty()) {
+            let files_to_sync: Vec<_> = filtered_changed_files
+                .iter()
+                .filter_map(|path| {
+                    let meta = self.workspace_crdt.get_file(path);
+                    log::info!(
+                        "[SyncManager] get_file for sync '{}': exists={}, deleted={:?}",
+                        path,
+                        meta.is_some(),
+                        meta.as_ref().map(|m| m.deleted)
+                    );
+                    meta.and_then(|m| Some((path.clone(), m)))
                 })
                 .collect();
 
@@ -328,7 +400,7 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
 
         Ok(SyncMessageResult {
             response,
-            changed_files: all_changed_files,
+            changed_files: filtered_changed_files,
             sync_complete,
         })
     }
@@ -374,6 +446,13 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
                         .apply_update_tracking_changes(&update, UpdateOrigin::Sync)?;
                     changed_files = files;
                     renames = detected_renames;
+                }
+
+                // Cache the new state vector after successful sync
+                let new_sv = self.workspace_crdt.encode_state_vector();
+                {
+                    let mut cache = self.last_synced_workspace_sv.write().unwrap();
+                    *cache = Some(new_sv);
                 }
 
                 Ok((None, changed_files, renames))
@@ -524,19 +603,23 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
                     }
                 }
                 SyncMessage::SyncStep2(update) | SyncMessage::Update(update) => {
+                    let is_step2 = matches!(sync_msg, SyncMessage::SyncStep2(_));
                     log::info!(
                         "[SyncManager] handle_body_message: doc='{}', msg[{}] = {:?}, update_len={}",
                         doc_name,
                         i,
-                        if matches!(sync_msg, SyncMessage::SyncStep2(_)) {
-                            "SyncStep2"
-                        } else {
-                            "Update"
-                        },
+                        if is_step2 { "SyncStep2" } else { "Update" },
                         update.len()
                     );
                     if !update.is_empty() {
                         body_doc.apply_update(update, UpdateOrigin::Remote)?;
+                    }
+
+                    // Cache the new state vector after successful SyncStep2
+                    if is_step2 {
+                        let new_sv = body_doc.encode_state_vector();
+                        let mut cache = self.last_synced_body_svs.write().unwrap();
+                        cache.insert(doc_name.to_string(), new_sv);
                     }
                 }
             }
@@ -587,6 +670,13 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
                 .await?;
         }
 
+        // Notify UI of remote body change (even if write_to_disk is false, e.g., guest mode)
+        if content_changed && !is_echo {
+            let event =
+                FileSystemEvent::contents_changed(PathBuf::from(doc_name), content_after.clone());
+            self.emit_event(event);
+        }
+
         // Mark as synced
         {
             let mut synced = self.body_synced.write().unwrap();
@@ -623,6 +713,76 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         SyncMessage::SyncStep1(sv).encode()
     }
 
+    /// Ensure body content is populated from disk before sync.
+    ///
+    /// This method reads the file content from disk and sets it into the body CRDT.
+    /// It should be called before `create_body_sync_step1()` to ensure the body
+    /// CRDT has content to sync (rather than sending an empty state vector).
+    ///
+    /// Returns true if content was loaded, false if the body doc already had content
+    /// or the file doesn't exist.
+    pub async fn ensure_body_content_loaded(&self, doc_name: &str) -> Result<bool> {
+        // Check if body doc already has content
+        let body_doc = self.body_manager.get_or_create(doc_name);
+        let existing_content = body_doc.get_body();
+
+        if !existing_content.is_empty() {
+            log::debug!(
+                "[SyncManager] Body already has content for {}: {} chars",
+                doc_name,
+                existing_content.len()
+            );
+            return Ok(false);
+        }
+
+        // Check if file exists on disk
+        if !self.sync_handler.file_exists(doc_name).await {
+            log::debug!(
+                "[SyncManager] File does not exist for body {}, skipping load",
+                doc_name
+            );
+            return Ok(false);
+        }
+
+        // Read content from disk
+        match self.sync_handler.read_body_content(doc_name).await {
+            Ok(content) => {
+                if content.is_empty() {
+                    log::debug!(
+                        "[SyncManager] File has empty body for {}, nothing to load",
+                        doc_name
+                    );
+                    return Ok(false);
+                }
+
+                log::info!(
+                    "[SyncManager] Loading body content from disk for {}: {} chars",
+                    doc_name,
+                    content.len()
+                );
+
+                // Set content into body CRDT
+                body_doc.set_body(&content)?;
+
+                // Track for echo detection
+                {
+                    let mut last_known = self.last_known_content.write().unwrap();
+                    last_known.insert(doc_name.to_string(), content);
+                }
+
+                Ok(true)
+            }
+            Err(e) => {
+                log::warn!(
+                    "[SyncManager] Failed to read body content for {}: {:?}",
+                    doc_name,
+                    e
+                );
+                Ok(false)
+            }
+        }
+    }
+
     /// Create an update message for local body changes.
     pub fn create_body_update(&self, doc_name: &str, content: &str) -> Result<Vec<u8>> {
         // Update content in body doc
@@ -648,6 +808,47 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
     pub fn is_body_synced(&self, doc_name: &str) -> bool {
         let synced = self.body_synced.read().unwrap();
         synced.contains(doc_name)
+    }
+
+    // =========================================================================
+    // Sync State Comparison (for skip-if-unchanged optimization)
+    // =========================================================================
+
+    /// Check if workspace state has changed since last successful sync.
+    ///
+    /// Returns true if:
+    /// - This is the first sync (no cached state)
+    /// - The local state vector differs from the cached state after last SyncStep2
+    ///
+    /// Used to skip sending SyncStep1 on reconnect when state hasn't changed.
+    pub fn workspace_state_changed(&self) -> bool {
+        let current_sv = self.workspace_crdt.encode_state_vector();
+        let last_synced = self.last_synced_workspace_sv.read().unwrap();
+        match &*last_synced {
+            Some(sv) => current_sv != *sv,
+            None => true, // First sync, always send
+        }
+    }
+
+    /// Check if body doc state has changed since last successful sync.
+    ///
+    /// Returns true if:
+    /// - This is the first sync for this doc (no cached state)
+    /// - The doc is not loaded yet
+    /// - The local state vector differs from the cached state after last SyncStep2
+    ///
+    /// Used to skip sending SyncStep1 on reconnect when state hasn't changed.
+    pub fn body_state_changed(&self, doc_name: &str) -> bool {
+        let body_doc = match self.body_manager.get(doc_name) {
+            Some(doc) => doc,
+            None => return true, // Doc not loaded, need to sync
+        };
+        let current_sv = body_doc.encode_state_vector();
+        let last_synced = self.last_synced_body_svs.read().unwrap();
+        match last_synced.get(doc_name) {
+            Some(sv) => current_sv != *sv,
+            None => true, // First sync for this doc
+        }
     }
 
     // =========================================================================
@@ -696,6 +897,22 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
     }
 
     // =========================================================================
+    // File Discovery
+    // =========================================================================
+
+    /// Get all active file paths in the workspace CRDT.
+    ///
+    /// Used by SyncClient to initiate body sync for all files after the body
+    /// connection is established.
+    pub fn get_all_file_paths(&self) -> Vec<String> {
+        self.workspace_crdt
+            .list_active_files()
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect()
+    }
+
+    // =========================================================================
     // Sync State
     // =========================================================================
 
@@ -718,6 +935,53 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
     }
 
     // =========================================================================
+    // Focus Tracking (for focus-based sync)
+    // =========================================================================
+
+    /// Set the files this client is focused on.
+    ///
+    /// This is used to track focus for reconnection - when the client reconnects,
+    /// it should re-focus on these files.
+    pub fn set_focused_files(&self, files: &[String]) {
+        let mut focused = self.focused_files.write().unwrap();
+        focused.clear();
+        for file in files {
+            focused.insert(file.clone());
+        }
+        log::debug!("[SyncManager] Set focused files: {:?}", files);
+    }
+
+    /// Get the files this client is focused on.
+    ///
+    /// Returns the list of files to re-focus on after reconnection.
+    pub fn get_focused_files(&self) -> Vec<String> {
+        let focused = self.focused_files.read().unwrap();
+        focused.iter().cloned().collect()
+    }
+
+    /// Add files to the focus list.
+    pub fn add_focused_files(&self, files: &[String]) {
+        let mut focused = self.focused_files.write().unwrap();
+        for file in files {
+            focused.insert(file.clone());
+        }
+    }
+
+    /// Remove files from the focus list.
+    pub fn remove_focused_files(&self, files: &[String]) {
+        let mut focused = self.focused_files.write().unwrap();
+        for file in files {
+            focused.remove(file);
+        }
+    }
+
+    /// Check if a file is in the focus list.
+    pub fn is_file_focused(&self, file: &str) -> bool {
+        let focused = self.focused_files.read().unwrap();
+        focused.contains(file)
+    }
+
+    // =========================================================================
     // Path Handling (delegates to SyncHandler)
     // =========================================================================
 
@@ -734,6 +998,66 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
     /// Check if we're in guest mode.
     pub fn is_guest(&self) -> bool {
         self.sync_handler.is_guest()
+    }
+
+    // =========================================================================
+    // Cleanup
+    // =========================================================================
+
+    // =========================================================================
+    // Handshake Protocol (for preventing CRDT corruption on initial sync)
+    // =========================================================================
+
+    /// Handle the CrdtState message from the server's handshake protocol.
+    ///
+    /// This is called after the client has downloaded all files (via HTTP or
+    /// batch request) and sent the `FilesReady` message. The server then
+    /// sends the full CRDT state which is applied to the workspace.
+    ///
+    /// **Important**: This method is designed for new clients with empty workspaces.
+    /// When the local workspace is empty, applying the server's full state via
+    /// `apply_update` works correctly without tombstoning issues. The handshake
+    /// protocol ensures files are downloaded BEFORE this state is applied, so
+    /// the CRDT state and filesystem are consistent.
+    ///
+    /// # Arguments
+    /// * `state` - The full CRDT state as bytes (Y-update v1 encoded)
+    ///
+    /// # Returns
+    /// The number of files in the workspace after applying the state
+    pub fn handle_crdt_state(&self, state: &[u8]) -> Result<usize> {
+        log::info!(
+            "[SyncManager] handle_crdt_state: applying {} bytes of state to workspace",
+            state.len()
+        );
+
+        // Apply the state to the workspace CRDT
+        // This works correctly for new clients because:
+        // 1. The local workspace is empty (no files to tombstone)
+        // 2. Files were already downloaded via the handshake
+        // 3. The state contains all file metadata to match the filesystem
+        self.workspace_crdt
+            .apply_update_tracking_changes(state, UpdateOrigin::Sync)?;
+
+        // Mark sync as complete since we now have the authoritative state
+        self.mark_sync_complete();
+
+        // Return the number of files in the workspace
+        let files = self.workspace_crdt.list_active_files();
+        log::info!(
+            "[SyncManager] handle_crdt_state: workspace now has {} active files",
+            files.len()
+        );
+
+        Ok(files.len())
+    }
+
+    /// Check if the workspace CRDT is empty (no files).
+    ///
+    /// Used to determine if this is a "new client" that needs the handshake
+    /// protocol to prevent CRDT corruption.
+    pub fn is_workspace_empty(&self) -> bool {
+        self.workspace_crdt.list_active_files().is_empty()
     }
 
     // =========================================================================
@@ -770,10 +1094,20 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
             sv_map.clear();
         }
 
+        // Clear cached synced state vectors (for skip-if-unchanged optimization)
         {
-            let mut sv_map = self.last_sent_body_sv.write().unwrap();
-            sv_map.clear();
+            let mut cache = self.last_synced_workspace_sv.write().unwrap();
+            *cache = None;
         }
+
+        {
+            let mut cache = self.last_synced_body_svs.write().unwrap();
+            cache.clear();
+        }
+
+        // Note: We intentionally do NOT clear focused_files on reset.
+        // Focus should persist across reconnections so the client can
+        // re-focus on the same files after reconnecting.
 
         log::info!("[SyncManager] Reset complete");
     }
@@ -819,17 +1153,26 @@ mod tests {
     }
 
     #[test]
-    fn test_body_sync_init() {
+    fn test_body_sync_init_and_close() {
         let manager = create_test_manager();
 
-        // Initially no body syncs
+        // Initially no active syncs (syncs that have completed initial handshake)
         assert!(manager.get_active_syncs().is_empty());
 
-        // Init body sync
+        // init_body_sync creates the body doc but doesn't mark it as synced
+        // (synced status is set by handle_body_message after receiving server response)
         manager.init_body_sync("test.md");
+        assert!(manager.get_active_syncs().is_empty());
+
+        // Simulate that a sync completed by directly adding to body_synced
+        // (normally this happens in handle_body_message)
+        {
+            let mut synced = manager.body_synced.write().unwrap();
+            synced.insert("test.md".to_string());
+        }
         assert_eq!(manager.get_active_syncs(), vec!["test.md"]);
 
-        // Close body sync
+        // close_body_sync removes from synced set
         manager.close_body_sync("test.md");
         assert!(manager.get_active_syncs().is_empty());
     }
@@ -897,5 +1240,55 @@ mod tests {
         manager.reset();
         assert!(!manager.is_sync_complete());
         assert!(!manager.is_workspace_synced());
+    }
+
+    #[test]
+    fn test_handle_crdt_state() {
+        use super::FileMetadata;
+
+        // Create a source workspace with files
+        let source_storage: Arc<dyn CrdtStorage> = Arc::new(MemoryStorage::new());
+        let source_workspace = WorkspaceCrdt::new(Arc::clone(&source_storage));
+
+        // Add a file to the source workspace
+        let meta = FileMetadata::new(Some("Test File".to_string()));
+        source_workspace.create_file(meta).unwrap();
+
+        // Encode the source workspace state
+        let state = source_workspace.encode_state_as_update();
+
+        // Create target manager (empty workspace)
+        let manager = create_test_manager();
+
+        // Initially workspace is empty
+        assert!(manager.is_workspace_empty());
+        assert!(!manager.is_sync_complete());
+
+        // Handle the CRDT state (simulating server handshake)
+        let result = manager.handle_crdt_state(&state);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 1); // Should have 1 file
+
+        // Workspace should now be marked as synced
+        assert!(manager.is_sync_complete());
+    }
+
+    #[test]
+    fn test_is_workspace_empty() {
+        use super::FileMetadata;
+
+        // Create storage and workspace directly (not via manager) to test
+        let storage: Arc<dyn CrdtStorage> = Arc::new(MemoryStorage::new());
+        let workspace = WorkspaceCrdt::new(Arc::clone(&storage));
+
+        // Initially empty
+        assert!(workspace.list_active_files().is_empty());
+
+        // Add a file to workspace
+        let meta = FileMetadata::new(Some("Test".to_string()));
+        workspace.create_file(meta).unwrap();
+
+        // No longer empty
+        assert!(!workspace.list_active_files().is_empty());
     }
 }

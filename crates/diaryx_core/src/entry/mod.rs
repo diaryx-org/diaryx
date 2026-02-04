@@ -32,6 +32,7 @@ use crate::config::Config;
 use crate::date::{date_to_path, parse_date};
 use crate::error::{DiaryxError, Result};
 use crate::fs::{AsyncFileSystem, FileSystem};
+use crate::link_parser;
 use crate::template::{Template, TemplateContext, TemplateManager};
 use chrono::{NaiveDate, Utc};
 use indexmap::IndexMap;
@@ -999,18 +1000,58 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
         let title = date.format("%B %d, %Y").to_string(); // e.g., "January 15, 2024"
         let month_index_name = Self::month_index_filename(date);
 
+        // Compute canonical paths for proper linking (workspace-relative)
+        let daily_prefix = config.daily_entry_folder.clone().unwrap_or_default();
+        let daily_prefix = daily_prefix.trim_start_matches('/').to_string(); // canonical has no leading slash
+
+        // Helper to join paths with slash, avoiding double slashes or empty segments
+        let join_path = |base: &str, part: &str| -> String {
+            if base.is_empty() {
+                part.to_string()
+            } else {
+                format!("{}/{}", base, part)
+            }
+        };
+
+        let year = date.format("%Y").to_string();
+        let month = date.format("%m").to_string();
+        let month_index_canonical = join_path(
+            &daily_prefix,
+            &format!("{}/{}/{}", year, month, month_index_name),
+        );
+
+        let entry_filename = format!("{}.md", date.format("%Y-%m-%d"));
+        let entry_canonical = join_path(
+            &daily_prefix,
+            &format!("{}/{}/{}", year, month, entry_filename),
+        );
+
         let context = TemplateContext::new()
             .with_title(&title)
             .with_date(*date)
-            .with_part_of(&month_index_name);
+            // Use configured link format for frontmatter links
+            .with_part_of(link_parser::format_link_with_format(
+                &month_index_canonical,
+                &link_parser::path_to_title(&month_index_name),
+                config.link_format,
+                &entry_canonical,
+            ));
 
         let content = template.render(&context);
         self.fs.create_new(&path, &content)?;
 
         // Add entry to month index contents
-        let date_str = date.format("%Y-%m-%d").to_string();
         let month_index_path = path.parent().unwrap().join(&month_index_name);
-        self.add_to_index_contents(&month_index_path, &format!("{}.md", date_str))?;
+
+        // Format the link according to config
+        let link = link_parser::format_link_with_format(
+            &entry_canonical,
+            &link_parser::path_to_title(&entry_filename),
+            config.link_format,
+            &month_index_canonical,
+        );
+
+        self.add_to_index_contents(&month_index_path, &link)?;
 
         Ok(path)
     }
@@ -1037,7 +1078,154 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
         }
 
         // Create the entry (create_new will fail if file exists)
+        // Check for duplicates before creating
+        if let Err(_e) = self.validate_daily_hierarchy(date, config) {
+            // Note: We just log validation errors for now during creation,
+            // as we want creation to succeed even if there are warnings.
+            // In the future this could be more aggressive.
+            // We use standard error output or logging mechanism.
+            // For now, since this returns Result, we won't fail here.
+        }
+
+        // Always ensure hierarchy exists and is correct
+        self.ensure_daily_index_hierarchy(date, config)?;
+
         self.create_dated_entry_with_template(date, config, template_name)
+    }
+
+    /// Validates the daily hierarchy for a given date.
+    /// Returns a list of strings (warnings) for any detached nodes or duplicates.
+    pub fn validate_daily_hierarchy(
+        &self,
+        date: &NaiveDate,
+        config: &Config,
+    ) -> Result<Vec<String>> {
+        let mut warnings = Vec::new();
+        let daily_dir = config.daily_entry_dir();
+
+        // 1. Check for duplicates
+        let duplicates = self.detect_duplicates(date, config)?;
+        for dup in duplicates {
+            warnings.push(format!("Duplicate folder found: {}", dup));
+        }
+
+        // 2. Check connections
+        let year = date.format("%Y").to_string();
+        let month = date.format("%m").to_string();
+
+        let daily_index_path = daily_dir.join("daily_index.md");
+        let year_dir = daily_dir.join(&year);
+        let year_index_path = year_dir.join(Self::year_index_filename(date));
+        let month_dir = year_dir.join(&month);
+        let _month_index_path = month_dir.join(Self::month_index_filename(date));
+
+        // Check daily index <-> year link
+        if self.fs.exists(&year_index_path) {
+            let year_index_name = Self::year_index_filename(date);
+            if self.fs.exists(&daily_index_path) {
+                let year_index_rel = format!("{}/{}", year, year_index_name);
+                let daily_content =
+                    self.get_frontmatter_property(&daily_index_path.to_string_lossy(), "contents")?;
+
+                let is_linked = match daily_content {
+                    Some(Value::Sequence(seq)) => {
+                        seq.iter().any(|v| v.as_str() == Some(&year_index_rel))
+                    }
+                    _ => false,
+                };
+
+                if !is_linked {
+                    warnings.push(format!(
+                        "Year index {} is not listed in daily_index.md contents",
+                        year
+                    ));
+                }
+            }
+        }
+
+        Ok(warnings)
+    }
+
+    /// Detects duplicate month/year folders.
+    /// Returns a list of paths that are duplicates of the canonical paths.
+    pub fn detect_duplicates(&self, date: &NaiveDate, config: &Config) -> Result<Vec<String>> {
+        let mut duplicates = Vec::new();
+        let daily_dir = config.daily_entry_dir();
+
+        // Check Year duplicates (e.g. "2024" vs "2024 (1)") - unlikely for year numbers but good to have
+        // Actually, more common is names vs numbers for months.
+
+        let year = date.format("%Y").to_string();
+        let month = date.format("%m").to_string(); // "01", "02"
+        let month_name = date.format("%B").to_string(); // "January"
+
+        // Canonical structure is daily_dir/YYYY/MM
+        let year_dir = daily_dir.join(&year);
+
+        // Check for month duplicates in year directory
+        if self.fs.exists(&year_dir) {
+            // Check if "January" exists alongside "01"
+            let named_month_path = year_dir.join(&month_name);
+            let _numbered_month_path = year_dir.join(&month);
+
+            // If we are using numbered months (default), check if named month exists
+            if self.fs.exists(&named_month_path) && month_name != month {
+                duplicates.push(named_month_path.to_string_lossy().to_string());
+            }
+        }
+
+        Ok(duplicates)
+    }
+
+    /// Merges duplicates into the canonical path.
+    /// Moves files from source to dest, then deletes source.
+    pub fn merge_duplicates(&self, from_path: &Path, to_path: &Path) -> Result<()> {
+        if !self.fs.exists(from_path) {
+            return Ok(());
+        }
+
+        self.fs.create_dir_all(to_path)?;
+
+        // Move all files
+        // Since list_all_files_recursive is async and we are in sync shim,
+        // we might need to rely on the underlying fs being efficient or implementation details.
+        // But wait, we are in DiaryxAppSync which holds FS: FileSystem (sync trait).
+        // The sync FileSystem trait has `list_files`.
+
+        // Basic merge strategy:
+        // 1. List files in from_path
+        // 2. Move each to to_path
+        // 3. Remove from_path
+
+        let entries = self.fs.list_files(from_path)?;
+        for entry in entries {
+            let file_name = entry.file_name().unwrap_or_default();
+            let dest = to_path.join(file_name);
+
+            if self.fs.is_dir(&entry) {
+                // Recursive merge
+                self.merge_duplicates(&entry, &dest)?;
+            } else {
+                // Move file
+                // If dest exists, we might overwrite or rename. For now, let's assume valid merge and overwrite or skip?
+                // Safest is to not overwrite if exists? But then we leave duplicates.
+                // Let's try to move.
+                if self.fs.exists(&dest) {
+                    // Conflict. Append timestamp?
+                    // Or just skip for now to be safe.
+                } else {
+                    self.fs.move_file(&entry, &dest)?;
+                }
+            }
+        }
+
+        // If directory is empty, remove it
+        let remaining = self.fs.list_files(from_path)?;
+        if remaining.is_empty() {
+            self.fs.delete_file(from_path)?;
+        }
+
+        Ok(())
     }
 
     /// Ensure the daily index hierarchy exists for a given date.
@@ -1048,12 +1236,37 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
         let year = date.format("%Y").to_string();
         let month = date.format("%m").to_string();
 
-        // Paths for each level
-        let daily_index_path = daily_dir.join("daily_index.md");
+        // Compute canonical paths for properly formatted linking (workspace-relative)
+        let daily_prefix = config.daily_entry_folder.clone().unwrap_or_default();
+        let daily_prefix = daily_prefix.trim_start_matches('/').to_string(); // canonical has no leading slash
+
+        // Helper to join paths with slash, avoiding double slashes or empty segments
+        // We use forward slashes for canonical paths even on Windows
+        let join_path = |base: &str, part: &str| -> String {
+            if base.is_empty() {
+                part.to_string()
+            } else {
+                format!("{}/{}", base, part)
+            }
+        };
+
+        let daily_index_filename = "daily_index.md";
+        let daily_index_canonical = join_path(&daily_prefix, daily_index_filename);
+        let daily_index_path = daily_dir.join(daily_index_filename);
+
+        let year_index_filename = Self::year_index_filename(date);
+        let year_index_canonical =
+            join_path(&daily_prefix, &format!("{}/{}", year, year_index_filename));
         let year_dir = daily_dir.join(&year);
-        let year_index_path = year_dir.join(Self::year_index_filename(date));
+        let year_index_path = year_dir.join(&year_index_filename);
+
+        let month_index_filename = Self::month_index_filename(date);
+        let month_index_canonical = join_path(
+            &daily_prefix,
+            &format!("{}/{}/{}", year, month, month_index_filename),
+        );
         let month_dir = year_dir.join(&month);
-        let month_index_path = month_dir.join(Self::month_index_filename(date));
+        let month_index_path = month_dir.join(&month_index_filename);
 
         // Create directories
         self.fs.create_dir_all(&month_dir)?;
@@ -1072,32 +1285,74 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
 
             // If we have a workspace root, add daily_index to its contents
             if let Some(ref root_rel) = part_of {
+                // Determine workspace root absolute path
                 let workspace_root = daily_dir.join(root_rel);
+
+                // We need canonical path of workspace root (which is empty string if it's root)
+                // or we rely on the fact that daily_index_canonical is already correct relative to it.
+                // format_link_with_format for linking TO daily_index FROM root.
+                // From root: current path is "" (or root index name).
+
+                // Let's deduce root canonical path.
+                // If daily_prefix is "Daily", then root is "".
+                let root_canonical = "";
+
                 if self.fs.exists(&workspace_root) {
-                    // Calculate relative path from workspace root to daily_index
-                    if let Some(daily_folder) = &config.daily_entry_folder {
-                        let daily_index_rel = format!("{}/daily_index.md", daily_folder);
-                        self.add_to_index_contents(&workspace_root, &daily_index_rel)?;
-                    }
+                    let link = link_parser::format_link_with_format(
+                        &daily_index_canonical,
+                        "Daily Index",
+                        config.link_format,
+                        root_canonical,
+                    );
+
+                    self.add_to_index_contents(&workspace_root, &link)?;
                 }
             }
         }
 
         // 2. Ensure year index exists
         if !self.fs.exists(&year_index_path) {
-            self.create_year_index(&year_index_path, date)?;
-            // Add year index to daily index contents
-            let year_index_rel = format!("{}/{}", year, Self::year_index_filename(date));
-            self.add_to_index_contents(&daily_index_path, &year_index_rel)?;
+            // Create link from Year Index TO Daily Index (part_of)
+            let part_of_link = link_parser::format_link_with_format(
+                &daily_index_canonical,
+                "Daily Index",
+                config.link_format,
+                &year_index_canonical,
+            );
+            self.create_year_index(&year_index_path, date, &part_of_link)?;
         }
+
+        // Ensure year index is in daily index contents
+        // Link from Daily Index TO Year Index
+        let link = link_parser::format_link_with_format(
+            &year_index_canonical,
+            &year,
+            config.link_format,
+            &daily_index_canonical,
+        );
+        self.add_to_index_contents(&daily_index_path, &link)?;
 
         // 3. Ensure month index exists
         if !self.fs.exists(&month_index_path) {
-            self.create_month_index(&month_index_path, date)?;
-            // Add month index to year index contents
-            let month_index_rel = format!("{}/{}", month, Self::month_index_filename(date));
-            self.add_to_index_contents(&year_index_path, &month_index_rel)?;
+            // Create link from Month Index TO Year Index (part_of)
+            let part_of_link = link_parser::format_link_with_format(
+                &year_index_canonical,
+                &year,
+                config.link_format,
+                &month_index_canonical,
+            );
+            self.create_month_index(&month_index_path, date, &part_of_link)?;
         }
+
+        // Ensure month index is in year index contents
+        // Link from Year Index TO Month Index
+        let link = link_parser::format_link_with_format(
+            &month_index_canonical,
+            &date.format("%B").to_string(), // Month name
+            config.link_format,
+            &year_index_canonical,
+        );
+        self.add_to_index_contents(&year_index_path, &link)?;
 
         Ok(())
     }
@@ -1137,7 +1392,7 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
     /// Create the root daily index file.
     fn create_daily_index(&self, path: &Path, part_of: Option<&str>) -> Result<()> {
         let part_of_line = match part_of {
-            Some(p) => format!("part_of: {}\n", p),
+            Some(p) => format!("part_of: \"{}\"\n", p),
             None => String::new(),
         };
 
@@ -1156,12 +1411,12 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
     }
 
     /// Create a year index file.
-    fn create_year_index(&self, path: &Path, date: &NaiveDate) -> Result<()> {
+    fn create_year_index(&self, path: &Path, date: &NaiveDate, part_of: &str) -> Result<()> {
         let year = date.format("%Y").to_string();
         let content = format!(
             "---\n\
             title: {year}\n\
-            part_of: ../daily_index.md\n\
+            part_of: \"{part_of}\"\n\
             contents: []\n\
             ---\n\n\
             # {year}\n\n\
@@ -1173,16 +1428,15 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
     }
 
     /// Create a month index file.
-    fn create_month_index(&self, path: &Path, date: &NaiveDate) -> Result<()> {
+    fn create_month_index(&self, path: &Path, date: &NaiveDate, part_of: &str) -> Result<()> {
         let year = date.format("%Y").to_string();
         let month_name = date.format("%B").to_string(); // e.g., "January"
         let title = format!("{} {}", month_name, year);
-        let year_index_name = Self::year_index_filename(date);
 
         let content = format!(
             "---\n\
             title: {title}\n\
-            part_of: ../{year_index_name}\n\
+            part_of: \"{part_of}\"\n\
             contents: []\n\
             ---\n\n\
             # {title}\n\n\
@@ -1457,5 +1711,90 @@ mod tests {
         assert!(content.starts_with("# Title"));
         assert!(content.contains("Line 1"));
         assert!(content.contains("Line 2"));
+    }
+
+    #[test]
+    fn test_ensure_daily_index_hierarchy_repairs_links() {
+        let fs = MockFileSystem::new();
+        // Use DiaryxAppSync since the method is on it
+        let app = DiaryxAppSync::new(fs.clone());
+        let config = Config::default();
+        let date = NaiveDate::from_ymd_opt(2025, 1, 15).unwrap();
+
+        // 1. Create partial hierarchy: Year index exists but NOT linked in Daily Index
+        let daily_dir = config.daily_entry_dir();
+        fs.create_dir_all(&daily_dir).unwrap();
+        app.create_daily_index(&daily_dir.join("daily_index.md"), None)
+            .unwrap();
+
+        let year_dir = daily_dir.join("2025");
+        fs.create_dir_all(&year_dir).unwrap();
+        app.create_year_index(&year_dir.join("2025_index.md"), &date, "../daily_index.md")
+            .unwrap();
+
+        // ensure_daily_index_hierarchy should fix the link
+        app.ensure_daily_index_hierarchy(&date, &config).unwrap();
+
+        // Verify link established
+        let daily_index_path = daily_dir.join("daily_index.md");
+        let daily_content_after = app
+            .get_frontmatter_property(daily_index_path.to_str().unwrap(), "contents")
+            .unwrap();
+        if let Some(Value::Sequence(seq)) = daily_content_after {
+            assert!(!seq.is_empty());
+            assert_eq!(seq[0].as_str(), Some("2025/2025_index.md"));
+        } else {
+            panic!("Contents should be a sequence");
+        }
+    }
+
+    #[test]
+    fn test_detect_duplicates() {
+        let fs = MockFileSystem::new();
+        let app = DiaryxAppSync::new(fs.clone());
+        let config = Config::default();
+        let date = NaiveDate::from_ymd_opt(2025, 1, 15).unwrap(); // January
+
+        // Create canonical hierarchy
+        let daily_dir = config.daily_entry_dir();
+        let year_dir = daily_dir.join("2025");
+        fs.create_dir_all(&year_dir).unwrap();
+
+        // Create duplicate "January" folder
+        let duplicate_dir = year_dir.join("January");
+        fs.create_dir_all(&duplicate_dir).unwrap();
+
+        // Run detection
+        let duplicates = app.detect_duplicates(&date, &config).unwrap();
+
+        assert_eq!(duplicates.len(), 1);
+        assert!(duplicates[0].ends_with("January"));
+    }
+
+    #[test]
+    fn test_merge_duplicates() {
+        let fs = MockFileSystem::new();
+        let app = DiaryxAppSync::new(fs.clone());
+
+        // Setup scenarios
+        let from_dir = Path::new("from_dir");
+        let to_dir = Path::new("to_dir");
+        fs.create_dir_all(from_dir).unwrap();
+
+        // Create file in from_dir
+        fs.write_file(&from_dir.join("note.md"), "content").unwrap();
+
+        // Run merge
+        app.merge_duplicates(from_dir, to_dir).unwrap();
+
+        // Verify
+        assert!(!fs.exists(from_dir));
+        assert!(fs.exists(to_dir));
+        assert!(fs.exists(&to_dir.join("note.md")));
+        assert_eq!(
+            fs.get_content(to_dir.join("note.md").to_str().unwrap())
+                .unwrap(),
+            "content"
+        );
     }
 }

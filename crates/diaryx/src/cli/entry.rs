@@ -111,6 +111,13 @@ pub fn handle_today(app: &CliDiaryxAppSync, template: Option<String>) -> bool {
 
     match parse_date("today") {
         Ok(date) => {
+            // Validate hierarchy and duplicate detection
+            if let Ok(warnings) = app.validate_daily_hierarchy(&date, &config) {
+                for warning in warnings {
+                    eprintln!("! Warning: {}", warning);
+                }
+            }
+
             match app.ensure_dated_entry_with_template(&date, &config, template.as_deref()) {
                 Ok(path) => {
                     println!("Opening: {}", path.display());
@@ -151,6 +158,13 @@ pub fn handle_yesterday(app: &CliDiaryxAppSync, template: Option<String>) -> boo
 
     match parse_date("yesterday") {
         Ok(date) => {
+            // Validate hierarchy and duplicate detection
+            if let Ok(warnings) = app.validate_daily_hierarchy(&date, &config) {
+                for warning in warnings {
+                    eprintln!("! Warning: {}", warning);
+                }
+            }
+
             match app.ensure_dated_entry_with_template(&date, &config, template.as_deref()) {
                 Ok(path) => {
                     println!("Opening: {}", path.display());

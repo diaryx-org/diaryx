@@ -1,27 +1,27 @@
 ---
 title: CRDT Synchronization
 description: Conflict-free replicated data types for real-time collaboration
-part_of: '[README](/crates/diaryx_core/src/README.md)'
+part_of: "[README](/crates/diaryx_core/src/README.md)"
 audience:
-- developers
+  - developers
 attachments:
-  - '[mod.rs](/crates/diaryx_core/src/crdt/mod.rs)'
-  - '[body_doc.rs](/crates/diaryx_core/src/crdt/body_doc.rs)'
-  - '[body_doc_manager.rs](/crates/diaryx_core/src/crdt/body_doc_manager.rs)'
-  - '[history.rs](/crates/diaryx_core/src/crdt/history.rs)'
-  - '[memory_storage.rs](/crates/diaryx_core/src/crdt/memory_storage.rs)'
-  - '[sqlite_storage.rs](/crates/diaryx_core/src/crdt/sqlite_storage.rs)'
-  - '[storage.rs](/crates/diaryx_core/src/crdt/storage.rs)'
-  - '[sync.rs](/crates/diaryx_core/src/crdt/sync.rs)'
-  - '[sync_client.rs](/crates/diaryx_core/src/crdt/sync_client.rs)'
-  - '[sync_handler.rs](/crates/diaryx_core/src/crdt/sync_handler.rs)'
-  - '[sync_manager.rs](/crates/diaryx_core/src/crdt/sync_manager.rs)'
-  - '[tokio_transport.rs](/crates/diaryx_core/src/crdt/tokio_transport.rs)'
-  - '[transport.rs](/crates/diaryx_core/src/crdt/transport.rs)'
-  - '[types.rs](/crates/diaryx_core/src/crdt/types.rs)'
-  - '[workspace_doc.rs](/crates/diaryx_core/src/crdt/workspace_doc.rs)'
+  - "[mod.rs](/crates/diaryx_core/src/crdt/mod.rs)"
+  - "[body_doc.rs](/crates/diaryx_core/src/crdt/body_doc.rs)"
+  - "[body_doc_manager.rs](/crates/diaryx_core/src/crdt/body_doc_manager.rs)"
+  - "[history.rs](/crates/diaryx_core/src/crdt/history.rs)"
+  - "[memory_storage.rs](/crates/diaryx_core/src/crdt/memory_storage.rs)"
+  - "[sqlite_storage.rs](/crates/diaryx_core/src/crdt/sqlite_storage.rs)"
+  - "[storage.rs](/crates/diaryx_core/src/crdt/storage.rs)"
+  - "[sync.rs](/crates/diaryx_core/src/crdt/sync.rs)"
+  - "[sync_client.rs](/crates/diaryx_core/src/crdt/sync_client.rs)"
+  - "[sync_handler.rs](/crates/diaryx_core/src/crdt/sync_handler.rs)"
+  - "[sync_manager.rs](/crates/diaryx_core/src/crdt/sync_manager.rs)"
+  - "[tokio_transport.rs](/crates/diaryx_core/src/crdt/tokio_transport.rs)"
+  - "[transport.rs](/crates/diaryx_core/src/crdt/transport.rs)"
+  - "[types.rs](/crates/diaryx_core/src/crdt/types.rs)"
+  - "[workspace_doc.rs](/crates/diaryx_core/src/crdt/workspace_doc.rs)"
 exclude:
-  - '*.lock'
+  - "*.lock"
 ---
 
 # CRDT Synchronization
@@ -78,6 +78,13 @@ The CRDT system has several layers, from low-level to high-level:
 5. **BodyDocManager** (`body_doc_manager.rs`): Manages multiple BodyDocs
 6. **SyncProtocol** (`sync.rs`): Y-sync protocol for Hocuspocus server
 7. **HistoryManager** (`history.rs`): Version history and time travel
+
+## Frontmatter timestamps
+
+When converting frontmatter to `FileMetadata`, the `updated` property is parsed
+as either a numeric timestamp (milliseconds) or an RFC3339/ISO8601 string, and
+mapped to `modified_at`. When writing frontmatter back to disk, `updated` is
+emitted as an RFC3339 string for readability.
 
 ## WorkspaceCrdt
 
@@ -156,6 +163,14 @@ doc.set_frontmatter("title", "My Note");
 let title = doc.get_frontmatter("title");
 doc.remove_frontmatter("audience");
 ```
+
+Body sync observer registration and per-update logs are emitted at trace level
+to avoid log spam during large downloads. Enable trace logging only when
+diagnosing body sync issues.
+
+BodyDoc sync observers are registered once per document. Repeated calls to
+`set_sync_callback` for the same doc are ignored to avoid duplicate observers
+and unnecessary overhead during bulk downloads.
 
 ## BodyDocManager
 
@@ -310,6 +325,10 @@ across all platforms. It uses a `SyncTransport` trait for platform abstraction:
           │   RustSyncManager    │
           └──────────────────────┘
 ```
+
+The `SyncManager` filters metadata-echo updates before returning
+`changed_files`, so `FilesChanged` events are suppressed for no-op metadata
+syncs that would otherwise trigger unnecessary UI refreshes.
 
 ### Native (CLI/Tauri)
 

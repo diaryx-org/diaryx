@@ -236,8 +236,25 @@ impl WorkspaceCrdt {
         };
 
         if !update.is_empty() {
+            log::info!(
+                "[WorkspaceCrdt] set_file: Appending {} bytes to storage for '{}' (path='{}')",
+                update.len(),
+                self.doc_name,
+                path
+            );
             self.storage
                 .append_update(&self.doc_name, &update, UpdateOrigin::Local)?;
+            log::info!(
+                "[WorkspaceCrdt] set_file: Append complete for '{}' (path='{}')",
+                self.doc_name,
+                path
+            );
+        } else {
+            log::debug!(
+                "[WorkspaceCrdt] set_file: No update to append for '{}' (path='{}', empty update)",
+                self.doc_name,
+                path
+            );
         }
         Ok(())
     }
@@ -786,6 +803,87 @@ impl WorkspaceCrdt {
         Ok(Some(update_id))
     }
 
+    /// Replace the entire CRDT state with the given state.
+    ///
+    /// This is used during initial sync when a new client receives the full state
+    /// from the server. Instead of merging (which can cause tombstoning), this
+    /// completely replaces the local state.
+    ///
+    /// **Important**: This method discards all local state and replaces it with
+    /// the provided state. Any local changes not synced will be lost.
+    ///
+    /// # Arguments
+    /// * `full_state` - The full CRDT state as a Y-update encoded in v1 format
+    /// * `origin` - The origin of the update (typically `UpdateOrigin::Sync`)
+    ///
+    /// # Returns
+    /// The update ID if the state was persisted to storage.
+    pub fn replace_state(
+        &mut self,
+        full_state: &[u8],
+        origin: UpdateOrigin,
+    ) -> StorageResult<Option<i64>> {
+        log::info!(
+            "[WorkspaceCrdt] replace_state: replacing {} bytes of state for '{}'",
+            full_state.len(),
+            self.doc_name
+        );
+
+        // Decode the incoming state
+        let incoming_update = Update::decode_v1(full_state)
+            .map_err(|e| DiaryxError::Unsupported(format!("Failed to decode state: {}", e)))?;
+
+        // Create a fresh document and apply the state
+        let new_doc = Doc::new();
+        {
+            let mut txn = new_doc.transact_mut();
+            txn.apply_update(incoming_update)
+                .map_err(|e| DiaryxError::Unsupported(format!("Failed to apply state: {}", e)))?;
+        }
+
+        // Get the new files map
+        let new_files_map = new_doc.get_or_insert_map(FILES_MAP_NAME);
+
+        // Capture state for event emission
+        let files_before: HashMap<String, FileMetadata> = if self.event_callback.is_some() {
+            self.list_files().into_iter().collect()
+        } else {
+            HashMap::new()
+        };
+
+        // Replace the document
+        self.doc = new_doc;
+        self.files_map = new_files_map;
+
+        // Capture state after replacement for events
+        let files_after: HashMap<String, FileMetadata> = if self.event_callback.is_some() {
+            self.list_files().into_iter().collect()
+        } else {
+            HashMap::new()
+        };
+
+        // Emit events for all changes
+        if self.event_callback.is_some() {
+            self.emit_diff_events(&files_before, &files_after, &[]);
+        }
+
+        log::info!(
+            "[WorkspaceCrdt] replace_state: complete. Files: {}",
+            self.file_count()
+        );
+
+        // Clear existing stored updates and save the new state
+        // This ensures we don't have conflicting history
+        self.storage.clear_updates(&self.doc_name)?;
+        self.storage.save_doc(&self.doc_name, full_state)?;
+
+        // Append the state as an update for history tracking
+        let update_id = self
+            .storage
+            .append_update(&self.doc_name, full_state, origin)?;
+        Ok(Some(update_id))
+    }
+
     /// Apply an update from a remote peer and return the list of changed file paths.
     ///
     /// This is like `apply_update` but returns the paths of files that changed,
@@ -801,6 +899,11 @@ impl WorkspaceCrdt {
     ) -> StorageResult<(Option<i64>, Vec<String>, Vec<(String, String)>)> {
         // Capture state before the update
         let files_before: HashMap<String, FileMetadata> = self.list_files().into_iter().collect();
+        log::info!(
+            "[WorkspaceCrdt] apply_update_tracking_changes BEFORE: {} files: {:?}",
+            files_before.len(),
+            files_before.keys().collect::<Vec<_>>()
+        );
 
         // Decode and apply the update
         let decoded = Update::decode_v1(update)
@@ -814,6 +917,14 @@ impl WorkspaceCrdt {
 
         // Capture state after the update
         let files_after: HashMap<String, FileMetadata> = self.list_files().into_iter().collect();
+        log::info!(
+            "[WorkspaceCrdt] apply_update_tracking_changes AFTER: {} files: {:?}",
+            files_after.len(),
+            files_after
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.deleted))
+                .collect::<Vec<_>>()
+        );
 
         // Detect doc-ID based renames: same key with different filename
         // In doc-ID mode, the key is a UUID and renames are just filename property updates
@@ -1203,7 +1314,7 @@ impl WorkspaceCrdt {
     /// Panics if unable to acquire transaction for observing.
     pub fn observe_updates<F>(&self, callback: F) -> yrs::Subscription
     where
-        F: Fn(&[u8]) + 'static,
+        F: Fn(&[u8]) + Send + Sync + 'static,
     {
         self.doc
             .observe_update_v1(move |_txn, event| {
@@ -1218,7 +1329,7 @@ impl WorkspaceCrdt {
     /// for each changed file.
     pub fn observe_files<F>(&self, callback: F) -> yrs::Subscription
     where
-        F: Fn(Vec<(String, Option<FileMetadata>)>) + 'static,
+        F: Fn(Vec<(String, Option<FileMetadata>)>) + Send + Sync + 'static,
     {
         self.files_map.observe(move |txn, event| {
             let changes: Vec<(String, Option<FileMetadata>)> = event
@@ -1468,21 +1579,20 @@ mod tests {
 
     #[test]
     fn test_observer_fires_on_change() {
-        use std::cell::RefCell;
-        use std::rc::Rc;
+        use std::sync::{Arc, Mutex};
 
         let crdt = create_test_crdt();
-        let changes = Rc::new(RefCell::new(Vec::new()));
-        let changes_clone = Rc::clone(&changes);
+        let changes = Arc::new(Mutex::new(Vec::new()));
+        let changes_clone = Arc::clone(&changes);
 
         let _sub = crdt.observe_files(move |file_changes| {
-            changes_clone.borrow_mut().extend(file_changes);
+            changes_clone.lock().unwrap().extend(file_changes);
         });
 
         crdt.set_file("test.md", FileMetadata::new(Some("Test".to_string())))
             .unwrap();
 
-        let captured = changes.borrow();
+        let captured = changes.lock().unwrap();
         assert_eq!(captured.len(), 1);
         assert_eq!(captured[0].0, "test.md");
     }

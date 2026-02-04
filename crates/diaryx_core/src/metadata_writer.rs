@@ -12,9 +12,14 @@
 //! - **Clickable** in editors like Obsidian
 //! - **Unambiguous** with workspace-root paths
 //! - **Self-documenting** with human-readable titles
+//!
+//! File writes use a temp + backup strategy to reduce the risk of partial
+//! frontmatter updates if the process is interrupted mid-write.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use chrono::TimeZone;
 
 use crate::error::{DiaryxError, Result};
 use crate::frontmatter;
@@ -40,6 +45,8 @@ pub struct FrontmatterMetadata {
     pub audience: Option<Vec<String>>,
     /// File description
     pub description: Option<String>,
+    /// Last modification timestamp (milliseconds since Unix epoch)
+    pub updated: Option<i64>,
     /// Additional frontmatter properties (excluding internal keys like _body)
     pub extra: HashMap<String, serde_json::Value>,
 }
@@ -165,6 +172,10 @@ impl FrontmatterMetadata {
             .and_then(|v| v.as_str())
             .map(String::from);
 
+        let updated = obj
+            .and_then(|o| o.get("modified_at"))
+            .and_then(|v| v.as_i64());
+
         // Extract extra properties, excluding internal keys
         let mut extra = HashMap::new();
         if let Some(extra_obj) = obj.and_then(|o| o.get("extra")).and_then(|v| v.as_object()) {
@@ -183,6 +194,7 @@ impl FrontmatterMetadata {
             attachments,
             audience,
             description,
+            updated,
             extra,
         }
     }
@@ -230,6 +242,17 @@ impl FrontmatterMetadata {
             lines.push("attachments:".to_string());
             for item in attachments {
                 lines.push(format!("  - {}", yaml_string(item)));
+            }
+        }
+
+        // Write updated timestamp if present (RFC3339 string)
+        if let Some(updated) = self.updated {
+            if let Some(dt) = chrono::Utc.timestamp_millis_opt(updated).single() {
+                let formatted = dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                lines.push(format!("updated: {}", yaml_string(&formatted)));
+            } else {
+                // Fallback to raw number if timestamp is invalid
+                lines.push(format!("updated: {}", updated));
             }
         }
 
@@ -355,12 +378,47 @@ pub async fn write_file_with_metadata_and_canonical_path<FS: AsyncFileSystem>(
         fs.create_dir_all(parent).await?;
     }
 
-    fs.write_file(path, &content)
+    // Recover from any previous interrupted write
+    recover_backup_if_needed(fs, path).await?;
+
+    let temp_path = temp_path_for(path);
+    let backup_path = backup_path_for(path);
+
+    if fs.exists(&temp_path).await {
+        let _ = fs.delete_file(&temp_path).await;
+    }
+
+    fs.write_file(&temp_path, &content)
         .await
         .map_err(|e| DiaryxError::FileWrite {
-            path: path.to_path_buf(),
+            path: temp_path.clone(),
             source: e,
         })?;
+
+    // Move existing file out of the way (backup) before swapping in the new content.
+    if fs.exists(path).await {
+        fs.move_file(path, &backup_path)
+            .await
+            .map_err(|e| DiaryxError::FileWrite {
+                path: backup_path.clone(),
+                source: e,
+            })?;
+    }
+
+    if let Err(e) = fs.move_file(&temp_path, path).await {
+        // Attempt to restore the backup if swap failed.
+        if fs.exists(&backup_path).await {
+            let _ = fs.move_file(&backup_path, path).await;
+        }
+        return Err(DiaryxError::FileWrite {
+            path: path.to_path_buf(),
+            source: e,
+        });
+    }
+
+    if fs.exists(&backup_path).await {
+        let _ = fs.delete_file(&backup_path).await;
+    }
 
     Ok(())
 }
@@ -392,7 +450,64 @@ pub async fn update_file_metadata<FS: AsyncFileSystem>(
         parsed.body
     };
 
-    write_file_with_metadata(fs, path, metadata, &body).await
+    // Preserve existing frontmatter fields when the incoming metadata omits them.
+    let mut merged_metadata = metadata.clone();
+    if let Some(obj) = merged_metadata.as_object_mut()
+        && let Ok(existing_content) = fs.read_to_string(path).await
+        && let Ok(parsed) = frontmatter::parse_or_empty(&existing_content)
+    {
+        let fm = &parsed.frontmatter;
+
+        let missing_contents = obj.get("contents").map(|v| v.is_null()).unwrap_or(true);
+        if missing_contents && let Some(seq) = fm.get("contents").and_then(|v| v.as_sequence()) {
+            let preserved: Vec<serde_json::Value> = seq
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| serde_json::Value::String(s.to_string())))
+                .collect();
+            obj.insert("contents".to_string(), serde_json::Value::Array(preserved));
+        }
+
+        let missing_part_of = obj.get("part_of").map(|v| v.is_null()).unwrap_or(true);
+        if missing_part_of && let Some(parent) = fm.get("part_of").and_then(|v| v.as_str()) {
+            obj.insert(
+                "part_of".to_string(),
+                serde_json::Value::String(parent.to_string()),
+            );
+        }
+    }
+
+    write_file_with_metadata(fs, path, &merged_metadata, &body).await
+}
+
+fn temp_path_for(path: &Path) -> PathBuf {
+    match path.file_name().and_then(|n| n.to_str()) {
+        Some(name) => path.with_file_name(format!("{}.tmp", name)),
+        None => path.with_extension("tmp"),
+    }
+}
+
+fn backup_path_for(path: &Path) -> PathBuf {
+    match path.file_name().and_then(|n| n.to_str()) {
+        Some(name) => path.with_file_name(format!("{}.bak", name)),
+        None => path.with_extension("bak"),
+    }
+}
+
+async fn recover_backup_if_needed<FS: AsyncFileSystem>(fs: &FS, path: &Path) -> Result<()> {
+    let backup_path = backup_path_for(path);
+    if fs.exists(&backup_path).await {
+        if !fs.exists(path).await {
+            fs.move_file(&backup_path, path)
+                .await
+                .map_err(|e| DiaryxError::FileWrite {
+                    path: path.to_path_buf(),
+                    source: e,
+                })?;
+        } else {
+            let _ = fs.delete_file(&backup_path).await;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -460,6 +575,7 @@ mod tests {
             audience: None,
             description: Some("A description".to_string()),
             attachments: None,
+            updated: None,
             extra: HashMap::new(),
         };
 
@@ -483,6 +599,7 @@ mod tests {
             audience: None,
             description: None,
             attachments: None,
+            updated: None,
             extra: HashMap::new(),
         };
 
@@ -504,6 +621,7 @@ mod tests {
             audience: None,
             description: None,
             attachments: None,
+            updated: None,
             extra: HashMap::new(),
         };
 
@@ -591,6 +709,7 @@ mod tests {
             audience: None,
             description: None,
             attachments: None,
+            updated: None,
             extra: HashMap::new(),
         };
 

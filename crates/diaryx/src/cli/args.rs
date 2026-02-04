@@ -753,6 +753,25 @@ pub enum WorkspaceCommands {
         #[arg(short = 'y', long)]
         yes: bool,
     },
+
+    /// Combine contents of two index files
+    /// Merges contents and body of source into target, then deletes source
+    #[command(alias = "merge")]
+    Combine {
+        /// Source index file (will be deleted)
+        source: String,
+
+        /// Target index file (will receive contents)
+        target: String,
+
+        /// Skip confirmation prompts
+        #[arg(short = 'y', long)]
+        yes: bool,
+
+        /// Show what would be done without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]

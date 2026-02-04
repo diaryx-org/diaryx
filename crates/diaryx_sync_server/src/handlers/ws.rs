@@ -1,6 +1,6 @@
 use crate::auth::validate_token;
 use crate::db::AuthRepo;
-use crate::sync::{ClientConnection, ControlMessage, SessionContext, SyncState};
+use crate::sync::{ClientConnection, ClientInitState, ControlMessage, SessionContext, SyncState};
 use axum::{
     extract::{
         Query, State,
@@ -358,6 +358,9 @@ async fn handle_authenticated_socket(
         room.clone(),
     );
 
+    // Generate unique client ID for tracking handshake state
+    let client_id = format!("{}:{}", user_id, device_id);
+
     // Subscribe to control messages for progress updates
     let mut control_rx = room.subscribe_control();
 
@@ -368,20 +371,63 @@ async fn handle_authenticated_socket(
         room.connection_count()
     );
 
-    // Send initial sync (full state)
-    let initial_state = connection.get_initial_sync().await;
-    info!(
-        "METADATA sending initial state: {} bytes to user={}",
-        initial_state.len(),
-        user_id
-    );
-    if let Err(e) = ws_tx.send(Message::Binary(initial_state.into())).await {
-        error!("Failed to send initial state: {}", e);
-        return;
-    }
-
     // Track initial sync completion for this connection
     let mut initial_sync_complete = false;
+
+    // Track whether we're using the files-ready handshake
+    let mut using_handshake = false;
+
+    // Check if we need to use the files-ready handshake.
+    // We determine this when we receive the client's first SyncStep1 message,
+    // which contains their state vector. For now, send file manifest for clients
+    // connecting to workspaces that have existing files.
+    let server_file_count = room.get_file_count().await;
+    if server_file_count > 0 {
+        // Server has files - check if this might be a new client
+        // We'll use the handshake for safety on first connection
+        info!(
+            "METADATA: workspace has {} files, sending file manifest to client {}",
+            server_file_count, client_id
+        );
+
+        // Generate and send file manifest
+        let manifest = room.generate_file_manifest().await;
+        let manifest_msg = ControlMessage::FileManifest {
+            files: manifest,
+            client_is_new: true, // Assume new client; they can skip handshake if they have data
+        };
+
+        if let Ok(json) = serde_json::to_string(&manifest_msg) {
+            if let Err(e) = ws_tx.send(Message::Text(json.into())).await {
+                error!("Failed to send file manifest: {}", e);
+                room.remove_client_init_state(&client_id).await;
+                return;
+            }
+            using_handshake = true;
+            room.set_client_init_state(&client_id, ClientInitState::AwaitingFilesReady)
+                .await;
+            info!(
+                "METADATA: sent file manifest with {} files to client {}",
+                server_file_count, client_id
+            );
+        }
+    }
+
+    // If not using handshake, send initial sync immediately (legacy behavior)
+    if !using_handshake {
+        let initial_state = connection.get_initial_sync().await;
+        info!(
+            "METADATA sending initial state (no handshake): {} bytes to user={}",
+            initial_state.len(),
+            user_id
+        );
+        if let Err(e) = ws_tx.send(Message::Binary(initial_state.into())).await {
+            error!("Failed to send initial state: {}", e);
+            return;
+        }
+        room.set_client_init_state(&client_id, ClientInitState::Synchronized)
+            .await;
+    }
 
     // Handle bidirectional communication
     loop {
@@ -390,6 +436,17 @@ async fn handle_authenticated_socket(
             Some(msg) = ws_rx.next() => {
                 match msg {
                     Ok(Message::Binary(data)) => {
+                        // Check if client has completed handshake
+                        let client_state = room.get_client_init_state(&client_id).await;
+                        if client_state != ClientInitState::Synchronized {
+                            // Client hasn't completed handshake yet - don't process Y-sync messages
+                            warn!(
+                                "METADATA: received binary message from {} before handshake complete, state={:?}",
+                                client_id, client_state
+                            );
+                            continue;
+                        }
+
                         // Y-sync message format:
                         // Byte 0: msg_type::SYNC (0)
                         // Byte 1: sync_type - STEP1 (0), STEP2 (1), or UPDATE (2)
@@ -424,6 +481,30 @@ async fn handle_authenticated_socket(
                             }
                         }
                     }
+                    Ok(Message::Text(text)) => {
+                        // Handle text messages (control messages from client)
+                        if let Ok(ctrl_msg) = serde_json::from_str::<ControlMessage>(&text) {
+                            match ctrl_msg {
+                                ControlMessage::FilesReady => {
+                                    // Client has downloaded files, send CRDT state
+                                    info!("METADATA: received FilesReady from {}", client_id);
+                                    if let Some(crdt_state_msg) = room.handle_files_ready(&client_id).await {
+                                        if let Ok(json) = serde_json::to_string(&crdt_state_msg) {
+                                            if let Err(e) = ws_tx.send(Message::Text(json.into())).await {
+                                                error!("Failed to send CRDT state: {}", e);
+                                                break;
+                                            }
+                                            info!("METADATA: sent CrdtState to {}", client_id);
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    // Other control messages from client - ignore for now
+                                    debug!("METADATA: received control message from {}: {:?}", client_id, ctrl_msg);
+                                }
+                            }
+                        }
+                    }
                     Ok(Message::Ping(data)) => {
                         if let Err(e) = ws_tx.send(Message::Pong(data)).await {
                             error!("Failed to send pong: {}", e);
@@ -444,9 +525,13 @@ async fn handle_authenticated_socket(
 
             // Handle broadcast messages from other clients
             Some(broadcast_msg) = connection.recv_broadcast() => {
-                if let Err(e) = ws_tx.send(Message::Binary(broadcast_msg.into())).await {
-                    error!("Failed to send broadcast: {}", e);
-                    break;
+                // Only forward broadcasts if client has completed handshake
+                let client_state = room.get_client_init_state(&client_id).await;
+                if client_state == ClientInitState::Synchronized {
+                    if let Err(e) = ws_tx.send(Message::Binary(broadcast_msg.into())).await {
+                        error!("Failed to send broadcast: {}", e);
+                        break;
+                    }
                 }
             }
 
@@ -479,6 +564,9 @@ async fn handle_authenticated_socket(
             else => break,
         }
     }
+
+    // Clean up client init state on disconnect
+    room.remove_client_init_state(&client_id).await;
 
     info!(
         "WebSocket disconnected: user={}, workspace={}",
@@ -523,6 +611,9 @@ async fn handle_session_socket(
         room.clone(),
     );
 
+    // Use guest_id as client_id for tracking handshake state
+    let client_id = guest_id.clone();
+
     // Subscribe to control messages
     let mut control_rx = room.subscribe_control();
 
@@ -552,16 +643,56 @@ async fn handle_session_socket(
         return;
     }
 
-    // Send initial sync (full state)
-    let initial_state = connection.get_initial_sync().await;
-    if let Err(e) = ws_tx.send(Message::Binary(initial_state.into())).await {
-        error!("Failed to send initial state: {}", e);
-        room.remove_guest(&guest_id).await;
-        return;
-    }
-
     // Track if session ended
     let mut session_ended = false;
+
+    // Track whether we're using the files-ready handshake
+    let mut using_handshake = false;
+
+    // Check if we need to use the files-ready handshake (for guests joining a workspace with files)
+    let server_file_count = room.get_file_count().await;
+    if server_file_count > 0 {
+        // Server has files - use handshake to prevent tombstoning
+        info!(
+            "Session: workspace has {} files, sending file manifest to guest {}",
+            server_file_count, client_id
+        );
+
+        // Generate and send file manifest
+        let manifest = room.generate_file_manifest().await;
+        let manifest_msg = ControlMessage::FileManifest {
+            files: manifest,
+            client_is_new: true, // Guests are always "new" to the workspace
+        };
+
+        if let Ok(json) = serde_json::to_string(&manifest_msg) {
+            if let Err(e) = ws_tx.send(Message::Text(json.into())).await {
+                error!("Failed to send file manifest: {}", e);
+                room.remove_guest(&guest_id).await;
+                room.remove_client_init_state(&client_id).await;
+                return;
+            }
+            using_handshake = true;
+            room.set_client_init_state(&client_id, ClientInitState::AwaitingFilesReady)
+                .await;
+            info!(
+                "Session: sent file manifest with {} files to guest {}",
+                server_file_count, client_id
+            );
+        }
+    }
+
+    // If not using handshake, send initial sync immediately (legacy behavior)
+    if !using_handshake {
+        let initial_state = connection.get_initial_sync().await;
+        if let Err(e) = ws_tx.send(Message::Binary(initial_state.into())).await {
+            error!("Failed to send initial state: {}", e);
+            room.remove_guest(&guest_id).await;
+            return;
+        }
+        room.set_client_init_state(&client_id, ClientInitState::Synchronized)
+            .await;
+    }
 
     // Handle bidirectional communication
     loop {
@@ -570,6 +701,17 @@ async fn handle_session_socket(
             Some(msg) = ws_rx.next() => {
                 match msg {
                     Ok(Message::Binary(data)) => {
+                        // Check if client has completed handshake
+                        let client_state = room.get_client_init_state(&client_id).await;
+                        if client_state != ClientInitState::Synchronized {
+                            // Client hasn't completed handshake yet - don't process Y-sync messages
+                            warn!(
+                                "Session: received binary message from {} before handshake complete, state={:?}",
+                                client_id, client_state
+                            );
+                            continue;
+                        }
+
                         // Check read-only mode for updates
                         if room.is_read_only() {
                             // In read-only mode, only allow sync step 1 (state vector request)
@@ -583,6 +725,30 @@ async fn handle_session_socket(
                             if let Err(e) = ws_tx.send(Message::Binary(response.into())).await {
                                 error!("Failed to send response: {}", e);
                                 break;
+                            }
+                        }
+                    }
+                    Ok(Message::Text(text)) => {
+                        // Handle text messages (control messages from client)
+                        if let Ok(ctrl_msg) = serde_json::from_str::<ControlMessage>(&text) {
+                            match ctrl_msg {
+                                ControlMessage::FilesReady => {
+                                    // Client has downloaded files, send CRDT state
+                                    info!("Session: received FilesReady from {}", client_id);
+                                    if let Some(crdt_state_msg) = room.handle_files_ready(&client_id).await {
+                                        if let Ok(json) = serde_json::to_string(&crdt_state_msg) {
+                                            if let Err(e) = ws_tx.send(Message::Text(json.into())).await {
+                                                error!("Failed to send CRDT state: {}", e);
+                                                break;
+                                            }
+                                            info!("Session: sent CrdtState to {}", client_id);
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    // Other control messages from client - ignore for now
+                                    debug!("Session: received control message from {}: {:?}", client_id, ctrl_msg);
+                                }
                             }
                         }
                     }
@@ -606,9 +772,13 @@ async fn handle_session_socket(
 
             // Handle broadcast messages from other clients
             Some(broadcast_msg) = connection.recv_broadcast() => {
-                if let Err(e) = ws_tx.send(Message::Binary(broadcast_msg.into())).await {
-                    error!("Failed to send broadcast: {}", e);
-                    break;
+                // Only forward broadcasts if client has completed handshake
+                let client_state = room.get_client_init_state(&client_id).await;
+                if client_state == ClientInitState::Synchronized {
+                    if let Err(e) = ws_tx.send(Message::Binary(broadcast_msg.into())).await {
+                        error!("Failed to send broadcast: {}", e);
+                        break;
+                    }
                 }
             }
 
@@ -647,6 +817,9 @@ async fn handle_session_socket(
             else => break,
         }
     }
+
+    // Clean up client init state on disconnect
+    room.remove_client_init_state(&client_id).await;
 
     // Remove guest from the room (only if session didn't end - if it ended, guests are already cleared)
     if !session_ended {
@@ -877,6 +1050,16 @@ async fn handle_session_body_socket(
     state.sync_state.maybe_remove_room(&workspace_id).await;
 }
 
+/// Focus control message from client
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum FocusControlMessage {
+    /// Client wants to focus on files
+    Focus { files: Vec<String> },
+    /// Client wants to unfocus files
+    Unfocus { files: Vec<String> },
+}
+
 /// Handle a multiplexed body document WebSocket connection.
 ///
 /// This handler uses a single WebSocket for all body syncs in a workspace.
@@ -884,6 +1067,12 @@ async fn handle_session_body_socket(
 /// they belong to.
 ///
 /// Message framing format: `[varUint(pathLen)] [pathBytes (UTF-8)] [message]`
+///
+/// Focus control messages (JSON text):
+/// - `{"type": "focus", "files": ["path/to/doc.md"]}`
+/// - `{"type": "unfocus", "files": ["path/to/doc.md"]}`
+///
+/// Server broadcasts `focus_list_changed` when the global focus list changes.
 async fn handle_multiplexed_body_socket(
     socket: WebSocket,
     state: WsState,
@@ -908,6 +1097,9 @@ async fn handle_multiplexed_body_socket(
     // Subscribe to ALL body broadcasts (not filtered by file)
     let mut body_rx = room.subscribe_all_bodies();
 
+    // Subscribe to control messages (for focus_list_changed)
+    let mut control_rx = room.subscribe_control();
+
     // Track which files this client is subscribed to
     let mut subscribed_files: HashSet<String> = HashSet::new();
 
@@ -916,6 +1108,17 @@ async fn handle_multiplexed_body_socket(
     let mut messages_processed = 0usize;
     let mut last_new_subscription = std::time::Instant::now();
     let mut initial_sync_complete_sent = false;
+
+    // Send current focus list on connect
+    let current_focus = room.get_focus_list().await;
+    if !current_focus.is_empty() {
+        let focus_msg = ControlMessage::FocusListChanged {
+            files: current_focus,
+        };
+        if let Ok(json) = serde_json::to_string(&focus_msg) {
+            let _ = ws_tx.send(Message::Text(json.into())).await;
+        }
+    }
 
     // Handle bidirectional communication
     loop {
@@ -971,6 +1174,23 @@ async fn handle_multiplexed_body_socket(
                             }
                         }
                     }
+                    Ok(Message::Text(text)) => {
+                        // Handle focus control messages (JSON)
+                        match serde_json::from_str::<FocusControlMessage>(&text) {
+                            Ok(FocusControlMessage::Focus { files }) => {
+                                debug!("Client {} focusing on {} files", client_id, files.len());
+                                room.focus_files(&client_id, &files).await;
+                            }
+                            Ok(FocusControlMessage::Unfocus { files }) => {
+                                debug!("Client {} unfocusing {} files", client_id, files.len());
+                                room.unfocus_files(&client_id, &files).await;
+                            }
+                            Err(e) => {
+                                // Not a focus message, might be other control message - ignore
+                                debug!("Unrecognized text message from {}: {}", client_id, e);
+                            }
+                        }
+                    }
                     Ok(Message::Ping(data)) => {
                         if let Err(e) = ws_tx.send(Message::Pong(data)).await {
                             error!("Failed to send pong: {}", e);
@@ -1011,6 +1231,27 @@ async fn handle_multiplexed_body_socket(
                 }
             }
 
+            // Handle control messages (focus_list_changed, etc.)
+            result = control_rx.recv() => {
+                match result {
+                    Ok(control_msg) => {
+                        // Forward all control messages as JSON
+                        if let Ok(json) = serde_json::to_string(&control_msg) {
+                            if let Err(e) = ws_tx.send(Message::Text(json.into())).await {
+                                error!("Failed to send control message: {}", e);
+                                break;
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("Control message receiver lagged {} messages", n);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        break;
+                    }
+                }
+            }
+
             // Low priority: check for initial sync completion after quiet period
             _ = tokio::time::sleep(tokio::time::Duration::from_secs(3)) => {
                 // If we have subscriptions and no new ones for 3+ seconds, send SyncComplete
@@ -1036,10 +1277,13 @@ async fn handle_multiplexed_body_socket(
         }
     }
 
-    // Cleanup: unsubscribe from all files
+    // Cleanup: unsubscribe from all files and clear focus
     for file_path in &subscribed_files {
         room.unsubscribe_body(file_path, &client_id).await;
     }
+
+    // Clean up focus entries for this client
+    room.client_disconnected_focus(&client_id).await;
 
     info!(
         "Multiplexed body sync disconnected: workspace={}, user={}, files={}",

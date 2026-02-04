@@ -2617,7 +2617,7 @@ pub async fn start_websocket_sync<R: Runtime>(
             let _ = app_handle.emit("sync-status-changed", status);
         }
         SyncEvent::FilesChanged { paths } => {
-            log::info!("[start_websocket_sync] Files changed: {:?}", paths);
+            log::debug!("[start_websocket_sync] Files changed: {:?}", paths);
             let _ = app_handle.emit("sync-files-changed", paths);
         }
         SyncEvent::BodyChanged { path, content: _ } => {

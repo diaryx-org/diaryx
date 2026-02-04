@@ -178,6 +178,8 @@ enum ControlMessage {
         #[serde(default)]
         peer_count: usize,
     },
+    /// Focus list changed - files that any client is focused on
+    FocusListChanged { files: Vec<String> },
     /// Catch-all for other message types
     #[serde(other)]
     Other,
@@ -366,6 +368,26 @@ pub fn handle_push(config: &Config, workspace_root: &Path) {
             Ok(0) => println!("  Metadata already up to date"),
             Ok(_) => println!("  Pushed metadata"),
             Err(e) => eprintln!("  Failed to push metadata: {}", e),
+        }
+
+        // Get list of all files to push
+        let files_to_push: Vec<String> = workspace_crdt
+            .list_files()
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect();
+
+        // Send focus message to notify other clients which files we're pushing
+        if !files_to_push.is_empty() {
+            if let Err(e) = send_focus_message(&body_url, &files_to_push).await {
+                // Non-fatal - continue with push even if focus fails
+                eprintln!("  Warning: Failed to send focus notification: {}", e);
+            } else {
+                println!("  Notified {} files for sync", files_to_push.len());
+            }
+
+            // Brief delay to let focus propagate to other connected clients
+            tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
         }
 
         // Connect and push bodies
@@ -597,6 +619,12 @@ async fn run_sync_loop(
                                         ControlMessage::PeerLeft { peer_count } => {
                                             println!("\r\x1b[K  Peer left ({} connected)", peer_count);
                                         }
+                                        ControlMessage::FocusListChanged { files } => {
+                                            // Log focus list changes (typically handled by body connection)
+                                            if !files.is_empty() {
+                                                println!("\r\x1b[K  Focus list updated: {} files", files.len());
+                                            }
+                                        }
                                         ControlMessage::Other => {}
                                     }
                                 }
@@ -765,6 +793,13 @@ async fn run_sync_loop(
                                         }
                                         ControlMessage::PeerJoined { .. } | ControlMessage::PeerLeft { .. } => {
                                             // Handled by metadata connection
+                                        }
+                                        ControlMessage::FocusListChanged { files } => {
+                                            // Focus list changed - could subscribe to newly focused files
+                                            // For continuous sync, we're already syncing all files
+                                            if !files.is_empty() {
+                                                log::debug!("Focus list changed: {} files focused", files.len());
+                                            }
                                         }
                                         ControlMessage::Other => {}
                                     }
@@ -1009,6 +1044,30 @@ async fn do_one_shot_body_sync(
     ws.close(None).await?;
     // Return the relevant count based on mode
     Ok(if pull { pull_count } else { push_count })
+}
+
+/// Send a focus message to notify other clients which files we're about to sync.
+///
+/// This opens a temporary WebSocket connection, sends a focus message, and closes.
+/// Other clients will receive a `focus_list_changed` notification and can subscribe
+/// to the focused files.
+async fn send_focus_message(
+    body_url: &str,
+    files: &[String],
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let (mut ws, _) = connect_async(body_url).await?;
+
+    let focus_msg = serde_json::json!({
+        "type": "focus",
+        "files": files
+    });
+    ws.send(Message::Text(focus_msg.to_string().into())).await?;
+
+    // Brief delay to ensure message is processed before closing
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    ws.close(None).await?;
+    Ok(())
 }
 
 #[cfg(test)]

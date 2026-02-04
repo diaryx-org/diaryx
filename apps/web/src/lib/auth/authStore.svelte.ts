@@ -8,9 +8,21 @@
  * - Auto-connect to sync server when logged in
  */
 
-import { AuthService, createAuthService, type User, type Workspace, type Device, AuthError, type UserHasDataResponse } from './authService';
-import { setAuthToken, setCollaborationServer, setCollaborationWorkspaceId } from '../crdt';
-import { collaborationStore } from '@/models/stores/collaborationStore.svelte';
+import {
+  AuthService,
+  createAuthService,
+  type User,
+  type Workspace,
+  type Device,
+  AuthError,
+  type UserHasDataResponse,
+} from "./authService";
+import {
+  setAuthToken,
+  setCollaborationServer,
+  setCollaborationWorkspaceId,
+} from "../crdt";
+import { collaborationStore } from "@/models/stores/collaborationStore.svelte";
 
 // ============================================================================
 // Types
@@ -31,9 +43,9 @@ export interface AuthState {
 // ============================================================================
 
 const STORAGE_KEYS = {
-  TOKEN: 'diaryx_auth_token',
-  SERVER_URL: 'diaryx_sync_server_url',
-  USER: 'diaryx_user',
+  TOKEN: "diaryx_auth_token",
+  SERVER_URL: "diaryx_sync_server_url",
+  USER: "diaryx_user",
 } as const;
 
 // ============================================================================
@@ -69,7 +81,7 @@ export function getUser(): User | null {
 }
 
 export function getToken(): string | null {
-  if (typeof localStorage === 'undefined') return null;
+  if (typeof localStorage === "undefined") return null;
   return localStorage.getItem(STORAGE_KEYS.TOKEN);
 }
 
@@ -78,7 +90,11 @@ export function getServerUrl(): string | null {
 }
 
 export function getDefaultWorkspace(): Workspace | null {
-  return state.workspaces.find(w => w.name === 'default') ?? state.workspaces[0] ?? null;
+  return (
+    state.workspaces.find((w) => w.name === "default") ??
+    state.workspaces[0] ??
+    null
+  );
 }
 
 // ============================================================================
@@ -89,7 +105,7 @@ export function getDefaultWorkspace(): Workspace | null {
  * Initialize auth state from localStorage.
  */
 export async function initAuth(): Promise<void> {
-  if (typeof localStorage === 'undefined') return;
+  if (typeof localStorage === "undefined") return;
 
   const serverUrl = localStorage.getItem(STORAGE_KEYS.SERVER_URL);
   const token = localStorage.getItem(STORAGE_KEYS.TOKEN);
@@ -126,7 +142,8 @@ export async function initAuth(): Promise<void> {
 
       // Update collaboration settings
       setAuthToken(token);
-      const defaultWorkspace = me.workspaces.find(w => w.name === 'default') ?? me.workspaces[0];
+      const defaultWorkspace =
+        me.workspaces.find((w) => w.name === "default") ?? me.workspaces[0];
       if (defaultWorkspace) {
         setCollaborationWorkspaceId(defaultWorkspace.id);
       }
@@ -136,7 +153,7 @@ export async function initAuth(): Promise<void> {
 
       // Update sync status to show we're ready to connect
       // The actual connection will happen when workspace CRDT initializes
-      collaborationStore.setSyncStatus('idle');
+      collaborationStore.setSyncStatus("idle");
 
       // Save user for faster restore next time
       localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(me.user));
@@ -146,11 +163,11 @@ export async function initAuth(): Promise<void> {
         await logout();
       } else {
         // Network error - keep user logged in with cached data
-        console.warn('[AuthStore] Failed to validate token:', err);
+        console.warn("[AuthStore] Failed to validate token:", err);
         if (savedUser) {
           state.isAuthenticated = true;
           collaborationStore.setEnabled(true);
-          collaborationStore.setSyncStatus('idle');
+          collaborationStore.setSyncStatus("idle");
         }
       }
     } finally {
@@ -180,9 +197,11 @@ export function setServerUrl(url: string | null): void {
 /**
  * Request a magic link.
  */
-export async function requestMagicLink(email: string): Promise<{ success: boolean; devLink?: string }> {
+export async function requestMagicLink(
+  email: string,
+): Promise<{ success: boolean; devLink?: string }> {
   if (!authService) {
-    throw new Error('Server URL not configured');
+    throw new Error("Server URL not configured");
   }
 
   state.isLoading = true;
@@ -192,7 +211,8 @@ export async function requestMagicLink(email: string): Promise<{ success: boolea
     const response = await authService.requestMagicLink(email);
     return { success: true, devLink: response.dev_link };
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to send magic link';
+    const message =
+      err instanceof Error ? err.message : "Failed to send magic link";
     state.error = message;
     throw err;
   } finally {
@@ -205,7 +225,7 @@ export async function requestMagicLink(email: string): Promise<{ success: boolea
  */
 export async function verifyMagicLink(token: string): Promise<void> {
   if (!authService) {
-    throw new Error('Server URL not configured');
+    throw new Error("Server URL not configured");
   }
 
   state.isLoading = true;
@@ -234,7 +254,8 @@ export async function verifyMagicLink(token: string): Promise<void> {
     // Fetch full user info (workspaces, devices)
     await refreshUserInfo();
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to verify magic link';
+    const message =
+      err instanceof Error ? err.message : "Failed to verify magic link";
     state.error = message;
     throw err;
   } finally {
@@ -256,12 +277,13 @@ export async function refreshUserInfo(): Promise<void> {
     state.devices = me.devices;
 
     // Update workspace ID
-    const defaultWorkspace = me.workspaces.find(w => w.name === 'default') ?? me.workspaces[0];
+    const defaultWorkspace =
+      me.workspaces.find((w) => w.name === "default") ?? me.workspaces[0];
     if (defaultWorkspace) {
       setCollaborationWorkspaceId(defaultWorkspace.id);
     }
   } catch (err) {
-    console.error('[AuthStore] Failed to refresh user info:', err);
+    console.error("[AuthStore] Failed to refresh user info:", err);
   }
 }
 
@@ -340,47 +362,47 @@ export async function deleteAccount(): Promise<void> {
  * Convert HTTP URL to WebSocket URL with /sync endpoint.
  */
 function toWebSocketUrl(httpUrl: string): string {
-  return httpUrl
-    .replace(/^https:\/\//, 'wss://')
-    .replace(/^http:\/\//, 'ws://')
-    + '/sync';
+  return (
+    httpUrl.replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://") +
+    "/sync"
+  );
 }
 
 function getDeviceName(): string {
-  if (typeof navigator === 'undefined') return 'Unknown';
+  if (typeof navigator === "undefined") return "Unknown";
 
   const ua = navigator.userAgent;
 
   // Check for common browsers/platforms
-  if (ua.includes('Chrome')) {
-    if (ua.includes('Android')) return 'Chrome (Android)';
-    if (ua.includes('iPhone') || ua.includes('iPad')) return 'Chrome (iOS)';
-    if (ua.includes('Windows')) return 'Chrome (Windows)';
-    if (ua.includes('Mac')) return 'Chrome (Mac)';
-    if (ua.includes('Linux')) return 'Chrome (Linux)';
-    return 'Chrome';
+  if (ua.includes("Chrome")) {
+    if (ua.includes("Android")) return "Chrome (Android)";
+    if (ua.includes("iPhone") || ua.includes("iPad")) return "Chrome (iOS)";
+    if (ua.includes("Windows")) return "Chrome (Windows)";
+    if (ua.includes("Mac")) return "Chrome (Mac)";
+    if (ua.includes("Linux")) return "Chrome (Linux)";
+    return "Chrome";
   }
-  if (ua.includes('Firefox')) {
-    if (ua.includes('Android')) return 'Firefox (Android)';
-    if (ua.includes('Windows')) return 'Firefox (Windows)';
-    if (ua.includes('Mac')) return 'Firefox (Mac)';
-    if (ua.includes('Linux')) return 'Firefox (Linux)';
-    return 'Firefox';
+  if (ua.includes("Firefox")) {
+    if (ua.includes("Android")) return "Firefox (Android)";
+    if (ua.includes("Windows")) return "Firefox (Windows)";
+    if (ua.includes("Mac")) return "Firefox (Mac)";
+    if (ua.includes("Linux")) return "Firefox (Linux)";
+    return "Firefox";
   }
-  if (ua.includes('Safari') && !ua.includes('Chrome')) {
-    if (ua.includes('iPhone')) return 'Safari (iPhone)';
-    if (ua.includes('iPad')) return 'Safari (iPad)';
-    if (ua.includes('Mac')) return 'Safari (Mac)';
-    return 'Safari';
+  if (ua.includes("Safari") && !ua.includes("Chrome")) {
+    if (ua.includes("iPhone")) return "Safari (iPhone)";
+    if (ua.includes("iPad")) return "Safari (iPad)";
+    if (ua.includes("Mac")) return "Safari (Mac)";
+    return "Safari";
   }
-  if (ua.includes('Tauri')) {
-    if (ua.includes('Windows')) return 'Diaryx (Windows)';
-    if (ua.includes('Mac')) return 'Diaryx (Mac)';
-    if (ua.includes('Linux')) return 'Diaryx (Linux)';
-    return 'Diaryx Desktop';
+  if (ua.includes("Tauri")) {
+    if (ua.includes("Windows")) return "Diaryx (Windows)";
+    if (ua.includes("Mac")) return "Diaryx (Mac)";
+    if (ua.includes("Linux")) return "Diaryx (Linux)";
+    return "Diaryx Desktop";
   }
 
-  return 'Web Browser';
+  return "Web Browser";
 }
 
 /**
@@ -395,7 +417,50 @@ export async function checkUserHasData(): Promise<UserHasDataResponse | null> {
   try {
     return await authService.checkUserHasData(token);
   } catch (err) {
-    console.error('[AuthStore] Failed to check user data:', err);
+    console.error("[AuthStore] Failed to check user data:", err);
+    return null;
+  }
+}
+
+/**
+ * Download a workspace snapshot zip from the server.
+ */
+export async function downloadWorkspaceSnapshot(
+  workspaceId: string,
+): Promise<Blob | null> {
+  const token = getToken();
+  const url = state.serverUrl;
+  if (!token || !url || !authService) return null;
+
+  try {
+    return await authService.downloadWorkspaceSnapshot(token, workspaceId);
+  } catch (err) {
+    console.error("[AuthStore] Failed to download snapshot:", err);
+    return null;
+  }
+}
+
+/**
+ * Upload a workspace snapshot zip to the server.
+ */
+export async function uploadWorkspaceSnapshot(
+  workspaceId: string,
+  snapshot: Blob,
+  mode: "replace" | "merge" = "replace",
+): Promise<{ files_imported: number } | null> {
+  const token = getToken();
+  const url = state.serverUrl;
+  if (!token || !url || !authService) return null;
+
+  try {
+    return await authService.uploadWorkspaceSnapshot(
+      token,
+      workspaceId,
+      snapshot,
+      mode,
+    );
+  } catch (err) {
+    console.error("[AuthStore] Failed to upload snapshot:", err);
     return null;
   }
 }

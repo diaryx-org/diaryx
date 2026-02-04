@@ -7,7 +7,7 @@
  * Message framing format: [varUint(pathLen)] [pathBytes (UTF-8)] [message]
  */
 
-import type { Backend } from '../backend/interface';
+import type { Backend } from "../backend/interface";
 
 /**
  * Configuration for the multiplexed body sync transport.
@@ -30,7 +30,12 @@ export interface MultiplexedBodySyncOptions {
   /** Callback when sync_complete is received from server. */
   onSyncComplete?: (filesSynced: number) => void;
   /** Callback for unsubscribed file messages (allows applying updates for files not actively open). */
-  onUnsubscribedMessage?: (filePath: string, message: Uint8Array) => Promise<void>;
+  onUnsubscribedMessage?: (
+    filePath: string,
+    message: Uint8Array,
+  ) => Promise<void>;
+  /** Callback when focus list changes (files that any client is focused on). */
+  onFocusListChanged?: (files: string[]) => void;
 }
 
 /**
@@ -74,6 +79,9 @@ export class MultiplexedBodySync {
   /** Pending messages to send when connection is established */
   private pendingMessages = new Map<string, Uint8Array[]>();
 
+  /** Files this client is currently focused on */
+  private focusedFiles = new Set<string>();
+
   constructor(options: MultiplexedBodySyncOptions) {
     this.options = options;
   }
@@ -85,13 +93,13 @@ export class MultiplexedBodySync {
     if (this.destroyed || this.ws) return;
 
     const url = this.buildUrl();
-    console.log('[MultiplexedBodySync] Connecting to', url);
+    console.log("[MultiplexedBodySync] Connecting to", url);
 
     this.ws = new WebSocket(url);
-    this.ws.binaryType = 'arraybuffer';
+    this.ws.binaryType = "arraybuffer";
 
     this.ws.onopen = async () => {
-      console.log('[MultiplexedBodySync] Connected');
+      console.log("[MultiplexedBodySync] Connected");
       this.reconnectAttempts = 0;
       this.options.onStatusChange?.(true);
 
@@ -103,15 +111,24 @@ export class MultiplexedBodySync {
 
       // Flush any queued messages that were waiting for connection
       if (this.pendingMessages.size > 0) {
-        console.log(`[MultiplexedBodySync] Flushing ${this.pendingMessages.size} queued file(s)`);
+        console.log(
+          `[MultiplexedBodySync] Flushing ${this.pendingMessages.size} queued file(s)`,
+        );
         for (const [filePath, messages] of this.pendingMessages) {
           for (const msg of messages) {
             const framed = this.frameMessage(filePath, msg);
             this.ws!.send(framed);
-            console.log(`[MultiplexedBodySync] Sent queued message for ${filePath}, ${msg.length} bytes`);
+            console.log(
+              `[MultiplexedBodySync] Sent queued message for ${filePath}, ${msg.length} bytes`,
+            );
           }
         }
         this.pendingMessages.clear();
+      }
+
+      // Resend focus list after reconnect (server clears focus on disconnect)
+      if (this.focusedFiles.size > 0) {
+        this.sendFocusMessage(Array.from(this.focusedFiles));
       }
     };
 
@@ -119,14 +136,18 @@ export class MultiplexedBodySync {
       if (this.destroyed) return;
 
       // Handle text messages (JSON control messages) separately from binary
-      if (typeof event.data === 'string') {
+      if (typeof event.data === "string") {
         try {
           const msg = JSON.parse(event.data);
-          if (msg.type === 'sync_progress') {
-            console.log(`[MultiplexedBodySync] Sync progress: ${msg.completed}/${msg.total}`);
+          if (msg.type === "sync_progress") {
+            console.log(
+              `[MultiplexedBodySync] Sync progress: ${msg.completed}/${msg.total}`,
+            );
             this.options.onProgress?.(msg.completed, msg.total);
-          } else if (msg.type === 'sync_complete') {
-            console.log(`[MultiplexedBodySync] Sync complete: ${msg.files_synced} files`);
+          } else if (msg.type === "sync_complete") {
+            console.log(
+              `[MultiplexedBodySync] Sync complete: ${msg.files_synced} files`,
+            );
             this.options.onSyncComplete?.(msg.files_synced);
             // Mark all subscribed files as synced and notify
             // Note: Files that haven't received data will still be marked synced
@@ -134,14 +155,24 @@ export class MultiplexedBodySync {
             for (const [filePath, callbacks] of this.fileCallbacks) {
               if (!callbacks.synced) {
                 callbacks.synced = true;
-                console.log(`[MultiplexedBodySync] Marking ${filePath} synced (receivedData: ${callbacks.receivedData})`);
+                console.log(
+                  `[MultiplexedBodySync] Marking ${filePath} synced (receivedData: ${callbacks.receivedData})`,
+                );
                 callbacks.onSynced?.();
                 callbacks.syncedResolver?.();
               }
             }
+          } else if (msg.type === "focus_list_changed") {
+            console.log(
+              `[MultiplexedBodySync] Focus list changed: ${msg.files?.length ?? 0} files`,
+            );
+            this.options.onFocusListChanged?.(msg.files ?? []);
           }
         } catch (e) {
-          console.warn('[MultiplexedBodySync] Failed to parse control message:', e);
+          console.warn(
+            "[MultiplexedBodySync] Failed to parse control message:",
+            e,
+          );
         }
         return;
       }
@@ -151,7 +182,7 @@ export class MultiplexedBodySync {
       // Unframe: read file path prefix
       const unframed = this.unframeMessage(data);
       if (!unframed.filePath) {
-        console.warn('[MultiplexedBodySync] Invalid framed message');
+        console.warn("[MultiplexedBodySync] Invalid framed message");
         return;
       }
 
@@ -164,14 +195,24 @@ export class MultiplexedBodySync {
       } else if (this.options.onUnsubscribedMessage) {
         // Handle messages for files we're not actively subscribed to
         // This ensures updates from other clients are applied even if the file isn't open
-        console.log(`[MultiplexedBodySync] Received message for unsubscribed file: ${unframed.filePath}, forwarding to handler`);
+        console.log(
+          `[MultiplexedBodySync] Received message for unsubscribed file: ${unframed.filePath}, forwarding to handler`,
+        );
         try {
-          await this.options.onUnsubscribedMessage(unframed.filePath, unframed.message);
+          await this.options.onUnsubscribedMessage(
+            unframed.filePath,
+            unframed.message,
+          );
         } catch (err) {
-          console.warn(`[MultiplexedBodySync] Failed to handle unsubscribed message for ${unframed.filePath}:`, err);
+          console.warn(
+            `[MultiplexedBodySync] Failed to handle unsubscribed message for ${unframed.filePath}:`,
+            err,
+          );
         }
       } else {
-        console.log(`[MultiplexedBodySync] Dropped message for unsubscribed file: ${unframed.filePath} (no handler)`);
+        console.log(
+          `[MultiplexedBodySync] Dropped message for unsubscribed file: ${unframed.filePath} (no handler)`,
+        );
       }
     };
 
@@ -184,7 +225,7 @@ export class MultiplexedBodySync {
     };
 
     this.ws.onerror = (e) => {
-      console.error('[MultiplexedBodySync] Error:', e);
+      console.error("[MultiplexedBodySync] Error:", e);
     };
   }
 
@@ -196,7 +237,7 @@ export class MultiplexedBodySync {
   async subscribe(
     filePath: string,
     onMessage: (msg: Uint8Array) => Promise<void>,
-    onSynced?: () => void
+    onSynced?: () => void,
   ): Promise<void> {
     // Create a promise that resolves when this file's sync completes
     let syncedResolver: () => void;
@@ -238,7 +279,7 @@ export class MultiplexedBodySync {
       await Promise.race([
         callbacks.syncedPromise,
         new Promise<void>((_, reject) =>
-          setTimeout(() => reject(new Error('Sync timeout')), timeoutMs)
+          setTimeout(() => reject(new Error("Sync timeout")), timeoutMs),
         ),
       ]);
       return true;
@@ -263,7 +304,7 @@ export class MultiplexedBodySync {
       await Promise.race([
         Promise.all(promises),
         new Promise<void>((_, reject) =>
-          setTimeout(() => reject(new Error('Sync timeout')), timeoutMs)
+          setTimeout(() => reject(new Error("Sync timeout")), timeoutMs),
         ),
       ]);
       return true;
@@ -298,13 +339,17 @@ export class MultiplexedBodySync {
         this.pendingMessages.set(filePath, []);
       }
       this.pendingMessages.get(filePath)!.push(message);
-      console.log(`[MultiplexedBodySync] Queued message for ${filePath} (not connected), ${message.length} bytes`);
+      console.log(
+        `[MultiplexedBodySync] Queued message for ${filePath} (not connected), ${message.length} bytes`,
+      );
       return;
     }
 
     const framed = this.frameMessage(filePath, message);
     this.ws.send(framed);
-    console.log(`[MultiplexedBodySync] Sent message for ${filePath}, ${message.length} bytes`);
+    console.log(
+      `[MultiplexedBodySync] Sent message for ${filePath}, ${message.length} bytes`,
+    );
   }
 
   /**
@@ -325,7 +370,9 @@ export class MultiplexedBodySync {
    * Get sync status for a specific file.
    * Returns null if not subscribed.
    */
-  getFileSyncStatus(filePath: string): { receivedData: boolean; synced: boolean } | null {
+  getFileSyncStatus(
+    filePath: string,
+  ): { receivedData: boolean; synced: boolean } | null {
     const callbacks = this.fileCallbacks.get(filePath);
     if (!callbacks) return null;
     return {
@@ -337,7 +384,11 @@ export class MultiplexedBodySync {
   /**
    * Get counts of files by sync status.
    */
-  getSyncStatusCounts(): { total: number; synced: number; receivedData: number } {
+  getSyncStatusCounts(): {
+    total: number;
+    synced: number;
+    receivedData: number;
+  } {
     let synced = 0;
     let receivedData = 0;
     for (const callbacks of this.fileCallbacks.values()) {
@@ -361,13 +412,78 @@ export class MultiplexedBodySync {
       this.reconnectTimeout = null;
     }
     if (this.ws) {
-      this.ws.close(1000, 'Client destroying');
+      this.ws.close(1000, "Client destroying");
       this.ws = null;
     }
     this.fileCallbacks.clear();
     this.pendingSubscriptions.clear();
     this.pendingMessages.clear();
     this.options.onStatusChange?.(false);
+  }
+
+  // =========================================================================
+  // Focus API - Focus-based sync subscription
+  // =========================================================================
+
+  /**
+   * Focus on specific files for sync.
+   *
+   * Sends a focus message to the server indicating which files the client
+   * is currently interested in syncing. Other clients will receive a
+   * `focus_list_changed` notification and can subscribe to sync updates
+   * for these files.
+   *
+   * Call this when a file is opened in the editor.
+   *
+   * @param filePaths - Array of file paths to focus on
+   */
+  focus(filePaths: string[]): void {
+    // Track focused files locally so we can resend on reconnect
+    for (const filePath of filePaths) {
+      this.focusedFiles.add(filePath);
+    }
+
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.warn(
+        "[MultiplexedBodySync] Cannot send focus message: not connected",
+      );
+      return;
+    }
+
+    this.sendFocusMessage(filePaths);
+  }
+
+  /**
+   * Unfocus specific files.
+   *
+   * Sends an unfocus message to the server indicating the client is no
+   * longer interested in syncing these files.
+   *
+   * Call this when a file is closed in the editor.
+   *
+   * @param filePaths - Array of file paths to unfocus
+   */
+  unfocus(filePaths: string[]): void {
+    // Update local focus state
+    for (const filePath of filePaths) {
+      this.focusedFiles.delete(filePath);
+    }
+
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.warn(
+        "[MultiplexedBodySync] Cannot send unfocus message: not connected",
+      );
+      return;
+    }
+
+    const unfocusMsg = JSON.stringify({
+      type: "unfocus",
+      files: filePaths,
+    });
+    this.ws.send(unfocusMsg);
+    console.log(
+      `[MultiplexedBodySync] Sent unfocus for ${filePaths.length} files`,
+    );
   }
 
   // =========================================================================
@@ -381,14 +497,14 @@ export class MultiplexedBodySync {
     let url = this.options.serverUrl;
 
     // Add workspace ID
-    if (!url.includes('?')) {
+    if (!url.includes("?")) {
       url += `?doc=${encodeURIComponent(this.options.workspaceId)}`;
     } else {
       url += `&doc=${encodeURIComponent(this.options.workspaceId)}`;
     }
 
     // Add multiplexed=true to enable multiplexed body sync mode
-    url += '&multiplexed=true';
+    url += "&multiplexed=true";
 
     // Add auth token if provided
     if (this.options.authToken) {
@@ -411,7 +527,9 @@ export class MultiplexedBodySync {
     const pathBytes = new TextEncoder().encode(filePath);
     const pathLen = this.encodeVarUint(pathBytes.length);
 
-    const result = new Uint8Array(pathLen.length + pathBytes.length + message.length);
+    const result = new Uint8Array(
+      pathLen.length + pathBytes.length + message.length,
+    );
     result.set(pathLen, 0);
     result.set(pathBytes, pathLen.length);
     result.set(message, pathLen.length + pathBytes.length);
@@ -421,7 +539,10 @@ export class MultiplexedBodySync {
   /**
    * Unframe a message to extract file path and payload.
    */
-  private unframeMessage(data: Uint8Array): { filePath: string | null; message: Uint8Array } {
+  private unframeMessage(data: Uint8Array): {
+    filePath: string | null;
+    message: Uint8Array;
+  } {
     const { value: pathLen, bytesRead } = this.decodeVarUint(data);
     if (pathLen === null || bytesRead + pathLen > data.length) {
       return { filePath: null, message: new Uint8Array(0) };
@@ -441,7 +562,7 @@ export class MultiplexedBodySync {
   private encodeVarUint(num: number): Uint8Array {
     const bytes: number[] = [];
     while (num >= 0x80) {
-      bytes.push((num & 0x7F) | 0x80);
+      bytes.push((num & 0x7f) | 0x80);
       num >>>= 7;
     }
     bytes.push(num);
@@ -451,7 +572,10 @@ export class MultiplexedBodySync {
   /**
    * Decode a variable-length unsigned integer.
    */
-  private decodeVarUint(data: Uint8Array): { value: number | null; bytesRead: number } {
+  private decodeVarUint(data: Uint8Array): {
+    value: number | null;
+    bytesRead: number;
+  } {
     let value = 0;
     let shift = 0;
     let bytesRead = 0;
@@ -459,7 +583,7 @@ export class MultiplexedBodySync {
     for (let i = 0; i < data.length && shift < 35; i++) {
       const byte = data[i];
       bytesRead++;
-      value |= (byte & 0x7F) << shift;
+      value |= (byte & 0x7f) << shift;
       if ((byte & 0x80) === 0) {
         return { value, bytesRead };
       }
@@ -476,22 +600,25 @@ export class MultiplexedBodySync {
     try {
       // Initialize body sync in Rust
       await this.options.backend.execute({
-        type: 'InitBodySync' as any,
+        type: "InitBodySync" as any,
         params: { doc_name: filePath },
       } as any);
 
       // Get SyncStep1 message
       const response = await this.options.backend.execute({
-        type: 'CreateBodySyncStep1' as any,
+        type: "CreateBodySyncStep1" as any,
         params: { doc_name: filePath },
       } as any);
 
-      if ((response.type as string) === 'Binary' && (response as any).data) {
+      if ((response.type as string) === "Binary" && (response as any).data) {
         const bytes = new Uint8Array((response as any).data);
         this.send(filePath, bytes);
       }
     } catch (error) {
-      console.error(`[MultiplexedBodySync] Failed to send SyncStep1 for ${filePath}:`, error);
+      console.error(
+        `[MultiplexedBodySync] Failed to send SyncStep1 for ${filePath}:`,
+        error,
+      );
     }
   }
 
@@ -500,7 +627,7 @@ export class MultiplexedBodySync {
    */
   private scheduleReconnect(): void {
     if (this.destroyed || this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.log('[MultiplexedBodySync] Max reconnect attempts reached');
+      console.log("[MultiplexedBodySync] Max reconnect attempts reached");
       return;
     }
 
@@ -508,11 +635,28 @@ export class MultiplexedBodySync {
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 32000);
     this.reconnectAttempts++;
 
-    console.log(`[MultiplexedBodySync] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
+    console.log(
+      `[MultiplexedBodySync] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`,
+    );
 
     this.reconnectTimeout = setTimeout(() => {
       this.reconnectTimeout = null;
       this.connect();
     }, delay);
+  }
+
+  private sendFocusMessage(filePaths: string[]): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    const focusMsg = JSON.stringify({
+      type: "focus",
+      files: filePaths,
+    });
+    this.ws.send(focusMsg);
+    console.log(
+      `[MultiplexedBodySync] Sent focus for ${filePaths.length} files`,
+    );
   }
 }

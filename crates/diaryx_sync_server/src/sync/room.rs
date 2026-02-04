@@ -1,13 +1,78 @@
 use diaryx_core::crdt::{BodyDocManager, SqliteStorage, SyncMessage, UpdateOrigin, WorkspaceCrdt};
+use diaryx_core::metadata_writer::FrontmatterMetadata;
+use diaryx_core::{frontmatter, link_parser};
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::io::{Cursor, Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::{RwLock, broadcast};
 use tracing::{debug, error, info, warn};
+use zip::write::FileOptions;
+use zip::{CompressionMethod, ZipWriter};
+
+#[derive(Debug)]
+pub enum SnapshotError {
+    Zip(std::io::Error),
+    Json(serde_json::Error),
+    Storage(String),
+    Parse(String),
+    ZipFormat(zip::result::ZipError),
+}
+
+impl From<std::io::Error> for SnapshotError {
+    fn from(error: std::io::Error) -> Self {
+        SnapshotError::Zip(error)
+    }
+}
+
+impl From<serde_json::Error> for SnapshotError {
+    fn from(error: serde_json::Error) -> Self {
+        SnapshotError::Json(error)
+    }
+}
+
+impl From<diaryx_core::error::DiaryxError> for SnapshotError {
+    fn from(error: diaryx_core::error::DiaryxError) -> Self {
+        SnapshotError::Storage(error.to_string())
+    }
+}
+
+impl From<zip::result::ZipError> for SnapshotError {
+    fn from(error: zip::result::ZipError) -> Self {
+        SnapshotError::ZipFormat(error)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotImportMode {
+    Replace,
+    Merge,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SnapshotImportResult {
+    pub files_imported: usize,
+}
+
+/// File metadata for the initial sync handshake.
+/// This is a lightweight version of FileMetadata for the manifest.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManifestFileEntry {
+    /// Document ID (key in the CRDT)
+    pub doc_id: String,
+    /// Filename on disk
+    pub filename: String,
+    /// Optional title
+    pub title: Option<String>,
+    /// Parent document ID (for hierarchy)
+    pub part_of: Option<String>,
+    /// Whether the file is deleted
+    pub deleted: bool,
+}
 
 /// Control messages for session management
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,6 +97,27 @@ pub enum ControlMessage {
     /// Initial sync has completed - all data has been exchanged
     SyncComplete {
         files_synced: usize,
+    },
+    /// Focus list has changed - clients should sync these files
+    FocusListChanged {
+        files: Vec<String>,
+    },
+    /// Server sends file manifest to client during initial sync handshake.
+    /// Client should download these files before CRDT sync begins.
+    FileManifest {
+        /// List of files in the workspace
+        files: Vec<ManifestFileEntry>,
+        /// Whether the client has existing data that could conflict
+        client_is_new: bool,
+    },
+    /// Client signals that files from manifest have been downloaded.
+    /// Server will then send the full CRDT state.
+    FilesReady,
+    /// Server sends full CRDT state after FilesReady.
+    /// Client should replace (not merge) their CRDT state with this.
+    CrdtState {
+        /// Base64-encoded CRDT state
+        state: String,
     },
 }
 
@@ -208,6 +294,17 @@ impl SyncState {
     }
 }
 
+/// Client initialization state for the files-ready handshake.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientInitState {
+    /// Client is awaiting file manifest (new connection)
+    AwaitingManifest,
+    /// Server sent manifest, waiting for FilesReady from client
+    AwaitingFilesReady,
+    /// Client completed handshake, normal sync in progress
+    Synchronized,
+}
+
 /// A sync room for a single workspace
 pub struct SyncRoom {
     #[allow(dead_code)]
@@ -239,6 +336,12 @@ pub struct SyncRoom {
     body_subscriptions: RwLock<HashMap<String, HashSet<String>>>,
     /// Files synced counter for progress tracking (reset on new sync session)
     files_synced: AtomicUsize,
+    /// Files that clients are focused on (file_path -> client_ids)
+    /// Unlike subscriptions, focus is shared: all clients sync files ANY client is focused on
+    focus_list: RwLock<HashMap<String, HashSet<String>>>,
+    /// Per-client initialization state for the files-ready handshake.
+    /// Tracks whether each client has completed the handshake before receiving CRDT state.
+    client_init_states: RwLock<HashMap<String, ClientInitState>>,
 }
 
 impl SyncRoom {
@@ -275,6 +378,8 @@ impl SyncRoom {
             last_responses: RwLock::new(HashMap::new()),
             body_subscriptions: RwLock::new(HashMap::new()),
             files_synced: AtomicUsize::new(0),
+            focus_list: RwLock::new(HashMap::new()),
+            client_init_states: RwLock::new(HashMap::new()),
         })
     }
 
@@ -304,7 +409,130 @@ impl SyncRoom {
             last_responses: RwLock::new(HashMap::new()),
             body_subscriptions: RwLock::new(HashMap::new()),
             files_synced: AtomicUsize::new(0),
+            focus_list: RwLock::new(HashMap::new()),
+            client_init_states: RwLock::new(HashMap::new()),
         }
+    }
+
+    fn resolve_snapshot_path(value: &str, id_to_path: &HashMap<String, String>) -> Option<String> {
+        if value.contains('/') || value.ends_with(".md") {
+            Some(value.to_string())
+        } else {
+            id_to_path.get(value).cloned()
+        }
+    }
+
+    fn parse_updated_value(value: &serde_yaml::Value) -> Option<i64> {
+        if let Some(num) = value.as_i64() {
+            return Some(num);
+        }
+
+        if let Some(num) = value.as_f64() {
+            return Some(num as i64);
+        }
+
+        if let Some(raw) = value.as_str() {
+            if let Ok(num) = raw.parse::<i64>() {
+                return Some(num);
+            }
+
+            if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(raw) {
+                return Some(parsed.timestamp_millis());
+            }
+        }
+
+        None
+    }
+
+    fn parse_snapshot_markdown(
+        path: &str,
+        content: &str,
+    ) -> Result<(diaryx_core::crdt::FileMetadata, String), SnapshotError> {
+        let parsed = frontmatter::parse_or_empty(content)
+            .map_err(|e| SnapshotError::Parse(e.to_string()))?;
+        let fm = &parsed.frontmatter;
+        let body = parsed.body;
+        let file_path = std::path::Path::new(path);
+
+        let filename = file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+
+        let part_of = fm.get("part_of").and_then(|v| v.as_str()).map(|raw| {
+            let parsed = link_parser::parse_link(raw);
+            link_parser::to_canonical(&parsed, file_path)
+        });
+
+        let contents = fm.get("contents").and_then(|v| {
+            v.as_sequence().map(|seq| {
+                seq.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|raw| {
+                        let parsed = link_parser::parse_link(raw);
+                        link_parser::to_canonical(&parsed, file_path)
+                    })
+                    .collect::<Vec<String>>()
+            })
+        });
+
+        let audience = fm.get("audience").and_then(|v| {
+            v.as_sequence().map(|seq| {
+                seq.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect::<Vec<String>>()
+            })
+        });
+
+        let description = fm
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let attachments = fm
+            .get("attachments")
+            .and_then(|v| {
+                v.as_sequence().map(|seq| {
+                    seq.iter()
+                        .filter_map(|v| v.as_str())
+                        .map(|raw| {
+                            let parsed = link_parser::parse_link(raw);
+                            let canonical = link_parser::to_canonical(&parsed, file_path);
+                            diaryx_core::crdt::BinaryRef {
+                                path: canonical,
+                                source: "local".to_string(),
+                                hash: String::new(),
+                                mime_type: String::new(),
+                                size: 0,
+                                uploaded_at: None,
+                                deleted: false,
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .unwrap_or_default();
+
+        let modified_at = fm
+            .get("updated")
+            .and_then(Self::parse_updated_value)
+            .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+
+        let metadata = diaryx_core::crdt::FileMetadata {
+            filename,
+            title: fm.get("title").and_then(|v| v.as_str()).map(String::from),
+            part_of,
+            contents,
+            attachments,
+            deleted: fm.get("deleted").and_then(|v| v.as_bool()).unwrap_or(false),
+            audience,
+            description,
+            extra: HashMap::new(),
+            modified_at,
+        };
+
+        Ok((metadata, body))
     }
 
     /// Subscribe to room updates
@@ -579,6 +807,107 @@ impl SyncRoom {
         SyncMessage::SyncStep1(sv).encode()
     }
 
+    // ==================== Files-Ready Handshake Operations ====================
+
+    /// Get the client initialization state for a specific client.
+    pub async fn get_client_init_state(&self, client_id: &str) -> ClientInitState {
+        let states = self.client_init_states.read().await;
+        states
+            .get(client_id)
+            .copied()
+            .unwrap_or(ClientInitState::AwaitingManifest)
+    }
+
+    /// Set the client initialization state.
+    pub async fn set_client_init_state(&self, client_id: &str, state: ClientInitState) {
+        let mut states = self.client_init_states.write().await;
+        states.insert(client_id.to_string(), state);
+    }
+
+    /// Remove client initialization state (on disconnect).
+    pub async fn remove_client_init_state(&self, client_id: &str) {
+        let mut states = self.client_init_states.write().await;
+        states.remove(client_id);
+    }
+
+    /// Generate a file manifest for a new client.
+    ///
+    /// This returns a list of files in the workspace that the client needs
+    /// to download before CRDT sync begins. The manifest is sent as the first
+    /// step of the files-ready handshake.
+    pub async fn generate_file_manifest(&self) -> Vec<ManifestFileEntry> {
+        let workspace = self.workspace.read().await;
+        let files = workspace.list_files();
+
+        files
+            .into_iter()
+            .map(|(doc_id, meta)| ManifestFileEntry {
+                doc_id,
+                filename: meta.filename.clone(),
+                title: meta.title.clone(),
+                part_of: meta.part_of.clone(),
+                deleted: meta.deleted,
+            })
+            .collect()
+    }
+
+    /// Check if a client should use the files-ready handshake.
+    ///
+    /// Returns true if:
+    /// - The server has existing files (non-empty workspace)
+    /// - The client's state vector indicates they have no data (empty or very small)
+    ///
+    /// This prevents the tombstoning issue where a new client with empty CRDT
+    /// merges with a full workspace and marks all files as deleted.
+    pub async fn should_use_handshake(&self, client_state_vector: &[u8]) -> bool {
+        let workspace = self.workspace.read().await;
+        let server_file_count = workspace.file_count();
+
+        // If server has no files, no handshake needed
+        if server_file_count == 0 {
+            return false;
+        }
+
+        // If client state vector is empty or very small, they need the handshake
+        // A proper state vector for a workspace with files is at least 10+ bytes
+        client_state_vector.len() < 10
+    }
+
+    /// Get the CRDT state for initial sync after files are ready.
+    ///
+    /// This returns the full CRDT state as a base64-encoded string,
+    /// suitable for sending via the CrdtState control message.
+    pub async fn get_crdt_state_for_handshake(&self) -> String {
+        let workspace = self.workspace.read().await;
+        let state = workspace.encode_state_as_update();
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(&state)
+    }
+
+    /// Handle the FilesReady message from a client.
+    ///
+    /// Transitions the client to Synchronized state and returns the
+    /// CrdtState control message to send.
+    pub async fn handle_files_ready(&self, client_id: &str) -> Option<ControlMessage> {
+        let current_state = self.get_client_init_state(client_id).await;
+
+        if current_state != ClientInitState::AwaitingFilesReady {
+            warn!(
+                "Client {} sent FilesReady in unexpected state: {:?}",
+                client_id, current_state
+            );
+            return None;
+        }
+
+        // Transition to synchronized
+        self.set_client_init_state(client_id, ClientInitState::Synchronized)
+            .await;
+
+        // Return the CRDT state
+        let state = self.get_crdt_state_for_handshake().await;
+        Some(ControlMessage::CrdtState { state })
+    }
+
     /// Save the room state to storage
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // The workspace auto-saves on updates, but we can force a save here
@@ -764,6 +1093,246 @@ impl SyncRoom {
     pub async fn get_file_count(&self) -> usize {
         let workspace = self.workspace.read().await;
         workspace.file_count()
+    }
+
+    /// Export a workspace snapshot as a zip archive (markdown only).
+    ///
+    /// This dumps the current workspace metadata + body content into
+    /// markdown files with frontmatter. Attachments are not included.
+    pub async fn export_snapshot_zip(&self) -> Result<Vec<u8>, SnapshotError> {
+        let workspace = self.workspace.read().await;
+        let files = workspace.list_files();
+
+        let mut id_to_path: HashMap<String, String> = HashMap::new();
+        for (key, _meta) in &files {
+            if key.contains('/') || key.ends_with(".md") {
+                id_to_path.insert(key.clone(), key.clone());
+            } else if let Some(path) = workspace.get_path(key) {
+                id_to_path.insert(key.clone(), path.to_string_lossy().to_string());
+            }
+        }
+
+        let body_docs = self.body_docs.read().await;
+
+        let cursor = Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(cursor);
+        let options = FileOptions::<()>::default()
+            .compression_method(CompressionMethod::Deflated)
+            .unix_permissions(0o644);
+
+        for (key, meta) in files {
+            if meta.deleted {
+                continue;
+            }
+
+            let path = match Self::resolve_snapshot_path(&key, &id_to_path) {
+                Some(path) => path,
+                None => {
+                    warn!("Snapshot export: skipping unresolved path for {}", key);
+                    continue;
+                }
+            };
+
+            let mut export_meta = meta.clone();
+            export_meta.part_of = export_meta
+                .part_of
+                .and_then(|value| Self::resolve_snapshot_path(&value, &id_to_path));
+
+            if let Some(contents) = export_meta.contents.take() {
+                let resolved: Vec<String> = contents
+                    .into_iter()
+                    .filter_map(|value| Self::resolve_snapshot_path(&value, &id_to_path))
+                    .collect();
+                export_meta.contents = Some(resolved);
+            }
+
+            let metadata_json = serde_json::to_value(&export_meta)?;
+            let fm = FrontmatterMetadata::from_json_with_file_path(&metadata_json, Some(&path));
+            let yaml = fm.to_yaml();
+
+            let mut body = body_docs.get_or_create(&path).get_body();
+            if body.is_empty() && key != path {
+                body = body_docs.get_or_create(&key).get_body();
+            }
+            let content = if yaml.is_empty() {
+                body
+            } else {
+                format!("---\n{}\n---\n\n{}", yaml, body)
+            };
+
+            zip.start_file(path.replace('\\', "/"), options)?;
+            zip.write_all(content.as_bytes())?;
+        }
+
+        let cursor = zip.finish()?;
+        Ok(cursor.into_inner())
+    }
+
+    /// Import a workspace snapshot zip into the CRDT store.
+    pub async fn import_snapshot_zip(
+        &self,
+        bytes: &[u8],
+        mode: SnapshotImportMode,
+    ) -> Result<SnapshotImportResult, SnapshotError> {
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes))?;
+
+        let workspace = self.workspace.write().await;
+        let body_docs = self.body_docs.read().await;
+
+        if mode == SnapshotImportMode::Replace {
+            let existing: Vec<String> = workspace
+                .list_files()
+                .into_iter()
+                .map(|(path, _)| path)
+                .collect();
+            for path in existing {
+                let _ = workspace.delete_file(&path);
+            }
+        }
+
+        let mut files_imported = 0usize;
+
+        for i in 0..archive.len() {
+            let mut entry = archive.by_index(i)?;
+            if entry.is_dir() {
+                continue;
+            }
+
+            let name = entry.name().to_string();
+            if !name.ends_with(".md") {
+                continue;
+            }
+
+            let mut content = String::new();
+            entry
+                .read_to_string(&mut content)
+                .map_err(|e| SnapshotError::Parse(format!("Failed reading {}: {}", name, e)))?;
+
+            let (metadata, body) = Self::parse_snapshot_markdown(&name, &content)?;
+
+            workspace.set_file(&name, metadata)?;
+            body_docs.get_or_create(&name).set_body(&body)?;
+            files_imported += 1;
+        }
+
+        Ok(SnapshotImportResult { files_imported })
+    }
+
+    // ==================== Focus Tracking Operations ====================
+
+    /// Focus on files for a client. Broadcasts focus_list_changed if the list changes.
+    /// Returns true if the focus list changed.
+    pub async fn focus_files(&self, client_id: &str, files: &[String]) -> bool {
+        let mut focus = self.focus_list.write().await;
+        let mut changed = false;
+
+        for file_path in files {
+            let clients = focus.entry(file_path.clone()).or_default();
+            if clients.insert(client_id.to_string()) {
+                changed = true;
+            }
+        }
+
+        if changed {
+            let focus_list = self.get_focus_list_internal(&focus);
+            drop(focus); // Release lock before broadcast
+            self.broadcast_control_message(ControlMessage::FocusListChanged { files: focus_list })
+                .await;
+        }
+
+        changed
+    }
+
+    /// Unfocus files for a client. Broadcasts focus_list_changed if the list changes.
+    /// Returns true if the focus list changed.
+    pub async fn unfocus_files(&self, client_id: &str, files: &[String]) -> bool {
+        let mut focus = self.focus_list.write().await;
+        let mut changed = false;
+
+        for file_path in files {
+            if let Some(clients) = focus.get_mut(file_path) {
+                if clients.remove(client_id) {
+                    changed = true;
+                    // Remove entry if no clients are focused on this file
+                    if clients.is_empty() {
+                        focus.remove(file_path);
+                    }
+                }
+            }
+        }
+
+        if changed {
+            let focus_list = self.get_focus_list_internal(&focus);
+            drop(focus); // Release lock before broadcast
+            self.broadcast_control_message(ControlMessage::FocusListChanged { files: focus_list })
+                .await;
+        }
+
+        changed
+    }
+
+    /// Clean up all focus entries for a disconnected client.
+    /// Broadcasts focus_list_changed if the list changes.
+    pub async fn client_disconnected_focus(&self, client_id: &str) -> bool {
+        let mut focus = self.focus_list.write().await;
+        let mut changed = false;
+
+        // Collect paths to remove (where this client was the only one focused)
+        let mut paths_to_remove = Vec::new();
+
+        for (file_path, clients) in focus.iter_mut() {
+            if clients.remove(client_id) {
+                changed = true;
+                if clients.is_empty() {
+                    paths_to_remove.push(file_path.clone());
+                }
+            }
+        }
+
+        for path in paths_to_remove {
+            focus.remove(&path);
+        }
+
+        if changed {
+            let focus_list = self.get_focus_list_internal(&focus);
+            drop(focus); // Release lock before broadcast
+            self.broadcast_control_message(ControlMessage::FocusListChanged { files: focus_list })
+                .await;
+        }
+
+        changed
+    }
+
+    /// Get the current focus list (all files any client is focused on)
+    pub async fn get_focus_list(&self) -> Vec<String> {
+        let focus = self.focus_list.read().await;
+        self.get_focus_list_internal(&focus)
+    }
+
+    /// Internal helper to get focus list from a lock guard
+    fn get_focus_list_internal(&self, focus: &HashMap<String, HashSet<String>>) -> Vec<String> {
+        focus.keys().cloned().collect()
+    }
+
+    /// Check if any client is focused on a specific file
+    pub async fn is_file_focused(&self, file_path: &str) -> bool {
+        let focus = self.focus_list.read().await;
+        focus.contains_key(file_path)
+    }
+
+    /// Get the list of files a specific client is focused on
+    pub async fn get_client_focus(&self, client_id: &str) -> Vec<String> {
+        let focus = self.focus_list.read().await;
+        focus
+            .iter()
+            .filter_map(|(path, clients)| {
+                if clients.contains(client_id) {
+                    Some(path.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }
 
@@ -1398,5 +1967,219 @@ mod tests {
 
         let deserialized: ControlMessage = serde_json::from_str(&json).unwrap();
         assert!(matches!(deserialized, ControlMessage::SessionEnded));
+    }
+
+    #[test]
+    fn test_control_message_focus_list_changed_serialization() {
+        let msg = ControlMessage::FocusListChanged {
+            files: vec!["doc1.md".to_string(), "doc2.md".to_string()],
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("focus_list_changed"));
+        assert!(json.contains("doc1.md"));
+        assert!(json.contains("doc2.md"));
+
+        let deserialized: ControlMessage = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            ControlMessage::FocusListChanged { files } => {
+                assert_eq!(files.len(), 2);
+                assert!(files.contains(&"doc1.md".to_string()));
+                assert!(files.contains(&"doc2.md".to_string()));
+            }
+            _ => panic!("Expected FocusListChanged"),
+        }
+    }
+
+    // =========================================================================
+    // Focus Tracking Tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_focus_files_single_client() {
+        let room = SyncRoom::in_memory("test-workspace");
+        let mut control_rx = room.subscribe_control();
+
+        // Focus on a file
+        let changed = room.focus_files("client-1", &["doc1.md".to_string()]).await;
+        assert!(changed);
+
+        // Verify focus list
+        let focus_list = room.get_focus_list().await;
+        assert_eq!(focus_list.len(), 1);
+        assert!(focus_list.contains(&"doc1.md".to_string()));
+
+        // Should receive FocusListChanged
+        let msg = control_rx.try_recv();
+        assert!(msg.is_ok());
+        match msg.unwrap() {
+            ControlMessage::FocusListChanged { files } => {
+                assert_eq!(files.len(), 1);
+                assert!(files.contains(&"doc1.md".to_string()));
+            }
+            _ => panic!("Expected FocusListChanged"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_focus_files_multiple_clients() {
+        let room = SyncRoom::in_memory("test-workspace");
+
+        // Client 1 focuses on doc1
+        room.focus_files("client-1", &["doc1.md".to_string()]).await;
+
+        // Client 2 focuses on doc2
+        room.focus_files("client-2", &["doc2.md".to_string()]).await;
+
+        // Both files should be in focus list
+        let focus_list = room.get_focus_list().await;
+        assert_eq!(focus_list.len(), 2);
+        assert!(focus_list.contains(&"doc1.md".to_string()));
+        assert!(focus_list.contains(&"doc2.md".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_focus_files_same_file_multiple_clients() {
+        let room = SyncRoom::in_memory("test-workspace");
+
+        // Both clients focus on same file
+        room.focus_files("client-1", &["doc1.md".to_string()]).await;
+        room.focus_files("client-2", &["doc1.md".to_string()]).await;
+
+        // File should only appear once
+        let focus_list = room.get_focus_list().await;
+        assert_eq!(focus_list.len(), 1);
+        assert!(focus_list.contains(&"doc1.md".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_unfocus_files() {
+        let room = SyncRoom::in_memory("test-workspace");
+        let mut control_rx = room.subscribe_control();
+
+        // Focus on files
+        room.focus_files("client-1", &["doc1.md".to_string(), "doc2.md".to_string()])
+            .await;
+
+        // Drain the focus message
+        let _ = control_rx.try_recv();
+
+        // Unfocus one file
+        let changed = room
+            .unfocus_files("client-1", &["doc1.md".to_string()])
+            .await;
+        assert!(changed);
+
+        // Only doc2 should remain
+        let focus_list = room.get_focus_list().await;
+        assert_eq!(focus_list.len(), 1);
+        assert!(focus_list.contains(&"doc2.md".to_string()));
+
+        // Should receive FocusListChanged
+        let msg = control_rx.try_recv();
+        assert!(msg.is_ok());
+        match msg.unwrap() {
+            ControlMessage::FocusListChanged { files } => {
+                assert_eq!(files.len(), 1);
+                assert!(files.contains(&"doc2.md".to_string()));
+            }
+            _ => panic!("Expected FocusListChanged"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_unfocus_shared_file_keeps_other_client() {
+        let room = SyncRoom::in_memory("test-workspace");
+
+        // Both clients focus on same file
+        room.focus_files("client-1", &["doc1.md".to_string()]).await;
+        room.focus_files("client-2", &["doc1.md".to_string()]).await;
+
+        // Client 1 unfocuses
+        room.unfocus_files("client-1", &["doc1.md".to_string()])
+            .await;
+
+        // File should still be in focus (client-2 still focused)
+        let focus_list = room.get_focus_list().await;
+        assert_eq!(focus_list.len(), 1);
+        assert!(focus_list.contains(&"doc1.md".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_client_disconnected_focus_cleanup() {
+        let room = SyncRoom::in_memory("test-workspace");
+        let mut control_rx = room.subscribe_control();
+
+        // Client 1 focuses on multiple files
+        room.focus_files("client-1", &["doc1.md".to_string(), "doc2.md".to_string()])
+            .await;
+
+        // Client 2 focuses on doc1 as well
+        room.focus_files("client-2", &["doc1.md".to_string()]).await;
+
+        // Drain messages
+        while control_rx.try_recv().is_ok() {}
+
+        // Client 1 disconnects
+        let changed = room.client_disconnected_focus("client-1").await;
+        assert!(changed);
+
+        // Only doc1 should remain (client-2 still focused)
+        let focus_list = room.get_focus_list().await;
+        assert_eq!(focus_list.len(), 1);
+        assert!(focus_list.contains(&"doc1.md".to_string()));
+
+        // Should receive FocusListChanged
+        let msg = control_rx.try_recv();
+        assert!(msg.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_is_file_focused() {
+        let room = SyncRoom::in_memory("test-workspace");
+
+        assert!(!room.is_file_focused("doc1.md").await);
+
+        room.focus_files("client-1", &["doc1.md".to_string()]).await;
+
+        assert!(room.is_file_focused("doc1.md").await);
+        assert!(!room.is_file_focused("doc2.md").await);
+    }
+
+    #[tokio::test]
+    async fn test_get_client_focus() {
+        let room = SyncRoom::in_memory("test-workspace");
+
+        room.focus_files("client-1", &["doc1.md".to_string(), "doc2.md".to_string()])
+            .await;
+        room.focus_files("client-2", &["doc3.md".to_string()]).await;
+
+        let client1_focus = room.get_client_focus("client-1").await;
+        assert_eq!(client1_focus.len(), 2);
+        assert!(client1_focus.contains(&"doc1.md".to_string()));
+        assert!(client1_focus.contains(&"doc2.md".to_string()));
+
+        let client2_focus = room.get_client_focus("client-2").await;
+        assert_eq!(client2_focus.len(), 1);
+        assert!(client2_focus.contains(&"doc3.md".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_focus_no_change_no_broadcast() {
+        let room = SyncRoom::in_memory("test-workspace");
+        let mut control_rx = room.subscribe_control();
+
+        // Focus on a file
+        room.focus_files("client-1", &["doc1.md".to_string()]).await;
+
+        // Drain the initial message
+        let _ = control_rx.try_recv();
+
+        // Focus on the same file again (should not broadcast)
+        let changed = room.focus_files("client-1", &["doc1.md".to_string()]).await;
+        assert!(!changed);
+
+        // Should not have received another message
+        assert!(control_rx.try_recv().is_err());
     }
 }

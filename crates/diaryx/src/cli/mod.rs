@@ -138,7 +138,7 @@ pub fn run_cli() {
             yes,
             dry_run,
         } => {
-            normalize::handle_normalize_filename(&app_sync, &path, title, yes, dry_run);
+            normalize::handle_normalize_filename(&app_sync, &ws, &path, title, yes, dry_run);
             true
         }
 

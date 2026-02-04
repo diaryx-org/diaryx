@@ -53,8 +53,11 @@ use diaryx_core::error::Result;
 /// This transport uses `RefCell` because WASM is single-threaded.
 /// All operations happen on the main JS thread.
 pub struct CallbackTransport {
-    /// Queue of outgoing messages for JavaScript to send.
+    /// Queue of outgoing binary messages for JavaScript to send.
     outgoing: RefCell<VecDeque<Vec<u8>>>,
+
+    /// Queue of outgoing text messages for JavaScript to send.
+    outgoing_text: RefCell<VecDeque<String>>,
 
     /// Callback for incoming messages.
     on_message: RefCell<Option<MessageCallback>>,
@@ -77,6 +80,7 @@ impl CallbackTransport {
     pub fn new() -> Self {
         Self {
             outgoing: RefCell::new(VecDeque::new()),
+            outgoing_text: RefCell::new(VecDeque::new()),
             on_message: RefCell::new(None),
             on_status: RefCell::new(None),
             status: RefCell::new(ConnectionStatus::Disconnected),
@@ -106,11 +110,31 @@ impl CallbackTransport {
         self.outgoing.borrow_mut().pop_front()
     }
 
-    /// Queue an outgoing message.
+    /// Queue an outgoing binary message.
     ///
     /// Called internally when `send()` is invoked.
-    fn queue_outgoing(&self, message: Vec<u8>) {
+    /// Also available publicly for direct message queueing.
+    pub fn queue_outgoing(&self, message: Vec<u8>) {
         self.outgoing.borrow_mut().push_back(message);
+    }
+
+    /// Queue an outgoing text message.
+    ///
+    /// Called internally when `send_text()` is invoked.
+    pub fn queue_outgoing_text(&self, message: String) {
+        self.outgoing_text.borrow_mut().push_back(message);
+    }
+
+    /// Poll for an outgoing text message to send via JavaScript.
+    ///
+    /// Returns the next text message in the queue, or None if empty.
+    pub fn poll_outgoing_text(&self) -> Option<String> {
+        self.outgoing_text.borrow_mut().pop_front()
+    }
+
+    /// Check if there are pending outgoing text messages.
+    pub fn has_outgoing_text(&self) -> bool {
+        !self.outgoing_text.borrow().is_empty()
     }
 
     /// Update status and notify callback.
@@ -148,9 +172,10 @@ impl CallbackTransport {
         self.outgoing.borrow().len()
     }
 
-    /// Clear all outgoing messages.
+    /// Clear all outgoing messages (both binary and text).
     pub fn clear_outgoing(&self) {
         self.outgoing.borrow_mut().clear();
+        self.outgoing_text.borrow_mut().clear();
     }
 }
 
@@ -182,6 +207,11 @@ impl SyncTransport for CallbackTransport {
 
     async fn send(&self, message: &[u8]) -> Result<()> {
         self.queue_outgoing(message.to_vec());
+        Ok(())
+    }
+
+    async fn send_text(&self, message: &str) -> Result<()> {
+        self.queue_outgoing_text(message.to_string());
         Ok(())
     }
 

@@ -21,6 +21,7 @@
 import type { RustCrdtApi } from './rustCrdtApi';
 import { SyncTransport, createWorkspaceSyncTransport } from './syncTransport';
 import { MultiplexedBodySync } from './multiplexedBodySync';
+import { WasmSyncBridge, createWasmSyncBridge } from './wasmSyncBridge';
 import type { FileMetadata, BinaryRef } from '../backend/generated';
 import type { Backend, FileSystemEvent, SyncEvent } from '../backend/interface';
 import { crdt_update_file_index, isStorageReady } from '$lib/storage/sqliteStorageBridge.js';
@@ -58,6 +59,9 @@ let _backend: Backend | null = null;
 let _nativeSyncActive = false;
 let _nativeSyncUnsubscribe: (() => void) | null = null;
 
+// WASM unified sync bridge (new architecture)
+let wasmSyncBridge: WasmSyncBridge | null = null;
+
 let serverUrl: string | null = null;
 let _workspaceId: string | null = null;
 let initialized = false;
@@ -79,6 +83,9 @@ const bodyBridgePendingCreation = new Map<string, Promise<void>>();
 
 // Cached server URL for body bridges
 let _serverUrl: string | null = null;
+
+// Pending body sync requests when sync config isn't ready yet
+const pendingBodySync = new Set<string>();
 
 // Per-file mutex to prevent race conditions on concurrent updates
 // Map of path -> Promise that resolves when the lock is released
@@ -111,6 +118,30 @@ async function acquireFileLock(path: string): Promise<() => void> {
     fileLocks.delete(path);
     releaseLock!();
   };
+}
+
+async function flushPendingBodySync(reason: string): Promise<void> {
+  if (pendingBodySync.size === 0) return;
+  if (!_backend || _backend?.hasNativeSync?.()) return;
+  if (!_workspaceId || !_serverUrl || !rustApi) return;
+
+  const files = Array.from(pendingBodySync);
+  pendingBodySync.clear();
+  console.log(
+    `[WorkspaceCrdtBridge] Flushing ${files.length} pending body sync request(s) (${reason})`,
+  );
+
+  for (const filePath of files) {
+    try {
+      await getOrCreateBodyBridge(filePath, true);
+    } catch (err) {
+      console.warn(
+        `[WorkspaceCrdtBridge] Failed to flush pending body sync for ${filePath}:`,
+        err,
+      );
+      pendingBodySync.add(filePath);
+    }
+  }
 }
 
 // Callbacks
@@ -187,7 +218,8 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
 
     // Check if backend supports native sync (Tauri)
     if (_backend.hasNativeSync?.() && _backend.startSync) {
-      console.log('[WorkspaceCrdtBridge] Using native sync (Tauri):', url, 'docName:', workspaceDocName);
+      // Use _serverUrl (WebSocket URL) for native sync - Rust client expects wss:// scheme
+      console.log('[WorkspaceCrdtBridge] Using native sync (Tauri):', _serverUrl, 'docName:', workspaceDocName);
 
       // Set up event listener for native sync events
       if (_backend.onSyncEvent) {
@@ -200,8 +232,8 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
       notifySyncStatus('connecting');
 
       try {
-        await _backend.startSync(url, workspaceDocName, getToken() ?? undefined);
         _nativeSyncActive = true;
+        await _backend.startSync(_serverUrl!, workspaceDocName, getToken() ?? undefined);
         console.log('[WorkspaceCrdtBridge] Native sync started successfully');
       } catch (e) {
         console.error('[WorkspaceCrdtBridge] Native sync failed to start:', e);
@@ -213,38 +245,99 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
       const wsUrl = toWebSocketUrl(url);
       console.log('[WorkspaceCrdtBridge] Using browser sync (WASM):', wsUrl, 'docName:', workspaceDocName);
 
-      syncBridge = createWorkspaceSyncTransport({
-        serverUrl: wsUrl,
-        docName: workspaceDocName,
-        backend: _backend,
-        authToken: getToken() ?? undefined,
-        writeToDisk: true, // Rust handles disk writes automatically
-        onStatusChange: (connected) => {
-          console.log('[WorkspaceCrdtBridge] Connection status:', connected);
-          notifySyncStatus(connected ? 'syncing' : 'idle');
-        },
-        onSynced: async () => {
-          console.log('[WorkspaceCrdtBridge] Initial sync complete (via setWorkspaceServer)');
-          notifySyncStatus('synced');
-          notifyFileChange(null, null);
-          await updateFileIndexFromCrdt();
-          markInitialSyncComplete();
+      // Try the new unified WasmSyncBridge first (uses SyncClient architecture like Tauri)
+      // This approach keeps all sync logic in Rust and provides automatic body subscription
+      const newBridge = await createWasmSyncBridge(
+        _backend,
+        wsUrl,
+        workspaceDocName,
+        getToken() ?? undefined,
+        {
+          onStatusChange: (connected) => {
+            console.log('[WorkspaceCrdtBridge] WasmSyncBridge connection status:', connected);
+            if (connected) {
+              notifySyncStatus('syncing');
+              collaborationStore.setBodySyncStatus('synced');
+            } else {
+              notifySyncStatus('idle');
+              collaborationStore.setBodySyncStatus('idle');
+            }
+          },
+          onSynced: async () => {
+            console.log('[WorkspaceCrdtBridge] WasmSyncBridge initial sync complete');
+            notifySyncStatus('synced');
+            notifyFileChange(null, null);
+            await updateFileIndexFromCrdt();
+            markInitialSyncComplete();
+            // Note: Body sync is automatic with WasmSyncBridge (subscribe_all_bodies)
+          },
+          onFilesChanged: (changedFiles) => {
+            console.log('[WorkspaceCrdtBridge] WasmSyncBridge files changed:', changedFiles);
+            notifyFileChange(null, null);
+          },
+          onBodyChanged: (docName, content) => {
+            console.log('[WorkspaceCrdtBridge] WasmSyncBridge body changed:', docName);
+            notifyBodyChange(docName, content);
+          },
+          onProgress: (completed, total) => {
+            console.log('[WorkspaceCrdtBridge] WasmSyncBridge sync progress:', completed, '/', total);
+            notifySyncProgress(completed, total);
+          },
+          onError: (error) => {
+            console.error('[WorkspaceCrdtBridge] WasmSyncBridge error:', error);
+            notifySyncStatus('error', error);
+          },
+        }
+      );
 
-          // Auto-sync body content for all files in background
-          await autoSyncBodiesInBackground();
-        },
-        onFilesChanged: () => notifyFileChange(null, null),
-        onProgress: (completed, total) => {
-          console.log('[WorkspaceCrdtBridge] Sync progress:', completed, '/', total);
-          notifySyncProgress(completed, total);
-        },
-      });
+      if (newBridge) {
+        console.log('[WorkspaceCrdtBridge] Using new unified WasmSyncBridge');
+        wasmSyncBridge = newBridge;
 
-      // Notify connecting status
-      notifySyncStatus('connecting');
+        // Notify connecting status
+        notifySyncStatus('connecting');
 
-      await syncBridge.connect();
+        await wasmSyncBridge.connect();
+      } else {
+        // Fallback to old SyncTransport approach
+        console.log('[WorkspaceCrdtBridge] Falling back to legacy SyncTransport');
+
+        syncBridge = createWorkspaceSyncTransport({
+          serverUrl: wsUrl,
+          docName: workspaceDocName,
+          workspaceId: _workspaceId ?? undefined,
+          backend: _backend,
+          authToken: getToken() ?? undefined,
+          writeToDisk: true, // Rust handles disk writes automatically
+          onStatusChange: (connected) => {
+            console.log('[WorkspaceCrdtBridge] Connection status:', connected);
+            notifySyncStatus(connected ? 'syncing' : 'idle');
+          },
+          onSynced: async () => {
+            console.log('[WorkspaceCrdtBridge] Initial sync complete (via setWorkspaceServer)');
+            notifySyncStatus('synced');
+            notifyFileChange(null, null);
+            await updateFileIndexFromCrdt();
+            markInitialSyncComplete();
+
+            // Auto-sync body content for all files in background
+            await autoSyncBodiesInBackground();
+          },
+          onFilesChanged: () => notifyFileChange(null, null),
+          onProgress: (completed, total) => {
+            console.log('[WorkspaceCrdtBridge] Sync progress:', completed, '/', total);
+            notifySyncProgress(completed, total);
+          },
+        });
+
+        // Notify connecting status
+        notifySyncStatus('connecting');
+
+        await syncBridge.connect();
+      }
     }
+
+    await flushPendingBodySync('setWorkspaceServer');
   }
 }
 
@@ -348,9 +441,16 @@ async function disconnectExistingSync(): Promise<void> {
   // Reset body sync status since we're disconnecting
   collaborationStore.resetBodySyncStatus();
 
-  // Disconnect browser sync bridge if any
+  // Disconnect new WASM sync bridge if any
+  if (wasmSyncBridge) {
+    console.log('[WorkspaceCrdtBridge] Disconnecting WasmSyncBridge');
+    wasmSyncBridge.disconnect();
+    wasmSyncBridge = null;
+  }
+
+  // Disconnect legacy browser sync bridge if any
   if (syncBridge) {
-    console.log('[WorkspaceCrdtBridge] Disconnecting browser sync bridge');
+    console.log('[WorkspaceCrdtBridge] Disconnecting legacy browser sync bridge');
     syncBridge.destroy();
     syncBridge = null;
   }
@@ -359,13 +459,21 @@ async function disconnectExistingSync(): Promise<void> {
 /**
  * Auto-sync body content for all files in background.
  *
- * NOTE: When native sync is active (Tauri), this is a no-op because
+ * NOTE: When backend has native sync capability (Tauri), this is a no-op because
  * the native SyncClient handles body sync internally.
  */
 async function autoSyncBodiesInBackground(): Promise<void> {
-  // Skip if native sync is active - it handles body sync internally
-  if (_nativeSyncActive) {
-    console.log('[WorkspaceCrdtBridge] autoSyncBodiesInBackground skipped (native sync active)');
+  // Skip if backend supports native sync - it handles body sync internally
+  // We check hasNativeSync() (capability) not _nativeSyncActive (state) to prevent
+  // fallback to TypeScript sync even if native sync fails to start
+  if (_backend?.hasNativeSync?.()) {
+    console.log('[WorkspaceCrdtBridge] autoSyncBodiesInBackground skipped (native sync capable)');
+    return;
+  }
+
+  // Skip if using new WasmSyncBridge - it handles body sync automatically via subscribe_all_bodies()
+  if (wasmSyncBridge) {
+    console.log('[WorkspaceCrdtBridge] autoSyncBodiesInBackground skipped (using WasmSyncBridge)');
     return;
   }
 
@@ -422,6 +530,8 @@ export async function setWorkspaceId(id: string | null): Promise<void> {
     serverUrl = null;
     await setWorkspaceServer(savedUrl);
   }
+
+  await flushPendingBodySync('setWorkspaceId');
 }
 
 /**
@@ -586,6 +696,7 @@ export async function startSessionSync(sessionServerUrl: string, sessionCode: st
   syncBridge = createWorkspaceSyncTransport({
     serverUrl: sessionServerUrl,
     docName: workspaceDocName,
+    workspaceId: _workspaceId ?? undefined,
     backend: _backend,
     sessionCode: sessionCode,
     writeToDisk: true, // Rust handles disk writes automatically (with guest path prefixing if configured)
@@ -733,7 +844,8 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
 
         // Check if backend supports native sync (Tauri)
         if (_backend.hasNativeSync?.() && _backend.startSync) {
-          console.log('[WorkspaceCrdtBridge] Using native sync during init (Tauri):', serverUrl, 'docName:', workspaceDocName);
+          // Use _serverUrl (WebSocket URL) for native sync - Rust client expects wss:// scheme
+          console.log('[WorkspaceCrdtBridge] Using native sync during init (Tauri):', _serverUrl, 'docName:', workspaceDocName);
 
           // Set up event listener for native sync events
           if (_backend.onSyncEvent) {
@@ -743,8 +855,8 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
           }
 
           try {
-            await _backend.startSync(serverUrl, workspaceDocName, getToken() ?? undefined);
             _nativeSyncActive = true;
+            await _backend.startSync(_serverUrl!, workspaceDocName, getToken() ?? undefined);
             console.log('[WorkspaceCrdtBridge] Native sync started successfully (init)');
           } catch (e) {
             console.error('[WorkspaceCrdtBridge] Native sync failed to start (init):', e);
@@ -758,6 +870,7 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
           syncBridge = createWorkspaceSyncTransport({
             serverUrl: wsUrl,
             docName: workspaceDocName,
+            workspaceId: _workspaceId ?? undefined,
             backend: _backend,
             authToken: getToken() ?? undefined,
             writeToDisk: true, // Rust handles disk writes automatically
@@ -790,6 +903,7 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
     }
 
     initialized = true;
+    await flushPendingBodySync('initWorkspace');
     options.onReady?.();
   } finally {
     _initializing = false;
@@ -887,6 +1001,47 @@ export async function getAllFilesIncludingDeleted(): Promise<Map<string, FileMet
   if (!rustApi) return new Map();
   const files = await rustApi.listFiles(true);
   return new Map(files);
+}
+
+/**
+ * Mark all CRDT files as deleted (tombstone).
+ * Used when "Load from server" is selected to ensure local files don't
+ * persist after sync with server.
+ *
+ * Note: This sets deleted=true on all files but preserves other metadata
+ * as required by CRDT semantics.
+ */
+export async function markAllCrdtFilesAsDeleted(): Promise<number> {
+  if (!rustApi) {
+    console.warn('[WorkspaceCrdtBridge] Cannot mark files as deleted: not initialized');
+    return 0;
+  }
+
+  const files = await rustApi.listFiles(false); // Get non-deleted files
+  const filePaths = files.map(([path]) => path);
+
+  console.log(`[WorkspaceCrdtBridge] Marking ${filePaths.length} CRDT files as deleted`);
+
+  let deleted = 0;
+  for (const path of filePaths) {
+    try {
+      const existing = await rustApi.getFile(path);
+      if (existing && !existing.deleted) {
+        const updated: FileMetadata = {
+          ...existing,
+          deleted: true,
+          modified_at: BigInt(Date.now()),
+        };
+        await rustApi.setFile(path, updated);
+        deleted++;
+      }
+    } catch (e) {
+      console.warn(`[WorkspaceCrdtBridge] Failed to mark ${path} as deleted:`, e);
+    }
+  }
+
+  console.log(`[WorkspaceCrdtBridge] Marked ${deleted} CRDT files as deleted`);
+  return deleted;
 }
 
 /**
@@ -1089,10 +1244,12 @@ function isReadOnlyBlocked(): boolean {
  * NOTE: When native sync is active (Tauri), this is a no-op because
  * the native SyncClient handles body sync internally.
  */
-async function getOrCreateBodyBridge(filePath: string): Promise<void> {
-  // Skip if native sync is active - it handles body sync internally
-  if (_nativeSyncActive) {
-    console.log('[WorkspaceCrdtBridge] getOrCreateBodyBridge skipped (native sync active):', filePath);
+async function getOrCreateBodyBridge(filePath: string, sendFocus: boolean = false): Promise<void> {
+  // Skip if backend supports native sync - it handles body sync internally
+  // We check hasNativeSync() (capability) not _nativeSyncActive (state) to prevent
+  // fallback to TypeScript sync even if native sync fails to start
+  if (_backend?.hasNativeSync?.()) {
+    console.log('[WorkspaceCrdtBridge] getOrCreateBodyBridge skipped (native sync capable):', filePath);
     return;
   }
 
@@ -1116,7 +1273,7 @@ async function getOrCreateBodyBridge(filePath: string): Promise<void> {
   }
 
   // Create the subscription with a lock to prevent concurrent creation
-  const createPromise = subscribeToBodyViaMultiplexed(canonicalPath);
+  const createPromise = subscribeToBodyViaMultiplexed(canonicalPath, sendFocus);
   bodyBridgePendingCreation.set(canonicalPath, createPromise);
 
   try {
@@ -1129,7 +1286,7 @@ async function getOrCreateBodyBridge(filePath: string): Promise<void> {
 /**
  * Ensure the multiplexed body sync connection exists and subscribe to a file.
  */
-async function subscribeToBodyViaMultiplexed(canonicalPath: string): Promise<void> {
+async function subscribeToBodyViaMultiplexed(canonicalPath: string, sendFocus: boolean = false): Promise<void> {
   if (!rustApi || !_serverUrl || !_workspaceId || !_backend) {
     return;
   }
@@ -1158,6 +1315,25 @@ async function subscribeToBodyViaMultiplexed(canonicalPath: string): Promise<voi
         console.log(`[MultiplexedBodySync] Sync complete: ${filesSynced} files`);
         // Mark body sync as complete
         collaborationStore.setBodySyncStatus('synced');
+      },
+      // Handle focus list changes from server
+      // When other clients focus on files, we should subscribe to sync for those files
+      onFocusListChanged: async (files) => {
+        console.log(`[MultiplexedBodySync] Focus list changed: ${files.length} files`);
+
+        // Subscribe to any newly focused files that we're not already subscribed to
+        for (const filePath of files) {
+          const canonicalPath = getCanonicalPath(filePath);
+          if (!multiplexedBodySync?.isSubscribed(canonicalPath)) {
+            console.log(`[MultiplexedBodySync] Auto-subscribing to focused file: ${canonicalPath}`);
+            // Create body sync subscription for this file (sendFocus=false to avoid re-broadcasting)
+            try {
+              await getOrCreateBodyBridge(canonicalPath);
+            } catch (err) {
+              console.warn(`[MultiplexedBodySync] Failed to subscribe to focused file ${canonicalPath}:`, err);
+            }
+          }
+        }
       },
       // Handle messages for files we're not actively subscribed to
       // This ensures updates from other clients (e.g., Tauri) are applied even if the file isn't open
@@ -1330,6 +1506,13 @@ async function subscribeToBodyViaMultiplexed(canonicalPath: string): Promise<voi
   );
 
   console.log(`[MultiplexedBodySync] Subscribed to ${canonicalPath}`);
+
+  // Send focus message only when explicitly requested (user opened file in editor)
+  // Don't send focus for background sync or when auto-subscribing to other clients' focus list
+  if (sendFocus) {
+    multiplexedBodySync.focus([canonicalPath]);
+    console.log(`[MultiplexedBodySync] Focused on ${canonicalPath}`);
+  }
 }
 
 /**
@@ -1346,6 +1529,9 @@ export function closeBodySync(filePath: string): void {
   if (multiplexedBodySync?.isSubscribed(canonicalPath)) {
     console.log(`[MultiplexedBodySync] Unsubscribing from: ${canonicalPath}`);
     multiplexedBodySync.unsubscribe(canonicalPath);
+
+    // Send unfocus message to server
+    multiplexedBodySync.unfocus([canonicalPath]);
   }
 
   // Also clean up any legacy per-file bridges
@@ -1366,27 +1552,34 @@ export function closeBodySync(filePath: string): void {
  * files opened from sync would appear empty because the body bridge
  * wasn't created yet.
  *
- * NOTE: When native sync is active (Tauri), this is a no-op because
+ * NOTE: When backend has native sync capability (Tauri), this is a no-op because
  * the native SyncClient handles body sync internally.
  */
 export async function ensureBodySync(filePath: string): Promise<void> {
-  // Skip if native sync is active - it handles body sync internally
-  if (_nativeSyncActive) {
-    console.log('[WorkspaceCrdtBridge] ensureBodySync skipped (native sync active):', filePath);
+  // Skip if backend supports native sync - it handles body sync internally
+  // We check hasNativeSync() (capability) not _nativeSyncActive (state) to prevent
+  // fallback to TypeScript sync even if native sync fails to start
+  if (_backend?.hasNativeSync?.()) {
+    console.log('[WorkspaceCrdtBridge] ensureBodySync skipped (native sync capable):', filePath);
     return;
   }
 
+  const canonicalPath = getCanonicalPath(filePath);
+
   if (!_workspaceId || !_serverUrl || !rustApi) {
-    console.log('[WorkspaceCrdtBridge] ensureBodySync skipped - not in sync mode:', {
+    console.log('[WorkspaceCrdtBridge] ensureBodySync deferred - not in sync mode yet:', {
       hasWorkspaceId: !!_workspaceId,
       hasServerUrl: !!_serverUrl,
       hasRustApi: !!rustApi,
+      queuedPath: canonicalPath,
     });
+    pendingBodySync.add(canonicalPath);
     return;
   }
-  const canonicalPath = getCanonicalPath(filePath);
+
   console.log('[WorkspaceCrdtBridge] ensureBodySync for:', canonicalPath);
-  await getOrCreateBodyBridge(canonicalPath);
+  // Pass sendFocus=true since this is called when user opens a file in the editor
+  await getOrCreateBodyBridge(canonicalPath, true);
 }
 
 /**
@@ -1430,7 +1623,7 @@ export interface ProactiveSyncOptions {
  * Call this after the tree loads to pre-fetch body content for all files,
  * so they're ready when the user opens them.
  *
- * NOTE: When native sync is active (Tauri), this is a no-op because
+ * NOTE: When backend has native sync capability (Tauri), this is a no-op because
  * the native SyncClient handles body sync internally.
  *
  * @param filePaths Array of file paths to sync bodies for
@@ -1440,9 +1633,11 @@ export async function proactivelySyncBodies(
   filePaths: string[],
   optionsOrConcurrency?: number | ProactiveSyncOptions
 ): Promise<void> {
-  // Skip if native sync is active - it handles body sync internally
-  if (_nativeSyncActive) {
-    console.log('[WorkspaceCrdtBridge] proactivelySyncBodies skipped (native sync active)');
+  // Skip if backend supports native sync - it handles body sync internally
+  // We check hasNativeSync() (capability) not _nativeSyncActive (state) to prevent
+  // fallback to TypeScript sync even if native sync fails to start
+  if (_backend?.hasNativeSync?.()) {
+    console.log('[WorkspaceCrdtBridge] proactivelySyncBodies skipped (native sync capable)');
     return;
   }
 
@@ -2326,9 +2521,11 @@ function handleFileSystemEvent(event: FileSystemEvent): void {
       // handles WebSocket communication directly via the event bridge set up in start_websocket_sync.
       //
       // For browser sync (WASM/web): Forward to JavaScript WebSocket bridges.
-      if (_nativeSyncActive) {
+      // We check hasNativeSync() (capability) not _nativeSyncActive (state) to prevent
+      // fallback to TypeScript sync even if native sync fails to start
+      if (_backend?.hasNativeSync?.()) {
         // Native sync handles this internally via the event bridge
-        console.log('[WorkspaceCrdtBridge] SendSyncMessage skipped (native sync active)');
+        console.log('[WorkspaceCrdtBridge] SendSyncMessage skipped (native sync capable)');
         break;
       }
 

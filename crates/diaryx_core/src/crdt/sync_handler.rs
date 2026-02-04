@@ -540,6 +540,16 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
         body: &str,
         crdt_metadata: Option<&FileMetadata>,
     ) -> Result<()> {
+        // Skip temporary files created by the metadata writer's safe write process
+        // These files should never be processed from remote updates
+        if canonical_path.ends_with(".tmp") || canonical_path.ends_with(".bak") {
+            log::debug!(
+                "[SyncHandler] Skipping remote body update for temporary file: {}",
+                canonical_path
+            );
+            return Ok(());
+        }
+
         let storage_path = self.get_storage_path(canonical_path);
         log::info!(
             "[SyncHandler] handle_remote_body_update START: canonical_path='{}', storage_path='{:?}', body_len={}, body_preview='{}'",
@@ -674,6 +684,29 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
         // Convert IndexMap<String, Value> to FileMetadata
         let fm = &parsed.frontmatter;
 
+        // Helper to parse the frontmatter "updated" value into a timestamp (ms)
+        fn parse_updated_value(value: &serde_yaml::Value) -> Option<i64> {
+            if let Some(num) = value.as_i64() {
+                return Some(num);
+            }
+
+            if let Some(num) = value.as_f64() {
+                return Some(num as i64);
+            }
+
+            if let Some(raw) = value.as_str() {
+                if let Ok(num) = raw.parse::<i64>() {
+                    return Some(num);
+                }
+
+                if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(raw) {
+                    return Some(parsed.timestamp_millis());
+                }
+            }
+
+            None
+        }
+
         // Extract filename from path
         let filename = path
             .file_name()
@@ -726,7 +759,11 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
                 .and_then(|v| v.as_str())
                 .map(String::from),
             extra: std::collections::HashMap::new(), // TODO: Parse extra fields
-            modified_at: chrono::Utc::now().timestamp_millis(),
+            // Read 'updated' from frontmatter if present, otherwise use current time
+            modified_at: fm
+                .get("updated")
+                .and_then(parse_updated_value)
+                .unwrap_or_else(|| chrono::Utc::now().timestamp_millis()),
         })
     }
 
@@ -735,6 +772,21 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
         let content = self.fs.read_to_string(path).await?;
         let parsed = crate::frontmatter::parse_or_empty(&content)?;
         Ok(parsed.body)
+    }
+
+    /// Read body content for a canonical path.
+    ///
+    /// This is used to populate body CRDTs with disk content before sync.
+    /// The path is converted to storage path using guest config if set.
+    pub async fn read_body_content(&self, canonical_path: &str) -> Result<String> {
+        let storage_path = self.get_storage_path(canonical_path);
+        self.read_disk_body(&storage_path).await
+    }
+
+    /// Check if a file exists at the given canonical path.
+    pub async fn file_exists(&self, canonical_path: &str) -> bool {
+        let storage_path = self.get_storage_path(canonical_path);
+        self.fs.exists(&storage_path).await
     }
 }
 

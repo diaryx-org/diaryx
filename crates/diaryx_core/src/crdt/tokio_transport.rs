@@ -29,8 +29,15 @@ use super::transport::{
 };
 use crate::error::{DiaryxError, Result};
 
+/// Outgoing WebSocket message type.
+#[derive(Debug, Clone)]
+enum OutgoingMessage {
+    Binary(Vec<u8>),
+    Text(String),
+}
+
 /// Sender half for outgoing WebSocket messages.
-type WsSender = mpsc::UnboundedSender<Vec<u8>>;
+type WsSender = mpsc::UnboundedSender<OutgoingMessage>;
 
 /// Default no-op message callback.
 fn default_message_callback(_: &[u8]) -> Option<Vec<u8>> {
@@ -123,7 +130,7 @@ impl SyncTransport for TokioTransport {
         let (mut write, mut read) = ws_stream.split();
 
         // Create channel for outgoing messages
-        let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (tx, mut rx) = mpsc::unbounded_channel::<OutgoingMessage>();
 
         // Store the sender
         {
@@ -194,9 +201,15 @@ impl SyncTransport for TokioTransport {
                     // Handle outgoing messages
                     msg = rx.recv() => {
                         match msg {
-                            Some(data) => {
+                            Some(OutgoingMessage::Binary(data)) => {
                                 if let Err(e) = write.send(Message::Binary(data.into())).await {
-                                    log::error!("[TokioTransport] Failed to send: {}", e);
+                                    log::error!("[TokioTransport] Failed to send binary: {}", e);
+                                    break;
+                                }
+                            }
+                            Some(OutgoingMessage::Text(text)) => {
+                                if let Err(e) = write.send(Message::Text(text.into())).await {
+                                    log::error!("[TokioTransport] Failed to send text: {}", e);
                                     break;
                                 }
                             }
@@ -229,8 +242,19 @@ impl SyncTransport for TokioTransport {
     async fn send(&self, message: &[u8]) -> Result<()> {
         let sender = self.sender.read().unwrap();
         if let Some(ref tx) = *sender {
-            tx.send(message.to_vec())
+            tx.send(OutgoingMessage::Binary(message.to_vec()))
                 .map_err(|e| DiaryxError::Crdt(format!("Failed to queue message: {}", e)))?;
+            Ok(())
+        } else {
+            Err(DiaryxError::Crdt("Not connected".to_string()))
+        }
+    }
+
+    async fn send_text(&self, message: &str) -> Result<()> {
+        let sender = self.sender.read().unwrap();
+        if let Some(ref tx) = *sender {
+            tx.send(OutgoingMessage::Text(message.to_string()))
+                .map_err(|e| DiaryxError::Crdt(format!("Failed to queue text message: {}", e)))?;
             Ok(())
         } else {
             Err(DiaryxError::Crdt("Not connected".to_string()))

@@ -171,8 +171,12 @@ pub struct RenameResult {
 /// - Parent's `contents` list (if file has `part_of`)
 /// - Children's `part_of` property (if file has `contents`)
 /// - The file's own `part_of` (if moving to different directory)
+///
+/// If `ws` is provided, links will be formatted according to the workspace's configured link format.
+/// Otherwise, plain relative paths will be used.
 pub fn rename_file_with_refs(
     app: &CliDiaryxAppSync,
+    ws: Option<&CliWorkspace>,
     source_path: &Path,
     dest_path: &Path,
     dry_run: bool,
@@ -345,7 +349,11 @@ pub fn rename_file_with_refs(
     // 4. Update part_of in the moved file if parent exists and relative path changed
     if let Some(ref parent) = parent_path {
         let dest_str = dest_path.to_string_lossy();
-        let new_part_of = calculate_relative_path(dest_path, parent);
+        let new_part_of = if let Some(ws) = ws {
+            format_workspace_link(ws, dest_path, parent, None)
+        } else {
+            calculate_relative_path(dest_path, parent)
+        };
         if let Err(e) =
             app.set_frontmatter_property(&dest_str, "part_of", Value::String(new_part_of))
         {
@@ -356,7 +364,11 @@ pub fn rename_file_with_refs(
     // 5. Update children's part_of to point to new location
     for child in &children {
         let child_str = child.to_string_lossy();
-        let new_part_of = calculate_relative_path(child, dest_path);
+        let new_part_of = if let Some(ws) = ws {
+            format_workspace_link(ws, child, dest_path, None)
+        } else {
+            calculate_relative_path(child, dest_path)
+        };
         if let Err(e) =
             app.set_frontmatter_property(&child_str, "part_of", Value::String(new_part_of))
         {

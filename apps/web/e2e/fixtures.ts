@@ -115,19 +115,20 @@ export class EditorHelper {
  * Wait for the app to be fully initialized.
  * This is more reliable than networkidle for WASM apps.
  */
-export async function waitForAppReady(page: Page): Promise<void> {
+export async function waitForAppReady(page: Page, timeoutMs: number = 20000): Promise<void> {
   // Wait for the main app container
   await page.waitForSelector('body', { state: 'visible' })
 
   // Wait for the editor to be available (indicates WASM is loaded)
   await page.waitForSelector('.ProseMirror, [contenteditable="true"]', {
     state: 'visible',
-    timeout: 20000
+    timeout: timeoutMs
   })
 
   // Additional check: ensure no loading spinners are visible
   const spinner = page.locator('.loading, [data-loading="true"]')
-  await spinner.waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {
+  const spinnerTimeout = Math.min(10000, timeoutMs)
+  await spinner.waitFor({ state: 'hidden', timeout: spinnerTimeout }).catch(() => {
     // No spinner found, which is fine
   })
 }
@@ -149,6 +150,36 @@ export async function clearStorage(page: Page): Promise<void> {
       if (db.name) {
         indexedDB.deleteDatabase(db.name)
       }
+    }
+  })
+}
+
+/**
+ * Clear ALL browser storage including OPFS for complete test isolation.
+ * This ensures each client starts with a fresh, minimal 1-file workspace.
+ */
+export async function clearAllBrowserStorage(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    // Clear localStorage and sessionStorage
+    localStorage.clear()
+    sessionStorage.clear()
+
+    // Clear all IndexedDB databases
+    const dbs = await indexedDB.databases?.() ?? []
+    for (const db of dbs) {
+      if (db.name) {
+        indexedDB.deleteDatabase(db.name)
+      }
+    }
+
+    // Clear OPFS (Origin Private File System) where SQLite CRDT db lives
+    try {
+      const root = await navigator.storage.getDirectory()
+      for await (const [name] of root.entries()) {
+        await root.removeEntry(name, { recursive: true })
+      }
+    } catch {
+      // OPFS may not be supported in all browsers
     }
   })
 }

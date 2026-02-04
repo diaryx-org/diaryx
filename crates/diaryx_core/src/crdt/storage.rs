@@ -116,6 +116,12 @@ pub trait CrdtStorage: Send + Sync {
     ///
     /// Used when renaming files to migrate their body CRDT state.
     fn rename_doc(&self, old_name: &str, new_name: &str) -> StorageResult<()>;
+
+    /// Clear all updates for a document while keeping the snapshot.
+    ///
+    /// This is used when replacing the entire CRDT state during initial sync.
+    /// After replacement, the old update history is no longer valid and must be cleared.
+    fn clear_updates(&self, name: &str) -> StorageResult<()>;
 }
 
 #[cfg(test)]

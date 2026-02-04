@@ -63,8 +63,9 @@ use crate::wasm_sqlite_storage::WasmSqliteStorage;
 // Storage Backend Enum
 // ============================================================================
 
-/// Internal enum to hold either storage backend
-enum StorageBackend {
+/// Internal enum to hold either storage backend.
+/// Exposed for use by wasm_sync_client module.
+pub(crate) enum StorageBackend {
     Opfs(OpfsFileSystem),
     IndexedDb(IndexedDbFileSystem),
     /// File System Access API - user-selected directory on their real filesystem
@@ -501,12 +502,12 @@ impl DiaryxBackend {
         // Try to use persistent SQLite storage, fall back to memory storage
         let crdt_storage: Arc<dyn CrdtStorage> = match WasmSqliteStorage::new() {
             Ok(storage) => {
-                log::info!("Using persistent SQLite CRDT storage");
+                log::info!("✓ CRDT storage (OPFS): Using persistent SQLite storage");
                 Arc::new(storage)
             }
             Err(e) => {
-                log::warn!(
-                    "SQLite CRDT storage not available, using memory storage: {:?}",
+                log::error!(
+                    "✗ CRDT storage (OPFS): FALLBACK TO MEMORY - {:?}. This will cause data loss!",
                     e
                 );
                 Arc::new(MemoryStorage::new())
@@ -595,12 +596,12 @@ impl DiaryxBackend {
         // Try to use persistent SQLite storage, fall back to memory storage
         let crdt_storage: Arc<dyn CrdtStorage> = match WasmSqliteStorage::new() {
             Ok(storage) => {
-                log::info!("Using persistent SQLite CRDT storage");
+                log::info!("✓ CRDT storage (IndexedDB): Using persistent SQLite storage");
                 Arc::new(storage)
             }
             Err(e) => {
-                log::warn!(
-                    "SQLite CRDT storage not available, using memory storage: {:?}",
+                log::error!(
+                    "✗ CRDT storage (IndexedDB): FALLBACK TO MEMORY - {:?}. This will cause data loss!",
                     e
                 );
                 Arc::new(MemoryStorage::new())
@@ -810,12 +811,12 @@ impl DiaryxBackend {
         // Try to use persistent SQLite storage, fall back to memory storage
         let crdt_storage: Arc<dyn CrdtStorage> = match WasmSqliteStorage::new() {
             Ok(storage) => {
-                log::info!("Using persistent SQLite CRDT storage");
+                log::info!("✓ CRDT storage (FSA): Using persistent SQLite storage");
                 Arc::new(storage)
             }
             Err(e) => {
-                log::warn!(
-                    "SQLite CRDT storage not available, using memory storage: {:?}",
+                log::error!(
+                    "✗ CRDT storage (FSA): FALLBACK TO MEMORY - {:?}. This will cause data loss!",
                     e
                 );
                 Arc::new(MemoryStorage::new())
@@ -1509,5 +1510,92 @@ impl DiaryxBackend {
     #[wasm_bindgen(js_name = "outgoingSyncMessageCount")]
     pub fn outgoing_sync_message_count(&self) -> usize {
         self.outgoing_sync_messages.borrow().len()
+    }
+
+    // ========================================================================
+    // New Unified Sync Client API
+    // ========================================================================
+    //
+    // This API provides a unified SyncClient<CallbackTransport> wrapper that
+    // keeps all sync protocol logic in Rust while JavaScript manages WebSocket
+    // connections. This matches the native architecture where Tauri uses
+    // SyncClient<TokioTransport>.
+
+    /// Create a new sync client for the given server and workspace.
+    ///
+    /// This creates a `WasmSyncClient` that wraps `SyncClient<CallbackTransport>`.
+    /// JavaScript manages WebSocket connections while Rust handles all sync logic.
+    ///
+    /// ## Example
+    ///
+    /// ```javascript
+    /// const client = backend.createSyncClient(
+    ///   'wss://sync.example.com/sync',
+    ///   'my-workspace-id',
+    ///   'auth-token-optional'
+    /// );
+    ///
+    /// // Get URLs and create WebSocket connections
+    /// const metaUrl = client.getMetadataUrl();
+    /// const bodyUrl = client.getBodyUrl();
+    ///
+    /// // Create WebSockets and connect them to the client
+    /// const metaWs = new WebSocket(metaUrl);
+    /// metaWs.binaryType = 'arraybuffer';
+    /// metaWs.onopen = () => client.markMetadataConnected();
+    /// metaWs.onclose = () => client.markMetadataDisconnected();
+    /// metaWs.onmessage = async (e) => {
+    ///   const response = await client.injectMetadataMessage(new Uint8Array(e.data));
+    ///   if (response) metaWs.send(response);
+    /// };
+    /// // Similar for body WebSocket...
+    ///
+    /// // Poll for outgoing messages
+    /// setInterval(() => {
+    ///   let msg;
+    ///   while ((msg = client.pollMetadataOutgoing())) metaWs.send(msg);
+    ///   while ((msg = client.pollBodyOutgoing())) bodyWs.send(msg);
+    /// }, 50);
+    ///
+    /// // Start sync
+    /// await client.start();
+    /// ```
+    #[wasm_bindgen(js_name = "createSyncClient")]
+    pub fn create_sync_client(
+        &self,
+        server_url: String,
+        workspace_id: String,
+        auth_token: Option<String>,
+    ) -> crate::wasm_sync_client::WasmSyncClient {
+        use diaryx_core::crdt::SyncClientConfig;
+
+        // Build configuration
+        let mut config = SyncClientConfig::new(
+            server_url,
+            workspace_id,
+            PathBuf::new(), // WASM doesn't use workspace_root path
+        )
+        .with_write_to_disk(true);
+
+        if let Some(token) = auth_token {
+            config = config.with_auth(token);
+        }
+
+        log::info!(
+            "[DiaryxBackend] Creating WasmSyncClient for workspace: {}",
+            config.workspace_id
+        );
+
+        // Create WasmSyncClient with the shared sync_manager
+        crate::wasm_sync_client::WasmSyncClient::new(config, Arc::clone(&self.sync_manager))
+    }
+
+    /// Check if this backend has native sync support.
+    ///
+    /// For WASM, this always returns false. The new `createSyncClient()` API
+    /// provides a unified approach that works across all platforms.
+    #[wasm_bindgen(js_name = "hasNativeSync")]
+    pub fn has_native_sync(&self) -> bool {
+        false
     }
 }

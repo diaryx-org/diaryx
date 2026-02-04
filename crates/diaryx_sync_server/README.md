@@ -3,17 +3,17 @@ title: diaryx_sync_server
 description: Sync server used by frontends
 author: adammharris
 audience:
-- public
-- developers
-part_of: '[README](/crates/README.md)'
+  - public
+  - developers
+part_of: "[README](/crates/README.md)"
 contents:
-  - '[README](/crates/diaryx_sync_server/src/README.md)'
+  - "[README](/crates/diaryx_sync_server/src/README.md)"
 attachments:
-  - '[Cargo.toml](/crates/diaryx_sync_server/Cargo.toml)'
-  - '[build.rs](/crates/diaryx_sync_server/build.rs)'
+  - "[Cargo.toml](/crates/diaryx_sync_server/Cargo.toml)"
+  - "[build.rs](/crates/diaryx_sync_server/build.rs)"
 exclude:
-  - '*.lock'
-  - '*.db'
+  - "*.lock"
+  - "*.db"
 ---
 
 # Diaryx Sync Server
@@ -44,27 +44,28 @@ cargo run -p diaryx_sync_server
 
 ## Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `HOST` | `0.0.0.0` | Server host |
-| `PORT` | `3030` | Server port |
-| `DATABASE_PATH` | `./diaryx_sync.db` | Path to SQLite database |
-| `APP_BASE_URL` | `http://localhost:5173` | Base URL for magic link verification |
-| `SMTP_HOST` | `smtp.resend.com` | SMTP server host |
-| `SMTP_PORT` | `465` | SMTP server port |
-| `SMTP_USERNAME` | - | SMTP username |
-| `SMTP_PASSWORD` | - | SMTP password/API key |
-| `SMTP_FROM_EMAIL` | `noreply@diaryx.org` | From email address |
-| `SMTP_FROM_NAME` | `Diaryx` | From name |
-| `SESSION_EXPIRY_DAYS` | `30` | Session token expiration in days |
-| `MAGIC_LINK_EXPIRY_MINUTES` | `15` | Magic link expiration in minutes |
-| `CORS_ORIGINS` | `http://localhost:5173,http://localhost:1420` | Comma-separated CORS origins |
+| Variable                    | Default                                       | Description                          |
+| --------------------------- | --------------------------------------------- | ------------------------------------ |
+| `HOST`                      | `0.0.0.0`                                     | Server host                          |
+| `PORT`                      | `3030`                                        | Server port                          |
+| `DATABASE_PATH`             | `./diaryx_sync.db`                            | Path to SQLite database              |
+| `APP_BASE_URL`              | `http://localhost:5173`                       | Base URL for magic link verification |
+| `SMTP_HOST`                 | `smtp.resend.com`                             | SMTP server host                     |
+| `SMTP_PORT`                 | `465`                                         | SMTP server port                     |
+| `SMTP_USERNAME`             | -                                             | SMTP username                        |
+| `SMTP_PASSWORD`             | -                                             | SMTP password/API key                |
+| `SMTP_FROM_EMAIL`           | `noreply@diaryx.org`                          | From email address                   |
+| `SMTP_FROM_NAME`            | `Diaryx`                                      | From name                            |
+| `SESSION_EXPIRY_DAYS`       | `30`                                          | Session token expiration in days     |
+| `MAGIC_LINK_EXPIRY_MINUTES` | `15`                                          | Magic link expiration in minutes     |
+| `CORS_ORIGINS`              | `http://localhost:5173,http://localhost:1420` | Comma-separated CORS origins         |
 
 ## API Endpoints
 
 ### Authentication
 
 #### Request Magic Link
+
 ```
 POST /auth/magic-link
 Content-Type: application/json
@@ -73,6 +74,7 @@ Content-Type: application/json
 ```
 
 Response:
+
 ```json
 {
   "success": true,
@@ -81,11 +83,13 @@ Response:
 ```
 
 #### Verify Magic Link
+
 ```
 GET /auth/verify?token=XXX&device_name=My%20Device
 ```
 
 Response:
+
 ```json
 {
   "success": true,
@@ -98,24 +102,28 @@ Response:
 ```
 
 #### Get Current User
+
 ```
 GET /auth/me
 Authorization: Bearer <session_token>
 ```
 
 #### Logout
+
 ```
 POST /auth/logout
 Authorization: Bearer <session_token>
 ```
 
 #### List Devices
+
 ```
 GET /auth/devices
 Authorization: Bearer <session_token>
 ```
 
 #### Delete Device
+
 ```
 DELETE /auth/devices/{device_id}
 Authorization: Bearer <session_token>
@@ -124,11 +132,13 @@ Authorization: Bearer <session_token>
 ### API
 
 #### Server Status
+
 ```
 GET /api/status
 ```
 
 Response:
+
 ```json
 {
   "status": "ok",
@@ -139,9 +149,33 @@ Response:
 ```
 
 #### List Workspaces
+
 ```
 GET /api/workspaces
 Authorization: Bearer <session_token>
+```
+
+#### Download Workspace Snapshot
+
+```
+GET /api/workspaces/{workspace_id}/snapshot
+Authorization: Bearer <session_token>
+```
+
+Response: zip archive containing markdown files with frontmatter.
+
+#### Upload Workspace Snapshot
+
+```
+POST /api/workspaces/{workspace_id}/snapshot?mode=replace|merge
+Authorization: Bearer <session_token>
+Content-Type: application/zip
+```
+
+Response:
+
+```json
+{ "files_imported": 123 }
 ```
 
 ### Share Sessions (Live Collaboration)
@@ -149,6 +183,7 @@ Authorization: Bearer <session_token>
 Share sessions allow real-time collaboration with guests who don't need accounts.
 
 #### Create Session
+
 ```
 POST /api/sessions
 Authorization: Bearer <session_token>
@@ -158,6 +193,7 @@ Content-Type: application/json
 ```
 
 Response:
+
 ```json
 {
   "code": "XXXXXXXX-XXXXXXXX",
@@ -167,11 +203,13 @@ Response:
 ```
 
 #### Get Session Info
+
 ```
 GET /api/sessions/{code}
 ```
 
 Response:
+
 ```json
 {
   "code": "XXXXXXXX-XXXXXXXX",
@@ -182,6 +220,7 @@ Response:
 ```
 
 #### Update Session (toggle read-only)
+
 ```
 PATCH /api/sessions/{code}
 Authorization: Bearer <session_token>
@@ -191,6 +230,7 @@ Content-Type: application/json
 ```
 
 #### End Session
+
 ```
 DELETE /api/sessions/{code}
 Authorization: Bearer <session_token>
@@ -208,11 +248,13 @@ This separation prevents large file bodies from bloating the workspace CRDT.
 #### Workspace Sync (metadata only)
 
 ##### Authenticated (multi-device)
+
 ```
 GET /sync?doc=workspace_id&token=session_token
 ```
 
 ##### Session Guest
+
 ```
 GET /sync?session=XXXXXXXX-XXXXXXXX&guest_id=guest-123
 ```
@@ -220,11 +262,13 @@ GET /sync?session=XXXXXXXX-XXXXXXXX&guest_id=guest-123
 #### Body Doc Sync (per-file body content)
 
 ##### Authenticated (multi-device)
+
 ```
 GET /sync?doc=workspace_id&file=path/to/file.md&token=session_token
 ```
 
 ##### Session Guest
+
 ```
 GET /sync?session=XXXXXXXX-XXXXXXXX&file=path/to/file.md&guest_id=guest-123
 ```

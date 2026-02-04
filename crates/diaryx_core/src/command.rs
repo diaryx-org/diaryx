@@ -806,6 +806,19 @@ pub enum Command {
         write_to_disk: bool,
     },
 
+    /// Handle CRDT state from server's handshake protocol.
+    ///
+    /// This is called after receiving the CrdtState message from the server.
+    /// The state is the full CRDT state that should be applied (not merged)
+    /// to ensure consistency with the server.
+    ///
+    /// Returns the number of files in the workspace after applying the state.
+    #[cfg(feature = "crdt")]
+    HandleCrdtState {
+        /// The full CRDT state bytes (Y-update v1 encoded).
+        state: Vec<u8>,
+    },
+
     /// Create a SyncStep1 message for initiating workspace sync.
     ///
     /// Returns the encoded Y-sync message to send to the server.

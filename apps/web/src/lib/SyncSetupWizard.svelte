@@ -19,6 +19,8 @@
     requestMagicLink,
     verifyMagicLink,
     checkUserHasData,
+    downloadWorkspaceSnapshot,
+    uploadWorkspaceSnapshot,
   } from "$lib/auth";
   import {
     Mail,
@@ -38,6 +40,7 @@
   } from "@lucide/svelte";
   import { toast } from "svelte-sonner";
   import { getBackend, createApi } from "./backend";
+  import type { TreeNode } from "$lib/backend/interface";
   import {
     waitForInitialSync,
     onSyncProgress,
@@ -46,6 +49,7 @@
     setWorkspaceId,
     getAllFiles,
     proactivelySyncBodies,
+    markAllCrdtFilesAsDeleted,
   } from "$lib/crdt/workspaceCrdtBridge";
   import { getDefaultWorkspace } from "$lib/auth";
 
@@ -95,6 +99,9 @@
   let isDownloadingBackup = $state(false);
   let importProgress = $state(0);
   let isCheckingServerData = $state(false);
+  let progressDetail = $state<string | null>(null);
+  let suppressSyncProgress = $state(false);
+  let progressMode = $state<'bytes' | 'files' | 'percent' | null>(null);
 
   // File input for import
   let fileInputRef: HTMLInputElement | null = $state(null);
@@ -376,6 +383,9 @@
     try {
       const backend = await getBackend();
       const api = createApi(backend);
+      const defaultWorkspace = getDefaultWorkspace();
+      const workspaceId = defaultWorkspace?.id ?? null;
+      let snapshotUploaded = false;
 
       // Resolve workspace path the same way App.svelte does
       const workspaceDir = backend.getWorkspacePath()
@@ -393,11 +403,14 @@
 
       // Subscribe to sync progress for real-time updates
       unsubscribeProgress = onSyncProgress((completed, total) => {
+        if (suppressSyncProgress) return;
         syncCompleted = completed;
         syncTotal = total;
         if (total > 0) {
           importProgress = Math.round((completed / total) * 100);
         }
+        progressDetail = total > 0 ? `${completed} of ${total}` : null;
+        progressMode = total > 0 ? 'files' : null;
       });
 
       unsubscribeStatus = onSyncStatus((status, statusError) => {
@@ -408,12 +421,80 @@
 
       switch (initMode) {
         case 'load_server':
-          // Clear local files and let sync download from server
-          console.log("[SyncWizard] Loading from server - clearing local data");
-          syncStatusText = "Downloading files...";
-          // Note: The actual clearing and sync will be handled by the sync system
-          // We just need to initialize with an empty state
-          await api.initializeWorkspaceCrdt(workspacePath);
+          // Download server snapshot and replace local content
+          console.log("[SyncWizard] Loading from server");
+          syncStatusText = "Preparing workspace...";
+          suppressSyncProgress = true;
+          progressDetail = null;
+          progressMode = 'bytes';
+
+          // Step 1: Clear local workspace files from disk/OPFS
+          await clearLocalWorkspace(api, workspaceDir);
+
+          // Step 2: Mark all existing CRDT entries as deleted (tombstone)
+          // This ensures local entries don't persist after sync
+          const tombstoned = await markAllCrdtFilesAsDeleted();
+          console.log(`[SyncWizard] Tombstoned ${tombstoned} local CRDT entries`);
+
+          // Step 3: Download and import server snapshot
+          // This happens BEFORE WebSocket connects, but AFTER clearing local state
+          // The test waits 5s after clientA sync to ensure server has files
+          syncStatusText = "Downloading snapshot...";
+          if (workspaceId) {
+            try {
+              const snapshot = await downloadWorkspaceSnapshot(workspaceId);
+              console.log("[SyncWizard] Snapshot download result:", snapshot ? `${snapshot.size} bytes` : "null");
+
+              if (snapshot && snapshot.size > 100) {
+                const snapshotFile = new File(
+                  [snapshot],
+                  `diaryx-snapshot-${workspaceId}.zip`,
+                  { type: "application/zip" },
+                );
+
+                const result = await backend.importFromZip(
+                  snapshotFile,
+                  workspaceDir,
+                  (uploaded, total) => {
+                    importProgress = total > 0 ? Math.round((uploaded / total) * 100) : 0;
+                    progressDetail = total > 0
+                      ? `${formatBytes(uploaded)} of ${formatBytes(total)}`
+                      : null;
+                    progressMode = 'bytes';
+                  },
+                );
+
+                if (result.success && result.files_imported > 0) {
+                  console.log(`[SyncWizard] Snapshot import complete: ${result.files_imported} files`);
+                  progressDetail = `${result.files_imported} files`;
+                  progressMode = 'files';
+                } else if (result.success) {
+                  console.warn("[SyncWizard] Snapshot downloaded but no files imported");
+                } else {
+                  console.warn("[SyncWizard] Snapshot import failed:", result.error);
+                }
+              } else {
+                console.log("[SyncWizard] Snapshot empty or unavailable");
+              }
+            } catch (e) {
+              console.warn("[SyncWizard] Snapshot download/import error:", e);
+            }
+          }
+
+          suppressSyncProgress = false;
+          progressDetail = null;
+          progressMode = null;
+
+          // Step 4: Initialize CRDT from the downloaded files
+          // If snapshot was imported, this populates CRDT from disk
+          // If snapshot wasn't available, this may fail (empty disk) - WebSocket sync will handle it
+          syncStatusText = "Initializing workspace...";
+          try {
+            await api.initializeWorkspaceCrdt(workspacePath);
+            console.log("[SyncWizard] CRDT initialized from downloaded files");
+          } catch (e) {
+            console.log("[SyncWizard] CRDT init error (continuing anyway):", e);
+          }
           break;
 
         case 'merge':
@@ -426,6 +507,44 @@
         case 'sync_local':
           // Initialize with local files, upload to server
           console.log("[SyncWizard] Syncing local content to server");
+          syncStatusText = "Uploading snapshot...";
+          suppressSyncProgress = true;
+          progressDetail = null;
+          progressMode = 'bytes';
+
+          if (workspaceId && userHasServerData === false) {
+            try {
+              const JSZip = (await import("jszip")).default;
+              const zip = new JSZip();
+
+              const files = await api.exportToMemory(workspacePath, "*");
+              for (const file of files) {
+                zip.file(file.path, file.content);
+              }
+
+              const blob = await zip.generateAsync({ type: "blob" });
+              const result = await uploadWorkspaceSnapshot(
+                workspaceId,
+                blob,
+                "replace",
+              );
+
+              if (result) {
+                snapshotUploaded = true;
+                console.log(
+                  `[SyncWizard] Snapshot upload complete (${result.files_imported} files)`
+                );
+                progressDetail = `${result.files_imported} files`;
+                progressMode = 'files';
+              }
+            } catch (e) {
+              console.warn("[SyncWizard] Snapshot upload failed:", e);
+            }
+          }
+
+          suppressSyncProgress = false;
+          progressDetail = null;
+          progressMode = null;
           syncStatusText = "Uploading files...";
           await api.initializeWorkspaceCrdt(workspacePath);
           break;
@@ -440,12 +559,19 @@
               undefined,
               (uploaded, total) => {
                 importProgress = Math.round((uploaded / total) * 100);
+                progressDetail = total > 0
+                  ? `${formatBytes(uploaded)} of ${formatBytes(total)}`
+                  : null;
+                progressMode = 'bytes';
               }
             );
 
             if (!result.success) {
               throw new Error(result.error || "Import failed");
             }
+
+            progressDetail = `${result.files_imported} files`;
+            progressMode = 'files';
 
             // Dispatch event for tree refresh
             window.dispatchEvent(
@@ -458,9 +584,6 @@
 
       // IMPORTANT: Now establish the WebSocket sync connection
       // The CRDT is populated with local files, now we need to connect to the server
-      const defaultWorkspace = getDefaultWorkspace();
-      const workspaceId = defaultWorkspace?.id ?? null;
-
       if (workspaceId) {
         console.log("[SyncWizard] Establishing sync connection for workspace:", workspaceId);
 
@@ -486,61 +609,12 @@
         });
       }
 
-      // For load_server mode, proactively sync body content for ALL files
-      // This downloads the actual file content from the server, not just metadata
-      if (initMode === 'load_server') {
-        console.log("[SyncWizard] Starting body content download...");
-        syncStatusText = "Downloading file contents...";
-
-        try {
-          const allFiles = await getAllFiles();
-          const filePaths = Array.from(allFiles.keys());
-
-          if (filePaths.length > 0) {
-            console.log(`[SyncWizard] Downloading body content for ${filePaths.length} files`);
-
-            // Two-phase progress:
-            // Phase 1 (0-50%): Sending subscriptions
-            // Phase 2 (50-100%): Waiting for server to send content
-            let subscriptionsSent = false;
-
-            await proactivelySyncBodies(filePaths, {
-              concurrency: 5,
-              waitForComplete: true, // Wait for actual body sync completion
-              syncTimeout: 120000, // 2 minute timeout
-              onProgress: (completed, total) => {
-                syncCompleted = completed;
-                syncTotal = total;
-                if (total > 0) {
-                  // Phase 1: subscriptions being sent (0-50%)
-                  const subscriptionProgress = Math.round((completed / total) * 50);
-                  importProgress = subscriptionProgress;
-
-                  if (completed === total && !subscriptionsSent) {
-                    subscriptionsSent = true;
-                    syncStatusText = "Receiving file contents...";
-                    // Phase 2 starts - we wait for server's sync_complete
-                    // Progress jumps to 50% as we wait
-                    importProgress = 50;
-                  }
-                }
-              }
-            });
-
-            // If we get here, body sync completed successfully
-            importProgress = 100;
-            console.log("[SyncWizard] Body content download complete");
-          }
-        } catch (e) {
-          console.warn("[SyncWizard] Body sync error (continuing anyway):", e);
-        }
-      }
-
       // For sync_local and merge modes, proactively sync body content
       // This uploads the actual file content to the server, not just metadata
-      if (initMode === 'sync_local' || initMode === 'merge') {
+      if ((initMode === 'sync_local' && !snapshotUploaded) || initMode === 'merge') {
         console.log("[SyncWizard] Starting body content sync...");
         syncStatusText = "Uploading file contents...";
+        progressMode = 'percent';
 
         try {
           const allFiles = await getAllFiles();
@@ -572,6 +646,7 @@
                     // Phase 2 starts - waiting for server confirmation
                     importProgress = 50;
                   }
+                  progressMode = 'percent';
                 }
               }
             });
@@ -658,6 +733,44 @@
       .replace(/^https:\/\//, "wss://")
       .replace(/^http:\/\//, "ws://")
       + "/sync";
+  }
+
+  function formatBytes(bytes: number): string {
+    if (bytes === 0) return "0 B";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    const index = Math.floor(Math.log(bytes) / Math.log(1024));
+    const value = bytes / Math.pow(1024, index);
+    return `${value.toFixed(value < 10 && index > 0 ? 1 : 0)} ${units[index]}`;
+  }
+
+  function collectFilePaths(node: TreeNode, paths: string[]) {
+    if (!node.children || node.children.length === 0) {
+      paths.push(node.path);
+      return;
+    }
+    for (const child of node.children) {
+      collectFilePaths(child, paths);
+    }
+  }
+
+  async function clearLocalWorkspace(api: ReturnType<typeof createApi>, workspaceDir: string) {
+    try {
+      const tree = await api.getFilesystemTree(workspaceDir, true);
+      const files: string[] = [];
+      collectFilePaths(tree, files);
+      if (files.length === 0) return;
+
+      console.log(`[SyncWizard] Clearing ${files.length} local file(s) before download`);
+      for (const path of files) {
+        try {
+          await api.deleteFile(path);
+        } catch (e) {
+          console.warn(`[SyncWizard] Failed to delete ${path}:`, e);
+        }
+      }
+    } catch (e) {
+      console.warn("[SyncWizard] Failed to clear local workspace:", e);
+    }
   }
 
   // Cleanup on destroy
@@ -967,7 +1080,17 @@
             <p class="text-xs text-muted-foreground text-center">
               {#if syncStatusText}
                 {syncStatusText}
-                {#if syncTotal > 0}
+                {#if progressDetail}
+                  {#if progressMode === 'bytes'}
+                    ({progressDetail})
+                  {:else if progressMode === 'files'}
+                    ({progressDetail} files)
+                  {:else if progressMode === 'percent'}
+                    ({importProgress}%)
+                  {:else}
+                    ({progressDetail})
+                  {/if}
+                {:else if syncTotal > 0}
                   ({syncCompleted} of {syncTotal} files)
                 {/if}
               {:else if initMode === 'import'}

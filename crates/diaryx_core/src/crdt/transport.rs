@@ -210,6 +210,16 @@ pub trait SyncTransport: Send + Sync {
     /// Returns an error if the connection is closed or the send fails.
     fn send(&self, message: &[u8]) -> impl std::future::Future<Output = Result<()>> + Send;
 
+    /// Send a text message to the server.
+    ///
+    /// The message is sent as a WebSocket text frame. Used for JSON control
+    /// messages like focus/unfocus.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection is closed or the send fails.
+    fn send_text(&self, message: &str) -> impl std::future::Future<Output = Result<()>> + Send;
+
     /// Set the callback for incoming messages.
     ///
     /// The callback receives raw message bytes and returns an optional response

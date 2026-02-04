@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use super::body_doc::BodyDoc;
+use super::body_doc::{BodyDoc, SyncCallback};
 use super::storage::{CrdtStorage, StorageResult};
 use super::types::UpdateOrigin;
 use crate::fs::FileSystemEvent;
@@ -50,6 +50,9 @@ pub struct BodyDocManager {
     /// Optional callback for emitting filesystem events on remote/sync updates.
     /// This callback is propagated to each BodyDoc when created.
     event_callback: RwLock<Option<Arc<dyn Fn(&FileSystemEvent) + Send + Sync>>>,
+    /// Optional callback for emitting sync messages when local changes occur.
+    /// This callback is propagated to each BodyDoc when created.
+    sync_callback: RwLock<Option<SyncCallback>>,
 }
 
 impl BodyDocManager {
@@ -59,6 +62,7 @@ impl BodyDocManager {
             storage,
             docs: RwLock::new(HashMap::new()),
             event_callback: RwLock::new(None),
+            sync_callback: RwLock::new(None),
         }
     }
 
@@ -71,11 +75,67 @@ impl BodyDocManager {
         *cb = Some(callback);
     }
 
+    /// Set the sync callback for emitting sync messages when local changes occur.
+    ///
+    /// This callback will be propagated to each BodyDoc when it's created or loaded.
+    /// The callback uses the Yrs observer pattern to automatically emit the exact
+    /// update bytes when mutations occur.
+    ///
+    /// **Note**: This also applies the callback to all currently loaded documents.
+    pub fn set_sync_callback(&self, callback: SyncCallback) {
+        // Store the callback
+        {
+            let mut cb = self.sync_callback.write().unwrap();
+            *cb = Some(callback.clone());
+        }
+
+        // Apply to all currently loaded documents
+        let docs = self.docs.read().unwrap();
+        log::trace!(
+            "[BodyDocManager] set_sync_callback: applying to {} currently loaded docs",
+            docs.len()
+        );
+        for (doc_name, doc) in docs.iter() {
+            log::trace!(
+                "[BodyDocManager] set_sync_callback: registering observer for '{}'",
+                doc_name
+            );
+            doc.set_sync_callback(Arc::new({
+                let callback = callback.clone();
+                let doc_name = doc_name.clone();
+                move |_name: &str, update: &[u8]| {
+                    callback(&doc_name, update);
+                }
+            }));
+        }
+    }
+
     /// Apply the event callback to a BodyDoc if one is set.
     fn apply_event_callback(&self, doc: &mut BodyDoc) {
         let cb = self.event_callback.read().unwrap();
         if let Some(ref callback) = *cb {
             doc.set_event_callback(Arc::clone(callback));
+        }
+    }
+
+    /// Apply the sync callback to a BodyDoc if one is set.
+    fn apply_sync_callback(&self, doc: &BodyDoc, doc_name: &str) {
+        let cb = self.sync_callback.read().unwrap();
+        if let Some(ref callback) = *cb {
+            log::trace!(
+                "[BodyDocManager] apply_sync_callback: registering observer for '{}'",
+                doc_name
+            );
+            let callback = callback.clone();
+            let doc_name = doc_name.to_string();
+            doc.set_sync_callback(Arc::new(move |_name: &str, update: &[u8]| {
+                callback(&doc_name, update);
+            }));
+        } else {
+            log::trace!(
+                "[BodyDocManager] apply_sync_callback: no callback set, skipping '{}'",
+                doc_name
+            );
         }
     }
 
@@ -109,6 +169,8 @@ impl BodyDocManager {
                         // Apply event callback if set
                         self.apply_event_callback(&mut doc);
                         let doc = Arc::new(doc);
+                        // Apply sync callback if set (must be done after Arc wrap)
+                        self.apply_sync_callback(&doc, doc_name);
                         docs.insert(doc_name.to_string(), Arc::clone(&doc));
                         Some(doc)
                     }
@@ -148,6 +210,8 @@ impl BodyDocManager {
         self.apply_event_callback(&mut doc);
 
         let doc = Arc::new(doc);
+        // Apply sync callback if set (must be done after Arc wrap)
+        self.apply_sync_callback(&doc, doc_name);
         docs.insert(doc_name.to_string(), Arc::clone(&doc));
         doc
     }
@@ -160,6 +224,8 @@ impl BodyDocManager {
         self.apply_event_callback(&mut doc);
 
         let doc = Arc::new(doc);
+        // Apply sync callback if set (must be done after Arc wrap)
+        self.apply_sync_callback(&doc, doc_name);
 
         let mut docs = self.docs.write().unwrap();
         docs.insert(doc_name.to_string(), Arc::clone(&doc));
@@ -556,5 +622,38 @@ mod tests {
         // Should be gone from both cache and storage
         assert!(!manager.is_loaded("to_delete.md"));
         assert!(storage.load_doc("to_delete.md").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_sync_callback_fires_on_local_changes() {
+        use std::sync::{Arc, Mutex};
+
+        let storage: Arc<dyn CrdtStorage> = Arc::new(MemoryStorage::new());
+        let manager = BodyDocManager::new(Arc::clone(&storage));
+
+        // Track sync callback invocations
+        let sync_calls = Arc::new(Mutex::new(Vec::<(String, Vec<u8>)>::new()));
+        let sync_calls_clone = Arc::clone(&sync_calls);
+
+        // Set up sync callback
+        manager.set_sync_callback(Arc::new(move |doc_name: &str, update: &[u8]| {
+            sync_calls_clone
+                .lock()
+                .unwrap()
+                .push((doc_name.to_string(), update.to_vec()));
+        }));
+
+        // Create a doc and set content - should trigger sync callback
+        let doc = manager.get_or_create("test.md");
+        let _ = doc.set_body("Hello World");
+
+        // Verify sync callback was called with the update
+        let calls = sync_calls.lock().unwrap();
+        assert!(
+            !calls.is_empty(),
+            "Sync callback should have been called when content was set"
+        );
+        assert_eq!(calls[0].0, "test.md", "Callback should receive doc name");
+        assert!(!calls[0].1.is_empty(), "Update bytes should not be empty");
     }
 }

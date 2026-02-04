@@ -3,10 +3,10 @@
 use serde_yaml::Value;
 use std::path::PathBuf;
 
-use crate::cli::CliDiaryxAppSync;
 use crate::cli::util::{
     ConfirmResult, load_config, prompt_confirm, rename_file_with_refs, resolve_paths,
 };
+use crate::cli::{CliDiaryxAppSync, CliWorkspace};
 
 /// Convert a filename (without extension) to a human-readable title
 /// Replaces underscores and hyphens with spaces, applies title case
@@ -52,6 +52,7 @@ pub fn slugify(title: &str) -> String {
 /// Handle the normalize-filename command
 pub fn handle_normalize_filename(
     app: &CliDiaryxAppSync,
+    ws: &CliWorkspace,
     path: &str,
     new_title: Option<String>,
     yes: bool,
@@ -194,7 +195,7 @@ pub fn handle_normalize_filename(
         }
 
         // Perform the rename using shared utility that updates all workspace references
-        rename_file_with_refs(app, file_path, &new_path, false);
+        rename_file_with_refs(app, Some(ws), file_path, &new_path, false);
     }
 }
 

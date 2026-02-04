@@ -5,6 +5,7 @@
 //! BodyDoc for real-time sync of markdown content.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
 use yrs::{
@@ -22,6 +23,9 @@ const BODY_TEXT_NAME: &str = "body";
 
 /// Name of the Y.Map holding frontmatter properties.
 const FRONTMATTER_MAP_NAME: &str = "frontmatter";
+
+/// Callback type for sync messages. Takes (doc_name, update_bytes).
+pub type SyncCallback = Arc<dyn Fn(&str, &[u8]) + Send + Sync>;
 
 /// A CRDT document for a single file's body content.
 ///
@@ -56,6 +60,14 @@ pub struct BodyDoc {
     doc_name: RwLock<String>,
     /// Optional callback for emitting filesystem events on remote/sync updates.
     event_callback: Option<Arc<dyn Fn(&FileSystemEvent) + Send + Sync>>,
+    /// Flag set during apply_update to prevent observer from firing for remote updates.
+    /// This prevents echoing back updates we receive from the server.
+    applying_remote: Arc<AtomicBool>,
+    /// Callback to emit sync messages when local changes occur.
+    sync_callback: RwLock<Option<SyncCallback>>,
+    /// Stored observer subscription to keep it alive.
+    /// With yrs "sync" feature enabled, Subscription is Send+Sync.
+    _update_subscription: RwLock<Option<yrs::Subscription>>,
 }
 
 impl BodyDoc {
@@ -74,6 +86,9 @@ impl BodyDoc {
             storage,
             doc_name: RwLock::new(doc_name),
             event_callback: None,
+            applying_remote: Arc::new(AtomicBool::new(false)),
+            sync_callback: RwLock::new(None),
+            _update_subscription: RwLock::new(None),
         }
     }
 
@@ -126,6 +141,9 @@ impl BodyDoc {
             storage,
             doc_name: RwLock::new(doc_name),
             event_callback: None,
+            applying_remote: Arc::new(AtomicBool::new(false)),
+            sync_callback: RwLock::new(None),
+            _update_subscription: RwLock::new(None),
         })
     }
 
@@ -135,6 +153,74 @@ impl BodyDoc {
     /// `apply_update()` is called with a non-Local origin.
     pub fn set_event_callback(&mut self, callback: Arc<dyn Fn(&FileSystemEvent) + Send + Sync>) {
         self.event_callback = Some(callback);
+    }
+
+    /// Set the sync callback for emitting sync messages when local changes occur.
+    ///
+    /// This uses the Yrs observer pattern: when any mutation occurs in the document
+    /// (via `set_body()`, `insert_at()`, etc.), the observer automatically receives
+    /// the exact update bytes to send. This is more reliable than manual delta encoding
+    /// because Yrs handles state vector tracking internally.
+    ///
+    /// The callback receives (doc_name, update_bytes) and should send the update
+    /// to the sync server.
+    ///
+    /// **Important**: The observer will NOT fire for remote updates (those applied via
+    /// `apply_update()` with non-Local origin) because the `applying_remote` flag
+    /// prevents echoing.
+    pub fn set_sync_callback(&self, callback: SyncCallback) {
+        let doc_name = self.doc_name.read().unwrap().clone();
+        if self._update_subscription.read().unwrap().is_some() {
+            log::trace!(
+                "[BodyDoc] set_sync_callback: observer already registered for '{}', skipping",
+                doc_name
+            );
+            return;
+        }
+        log::trace!(
+            "[BodyDoc] set_sync_callback: registering observer for '{}'",
+            doc_name
+        );
+
+        // Store the callback
+        {
+            let mut cb = self.sync_callback.write().unwrap();
+            *cb = Some(callback.clone());
+        }
+
+        // Set up the update observer
+        let applying_remote = Arc::clone(&self.applying_remote);
+        let doc_name_for_observer = doc_name.clone();
+
+        let subscription = self
+            .doc
+            .observe_update_v1(move |_, event| {
+                // Skip if this is a remote update (we don't want to echo it back)
+                if applying_remote.load(Ordering::SeqCst) {
+                    log::trace!(
+                        "[BodyDoc] Observer skipping remote update for '{}'",
+                        doc_name_for_observer
+                    );
+                    return;
+                }
+
+                // Emit sync message with the update bytes
+                log::trace!(
+                    "[BodyDoc] Observer fired for '{}', update_len={}",
+                    doc_name_for_observer,
+                    event.update.len()
+                );
+                callback(&doc_name_for_observer, &event.update);
+            })
+            .expect("Failed to observe document updates");
+
+        // Store subscription to keep it alive
+        let mut sub = self._update_subscription.write().unwrap();
+        *sub = Some(subscription);
+        log::trace!(
+            "[BodyDoc] set_sync_callback: observer registered for '{}'",
+            doc_name
+        );
     }
 
     /// Emit a filesystem event to the registered callback, if any.
@@ -179,6 +265,13 @@ impl BodyDoc {
     ///
     /// Returns an error if the update fails to persist to storage.
     pub fn set_body(&self, content: &str) -> StorageResult<()> {
+        let doc_name = self.doc_name.read().unwrap().clone();
+        log::info!(
+            "[BodyDoc] set_body called for '{}', content_len={}",
+            doc_name,
+            content.len()
+        );
+
         // Get current content and state vector before the change
         let (current, sv_before) = {
             let txn = self.doc.transact();
@@ -187,8 +280,18 @@ impl BodyDoc {
 
         // If content is the same, no-op
         if current == content {
+            log::info!(
+                "[BodyDoc] set_body: content unchanged for '{}', no-op",
+                doc_name
+            );
             return Ok(());
         }
+        log::info!(
+            "[BodyDoc] set_body: content changed for '{}', current_len={}, new_len={}",
+            doc_name,
+            current.len(),
+            content.len()
+        );
 
         // Calculate minimal diff using common prefix/suffix approach
         let current_chars: Vec<char> = current.chars().collect();
@@ -387,18 +490,36 @@ impl BodyDoc {
     /// For non-Local origins (Remote, Sync), this method will emit a `ContentsChanged`
     /// event via the event callback. This enables unified event handling where the UI
     /// responds the same way to both local and remote changes.
+    ///
+    /// This method also sets the `applying_remote` flag to prevent the update observer
+    /// from firing, which would otherwise echo the remote update back to the server.
     pub fn apply_update(&self, update: &[u8], origin: UpdateOrigin) -> StorageResult<Option<i64>> {
         // Only emit events for remote/sync updates (Local updates emit via CrdtFs)
         let should_emit = origin != UpdateOrigin::Local && self.event_callback.is_some();
 
+        // Set flag to prevent observer from firing for remote updates
+        // This prevents echoing back updates we receive from the server
+        let is_remote = origin != UpdateOrigin::Local;
+        if is_remote {
+            self.applying_remote.store(true, Ordering::SeqCst);
+        }
+
         let decoded = Update::decode_v1(update)
             .map_err(|e| DiaryxError::Crdt(format!("Failed to decode update: {}", e)))?;
 
-        {
+        let result = {
             let mut txn = self.doc.transact_mut();
             txn.apply_update(decoded)
-                .map_err(|e| DiaryxError::Crdt(format!("Failed to apply update: {}", e)))?;
+                .map_err(|e| DiaryxError::Crdt(format!("Failed to apply update: {}", e)))
+        };
+
+        // Clear flag after applying (before potential error return)
+        if is_remote {
+            self.applying_remote.store(false, Ordering::SeqCst);
         }
+
+        // Propagate any error from apply_update
+        result?;
 
         // Emit ContentsChanged event for remote body updates
         let doc_name = self.doc_name.read().unwrap().clone();
@@ -460,7 +581,7 @@ impl BodyDoc {
     /// It receives the transaction and text event.
     pub fn observe_body<F>(&self, callback: F) -> yrs::Subscription
     where
-        F: Fn() + 'static,
+        F: Fn() + Send + Sync + 'static,
     {
         self.body_text.observe(move |_txn, _event| {
             callback();
@@ -470,7 +591,7 @@ impl BodyDoc {
     /// Observe changes to the underlying document.
     pub fn observe_updates<F>(&self, callback: F) -> yrs::Subscription
     where
-        F: Fn(&[u8]) + 'static,
+        F: Fn(&[u8]) + Send + Sync + 'static,
     {
         self.doc
             .observe_update_v1(move |_, event| {

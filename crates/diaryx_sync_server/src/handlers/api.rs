@@ -1,15 +1,18 @@
 use crate::auth::RequireAuth;
 use crate::db::AuthRepo;
+use crate::sync::SnapshotImportMode;
 use crate::sync::SyncState;
+use axum::body::Bytes;
 use axum::{
     Router,
-    extract::State,
-    http::StatusCode,
+    extract::{Query, State},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Json},
     routing::get,
 };
 use serde::Serialize;
 use std::sync::Arc;
+use tracing::error;
 
 /// Shared state for API handlers
 #[derive(Clone)]
@@ -47,6 +50,10 @@ pub fn api_routes(state: ApiState) -> Router {
         .route("/status", get(get_status))
         .route("/workspaces", get(list_workspaces))
         .route("/workspaces/{workspace_id}", get(get_workspace))
+        .route(
+            "/workspaces/{workspace_id}/snapshot",
+            get(get_workspace_snapshot).post(upload_workspace_snapshot),
+        )
         .route("/user/has-data", get(check_user_has_data))
         .with_state(state)
 }
@@ -104,6 +111,87 @@ async fn get_workspace(
         name: workspace.name,
     })
     .into_response()
+}
+
+/// GET /api/workspaces/:workspace_id/snapshot - Download workspace snapshot zip
+async fn get_workspace_snapshot(
+    State(state): State<ApiState>,
+    RequireAuth(auth): RequireAuth,
+    axum::extract::Path(workspace_id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let workspace = match state.repo.get_workspace(&workspace_id) {
+        Ok(Some(w)) => w,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+
+    // Verify ownership
+    if workspace.user_id != auth.user.id {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    let room = state.sync_state.get_or_create_room(&workspace_id).await;
+    let snapshot = match room.export_snapshot_zip().await {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            error!("Snapshot export failed for {}: {:?}", workspace_id, err);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, "application/zip".parse().unwrap());
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        format!(
+            "attachment; filename=\"diaryx-snapshot-{}.zip\"",
+            workspace_id
+        )
+        .parse()
+        .unwrap(),
+    );
+
+    (headers, snapshot).into_response()
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SnapshotUploadQuery {
+    mode: Option<String>,
+}
+
+/// POST /api/workspaces/:workspace_id/snapshot - Upload workspace snapshot zip
+async fn upload_workspace_snapshot(
+    State(state): State<ApiState>,
+    RequireAuth(auth): RequireAuth,
+    axum::extract::Path(workspace_id): axum::extract::Path<String>,
+    Query(query): Query<SnapshotUploadQuery>,
+    bytes: Bytes,
+) -> impl IntoResponse {
+    let workspace = match state.repo.get_workspace(&workspace_id) {
+        Ok(Some(w)) => w,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+
+    if workspace.user_id != auth.user.id {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    let mode = match query.mode.as_deref() {
+        Some("merge") => SnapshotImportMode::Merge,
+        _ => SnapshotImportMode::Replace,
+    };
+
+    let room = state.sync_state.get_or_create_room(&workspace_id).await;
+    let result = match room.import_snapshot_zip(&bytes, mode).await {
+        Ok(result) => result,
+        Err(err) => {
+            error!("Snapshot import failed for {}: {:?}", workspace_id, err);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    Json(result).into_response()
 }
 
 /// GET /api/user/has-data - Check if user has synced data on the server

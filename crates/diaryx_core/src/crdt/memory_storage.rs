@@ -242,6 +242,14 @@ impl CrdtStorage for MemoryStorage {
 
         Ok(())
     }
+
+    fn clear_updates(&self, name: &str) -> StorageResult<()> {
+        let mut updates = self.updates.write().unwrap();
+        if let Some(doc_updates) = updates.get_mut(name) {
+            doc_updates.clear();
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -488,5 +496,41 @@ mod tests {
         // Both should be empty
         assert!(storage.load_doc("nonexistent").unwrap().is_none());
         assert!(storage.load_doc("new_name").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_clear_updates() {
+        let storage = MemoryStorage::new();
+
+        // Add some updates and a doc snapshot
+        storage.save_doc("test", b"snapshot").unwrap();
+        storage
+            .append_update("test", b"update1", UpdateOrigin::Local)
+            .unwrap();
+        storage
+            .append_update("test", b"update2", UpdateOrigin::Remote)
+            .unwrap();
+
+        // Verify updates exist
+        assert_eq!(storage.get_all_updates("test").unwrap().len(), 2);
+
+        // Clear updates
+        storage.clear_updates("test").unwrap();
+
+        // Updates should be gone but snapshot should remain
+        assert!(storage.get_all_updates("test").unwrap().is_empty());
+        assert_eq!(
+            storage.load_doc("test").unwrap(),
+            Some(b"snapshot".to_vec())
+        );
+    }
+
+    #[test]
+    fn test_clear_updates_nonexistent() {
+        let storage = MemoryStorage::new();
+
+        // Clearing updates for nonexistent doc should not error
+        let result = storage.clear_updates("nonexistent");
+        assert!(result.is_ok());
     }
 }

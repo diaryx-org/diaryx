@@ -38,6 +38,7 @@ mod js_async_fs;
 mod opfs_fs;
 mod utils;
 mod wasm_sqlite_storage;
+mod wasm_sync_client;
 
 // Re-export WASM SQLite storage for external use
 pub use wasm_sqlite_storage::WasmSqliteStorage;
@@ -47,6 +48,9 @@ pub use callback_transport::CallbackTransport;
 
 // Re-export the main backend class
 pub use backend::DiaryxBackend;
+
+// Re-export WASM sync client
+pub use wasm_sync_client::WasmSyncClient;
 
 // Re-export filesystem implementations
 pub use fsa_fs::FsaFileSystem;

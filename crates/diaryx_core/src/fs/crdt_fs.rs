@@ -420,7 +420,7 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
 
         // Skip temporary files created by the metadata writer's safe write process
         // These files should never be synced to the server
-        if path_str.ends_with(".tmp") || path_str.ends_with(".bak") {
+        if path_str.ends_with(".tmp") || path_str.ends_with(".bak") || path_str.ends_with(".swap") {
             log::debug!(
                 "CrdtFs: Skipping CRDT update for temporary file: {}",
                 path_str
@@ -428,7 +428,7 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
             return;
         }
         let body = frontmatter::extract_body(content);
-        log::debug!(
+        log::trace!(
             "[CrdtFs] update_crdt_for_file_internal: path_str='{}', is_new_file={}, body_preview='{}'",
             path_str,
             is_new_file,
@@ -444,14 +444,14 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
             .unwrap_or(path_str.clone());
 
         // Update workspace CRDT with the doc_key (doc_id or path)
-        log::info!("[CrdtFs] BEFORE set_file: doc_key={}", doc_key);
+        log::trace!("[CrdtFs] BEFORE set_file: doc_key={}", doc_key);
         if let Err(e) = self.workspace_crdt.set_file(&doc_key, metadata.clone()) {
             log::warn!("[CrdtFs] set_file FAILED: {}: {}", doc_key, e);
         } else {
-            log::info!("[CrdtFs] set_file SUCCESS: {}", doc_key);
+            log::trace!("[CrdtFs] set_file SUCCESS: {}", doc_key);
             // Verify write by reading back (debug only)
             let verify = self.workspace_crdt.get_file(&doc_key);
-            log::info!(
+            log::trace!(
                 "[CrdtFs] set_file VERIFY: {} -> {:?}",
                 doc_key,
                 verify.is_some()

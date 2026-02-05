@@ -203,6 +203,15 @@ impl SqliteStorage {
         conn.execute("DELETE FROM file_index WHERE path = ?", params![path])?;
         Ok(())
     }
+
+    /// Clear all entries from the file_index table.
+    ///
+    /// Used during Replace mode snapshot imports to remove stale entries.
+    pub fn clear_file_index(&self) -> StorageResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM file_index", [])?;
+        Ok(())
+    }
 }
 
 impl std::fmt::Debug for SqliteStorage {
@@ -617,6 +626,33 @@ mod tests {
         storage.remove_from_file_index("/child.md").unwrap();
         let active = storage.query_active_files().unwrap();
         assert_eq!(active.len(), 1);
+    }
+
+    #[test]
+    fn test_sqlite_clear_file_index() {
+        let storage = SqliteStorage::in_memory().unwrap();
+
+        // Add some files
+        storage
+            .update_file_index("/test1.md", Some("Test 1"), None, false, 1000)
+            .unwrap();
+        storage
+            .update_file_index("/test2.md", Some("Test 2"), None, false, 2000)
+            .unwrap();
+        storage
+            .update_file_index("/deleted.md", Some("Deleted"), None, true, 3000)
+            .unwrap();
+
+        // Verify files exist
+        let active = storage.query_active_files().unwrap();
+        assert_eq!(active.len(), 2);
+
+        // Clear all file_index entries
+        storage.clear_file_index().unwrap();
+
+        // Verify all entries are gone
+        let active = storage.query_active_files().unwrap();
+        assert!(active.is_empty());
     }
 
     #[test]

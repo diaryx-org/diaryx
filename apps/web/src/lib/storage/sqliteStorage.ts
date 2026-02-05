@@ -263,6 +263,15 @@ export class SqliteStorage {
   }
 
   /**
+   * Clear all updates for a document while keeping the snapshot.
+   * Used when replacing entire CRDT state during initial sync.
+   */
+  clearUpdates(name: string): void {
+    this.db.run("DELETE FROM updates WHERE doc_name = ?", [name]);
+    this.markDirty();
+  }
+
+  /**
    * Compact old updates into the document snapshot.
    * Keeps only the most recent `keepUpdates` in the log.
    */

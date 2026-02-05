@@ -92,6 +92,9 @@ export class UnifiedSyncTransport {
   /** Files this client is currently focused on */
   private focusedFiles = new Set<string>();
 
+  /** Whether handshake is complete (FileManifest → FilesReady → CrdtState) */
+  private handshakeComplete = false;
+
   constructor(options: UnifiedSyncTransportOptions) {
     this.options = options;
   }
@@ -107,13 +110,11 @@ export class UnifiedSyncTransport {
     if (this.destroyed || this.ws) return;
 
     const url = this.buildUrl();
-    console.log("[UnifiedSyncTransport] Connecting to", url);
 
     this.ws = new WebSocket(url);
     this.ws.binaryType = "arraybuffer";
 
     this.ws.onopen = async () => {
-      console.log("[UnifiedSyncTransport] Connected");
       this.reconnectAttempts = 0;
       this.options.onStatusChange?.(true);
 
@@ -127,15 +128,10 @@ export class UnifiedSyncTransport {
       this.pendingBodySubscriptions.clear();
 
       // Flush any queued messages
-      if (this.pendingMessages.length > 0) {
-        console.log(
-          `[UnifiedSyncTransport] Flushing ${this.pendingMessages.length} queued messages`,
-        );
-        for (const msg of this.pendingMessages) {
-          this.ws!.send(msg);
-        }
-        this.pendingMessages = [];
+      for (const msg of this.pendingMessages) {
+        this.ws!.send(msg);
       }
+      this.pendingMessages = [];
 
       // Resend focus list after reconnect
       if (this.focusedFiles.size > 0) {
@@ -213,6 +209,13 @@ export class UnifiedSyncTransport {
   }
 
   /**
+   * Check if handshake is complete.
+   */
+  get isHandshakeComplete(): boolean {
+    return this.handshakeComplete;
+  }
+
+  /**
    * Subscribe to body sync for a specific file.
    */
   async subscribeBody(
@@ -239,6 +242,13 @@ export class UnifiedSyncTransport {
     } else {
       this.pendingBodySubscriptions.add(filePath);
     }
+  }
+
+  /**
+   * Check if a body file is already subscribed.
+   */
+  isBodySubscribed(filePath: string): boolean {
+    return this.bodyCallbacks.has(filePath);
   }
 
   /**
@@ -280,9 +290,21 @@ export class UnifiedSyncTransport {
 
     if (!this.isConnected) {
       this.pendingMessages.push(framed);
-      console.log(
-        `[UnifiedSyncTransport] Queued body message for ${filePath}`,
-      );
+      return;
+    }
+
+    this.ws!.send(framed);
+  }
+
+  /**
+   * Send a workspace sync message.
+   */
+  sendWorkspaceMessage(message: Uint8Array): void {
+    const docId = this.formatWorkspaceDocId();
+    const framed = this.frameMessageV2(docId, message);
+
+    if (!this.isConnected) {
+      this.pendingMessages.push(framed);
       return;
     }
 
@@ -306,14 +328,20 @@ export class UnifiedSyncTransport {
    * Unfocus specific files.
    */
   unfocus(filePaths: string[]): void {
-    for (const filePath of filePaths) {
+    // Only unfocus files that were actually focused (prevents duplicate unfocus messages)
+    const actuallyFocused = filePaths.filter((fp) => this.focusedFiles.has(fp));
+    if (actuallyFocused.length === 0) {
+      return;
+    }
+
+    for (const filePath of actuallyFocused) {
       this.focusedFiles.delete(filePath);
     }
 
     if (this.isConnected) {
       const unfocusMsg = JSON.stringify({
         type: "unfocus",
-        files: filePaths,
+        files: actuallyFocused,
       });
       this.ws!.send(unfocusMsg);
     }
@@ -409,24 +437,15 @@ export class UnifiedSyncTransport {
 
       switch (msg.type) {
         case "sync_progress":
-          console.log(
-            `[UnifiedSyncTransport] Sync progress: ${msg.completed}/${msg.total}`,
-          );
           this.options.onProgress?.(msg.completed, msg.total);
           break;
 
         case "sync_complete":
-          console.log(
-            `[UnifiedSyncTransport] Sync complete: ${msg.files_synced} files`,
-          );
           this.options.onSyncComplete?.(msg.files_synced);
           // Mark all body subscriptions as synced
-          for (const [filePath, callbacks] of this.bodyCallbacks) {
+          for (const [, callbacks] of this.bodyCallbacks) {
             if (!callbacks.synced) {
               callbacks.synced = true;
-              console.log(
-                `[UnifiedSyncTransport] Marking ${filePath} synced`,
-              );
               callbacks.onSynced?.();
               callbacks.syncedResolver?.();
             }
@@ -434,16 +453,17 @@ export class UnifiedSyncTransport {
           break;
 
         case "focus_list_changed":
-          console.log(
-            `[UnifiedSyncTransport] Focus list changed: ${msg.files?.length ?? 0} files`,
-          );
           this.options.onFocusListChanged?.(msg.files ?? []);
           break;
 
         case "FileManifest":
+        case "file_manifest":
+          await this.handleFileManifest(msg);
+          break;
+
         case "CrdtState":
-          // v2 protocol may still use these for handshaking
-          console.log(`[UnifiedSyncTransport] Received ${msg.type}`);
+        case "crdt_state":
+          await this.handleCrdtState(msg);
           break;
 
         default:
@@ -564,13 +584,9 @@ export class UnifiedSyncTransport {
           new Uint8Array((response as any).data),
         );
         this.ws?.send(framed);
-        console.log("[UnifiedSyncTransport] Sent workspace SyncStep1");
       }
     } catch (error) {
-      console.error(
-        "[UnifiedSyncTransport] Failed to send workspace SyncStep1:",
-        error,
-      );
+      console.error("[UnifiedSyncTransport] Failed to send workspace SyncStep1:", error);
     }
   }
 
@@ -598,15 +614,9 @@ export class UnifiedSyncTransport {
           new Uint8Array((response as any).data),
         );
         this.ws?.send(framed);
-        console.log(
-          `[UnifiedSyncTransport] Sent body SyncStep1 for ${filePath}`,
-        );
       }
     } catch (error) {
-      console.error(
-        `[UnifiedSyncTransport] Failed to send body SyncStep1 for ${filePath}:`,
-        error,
-      );
+      console.error(`[UnifiedSyncTransport] Failed to send body SyncStep1 for ${filePath}:`, error);
     }
   }
 
@@ -621,9 +631,150 @@ export class UnifiedSyncTransport {
       files: filePaths,
     });
     this.ws!.send(focusMsg);
-    console.log(
-      `[UnifiedSyncTransport] Sent focus for ${filePaths.length} files`,
-    );
+  }
+
+  // =========================================================================
+  // Files-Ready Handshake (v2 protocol)
+  // =========================================================================
+
+  /**
+   * Convert WebSocket URL to HTTP URL for API calls.
+   */
+  private getHttpServerUrl(): string {
+    return this.options.serverUrl
+      .replace(/^wss:\/\//, "https://")
+      .replace(/^ws:\/\//, "http://")
+      .replace(/\/sync2$/, "")
+      .replace(/\/sync$/, "");
+  }
+
+  /**
+   * Download workspace snapshot from HTTP endpoint.
+   */
+  private async downloadWorkspaceSnapshot(
+    workspaceId: string,
+  ): Promise<Blob | null> {
+    const httpUrl = this.getHttpServerUrl();
+    const url = `${httpUrl}/api/workspaces/${encodeURIComponent(workspaceId)}/snapshot`;
+    const authToken = this.options.authToken;
+
+    try {
+      const response = await fetch(url, {
+        headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+      });
+
+      if (!response.ok) {
+        console.warn(
+          `[UnifiedSyncTransport] Snapshot download failed: ${response.status}`,
+        );
+        return null;
+      }
+
+      return await response.blob();
+    } catch (error) {
+      console.error("[UnifiedSyncTransport] Snapshot download error:", error);
+      return null;
+    }
+  }
+
+  /**
+   * Handle FileManifest message - download files before CRDT sync.
+   */
+  private async handleFileManifest(msg: {
+    type: string;
+    files: Array<{
+      doc_id: string;
+      filename: string;
+      title: string | null;
+      part_of: string | null;
+      deleted: boolean;
+    }>;
+    client_is_new: boolean;
+  }): Promise<void> {
+    // If not a new client, skip file download
+    if (!msg.client_is_new) {
+      this.sendFilesReady();
+      return;
+    }
+
+    // Filter to non-deleted files
+    const activeFiles = msg.files.filter((f) => !f.deleted);
+    if (activeFiles.length === 0) {
+      this.sendFilesReady();
+      return;
+    }
+
+    try {
+      const snapshot = await this.downloadWorkspaceSnapshot(
+        this.options.workspaceId,
+      );
+
+      if (snapshot && snapshot.size > 100) {
+        const snapshotFile = new File(
+          [snapshot],
+          `snapshot-${this.options.workspaceId}.zip`,
+          { type: "application/zip" },
+        );
+
+        const workspacePath = this.options.backend
+          .getWorkspacePath()
+          .replace(/\/index\.md$/, "")
+          .replace(/\/README\.md$/, "");
+
+        await this.options.backend.importFromZip(snapshotFile, workspacePath);
+      }
+    } catch (error) {
+      console.error("[UnifiedSyncTransport] Download/import error:", error);
+      // Continue anyway - CRDT sync may partially work
+    }
+
+    this.sendFilesReady();
+  }
+
+  /**
+   * Send FilesReady message to proceed with CRDT sync.
+   */
+  private sendFilesReady(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.warn("[UnifiedSyncTransport] Cannot send FilesReady - not connected");
+      return;
+    }
+
+    this.ws.send(JSON.stringify({ type: "FilesReady" }));
+  }
+
+  /**
+   * Handle CrdtState message - apply authoritative CRDT state.
+   */
+  private async handleCrdtState(msg: {
+    type: string;
+    state: string; // Base64 encoded
+  }): Promise<void> {
+
+    try {
+      // Decode base64 to binary
+      const binaryString = atob(msg.state);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+
+      // Apply the CRDT state via backend command
+      await this.options.backend.execute({
+        type: "HandleCrdtState",
+        params: { state: Array.from(bytes) },
+      } as any);
+
+      this.handshakeComplete = true;
+
+      // Mark workspace as synced
+      if (!this.workspaceSynced) {
+        this.workspaceSynced = true;
+        this.options.onWorkspaceSynced?.();
+      }
+    } catch (error) {
+      console.error("[UnifiedSyncTransport] CrdtState error:", error);
+    }
   }
 
   // =========================================================================

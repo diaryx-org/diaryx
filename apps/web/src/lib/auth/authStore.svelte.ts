@@ -19,7 +19,6 @@ import {
 } from "./authService";
 import {
   setAuthToken,
-  setCollaborationServer,
   setCollaborationWorkspaceId,
 } from "../crdt";
 import { collaborationStore } from "@/models/stores/collaborationStore.svelte";
@@ -114,8 +113,8 @@ export async function initAuth(): Promise<void> {
   if (serverUrl) {
     state.serverUrl = serverUrl;
     authService = createAuthService(serverUrl);
-    // Convert HTTP URL to WebSocket URL for collaboration
-    setCollaborationServer(toWebSocketUrl(serverUrl));
+    // Note: We do NOT call setCollaborationServer() here.
+    // Sync should only start after token validation succeeds below.
   }
 
   if (token && serverUrl) {
@@ -178,6 +177,10 @@ export async function initAuth(): Promise<void> {
 
 /**
  * Set the sync server URL.
+ *
+ * Note: This only saves the URL - it does NOT start sync.
+ * Sync is started by setWorkspaceServer() which is called
+ * from SyncSetupWizard after authentication completes.
  */
 export function setServerUrl(url: string | null): void {
   state.serverUrl = url;
@@ -185,12 +188,12 @@ export function setServerUrl(url: string | null): void {
   if (url) {
     localStorage.setItem(STORAGE_KEYS.SERVER_URL, url);
     authService = createAuthService(url);
-    // Convert HTTP URL to WebSocket URL for collaboration
-    setCollaborationServer(toWebSocketUrl(url));
+    // Note: We intentionally do NOT call setCollaborationServer() here.
+    // Sync should only start after authentication completes and user
+    // chooses to sync via SyncSetupWizard.
   } else {
     localStorage.removeItem(STORAGE_KEYS.SERVER_URL);
     authService = null;
-    setCollaborationServer(null);
   }
 }
 
@@ -357,16 +360,6 @@ export async function deleteAccount(): Promise<void> {
 // ============================================================================
 // Helpers
 // ============================================================================
-
-/**
- * Convert HTTP URL to WebSocket URL with /sync endpoint.
- */
-function toWebSocketUrl(httpUrl: string): string {
-  return (
-    httpUrl.replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://") +
-    "/sync"
-  );
-}
 
 function getDeviceName(): string {
   if (typeof navigator === "undefined") return "Unknown";

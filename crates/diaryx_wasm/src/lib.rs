@@ -78,8 +78,8 @@ pub fn init() {
     #[cfg(feature = "console_error_panic_hook")]
     set_panic_hook();
 
-    // Initialize console logging for Rust log macros
-    console_log::init_with_level(log::Level::Debug).ok();
+    // Initialize console logging for Rust log macros (Info level for reduced verbosity)
+    console_log::init_with_level(log::Level::Info).ok();
 }
 
 // ============================================================================

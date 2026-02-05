@@ -138,7 +138,7 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
     /// **Important**: This also sets up the body sync observer callback on the body_manager,
     /// so that local body changes automatically emit sync messages via the Yrs observer pattern.
     pub fn set_event_callback(&self, callback: Arc<dyn Fn(&FileSystemEvent) + Send + Sync>) {
-        log::debug!("[SyncManager] set_event_callback called, setting up body sync observer");
+        log::trace!("[SyncManager] set_event_callback called, setting up body sync observer");
         {
             let mut cb = self.event_callback.write().unwrap();
             *cb = Some(callback.clone());
@@ -368,12 +368,6 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
                 .iter()
                 .filter_map(|path| {
                     let meta = self.workspace_crdt.get_file(path);
-                    log::info!(
-                        "[SyncManager] get_file for sync '{}': exists={}, deleted={:?}",
-                        path,
-                        meta.is_some(),
-                        meta.as_ref().map(|m| m.deleted)
-                    );
                     meta.and_then(|m| Some((path.clone(), m)))
                 })
                 .collect();
@@ -544,7 +538,7 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         message: &[u8],
         write_to_disk: bool,
     ) -> Result<BodySyncResult> {
-        log::info!(
+        log::trace!(
             "[SyncManager] handle_body_message START: doc='{}', message_len={}, write_to_disk={}",
             doc_name,
             message.len(),
@@ -557,7 +551,7 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         // Get the body doc - this is the SINGLE source of truth
         let body_doc = self.body_manager.get_or_create(doc_name);
         let content_before = body_doc.get_body();
-        log::info!(
+        log::trace!(
             "[SyncManager] handle_body_message: doc='{}', content_before_len={}",
             doc_name,
             content_before.len()
@@ -565,7 +559,7 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
 
         // Decode and process all messages, building response and applying updates
         let messages = SyncMessage::decode_all(message)?;
-        log::info!(
+        log::trace!(
             "[SyncManager] handle_body_message: doc='{}', decoded {} messages",
             doc_name,
             messages.len()
@@ -577,7 +571,7 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
             match sync_msg {
                 SyncMessage::SyncStep1(remote_sv) => {
                     // Respond with SyncStep2 containing our diff based on their state vector
-                    log::info!(
+                    log::trace!(
                         "[SyncManager] handle_body_message: doc='{}', msg[{}] = SyncStep1, sv_len={}",
                         doc_name,
                         i,
@@ -589,7 +583,7 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
                         if diff.len() > 2 {
                             // More than just empty update header
                             let step2 = SyncMessage::SyncStep2(diff).encode();
-                            log::info!(
+                            log::trace!(
                                 "[SyncManager] handle_body_message: doc='{}', sending SyncStep2 response, {} bytes",
                                 doc_name,
                                 step2.len()
@@ -604,7 +598,7 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
                 }
                 SyncMessage::SyncStep2(update) | SyncMessage::Update(update) => {
                     let is_step2 = matches!(sync_msg, SyncMessage::SyncStep2(_));
-                    log::info!(
+                    log::trace!(
                         "[SyncManager] handle_body_message: doc='{}', msg[{}] = {:?}, update_len={}",
                         doc_name,
                         i,
@@ -626,7 +620,7 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         }
 
         let content_after = body_doc.get_body();
-        log::info!(
+        log::trace!(
             "[SyncManager] handle_body_message: doc='{}', content_after_len={}, content_after_preview='{}'",
             doc_name,
             content_after.len(),
@@ -641,7 +635,7 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
             let last_known = self.last_known_content.read().unwrap();
             let tracked_content = last_known.get(doc_name);
             let echo_check = tracked_content == Some(&content_after);
-            log::info!(
+            log::trace!(
                 "[SyncManager] handle_body_message echo check: doc='{}', has_tracked_content={}, tracked_len={}, echo_check={}",
                 doc_name,
                 tracked_content.is_some(),
@@ -653,7 +647,7 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
             false
         };
 
-        log::info!(
+        log::trace!(
             "[SyncManager] handle_body_message RESULT: doc='{}', content_changed={}, is_echo={}, write_to_disk={}",
             doc_name,
             content_changed,

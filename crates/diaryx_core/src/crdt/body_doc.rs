@@ -266,7 +266,7 @@ impl BodyDoc {
     /// Returns an error if the update fails to persist to storage.
     pub fn set_body(&self, content: &str) -> StorageResult<()> {
         let doc_name = self.doc_name.read().unwrap().clone();
-        log::info!(
+        log::trace!(
             "[BodyDoc] set_body called for '{}', content_len={}",
             doc_name,
             content.len()
@@ -280,13 +280,13 @@ impl BodyDoc {
 
         // If content is the same, no-op
         if current == content {
-            log::info!(
+            log::trace!(
                 "[BodyDoc] set_body: content unchanged for '{}', no-op",
                 doc_name
             );
             return Ok(());
         }
-        log::info!(
+        log::trace!(
             "[BodyDoc] set_body: content changed for '{}', current_len={}, new_len={}",
             doc_name,
             current.len(),

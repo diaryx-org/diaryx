@@ -15,7 +15,8 @@ import { tmpdir } from "os";
 
 const defaultServerHost = process.env.SYNC_SERVER_HOST ?? "127.0.0.1";
 const baseServerPort = Number(process.env.SYNC_SERVER_PORT ?? "3030");
-let serverPort = baseServerPort;
+// Use offset +5 to avoid collisions with other sync test suites
+let serverPort = baseServerPort + 5;
 let serverUrl = process.env.SYNC_SERVER_URL ?? `http://${defaultServerHost}:${serverPort}`;
 const shouldStartServer = process.env.SYNC_E2E_START_SERVER !== "0";
 const repoRoot = path.resolve(
@@ -37,12 +38,12 @@ function log(label: string, msg: string): void {
 function getProjectPort(projectName: string): number {
   switch (projectName) {
     case "webkit":
-      return baseServerPort + 1;
+      return baseServerPort + 6;
     case "firefox":
-      return baseServerPort + 2;
+      return baseServerPort + 7;
     case "chromium":
     default:
-      return baseServerPort;
+      return baseServerPort + 5;
   }
 }
 
@@ -77,7 +78,8 @@ function setupConsoleLogs(page: Page, label: string): void {
       text.includes("[Storage]") ||
       text.includes("workspace") ||
       text.includes("error") ||
-      text.includes("Error")
+      text.includes("Error") ||
+      text.includes("UnifiedSync")
     ) {
       log(label, text);
     }
@@ -116,97 +118,96 @@ async function waitForWorkspaceCrdtInitialized(page: Page, timeout = 30000): Pro
   throw new Error("Timed out waiting for workspace CRDT to initialize");
 }
 
-
-
-async function waitForFileExists(page: Page, path: string, timeout = 30000): Promise<void> {
+async function waitForFileExists(page: Page, entryPath: string, timeout = 30000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeout) {
-    const exists = await page.evaluate(async (entryPath) => {
+    const exists = await page.evaluate(async (p) => {
       const { getBackend, createApi } = await import("/src/lib/backend");
       const { getFileMetadata } = await import("/src/lib/crdt/workspaceCrdtBridge");
       const backend = await getBackend();
       const api = createApi(backend);
-      const candidates = [
-        entryPath,
-        entryPath.startsWith("./") ? entryPath.slice(2) : `./${entryPath}`,
-      ];
+      const candidates = [p, p.startsWith("./") ? p.slice(2) : `./${p}`];
       for (const candidate of candidates) {
         try {
-          if (await api.fileExists(candidate)) {
-            return true;
-          }
-        } catch {
-          // ignore
-        }
+          if (await api.fileExists(candidate)) return true;
+        } catch { /* ignore */ }
         try {
           const metadata = await getFileMetadata(candidate);
-          if (metadata && !metadata.deleted) {
-            return true;
-          }
-        } catch {
-          // ignore
-        }
+          if (metadata && !metadata.deleted) return true;
+        } catch { /* ignore */ }
       }
       return false;
-    }, path);
+    }, entryPath);
 
     if (exists) return;
     await page.waitForTimeout(500);
   }
-  throw new Error(`Timed out waiting for file to exist: ${path}`);
+  throw new Error(`Timed out waiting for file to exist: ${entryPath}`);
 }
 
 async function waitForEntryContent(
   page: Page,
-  path: string,
+  entryPath: string,
   expected: string,
   timeout = 30000,
 ): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeout) {
-    const content = await page.evaluate(async (entryPath) => {
+    const content = await page.evaluate(async (p) => {
       const { getBackend, createApi } = await import("/src/lib/backend");
       const { ensureBodySync, getBodyContentFromCrdt } = await import("/src/lib/crdt/workspaceCrdtBridge");
       const backend = await getBackend();
       const api = createApi(backend);
-      const candidates = [
-        entryPath,
-        entryPath.startsWith("./") ? entryPath.slice(2) : `./${entryPath}`,
-      ];
+      const candidates = [p, p.startsWith("./") ? p.slice(2) : `./${p}`];
       for (const candidate of candidates) {
         try {
           await ensureBodySync(candidate);
           const crdtContent = await getBodyContentFromCrdt(candidate);
-          if (crdtContent) {
-            return crdtContent;
-          }
-        } catch {
-          // ignore
-        }
+          if (crdtContent) return crdtContent;
+        } catch { /* ignore */ }
         try {
           const entry = await api.getEntry(candidate);
-          if (entry?.content) {
-            return entry.content;
-          }
-        } catch {
-          // ignore
-        }
+          if (entry?.content) return entry.content;
+        } catch { /* ignore */ }
         try {
           const content = await api.readFile(candidate);
-          if (content) {
-            return content;
-          }
-        } catch {
-          // ignore
-        }
+          if (content) return content;
+        } catch { /* ignore */ }
       }
       return "";
-    }, path);
+    }, entryPath);
 
     if (content.includes(expected)) return;
     await page.waitForTimeout(500);
   }
-  throw new Error(`Timed out waiting for entry content in ${path}`);
+  throw new Error(`Timed out waiting for entry content "${expected}" in ${entryPath}`);
+}
+
+async function waitForFileMissing(page: Page, entryPath: string, timeout = 30000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    const exists = await page.evaluate(async (p) => {
+      const { getBackend, createApi } = await import("/src/lib/backend");
+      const { getFileMetadata } = await import("/src/lib/crdt/workspaceCrdtBridge");
+      const backend = await getBackend();
+      const api = createApi(backend);
+      const candidates = [p, p.startsWith("./") ? p.slice(2) : `./${p}`];
+      for (const candidate of candidates) {
+        try {
+          if (await api.fileExists(candidate)) return true;
+        } catch { /* ignore */ }
+        try {
+          const metadata = await getFileMetadata(candidate);
+          if (metadata && !metadata.deleted) return true;
+        } catch { /* ignore */ }
+      }
+      return false;
+    }, entryPath);
+
+    if (!exists) return;
+    await page.waitForTimeout(500);
+  }
+  throw new Error(`Timed out waiting for file to be missing: ${entryPath}`);
 }
 
 async function createEntry(
@@ -224,7 +225,6 @@ async function createEntry(
 
       const backend = await getBackend();
       const api = createApi(backend);
-      // Resolve the actual root index so part_of points to the workspace root.
       let resolvedParent = parent;
       if (!resolvedParent) {
         const workspaceDir = backend
@@ -237,11 +237,9 @@ async function createEntry(
           resolvedParent = `${workspaceDir}/README.md`;
         }
       }
-      // Link entry to parent so it's included in workspace exports
       await api.createEntry(path, { title: entryTitle, part_of: resolvedParent });
       await api.saveEntry(path, entryBody);
 
-      // Also add to parent's contents array for export to work
       if (resolvedParent) {
         try {
           const parentFm = await api.getFrontmatter(resolvedParent);
@@ -268,9 +266,7 @@ async function createEntry(
             resolved = candidate;
             break;
           }
-        } catch {
-          // ignore
-        }
+        } catch { /* ignore */ }
       }
 
       await refreshTree(
@@ -289,89 +285,6 @@ async function createEntry(
   ).toBeVisible({ timeout: 15000 });
 
   return resolvedPath;
-}
-
-async function uploadWorkspaceSnapshot(
-  page: Page,
-  mode: "replace" | "merge" = "replace",
-): Promise<void> {
-  await page.evaluate(async (uploadMode) => {
-    const { getBackend, createApi } = await import("/src/lib/backend");
-    const { getDefaultWorkspace, uploadWorkspaceSnapshot } = await import(
-      "/src/lib/auth/authStore.svelte"
-    );
-    const JSZip = (await import("jszip")).default;
-
-    const backend = await getBackend();
-    const api = createApi(backend);
-    const workspace = getDefaultWorkspace();
-
-    if (!workspace?.id) {
-      throw new Error("No default workspace available for snapshot upload");
-    }
-
-    const workspaceDir = backend
-      .getWorkspacePath()
-      .replace(/\/index\.md$/, "")
-      .replace(/\/README\.md$/, "");
-    let workspacePath: string;
-    try {
-      workspacePath = await api.findRootIndex(workspaceDir);
-    } catch {
-      // Fall back to default README in workspace dir
-      workspacePath = `${workspaceDir}/README.md`;
-    }
-
-    const zip = new JSZip();
-    const files = await api.exportToMemory(workspacePath, "*");
-    for (const file of files) {
-      zip.file(file.path, file.content);
-    }
-
-    const blob = await zip.generateAsync({ type: "blob" });
-    const result = await uploadWorkspaceSnapshot(workspace.id, blob, uploadMode);
-    if (!result) {
-      throw new Error("Snapshot upload failed");
-    }
-  }, mode);
-}
-
-async function waitForFileMissing(page: Page, path: string, timeout = 30000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeout) {
-    const exists = await page.evaluate(async (entryPath) => {
-      const { getBackend, createApi } = await import("/src/lib/backend");
-      const { getFileMetadata } = await import("/src/lib/crdt/workspaceCrdtBridge");
-      const backend = await getBackend();
-      const api = createApi(backend);
-      const candidates = [
-        entryPath,
-        entryPath.startsWith("./") ? entryPath.slice(2) : `./${entryPath}`,
-      ];
-      for (const candidate of candidates) {
-        try {
-          if (await api.fileExists(candidate)) {
-            return true;
-          }
-        } catch {
-          // ignore
-        }
-        try {
-          const metadata = await getFileMetadata(candidate);
-          if (metadata && !metadata.deleted) {
-            return true;
-          }
-        } catch {
-          // ignore
-        }
-      }
-      return false;
-    }, path);
-
-    if (!exists) return;
-    await page.waitForTimeout(500);
-  }
-  throw new Error(`Timed out waiting for file to be deleted: ${path}`);
 }
 
 async function openSyncWizard(page: Page, label: string): Promise<void> {
@@ -425,8 +338,6 @@ async function completeAuthAndInit(
   log(label, "Got magic link token");
 
   log(label, "Clicking dev link to verify token");
-  // Click the dev link directly instead of injecting token into URL
-  // This is more reliable than waiting for the wizard's URL polling
   const devLinkElement = page.locator('a:has-text("Click here to verify")');
   await devLinkElement.waitFor({ state: "visible", timeout: 10000 });
   await devLinkElement.click();
@@ -441,16 +352,13 @@ async function completeAuthAndInit(
   const syncStatusButton = page.getByLabel("Sync status");
   const popoverContent = page.locator('[data-slot="popover-content"]');
 
-  // Helper to check if synced - only used after wizard closes
   async function isSynced(): Promise<boolean> {
     try {
       const expanded = await syncStatusButton.getAttribute("aria-expanded");
       if (expanded !== "true") {
         await syncStatusButton.click();
       }
-    } catch {
-      // ignore
-    }
+    } catch { /* ignore */ }
 
     const popoverSynced = await popoverContent
       .filter({ hasText: "Synced" })
@@ -462,16 +370,12 @@ async function completeAuthAndInit(
     return syncText?.includes("Synced") ?? false;
   }
 
-  // Wait specifically for the mode button to appear
-  // Don't check isSynced during this phase as it can interfere with the wizard
   try {
     await modeButton.waitFor({ state: "visible", timeout: 30000 });
     log(label, "Mode button is visible");
   } catch {
-    // If mode button didn't appear, check if wizard is still open
     const dialogVisible = await page.getByRole("dialog").isVisible().catch(() => false);
     if (!dialogVisible) {
-      // Wizard closed, check if already synced
       if (await isSynced()) {
         log(label, "Wizard closed, already synced");
         return;
@@ -509,10 +413,13 @@ async function completeAuthAndInit(
   }
 }
 
-test.describe.serial("Sync Workspace Transfer", () => {
+// =========================================================================
+// Test Suite
+// =========================================================================
+
+test.describe.serial("Sync V2", () => {
   test.beforeAll(async ({}, testInfo) => {
-    // Skip server startup for WebKit - tests will be skipped anyway
-    if (testInfo.project.name === 'webkit') {
+    if (testInfo.project.name === "webkit") {
       return;
     }
 
@@ -533,7 +440,7 @@ test.describe.serial("Sync Workspace Transfer", () => {
         );
       }
 
-      tempDataDir = mkdtempSync(path.join(tmpdir(), "diaryx-sync-test-"));
+      tempDataDir = mkdtempSync(path.join(tmpdir(), "diaryx-sync-v2-test-"));
       log("server", `Using temp data dir: ${tempDataDir}`);
 
       log("server", `Starting server from binary: ${syncServerBinary}`);
@@ -547,18 +454,18 @@ test.describe.serial("Sync Workspace Transfer", () => {
         },
       });
 
-      serverProcess.stdout.on("data", (data) => {
+      serverProcess.stdout.on("data", (data: Buffer) => {
         log("server", data.toString().trim());
       });
-      serverProcess.stderr.on("data", (data) => {
+      serverProcess.stderr.on("data", (data: Buffer) => {
         log("server-err", data.toString().trim());
       });
 
-      serverProcess.on("error", (err) => {
+      serverProcess.on("error", (err: Error) => {
         log("server", `Process error: ${err.message}`);
       });
 
-      serverProcess.on("exit", (code, signal) => {
+      serverProcess.on("exit", (code: number | null, signal: string | null) => {
         log("server", `Process exited with code ${code}, signal ${signal}`);
       });
     }
@@ -580,143 +487,311 @@ test.describe.serial("Sync Workspace Transfer", () => {
     }
   });
 
-  test("uploads workspace and replaces local content on another client", async ({ browser, browserName }) => {
+  // -----------------------------------------------------------------------
+  // Test 1: No content duplication when second client joins
+  // -----------------------------------------------------------------------
+  test("no content duplication when second client joins", async ({ browser, browserName }) => {
     test.setTimeout(180000);
-    test.skip(browserName === 'webkit', 'WebKit OPFS not fully supported');
+    test.skip(browserName === "webkit", "WebKit OPFS not fully supported");
     test.skip(!serverAvailable, "Sync server not available");
 
-    log("test", "Creating browser contexts");
     const contextA = await browser.newContext();
     const contextB = await browser.newContext();
-
     const pageA = await contextA.newPage();
     const pageB = await contextB.newPage();
 
     setupConsoleLogs(pageA, "clientA");
     setupConsoleLogs(pageB, "clientB");
 
-    log("test", "Navigating to app");
     await pageA.goto("/");
     await pageB.goto("/");
 
-    log("clientA", "Clearing browser storage");
     await clearAllBrowserStorage(pageA);
-    log("clientB", "Clearing browser storage");
     await clearAllBrowserStorage(pageB);
-
-    log("test", "Reloading pages after storage clear");
     await pageA.reload();
     await pageB.reload();
 
-    log("test", "Waiting for app ready");
     await waitForAppReady(pageA, 40000);
     await waitForAppReady(pageB, 40000);
-    log("test", "Waiting for workspace CRDT initialization");
     await waitForWorkspaceCrdtInitialized(pageA);
     await waitForWorkspaceCrdtInitialized(pageB);
-
-    log("test", "Enabling show all files mode");
     await enableShowAllFiles(pageA);
     await enableShowAllFiles(pageB);
 
-    const runSuffix = Date.now();
-    const testEmail = `sync-transfer-${runSuffix}@example.com`;
-    log("test", `Using test email: ${testEmail}`);
+    const ts = Date.now();
+    const testEmail = `sync-v2-dup-${ts}@example.com`;
+    const uniqueBody = `Unique body content ${ts}`;
 
-    const entries = [
-      {
-        path: `alpha-${runSuffix}.md`,
-        title: `Alpha ${runSuffix}`,
-        body: `Alpha body ${runSuffix}`,
-      },
-      {
-        path: `beta-${runSuffix}.md`,
-        title: `Beta ${runSuffix}`,
-        body: `Beta body ${runSuffix}`,
-      },
-    ];
+    log("test", "Creating entry on clientA");
+    await createEntry(pageA, `dup-test-${ts}.md`, `Dup Test ${ts}`, uniqueBody);
 
-    for (const entry of entries) {
-      log("clientA", `Creating entry ${entry.title}`);
-      entry.path = await createEntry(pageA, entry.path, entry.title, entry.body);
-    }
-
-    const localEntry = {
-      path: `local-only-${runSuffix}.md`,
-      title: `Local Only ${runSuffix}`,
-      body: `Local body ${runSuffix}`,
-    };
-
-    log("clientB", `Creating local-only entry ${localEntry.title}`);
-    localEntry.path = await createEntry(pageB, localEntry.path, localEntry.title, localEntry.body);
-
-    log("test", "Starting auth for clientA");
+    log("test", "Auth + sync clientA");
     await completeAuthAndInit(pageA, testEmail, /Sync local content/i, "clientA");
+    await pageA.waitForTimeout(3000);
 
-    log("test", "Waiting for clientA sync to fully complete");
-    await pageA.waitForTimeout(5000);
+    log("test", "Auth + sync clientB");
+    await completeAuthAndInit(pageB, testEmail, /Load from server/i, "clientB");
 
-    // Debug: Check what files are in the CRDT after sync
-    const crdtFiles = await pageA.evaluate(async () => {
-      const { getAllFiles, getFileMetadata } = await import("/src/lib/crdt/workspaceCrdtBridge");
-      const files = await getAllFiles();
-      const result: { path: string; deleted: boolean; title?: string }[] = [];
-      for (const [path, meta] of files.entries()) {
-        result.push({
-          path,
-          deleted: meta.deleted ?? false,
-          title: meta.title,
-        });
-      }
-      return result;
-    });
-    log("test", `CRDT files after clientA sync: ${JSON.stringify(crdtFiles, null, 2)}`);
+    log("test", "Waiting for file on clientB");
+    await waitForFileExists(pageB, `dup-test-${ts}.md`, 30000);
 
-    // Debug: Check what files are on disk
-    const diskFiles = await pageA.evaluate(async () => {
+    log("test", "Waiting for body content to arrive on clientB");
+    await waitForEntryContent(pageB, `dup-test-${ts}.md`, uniqueBody, 30000);
+
+    log("test", "Checking body content on clientB for duplication");
+    const bodyB = await pageB.evaluate(async (args) => {
       const { getBackend, createApi } = await import("/src/lib/backend");
       const backend = await getBackend();
       const api = createApi(backend);
-      try {
-        const tree = await api.getFilesystemTree(".", true);
-        const paths: string[] = [];
-        const collectPaths = (node: any) => {
-          paths.push(node.path);
-          if (node.children) {
-            for (const child of node.children) {
-              collectPaths(child);
-            }
-          }
-        };
-        collectPaths(tree);
-        return paths;
-      } catch (e) {
-        return [`Error: ${e}`];
+      const candidates = [args.path, `./${args.path}`];
+      for (const candidate of candidates) {
+        try {
+          const entry = await api.getEntry(candidate);
+          if (entry?.content) return entry.content;
+        } catch { /* ignore */ }
+        try {
+          const content = await api.readFile(candidate);
+          if (content) return content;
+        } catch { /* ignore */ }
       }
-    });
-    log("test", `Disk files after clientA sync: ${JSON.stringify(diskFiles, null, 2)}`);
+      return "";
+    }, { path: `dup-test-${ts}.md` });
 
-    // Verify entries appear in clientA's tree after sync
-    log("test", "Verifying entries appear in clientA tree");
-    for (const entry of entries) {
-      await expect(
-        pageA.getByRole("treeitem", { name: new RegExp(entry.title) }),
-      ).toBeVisible({ timeout: 15000 });
-    }
+    log("test", `clientB body content (${bodyB.length} chars): "${bodyB.slice(0, 200)}"`);
 
-    log("test", "Starting auth for clientB");
+    // Count occurrences of the unique body string
+    const occurrences = bodyB.split(uniqueBody).length - 1;
+    log("test", `Body occurrences: ${occurrences}`);
+    expect(occurrences).toBe(1);
+
+    await contextA.close();
+    await contextB.close();
+  });
+
+  // -----------------------------------------------------------------------
+  // Test 2: File creation propagates to second client after sync
+  // -----------------------------------------------------------------------
+  test("file creation propagates to second client after sync", async ({ browser, browserName }) => {
+    test.setTimeout(180000);
+    test.skip(browserName === "webkit", "WebKit OPFS not fully supported");
+    test.skip(!serverAvailable, "Sync server not available");
+
+    const contextA = await browser.newContext();
+    const contextB = await browser.newContext();
+    const pageA = await contextA.newPage();
+    const pageB = await contextB.newPage();
+
+    setupConsoleLogs(pageA, "clientA");
+    setupConsoleLogs(pageB, "clientB");
+
+    await pageA.goto("/");
+    await pageB.goto("/");
+
+    await clearAllBrowserStorage(pageA);
+    await clearAllBrowserStorage(pageB);
+    await pageA.reload();
+    await pageB.reload();
+
+    await waitForAppReady(pageA, 40000);
+    await waitForAppReady(pageB, 40000);
+    await waitForWorkspaceCrdtInitialized(pageA);
+    await waitForWorkspaceCrdtInitialized(pageB);
+    await enableShowAllFiles(pageA);
+    await enableShowAllFiles(pageB);
+
+    const ts = Date.now();
+    const testEmail = `sync-v2-prop-${ts}@example.com`;
+
+    log("test", "Auth + sync both clients");
+    await completeAuthAndInit(pageA, testEmail, /Sync local content/i, "clientA");
+    await pageA.waitForTimeout(2000);
+    await completeAuthAndInit(pageB, testEmail, /Load from server/i, "clientB");
+    await pageB.waitForTimeout(2000);
+
+    log("test", "Creating new entry on clientA after both are synced");
+    await createEntry(pageA, `new-${ts}.md`, `New File ${ts}`, `Body for new file ${ts}`);
+
+    log("test", "Waiting for new file to appear on clientB");
+    await waitForFileExists(pageB, `new-${ts}.md`, 30000);
+    await waitForEntryContent(pageB, `new-${ts}.md`, `Body for new file ${ts}`);
+
+    log("test", "Verifying tree item visible on clientB");
+    await enableShowAllFiles(pageB);
+    await expect(
+      pageB.getByRole("treeitem", { name: new RegExp(`New File ${ts}`) }),
+    ).toBeVisible({ timeout: 15000 });
+
+    await contextA.close();
+    await contextB.close();
+  });
+
+  // -----------------------------------------------------------------------
+  // Test 3: Content persists after page refresh
+  // -----------------------------------------------------------------------
+  test("content persists after page refresh", async ({ browser, browserName }) => {
+    test.setTimeout(180000);
+    test.skip(browserName === "webkit", "WebKit OPFS not fully supported");
+    test.skip(!serverAvailable, "Sync server not available");
+
+    const contextA = await browser.newContext();
+    const contextB = await browser.newContext();
+    const pageA = await contextA.newPage();
+    const pageB = await contextB.newPage();
+
+    setupConsoleLogs(pageA, "clientA");
+    setupConsoleLogs(pageB, "clientB");
+
+    await pageA.goto("/");
+    await pageB.goto("/");
+
+    await clearAllBrowserStorage(pageA);
+    await clearAllBrowserStorage(pageB);
+    await pageA.reload();
+    await pageB.reload();
+
+    await waitForAppReady(pageA, 40000);
+    await waitForAppReady(pageB, 40000);
+    await waitForWorkspaceCrdtInitialized(pageA);
+    await waitForWorkspaceCrdtInitialized(pageB);
+    await enableShowAllFiles(pageA);
+    await enableShowAllFiles(pageB);
+
+    const ts = Date.now();
+    const testEmail = `sync-v2-persist-${ts}@example.com`;
+
+    log("test", "Creating initial entry on clientA");
+    await createEntry(pageA, `persist-${ts}.md`, `Persist Test ${ts}`, `Original content ${ts}`);
+
+    log("test", "Auth + sync clientA");
+    await completeAuthAndInit(pageA, testEmail, /Sync local content/i, "clientA");
+    await pageA.waitForTimeout(3000);
+
+    log("test", "Auth + sync clientB");
     await completeAuthAndInit(pageB, testEmail, /Load from server/i, "clientB");
 
-    log("clientB", "Waiting for local-only entry to be removed after load from server");
-    await waitForFileMissing(pageB, localEntry.path);
+    log("test", "Waiting for content on clientB");
+    await waitForEntryContent(pageB, `persist-${ts}.md`, `Original content ${ts}`);
 
-    for (const entry of entries) {
-      log("clientB", `Waiting for server entry ${entry.title} to exist`);
-      await waitForFileExists(pageB, entry.path);
-      await waitForEntryContent(pageB, entry.path, entry.body);
+    log("test", "Updating content on clientA");
+    await pageA.evaluate(async (args) => {
+      const { getBackend, createApi } = await import("/src/lib/backend");
+      const backend = await getBackend();
+      const api = createApi(backend);
+      await api.saveEntry(args.path, args.body);
+    }, { path: `persist-${ts}.md`, body: `Updated content ${ts}` });
+
+    log("test", "Waiting for updated content on clientB");
+    await waitForEntryContent(pageB, `persist-${ts}.md`, `Updated content ${ts}`, 30000);
+
+    log("test", "Refreshing both pages");
+    await pageA.reload();
+    await pageB.reload();
+
+    await waitForAppReady(pageA, 40000);
+    await waitForAppReady(pageB, 40000);
+    await waitForWorkspaceCrdtInitialized(pageA);
+    await waitForWorkspaceCrdtInitialized(pageB);
+
+    // Wait for sync to re-establish
+    await pageA.waitForTimeout(5000);
+    await pageB.waitForTimeout(5000);
+
+    log("test", "Verifying content persists after refresh on clientA");
+    await waitForEntryContent(pageA, `persist-${ts}.md`, `Updated content ${ts}`, 30000);
+
+    log("test", "Verifying content persists after refresh on clientB");
+    await waitForEntryContent(pageB, `persist-${ts}.md`, `Updated content ${ts}`, 30000);
+
+    await contextA.close();
+    await contextB.close();
+  });
+
+  // -----------------------------------------------------------------------
+  // Test 4: Temporary files are not synced
+  // -----------------------------------------------------------------------
+  test("temporary files are not synced", async ({ browser, browserName }) => {
+    test.setTimeout(180000);
+    test.skip(browserName === "webkit", "WebKit OPFS not fully supported");
+    test.skip(!serverAvailable, "Sync server not available");
+
+    const contextA = await browser.newContext();
+    const contextB = await browser.newContext();
+    const pageA = await contextA.newPage();
+    const pageB = await contextB.newPage();
+
+    setupConsoleLogs(pageA, "clientA");
+    setupConsoleLogs(pageB, "clientB");
+
+    await pageA.goto("/");
+    await pageB.goto("/");
+
+    await clearAllBrowserStorage(pageA);
+    await clearAllBrowserStorage(pageB);
+    await pageA.reload();
+    await pageB.reload();
+
+    await waitForAppReady(pageA, 40000);
+    await waitForAppReady(pageB, 40000);
+    await waitForWorkspaceCrdtInitialized(pageA);
+    await waitForWorkspaceCrdtInitialized(pageB);
+    await enableShowAllFiles(pageA);
+    await enableShowAllFiles(pageB);
+
+    const ts = Date.now();
+    const testEmail = `sync-v2-temp-${ts}@example.com`;
+
+    log("test", "Auth + sync both clients");
+    await completeAuthAndInit(pageA, testEmail, /Sync local content/i, "clientA");
+    await pageA.waitForTimeout(2000);
+    await completeAuthAndInit(pageB, testEmail, /Load from server/i, "clientB");
+    await pageB.waitForTimeout(2000);
+
+    log("test", "Creating real file on clientA");
+    await createEntry(pageA, `real-${ts}.md`, `Real File ${ts}`, `Real body ${ts}`);
+
+    log("test", "Attempting to create temp files on clientA");
+    await pageA.evaluate(async (args) => {
+      const { getBackend, createApi } = await import("/src/lib/backend");
+      const backend = await getBackend();
+      const api = createApi(backend);
+      // Try to save temp files - these should be filtered
+      for (const ext of [".tmp", ".swap", ".bak"]) {
+        try {
+          await api.saveEntry(`temp-${args.ts}${ext}`, `Temp content ${ext}`);
+        } catch (e) {
+          console.log(`[test] Expected: saveEntry for ${ext} may fail:`, e);
+        }
+      }
+    }, { ts });
+
+    log("test", "Waiting for real file on clientB (control)");
+    await waitForFileExists(pageB, `real-${ts}.md`, 30000);
+
+    // Wait extra time to give temp files a chance to sync (they shouldn't)
+    await pageB.waitForTimeout(5000);
+
+    log("test", "Verifying temp files did NOT sync to clientB");
+    for (const ext of [".tmp", ".swap", ".bak"]) {
+      await waitForFileMissing(pageB, `temp-${ts}${ext}`, 5000);
+      log("test", `Confirmed: temp-${ts}${ext} is missing on clientB`);
     }
 
-    log("test", "Closing contexts");
+    log("test", "Checking clientA CRDT doesn't contain temp file entries");
+    const crdtHasTempFiles = await pageA.evaluate(async (args) => {
+      const { getAllFiles } = await import("/src/lib/crdt/workspaceCrdtBridge");
+      const files = await getAllFiles();
+      const tempFiles: string[] = [];
+      for (const [filePath] of files.entries()) {
+        if (filePath.includes(`temp-${args.ts}`)) {
+          tempFiles.push(filePath);
+        }
+      }
+      return tempFiles;
+    }, { ts });
+
+    log("test", `Temp files in CRDT: ${JSON.stringify(crdtHasTempFiles)}`);
+    expect(crdtHasTempFiles).toHaveLength(0);
+
     await contextA.close();
     await contextB.close();
   });

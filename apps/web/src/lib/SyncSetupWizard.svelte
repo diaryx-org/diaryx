@@ -50,6 +50,7 @@
     getAllFiles,
     proactivelySyncBodies,
     markAllCrdtFilesAsDeleted,
+    setFreshFromServerLoad,
   } from "$lib/crdt/workspaceCrdtBridge";
   import { getDefaultWorkspace } from "$lib/auth";
 
@@ -589,6 +590,12 @@
 
         // Set workspace ID for proper document routing
         await setWorkspaceId(workspaceId);
+
+        // Mark load_server mode so body CRDTs are cleared before sync
+        // (prevents duplication when importFromZip populates body locally)
+        if (initMode === 'load_server') {
+          setFreshFromServerLoad(true);
+        }
 
         // Set server URL to create SyncTransport and connect
         // This triggers the WebSocket connection that syncs CRDT data to server

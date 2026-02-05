@@ -216,6 +216,15 @@ impl WorkspaceCrdt {
     ///
     /// Returns an error if the update fails to persist to storage.
     pub fn set_file(&self, path: &str, metadata: FileMetadata) -> StorageResult<()> {
+        // Skip temporary files - they should never enter the workspace CRDT
+        if path.ends_with(".tmp") || path.ends_with(".bak") || path.ends_with(".swap") {
+            log::debug!(
+                "[WorkspaceCrdt] Skipping set_file for temporary file: {}",
+                path
+            );
+            return Ok(());
+        }
+
         // Get state vector before the change
         let sv_before = {
             let txn = self.doc.transact();
@@ -236,7 +245,7 @@ impl WorkspaceCrdt {
         };
 
         if !update.is_empty() {
-            log::info!(
+            log::trace!(
                 "[WorkspaceCrdt] set_file: Appending {} bytes to storage for '{}' (path='{}')",
                 update.len(),
                 self.doc_name,
@@ -244,13 +253,13 @@ impl WorkspaceCrdt {
             );
             self.storage
                 .append_update(&self.doc_name, &update, UpdateOrigin::Local)?;
-            log::info!(
+            log::trace!(
                 "[WorkspaceCrdt] set_file: Append complete for '{}' (path='{}')",
                 self.doc_name,
                 path
             );
         } else {
-            log::debug!(
+            log::trace!(
                 "[WorkspaceCrdt] set_file: No update to append for '{}' (path='{}', empty update)",
                 self.doc_name,
                 path
@@ -899,10 +908,9 @@ impl WorkspaceCrdt {
     ) -> StorageResult<(Option<i64>, Vec<String>, Vec<(String, String)>)> {
         // Capture state before the update
         let files_before: HashMap<String, FileMetadata> = self.list_files().into_iter().collect();
-        log::info!(
-            "[WorkspaceCrdt] apply_update_tracking_changes BEFORE: {} files: {:?}",
-            files_before.len(),
-            files_before.keys().collect::<Vec<_>>()
+        log::debug!(
+            "[WorkspaceCrdt] apply_update_tracking_changes BEFORE: {} files",
+            files_before.len()
         );
 
         // Decode and apply the update
@@ -917,13 +925,9 @@ impl WorkspaceCrdt {
 
         // Capture state after the update
         let files_after: HashMap<String, FileMetadata> = self.list_files().into_iter().collect();
-        log::info!(
-            "[WorkspaceCrdt] apply_update_tracking_changes AFTER: {} files: {:?}",
-            files_after.len(),
-            files_after
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.deleted))
-                .collect::<Vec<_>>()
+        log::debug!(
+            "[WorkspaceCrdt] apply_update_tracking_changes AFTER: {} files",
+            files_after.len()
         );
 
         // Detect doc-ID based renames: same key with different filename

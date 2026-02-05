@@ -317,8 +317,9 @@ test.describe.serial("Sync", () => {
     }
   });
 
-  test("syncs edits between two clients", async ({ browser }) => {
+  test("syncs edits between two clients", async ({ browser, browserName }) => {
     test.setTimeout(120000);
+    test.skip(browserName === 'webkit', 'WebKit OPFS not fully supported');
     test.skip(!serverAvailable, "Sync server not available");
 
     log("test", "Creating browser contexts");

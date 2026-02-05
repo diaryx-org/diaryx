@@ -505,7 +505,7 @@
       const workspaceDir = backend.getWorkspacePath().replace(/\/index\.md$/, '').replace(/\/README\.md$/, '');
       console.log("[App] Workspace directory:", workspaceDir);
 
-      let workspacePath: string;
+      let workspacePath: string | undefined;
       try {
         const foundRoot = await api.findRootIndex(workspaceDir);
         if (!foundRoot) {
@@ -515,19 +515,44 @@
         console.log("[App] Found root index at:", workspacePath);
       } catch (e) {
         console.warn("[App] Could not find root index:", e);
+
+        // Before creating a new workspace, check if any files exist
+        // This helps diagnose issues where files exist but aren't valid root indexes
         try {
-          console.log("[App] Default workspace missing, creating...");
-          await api.createWorkspace(".", "My Journal");
-          const createdRoot = await api.findRootIndex(workspaceDir);
-          if (!createdRoot) {
-            throw new Error("Root index not found after workspace creation");
+          const fsTree = await api.getFilesystemTree(workspaceDir, false, 1);
+          const mdFiles = fsTree.children?.filter((c: any) => c.path?.endsWith('.md')) ?? [];
+          if (mdFiles.length > 0) {
+            console.warn("[App] Found existing markdown files but no valid root index:", mdFiles.map((f: any) => f.path));
+            // If files exist, use the first markdown file as workspace path
+            // rather than creating a new workspace that might conflict
+            const firstMd = mdFiles[0];
+            if (firstMd?.path) {
+              console.log("[App] Using existing markdown file as workspace:", firstMd.path);
+              workspacePath = firstMd.path;
+              // Skip workspace creation - let the existing file be used
+              // The user may need to add proper frontmatter manually
+            }
           }
-          workspacePath = createdRoot;
-          console.log("[App] Created workspace root index at:", workspacePath);
-        } catch (createErr) {
-          console.error("[App] Failed to create default workspace:", createErr);
-          // Fall back to default - will trigger workspace creation
-          workspacePath = `${workspaceDir}/index.md`;
+        } catch (listErr) {
+          console.log("[App] Could not list directory (may be empty):", listErr);
+        }
+
+        // Only create workspace if we haven't found an existing file to use
+        if (!workspacePath) {
+          try {
+            console.log("[App] Default workspace missing, creating...");
+            await api.createWorkspace(".", "My Journal");
+            const createdRoot = await api.findRootIndex(workspaceDir);
+            if (!createdRoot) {
+              throw new Error("Root index not found after workspace creation");
+            }
+            workspacePath = createdRoot;
+            console.log("[App] Created workspace root index at:", workspacePath);
+          } catch (createErr) {
+            console.error("[App] Failed to create default workspace:", createErr);
+            // Fall back to default - will trigger workspace creation
+            workspacePath = `${workspaceDir}/index.md`;
+          }
         }
       }
 

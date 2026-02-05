@@ -1582,7 +1582,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 audience,
             } => {
                 // Plan the export first
-                log::info!(
+                log::debug!(
                     "[Export] ExportToMemory starting - root_path: {:?}, audience: {:?}",
                     root_path,
                     audience
@@ -1592,28 +1592,16 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .plan_export(Path::new(&root_path), &audience, Path::new("/tmp/export"))
                     .await?;
 
-                log::info!(
+                log::debug!(
                     "[Export] plan_export returned {} included files",
                     plan.included.len()
                 );
-                for included in &plan.included {
-                    log::info!(
-                        "[Export] planned file: {:?} -> {:?}",
-                        included.source_path,
-                        included.relative_path
-                    );
-                }
 
                 // Read each included file
                 let mut files = Vec::new();
                 for included in &plan.included {
                     match self.fs().read_to_string(&included.source_path).await {
                         Ok(content) => {
-                            log::info!(
-                                "[Export] read success: {:?} ({} bytes)",
-                                included.source_path,
-                                content.len()
-                            );
                             files.push(crate::command::ExportedFile {
                                 path: included.relative_path.to_string_lossy().to_string(),
                                 content,
@@ -1624,7 +1612,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         }
                     }
                 }
-                log::info!("[Export] ExportToMemory returning {} files", files.len());
+                log::debug!("[Export] ExportToMemory returning {} files", files.len());
                 Ok(Response::ExportedFiles(files))
             }
 
@@ -2104,7 +2092,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 // Log initial CRDT state for debugging sync issues
                 let initial_files: Vec<_> = crdt.list_files().into_iter().collect();
-                log::info!(
+                log::debug!(
                     "[InitializeWorkspaceCrdt] INITIAL CRDT state: {} files: {:?}",
                     initial_files.len(),
                     initial_files.iter().take(10).collect::<Vec<_>>()
@@ -2124,7 +2112,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 } else {
                     root_path.clone()
                 };
-                log::info!(
+                log::debug!(
                     "[InitializeWorkspaceCrdt] workspace_path={:?}, base_path={:?}",
                     workspace_path,
                     base_path
@@ -2158,14 +2146,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 };
 
                 // Build tree
-                log::info!(
+                log::debug!(
                     "[InitializeWorkspaceCrdt] Building tree from root_index={:?}",
                     root_index
                 );
                 let tree = ws
                     .build_tree_with_depth(&root_index, None, &mut HashSet::new())
                     .await?;
-                log::info!(
+                log::debug!(
                     "[InitializeWorkspaceCrdt] Tree built: root={:?}, children={}",
                     tree.path,
                     tree.children.len()
@@ -2187,16 +2175,25 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                     // Convert absolute path to workspace-relative for CRDT storage
                     // This ensures paths are portable across machines
-                    let canonical_path = node.path
-                        .strip_prefix(&base_path)
-                        .map(|p| p.to_string_lossy().replace('\\', "/"))
-                        .unwrap_or_else(|_| {
-                            log::warn!(
-                                "[InitializeWorkspaceCrdt] Failed to strip prefix {:?} from {:?}, using absolute path",
-                                base_path, node.path
-                            );
-                            absolute_path.clone().replace('\\', "/")
-                        });
+                    let canonical_path = if base_path.as_os_str() == "." {
+                        // When base_path is ".", paths are already relative
+                        // Strip leading "./" prefix to match CrdtFs::normalize_crdt_path()
+                        let p = node.path.to_string_lossy().replace('\\', "/");
+                        p.trim_start_matches("./")
+                            .trim_start_matches('/')
+                            .to_string()
+                    } else {
+                        node.path
+                            .strip_prefix(&base_path)
+                            .map(|p| p.to_string_lossy().replace('\\', "/"))
+                            .unwrap_or_else(|_| {
+                                log::warn!(
+                                    "[InitializeWorkspaceCrdt] Failed to strip prefix {:?} from {:?}, using absolute path",
+                                    base_path, node.path
+                                );
+                                absolute_path.clone().replace('\\', "/")
+                            })
+                    };
 
                     log::debug!(
                         "[InitializeWorkspaceCrdt] Processing: absolute={}, canonical={}, children={}",
@@ -2221,7 +2218,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                     // Get existing CRDT entry for reconciliation (use canonical path)
                     let existing_crdt_entry = crdt.get_file(&canonical_path);
-                    log::info!(
+                    log::debug!(
                         "[InitializeWorkspaceCrdt] CRDT lookup for '{}': exists={}, deleted={:?}",
                         canonical_path,
                         existing_crdt_entry.is_some(),

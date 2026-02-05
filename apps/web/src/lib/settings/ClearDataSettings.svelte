@@ -20,19 +20,28 @@
   let error = $state<string | null>(null);
 
   /**
-   * Clear all OPFS data by deleting the diaryx directory.
+   * Clear all OPFS data by deleting diaryx directories.
    */
   async function clearOpfs(): Promise<void> {
     if (!navigator.storage?.getDirectory) return;
 
-    try {
-      const root = await navigator.storage.getDirectory();
-      // Try to remove the diaryx directory
-      await root.removeEntry("diaryx", { recursive: true });
-    } catch (e) {
-      // Directory might not exist, that's fine
-      if ((e as Error).name !== "NotFoundError") {
-        console.warn("[ClearData] Failed to clear OPFS:", e);
+    const root = await navigator.storage.getDirectory();
+
+    // Directories to delete:
+    // - "diaryx" - workspace files
+    // - ".diaryx" - CRDT database (crdt.db)
+    // - "guest" - guest session storage
+    const dirsToDelete = ["diaryx", ".diaryx", "guest"];
+
+    for (const dir of dirsToDelete) {
+      try {
+        await root.removeEntry(dir, { recursive: true });
+        console.log(`[ClearData] Deleted OPFS directory: ${dir}`);
+      } catch (e) {
+        // Directory might not exist, that's fine
+        if ((e as Error).name !== "NotFoundError") {
+          console.warn(`[ClearData] Failed to delete OPFS ${dir}:`, e);
+        }
       }
     }
   }

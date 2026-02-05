@@ -171,6 +171,20 @@ export function crdt_compact(name, keepUpdates) {
 }
 
 /**
+ * Clear all updates for a document while keeping the snapshot.
+ * Used when replacing entire CRDT state during initial sync.
+ * @param {string} name - Document name
+ */
+export function crdt_clear_updates(name) {
+  const storage = getSqliteStorageSync();
+  if (!storage) {
+    console.error("[SqliteStorageBridge] Storage not initialized");
+    return;
+  }
+  storage.clearUpdates(name);
+}
+
+/**
  * Rename a document by copying its state and updates to a new name.
  * @param {string} oldName - Current document name
  * @param {string} newName - New document name

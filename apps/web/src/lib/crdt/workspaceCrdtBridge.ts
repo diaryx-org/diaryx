@@ -21,7 +21,8 @@
 import type { RustCrdtApi } from './rustCrdtApi';
 import { SyncTransport, createWorkspaceSyncTransport } from './syncTransport';
 import { MultiplexedBodySync } from './multiplexedBodySync';
-import { WasmSyncBridge, createWasmSyncBridge } from './wasmSyncBridge';
+import type { WasmSyncBridge } from './wasmSyncBridge';
+import { UnifiedSyncTransport, createUnifiedSyncTransport } from './unifiedSyncTransport';
 import type { FileMetadata, BinaryRef } from '../backend/generated';
 import type { Backend, FileSystemEvent, SyncEvent } from '../backend/interface';
 import { crdt_update_file_index, isStorageReady } from '$lib/storage/sqliteStorageBridge.js';
@@ -49,6 +50,25 @@ function toWebSocketUrl(httpUrl: string): string {
   return wsUrl;
 }
 
+/**
+ * Convert an HTTP URL to v2 WebSocket URL (/sync2).
+ */
+function toWebSocketUrlV2(httpUrl: string): string {
+  return httpUrl
+    .replace(/^https:\/\//, 'wss://')
+    .replace(/^http:\/\//, 'ws://')
+    .replace(/\/sync$/, '')
+    .replace(/\/$/, '')
+    + '/sync2';
+}
+
+/**
+ * Check if a path refers to a temporary file that should not be synced.
+ */
+function isTempFile(path: string): boolean {
+  return path.endsWith('.tmp') || path.endsWith('.bak') || path.endsWith('.swap');
+}
+
 // State
 let rustApi: RustCrdtApi | null = null;
 let syncBridge: SyncTransport | null = null;
@@ -74,6 +94,9 @@ let _initialSyncResolvers: Array<() => void> = [];
 // Multiplexed body sync transport (single WebSocket for all body syncs)
 let multiplexedBodySync: MultiplexedBodySync | null = null;
 
+// Unified sync v2 transport (single WebSocket for workspace + body)
+let unifiedSyncTransport: UnifiedSyncTransport | null = null;
+
 // Legacy per-file body sync bridges (kept for fallback/migration)
 // Will be removed once multiplexed sync is stable
 const bodyBridges = new Map<string, SyncTransport>();
@@ -86,6 +109,15 @@ let _serverUrl: string | null = null;
 
 // Pending body sync requests when sync config isn't ready yet
 const pendingBodySync = new Set<string>();
+
+// Flag: true when this client loaded from server (load_server mode).
+// When set, body CRDTs are cleared before sync to prevent duplication
+// (importFromZip populates body CRDT locally, then server sends the same content).
+let _freshFromServerLoad = false;
+
+export function setFreshFromServerLoad(value: boolean): void {
+  _freshFromServerLoad = value;
+}
 
 // Per-file mutex to prevent race conditions on concurrent updates
 // Map of path -> Promise that resolves when the lock is released
@@ -181,15 +213,7 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
   serverUrl = url;
   _serverUrl = url ? toWebSocketUrl(url) : null;
 
-  console.log('[WorkspaceCrdtBridge] setWorkspaceServer:', {
-    inputUrl: url,
-    resolvedServerUrl: _serverUrl,
-    previousUrl,
-    initialized,
-    hasRustApi: !!rustApi,
-    hasBackend: !!_backend,
-    hasNativeSync: _backend?.hasNativeSync?.() ?? false,
-  });
+  console.log('[WorkspaceCrdtBridge] setWorkspaceServer:', url ? 'connecting' : 'disconnecting');
 
   // Skip if URL hasn't changed or not initialized
   if (previousUrl === url || !initialized || !rustApi) {
@@ -219,7 +243,7 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
     // Check if backend supports native sync (Tauri)
     if (_backend.hasNativeSync?.() && _backend.startSync) {
       // Use _serverUrl (WebSocket URL) for native sync - Rust client expects wss:// scheme
-      console.log('[WorkspaceCrdtBridge] Using native sync (Tauri):', _serverUrl, 'docName:', workspaceDocName);
+      console.log('[WorkspaceCrdtBridge] Using native sync (Tauri)');
 
       // Set up event listener for native sync events
       if (_backend.onSyncEvent) {
@@ -242,90 +266,56 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
       }
     } else {
       // Use browser WebSocket (WASM/web)
-      const wsUrl = toWebSocketUrl(url);
-      console.log('[WorkspaceCrdtBridge] Using browser sync (WASM):', wsUrl, 'docName:', workspaceDocName);
+      console.log('[WorkspaceCrdtBridge] Using browser sync (v2)');
 
-      // Try the new unified WasmSyncBridge first (uses SyncClient architecture like Tauri)
-      // This approach keeps all sync logic in Rust and provides automatic body subscription
-      const newBridge = await createWasmSyncBridge(
-        _backend,
-        wsUrl,
-        workspaceDocName,
-        getToken() ?? undefined,
-        {
+      // Use v2 UnifiedSyncTransport (single WebSocket for workspace + body via /sync2)
+      // This replaces the previous WasmSyncBridge (v1 /sync) path which caused
+      // "before handshake complete" warnings due to protocol mismatch.
+      {
+        const v2Url = toWebSocketUrlV2(url);
+
+        unifiedSyncTransport = createUnifiedSyncTransport({
+          serverUrl: v2Url,
+          workspaceId: _workspaceId!,
+          backend: _backend,
+          writeToDisk: true,
+          authToken: getToken() ?? undefined,
           onStatusChange: (connected) => {
-            console.log('[WorkspaceCrdtBridge] WasmSyncBridge connection status:', connected);
-            if (connected) {
-              notifySyncStatus('syncing');
-              collaborationStore.setBodySyncStatus('synced');
-            } else {
-              notifySyncStatus('idle');
+            notifySyncStatus(connected ? 'syncing' : 'idle');
+            if (!connected) {
               collaborationStore.setBodySyncStatus('idle');
             }
           },
-          onSynced: async () => {
-            console.log('[WorkspaceCrdtBridge] WasmSyncBridge initial sync complete');
-            notifySyncStatus('synced');
-            notifyFileChange(null, null);
-            await updateFileIndexFromCrdt();
-            markInitialSyncComplete();
-            // Note: Body sync is automatic with WasmSyncBridge (subscribe_all_bodies)
-          },
-          onFilesChanged: (changedFiles) => {
-            console.log('[WorkspaceCrdtBridge] WasmSyncBridge files changed:', changedFiles);
-            notifyFileChange(null, null);
-          },
-          onBodyChanged: (docName, content) => {
-            console.log('[WorkspaceCrdtBridge] WasmSyncBridge body changed:', docName);
-            notifyBodyChange(docName, content);
-          },
-          onProgress: (completed, total) => {
-            console.log('[WorkspaceCrdtBridge] WasmSyncBridge sync progress:', completed, '/', total);
-            notifySyncProgress(completed, total);
-          },
-          onError: (error) => {
-            console.error('[WorkspaceCrdtBridge] WasmSyncBridge error:', error);
-            notifySyncStatus('error', error);
-          },
-        }
-      );
-
-      if (newBridge) {
-        console.log('[WorkspaceCrdtBridge] Using new unified WasmSyncBridge');
-        wasmSyncBridge = newBridge;
-
-        // Notify connecting status
-        notifySyncStatus('connecting');
-
-        await wasmSyncBridge.connect();
-      } else {
-        // Fallback to old SyncTransport approach
-        console.log('[WorkspaceCrdtBridge] Falling back to legacy SyncTransport');
-
-        syncBridge = createWorkspaceSyncTransport({
-          serverUrl: wsUrl,
-          docName: workspaceDocName,
-          workspaceId: _workspaceId ?? undefined,
-          backend: _backend,
-          authToken: getToken() ?? undefined,
-          writeToDisk: true, // Rust handles disk writes automatically
-          onStatusChange: (connected) => {
-            console.log('[WorkspaceCrdtBridge] Connection status:', connected);
-            notifySyncStatus(connected ? 'syncing' : 'idle');
-          },
-          onSynced: async () => {
-            console.log('[WorkspaceCrdtBridge] Initial sync complete (via setWorkspaceServer)');
+          onWorkspaceSynced: async () => {
             notifySyncStatus('synced');
             notifyFileChange(null, null);
             await updateFileIndexFromCrdt();
             markInitialSyncComplete();
 
-            // Auto-sync body content for all files in background
-            await autoSyncBodiesInBackground();
+            // Proactively subscribe body sync for all files
+            try {
+              const allFiles = await getAllFiles();
+              const filePaths = Array.from(allFiles.keys());
+              if (filePaths.length > 0) {
+                console.log(`[UnifiedSync] Subscribing body sync for ${filePaths.length} files`);
+                // Subscribe in batches with concurrency limit
+                const concurrency = 5;
+                for (let i = 0; i < filePaths.length; i += concurrency) {
+                  const batch = filePaths.slice(i, i + concurrency);
+                  await Promise.all(batch.map(fp => getOrCreateBodyBridge(fp)));
+                }
+                console.log(`[UnifiedSync] All body subscriptions complete`);
+              }
+            } catch (e) {
+              console.warn('[UnifiedSync] Failed to start body sync:', e);
+            }
+            _freshFromServerLoad = false; // Reset after initial body sync
+            collaborationStore.setBodySyncStatus('synced');
           },
-          onFilesChanged: () => notifyFileChange(null, null),
+          onFilesChanged: () => {
+            notifyFileChange(null, null);
+          },
           onProgress: (completed, total) => {
-            console.log('[WorkspaceCrdtBridge] Sync progress:', completed, '/', total);
             notifySyncProgress(completed, total);
           },
         });
@@ -333,7 +323,7 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
         // Notify connecting status
         notifySyncStatus('connecting');
 
-        await syncBridge.connect();
+        await unifiedSyncTransport.connect();
       }
     }
 
@@ -345,7 +335,6 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
  * Handle native sync events from Tauri.
  */
 function handleNativeSyncEvent(event: SyncEvent): void {
-  console.log('[WorkspaceCrdtBridge] Native sync event:', event.type, event);
 
   switch (event.type) {
     case 'status-changed':
@@ -448,6 +437,13 @@ async function disconnectExistingSync(): Promise<void> {
     wasmSyncBridge = null;
   }
 
+  // Disconnect v2 unified sync transport if any
+  if (unifiedSyncTransport) {
+    console.log('[WorkspaceCrdtBridge] Disconnecting v2 UnifiedSyncTransport');
+    unifiedSyncTransport.destroy();
+    unifiedSyncTransport = null;
+  }
+
   // Disconnect legacy browser sync bridge if any
   if (syncBridge) {
     console.log('[WorkspaceCrdtBridge] Disconnecting legacy browser sync bridge');
@@ -474,6 +470,12 @@ async function autoSyncBodiesInBackground(): Promise<void> {
   // Skip if using new WasmSyncBridge - it handles body sync automatically via subscribe_all_bodies()
   if (wasmSyncBridge) {
     console.log('[WorkspaceCrdtBridge] autoSyncBodiesInBackground skipped (using WasmSyncBridge)');
+    return;
+  }
+
+  // Skip if using v2 UnifiedSyncTransport - body sync is multiplexed on the same connection
+  if (unifiedSyncTransport) {
+    console.log('[WorkspaceCrdtBridge] autoSyncBodiesInBackground skipped (using v2 UnifiedSyncTransport)');
     return;
   }
 
@@ -597,28 +599,33 @@ function getGuestStoragePath(originalPath: string): string {
  * For guests using OPFS: strips the guest/{joinCode}/ prefix.
  */
 export function getCanonicalPath(storagePath: string): string {
+  let path = storagePath;
+
+  // Strip leading "./" for consistent path format (server uses paths without ./ prefix)
+  if (path.startsWith('./')) {
+    path = path.slice(2);
+  }
+
   const isGuest = shareSessionStore.isGuest;
   const joinCode = shareSessionStore.joinCode;
   const usesInMemory = shareSessionStore.usesInMemoryStorage;
 
   if (!isGuest || !joinCode) {
-    return storagePath;
+    return path;
   }
 
   // Guests using in-memory storage don't have prefixes
   if (usesInMemory) {
-    return storagePath;
+    return path;
   }
 
   // Strip guest/{joinCode}/ prefix if present (for OPFS guests)
   const guestPrefix = `guest/${joinCode}/`;
-  if (storagePath.startsWith(guestPrefix)) {
-    const canonicalPath = storagePath.slice(guestPrefix.length);
-    console.log('[WorkspaceCrdtBridge] Converted guest path to canonical:', storagePath, '->', canonicalPath);
-    return canonicalPath;
+  if (path.startsWith(guestPrefix)) {
+    return path.slice(guestPrefix.length);
   }
 
-  return storagePath;
+  return path;
 }
 
 // Session code for share sessions
@@ -628,7 +635,6 @@ let _sessionCode: string | null = null;
  * Notify all body change callbacks.
  */
 function notifyBodyChange(path: string, body: string): void {
-  console.log('[WorkspaceCrdtBridge] Notifying body change:', path, 'callbacks:', bodyChangeCallbacks.size);
   for (const callback of bodyChangeCallbacks) {
     try {
       callback(path, body);
@@ -1210,6 +1216,12 @@ export async function setFileMetadata(path: string, metadata: FileMetadata): Pro
     throw new Error('Workspace not initialized');
   }
 
+  // Skip temporary files - they should never enter the CRDT
+  if (isTempFile(path)) {
+    console.log('[WorkspaceCrdtBridge] Skipping setFileMetadata for temp file:', path);
+    return;
+  }
+
   // Block updates in read-only mode for guests
   if (isReadOnlyBlocked()) {
     console.log('[WorkspaceCrdtBridge] Blocked setFileMetadata in read-only session:', path);
@@ -1245,6 +1257,11 @@ function isReadOnlyBlocked(): boolean {
  * the native SyncClient handles body sync internally.
  */
 async function getOrCreateBodyBridge(filePath: string, sendFocus: boolean = false): Promise<void> {
+  // Skip temporary files - they should never be synced
+  if (isTempFile(filePath)) {
+    return;
+  }
+
   // Skip if backend supports native sync - it handles body sync internally
   // We check hasNativeSync() (capability) not _nativeSyncActive (state) to prevent
   // fallback to TypeScript sync even if native sync fails to start
@@ -1259,6 +1276,67 @@ async function getOrCreateBodyBridge(filePath: string, sendFocus: boolean = fals
   }
 
   const canonicalPath = getCanonicalPath(filePath);
+
+  // Use v2 unified transport if active
+  if (unifiedSyncTransport) {
+    // Already subscribed? Skip (prevents re-subscribe loop from SendSyncMessage events).
+    if (unifiedSyncTransport.isBodySubscribed(canonicalPath)) {
+      return;
+    }
+
+    // Load body content from disk into CRDT BEFORE syncing (same as v1 path).
+    // This ensures local content is present for the Y-CRDT protocol to send.
+    try {
+      const existingBodyContent = await rustApi.getBodyContent(canonicalPath);
+      if (existingBodyContent && existingBodyContent.length > 0) {
+        if (_freshFromServerLoad) {
+          // Clear local body doc to prevent duplication with server content.
+          // importFromZip writes files to disk which populates body CRDTs (local actor).
+          // When the server sends its Y-CRDT state (original actor), Y-CRDT merges
+          // both independent inserts → text appears twice.
+          // Clearing first ensures only the server's content survives.
+          console.log(`[UnifiedSync] Clearing local body CRDT for ${canonicalPath} (freshFromServerLoad)`);
+          await rustApi.setBodyContent(canonicalPath, '');
+        } else {
+          await syncHelpers.trackContent(_backend!, canonicalPath, existingBodyContent);
+          console.log(`[UnifiedSync] Body CRDT already has ${existingBodyContent.length} chars for ${canonicalPath}`);
+        }
+      } else if (backendApi && !shareSessionStore.isGuest) {
+        try {
+          const entry = await backendApi.getEntry(canonicalPath);
+          if (entry && entry.content && entry.content.length > 0) {
+            console.log(`[UnifiedSync] Loading ${entry.content.length} chars from disk into CRDT BEFORE sync for ${canonicalPath}`);
+            await syncHelpers.trackContent(_backend!, canonicalPath, entry.content);
+            await rustApi.setBodyContent(canonicalPath, entry.content);
+          }
+        } catch (diskErr) {
+          console.log(`[UnifiedSync] Could not load from disk for ${canonicalPath}:`, diskErr);
+        }
+      }
+    } catch (err) {
+      console.warn(`[UnifiedSync] Could not get body content for ${canonicalPath}:`, err);
+    }
+
+    await unifiedSyncTransport.subscribeBody(
+      canonicalPath,
+      async (message) => {
+        // Handle incoming body sync message via Rust
+        const result = await syncHelpers.handleBodySyncMessage(_backend!, canonicalPath, message, true);
+        // Send response back if Rust returns one
+        if (result.response && result.response.length > 0) {
+          unifiedSyncTransport!.sendBodyMessage(canonicalPath, new Uint8Array(result.response));
+        }
+        // Notify body change if not an echo
+        if (result.content && !result.isEcho) {
+          notifyBodyChange(canonicalPath, result.content);
+        }
+      },
+      () => {
+        console.log(`[WorkspaceCrdtBridge] v2 body synced: ${canonicalPath}`);
+      }
+    );
+    return;
+  }
 
   // If there's already a pending subscription for this file, wait for it
   const pendingCreation = bodyBridgePendingCreation.get(canonicalPath);
@@ -1709,6 +1787,14 @@ export async function proactivelySyncBodies(
  * Call during cleanup/disconnect.
  */
 function closeAllBodyBridges(): void {
+  // Clean up v2 unified transport
+  // Note: Main disconnect happens in disconnectExistingSync(), but we
+  // may need to clean up body subscriptions here for partial cleanup scenarios
+  if (unifiedSyncTransport) {
+    console.log('[UnifiedSyncTransport] Cleaning up body subscriptions');
+    // The transport itself is cleaned up in disconnectExistingSync()
+  }
+
   // Destroy the multiplexed sync transport
   if (multiplexedBodySync) {
     console.log(`[MultiplexedBodySync] Destroying multiplexed connection (${multiplexedBodySync.subscriptionCount} subscriptions)`);
@@ -2259,7 +2345,10 @@ function notifySyncStatus(status: 'idle' | 'connecting' | 'syncing' | 'synced' |
     }
   }
 
-  console.log('[WorkspaceCrdtBridge] Notifying sync status:', status, errorStr ? `(${errorStr})` : '');
+  // Only log sync status changes when there's an error or significant status change
+  if (errorStr || status === 'synced' || status === 'error') {
+    console.log('[WorkspaceCrdtBridge] Sync status:', status, errorStr ? `(${errorStr})` : '');
+  }
 
   // Update collaborationStore for SyncStatusIndicator
   collaborationStore.setSyncStatus(status);
@@ -2421,10 +2510,11 @@ export function initEventSubscription(backend: Backend): () => void {
  * and CRDT synchronization.
  */
 function handleFileSystemEvent(event: FileSystemEvent): void {
-  console.log('[WorkspaceCrdtBridge] Received filesystem event:', event.type, event);
 
   switch (event.type) {
     case 'FileCreated':
+      // Skip temporary files
+      if (isTempFile(event.path)) return;
       // New file created - notify UI
       notifyFileChange(event.path, event.frontmatter ? (event.frontmatter as FileMetadata) : null);
       // Trigger tree refresh for all users (guests via session sync, hosts via file change with null path)
@@ -2535,28 +2625,34 @@ function handleFileSystemEvent(event: FileSystemEvent): void {
       console.log(`[WorkspaceCrdtBridge] SendSyncMessage received: doc=${doc_name}, is_body=${is_body}, bytes=${bytes.length}`);
 
       if (is_body) {
-        // Send via multiplexed body sync
-        // The send() method now queues messages if not connected, so we always try to send
+        // Send via v2 unified transport or multiplexed body sync
         (async () => {
           try {
-            // Ensure subscription exists
-            await getOrCreateBodyBridge(doc_name);
-
-            if (!multiplexedBodySync) {
-              console.warn('[WorkspaceCrdtBridge] multiplexedBodySync is null, message dropped for:', doc_name);
-              return;
+            if (unifiedSyncTransport) {
+              // v2: send directly — Rust already has the CRDT initialized when it fires SendSyncMessage.
+              // Do NOT call getOrCreateBodyBridge here; it would re-subscribe and send SyncStep1, causing a loop.
+              unifiedSyncTransport.sendBodyMessage(doc_name, bytes);
+              console.log('[WorkspaceCrdtBridge] v2 body sync message sent/queued for', doc_name, bytes.length, 'bytes');
+            } else {
+              // v1: ensure subscription exists, then send
+              await getOrCreateBodyBridge(doc_name);
+              if (multiplexedBodySync) {
+                multiplexedBodySync.send(doc_name, bytes);
+                console.log('[WorkspaceCrdtBridge] Body sync message sent/queued for', doc_name, bytes.length, 'bytes, connected:', multiplexedBodySync.isConnected);
+              } else {
+                console.warn('[WorkspaceCrdtBridge] No body sync transport available, message dropped for:', doc_name);
+              }
             }
-
-            // send() will queue the message if not connected
-            multiplexedBodySync.send(doc_name, bytes);
-            console.log('[WorkspaceCrdtBridge] Body sync message sent/queued for', doc_name, bytes.length, 'bytes, connected:', multiplexedBodySync.isConnected);
           } catch (err) {
             console.warn('[WorkspaceCrdtBridge] Failed to send body sync for', doc_name, err);
           }
         })();
       } else {
-        // Send via workspace bridge
-        if (syncBridge?.isConnected) {
+        // Send via v2 unified transport or workspace bridge
+        if (unifiedSyncTransport) {
+          unifiedSyncTransport.sendWorkspaceMessage(bytes);
+          console.log('[WorkspaceCrdtBridge] v2 workspace sync message sent', bytes.length, 'bytes');
+        } else if (syncBridge?.isConnected) {
           syncBridge.sendRawMessage(bytes);
           console.log('[WorkspaceCrdtBridge] Sent workspace sync', bytes.length, 'bytes');
         } else {

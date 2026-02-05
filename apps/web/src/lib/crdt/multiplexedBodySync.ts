@@ -464,8 +464,14 @@ export class MultiplexedBodySync {
    * @param filePaths - Array of file paths to unfocus
    */
   unfocus(filePaths: string[]): void {
+    // Only unfocus files that were actually focused (prevents duplicate unfocus messages)
+    const actuallyFocused = filePaths.filter((fp) => this.focusedFiles.has(fp));
+    if (actuallyFocused.length === 0) {
+      return;
+    }
+
     // Update local focus state
-    for (const filePath of filePaths) {
+    for (const filePath of actuallyFocused) {
       this.focusedFiles.delete(filePath);
     }
 
@@ -478,11 +484,11 @@ export class MultiplexedBodySync {
 
     const unfocusMsg = JSON.stringify({
       type: "unfocus",
-      files: filePaths,
+      files: actuallyFocused,
     });
     this.ws.send(unfocusMsg);
     console.log(
-      `[MultiplexedBodySync] Sent unfocus for ${filePaths.length} files`,
+      `[MultiplexedBodySync] Sent unfocus for ${actuallyFocused.length} files`,
     );
   }
 

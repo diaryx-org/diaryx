@@ -82,7 +82,7 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
     /// where files should be written to a specific workspace directory, not the
     /// current working directory.
     pub fn set_workspace_root(&self, root: PathBuf) {
-        log::debug!("[SyncHandler] Setting workspace root: {:?}", root);
+        log::trace!("[SyncHandler] Setting workspace root: {:?}", root);
         let mut wr = self.workspace_root.write().unwrap();
         *wr = Some(root);
     }
@@ -542,7 +542,10 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
     ) -> Result<()> {
         // Skip temporary files created by the metadata writer's safe write process
         // These files should never be processed from remote updates
-        if canonical_path.ends_with(".tmp") || canonical_path.ends_with(".bak") {
+        if canonical_path.ends_with(".tmp")
+            || canonical_path.ends_with(".bak")
+            || canonical_path.ends_with(".swap")
+        {
             log::debug!(
                 "[SyncHandler] Skipping remote body update for temporary file: {}",
                 canonical_path

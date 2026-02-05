@@ -307,7 +307,6 @@ pub enum ClientInitState {
 
 /// A sync room for a single workspace
 pub struct SyncRoom {
-    #[allow(dead_code)]
     workspace_id: String,
     /// The CRDT workspace document (metadata only)
     workspace: RwLock<WorkspaceCrdt>,
@@ -345,6 +344,21 @@ pub struct SyncRoom {
 }
 
 impl SyncRoom {
+    // ==================== V2 Storage Key Helpers ====================
+
+    /// Get the v2-compatible storage key for the workspace metadata document.
+    #[allow(dead_code)]
+    fn workspace_doc_key(&self) -> String {
+        format!("workspace:{}", self.workspace_id)
+    }
+
+    /// Get the v2-compatible storage key for a body document.
+    fn body_doc_key(&self, file_path: &str) -> String {
+        format!("body:{}/{}", self.workspace_id, file_path)
+    }
+
+    // ==================== Construction ====================
+
     /// Create a new SyncRoom with SQLite storage
     pub fn new(
         workspace_id: &str,
@@ -356,7 +370,9 @@ impl SyncRoom {
         }
 
         let storage = Arc::new(SqliteStorage::open(&db_path)?);
-        let workspace = WorkspaceCrdt::load_with_name(storage.clone(), workspace_id.to_string())?;
+        // Use v2-compatible storage key for workspace metadata
+        let workspace_doc_name = format!("workspace:{}", workspace_id);
+        let workspace = WorkspaceCrdt::load_with_name(storage.clone(), workspace_doc_name)?;
         let body_docs = BodyDocManager::new(storage.clone());
 
         let (broadcast_tx, _) = broadcast::channel(1024);
@@ -387,7 +403,9 @@ impl SyncRoom {
     pub fn in_memory(workspace_id: &str) -> Self {
         let storage =
             Arc::new(SqliteStorage::in_memory().expect("Failed to create in-memory storage"));
-        let workspace = WorkspaceCrdt::with_name(storage.clone(), workspace_id.to_string());
+        // Use v2-compatible storage key for workspace metadata
+        let workspace_doc_name = format!("workspace:{}", workspace_id);
+        let workspace = WorkspaceCrdt::with_name(storage.clone(), workspace_doc_name);
         let body_docs = BodyDocManager::new(storage.clone());
 
         let (broadcast_tx, _) = broadcast::channel(1024);
@@ -970,7 +988,8 @@ impl SyncRoom {
         let mut responses = Vec::new();
         // Use read lock - BodyDocManager::get_or_create handles its own internal locking
         let body_docs = self.body_docs.read().await;
-        let doc = body_docs.get_or_create(file_path);
+        // Use v2-compatible storage key
+        let doc = body_docs.get_or_create(&self.body_doc_key(file_path));
 
         for sync_msg in sync_messages {
             match sync_msg {
@@ -1047,7 +1066,8 @@ impl SyncRoom {
     pub async fn get_body_full_state(&self, file_path: &str) -> Vec<u8> {
         // Use read lock - get_or_create handles its own internal locking
         let body_docs = self.body_docs.read().await;
-        let doc = body_docs.get_or_create(file_path);
+        // Use v2-compatible storage key
+        let doc = body_docs.get_or_create(&self.body_doc_key(file_path));
         let state = doc.encode_state_as_update();
         SyncMessage::SyncStep2(state).encode()
     }
@@ -1056,7 +1076,8 @@ impl SyncRoom {
     pub async fn get_body_state_vector(&self, file_path: &str) -> Vec<u8> {
         // Use read lock - get_or_create handles its own internal locking
         let body_docs = self.body_docs.read().await;
-        let doc = body_docs.get_or_create(file_path);
+        // Use v2-compatible storage key
+        let doc = body_docs.get_or_create(&self.body_doc_key(file_path));
         let sv = doc.encode_state_vector();
         SyncMessage::SyncStep1(sv).encode()
     }
@@ -1086,7 +1107,10 @@ impl SyncRoom {
     /// Get body document content (for debugging/inspection)
     pub async fn get_body_content(&self, file_path: &str) -> Option<String> {
         let body_docs = self.body_docs.read().await;
-        body_docs.get(file_path).map(|doc| doc.get_body())
+        // Use v2-compatible storage key
+        body_docs
+            .get(&self.body_doc_key(file_path))
+            .map(|doc| doc.get_body())
     }
 
     /// Get the number of files in the workspace (for user data check)
@@ -1150,9 +1174,12 @@ impl SyncRoom {
             let fm = FrontmatterMetadata::from_json_with_file_path(&metadata_json, Some(&path));
             let yaml = fm.to_yaml();
 
-            let mut body = body_docs.get_or_create(&path).get_body();
+            // Use v2-compatible storage key for body docs
+            let mut body = body_docs
+                .get_or_create(&self.body_doc_key(&path))
+                .get_body();
             if body.is_empty() && key != path {
-                body = body_docs.get_or_create(&key).get_body();
+                body = body_docs.get_or_create(&self.body_doc_key(&key)).get_body();
             }
             let content = if yaml.is_empty() {
                 body
@@ -1180,6 +1207,9 @@ impl SyncRoom {
         let body_docs = self.body_docs.read().await;
 
         if mode == SnapshotImportMode::Replace {
+            // Clear file_index for v2 file manifest
+            self.storage.clear_file_index()?;
+
             let existing: Vec<String> = workspace
                 .list_files()
                 .into_iter()
@@ -1210,8 +1240,21 @@ impl SyncRoom {
 
             let (metadata, body) = Self::parse_snapshot_markdown(&name, &content)?;
 
-            workspace.set_file(&name, metadata)?;
-            body_docs.get_or_create(&name).set_body(&body)?;
+            workspace.set_file(&name, metadata.clone())?;
+            // Use v2-compatible storage key for body docs
+            body_docs
+                .get_or_create(&self.body_doc_key(&name))
+                .set_body(&body)?;
+
+            // Populate file_index for v2 file manifest handshake
+            self.storage.update_file_index(
+                &name,
+                metadata.title.as_deref(),
+                metadata.part_of.as_deref(),
+                metadata.deleted,
+                metadata.modified_at,
+            )?;
+
             files_imported += 1;
         }
 
@@ -1829,10 +1872,10 @@ mod tests {
     async fn test_get_body_full_state() {
         let room = SyncRoom::in_memory("test-workspace");
 
-        // Add body content
+        // Add body content using v2-compatible key
         {
             let body_docs = room.body_docs.read().await;
-            let doc = body_docs.get_or_create("test.md");
+            let doc = body_docs.get_or_create(&room.body_doc_key("test.md"));
             let _ = doc.set_body("Test content");
         }
 

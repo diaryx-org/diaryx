@@ -460,6 +460,9 @@ pub struct DiaryxBackend {
     /// Queue for outgoing sync messages.
     /// JS polls this queue and sends messages over WebSocket.
     outgoing_sync_messages: RefCell<VecDeque<OutgoingSyncMessage>>,
+    /// Shared Diaryx instance for command execution.
+    /// Created once during backend initialization with callbacks pre-configured.
+    diaryx: Diaryx<EventEmittingFs<CrdtFs<StorageBackend>>>,
 }
 
 #[wasm_bindgen]
@@ -559,6 +562,19 @@ impl DiaryxBackend {
             sync_handler,
         ));
 
+        // Create shared Diaryx instance with callbacks pre-configured
+        let diaryx = {
+            let mut d = Diaryx::with_crdt_instances(
+                (*fs).clone(),
+                Arc::clone(&workspace_crdt),
+                Arc::clone(&body_doc_manager),
+            );
+            d.set_sync_event_callback(create_event_bridge());
+            // In WASM with OPFS, paths are already workspace-relative
+            d.set_workspace_root(PathBuf::from(""));
+            d
+        };
+
         Ok(Self {
             fs,
             crdt_storage,
@@ -569,6 +585,7 @@ impl DiaryxBackend {
             crdt_update_subscription: Some(crdt_update_subscription),
             sync_manager,
             outgoing_sync_messages: RefCell::new(VecDeque::new()),
+            diaryx,
         })
     }
 
@@ -653,6 +670,18 @@ impl DiaryxBackend {
             sync_handler,
         ));
 
+        // Create shared Diaryx instance with callbacks pre-configured
+        let diaryx = {
+            let mut d = Diaryx::with_crdt_instances(
+                (*fs).clone(),
+                Arc::clone(&workspace_crdt),
+                Arc::clone(&body_doc_manager),
+            );
+            d.set_sync_event_callback(create_event_bridge());
+            d.set_workspace_root(PathBuf::from(""));
+            d
+        };
+
         Ok(Self {
             fs,
             crdt_storage,
@@ -663,6 +692,7 @@ impl DiaryxBackend {
             crdt_update_subscription: Some(crdt_update_subscription),
             sync_manager,
             outgoing_sync_messages: RefCell::new(VecDeque::new()),
+            diaryx,
         })
     }
 
@@ -759,6 +789,18 @@ impl DiaryxBackend {
             sync_handler,
         ));
 
+        // Create shared Diaryx instance with callbacks pre-configured
+        let diaryx = {
+            let mut d = Diaryx::with_crdt_instances(
+                (*fs).clone(),
+                Arc::clone(&workspace_crdt),
+                Arc::clone(&body_doc_manager),
+            );
+            d.set_sync_event_callback(create_event_bridge());
+            d.set_workspace_root(PathBuf::from(""));
+            d
+        };
+
         Ok(Self {
             fs,
             crdt_storage,
@@ -769,6 +811,7 @@ impl DiaryxBackend {
             crdt_update_subscription: Some(crdt_update_subscription),
             sync_manager,
             outgoing_sync_messages: RefCell::new(VecDeque::new()),
+            diaryx,
         })
     }
 
@@ -867,6 +910,18 @@ impl DiaryxBackend {
             sync_handler,
         ));
 
+        // Create shared Diaryx instance with callbacks pre-configured
+        let diaryx = {
+            let mut d = Diaryx::with_crdt_instances(
+                (*fs).clone(),
+                Arc::clone(&workspace_crdt),
+                Arc::clone(&body_doc_manager),
+            );
+            d.set_sync_event_callback(create_event_bridge());
+            d.set_workspace_root(PathBuf::from(""));
+            d
+        };
+
         Ok(Self {
             fs,
             crdt_storage,
@@ -877,6 +932,7 @@ impl DiaryxBackend {
             crdt_update_subscription: Some(crdt_update_subscription),
             sync_manager,
             outgoing_sync_messages: RefCell::new(VecDeque::new()),
+            diaryx,
         })
     }
 
@@ -910,27 +966,10 @@ impl DiaryxBackend {
             None
         };
 
-        // Use stored CRDT instances with event callbacks configured.
-        // This is critical for remote CRDT updates to trigger UI notifications.
-        // The shared Arc<WorkspaceCrdt> and Arc<BodyDocManager> have event callbacks
-        // that forward events to the JS event registry.
-        let diaryx = Diaryx::with_crdt_instances(
-            (*self.fs).clone(),
-            Arc::clone(&self.workspace_crdt),
-            Arc::clone(&self.body_doc_manager),
-        );
-
-        // Set the sync manager's event callback to forward events to JS
-        // This enables SendSyncMessage events to be emitted after CRDT updates
-        diaryx.set_sync_event_callback(create_event_bridge());
-
-        // Set workspace root for link formatting
-        // In WASM with OPFS, paths are already workspace-relative (the OPFS root IS the workspace)
-        // Using empty path means all paths are treated as canonical (no prefix stripping needed)
-        diaryx.set_workspace_root(std::path::PathBuf::from(""));
-
-        // Execute the command
-        let result = diaryx
+        // Execute the command using the shared Diaryx instance
+        // (callbacks were configured once during backend creation)
+        let result = self
+            .diaryx
             .execute(cmd)
             .await
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
@@ -958,27 +997,10 @@ impl DiaryxBackend {
             None
         };
 
-        // Use stored CRDT instances with event callbacks configured.
-        // This is critical for remote CRDT updates to trigger UI notifications.
-        // The shared Arc<WorkspaceCrdt> and Arc<BodyDocManager> have event callbacks
-        // that forward events to the JS event registry.
-        let diaryx = Diaryx::with_crdt_instances(
-            (*self.fs).clone(),
-            Arc::clone(&self.workspace_crdt),
-            Arc::clone(&self.body_doc_manager),
-        );
-
-        // Set the sync manager's event callback to forward events to JS
-        // This enables SendSyncMessage events to be emitted after CRDT updates
-        diaryx.set_sync_event_callback(create_event_bridge());
-
-        // Set workspace root for link formatting
-        // In WASM with OPFS, paths are already workspace-relative (the OPFS root IS the workspace)
-        // Using empty path means all paths are treated as canonical (no prefix stripping needed)
-        diaryx.set_workspace_root(std::path::PathBuf::from(""));
-
-        // Execute the command
-        let result = diaryx
+        // Execute the command using the shared Diaryx instance
+        // (callbacks were configured once during backend creation)
+        let result = self
+            .diaryx
             .execute(cmd)
             .await
             .map_err(|e| JsValue::from_str(&e.to_string()))?;

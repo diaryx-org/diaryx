@@ -101,6 +101,7 @@ impl WasmSqliteStorage {
             "crdt_get_all_updates",
             "crdt_get_latest_update_id",
             "crdt_compact",
+            "crdt_clear_updates",
         ];
 
         for func_name in required_functions {
@@ -333,6 +334,12 @@ impl CrdtStorage for WasmSqliteStorage {
             &[JsValue::from_str(old_name), JsValue::from_str(new_name)],
         )
         .map_err(|e| DiaryxError::Crdt(format!("rename_doc failed: {:?}", e)))?;
+        Ok(())
+    }
+
+    fn clear_updates(&self, name: &str) -> StorageResult<()> {
+        self.call_fn("crdt_clear_updates", &[JsValue::from_str(name)])
+            .map_err(|e| DiaryxError::Crdt(format!("clear_updates failed: {:?}", e)))?;
         Ok(())
     }
 }

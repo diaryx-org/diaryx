@@ -121,7 +121,7 @@ fn handle_normal_key(state: &mut NavState, key: KeyEvent, ws: &CliWorkspace) {
         // Duplicate selected entry
         KeyCode::Char('p') => {
             if let Some(path) = state.selected_path.clone() {
-                match commands::exec_duplicate(ws, &path) {
+                match commands::exec_duplicate(ws, &state.workspace_root, &path) {
                     Ok(new_path) => {
                         state.set_status("Duplicated".to_string(), false);
                         state.rebuild_tree_and_select(ws, new_path);
@@ -187,7 +187,7 @@ fn handle_text_input_key(state: &mut NavState, key: KeyEvent, ws: &CliWorkspace)
             match action {
                 TextAction::Create => {
                     if let Some(parent) = state.selected_path.clone() {
-                        match commands::exec_create(ws, &parent, &trimmed) {
+                        match commands::exec_create(ws, &state.workspace_root, &parent, &trimmed) {
                             Ok(new_path) => {
                                 state.set_status(format!("Created '{}'", trimmed), false);
                                 state.rebuild_tree_and_select(ws, new_path);
@@ -200,7 +200,7 @@ fn handle_text_input_key(state: &mut NavState, key: KeyEvent, ws: &CliWorkspace)
                 }
                 TextAction::Rename => {
                     if let Some(path) = state.selected_path.clone() {
-                        match commands::exec_rename(ws, &path, &trimmed) {
+                        match commands::exec_rename(ws, &state.workspace_root, &path, &trimmed) {
                             Ok(new_path) => {
                                 state.set_status(format!("Renamed to '{}'", trimmed), false);
                                 state.rebuild_tree_and_select(ws, new_path);
@@ -301,7 +301,7 @@ fn handle_confirm_key(state: &mut NavState, key: KeyEvent, ws: &CliWorkspace) {
             match action {
                 ConfirmAction::Delete => {
                     if let Some(path) = state.selected_path.clone() {
-                        match commands::exec_delete(ws, &path) {
+                        match commands::exec_delete(ws, &state.workspace_root, &path) {
                             Ok(()) => {
                                 state.set_status("Deleted".to_string(), false);
                                 state.rebuild_tree(ws);
@@ -376,26 +376,30 @@ fn handle_node_pick_key(state: &mut NavState, key: KeyEvent, ws: &CliWorkspace) 
             state.mode = InputMode::Normal;
 
             match action {
-                PickAction::Move => match commands::exec_move(ws, &source_path, &target) {
-                    Ok(new_path) => {
-                        state.set_status("Moved".to_string(), false);
-                        state.rebuild_tree_and_select(ws, new_path);
+                PickAction::Move => {
+                    match commands::exec_move(ws, &state.workspace_root, &source_path, &target) {
+                        Ok(new_path) => {
+                            state.set_status("Moved".to_string(), false);
+                            state.rebuild_tree_and_select(ws, new_path);
+                        }
+                        Err(e) => {
+                            state.set_status(e, true);
+                            state.rebuild_tree(ws);
+                        }
                     }
-                    Err(e) => {
-                        state.set_status(e, true);
-                        state.rebuild_tree(ws);
+                }
+                PickAction::Merge => {
+                    match commands::exec_merge(ws, &state.workspace_root, &source_path, &target) {
+                        Ok(()) => {
+                            state.set_status("Merged".to_string(), false);
+                            state.rebuild_tree_and_select(ws, target);
+                        }
+                        Err(e) => {
+                            state.set_status(e, true);
+                            state.rebuild_tree(ws);
+                        }
                     }
-                },
-                PickAction::Merge => match commands::exec_merge(ws, &source_path, &target) {
-                    Ok(()) => {
-                        state.set_status("Merged".to_string(), false);
-                        state.rebuild_tree_and_select(ws, target);
-                    }
-                    Err(e) => {
-                        state.set_status(e, true);
-                        state.rebuild_tree(ws);
-                    }
-                },
+                }
             }
         }
 

@@ -368,7 +368,7 @@ pub async fn write_file_with_metadata_and_canonical_path<FS: AsyncFileSystem>(
     let content = if yaml.is_empty() {
         body.to_string()
     } else {
-        format!("---\n{}\n---\n\n{}", yaml, body)
+        format!("---\n{}\n---\n{}", yaml, body)
     };
 
     // Ensure parent directory exists

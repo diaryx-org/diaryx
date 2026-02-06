@@ -619,11 +619,8 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
 
         write_result?;
 
-        // Emit contents changed event
-        self.emit_event(FileSystemEvent::contents_changed(
-            storage_path,
-            body.to_string(),
-        ));
+        // NOTE: We do NOT emit ContentsChanged here. The caller (sync_manager::handle_body_message)
+        // emits a single ContentsChanged event. Emitting here caused duplicate notifications.
 
         Ok(())
     }

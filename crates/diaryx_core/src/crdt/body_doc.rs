@@ -4,7 +4,6 @@
 //! individual file contents. Each file in the workspace can have its own
 //! BodyDoc for real-time sync of markdown content.
 
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
@@ -494,9 +493,6 @@ impl BodyDoc {
     /// This method also sets the `applying_remote` flag to prevent the update observer
     /// from firing, which would otherwise echo the remote update back to the server.
     pub fn apply_update(&self, update: &[u8], origin: UpdateOrigin) -> StorageResult<Option<i64>> {
-        // Only emit events for remote/sync updates (Local updates emit via CrdtFs)
-        let should_emit = origin != UpdateOrigin::Local && self.event_callback.is_some();
-
         // Set flag to prevent observer from firing for remote updates
         // This prevents echoing back updates we receive from the server
         let is_remote = origin != UpdateOrigin::Local;
@@ -521,17 +517,12 @@ impl BodyDoc {
         // Propagate any error from apply_update
         result?;
 
-        // Emit ContentsChanged event for remote body updates
-        let doc_name = self.doc_name.read().unwrap().clone();
-        if should_emit {
-            let content = self.get_body();
-            self.emit_event(FileSystemEvent::contents_changed(
-                PathBuf::from(&doc_name),
-                content,
-            ));
-        }
+        // NOTE: We do NOT emit ContentsChanged here. The caller (sync_manager::handle_body_message)
+        // is responsible for emitting a single ContentsChanged event after processing all updates.
+        // Emitting here caused triple-notification loops that triggered editor auto-save cascades.
 
         // Persist the update
+        let doc_name = self.doc_name.read().unwrap();
         let update_id = self.storage.append_update(&doc_name, update, origin)?;
         Ok(Some(update_id))
     }

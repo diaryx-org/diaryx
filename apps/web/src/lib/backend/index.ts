@@ -40,8 +40,25 @@ export { createApi, type Api } from "./api";
 // Singleton Backend Instance
 // ============================================================================
 
-let backendInstance: Backend | null = null;
-let initPromise: Promise<Backend> | null = null;
+// Use globalThis to ensure the singleton is shared across module instances.
+// Vite dev server may create separate module instances for the same file when
+// imported via different paths (e.g., "$lib/backend" vs "/src/lib/backend").
+// Without globalThis, each module instance gets its own backendInstance/initPromise,
+// causing duplicate Worker creation and lost event subscriptions.
+const _g = globalThis as any;
+
+function getBackendInstance(): Backend | null {
+  return _g.__diaryx_backendInstance ?? null;
+}
+function setBackendInstance(b: Backend | null): void {
+  _g.__diaryx_backendInstance = b;
+}
+function getInitPromise(): Promise<Backend> | null {
+  return _g.__diaryx_initPromise ?? null;
+}
+function setInitPromise(p: Promise<Backend> | null): void {
+  _g.__diaryx_initPromise = p;
+}
 
 /**
  * Get the backend instance, creating it if necessary.
@@ -54,20 +71,21 @@ let initPromise: Promise<Backend> | null = null;
  * ```
  */
 export async function getBackend(): Promise<Backend> {
-  if (backendInstance?.isReady()) {
-    console.log("[Backend] Returning existing ready backend");
-    return backendInstance;
+  const existing = getBackendInstance();
+  if (existing?.isReady()) {
+    return existing;
   }
 
   // Prevent multiple simultaneous initializations
-  if (initPromise) {
-    console.log("[Backend] Waiting for existing initialization...");
-    return initPromise;
+  const pending = getInitPromise();
+  if (pending) {
+    return pending;
   }
 
   console.log("[Backend] Starting initialization...");
-  initPromise = initializeBackend();
-  return initPromise;
+  const promise = initializeBackend();
+  setInitPromise(promise);
+  return promise;
 }
 
 /**
@@ -83,29 +101,31 @@ async function initializeBackend(): Promise<Backend> {
   );
 
   try {
+    let instance: Backend;
     if (isTauri()) {
       console.log("[Backend] Using Tauri backend");
       const { TauriBackend } = await import("./tauri");
-      backendInstance = new TauriBackend();
+      instance = new TauriBackend();
     } else if (isBrowser()) {
       // Use WorkerBackend which runs WasmBackend in a Web Worker
       // This enables OPFS with createSyncAccessHandle() for Safari
       console.log("[Backend] Using WorkerBackend (WASM in Web Worker)");
       const { WorkerBackendNew } = await import("./workerBackendNew");
-      backendInstance = new WorkerBackendNew();
+      instance = new WorkerBackendNew();
     } else {
       throw new Error("Unsupported runtime environment");
     }
 
     console.log("[Backend] Calling backend.init()...");
-    await backendInstance.init();
+    await instance.init();
     console.log("[Backend] Backend initialized successfully");
-    return backendInstance;
+    setBackendInstance(instance);
+    return instance;
   } catch (error) {
     console.error("[Backend] Initialization failed:", error);
     // Reset state so we can retry
-    backendInstance = null;
-    initPromise = null;
+    setBackendInstance(null);
+    setInitPromise(null);
     throw error;
   }
 }
@@ -115,8 +135,8 @@ async function initializeBackend(): Promise<Backend> {
  */
 export function resetBackend(): void {
   console.log("[Backend] Resetting backend instance");
-  backendInstance = null;
-  initPromise = null;
+  setBackendInstance(null);
+  setInitPromise(null);
 }
 
 // ============================================================================
@@ -127,7 +147,7 @@ export function resetBackend(): void {
  * Check if the backend is ready to use.
  */
 export function isBackendReady(): boolean {
-  return backendInstance?.isReady() ?? false;
+  return getBackendInstance()?.isReady() ?? false;
 }
 
 /**
@@ -135,12 +155,13 @@ export function isBackendReady(): boolean {
  * Throws if the backend hasn't been initialized yet.
  */
 export function getBackendSync(): Backend {
-  if (!backendInstance?.isReady()) {
+  const instance = getBackendInstance();
+  if (!instance?.isReady()) {
     throw new Error(
       "Backend not initialized. Call getBackend() first and await it.",
     );
   }
-  return backendInstance;
+  return instance;
 }
 
 // ============================================================================

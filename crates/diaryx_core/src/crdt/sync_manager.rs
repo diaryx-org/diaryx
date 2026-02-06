@@ -199,16 +199,15 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         if !update.is_empty() {
             log::debug!(
                 "[SyncManager] emit_workspace_update: sending {} bytes",
-                update.len()
+                update.len(),
             );
             self.emit_event(FileSystemEvent::send_sync_message(
                 "workspace",
                 update,
                 false,
             ));
-        } else {
-            log::debug!("[SyncManager] emit_workspace_update: update is empty, nothing to send");
         }
+
         Ok(())
     }
 

@@ -350,18 +350,25 @@ fn setup_crdt_sync_callback(wasm_registry: &Rc<WasmCallbackRegistry>) {
     let registry = Rc::clone(wasm_registry);
     CRDT_SYNC_CALLBACK.with(|cb| {
         *cb.borrow_mut() = Some(Box::new(move |update: &[u8]| {
-            // Skip emitting if we're handling a remote update (prevents feedback loop)
-            let is_remote = IS_HANDLING_REMOTE_UPDATE.with(|flag| *flag.borrow());
-            if is_remote {
-                return;
-            }
-
-            // Only emit if there are subscribers (i.e., sync is connected)
+            // Note: We intentionally do NOT check IS_HANDLING_REMOTE_UPDATE here.
+            // The y-sync protocol handles duplicate updates (applying them is a no-op),
+            // and the server excludes the sender from broadcasts. Checking the flag
+            // caused local updates to be suppressed when they occurred during an async
+            // suspension of a remote update handler (the flag leaked across .await points).
             if registry.subscriber_count() > 0 {
-                // Wrap the update in Y-sync message format and emit
+                log::trace!(
+                    "[CRDT_SYNC_CALLBACK] Emitting {} byte update, subscribers: {}",
+                    update.len(),
+                    registry.subscriber_count()
+                );
                 let encoded = SyncMessage::Update(update.to_vec()).encode();
                 let event = FileSystemEvent::send_sync_message("workspace", encoded, false);
                 registry.emit(&event);
+            } else {
+                log::trace!(
+                    "[CRDT_SYNC_CALLBACK] No subscribers, dropping {} byte update",
+                    update.len()
+                );
             }
         }));
     });

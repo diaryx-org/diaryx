@@ -114,7 +114,11 @@ async function init(port: MessagePort, storageType: StorageType, directoryHandle
   if (backend.onFileSystemEvent && eventPort) {
     fsEventSubscriptionId = backend.onFileSystemEvent((eventJson: string) => {
       // Forward the event JSON to the main thread via MessagePort
-      eventPort!.postMessage({ type: 'FileSystemEvent', data: eventJson });
+      try {
+        eventPort!.postMessage({ type: 'FileSystemEvent', data: eventJson });
+      } catch (e) {
+        console.error('[WasmWorker] Failed to forward filesystem event:', e);
+      }
     });
     console.log('[WasmWorker] Subscribed to filesystem events, id:', fsEventSubscriptionId);
   } else {

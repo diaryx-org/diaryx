@@ -69,6 +69,23 @@ function isTempFile(path: string): boolean {
   return path.endsWith('.tmp') || path.endsWith('.bak') || path.endsWith('.swap');
 }
 
+// Cross-module singleton support.
+// Vite dev server may create separate module instances when the same file is
+// imported via different paths (e.g., "$lib/crdt/workspaceCrdtBridge" from app
+// code vs "/src/lib/crdt/workspaceCrdtBridge" from page.evaluate in tests).
+// We register key functions on globalThis so unconfigured module instances
+// can delegate to the configured one.
+const _g = globalThis as any;
+if (!_g.__diaryx_bridge) {
+  _g.__diaryx_bridge = {} as Record<string, Function>;
+}
+
+/** Register this module instance as the configured bridge on globalThis. */
+function registerBridgeOnGlobal(): void {
+  _g.__diaryx_bridge.ensureBodySync = _ensureBodySyncImpl;
+  _g.__diaryx_bridge.getBodyContentFromCrdt = _getBodyContentFromCrdtImpl;
+}
+
 // State
 let rustApi: RustCrdtApi | null = null;
 let syncBridge: SyncTransport | null = null;
@@ -327,6 +344,7 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
       }
     }
 
+    registerBridgeOnGlobal();
     await flushPendingBodySync('setWorkspaceServer');
   }
 }
@@ -909,6 +927,7 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
     }
 
     initialized = true;
+    registerBridgeOnGlobal();
     await flushPendingBodySync('initWorkspace');
     options.onReady?.();
   } finally {
@@ -1634,6 +1653,14 @@ export function closeBodySync(filePath: string): void {
  * the native SyncClient handles body sync internally.
  */
 export async function ensureBodySync(filePath: string): Promise<void> {
+  // Delegate to configured module instance if this one isn't configured
+  if (!rustApi && _g.__diaryx_bridge?.ensureBodySync) {
+    return _g.__diaryx_bridge.ensureBodySync(filePath);
+  }
+  return _ensureBodySyncImpl(filePath);
+}
+
+async function _ensureBodySyncImpl(filePath: string): Promise<void> {
   // Skip if backend supports native sync - it handles body sync internally
   // We check hasNativeSync() (capability) not _nativeSyncActive (state) to prevent
   // fallback to TypeScript sync even if native sync fails to start
@@ -1669,6 +1696,14 @@ export async function ensureBodySync(filePath: string): Promise<void> {
  * @returns The body content, or null if not available
  */
 export async function getBodyContentFromCrdt(filePath: string): Promise<string | null> {
+  // Delegate to configured module instance if this one isn't configured
+  if (!rustApi && _g.__diaryx_bridge?.getBodyContentFromCrdt) {
+    return _g.__diaryx_bridge.getBodyContentFromCrdt(filePath);
+  }
+  return _getBodyContentFromCrdtImpl(filePath);
+}
+
+async function _getBodyContentFromCrdtImpl(filePath: string): Promise<string | null> {
   if (!rustApi) {
     return null;
   }

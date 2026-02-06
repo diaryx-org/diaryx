@@ -76,6 +76,7 @@
       <Tabs.Trigger value="sync" class="shrink-0">
         <RefreshCw class="size-4 mr-1.5 hidden sm:inline" />
         Sync
+        <span class="text-[9px] font-semibold uppercase ml-1 px-1 py-0.5 rounded-full bg-blue-500/15 text-blue-600 dark:text-blue-400">Beta</span>
       </Tabs.Trigger>
       <Tabs.Trigger value="account" class="shrink-0">
         <User class="size-4 mr-1.5 hidden sm:inline" />

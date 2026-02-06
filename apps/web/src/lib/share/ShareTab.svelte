@@ -216,7 +216,7 @@
       <!-- Header -->
       <div class="text-center space-y-1">
         <Users class="size-8 mx-auto text-muted-foreground" />
-        <h3 class="font-medium text-sm">Live Collaboration</h3>
+        <h3 class="font-medium text-sm">Live Collaboration <span class="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">Alpha</span></h3>
         <p class="text-xs text-muted-foreground">
           Share your workspace for real-time editing
         </p>

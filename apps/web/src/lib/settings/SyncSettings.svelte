@@ -44,6 +44,7 @@
   <h3 class="font-medium flex items-center gap-2">
     <Server class="size-4" />
     Multi-Device Sync
+    <span class="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-blue-500/15 text-blue-600 dark:text-blue-400">Beta</span>
   </h3>
 
   <p class="text-xs text-muted-foreground px-1">

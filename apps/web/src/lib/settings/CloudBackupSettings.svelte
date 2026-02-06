@@ -35,6 +35,7 @@
   <h3 class="font-medium flex items-center gap-2">
     <Cloud class="size-4" />
     Cloud Sync
+    <span class="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">Alpha</span>
   </h3>
 
   <div class="px-1">

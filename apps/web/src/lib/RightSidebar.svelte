@@ -482,14 +482,14 @@
         class="px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === 'history' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
         onclick={() => activeTab = "history"}
       >
-        History
+        History <span class="text-[8px] font-semibold uppercase px-1 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">α</span>
       </button>
       <button
         type="button"
         class="px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === 'share' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
         onclick={() => activeTab = "share"}
       >
-        Share
+        Share <span class="text-[8px] font-semibold uppercase px-1 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">α</span>
       </button>
     </div>
   </div>
@@ -792,6 +792,7 @@
             <div class="flex items-center gap-2 text-xs text-muted-foreground">
               <History class="size-3.5" />
               <span class="font-medium">Version History</span>
+              <span class="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">Alpha</span>
             </div>
             <Button
               variant="ghost"

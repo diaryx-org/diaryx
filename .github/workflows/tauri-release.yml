@@ -78,6 +78,9 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Install wasm-pack
+        run: cargo install wasm-pack
+
       - name: Install dependencies
         run: |
           cd apps/web

@@ -16,7 +16,7 @@ use rusqlite::Connection;
 use std::sync::Arc;
 use tokio::signal;
 use tower_http::{
-    cors::{Any, CorsLayer},
+    cors::{AllowOrigin, CorsLayer},
     trace::TraceLayer,
 };
 use tracing::{error, info};
@@ -101,6 +101,11 @@ async fn main() {
     };
 
     // Build CORS layer
+    let origins: Vec<_> = config
+        .cors_origins
+        .iter()
+        .filter_map(|o| o.parse().ok())
+        .collect();
     let cors = CorsLayer::new()
         .allow_methods([
             Method::GET,
@@ -110,7 +115,8 @@ async fn main() {
             Method::OPTIONS,
         ])
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
-        .allow_origin(Any); // In production, use specific origins from config
+        .allow_credentials(true)
+        .allow_origin(AllowOrigin::list(origins));
 
     // Build the router
     let app = Router::new()

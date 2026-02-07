@@ -1859,6 +1859,7 @@ dependencies = [
 name = "diaryx"
 version = "0.11.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "clap",
  "crossterm 0.28.1",

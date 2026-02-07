@@ -328,6 +328,9 @@ pub enum SyncEvent {
 ///
 /// This design allows the `RustSyncManager` event callback to queue messages
 /// without holding a direct reference to the SyncClient.
+#[deprecated(
+    note = "Use direct WebSocket with v2 protocol instead. See CLI sync/client.rs for reference."
+)]
 pub struct SyncClient<T: SyncTransport, FS: AsyncFileSystem + Send + Sync + 'static> {
     config: SyncClientConfig,
     metadata_transport: T,

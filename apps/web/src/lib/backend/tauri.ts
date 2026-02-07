@@ -471,7 +471,7 @@ export class TauriBackend implements Backend {
    * Always true for Tauri.
    */
   hasNativeSync(): boolean {
-    return true;
+    return false;
   }
 
   /**

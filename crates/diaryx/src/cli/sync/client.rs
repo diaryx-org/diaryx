@@ -6,11 +6,12 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use base64::Engine;
 use diaryx_core::config::Config;
 use diaryx_core::crdt::{
     BodyDocManager, DocIdKind, RustSyncManager, SyncHandler, SyncMessage, WorkspaceCrdt,
-    format_body_doc_id, format_workspace_doc_id, frame_body_message, frame_message_v2,
-    parse_doc_id, unframe_body_message, unframe_message_v2,
+    format_body_doc_id, format_workspace_doc_id, frame_message_v2, parse_doc_id,
+    unframe_message_v2,
 };
 use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
 use futures_util::{SinkExt, StreamExt};
@@ -181,6 +182,21 @@ enum ControlMessage {
     },
     /// Focus list changed - files that any client is focused on
     FocusListChanged { files: Vec<String> },
+    /// Files-Ready handshake: server sends file manifest before y-sync starts.
+    FileManifest {
+        #[serde(default)]
+        files: Vec<serde_json::Value>,
+        #[serde(default)]
+        client_is_new: bool,
+    },
+    /// Files-Ready handshake: server sends CRDT state after client replies with FilesReady.
+    CrdtState {
+        /// Base64-encoded Y-CRDT state bytes.
+        state: String,
+    },
+    /// Share session: guest joined confirmation.
+    #[serde(alias = "session_joined")]
+    SessionJoined {},
     /// Catch-all for other message types
     #[serde(other)]
     Other,
@@ -247,20 +263,12 @@ pub fn handle_start(config: &Config, workspace_root: &Path) {
         Arc::clone(&sync_handler),
     ));
 
-    // Build WebSocket URLs
+    // Build WebSocket URL for v2 protocol (single connection)
     let ws_server = server_url
         .replace("https://", "wss://")
         .replace("http://", "ws://");
 
-    let metadata_url = format!(
-        "{}/sync?doc={}&token={}",
-        ws_server, workspace_id, session_token
-    );
-
-    let body_url = format!(
-        "{}/sync?doc={}&multiplexed=true&token={}",
-        ws_server, workspace_id, session_token
-    );
+    let sync_url = format!("{}/sync2?token={}", ws_server, session_token);
 
     // Set up shutdown flag
     let running = Arc::new(AtomicBool::new(true));
@@ -291,9 +299,9 @@ pub fn handle_start(config: &Config, workspace_root: &Path) {
             }
         });
 
-        run_sync_loop(
-            &metadata_url,
-            &body_url,
+        run_sync_loop_v2(
+            &sync_url,
+            workspace_id,
             sync_manager,
             workspace_crdt,
             running,
@@ -347,55 +355,38 @@ pub fn handle_push(config: &Config, workspace_root: &Path) {
         println!("  {} files in local CRDT", existing_files.len());
     }
 
+    let fs = SyncToAsyncFs::new(RealFileSystem);
+    let sync_handler = Arc::new(SyncHandler::new(fs));
+    sync_handler.set_workspace_root(workspace_root.to_path_buf());
+
+    let sync_manager = Arc::new(RustSyncManager::new(
+        Arc::clone(&workspace_crdt),
+        Arc::clone(&body_manager),
+        Arc::clone(&sync_handler),
+    ));
+
     let ws_server = server_url
         .replace("https://", "wss://")
         .replace("http://", "ws://");
 
-    let metadata_url = format!(
-        "{}/sync?doc={}&token={}",
-        ws_server, workspace_id, session_token
-    );
-
-    let body_url = format!(
-        "{}/sync?doc={}&multiplexed=true&token={}",
-        ws_server, workspace_id, session_token
-    );
+    let sync_url = format!("{}/sync2?token={}", ws_server, session_token);
 
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
 
     runtime.block_on(async {
-        // Connect and push metadata
-        match do_one_shot_sync(&metadata_url, &workspace_crdt, false).await {
-            Ok(0) => println!("  Metadata already up to date"),
-            Ok(_) => println!("  Pushed metadata"),
-            Err(e) => eprintln!("  Failed to push metadata: {}", e),
-        }
-
-        // Get list of all files to push
-        let files_to_push: Vec<String> = workspace_crdt
-            .list_files()
-            .into_iter()
-            .map(|(path, _)| path)
-            .collect();
-
-        // Send focus message to notify other clients which files we're pushing
-        if !files_to_push.is_empty() {
-            if let Err(e) = send_focus_message(&body_url, &files_to_push).await {
-                // Non-fatal - continue with push even if focus fails
-                eprintln!("  Warning: Failed to send focus notification: {}", e);
-            } else {
-                println!("  Notified {} files for sync", files_to_push.len());
-            }
-
-            // Brief delay to let focus propagate to other connected clients
-            tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
-        }
-
-        // Connect and push bodies
-        match do_one_shot_body_sync(&body_url, &workspace_crdt, &body_manager, false).await {
-            Ok(0) => println!("  Body content already up to date"),
-            Ok(count) => println!("  Pushed {} file bodies", count),
-            Err(e) => eprintln!("  Failed to push bodies: {}", e),
+        match do_one_shot_sync_v2(
+            &sync_url,
+            workspace_id,
+            &sync_manager,
+            &workspace_crdt,
+            &body_manager,
+            false,
+        )
+        .await
+        {
+            Ok(0) => println!("  Already up to date"),
+            Ok(count) => println!("  Pushed {} items", count),
+            Err(e) => eprintln!("  Failed to push: {}", e),
         }
     });
 
@@ -434,36 +425,37 @@ pub fn handle_pull(config: &Config, workspace_root: &Path) {
     let sync_handler = Arc::new(SyncHandler::new(fs));
     sync_handler.set_workspace_root(workspace_root.to_path_buf());
 
+    let sync_manager = Arc::new(RustSyncManager::new(
+        Arc::clone(&workspace_crdt),
+        Arc::clone(&body_manager),
+        Arc::clone(&sync_handler),
+    ));
+
     let ws_server = server_url
         .replace("https://", "wss://")
         .replace("http://", "ws://");
 
-    let metadata_url = format!(
-        "{}/sync?doc={}&token={}",
-        ws_server, workspace_id, session_token
-    );
-
-    let body_url = format!(
-        "{}/sync?doc={}&multiplexed=true&token={}",
-        ws_server, workspace_id, session_token
-    );
+    let sync_url = format!("{}/sync2?token={}", ws_server, session_token);
 
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
 
     runtime.block_on(async {
-        // Connect and pull metadata
-        match do_one_shot_sync(&metadata_url, &workspace_crdt, true).await {
+        match do_one_shot_sync_v2(
+            &sync_url,
+            workspace_id,
+            &sync_manager,
+            &workspace_crdt,
+            &body_manager,
+            true,
+        )
+        .await
+        {
+            Ok(0) => println!("  Already up to date"),
             Ok(count) => {
-                if count == 0 {
-                    println!("  Metadata already up to date");
-                } else {
-                    println!("  Received metadata for {} files", count);
-                }
+                println!("  Received {} items", count);
 
                 // Write updated files to disk
-                // list_files() returns Vec<(String, FileMetadata)>
                 let files = workspace_crdt.list_files();
-
                 if !files.is_empty() {
                     let body_mgr_ref = Some(body_manager.as_ref());
                     if let Err(e) = sync_handler
@@ -474,601 +466,11 @@ pub fn handle_pull(config: &Config, workspace_root: &Path) {
                     }
                 }
             }
-            Err(e) => eprintln!("  Failed to pull metadata: {}", e),
-        }
-
-        // Connect and pull bodies
-        match do_one_shot_body_sync(&body_url, &workspace_crdt, &body_manager, true).await {
-            Ok(0) => println!("  Body content already up to date"),
-            Ok(count) => println!("  Received {} file bodies", count),
-            Err(e) => eprintln!("  Failed to pull bodies: {}", e),
+            Err(e) => eprintln!("  Failed to pull: {}", e),
         }
     });
 
     println!("Pull complete.");
-}
-
-/// Run the main sync loop with two WebSocket connections.
-async fn run_sync_loop(
-    metadata_url: &str,
-    body_url: &str,
-    sync_manager: Arc<RustSyncManager<SyncToAsyncFs<RealFileSystem>>>,
-    workspace_crdt: Arc<WorkspaceCrdt>,
-    running: Arc<AtomicBool>,
-) {
-    println!("Connecting to sync server...");
-    progress::show_progress(10); // 10% - starting connection
-
-    // Connect to metadata WebSocket
-    let metadata_ws = match connect_async(metadata_url).await {
-        Ok((ws, _)) => {
-            println!("Connected to metadata sync");
-            progress::show_progress(30); // 30% - metadata connected
-            Some(ws)
-        }
-        Err(e) => {
-            eprintln!("Failed to connect to metadata sync: {}", e);
-            progress::show_error(30);
-            None
-        }
-    };
-
-    // Connect to body WebSocket
-    let body_ws = match connect_async(body_url).await {
-        Ok((ws, _)) => {
-            println!("Connected to body sync");
-            progress::show_progress(50); // 50% - both connected
-            Some(ws)
-        }
-        Err(e) => {
-            eprintln!("Failed to connect to body sync: {}", e);
-            progress::show_error(50);
-            None
-        }
-    };
-
-    if metadata_ws.is_none() && body_ws.is_none() {
-        eprintln!("No connections established. Exiting.");
-        progress::show_error(100);
-        return;
-    }
-
-    println!();
-    println!("Sync is running. Press Ctrl+C to stop.");
-    println!();
-
-    // Track initial sync completion for progress
-    let metadata_synced = Arc::new(AtomicBool::new(false));
-    let body_synced = Arc::new(AtomicBool::new(false));
-
-    // Track when connections are closed so we can exit
-    let metadata_done = Arc::new(AtomicBool::new(metadata_ws.is_none()));
-    let body_done = Arc::new(AtomicBool::new(body_ws.is_none()));
-
-    // Spawn metadata WebSocket handler
-    let metadata_handle = if let Some(mut ws) = metadata_ws {
-        let running_clone = running.clone();
-        let sync_manager_clone = Arc::clone(&sync_manager);
-        let metadata_synced_clone = Arc::clone(&metadata_synced);
-        let body_synced_clone = Arc::clone(&body_synced);
-        let metadata_done_clone = Arc::clone(&metadata_done);
-
-        Some(tokio::spawn(async move {
-            // Send SyncStep1
-            let step1 = sync_manager_clone.create_workspace_sync_step1();
-            if let Err(e) = ws.send(Message::Binary(step1.into())).await {
-                eprintln!("Failed to send metadata SyncStep1: {}", e);
-                metadata_done_clone.store(true, Ordering::SeqCst);
-                return;
-            }
-
-            while running_clone.load(Ordering::SeqCst) {
-                tokio::select! {
-                    msg = ws.next() => {
-                        match msg {
-                            Some(Ok(Message::Binary(data))) => {
-                                match sync_manager_clone.handle_workspace_message(&data, true).await {
-                                    Ok(result) => {
-                                        if let Some(response) = result.response {
-                                            if let Err(e) = ws.send(Message::Binary(response.into())).await {
-                                                eprintln!("Failed to send metadata response: {}", e);
-                                            }
-                                        }
-                                        // Log synced files (SyncComplete from server will handle progress)
-                                        if !result.changed_files.is_empty() {
-                                            for file in &result.changed_files {
-                                                println!("  Synced: {}", file);
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        eprintln!("Error handling metadata message: {}", e);
-                                    }
-                                }
-                            }
-                            Some(Ok(Message::Text(text))) => {
-                                // Handle JSON control messages from server
-                                if let Ok(ctrl_msg) = serde_json::from_str::<ControlMessage>(&text) {
-                                    match ctrl_msg {
-                                        ControlMessage::SyncProgress { completed, total } => {
-                                            if total > 0 {
-                                                let percent = ((completed as f64 / total as f64) * 100.0) as u8;
-                                                // Scale to 50-100% range (first 50% is connection)
-                                                let scaled = 50 + (percent / 2);
-                                                progress::show_progress(scaled);
-                                                // Clear line and print progress
-                                                print!("\r\x1b[K  Metadata progress: {}/{} files ({}%)", completed, total, percent);
-                                                use std::io::Write;
-                                                let _ = std::io::stdout().flush();
-                                            }
-                                        }
-                                        ControlMessage::SyncComplete { files_synced } => {
-                                            metadata_synced_clone.store(true, Ordering::SeqCst);
-                                            println!("\r\x1b[K  Metadata sync complete ({} files)", files_synced);
-                                            // Update progress based on body sync state
-                                            if body_synced_clone.load(Ordering::SeqCst) {
-                                                progress::show_progress(100);
-                                                println!("Sync complete. Watching for changes...");
-                                                progress::show_indeterminate();
-                                            } else {
-                                                progress::show_progress(75);
-                                            }
-                                        }
-                                        ControlMessage::PeerJoined { peer_count } => {
-                                            println!("\r\x1b[K  Peer joined ({} connected)", peer_count);
-                                        }
-                                        ControlMessage::PeerLeft { peer_count } => {
-                                            println!("\r\x1b[K  Peer left ({} connected)", peer_count);
-                                        }
-                                        ControlMessage::FocusListChanged { files } => {
-                                            // Log focus list changes (typically handled by body connection)
-                                            if !files.is_empty() {
-                                                println!("\r\x1b[K  Focus list updated: {} files", files.len());
-                                            }
-                                        }
-                                        ControlMessage::Other => {}
-                                    }
-                                }
-                            }
-                            Some(Ok(Message::Close(_))) => {
-                                println!("\r\x1b[KMetadata connection closed by server");
-                                break;
-                            }
-                            Some(Ok(Message::Pong(_))) => {
-                                // Pong received, connection is alive
-                            }
-                            Some(Err(e)) => {
-                                eprintln!("\r\x1b[KMetadata WebSocket error: {}", e);
-                                break;
-                            }
-                            None => break,
-                            _ => {}
-                        }
-                    }
-                    _ = tokio::time::sleep(tokio::time::Duration::from_secs(30)) => {
-                        // Send ping to keep connection alive
-                        if let Err(e) = ws.send(Message::Ping(vec![].into())).await {
-                            eprintln!("Failed to send ping: {}", e);
-                            break;
-                        }
-                    }
-                }
-            }
-
-            // Close connection gracefully
-            let _ = ws.close(None).await;
-            metadata_done_clone.store(true, Ordering::SeqCst);
-        }))
-    } else {
-        None
-    };
-
-    // Spawn body WebSocket handler
-    let body_handle = if let Some(mut ws) = body_ws {
-        let running_clone = running.clone();
-        let sync_manager_clone = Arc::clone(&sync_manager);
-        let workspace_crdt_clone = Arc::clone(&workspace_crdt);
-        let metadata_synced_clone = Arc::clone(&metadata_synced);
-        let body_synced_clone = Arc::clone(&body_synced);
-        let body_done_clone = Arc::clone(&body_done);
-
-        Some(tokio::spawn(async move {
-            // Send SyncStep1 for all known files
-            // list_files() returns Vec<(String, FileMetadata)>
-            let files = workspace_crdt_clone.list_files();
-            let file_count = files.len();
-            let mut sent = 0;
-
-            // Send in batches to avoid overwhelming the server
-            const BATCH_SIZE: usize = 50;
-            for (file_path, _metadata) in files {
-                if !running_clone.load(Ordering::SeqCst) {
-                    break;
-                }
-                let step1 = sync_manager_clone.create_body_sync_step1(&file_path);
-                let framed = frame_body_message(&file_path, &step1);
-                if let Err(e) = ws.send(Message::Binary(framed.into())).await {
-                    eprintln!("Failed to send body SyncStep1 for {}: {}", file_path, e);
-                }
-                sent += 1;
-
-                // Rate limit: small delay every BATCH_SIZE messages
-                if sent % BATCH_SIZE == 0 {
-                    print!(
-                        "\r\x1b[K  Sending body state: {}/{} files",
-                        sent, file_count
-                    );
-                    use std::io::Write;
-                    let _ = std::io::stdout().flush();
-                    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-                }
-            }
-
-            if sent > 0 {
-                println!("\r\x1b[K  Sent body state for {} files", sent);
-            }
-
-            // If no files to sync, mark as complete immediately
-            if file_count == 0 && !body_synced_clone.load(Ordering::SeqCst) {
-                body_synced_clone.store(true, Ordering::SeqCst);
-                println!("  No body content to sync");
-                if metadata_synced_clone.load(Ordering::SeqCst) {
-                    progress::show_progress(100);
-                    println!("Sync complete. Watching for changes...");
-                    progress::show_indeterminate();
-                }
-            }
-
-            // Track body responses received for progress
-            let mut body_responses_received = 0usize;
-            let mut last_body_progress_shown = 0usize;
-
-            while running_clone.load(Ordering::SeqCst) {
-                tokio::select! {
-                    msg = ws.next() => {
-                        match msg {
-                            Some(Ok(Message::Binary(data))) => {
-                                // Unframe the multiplexed message
-                                if let Some((file_path, body_msg)) = unframe_body_message(&data) {
-                                    match sync_manager_clone.handle_body_message(&file_path, &body_msg, true).await {
-                                        Ok(result) => {
-                                            if let Some(response) = result.response {
-                                                let framed = frame_body_message(&file_path, &response);
-                                                if let Err(e) = ws.send(Message::Binary(framed.into())).await {
-                                                    eprintln!("Failed to send body response: {}", e);
-                                                }
-                                            }
-
-                                            // Track and show progress for received responses
-                                            body_responses_received += 1;
-                                            let progress_interval = (file_count / 20).max(50).min(200);
-                                            if body_responses_received - last_body_progress_shown >= progress_interval {
-                                                last_body_progress_shown = body_responses_received;
-                                                let percent = if file_count > 0 {
-                                                    (body_responses_received * 100 / file_count).min(100)
-                                                } else {
-                                                    100
-                                                };
-                                                print!("\r\x1b[K  Receiving body data: {}/{} ({}%)", body_responses_received, file_count, percent);
-                                                use std::io::Write;
-                                                let _ = std::io::stdout().flush();
-                                                progress::show_progress((50 + percent / 2) as u8);
-                                            }
-
-                                            if result.content.is_some() && !result.is_echo {
-                                                println!("\r\x1b[K  Body synced: {}", file_path);
-                                            }
-                                        }
-                                        Err(e) => {
-                                            eprintln!("Error handling body message for {}: {}", file_path, e);
-                                        }
-                                    }
-                                }
-                            }
-                            Some(Ok(Message::Text(text))) => {
-                                // Handle JSON control messages from server
-                                if let Ok(ctrl_msg) = serde_json::from_str::<ControlMessage>(&text) {
-                                    match ctrl_msg {
-                                        ControlMessage::SyncProgress { completed, total } => {
-                                            if total > 0 {
-                                                let percent = ((completed as f64 / total as f64) * 100.0) as u8;
-                                                // Scale to 50-100% range
-                                                let scaled = 50 + (percent / 2);
-                                                progress::show_progress(scaled);
-                                                print!("\r\x1b[K  Body progress: {}/{} files ({}%)", completed, total, percent);
-                                                use std::io::Write;
-                                                let _ = std::io::stdout().flush();
-                                            }
-                                        }
-                                        ControlMessage::SyncComplete { files_synced } => {
-                                            body_synced_clone.store(true, Ordering::SeqCst);
-                                            println!("\r\x1b[K  Body sync complete ({} files)", files_synced);
-                                            // Update progress based on metadata sync state
-                                            if metadata_synced_clone.load(Ordering::SeqCst) {
-                                                progress::show_progress(100);
-                                                println!("Sync complete. Watching for changes...");
-                                                progress::show_indeterminate();
-                                            } else {
-                                                progress::show_progress(85);
-                                            }
-                                        }
-                                        ControlMessage::PeerJoined { .. } | ControlMessage::PeerLeft { .. } => {
-                                            // Handled by metadata connection
-                                        }
-                                        ControlMessage::FocusListChanged { files } => {
-                                            // Focus list changed - could subscribe to newly focused files
-                                            // For continuous sync, we're already syncing all files
-                                            if !files.is_empty() {
-                                                log::debug!("Focus list changed: {} files focused", files.len());
-                                            }
-                                        }
-                                        ControlMessage::Other => {}
-                                    }
-                                }
-                            }
-                            Some(Ok(Message::Close(_))) => {
-                                println!("\r\x1b[KBody connection closed by server");
-                                break;
-                            }
-                            Some(Ok(Message::Pong(_))) => {
-                                // Pong received, connection is alive
-                            }
-                            Some(Err(e)) => {
-                                eprintln!("\r\x1b[KBody WebSocket error: {}", e);
-                                break;
-                            }
-                            None => break,
-                            _ => {}
-                        }
-                    }
-                    _ = tokio::time::sleep(tokio::time::Duration::from_secs(30)) => {
-                        // Send ping to keep connection alive
-                        if let Err(e) = ws.send(Message::Ping(vec![].into())).await {
-                            eprintln!("Failed to send ping: {}", e);
-                            break;
-                        }
-                    }
-                }
-            }
-
-            // Close connection gracefully
-            let _ = ws.close(None).await;
-            body_done_clone.store(true, Ordering::SeqCst);
-        }))
-    } else {
-        None
-    };
-
-    // Wait for shutdown signal OR both connections to close
-    while running.load(Ordering::SeqCst) {
-        // Check if both connections have closed
-        if metadata_done.load(Ordering::SeqCst) && body_done.load(Ordering::SeqCst) {
-            println!("\nBoth connections closed. Exiting sync.");
-            break;
-        }
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    }
-
-    // Signal tasks to stop
-    running.store(false, Ordering::SeqCst);
-
-    // Wait for tasks to complete
-    if let Some(handle) = metadata_handle {
-        let _ = handle.await;
-    }
-    if let Some(handle) = body_handle {
-        let _ = handle.await;
-    }
-}
-
-/// Perform one-shot metadata sync.
-async fn do_one_shot_sync(
-    url: &str,
-    workspace_crdt: &WorkspaceCrdt,
-    pull: bool,
-) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
-    let (mut ws, _) = connect_async(url).await?;
-
-    // Send our state vector
-    let sv = workspace_crdt.encode_state_vector();
-    let step1 = SyncMessage::SyncStep1(sv).encode();
-    ws.send(Message::Binary(step1.into())).await?;
-
-    let mut push_count = 0;
-    let mut pull_count = 0;
-    let mut sent_step2 = false;
-    let mut received_step2 = false;
-
-    // Receive and process messages until sync is complete
-    let timeout = tokio::time::Duration::from_secs(10);
-    let deadline = tokio::time::Instant::now() + timeout;
-
-    loop {
-        tokio::select! {
-            biased;
-
-            msg = ws.next() => {
-                match msg {
-                    Some(Ok(Message::Binary(data))) => {
-                        let messages = SyncMessage::decode_all(&data)?;
-                        for sync_msg in messages {
-                            match sync_msg {
-                                SyncMessage::SyncStep1(remote_sv) => {
-                                    // Send our diff to the server
-                                    let diff = workspace_crdt.encode_diff(&remote_sv)?;
-                                    // Y.js empty update is 2 bytes (header only)
-                                    if diff.len() > 2 {
-                                        // Mark that we pushed data
-                                        push_count = 1;
-                                    }
-                                    let step2 = SyncMessage::SyncStep2(diff).encode();
-                                    ws.send(Message::Binary(step2.into())).await?;
-                                    sent_step2 = true;
-                                }
-                                SyncMessage::SyncStep2(update) | SyncMessage::Update(update) => {
-                                    received_step2 = true;
-                                    // Y.js empty update is 2 bytes (header only)
-                                    if update.len() > 2 {
-                                        // Always apply incoming updates to stay in sync
-                                        let (_, changed_files, _) = workspace_crdt
-                                            .apply_update_tracking_changes(&update, diaryx_core::crdt::UpdateOrigin::Sync)?;
-                                        pull_count += changed_files.len();
-                                    }
-                                }
-                            }
-                        }
-
-                        // Exit after bidirectional sync is complete
-                        if sent_step2 && received_step2 {
-                            break;
-                        }
-                    }
-                    Some(Ok(Message::Close(_))) | None => break,
-                    Some(Err(e)) => return Err(e.into()),
-                    _ => {}
-                }
-            }
-            _ = tokio::time::sleep_until(deadline) => {
-                break;
-            }
-        }
-    }
-
-    ws.close(None).await?;
-    // Return the relevant count based on mode
-    Ok(if pull { pull_count } else { push_count })
-}
-
-/// Perform one-shot body sync.
-async fn do_one_shot_body_sync(
-    url: &str,
-    workspace_crdt: &WorkspaceCrdt,
-    body_manager: &BodyDocManager,
-    pull: bool,
-) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
-    use std::collections::HashSet;
-
-    let (mut ws, _) = connect_async(url).await?;
-
-    // Get list of files to sync
-    let files: Vec<String> = workspace_crdt
-        .list_files()
-        .into_iter()
-        .map(|(path, _)| path)
-        .collect();
-    let file_count = files.len();
-
-    if file_count == 0 {
-        ws.close(None).await?;
-        return Ok(0);
-    }
-
-    // Send SyncStep1 for all files
-    for file_path in &files {
-        let sv = body_manager
-            .get_sync_state(file_path)
-            .unwrap_or_else(Vec::new);
-        let step1 = SyncMessage::SyncStep1(sv).encode();
-        let framed = frame_body_message(file_path, &step1);
-        ws.send(Message::Binary(framed.into())).await?;
-    }
-
-    let mut push_count = 0;
-    let mut pull_count = 0;
-    let mut files_sent_step2: HashSet<String> = HashSet::new();
-    let mut files_received_step2: HashSet<String> = HashSet::new();
-
-    // Timeout based on file count - give more time for larger workspaces
-    let timeout_secs = (10 + file_count / 100).min(60) as u64;
-    let timeout = tokio::time::Duration::from_secs(timeout_secs);
-    let deadline = tokio::time::Instant::now() + timeout;
-
-    loop {
-        tokio::select! {
-            biased;
-
-            msg = ws.next() => {
-                match msg {
-                    Some(Ok(Message::Binary(data))) => {
-                        if let Some((file_path, body_msg)) = unframe_body_message(&data) {
-                            let messages = SyncMessage::decode_all(&body_msg)?;
-                            for sync_msg in messages {
-                                match sync_msg {
-                                    SyncMessage::SyncStep1(remote_sv) => {
-                                        // Server is asking for our diff
-                                        let diff = body_manager.get_diff(&file_path, &remote_sv)?;
-
-                                        // Y.js empty update is 2 bytes (header only, no operations)
-                                        // Treat ≤2 bytes as "no actual changes"
-                                        let has_changes = diff.len() > 2;
-
-                                        if has_changes {
-                                            // Count files where we actually have data to push
-                                            push_count += 1;
-                                        }
-                                        let step2 = SyncMessage::SyncStep2(diff).encode();
-                                        let framed = frame_body_message(&file_path, &step2);
-                                        ws.send(Message::Binary(framed.into())).await?;
-                                        files_sent_step2.insert(file_path.clone());
-                                    }
-                                    SyncMessage::SyncStep2(update) | SyncMessage::Update(update) => {
-                                        files_received_step2.insert(file_path.clone());
-                                        // Y.js empty update is 2 bytes (header only)
-                                        let has_changes = update.len() > 2;
-                                        if has_changes {
-                                            // Always apply incoming updates to stay in sync
-                                            let body_doc = body_manager.get_or_create(&file_path);
-                                            body_doc.apply_update(&update, diaryx_core::crdt::UpdateOrigin::Sync)?;
-                                            pull_count += 1;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // Exit after bidirectional sync is complete for all files
-                        if files_sent_step2.len() >= file_count && files_received_step2.len() >= file_count {
-                            break;
-                        }
-                    }
-                    Some(Ok(Message::Close(_))) | None => break,
-                    Some(Err(e)) => return Err(e.into()),
-                    _ => {}
-                }
-            }
-            _ = tokio::time::sleep_until(deadline) => {
-                break;
-            }
-        }
-    }
-
-    ws.close(None).await?;
-    // Return the relevant count based on mode
-    Ok(if pull { pull_count } else { push_count })
-}
-
-/// Send a focus message to notify other clients which files we're about to sync.
-///
-/// This opens a temporary WebSocket connection, sends a focus message, and closes.
-/// Other clients will receive a `focus_list_changed` notification and can subscribe
-/// to the focused files.
-async fn send_focus_message(
-    body_url: &str,
-    files: &[String],
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let (mut ws, _) = connect_async(body_url).await?;
-
-    let focus_msg = serde_json::json!({
-        "type": "focus",
-        "files": files
-    });
-    ws.send(Message::Text(focus_msg.to_string().into())).await?;
-
-    // Brief delay to ensure message is processed before closing
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-
-    ws.close(None).await?;
-    Ok(())
 }
 
 // ===========================================================================
@@ -1084,7 +486,6 @@ async fn send_focus_message(
 /// Doc ID format:
 /// - Workspace: `workspace:{workspace_id}`
 /// - Body: `body:{workspace_id}/{file_path}`
-#[allow(dead_code)]
 async fn run_sync_loop_v2(
     url: &str,
     workspace_id: &str,
@@ -1109,13 +510,76 @@ async fn run_sync_loop_v2(
         }
     };
 
-    // Send workspace SyncStep1
+    // Send workspace SyncStep1 (triggers server's on_before_sync handshake)
     let ws_doc_id = format_workspace_doc_id(workspace_id);
     let ws_step1 = sync_manager.create_workspace_sync_step1();
     let ws_framed = frame_message_v2(&ws_doc_id, &ws_step1);
     if let Err(e) = ws.send(Message::Binary(ws_framed.into())).await {
         eprintln!("Failed to send workspace SyncStep1: {}", e);
         return;
+    }
+
+    // Wait for Files-Ready handshake (if server requires it).
+    // The server sends file_manifest → we reply FilesReady → server sends crdt_state.
+    // If no files exist on server, it returns Continue (no handshake) and we get a
+    // binary SyncStep2 directly.
+    // Stash any binary message received during handshake to process later.
+    let mut stashed_binary: Option<Vec<u8>> = None;
+    let handshake_timeout = tokio::time::Duration::from_secs(10);
+    let handshake_deadline = tokio::time::Instant::now() + handshake_timeout;
+
+    loop {
+        tokio::select! {
+            msg = ws.next() => {
+                match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        if let Ok(ctrl_msg) = serde_json::from_str::<ControlMessage>(&text) {
+                            match ctrl_msg {
+                                ControlMessage::FileManifest { .. } => {
+                                    println!("  Received file manifest, completing handshake...");
+                                    let files_ready = r#"{"type":"FilesReady"}"#;
+                                    if let Err(e) = ws.send(Message::Text(files_ready.into())).await {
+                                        eprintln!("Failed to send FilesReady: {}", e);
+                                        return;
+                                    }
+                                }
+                                ControlMessage::CrdtState { state } => {
+                                    match base64::engine::general_purpose::STANDARD.decode(&state) {
+                                        Ok(state_bytes) => {
+                                            match sync_manager.handle_crdt_state(&state_bytes).await {
+                                                Ok(count) => println!("  Applied CRDT state ({} files)", count),
+                                                Err(e) => eprintln!("  Warning: Failed to apply CRDT state: {}", e),
+                                            }
+                                        }
+                                        Err(e) => eprintln!("  Warning: Failed to decode CRDT state: {}", e),
+                                    }
+                                    break; // Handshake complete
+                                }
+                                ControlMessage::SessionJoined { .. } => {
+                                    println!("  Session joined");
+                                    // Continue waiting for file_manifest
+                                }
+                                _ => {} // Ignore other messages during handshake
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Binary(data))) => {
+                        // Server returned Continue (no handshake) — got a binary sync response.
+                        stashed_binary = Some(data.to_vec());
+                        break;
+                    }
+                    Some(Ok(Message::Close(_))) | None => {
+                        eprintln!("Connection closed during handshake");
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+            _ = tokio::time::sleep_until(handshake_deadline) => {
+                println!("  No handshake required (timeout), proceeding with sync...");
+                break;
+            }
+        }
     }
 
     // Send body SyncStep1 for all known files
@@ -1156,6 +620,40 @@ async fn run_sync_loop_v2(
     // Track sync completion
     let workspace_synced = Arc::new(AtomicBool::new(false));
     let body_synced = Arc::new(AtomicBool::new(file_count == 0));
+
+    // Process any binary message that arrived during handshake
+    if let Some(data) = stashed_binary.take() {
+        if let Some((doc_id, payload)) = unframe_message_v2(&data) {
+            match parse_doc_id(&doc_id) {
+                Some(DocIdKind::Workspace(_)) => {
+                    if let Ok(result) = sync_manager.handle_workspace_message(&payload, true).await
+                    {
+                        if let Some(response) = result.response {
+                            let framed = frame_message_v2(&doc_id, &response);
+                            let _ = ws.send(Message::Binary(framed.into())).await;
+                        }
+                        if !result.changed_files.is_empty() {
+                            for file in &result.changed_files {
+                                println!("  Synced: {}", file);
+                            }
+                        }
+                    }
+                }
+                Some(DocIdKind::Body { file_path, .. }) => {
+                    if let Ok(result) = sync_manager
+                        .handle_body_message(&file_path, &payload, true)
+                        .await
+                    {
+                        if let Some(response) = result.response {
+                            let framed = frame_message_v2(&doc_id, &response);
+                            let _ = ws.send(Message::Binary(framed.into())).await;
+                        }
+                    }
+                }
+                None => {}
+            }
+        }
+    }
 
     // Message loop
     while running.load(Ordering::SeqCst) {
@@ -1245,7 +743,7 @@ async fn run_sync_loop_v2(
                                         log::debug!("Focus list changed: {} files", files.len());
                                     }
                                 }
-                                ControlMessage::Other => {}
+                                _ => {}
                             }
                         }
                     }
@@ -1279,10 +777,10 @@ async fn run_sync_loop_v2(
 }
 
 /// Perform one-shot v2 sync (push or pull).
-#[allow(dead_code)]
 async fn do_one_shot_sync_v2(
     url: &str,
     workspace_id: &str,
+    sync_manager: &RustSyncManager<SyncToAsyncFs<RealFileSystem>>,
     workspace_crdt: &WorkspaceCrdt,
     body_manager: &BodyDocManager,
     pull: bool,
@@ -1291,12 +789,57 @@ async fn do_one_shot_sync_v2(
 
     let (mut ws, _) = connect_async(url).await?;
 
-    // Send workspace SyncStep1
+    // Send workspace SyncStep1 (triggers server's on_before_sync handshake)
     let ws_doc_id = format_workspace_doc_id(workspace_id);
     let sv = workspace_crdt.encode_state_vector();
     let step1 = SyncMessage::SyncStep1(sv).encode();
     let framed = frame_message_v2(&ws_doc_id, &step1);
     ws.send(Message::Binary(framed.into())).await?;
+
+    // Wait for Files-Ready handshake (if server requires it).
+    // Stash any binary message received during handshake to process later.
+    let mut stashed_binary: Option<Vec<u8>> = None;
+    let hs_timeout = tokio::time::Duration::from_secs(10);
+    let hs_deadline = tokio::time::Instant::now() + hs_timeout;
+
+    loop {
+        tokio::select! {
+            msg = ws.next() => {
+                match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        if let Ok(ctrl_msg) = serde_json::from_str::<ControlMessage>(&text) {
+                            match ctrl_msg {
+                                ControlMessage::FileManifest { .. } => {
+                                    let files_ready = r#"{"type":"FilesReady"}"#;
+                                    ws.send(Message::Text(files_ready.into())).await?;
+                                }
+                                ControlMessage::CrdtState { state } => {
+                                    if let Ok(state_bytes) = base64::engine::general_purpose::STANDARD.decode(&state) {
+                                        let _ = sync_manager.handle_crdt_state(&state_bytes).await;
+                                    }
+                                    break; // Handshake complete
+                                }
+                                _ => {} // Ignore other text messages during handshake
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Binary(data))) => {
+                        // No handshake — server returned Continue directly.
+                        stashed_binary = Some(data.to_vec());
+                        break;
+                    }
+                    Some(Ok(Message::Close(_))) | None => {
+                        ws.close(None).await?;
+                        return Ok(0);
+                    }
+                    _ => {}
+                }
+            }
+            _ = tokio::time::sleep_until(hs_deadline) => {
+                break;
+            }
+        }
+    }
 
     // Get list of files to sync
     let files: Vec<String> = workspace_crdt
@@ -1329,83 +872,101 @@ async fn do_one_shot_sync_v2(
     let timeout = tokio::time::Duration::from_secs(timeout_secs);
     let deadline = tokio::time::Instant::now() + timeout;
 
-    loop {
-        tokio::select! {
-            biased;
+    // Collect all binary messages to process (stashed + incoming)
+    let mut pending_binaries: Vec<Vec<u8>> = Vec::new();
+    if let Some(data) = stashed_binary.take() {
+        pending_binaries.push(data);
+    }
 
-            msg = ws.next() => {
-                match msg {
-                    Some(Ok(Message::Binary(data))) => {
-                        if let Some((doc_id, payload)) = unframe_message_v2(&data) {
-                            match parse_doc_id(&doc_id) {
-                                Some(DocIdKind::Workspace(_)) => {
-                                    let messages = SyncMessage::decode_all(&payload)?;
-                                    for sync_msg in messages {
-                                        match sync_msg {
-                                            SyncMessage::SyncStep1(remote_sv) => {
-                                                let diff = workspace_crdt.encode_diff(&remote_sv)?;
-                                                if diff.len() > 2 {
-                                                    push_count = 1;
-                                                }
-                                                let step2 = SyncMessage::SyncStep2(diff).encode();
-                                                let framed = frame_message_v2(&doc_id, &step2);
-                                                ws.send(Message::Binary(framed.into())).await?;
-                                                ws_sent_step2 = true;
-                                            }
-                                            SyncMessage::SyncStep2(update) | SyncMessage::Update(update) => {
-                                                ws_received_step2 = true;
-                                                if update.len() > 2 {
-                                                    let (_, changed_files, _) = workspace_crdt
-                                                        .apply_update_tracking_changes(&update, diaryx_core::crdt::UpdateOrigin::Sync)?;
-                                                    pull_count += changed_files.len();
-                                                }
-                                            }
-                                        }
+    loop {
+        // Drain pending_binaries first, then wait for new messages
+        let data = if let Some(data) = pending_binaries.pop() {
+            data
+        } else {
+            // Wait for next message from WebSocket
+            let msg = tokio::select! {
+                biased;
+                msg = ws.next() => msg,
+                _ = tokio::time::sleep_until(deadline) => break,
+            };
+            match msg {
+                Some(Ok(Message::Binary(data))) => data.to_vec(),
+                Some(Ok(Message::Text(_))) => continue, // Ignore text in main loop
+                Some(Ok(Message::Close(_))) | None => break,
+                Some(Err(e)) => return Err(e.into()),
+                _ => continue,
+            }
+        };
+
+        {
+            let data = &data;
+            if let Some((doc_id, payload)) = unframe_message_v2(&data) {
+                match parse_doc_id(&doc_id) {
+                    Some(DocIdKind::Workspace(_)) => {
+                        let messages = SyncMessage::decode_all(&payload)?;
+                        for sync_msg in messages {
+                            match sync_msg {
+                                SyncMessage::SyncStep1(remote_sv) => {
+                                    let diff = workspace_crdt.encode_diff(&remote_sv)?;
+                                    if diff.len() > 2 {
+                                        push_count = 1;
+                                    }
+                                    let step2 = SyncMessage::SyncStep2(diff).encode();
+                                    let framed = frame_message_v2(&doc_id, &step2);
+                                    ws.send(Message::Binary(framed.into())).await?;
+                                    ws_sent_step2 = true;
+                                }
+                                SyncMessage::SyncStep2(update) | SyncMessage::Update(update) => {
+                                    ws_received_step2 = true;
+                                    if update.len() > 2 {
+                                        let (_, changed_files, _) = workspace_crdt
+                                            .apply_update_tracking_changes(
+                                                &update,
+                                                diaryx_core::crdt::UpdateOrigin::Sync,
+                                            )?;
+                                        pull_count += changed_files.len();
                                     }
                                 }
-                                Some(DocIdKind::Body { file_path, .. }) => {
-                                    let messages = SyncMessage::decode_all(&payload)?;
-                                    for sync_msg in messages {
-                                        match sync_msg {
-                                            SyncMessage::SyncStep1(remote_sv) => {
-                                                let diff = body_manager.get_diff(&file_path, &remote_sv)?;
-                                                if diff.len() > 2 {
-                                                    push_count += 1;
-                                                }
-                                                let step2 = SyncMessage::SyncStep2(diff).encode();
-                                                let framed = frame_message_v2(&doc_id, &step2);
-                                                ws.send(Message::Binary(framed.into())).await?;
-                                                body_files_sent_step2.insert(file_path.clone());
-                                            }
-                                            SyncMessage::SyncStep2(update) | SyncMessage::Update(update) => {
-                                                body_files_received_step2.insert(file_path.clone());
-                                                if update.len() > 2 {
-                                                    let body_doc = body_manager.get_or_create(&file_path);
-                                                    body_doc.apply_update(&update, diaryx_core::crdt::UpdateOrigin::Sync)?;
-                                                    pull_count += 1;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                None => {}
                             }
                         }
-
-                        // Check if sync is complete
-                        let ws_complete = ws_sent_step2 && ws_received_step2;
-                        let body_complete = body_files_sent_step2.len() >= file_count
-                            && body_files_received_step2.len() >= file_count;
-                        if ws_complete && (file_count == 0 || body_complete) {
-                            break;
+                    }
+                    Some(DocIdKind::Body { file_path, .. }) => {
+                        let messages = SyncMessage::decode_all(&payload)?;
+                        for sync_msg in messages {
+                            match sync_msg {
+                                SyncMessage::SyncStep1(remote_sv) => {
+                                    let diff = body_manager.get_diff(&file_path, &remote_sv)?;
+                                    if diff.len() > 2 {
+                                        push_count += 1;
+                                    }
+                                    let step2 = SyncMessage::SyncStep2(diff).encode();
+                                    let framed = frame_message_v2(&doc_id, &step2);
+                                    ws.send(Message::Binary(framed.into())).await?;
+                                    body_files_sent_step2.insert(file_path.clone());
+                                }
+                                SyncMessage::SyncStep2(update) | SyncMessage::Update(update) => {
+                                    body_files_received_step2.insert(file_path.clone());
+                                    if update.len() > 2 {
+                                        let body_doc = body_manager.get_or_create(&file_path);
+                                        body_doc.apply_update(
+                                            &update,
+                                            diaryx_core::crdt::UpdateOrigin::Sync,
+                                        )?;
+                                        pull_count += 1;
+                                    }
+                                }
+                            }
                         }
                     }
-                    Some(Ok(Message::Close(_))) | None => break,
-                    Some(Err(e)) => return Err(e.into()),
-                    _ => {}
+                    None => {}
                 }
             }
-            _ = tokio::time::sleep_until(deadline) => {
+
+            // Check if sync is complete
+            let ws_complete = ws_sent_step2 && ws_received_step2;
+            let body_complete = body_files_sent_step2.len() >= file_count
+                && body_files_received_step2.len() >= file_count;
+            if ws_complete && (file_count == 0 || body_complete) {
                 break;
             }
         }

@@ -83,7 +83,7 @@ jobs:
       - name: Build web app
         run: |
           cd apps/web
-          bun run build
+          bunx vite build
         env:
           # Set base path for GitHub Pages (repo name)
           # Uncomment and set if deploying to https://<user>.github.io/<repo>/

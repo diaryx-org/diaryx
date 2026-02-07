@@ -79,7 +79,9 @@ jobs:
           bun-version: latest
 
       - name: Install wasm-pack
-        run: cargo install wasm-pack
+        run: |
+          cargo install wasm-pack
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
       - name: Install dependencies
         run: |

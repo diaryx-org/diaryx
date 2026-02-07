@@ -15,10 +15,9 @@
  *   { type: 'error', id: number, error: string }
  */
 
-// Use ?url to get static asset URLs without triggering Vite's WASM module processing.
-// These bypass the package "exports" field via Vite's file-based resolution.
-// @ts-expect-error - Vite ?url import
-import wasmUrl from '/node_modules/wasm-pandoc/src/pandoc.wasm?url';
+// Load pandoc WASM from unpkg CDN at runtime to avoid bundling the 56MB file
+// (Cloudflare Workers has a 25 MiB per-asset limit).
+const wasmUrl = 'https://unpkg.com/wasm-pandoc@1.0.0/src/pandoc.wasm';
 
 let convertFn: ((options: any, stdin: string | null, files: Record<string, any>) => Promise<any>) | null = null;
 let pandocReady = false;

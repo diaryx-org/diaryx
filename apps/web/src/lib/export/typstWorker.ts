@@ -14,9 +14,9 @@
  *   { type: 'error', id?: number, error: string }
  */
 
-// Use ?url to get the WASM binary URL as a static asset (same pattern as pandocWorker.ts)
-// @ts-expect-error - Vite ?url import
-import wasmUrl from '/node_modules/@myriaddreamin/typst-ts-web-compiler/pkg/typst_ts_web_compiler_bg.wasm?url';
+// Load typst WASM from unpkg CDN at runtime to avoid bundling the 28MB file
+// (Cloudflare Workers has a 25 MiB per-asset limit).
+const wasmUrl = 'https://unpkg.com/@myriaddreamin/typst-ts-web-compiler@0.7.0-rc2/pkg/typst_ts_web_compiler_bg.wasm';
 
 let typst: any = null;
 

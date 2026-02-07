@@ -1742,7 +1742,7 @@ mod tests {
             .unwrap();
         if let Some(Value::Sequence(seq)) = daily_content_after {
             assert!(!seq.is_empty());
-            assert_eq!(seq[0].as_str(), Some("2025/2025_index.md"));
+            assert_eq!(seq[0].as_str(), Some("[2025](/2025/2025_index.md)"));
         } else {
             panic!("Contents should be a sequence");
         }

@@ -248,6 +248,35 @@ export async function mockWebSocket(page: Page): Promise<void> {
   })
 }
 
+/**
+ * Mock authentication state for tests that require a signed-in user.
+ * Sets localStorage items so initAuth() treats the user as authenticated,
+ * and mocks the /api/me endpoint that initAuth() calls to validate the token.
+ */
+export async function mockAuth(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    localStorage.setItem('diaryx_auth_token', 'test-token-e2e')
+    localStorage.setItem('diaryx_sync_server_url', 'http://localhost:9999')
+    localStorage.setItem('diaryx_user', JSON.stringify({
+      id: 'test-user-id',
+      email: 'test@example.com',
+    }))
+  })
+
+  // Mock the /api/me validation call that initAuth() makes on startup
+  await page.route('**/api/me', route => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        user: { id: 'test-user-id', email: 'test@example.com' },
+        workspaces: [{ id: 'test-workspace-id', name: 'default' }],
+        devices: [],
+      }),
+    })
+  })
+}
+
 // Extended test fixtures
 interface TestFixtures {
   editorHelper: EditorHelper

@@ -1,9 +1,19 @@
-import { test, expect, waitForAppReady, mockWebSocket } from './fixtures'
+import { test, expect, waitForAppReady, mockWebSocket, mockAuth } from './fixtures'
 
 test.describe('Share Tab', () => {
   test.beforeEach(async ({ page }) => {
     // Mock WebSocket to avoid flaky network-dependent tests
     await mockWebSocket(page)
+    // Mock auth so "Host a Session" button is enabled
+    await mockAuth(page)
+    // Mock the session creation API
+    await page.route('**/api/sessions', route => {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ code: 'TEST-1234' }),
+      })
+    })
     await page.goto('/')
     await waitForAppReady(page)
   })
@@ -68,6 +78,16 @@ test.describe('Share Session Hosting', () => {
   test.beforeEach(async ({ page }) => {
     // Mock WebSocket to avoid flaky network-dependent tests
     await mockWebSocket(page)
+    // Mock auth so "Host a Session" button is enabled
+    await mockAuth(page)
+    // Mock the session creation API
+    await page.route('**/api/sessions', route => {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ code: 'TEST-1234' }),
+      })
+    })
     await page.goto('/')
     await waitForAppReady(page)
 

@@ -27,4 +27,4 @@ echo "Building in directory: $WORKSPACE_ROOT/crates/diaryx_wasm"
 
 # Change to workspace root first to ensure cargo can find workspace
 cd "$WORKSPACE_ROOT"
-$WEB_DIR/node_modules/.bin/wasm-pack build crates/diaryx_wasm --target web --out-dir apps/web/src/lib/wasm
+$WEB_DIR/node_modules/.bin/wasm-pack build crates/diaryx_wasm --target web --out-dir "$WEB_DIR/src/lib/wasm"

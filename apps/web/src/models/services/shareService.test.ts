@@ -28,8 +28,8 @@ vi.mock('../stores/collaborationStore.svelte', () => ({
 vi.mock('$lib/crdt', () => ({
   startSessionSync: vi.fn(),
   stopSessionSync: vi.fn(),
-  setActiveSessionCode: vi.fn(),
   setBackendApi: vi.fn(),
+  setBackend: vi.fn(),
 }))
 
 import {

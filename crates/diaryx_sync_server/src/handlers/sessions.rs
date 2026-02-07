@@ -1,6 +1,6 @@
 use crate::auth::RequireAuth;
 use crate::db::AuthRepo;
-use crate::sync::SyncState;
+use crate::sync_v2::SyncV2State;
 use axum::{
     Router,
     extract::{Path, State},
@@ -15,7 +15,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct SessionsState {
     pub repo: Arc<AuthRepo>,
-    pub sync_state: Arc<SyncState>,
+    pub sync_v2: Arc<SyncV2State>,
 }
 
 /// Request to create a share session
@@ -107,12 +107,17 @@ async fn create_session(
         req.read_only,
         None, // No expiry for now
     ) {
-        Ok(code) => Json(SessionResponse {
-            code,
-            workspace_id,
-            read_only: req.read_only,
-        })
-        .into_response(),
+        Ok(code) => {
+            // Eagerly register session-to-workspace mapping
+            state.sync_v2.register_session(&code, &workspace_id).await;
+
+            Json(SessionResponse {
+                code,
+                workspace_id,
+                read_only: req.read_only,
+            })
+            .into_response()
+        }
         Err(e) => {
             tracing::error!("Failed to create share session: {}", e);
             (
@@ -136,9 +141,9 @@ async fn get_session(
 
     match state.repo.get_share_session(&code) {
         Ok(Some(session)) => {
-            // Get peer count from sync state
+            // Get peer count from siphonophore via sync v2 state
             let peer_count = state
-                .sync_state
+                .sync_v2
                 .get_session_peer_count(&code)
                 .await
                 .unwrap_or(0);
@@ -201,9 +206,10 @@ async fn update_session(
             {
                 Ok(true) => {
                     // Broadcast read-only change to all connected clients
-                    if let Some(room) = state.sync_state.get_room_for_session(&code).await {
-                        room.set_read_only(req.read_only).await;
-                    }
+                    state
+                        .sync_v2
+                        .broadcast_read_only_changed(&code, req.read_only)
+                        .await;
 
                     Json(serde_json::json!({
                         "code": code,
@@ -276,7 +282,7 @@ async fn delete_session(
             match state.repo.delete_share_session(&code) {
                 Ok(true) => {
                     // Notify connected clients that session ended
-                    state.sync_state.end_session(&code).await;
+                    state.sync_v2.end_session(&code).await;
 
                     (StatusCode::NO_CONTENT, ()).into_response()
                 }

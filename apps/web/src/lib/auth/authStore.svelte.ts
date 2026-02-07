@@ -147,12 +147,13 @@ export async function initAuth(): Promise<void> {
         setCollaborationWorkspaceId(defaultWorkspace.id);
       }
 
-      // Enable collaboration for returning authenticated users
-      collaborationStore.setEnabled(true);
-
-      // Update sync status to show we're ready to connect
-      // The actual connection will happen when workspace CRDT initializes
-      collaborationStore.setSyncStatus("idle");
+      // Only re-enable sync if user previously completed sync setup
+      // (not just authenticated). This decouples sign-in from sync.
+      const syncWasEnabled = localStorage.getItem('diaryx_sync_enabled') === 'true';
+      if (syncWasEnabled) {
+        collaborationStore.setEnabled(true);
+        collaborationStore.setSyncStatus("idle");
+      }
 
       // Save user for faster restore next time
       localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(me.user));
@@ -165,8 +166,11 @@ export async function initAuth(): Promise<void> {
         console.warn("[AuthStore] Failed to validate token:", err);
         if (savedUser) {
           state.isAuthenticated = true;
-          collaborationStore.setEnabled(true);
-          collaborationStore.setSyncStatus("idle");
+          const syncWasEnabled = localStorage.getItem('diaryx_sync_enabled') === 'true';
+          if (syncWasEnabled) {
+            collaborationStore.setEnabled(true);
+            collaborationStore.setSyncStatus("idle");
+          }
         }
       }
     } finally {
@@ -248,11 +252,9 @@ export async function verifyMagicLink(token: string): Promise<void> {
     state.user = response.user;
     state.isAuthenticated = true;
 
-    // Update collaboration settings
+    // Update collaboration settings (token is set for API calls,
+    // but sync is NOT auto-enabled — user must complete sync setup separately)
     setAuthToken(response.token);
-
-    // Enable collaboration now that we're authenticated
-    collaborationStore.setEnabled(true);
 
     // Fetch full user info (workspaces, devices)
     await refreshUserInfo();
@@ -291,6 +293,22 @@ export async function refreshUserInfo(): Promise<void> {
 }
 
 /**
+ * Explicitly enable sync. Called by SyncSetupWizard after workspace initialization.
+ * This is the only way sync gets enabled — signing in alone does not enable it.
+ */
+export function enableSync(): void {
+  collaborationStore.setEnabled(true);
+  localStorage.setItem('diaryx_sync_enabled', 'true');
+}
+
+/**
+ * Check if sync has been explicitly enabled by the user.
+ */
+export function isSyncEnabled(): boolean {
+  return typeof localStorage !== 'undefined' && localStorage.getItem('diaryx_sync_enabled') === 'true';
+}
+
+/**
  * Log out and clear auth state.
  */
 export async function logout(): Promise<void> {
@@ -305,6 +323,7 @@ export async function logout(): Promise<void> {
 
   localStorage.removeItem(STORAGE_KEYS.TOKEN);
   localStorage.removeItem(STORAGE_KEYS.USER);
+  localStorage.removeItem('diaryx_sync_enabled');
 
   // Clear collaboration settings
   setAuthToken(undefined);
@@ -350,6 +369,7 @@ export async function deleteAccount(): Promise<void> {
 
   localStorage.removeItem(STORAGE_KEYS.TOKEN);
   localStorage.removeItem(STORAGE_KEYS.USER);
+  localStorage.removeItem('diaryx_sync_enabled');
 
   // Clear collaboration settings
   setAuthToken(undefined);

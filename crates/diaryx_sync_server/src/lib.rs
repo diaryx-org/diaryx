@@ -32,7 +32,6 @@ pub mod config;
 pub mod db;
 pub mod email;
 pub mod handlers;
-pub mod sync;
 pub mod sync_v2;
 
 pub use config::Config;

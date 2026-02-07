@@ -1,7 +1,6 @@
 use crate::auth::RequireAuth;
 use crate::db::AuthRepo;
-use crate::sync::SnapshotImportMode;
-use crate::sync::SyncState;
+use crate::sync_v2::{SnapshotImportMode, SyncV2State};
 use axum::body::Bytes;
 use axum::{
     Router,
@@ -18,7 +17,7 @@ use tracing::error;
 #[derive(Clone)]
 pub struct ApiState {
     pub repo: Arc<AuthRepo>,
-    pub sync_state: Arc<SyncState>,
+    pub sync_v2: Arc<SyncV2State>,
 }
 
 /// Server status response
@@ -59,14 +58,13 @@ pub fn api_routes(state: ApiState) -> Router {
 }
 
 /// GET /api/status - Get server status (public endpoint)
-async fn get_status(State(state): State<ApiState>) -> impl IntoResponse {
-    let stats = state.sync_state.get_stats();
-
+async fn get_status(State(_state): State<ApiState>) -> impl IntoResponse {
+    // Siphonophore doesn't expose global stats; return version info only
     Json(StatusResponse {
         status: "ok".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
-        active_connections: stats.active_connections,
-        active_rooms: stats.active_rooms,
+        active_connections: 0,
+        active_rooms: 0,
     })
 }
 
@@ -130,8 +128,7 @@ async fn get_workspace_snapshot(
         return StatusCode::NOT_FOUND.into_response();
     }
 
-    let room = state.sync_state.get_or_create_room(&workspace_id).await;
-    let snapshot = match room.export_snapshot_zip().await {
+    let snapshot = match state.sync_v2.store.export_snapshot_zip(&workspace_id) {
         Ok(bytes) => bytes,
         Err(err) => {
             error!("Snapshot export failed for {}: {:?}", workspace_id, err);
@@ -182,8 +179,11 @@ async fn upload_workspace_snapshot(
         _ => SnapshotImportMode::Replace,
     };
 
-    let room = state.sync_state.get_or_create_room(&workspace_id).await;
-    let result = match room.import_snapshot_zip(&bytes, mode).await {
+    let result = match state
+        .sync_v2
+        .store
+        .import_snapshot_zip(&workspace_id, &bytes, mode)
+    {
         Ok(result) => result,
         Err(err) => {
             error!("Snapshot import failed for {}: {:?}", workspace_id, err);
@@ -209,17 +209,14 @@ async fn check_user_has_data(
     let default_ws = workspaces.into_iter().find(|w| w.name == "default");
 
     if let Some(ws) = default_ws {
-        // Check if room exists and has files
-        if let Some(room) = state.sync_state.get_room(&ws.id).await {
-            let count = room.get_file_count().await;
-            return Json(UserHasDataResponse {
-                has_data: count > 0,
-                file_count: count,
-            });
-        }
+        let count = state.sync_v2.store.get_file_count(&ws.id);
+        return Json(UserHasDataResponse {
+            has_data: count > 0,
+            file_count: count,
+        });
     }
 
-    // No workspace or room found - user has no data
+    // No workspace found - user has no data
     Json(UserHasDataResponse {
         has_data: false,
         file_count: 0,

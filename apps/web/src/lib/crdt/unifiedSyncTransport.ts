@@ -43,6 +43,16 @@ export interface UnifiedSyncTransportOptions {
   onSyncComplete?: (filesSynced: number) => void;
   /** Callback when focus list changes (files that any client is focused on). */
   onFocusListChanged?: (files: string[]) => void;
+  /** Callback when session_joined is received (for share session guests). */
+  onSessionJoined?: (data: { joinCode: string; workspaceId: string; readOnly: boolean }) => void;
+  /** Callback when a peer joins a document. */
+  onPeerJoined?: (guestId: string, peerCount: number) => void;
+  /** Callback when a peer leaves a document. */
+  onPeerLeft?: (guestId: string, peerCount: number) => void;
+  /** Callback when the session has ended (host disconnected). */
+  onSessionEnded?: () => void;
+  /** Callback when a fatal connection error occurs (e.g. server rejected protocol). */
+  onError?: (message: string) => void;
 }
 
 /**
@@ -79,6 +89,9 @@ export class UnifiedSyncTransport {
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   private readonly maxReconnectAttempts = 10;
 
+  /** Incremented on each connect() call to detect stale async handlers. */
+  private connectionGeneration = 0;
+
   /** Whether initial workspace sync is complete. */
   private workspaceSynced = false;
 
@@ -112,26 +125,37 @@ export class UnifiedSyncTransport {
     if (this.destroyed || this.ws) return;
 
     const url = this.buildUrl();
+    console.log(`[UnifiedSyncTransport] Connecting to: ${url.replace(/token=[^&]+/, 'token=***')}`);
+    this.connectionGeneration++;
+    const gen = this.connectionGeneration;
 
     this.ws = new WebSocket(url);
     this.ws.binaryType = "arraybuffer";
 
     this.ws.onopen = async () => {
-      this.reconnectAttempts = 0;
+      console.log('[UnifiedSyncTransport] WebSocket opened');
+      if (gen !== this.connectionGeneration) return;
+
+      // Don't reset reconnectAttempts here — wait until we receive a message
+      // (handleWorkspaceMessage/handleBodyMessage/handleControlMessage).
+      // This ensures exponential backoff works when the server accepts the
+      // upgrade but immediately closes the connection (e.g., protocol mismatch).
       this.options.onStatusChange?.(true);
 
       // Send workspace SyncStep1 first
       await this.sendWorkspaceSyncStep1();
+      if (gen !== this.connectionGeneration) return;
 
       // Send SyncStep1 for any body files that were subscribed while disconnected
       for (const filePath of this.pendingBodySubscriptions) {
         await this.sendBodySyncStep1(filePath);
+        if (gen !== this.connectionGeneration) return;
       }
       this.pendingBodySubscriptions.clear();
 
       // Flush any queued messages
       for (const msg of this.pendingMessages) {
-        this.ws!.send(msg);
+        this.safeSend(msg);
       }
       this.pendingMessages = [];
 
@@ -155,16 +179,27 @@ export class UnifiedSyncTransport {
       await this.handleBinaryMessage(data);
     };
 
-    this.ws.onclose = () => {
+    this.ws.onclose = (event) => {
+      console.log(`[UnifiedSyncTransport] WebSocket closed: code=${event.code}, reason='${event.reason}', wasClean=${event.wasClean}`);
       this.ws = null;
+      this.handshakeComplete = false;
       this.options.onStatusChange?.(false);
       if (!this.destroyed) {
+        // Don't reconnect on fatal server errors (4000-4999 are application-level rejections)
+        if (event.code >= 4000 && event.code < 5000) {
+          console.error(`[UnifiedSyncTransport] Server rejected connection (code ${event.code}): ${event.reason}. Not reconnecting.`);
+          const reason = event.reason || `Server rejected connection (code ${event.code})`;
+          this.options.onError?.(
+            `${reason}. The sync server may not support this protocol version. Check the server URL in Sync settings.`
+          );
+          return;
+        }
         this.scheduleReconnect();
       }
     };
 
     this.ws.onerror = (e) => {
-      console.error("[UnifiedSyncTransport] Error:", e);
+      console.error("[UnifiedSyncTransport] WebSocket error:", e);
     };
   }
 
@@ -201,6 +236,22 @@ export class UnifiedSyncTransport {
    */
   get isConnected(): boolean {
     return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
+  }
+
+  /**
+   * Send data on the WebSocket, guarding against CLOSING/CLOSED state.
+   * Returns true if the message was sent, false otherwise.
+   */
+  private safeSend(data: Uint8Array | string): boolean {
+    try {
+      if (this.isConnected) {
+        this.ws!.send(data);
+        return true;
+      }
+    } catch (e) {
+      console.warn("[UnifiedSyncTransport] Send failed:", e);
+    }
+    return false;
   }
 
   /**
@@ -296,7 +347,7 @@ export class UnifiedSyncTransport {
       return;
     }
 
-    this.ws!.send(framed);
+    this.safeSend(framed);
   }
 
   /**
@@ -311,7 +362,7 @@ export class UnifiedSyncTransport {
       return;
     }
 
-    this.ws!.send(framed);
+    this.safeSend(framed);
   }
 
   /**
@@ -346,7 +397,7 @@ export class UnifiedSyncTransport {
         type: "unfocus",
         files: actuallyFocused,
       });
-      this.ws!.send(unfocusMsg);
+      this.safeSend(unfocusMsg);
     }
   }
 
@@ -435,6 +486,9 @@ export class UnifiedSyncTransport {
    * Handle JSON control messages from server.
    */
   private async handleControlMessage(text: string): Promise<void> {
+    // Successfully received a message — reset reconnect backoff
+    this.reconnectAttempts = 0;
+
     try {
       const msg = JSON.parse(text);
 
@@ -469,6 +523,30 @@ export class UnifiedSyncTransport {
           await this.handleCrdtState(msg);
           break;
 
+        case "session_joined":
+          console.log("[UnifiedSyncTransport] Received session_joined:", msg.joinCode, msg.workspaceId);
+          this.options.onSessionJoined?.({
+            joinCode: msg.joinCode,
+            workspaceId: msg.workspaceId,
+            readOnly: msg.readOnly ?? false,
+          });
+          break;
+
+        case "peer_joined":
+          console.log("[UnifiedSyncTransport] Peer joined:", msg.guestId, "count:", msg.peer_count);
+          this.options.onPeerJoined?.(msg.guestId, msg.peer_count);
+          break;
+
+        case "peer_left":
+          console.log("[UnifiedSyncTransport] Peer left:", msg.guestId, "count:", msg.peer_count);
+          this.options.onPeerLeft?.(msg.guestId, msg.peer_count);
+          break;
+
+        case "session_ended":
+          console.log("[UnifiedSyncTransport] Session ended");
+          this.options.onSessionEnded?.();
+          break;
+
         default:
           // Unknown control message, ignore
           break;
@@ -485,6 +563,9 @@ export class UnifiedSyncTransport {
    * Handle binary sync messages from server.
    */
   private async handleBinaryMessage(data: Uint8Array): Promise<void> {
+    // Successfully received a message — reset reconnect backoff
+    this.reconnectAttempts = 0;
+
     const { docId, message } = this.unframeMessageV2(data);
     if (!docId) {
       console.warn("[UnifiedSyncTransport] Invalid framed message");
@@ -527,7 +608,7 @@ export class UnifiedSyncTransport {
             docId,
             new Uint8Array(result.data.response),
           );
-          this.ws?.send(framed);
+          this.safeSend(framed);
         }
 
         // Handle changed files notification
@@ -599,7 +680,7 @@ export class UnifiedSyncTransport {
           docId,
           new Uint8Array((response as any).data),
         );
-        this.ws?.send(framed);
+        this.safeSend(framed);
       }
     } catch (error) {
       console.error("[UnifiedSyncTransport] Failed to send workspace SyncStep1:", error);
@@ -629,7 +710,7 @@ export class UnifiedSyncTransport {
           docId,
           new Uint8Array((response as any).data),
         );
-        this.ws?.send(framed);
+        this.safeSend(framed);
       }
     } catch (error) {
       console.error(`[UnifiedSyncTransport] Failed to send body SyncStep1 for ${filePath}:`, error);
@@ -646,7 +727,7 @@ export class UnifiedSyncTransport {
       type: "focus",
       files: filePaths,
     });
-    this.ws!.send(focusMsg);
+    this.safeSend(focusMsg);
   }
 
   // =========================================================================
@@ -751,12 +832,9 @@ export class UnifiedSyncTransport {
    * Send FilesReady message to proceed with CRDT sync.
    */
   private sendFilesReady(): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+    if (!this.safeSend(JSON.stringify({ type: "FilesReady" }))) {
       console.warn("[UnifiedSyncTransport] Cannot send FilesReady - not connected");
-      return;
     }
-
-    this.ws.send(JSON.stringify({ type: "FilesReady" }));
   }
 
   /**

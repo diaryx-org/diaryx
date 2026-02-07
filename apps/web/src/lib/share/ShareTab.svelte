@@ -16,6 +16,9 @@
     UserPlus,
     Lock,
     LockOpen,
+    ChevronDown,
+    ChevronUp,
+    Server,
   } from "@lucide/svelte";
   import { shareSessionStore } from "@/models/stores/shareSessionStore.svelte";
   import {
@@ -23,9 +26,12 @@
     joinShareSession,
     endShareSession,
     setSessionReadOnly,
+    setShareServerUrl,
+    getShareServerUrl,
   } from "@/models/services/shareService";
   import { workspaceStore } from "@/models/stores/workspaceStore.svelte";
   import { entryStore } from "@/models/stores/entryStore.svelte";
+  import { getAuthState } from "$lib/auth";
   import type { Api } from "$lib/backend/api";
   import { toast } from "svelte-sonner";
 
@@ -57,6 +63,8 @@
   let preSessionReadOnly = $state(false);
   let selectedAudience = $state("all");
   let audiences = $state<string[]>([]);
+  let showAdvanced = $state(false);
+  let customServerUrl = $state(getShareServerUrl());
 
   // Get current state from store
   let mode = $derived(shareSessionStore.mode);
@@ -67,6 +75,13 @@
   let peerCount = $derived(shareSessionStore.peerCount);
   let readOnly = $derived(shareSessionStore.readOnly);
   let sessionAudience = $derived(shareSessionStore.audience);
+  let authState = $derived(getAuthState());
+
+  // Sync custom server URL to shareService
+  $effect(() => {
+    const trimmed = customServerUrl.trim();
+    setShareServerUrl(trimmed || null);
+  });
 
   // Load available audiences when component mounts or tree changes
   $effect(() => {
@@ -253,12 +268,44 @@
         {/if}
       </div>
 
+      <!-- Advanced settings -->
+      <div>
+        <Button
+          variant="ghost"
+          size="sm"
+          class="w-full justify-between"
+          onclick={() => showAdvanced = !showAdvanced}
+        >
+          <span class="text-xs">Advanced</span>
+          {#if showAdvanced}
+            <ChevronUp class="size-4" />
+          {:else}
+            <ChevronDown class="size-4" />
+          {/if}
+        </Button>
+        {#if showAdvanced}
+          <div class="space-y-1.5 mt-1 px-1">
+            <label for="share-server-url" class="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+              <Server class="size-3" />
+              Server URL
+            </label>
+            <Input
+              id="share-server-url"
+              type="text"
+              bind:value={customServerUrl}
+              placeholder="https://sync.diaryx.org"
+              class="h-8 text-xs font-mono"
+            />
+          </div>
+        {/if}
+      </div>
+
       <!-- Host Session Button -->
       <Button
         variant="default"
         class="w-full"
         onclick={handleCreateSession}
-        disabled={isCreating || connecting}
+        disabled={!authState.isAuthenticated || isCreating || connecting}
       >
         {#if isCreating || connecting}
           <Loader2 class="size-4 mr-2 animate-spin" />
@@ -268,6 +315,11 @@
           Host a Session
         {/if}
       </Button>
+      {#if !authState.isAuthenticated}
+        <p class="text-xs text-muted-foreground text-center">
+          Sign in from Settings to host sessions.
+        </p>
+      {/if}
 
       <!-- Divider -->
       <div class="relative">
@@ -307,6 +359,7 @@
             {/if}
           </Button>
         </div>
+        <p class="text-xs text-muted-foreground">No account needed to join.</p>
       </div>
     </div>
   {:else if mode === "hosting"}

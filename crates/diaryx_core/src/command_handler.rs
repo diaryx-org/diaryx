@@ -2986,7 +2986,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     )
                 })?;
 
-                let file_count = sync_manager.handle_crdt_state(&state)?;
+                let file_count = sync_manager.handle_crdt_state(&state).await?;
                 log::info!(
                     "[CommandHandler] HandleCrdtState: applied state, {} files in workspace",
                     file_count

@@ -11,12 +11,6 @@
 
 export { RustCrdtApi, createCrdtApi } from './rustCrdtApi';
 export {
-  SyncTransport,
-  createWorkspaceSyncTransport,
-  createBodySyncTransport,
-  type SyncTransportOptions,
-} from './syncTransport';
-export {
   UnifiedSyncTransport,
   createUnifiedSyncTransport,
   type UnifiedSyncTransportOptions,

@@ -21,8 +21,12 @@ export type BodySyncStatus = 'idle' | 'syncing' | 'synced';
 
 function getInitialServerUrl(): string | null {
   if (typeof window !== 'undefined') {
-    const saved = localStorage.getItem('diaryx-sync-server');
-    if (saved) return saved;
+    // Check canonical key first (used by auth store / SyncSetupWizard)
+    const canonical = localStorage.getItem('diaryx_sync_server_url');
+    if (canonical) return canonical;
+    // Fall back to legacy key for backwards compatibility
+    const legacy = localStorage.getItem('diaryx-sync-server');
+    if (legacy) return legacy;
   }
   if (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_COLLAB_SERVER) {
     return (import.meta as any).env.VITE_COLLAB_SERVER;
@@ -190,8 +194,10 @@ class CollaborationStore {
     this.collaborationServerUrl = url;
     if (typeof window !== 'undefined') {
       if (url) {
-        localStorage.setItem('diaryx-sync-server', url);
+        localStorage.setItem('diaryx_sync_server_url', url);
+        localStorage.setItem('diaryx-sync-server', url); // legacy key
       } else {
+        localStorage.removeItem('diaryx_sync_server_url');
         localStorage.removeItem('diaryx-sync-server');
       }
     }

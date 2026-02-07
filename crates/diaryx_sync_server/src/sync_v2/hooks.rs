@@ -6,7 +6,8 @@
 //! - Change event handling
 
 use async_trait::async_trait;
-use diaryx_core::crdt::{CrdtStorage, SqliteStorage, UpdateOrigin};
+use diaryx_core::crdt::{CrdtStorage, UpdateOrigin};
+use siphonophore::Handle;
 use siphonophore::{
     BeforeCloseDirtyPayload, BeforeSyncAction, ControlMessageResponse, Hook, HookResult,
     OnAuthenticatePayload, OnBeforeSyncPayload, OnChangePayload, OnConnectPayload,
@@ -14,12 +15,14 @@ use siphonophore::{
     OnPeerLeftPayload, OnSavePayload,
 };
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock};
+use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
 use crate::auth::validate_token;
 use crate::db::AuthRepo;
+
+use super::store::StorageCache;
 
 /// User information stored in the connection context after authentication.
 #[derive(Clone, Debug)]
@@ -85,45 +88,33 @@ impl DocType {
 pub struct DiaryxHook {
     /// Auth repository for token validation.
     repo: Arc<AuthRepo>,
-    /// Base directory for workspace databases.
-    workspaces_dir: PathBuf,
-    /// Cache of open storage connections (workspace_id -> storage).
-    storage_cache: RwLock<HashMap<String, Arc<SqliteStorage>>>,
+    /// Shared storage cache (also used by WorkspaceStore for HTTP API operations).
+    storage_cache: Arc<StorageCache>,
+    /// Handle for broadcasting messages to connected clients.
+    /// Set via `OnceLock` after server construction (hook is created before server).
+    handle: Arc<OnceLock<Handle>>,
+    /// Shared session-to-workspace mapping (also used by SyncV2State for peer counts).
+    session_to_workspace: Arc<RwLock<HashMap<String, String>>>,
 }
 
 impl DiaryxHook {
     /// Create a new DiaryxHook.
-    pub fn new(repo: Arc<AuthRepo>, workspaces_dir: PathBuf) -> Self {
-        Self {
+    ///
+    /// Returns the hook and a shared `OnceLock` that must be populated with the
+    /// server `Handle` after `Server::with_hooks()` is called.
+    pub fn new(
+        repo: Arc<AuthRepo>,
+        storage_cache: Arc<StorageCache>,
+        session_to_workspace: Arc<RwLock<HashMap<String, String>>>,
+    ) -> (Self, Arc<OnceLock<Handle>>) {
+        let handle = Arc::new(OnceLock::new());
+        let hook = Self {
             repo,
-            workspaces_dir,
-            storage_cache: RwLock::new(HashMap::new()),
-        }
-    }
-
-    /// Get or create storage for a workspace.
-    fn get_storage(&self, workspace_id: &str) -> Result<Arc<SqliteStorage>, String> {
-        // Check cache first
-        {
-            let cache = self.storage_cache.read().unwrap();
-            if let Some(storage) = cache.get(workspace_id) {
-                return Ok(storage.clone());
-            }
-        }
-
-        // Create new storage
-        let db_path = self.workspaces_dir.join(format!("{}.db", workspace_id));
-        let storage = SqliteStorage::open(&db_path)
-            .map_err(|e| format!("Failed to open storage for {}: {}", workspace_id, e))?;
-        let storage = Arc::new(storage);
-
-        // Cache it
-        {
-            let mut cache = self.storage_cache.write().unwrap();
-            cache.insert(workspace_id.to_string(), storage.clone());
-        }
-
-        Ok(storage)
+            storage_cache,
+            handle: handle.clone(),
+            session_to_workspace,
+        };
+        (hook, handle)
     }
 
     /// Authenticate from JWT token.
@@ -242,6 +233,11 @@ impl Hook for DiaryxHook {
                         "Authenticated guest {} for session {} doc {}",
                         guest_id, session_code, doc_id
                     );
+                    // Register session-to-workspace mapping for peer count lookups
+                    self.session_to_workspace
+                        .write()
+                        .await
+                        .insert(session_code.to_uppercase(), user.workspace_id.clone());
                     payload.context.insert(user);
                     return Ok(());
                 }
@@ -275,7 +271,7 @@ impl Hook for DiaryxHook {
         };
 
         // Get storage for this workspace
-        let storage = match self.get_storage(doc_type.workspace_id()) {
+        let storage = match self.storage_cache.get_storage(doc_type.workspace_id()) {
             Ok(s) => s,
             Err(e) => {
                 error!("Failed to get storage: {}", e);
@@ -338,7 +334,7 @@ impl Hook for DiaryxHook {
         }
 
         // Get storage
-        let storage = match self.get_storage(doc_type.workspace_id()) {
+        let storage = match self.storage_cache.get_storage(doc_type.workspace_id()) {
             Ok(s) => s,
             Err(e) => {
                 error!("Failed to get storage for change: {}", e);
@@ -389,7 +385,7 @@ impl Hook for DiaryxHook {
         };
 
         // Get storage
-        let storage = match self.get_storage(doc_type.workspace_id()) {
+        let storage = match self.storage_cache.get_storage(doc_type.workspace_id()) {
             Ok(s) => s,
             Err(e) => {
                 error!("Failed to get storage for save: {}", e);
@@ -425,7 +421,7 @@ impl Hook for DiaryxHook {
         };
 
         // Get storage
-        let storage = match self.get_storage(doc_type.workspace_id()) {
+        let storage = match self.storage_cache.get_storage(doc_type.workspace_id()) {
             Ok(s) => s,
             Err(e) => {
                 error!("Failed to get storage for auto-save: {}", e);
@@ -465,17 +461,50 @@ impl Hook for DiaryxHook {
             }
         };
 
-        // Only workspace documents need Files-Ready handshake
+        // Only workspace documents need Files-Ready handshake and session_joined
         if !matches!(doc_type, DocType::Workspace(_)) {
             return Ok(BeforeSyncAction::Continue);
         }
 
+        let mut messages = Vec::new();
+
+        // For session guests, send session_joined confirmation before anything else.
+        // This is a unicast to the connecting client (on_before_sync runs per-client).
+        if let Some(user) = payload.context.get::<AuthenticatedUser>() {
+            if user.is_guest {
+                if let Some(session_code) = payload.request.query_params.get("session") {
+                    let session_joined = serde_json::json!({
+                        "type": "session_joined",
+                        "joinCode": session_code.to_uppercase(),
+                        "workspaceId": user.workspace_id,
+                        "readOnly": user.read_only,
+                    });
+                    messages.push(session_joined.to_string());
+                    info!(
+                        "Sending session_joined for guest on workspace {}",
+                        user.workspace_id
+                    );
+                }
+            }
+        }
+
         // Get storage to generate file manifest
-        let storage = match self.get_storage(doc_type.workspace_id()) {
+        let storage = match self.storage_cache.get_storage(doc_type.workspace_id()) {
             Ok(s) => s,
             Err(e) => {
                 warn!("Failed to get storage for before_sync: {}", e);
-                return Ok(BeforeSyncAction::Continue);
+                if messages.is_empty() {
+                    return Ok(BeforeSyncAction::Continue);
+                }
+                // For session guests with no storage, still send a file_manifest so the
+                // client replies with FilesReady and the handshake completes.
+                let manifest = serde_json::json!({
+                    "type": "file_manifest",
+                    "files": [],
+                    "client_is_new": false
+                });
+                messages.push(manifest.to_string());
+                return Ok(BeforeSyncAction::SendMessages { messages });
             }
         };
 
@@ -484,40 +513,55 @@ impl Hook for DiaryxHook {
             Ok(f) => f,
             Err(e) => {
                 warn!("Failed to query files for manifest: {}", e);
-                return Ok(BeforeSyncAction::Continue);
+                if messages.is_empty() {
+                    return Ok(BeforeSyncAction::Continue);
+                }
+                let manifest = serde_json::json!({
+                    "type": "file_manifest",
+                    "files": [],
+                    "client_is_new": false
+                });
+                messages.push(manifest.to_string());
+                return Ok(BeforeSyncAction::SendMessages { messages });
             }
         };
 
-        // If no files, skip handshake
-        if files.is_empty() {
+        // If no files and no session messages, skip handshake
+        if files.is_empty() && messages.is_empty() {
             debug!("No files in workspace, skipping Files-Ready handshake");
             return Ok(BeforeSyncAction::Continue);
         }
 
-        // Generate file manifest message
-        let manifest = serde_json::json!({
-            "type": "file_manifest",
-            "files": files.iter().map(|(path, title, part_of)| {
-                serde_json::json!({
-                    "doc_id": format!("body:{}/{}", doc_type.workspace_id(), path),
-                    "filename": path,
-                    "title": title,
-                    "part_of": part_of,
-                    "deleted": false
-                })
-            }).collect::<Vec<_>>(),
-            "client_is_new": false
-        });
+        // Generate file manifest message.
+        // Always include a file_manifest when we have messages (e.g. session_joined)
+        // so the client replies with FilesReady and the handshake completes.
+        {
+            let manifest = serde_json::json!({
+                "type": "file_manifest",
+                "files": files.iter().map(|(path, title, part_of)| {
+                    serde_json::json!({
+                        "doc_id": format!("body:{}/{}", doc_type.workspace_id(), path),
+                        "filename": path,
+                        "title": title,
+                        "part_of": part_of,
+                        "deleted": false
+                    })
+                }).collect::<Vec<_>>(),
+                "client_is_new": false
+            });
 
-        info!(
-            "Sending file manifest with {} files for {}",
-            files.len(),
-            doc_id
-        );
+            if !files.is_empty() {
+                info!(
+                    "Sending file manifest with {} files for {}",
+                    files.len(),
+                    doc_id
+                );
+            }
 
-        Ok(BeforeSyncAction::SendMessages {
-            messages: vec![manifest.to_string()],
-        })
+            messages.push(manifest.to_string());
+        }
+
+        Ok(BeforeSyncAction::SendMessages { messages })
     }
 
     /// Handle custom control messages (FilesReady, focus, etc.).
@@ -536,13 +580,13 @@ impl Hook for DiaryxHook {
         let msg_type = json.get("type").and_then(|v| v.as_str());
 
         match msg_type {
-            Some("files_ready") => {
+            Some("files_ready") | Some("FilesReady") => {
                 debug!("Received FilesReady from client");
 
                 // Get workspace state to send as CrdtState
                 if let Some(doc_id) = payload.doc_id {
                     if let Some(DocType::Workspace(workspace_id)) = DocType::parse(doc_id) {
-                        if let Ok(storage) = self.get_storage(&workspace_id) {
+                        if let Ok(storage) = self.storage_cache.get_storage(&workspace_id) {
                             let storage_key = format!("workspace:{}", workspace_id);
                             if let Ok(Some(state)) = storage.load_doc(&storage_key) {
                                 let state_b64 = base64::Engine::encode(
@@ -596,7 +640,16 @@ impl Hook for DiaryxHook {
             user_id, payload.doc_id, payload.peer_count
         );
 
-        // TODO: Broadcast peer_joined control message to other clients
+        if let Some(handle) = self.handle.get() {
+            let msg = serde_json::json!({
+                "type": "peer_joined",
+                "guestId": user_id,
+                "peer_count": payload.peer_count,
+            });
+            handle
+                .broadcast_text(payload.doc_id, msg.to_string(), Some(payload.client_id))
+                .await;
+        }
         Ok(())
     }
 
@@ -610,7 +663,16 @@ impl Hook for DiaryxHook {
             user_id, payload.doc_id, payload.peer_count
         );
 
-        // TODO: Broadcast peer_left control message to other clients
+        if let Some(handle) = self.handle.get() {
+            let msg = serde_json::json!({
+                "type": "peer_left",
+                "guestId": user_id,
+                "peer_count": payload.peer_count,
+            });
+            handle
+                .broadcast_text(payload.doc_id, msg.to_string(), Some(payload.client_id))
+                .await;
+        }
         Ok(())
     }
 }

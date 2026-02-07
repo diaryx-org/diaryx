@@ -21,6 +21,8 @@
     checkUserHasData,
     downloadWorkspaceSnapshot,
     uploadWorkspaceSnapshot,
+    isAuthenticated,
+    enableSync,
   } from "$lib/auth";
   import {
     Mail,
@@ -52,7 +54,7 @@
     markAllCrdtFilesAsDeleted,
     setFreshFromServerLoad,
   } from "$lib/crdt/workspaceCrdtBridge";
-  import { getDefaultWorkspace } from "$lib/auth";
+  import { getDefaultWorkspace, getServerUrl } from "$lib/auth";
 
   interface Props {
     open?: boolean;
@@ -121,6 +123,13 @@
   // Magic link URL polling interval
   let urlCheckInterval: ReturnType<typeof setInterval> | null = null;
   let resendInterval: ReturnType<typeof setInterval> | null = null;
+
+  // Skip auth screen if user is already signed in (e.g. opened from Sync settings)
+  $effect(() => {
+    if (open && isAuthenticated() && screen === 'auth') {
+      checkServerData().then(() => { screen = 'options'; });
+    }
+  });
 
   // Get a sensible default device name based on platform
   function getDefaultDeviceName(): string {
@@ -597,9 +606,13 @@
           setFreshFromServerLoad(true);
         }
 
-        // Set server URL to create SyncTransport and connect
+        // Set server URL to create UnifiedSyncTransport and connect
         // This triggers the WebSocket connection that syncs CRDT data to server
-        await setWorkspaceServer(serverUrl);
+        // Use getServerUrl() (auth store) as the canonical source — the wizard's
+        // local serverUrl $state can become stale if the component re-renders.
+        const syncServerUrl = getServerUrl() ?? serverUrl;
+        console.log("[SyncWizard] Calling setWorkspaceServer with:", syncServerUrl);
+        await setWorkspaceServer(syncServerUrl);
       } else {
         console.warn("[SyncWizard] No workspace ID available after authentication");
       }
@@ -678,6 +691,9 @@
         importProgress = 100;
       }
 
+      // Mark sync as explicitly enabled (persists across sessions)
+      enableSync();
+
       // Cleanup subscriptions before closing
       cleanupSyncSubscriptions();
 
@@ -739,7 +755,7 @@
     return httpUrl
       .replace(/^https:\/\//, "wss://")
       .replace(/^http:\/\//, "ws://")
-      + "/sync";
+      + "/sync2";
   }
 
   function formatBytes(bytes: number): string {

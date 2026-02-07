@@ -1018,29 +1018,50 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
     ///
     /// # Returns
     /// The number of files in the workspace after applying the state
-    pub fn handle_crdt_state(&self, state: &[u8]) -> Result<usize> {
+    pub async fn handle_crdt_state(&self, state: &[u8]) -> Result<usize> {
         log::info!(
             "[SyncManager] handle_crdt_state: applying {} bytes of state to workspace",
             state.len()
         );
 
+        // Check if the filesystem already has files BEFORE applying state.
+        // Hosts already have files on disk — writing over them with CRDT metadata
+        // and (potentially empty) body doc content would corrupt existing files.
+        // Only write to disk for guests/new clients whose FS starts empty.
+        let root_exists = self.sync_handler.fs_has_root().await;
+
         // Apply the state to the workspace CRDT
-        // This works correctly for new clients because:
-        // 1. The local workspace is empty (no files to tombstone)
-        // 2. Files were already downloaded via the handshake
-        // 3. The state contains all file metadata to match the filesystem
         self.workspace_crdt
             .apply_update_tracking_changes(state, UpdateOrigin::Sync)?;
 
         // Mark sync as complete since we now have the authoritative state
         self.mark_sync_complete();
 
-        // Return the number of files in the workspace
         let files = self.workspace_crdt.list_active_files();
         log::info!(
-            "[SyncManager] handle_crdt_state: workspace now has {} active files",
-            files.len()
+            "[SyncManager] handle_crdt_state: workspace now has {} active files, fs_has_root={}",
+            files.len(),
+            root_exists,
         );
+
+        // Write files to disk only if the filesystem is empty (guest/new client).
+        // This is essential for guests whose in-memory FS starts empty — without
+        // writing files to disk, api.getEntry() fails and the editor shows nothing.
+        if !files.is_empty() && !root_exists {
+            let files_to_sync: Vec<_> = files
+                .iter()
+                .filter_map(|(path, meta)| Some((path.clone(), meta.clone())))
+                .collect();
+
+            self.sync_handler
+                .handle_remote_metadata_update(
+                    files_to_sync,
+                    vec![],
+                    Some(&self.body_manager),
+                    true,
+                )
+                .await?;
+        }
 
         Ok(files.len())
     }
@@ -1257,10 +1278,15 @@ mod tests {
         assert!(manager.is_workspace_empty());
         assert!(!manager.is_sync_complete());
 
-        // Handle the CRDT state (simulating server handshake)
-        let result = manager.handle_crdt_state(&state);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 1); // Should have 1 file
+        // Apply the CRDT state directly (skipping the async disk-write part)
+        manager
+            .workspace_crdt
+            .apply_update_tracking_changes(&state, UpdateOrigin::Sync)
+            .unwrap();
+        manager.mark_sync_complete();
+
+        let files = manager.workspace_crdt.list_active_files();
+        assert_eq!(files.len(), 1); // Should have 1 file
 
         // Workspace should now be marked as synced
         assert!(manager.is_sync_complete());

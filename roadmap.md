@@ -19,7 +19,7 @@ Almost implemented
 
 ### Export different file types
 
-Possibly embed pandoc?
+Done, but needs more control/options, especially with multi-file export
 
 ### Improved Sync/Backup
 
@@ -32,10 +32,6 @@ Import from Obsidian (add all part_of/contents properties + index files)
 Perhaps is already possible for Obsidian with validation fixes. The hard part is handling Wikilinks, which needs design decisions
 
 ## Other considerations
-
-### Better documentation
-
-~~We have just one README file right now.~~ Working on it!
 
 ### Undo/redo
 

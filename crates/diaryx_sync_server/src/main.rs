@@ -9,8 +9,7 @@ use diaryx_sync_server::{
     config::Config,
     db::{AuthRepo, init_database},
     email::EmailService,
-    handlers::{api_routes, auth_routes, session_routes, ws_handler},
-    sync::SyncState,
+    handlers::{api_routes, auth_routes, session_routes},
     sync_v2::SyncV2Server,
 };
 use rusqlite::Connection;
@@ -78,10 +77,9 @@ async fn main() {
         std::process::exit(1);
     }
 
-    let sync_state = Arc::new(SyncState::new(workspaces_dir.clone()));
-
     // Create sync v2 server (siphonophore-based)
     let sync_v2_server = SyncV2Server::new(repo.clone(), workspaces_dir.clone());
+    let sync_v2_state = Arc::new(sync_v2_server.state());
     let sync_v2_router = sync_v2_server.into_router_at("/sync2");
 
     // Create handler states
@@ -94,17 +92,12 @@ async fn main() {
 
     let api_state = diaryx_sync_server::handlers::api::ApiState {
         repo: repo.clone(),
-        sync_state: sync_state.clone(),
-    };
-
-    let ws_state = diaryx_sync_server::handlers::ws::WsState {
-        repo: repo.clone(),
-        sync_state: sync_state.clone(),
+        sync_v2: sync_v2_state.clone(),
     };
 
     let sessions_state = diaryx_sync_server::handlers::sessions::SessionsState {
         repo: repo.clone(),
-        sync_state: sync_state.clone(),
+        sync_v2: sync_v2_state.clone(),
     };
 
     // Build CORS layer
@@ -124,8 +117,6 @@ async fn main() {
         // Health check
         .route("/", get(|| async { "Diaryx Sync Server" }))
         .route("/health", get(|| async { "OK" }))
-        // WebSocket sync endpoint (v1 - legacy)
-        .route("/sync", get(ws_handler).with_state(ws_state))
         // Auth routes
         .nest("/auth", auth_routes(auth_state))
         // API routes

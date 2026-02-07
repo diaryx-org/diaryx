@@ -1,20 +1,6 @@
 //! Y-sync v2 implementation using siphonophore.
 //!
-//! This module provides an alternative sync backend using the siphonophore
-//! library for simpler use cases. It's designed to coexist with the existing
-//! `/sync` endpoint during migration.
-//!
-//! ## When to Use sync_v2
-//!
-//! **Use `/sync2` (siphonophore) for:**
-//! - Simple document sync without Files-Ready handshake
-//! - Use cases where native multiplexing is beneficial
-//! - Testing and evaluation
-//!
-//! **Use `/sync` (v1) for:**
-//! - Full feature support (Files-Ready handshake, focus tracking)
-//! - Session/guest collaboration with peer events
-//! - Production workloads until sync_v2 is fully tested
+//! This module provides the sync backend using the siphonophore library.
 //!
 //! ## Siphonophore Features
 //!
@@ -32,24 +18,23 @@
 //!
 //! ## Wire Protocol
 //!
-//! Siphonophore uses a slightly different wire format than v1:
+//! Siphonophore uses a slightly different wire format than the legacy v1:
 //! - `[doc_id_len: u8][doc_id: bytes][yjs_payload: bytes]`
 //!
-//! This is similar to v1 format but uses a single byte for length
-//! instead of varuint encoding.
+//! ## Hook-Based Features
 //!
-//! ## Limitations
+//! These features are implemented via siphonophore hooks rather than native support:
+//! - Files-Ready handshake: via `on_before_sync` + `on_control_message`
+//! - Peer join/leave notifications: via `on_peer_joined`/`on_peer_left` + `Handle::broadcast_text`
+//! - Session joined confirmation: via `on_before_sync` `SendMessages` for guests
 //!
-//! Siphonophore doesn't support:
-//! - Custom pre-sync handshakes (Files-Ready protocol)
-//! - Custom control messages beyond Leave/Save
-//! - Focus tracking or peer events
-//!
-//! These features require the v1 `/sync` endpoint.
+//! Not yet supported:
+//! - Focus tracking broadcast (focus/unfocus messages are received but not relayed)
 
 mod handshake;
 mod hooks;
 mod server;
+mod store;
 
 pub use handshake::{
     ClientControlMessage, ConnectionContext, HandshakeState, ManifestFileEntry,
@@ -57,3 +42,6 @@ pub use handshake::{
 };
 pub use hooks::{AuthenticatedUser, DiaryxHook, DocType};
 pub use server::{SyncV2Server, SyncV2State};
+pub use store::{
+    SnapshotError, SnapshotImportMode, SnapshotImportResult, StorageCache, WorkspaceStore,
+};

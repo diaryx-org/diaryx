@@ -37,7 +37,7 @@ README - Repository for the Diaryx project - README.md
 │           ├── Database module - SQLite database schema and repository - crates/diaryx_sync_server/src/db/README.md
 │           ├── Email module - SMTP email sending for magic links - crates/diaryx_sync_server/src/email/README.md
 │           ├── Handlers module - HTTP route handlers - crates/diaryx_sync_server/src/handlers/README.md
-│           └── Sync module - WebSocket sync room management - crates/diaryx_sync_server/src/sync/README.md
+│           └── Sync v2 module - Siphonophore-based WebSocket sync - crates/diaryx_sync_server/src/sync_v2/README.md
 ├── apps - GUI frontends for Diaryx - apps/README.md
 │   ├── web - Svelte + Tiptap frontend for Diaryx - apps/web/README.md
 │   │   ├── web src - Source code for the Diaryx web application - apps/web/src/README.md

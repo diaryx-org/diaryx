@@ -235,7 +235,8 @@
     // only when collaborationEnabled is true. This prevents the sync bridge from
     // trying to connect when there's no active sync session.
     if (typeof window !== "undefined") {
-      const savedServerUrl = localStorage.getItem("diaryx-sync-server");
+      const savedServerUrl = localStorage.getItem("diaryx_sync_server_url")
+        ?? localStorage.getItem("diaryx-sync-server");
       if (savedServerUrl) {
         collaborationStore.setServerUrl(savedServerUrl);
       }

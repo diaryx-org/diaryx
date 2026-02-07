@@ -788,6 +788,16 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
         let storage_path = self.get_storage_path(canonical_path);
         self.fs.exists(&storage_path).await
     }
+
+    /// Check if the filesystem already has a root index file.
+    ///
+    /// Used to distinguish hosts (who already have files on disk) from guests
+    /// (whose in-memory FS starts empty). Returns true if `index.md` or `.`
+    /// exists at the workspace root.
+    pub async fn fs_has_root(&self) -> bool {
+        let root_path = self.get_storage_path("index.md");
+        self.fs.exists(&root_path).await
+    }
 }
 
 impl<FS: AsyncFileSystem> std::fmt::Debug for SyncHandler<FS> {

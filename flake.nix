@@ -69,7 +69,6 @@
               clippy
               rustfmt
               cargo-binstall
-              wasm-pack
               bun
               pkg-config
               prek

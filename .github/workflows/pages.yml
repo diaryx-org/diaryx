@@ -41,13 +41,11 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-
-      - name: Build WASM package
+      - name: Install dependencies and build WASM
         run: |
-          cd crates/diaryx_wasm
-          wasm-pack build --target web --out-dir ../../apps/web/src/lib/wasm
+          cd apps/web
+          bun install
+          ../../scripts/build-wasm.sh
 
       - name: Upload WASM artifact
         uses: actions/upload-artifact@v4

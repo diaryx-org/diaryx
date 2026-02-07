@@ -60,7 +60,7 @@
   let isJoining = $state(false);
 
   // Pre-session config
-  let preSessionReadOnly = $state(false);
+  let preSessionReadOnly = $state(true);
   let selectedAudience = $state("all");
   let audiences = $state<string[]>([]);
   let showAdvanced = $state(false);
@@ -243,7 +243,7 @@
             {/if}
             <span class="text-xs font-medium">Read-only mode</span>
           </div>
-          <Switch bind:checked={preSessionReadOnly} />
+          <Switch bind:checked={preSessionReadOnly} disabled />
         </div>
 
         <!-- Audience picker (only show if audiences exist) -->
@@ -411,7 +411,7 @@
           {/if}
           <span class="text-xs text-muted-foreground">Read-only mode</span>
         </div>
-        <Switch checked={readOnly} onCheckedChange={handleReadOnlyToggle} />
+        <Switch checked={readOnly} onCheckedChange={handleReadOnlyToggle} disabled />
       </div>
 
       <!-- Peer Count -->

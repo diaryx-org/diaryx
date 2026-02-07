@@ -979,12 +979,11 @@ impl WorkspaceCrdt {
             }
         }
 
-        // Detect deleted files (both newly deleted and already-deleted files that need disk cleanup)
-        for path in files_before.keys() {
-            let is_deleted = files_after.get(path).map(|m| m.deleted).unwrap_or(true);
-            // Include if: file is now deleted (whether or not it was before)
-            // This ensures disk cleanup happens even if CRDT state was persisted from a previous session
-            if is_deleted && !changed_paths.contains(path) {
+        // Detect files that were NEWLY deleted by this update
+        for (path, old_meta) in &files_before {
+            let is_now_deleted = files_after.get(path).map(|m| m.deleted).unwrap_or(true);
+            // Only include if the file transitioned from active to deleted in THIS update
+            if is_now_deleted && !old_meta.deleted && !changed_paths.contains(path) {
                 changed_paths.push(path.clone());
             }
         }
@@ -1789,6 +1788,90 @@ mod tests {
         assert_eq!(
             FileMetadata::normalize_title_to_filename("Test_File Name"),
             "test-file-name.md"
+        );
+    }
+
+    #[test]
+    fn test_apply_update_tracking_changes_ignores_preexisting_tombstones() {
+        // Simulate the share-session bug: crdt1 has active files + old tombstones.
+        // When crdt2 sends its state, crdt1's pre-existing tombstones should NOT
+        // appear in the changed_paths list.
+        let crdt1 = create_test_crdt();
+        let crdt2 = create_test_crdt();
+
+        // crdt1: one active file + one tombstoned file
+        crdt1
+            .set_file("active.md", FileMetadata::new(Some("Active".to_string())))
+            .unwrap();
+        crdt1
+            .set_file(
+                "old-deleted.md",
+                FileMetadata::new(Some("Old Deleted".to_string())),
+            )
+            .unwrap();
+        crdt1.delete_file("old-deleted.md").unwrap();
+
+        // Sync crdt1 → crdt2 so both share the same baseline
+        let update1 = crdt1.encode_state_as_update();
+        crdt2.apply_update(&update1, UpdateOrigin::Remote).unwrap();
+
+        // crdt2 makes an unrelated change
+        crdt2
+            .set_file(
+                "new-file.md",
+                FileMetadata::new(Some("New File".to_string())),
+            )
+            .unwrap();
+
+        // Now sync crdt2's full state back to crdt1 (simulates SyncStep2 during handshake)
+        let update2 = crdt2.encode_state_as_update();
+        let (_update_id, changed_paths, _renames) = crdt1
+            .apply_update_tracking_changes(&update2, UpdateOrigin::Remote)
+            .unwrap();
+
+        // "new-file.md" should be in changed_paths (it's genuinely new)
+        assert!(
+            changed_paths.contains(&"new-file.md".to_string()),
+            "new-file.md should be detected as changed, got: {:?}",
+            changed_paths
+        );
+
+        // "old-deleted.md" should NOT be in changed_paths — it was already deleted before the update
+        assert!(
+            !changed_paths.contains(&"old-deleted.md".to_string()),
+            "pre-existing tombstone 'old-deleted.md' should NOT appear in changed_paths, got: {:?}",
+            changed_paths
+        );
+    }
+
+    #[test]
+    fn test_apply_update_tracking_changes_includes_newly_deleted() {
+        // A file that transitions from active → deleted in an update SHOULD be reported.
+        let crdt1 = create_test_crdt();
+        let crdt2 = create_test_crdt();
+
+        // Both start with the same active file
+        crdt1
+            .set_file("shared.md", FileMetadata::new(Some("Shared".to_string())))
+            .unwrap();
+        let update1 = crdt1.encode_state_as_update();
+        crdt2.apply_update(&update1, UpdateOrigin::Remote).unwrap();
+
+        // crdt2 deletes the file
+        crdt2.delete_file("shared.md").unwrap();
+
+        // Sync crdt2 → crdt1
+        let sv1 = crdt1.encode_state_vector();
+        let diff = crdt2.encode_diff(&sv1).unwrap();
+        let (_update_id, changed_paths, _renames) = crdt1
+            .apply_update_tracking_changes(&diff, UpdateOrigin::Remote)
+            .unwrap();
+
+        // "shared.md" should be in changed_paths because it was NEWLY deleted
+        assert!(
+            changed_paths.contains(&"shared.md".to_string()),
+            "newly deleted 'shared.md' should appear in changed_paths, got: {:?}",
+            changed_paths
         );
     }
 }

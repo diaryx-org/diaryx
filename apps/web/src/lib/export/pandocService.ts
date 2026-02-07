@@ -30,14 +30,12 @@ export interface FormatInfo {
 /**
  * All supported export formats with metadata.
  *
- * PDF uses html2pdf.js (html2canvas + jsPDF) on the web, converting via
- * the existing HTML export pipeline. It does not require wasm-pandoc.
- * CLI/Tauri use native pandoc+typst for PDF instead.
+ * PDF uses pandoc (markdown → typst) + typst WASM compiler (typst → PDF).
  */
 export const EXPORT_FORMATS: FormatInfo[] = [
   { id: 'markdown', label: 'Markdown', extension: '.md', binary: false, requiresPandoc: false },
   { id: 'html', label: 'HTML', extension: '.html', binary: false, requiresPandoc: false },
-  { id: 'pdf', label: 'PDF', extension: '.pdf', binary: true, requiresPandoc: false },
+  { id: 'pdf', label: 'PDF', extension: '.pdf', binary: true, requiresPandoc: true },
   { id: 'docx', label: 'Word (DOCX)', extension: '.docx', binary: true, requiresPandoc: true },
   { id: 'epub', label: 'EPUB', extension: '.epub', binary: true, requiresPandoc: true },
   { id: 'latex', label: 'LaTeX', extension: '.tex', binary: false, requiresPandoc: true },

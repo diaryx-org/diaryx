@@ -6,3 +6,5 @@ export {
   type FormatInfo,
   type PandocResult,
 } from './pandocService';
+
+export { TypstService } from './typstService';

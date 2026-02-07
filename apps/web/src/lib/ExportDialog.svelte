@@ -15,8 +15,7 @@
     Image,
     Paperclip,
   } from "@lucide/svelte";
-  import { EXPORT_FORMATS, PandocService, type ExportFormat } from "$lib/export";
-  import { marked } from "marked";
+  import { EXPORT_FORMATS, PandocService, TypstService, type ExportFormat } from "$lib/export";
 
   interface Props {
     open: boolean;
@@ -43,8 +42,9 @@
   let selectedFormat = $state<ExportFormat>('markdown');
   let pandocProgress = $state('');
 
-  // Lazy-created pandoc service (only instantiated when a pandoc format is selected)
+  // Lazy-created services (only instantiated when needed)
   let pandocService: PandocService | null = null;
+  let typstService: TypstService | null = null;
 
   // Load audiences when dialog opens
   $effect(() => {
@@ -130,83 +130,7 @@
       const audience = selectedAudience === "all" ? "*" : selectedAudience;
       const formatInfo = EXPORT_FORMATS.find(f => f.id === selectedFormat)!;
 
-      if (selectedFormat === 'pdf') {
-        // PDF: markdown → HTML (marked) → canvas (html2canvas-pro) → PDF (jsPDF)
-        pandocProgress = 'Generating PDF...';
-        const rawFiles = await api.exportToMemory(rootPath, audience);
-        const files = normalizeToObject(rawFiles) ?? [];
-        const rawBinaryFiles = await api.exportBinaryAttachments(rootPath, audience);
-        const binaries = normalizeToObject(rawBinaryFiles) ?? [];
-
-        const html2canvas = (await import('html2canvas-pro')).default;
-        const { jsPDF } = await import('jspdf');
-
-        // Strip YAML frontmatter from markdown
-        function stripFrontmatter(md: string): string {
-          const match = md.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
-          return match ? md.slice(match[0].length) : md;
-        }
-
-        const pdfFiles: { path: string; data: Uint8Array }[] = [];
-        for (let i = 0; i < files.length; i++) {
-          pandocProgress = `Generating PDF ${i + 1}/${files.length}: ${files[i].path}`;
-
-          // Convert markdown to HTML
-          const markdown = stripFrontmatter(files[i].content);
-          const html = await marked(markdown);
-
-          const container = document.createElement('div');
-          container.style.position = 'absolute';
-          container.style.left = '-9999px';
-          container.style.width = '210mm';
-          container.style.padding = '16px';
-          container.style.fontFamily = 'serif';
-          container.style.fontSize = '12pt';
-          container.style.lineHeight = '1.6';
-          container.style.color = '#000';
-          container.style.backgroundColor = '#fff';
-          container.innerHTML = html;
-          document.body.appendChild(container);
-
-          try {
-            const canvas = await html2canvas(container, {
-              scale: 2,
-              useCORS: true,
-              backgroundColor: '#ffffff',
-            });
-
-            const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
-            const pageWidth = pdf.internal.pageSize.getWidth();
-            const pageHeight = pdf.internal.pageSize.getHeight();
-            const margin = 10;
-            const contentWidth = pageWidth - margin * 2;
-            const contentHeight = pageHeight - margin * 2;
-
-            const imgData = canvas.toDataURL('image/jpeg', 0.95);
-            const imgHeight = (canvas.height * contentWidth) / canvas.width;
-
-            let heightLeft = imgHeight;
-            let yOffset = 0;
-
-            while (heightLeft > 0) {
-              if (yOffset > 0) pdf.addPage();
-              pdf.addImage(imgData, 'JPEG', margin, margin - yOffset, contentWidth, imgHeight);
-              heightLeft -= contentHeight;
-              yOffset += contentHeight;
-            }
-
-            const pdfBlob = pdf.output('blob');
-            const arrayBuf = await pdfBlob.arrayBuffer();
-            const pdfPath = files[i].path.replace(/\.md$/, '.pdf');
-            pdfFiles.push({ path: pdfPath, data: new Uint8Array(arrayBuf) });
-          } finally {
-            document.body.removeChild(container);
-          }
-        }
-
-        pandocProgress = '';
-        await downloadConvertedAsZip(pdfFiles, binaries);
-      } else if (formatInfo.requiresPandoc) {
+      if (formatInfo.requiresPandoc) {
         // Pandoc format — get markdown files, then convert via WASM worker
         const rawFiles = await api.exportToMemory(rootPath, audience);
         const files = normalizeToObject(rawFiles) ?? [];
@@ -216,6 +140,14 @@
         pandocProgress = 'Loading pandoc (first time may take a moment)...';
         if (!pandocService) pandocService = new PandocService();
         await pandocService.ensureReady();
+
+        // For PDF, also load the Typst compiler (pandoc produces typst source, typst compiles to PDF)
+        const isPdf = selectedFormat === 'pdf';
+        if (isPdf) {
+          pandocProgress = 'Loading typst compiler (first time may take a moment)...';
+          if (!typstService) typstService = new TypstService();
+          await typstService.ensureReady();
+        }
 
         // Build resource map for embedded images
         const resources: Record<string, Uint8Array> = {};
@@ -235,9 +167,14 @@
           const result = await pandocService.convert(files[i].content, selectedFormat, resources);
           const newPath = files[i].path.replace(/\.md$/, formatInfo.extension);
 
-          if (formatInfo.binary) {
-            // Binary output (docx, epub, pdf, odt)
-            // The worker sets output-file and returns it as outputFilename
+          if (isPdf) {
+            // PDF: pandoc returns typst source in stdout, compile to PDF with typst
+            const typstSource = result.stdout ?? '';
+            pandocProgress = `Generating PDF ${i + 1}/${files.length}: ${files[i].path}`;
+            const pdfBytes = await typstService!.compile(typstSource);
+            convertedFiles.push({ path: newPath, data: pdfBytes });
+          } else if (formatInfo.binary) {
+            // Binary output (docx, epub, odt)
             const outputKey = result.outputFilename ?? Object.keys(result.files ?? {})[0];
             const outputFile = outputKey ? result.files?.[outputKey] : null;
             if (outputFile) {

@@ -1419,10 +1419,20 @@ async function getOrCreateBodyBridge(filePath: string): Promise<void> {
           console.log(`[UnifiedSync] Body CRDT already has ${existingBodyContent.length} chars for ${canonicalPath}`);
         }
       } else if (backendApi && !shareSessionStore.isGuest) {
-        // Body CRDT is empty but we're about to sync — let the server deliver content.
-        // Loading from disk here creates NEW operations (fresh actor ID after reload)
-        // which duplicate with the server's original operations.
-        console.log(`[UnifiedSync] Body CRDT empty for ${canonicalPath}, letting sync deliver content`);
+        if (_sessionCode) {
+          // Share session host: load body from disk so it's available for the y-sync handshake.
+          // Without this, both host and server have empty body CRDTs, so the guest
+          // completes body sync with empty content and never sees file bodies.
+          const entry = await backendApi.getEntry(canonicalPath);
+          if (entry?.content && entry.content.length > 0) {
+            await rustApi!.setBodyContent(canonicalPath, entry.content);
+            console.log(`[UnifiedSync] Share host: loaded ${entry.content.length} chars from disk for ${canonicalPath}`);
+          }
+        } else {
+          // Regular multi-device sync: server is source of truth. Loading from disk here
+          // creates NEW operations (fresh actor ID after reload) that duplicate with server's.
+          console.log(`[UnifiedSync] Body CRDT empty for ${canonicalPath}, letting sync deliver content`);
+        }
       }
     } catch (err) {
       console.warn(`[UnifiedSync] Could not get body content for ${canonicalPath}:`, err);

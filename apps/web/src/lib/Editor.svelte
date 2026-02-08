@@ -642,6 +642,15 @@
   :global(.editor-content ul),
   :global(.editor-content ol) {
     padding-left: 1.5em;
+    color: var(--foreground);
+  }
+
+  :global(.editor-content ul:not([data-type="taskList"])) {
+    list-style-type: disc;
+  }
+
+  :global(.editor-content ol) {
+    list-style-type: decimal;
   }
 
   :global(.editor-content li) {

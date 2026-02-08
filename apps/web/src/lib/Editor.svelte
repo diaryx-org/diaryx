@@ -278,6 +278,17 @@
             element: bubbleMenuElement,
             options: {
               offset: 10,
+              // Manually control visibility to prevent flash on initial load
+              onShow: () => {
+                if (bubbleMenuElement) {
+                  bubbleMenuElement.style.display = "flex";
+                }
+              },
+              onHide: () => {
+                if (bubbleMenuElement) {
+                  bubbleMenuElement.style.display = "none";
+                }
+              },
             },
             shouldShow: ({ editor: ed, view, state, from, to }) => {
               // Must be editable

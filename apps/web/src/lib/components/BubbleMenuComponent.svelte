@@ -224,7 +224,8 @@
 
 <style>
   .bubble-menu {
-    display: flex;
+    /* Start hidden - controlled via onShow/onHide in Editor.svelte to prevent flash on initial load */
+    display: none;
     align-items: center;
     gap: 2px;
     padding: 4px;
@@ -235,8 +236,6 @@
       0 10px 15px -3px rgba(0, 0, 0, 0.1),
       0 4px 6px -2px rgba(0, 0, 0, 0.05);
     z-index: 50;
-    /* Start hidden - TipTap's BubbleMenu extension will show it */
-    visibility: hidden;
     position: fixed;
     /* Prevent text selection on toolbar */
     -webkit-user-select: none;

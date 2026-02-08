@@ -53,6 +53,50 @@ jobs:
           name: wasm-package
           path: apps/web/src/lib/wasm/
 
+  # Upload WASM to CDN with version tag + latest
+  upload-wasm-cdn:
+    name: Upload WASM to CDN
+    needs: [build-wasm]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download WASM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wasm-package
+          path: wasm-output/
+
+      - name: Upload WASM to CDN (versioned)
+        uses: ./.github/actions/upload-wasm-cdn
+        with:
+          wasm-path: wasm-output
+          version: ${{ steps.tag.outputs.tag }}
+          r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          r2-endpoint: ${{ secrets.R2_ENDPOINT }}
+          r2-bucket: ${{ secrets.R2_BUCKET }}
+
+      - name: Upload WASM to CDN (latest)
+        uses: ./.github/actions/upload-wasm-cdn
+        with:
+          wasm-path: wasm-output
+          version: latest
+          r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          r2-endpoint: ${{ secrets.R2_ENDPOINT }}
+          r2-bucket: ${{ secrets.R2_BUCKET }}
+
   # Build web app
   build-web:
     name: Build Web App

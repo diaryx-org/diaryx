@@ -1,0 +1,68 @@
+name: 'Upload WASM to CDN'
+description: 'Upload WASM build artifacts to cdn.diaryx.org via Cloudflare R2'
+
+inputs:
+  wasm-path:
+    description: 'Path to the WASM output directory'
+    required: true
+    default: 'apps/web/src/lib/wasm'
+  version:
+    description: 'Version string (e.g., sha-abc1234, v0.11.0, latest)'
+    required: true
+  r2-access-key-id:
+    description: 'R2 access key ID'
+    required: true
+  r2-secret-access-key:
+    description: 'R2 secret access key'
+    required: true
+  r2-endpoint:
+    description: 'R2 S3-compatible endpoint'
+    required: true
+  r2-bucket:
+    description: 'R2 bucket name'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Upload WASM to R2
+      shell: bash
+      env:
+        AWS_ACCESS_KEY_ID: ${{ inputs.r2-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.r2-secret-access-key }}
+        AWS_DEFAULT_REGION: auto
+      run: |
+        ENDPOINT="${{ inputs.r2-endpoint }}"
+        BUCKET="${{ inputs.r2-bucket }}"
+        VERSION="${{ inputs.version }}"
+        WASM_DIR="${{ inputs.wasm-path }}"
+
+        echo "Uploading WASM to s3://${BUCKET}/wasm/${VERSION}/"
+
+        CACHE_CONTROL="public, max-age=31536000, immutable"
+        if [ "${VERSION}" = "latest" ]; then
+          CACHE_CONTROL="public, max-age=300"
+        fi
+
+        for f in "${WASM_DIR}"/*.wasm; do
+          [ -f "$f" ] && aws s3 cp "$f" "s3://${BUCKET}/wasm/${VERSION}/$(basename "$f")" \
+            --endpoint-url "${ENDPOINT}" \
+            --content-type "application/wasm" \
+            --cache-control "${CACHE_CONTROL}"
+        done
+
+        for f in "${WASM_DIR}"/*.js; do
+          [ -f "$f" ] && aws s3 cp "$f" "s3://${BUCKET}/wasm/${VERSION}/$(basename "$f")" \
+            --endpoint-url "${ENDPOINT}" \
+            --content-type "application/javascript" \
+            --cache-control "${CACHE_CONTROL}"
+        done
+
+        for f in "${WASM_DIR}"/*.d.ts; do
+          [ -f "$f" ] && aws s3 cp "$f" "s3://${BUCKET}/wasm/${VERSION}/$(basename "$f")" \
+            --endpoint-url "${ENDPOINT}" \
+            --content-type "text/plain" \
+            --cache-control "${CACHE_CONTROL}"
+        done
+
+        echo "Upload complete: https://cdn.diaryx.org/wasm/${VERSION}/"

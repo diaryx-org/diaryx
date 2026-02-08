@@ -115,6 +115,38 @@ jobs:
           name: web-dist
           path: apps/web/dist/
 
+      - name: Upload WASM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-package
+          path: apps/web/src/lib/wasm/
+
+  # Upload WASM to CDN on master push
+  upload-wasm-cdn:
+    name: Upload WASM to CDN
+    runs-on: ubuntu-latest
+    needs: [web]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download WASM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wasm-package
+          path: wasm-output/
+
+      - name: Upload WASM to CDN
+        uses: ./.github/actions/upload-wasm-cdn
+        with:
+          wasm-path: wasm-output
+          version: sha-${{ github.sha }}
+          r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          r2-endpoint: ${{ secrets.R2_ENDPOINT }}
+          r2-bucket: ${{ secrets.R2_BUCKET }}
+
   # Web app unit tests
   test-web:
     name: Test Web App

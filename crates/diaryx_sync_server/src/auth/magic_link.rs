@@ -135,7 +135,7 @@ impl MagicLinkService {
 
     /// Build the magic link URL for a token
     pub fn build_magic_link_url(&self, token: &str) -> String {
-        format!("{}/auth/verify?token={}", self.config.app_base_url, token)
+        format!("{}?token={}", self.config.app_base_url, token)
     }
 
     /// Clean up expired tokens (should be called periodically)

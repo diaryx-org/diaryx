@@ -90,8 +90,15 @@ async function init(port: MessagePort, storageType: StorageType, directoryHandle
   }
 
   // Import WASM module
+  // Load the .wasm binary from CDN if configured (same pattern as pandoc/typst workers),
+  // otherwise fall back to the local build (dev / Tauri).
   const wasm = await import('../wasm/diaryx_wasm.js');
-  await wasm.default();
+  const wasmCdnUrl = (import.meta as any).env?.VITE_WASM_CDN_URL as string | undefined;
+  if (wasmCdnUrl) {
+    await wasm.default(`${wasmCdnUrl}/diaryx_wasm_bg.wasm`);
+  } else {
+    await wasm.default();
+  }
 
   // Create backend with specified storage type
   if (storageType === 'opfs') {

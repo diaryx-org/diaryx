@@ -39,9 +39,11 @@ runs:
 
         echo "Uploading WASM to s3://${BUCKET}/wasm/${VERSION}/"
 
-        CACHE_CONTROL="public, max-age=31536000, immutable"
-        if [ "${VERSION}" = "latest" ]; then
-          CACHE_CONTROL="public, max-age=300"
+        # Immutable cache for pinned versions (sha-* and v*), short cache for
+        # mutable versions (branch names like "master", "latest", etc.)
+        CACHE_CONTROL="public, max-age=300"
+        if [[ "${VERSION}" == sha-* ]] || [[ "${VERSION}" == v* ]]; then
+          CACHE_CONTROL="public, max-age=31536000, immutable"
         fi
 
         for f in "${WASM_DIR}"/*.wasm; do

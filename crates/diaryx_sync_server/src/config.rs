@@ -12,8 +12,8 @@ pub struct Config {
     pub database_path: PathBuf,
     /// Base URL for magic link verification (e.g., https://app.diaryx.org)
     pub app_base_url: String,
-    /// SMTP configuration for sending emails
-    pub smtp: SmtpConfig,
+    /// Email configuration
+    pub email: EmailConfig,
     /// Session token expiration in days (default: 30)
     pub session_expiry_days: i64,
     /// Magic link token expiration in minutes (default: 15)
@@ -22,17 +22,11 @@ pub struct Config {
     pub cors_origins: Vec<String>,
 }
 
-/// SMTP configuration for email sending
+/// Email configuration (Resend HTTP API)
 #[derive(Debug, Clone)]
-pub struct SmtpConfig {
-    /// SMTP host (e.g., smtp.resend.com)
-    pub host: String,
-    /// SMTP port (default: 465 for TLS)
-    pub port: u16,
-    /// SMTP username
-    pub username: String,
-    /// SMTP password or API key
-    pub password: String,
+pub struct EmailConfig {
+    /// Resend API key
+    pub api_key: String,
     /// From email address
     pub from_email: String,
     /// From name (default: Diaryx)
@@ -57,17 +51,10 @@ impl Config {
         let app_base_url =
             env::var("APP_BASE_URL").unwrap_or_else(|_| "http://localhost:5174".to_string());
 
-        let smtp = SmtpConfig {
-            host: env::var("SMTP_HOST").unwrap_or_else(|_| "smtp.resend.com".to_string()),
-            port: env::var("SMTP_PORT")
-                .unwrap_or_else(|_| "465".to_string())
-                .parse()
-                .map_err(|_| ConfigError::InvalidSmtpPort)?,
-            username: env::var("SMTP_USERNAME").unwrap_or_default(),
-            password: env::var("SMTP_PASSWORD").unwrap_or_default(),
-            from_email: env::var("SMTP_FROM_EMAIL")
-                .unwrap_or_else(|_| "noreply@diaryx.org".to_string()),
-            from_name: env::var("SMTP_FROM_NAME").unwrap_or_else(|_| "Diaryx".to_string()),
+        let email = EmailConfig {
+            api_key: env::var("RESEND_API_KEY").unwrap_or_default(),
+            from_email: env::var("EMAIL_FROM").unwrap_or_else(|_| "noreply@diaryx.org".to_string()),
+            from_name: env::var("EMAIL_FROM_NAME").unwrap_or_else(|_| "Diaryx".to_string()),
         };
 
         let session_expiry_days = env::var("SESSION_EXPIRY_DAYS")
@@ -92,7 +79,7 @@ impl Config {
             port,
             database_path,
             app_base_url,
-            smtp,
+            email,
             session_expiry_days,
             magic_link_expiry_minutes,
             cors_origins,
@@ -101,7 +88,7 @@ impl Config {
 
     /// Check if email sending is configured
     pub fn is_email_configured(&self) -> bool {
-        !self.smtp.username.is_empty() && !self.smtp.password.is_empty()
+        !self.email.api_key.is_empty()
     }
 
     /// Get the server address
@@ -113,14 +100,12 @@ impl Config {
 #[derive(Debug)]
 pub enum ConfigError {
     InvalidPort,
-    InvalidSmtpPort,
 }
 
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ConfigError::InvalidPort => write!(f, "Invalid PORT environment variable"),
-            ConfigError::InvalidSmtpPort => write!(f, "Invalid SMTP_PORT environment variable"),
         }
     }
 }

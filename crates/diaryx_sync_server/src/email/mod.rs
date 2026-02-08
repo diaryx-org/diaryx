@@ -1,16 +1,21 @@
 use crate::config::Config;
-use lettre::{
-    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
-    message::header::ContentType,
-    transport::smtp::{PoolConfig, authentication::Credentials, client::Tls},
-};
+use reqwest::Client;
+use serde::Serialize;
 use std::sync::Arc;
 use tracing::{error, info};
 
-/// Email service for sending magic links
+/// Email service using Resend HTTP API
 pub struct EmailService {
     config: Arc<Config>,
-    transport: Option<AsyncSmtpTransport<Tokio1Executor>>,
+    client: Option<Client>,
+}
+
+#[derive(Serialize)]
+struct ResendRequest {
+    from: String,
+    to: Vec<String>,
+    subject: String,
+    html: String,
 }
 
 /// Error types for email operations
@@ -18,8 +23,6 @@ pub struct EmailService {
 pub enum EmailError {
     /// Email service not configured
     NotConfigured,
-    /// Failed to build email
-    BuildError(String),
     /// Failed to send email
     SendError(String),
 }
@@ -28,7 +31,6 @@ impl std::fmt::Display for EmailError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             EmailError::NotConfigured => write!(f, "Email service not configured"),
-            EmailError::BuildError(e) => write!(f, "Failed to build email: {}", e),
             EmailError::SendError(e) => write!(f, "Failed to send email: {}", e),
         }
     }
@@ -39,54 +41,20 @@ impl std::error::Error for EmailError {}
 impl EmailService {
     /// Create a new EmailService
     pub fn new(config: Arc<Config>) -> Self {
-        let transport = if config.is_email_configured() {
-            match Self::create_transport(&config) {
-                Ok(t) => {
-                    info!(
-                        "Email service configured with SMTP host: {}",
-                        config.smtp.host
-                    );
-                    Some(t)
-                }
-                Err(e) => {
-                    error!("Failed to configure email transport: {}", e);
-                    None
-                }
-            }
+        let client = if config.is_email_configured() {
+            info!("Email service configured with Resend API");
+            Some(Client::new())
         } else {
-            info!("Email service not configured (SMTP credentials missing)");
+            info!("Email service not configured (RESEND_API_KEY missing)");
             None
         };
 
-        Self { config, transport }
-    }
-
-    fn create_transport(
-        config: &Config,
-    ) -> Result<AsyncSmtpTransport<Tokio1Executor>, lettre::transport::smtp::Error> {
-        let creds = Credentials::new(config.smtp.username.clone(), config.smtp.password.clone());
-
-        // Use STARTTLS for port 587, implicit TLS for port 465
-        let builder = if config.smtp.port == 465 {
-            AsyncSmtpTransport::<Tokio1Executor>::relay(&config.smtp.host)?
-                .port(config.smtp.port)
-                .tls(Tls::Wrapper(
-                    lettre::transport::smtp::client::TlsParameters::new(config.smtp.host.clone())?,
-                ))
-        } else {
-            AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.smtp.host)?
-                .port(config.smtp.port)
-        };
-
-        Ok(builder
-            .credentials(creds)
-            .pool_config(PoolConfig::new().max_size(5))
-            .build())
+        Self { config, client }
     }
 
     /// Check if email service is configured
     pub fn is_configured(&self) -> bool {
-        self.transport.is_some()
+        self.client.is_some()
     }
 
     /// Send a magic link email
@@ -95,33 +63,32 @@ impl EmailService {
         to_email: &str,
         magic_link_url: &str,
     ) -> Result<(), EmailError> {
-        let transport = self.transport.as_ref().ok_or(EmailError::NotConfigured)?;
+        let client = self.client.as_ref().ok_or(EmailError::NotConfigured)?;
 
-        let from = format!(
-            "{} <{}>",
-            self.config.smtp.from_name, self.config.smtp.from_email
-        );
+        let body = ResendRequest {
+            from: format!(
+                "{} <{}>",
+                self.config.email.from_name, self.config.email.from_email
+            ),
+            to: vec![to_email.to_string()],
+            subject: "Sign in to Diaryx".to_string(),
+            html: self.build_magic_link_email_body(magic_link_url),
+        };
 
-        let subject = "Sign in to Diaryx";
-        let body = self.build_magic_link_email_body(magic_link_url);
-
-        let email = Message::builder()
-            .from(
-                from.parse()
-                    .map_err(|e| EmailError::BuildError(format!("{}", e)))?,
-            )
-            .to(to_email
-                .parse()
-                .map_err(|e| EmailError::BuildError(format!("{}", e)))?)
-            .subject(subject)
-            .header(ContentType::TEXT_HTML)
-            .body(body)
-            .map_err(|e| EmailError::BuildError(e.to_string()))?;
-
-        transport
-            .send(email)
+        let resp = client
+            .post("https://api.resend.com/emails")
+            .bearer_auth(&self.config.email.api_key)
+            .json(&body)
+            .send()
             .await
             .map_err(|e| EmailError::SendError(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            error!("Resend API error: {} - {}", status, text);
+            return Err(EmailError::SendError(format!("{}: {}", status, text)));
+        }
 
         info!("Magic link email sent to {}", to_email);
         Ok(())

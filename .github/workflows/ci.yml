@@ -3,6 +3,8 @@ name: CI
 on:
   push:
     branches: [main, master]
+    tags:
+      - "v*"
     paths-ignore:
       - '**.md'
   pull_request:
@@ -163,12 +165,20 @@ jobs:
     runs-on: ubuntu-latest
     needs: [web, changes]
     if: github.event_name == 'push' && needs.changes.outputs.wasm == 'true'
+    permissions:
+      id-token: write
     steps:
       - name: Download WASM artifact
         uses: actions/download-artifact@v4
         with:
           name: wasm-package
           path: wasm-output/
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
 
       - name: Patch package.json for npm
         working-directory: wasm-output
@@ -183,19 +193,21 @@ jobs:
           # Ship JS glue + types only (no .wasm binary — that loads from CDN)
           jq '.files = ["diaryx_wasm.js", "diaryx_wasm_bg.js", "diaryx_wasm.d.ts", "diaryx_wasm_bg.wasm.d.ts"]' package.json > tmp.json && mv tmp.json package.json
 
-          # Dev version for non-tag pushes
-          jq --arg v "${BASE_VERSION}-dev.${SHORT_SHA}" '.version = $v' package.json > tmp.json && mv tmp.json package.json
+          # Tag pushes use the version as-is (stable release)
+          # Branch pushes get a dev pre-release suffix
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "NPM_TAG=latest" >> $GITHUB_ENV
+          else
+            jq --arg v "${BASE_VERSION}-dev.${SHORT_SHA}" '.version = $v' package.json > tmp.json && mv tmp.json package.json
+            echo "NPM_TAG=dev" >> $GITHUB_ENV
+          fi
 
-          echo "Publishing version: $(jq -r '.version' package.json)"
+          echo "Publishing version: $(jq -r '.version' package.json) with tag: ${NPM_TAG:-pending}"
           cat package.json
-
-      - name: Setup .npmrc
-        working-directory: wasm-output
-        run: echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > .npmrc
 
       - name: Publish to npm
         working-directory: wasm-output
-        run: npm publish --access public --tag dev
+        run: npm publish --provenance --access public --tag ${{ env.NPM_TAG }}
 
   # Web app unit tests
   test-web:

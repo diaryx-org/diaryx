@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@choochmeque/tauri-plugin-google-auth-api": "^0.3.6",
+    "@diaryx/wasm": "^0.11.0-dev",
     "@hocuspocus/provider": "^3.4.3",
     "@myriaddreamin/typst-ts-web-compiler": "^0.7.0-rc2",
     "@myriaddreamin/typst.ts": "^0.7.0-rc2",

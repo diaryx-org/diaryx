@@ -157,6 +157,46 @@ jobs:
           r2-endpoint: ${{ secrets.R2_ENDPOINT }}
           r2-bucket: ${{ secrets.R2_BUCKET }}
 
+  # Publish WASM bindings to npm (JS glue + types, no .wasm binary)
+  publish-wasm-npm:
+    name: Publish WASM to npm
+    runs-on: ubuntu-latest
+    needs: [web]
+    if: github.event_name == 'push'
+    steps:
+      - name: Download WASM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wasm-package
+          path: wasm-output/
+
+      - name: Patch package.json for npm
+        working-directory: wasm-output
+        run: |
+          # Read base version from wasm-pack output
+          BASE_VERSION=$(jq -r '.version' package.json)
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+
+          # Set scoped package name
+          jq '.name = "@diaryx/wasm"' package.json > tmp.json && mv tmp.json package.json
+
+          # Ship JS glue + types only (no .wasm binary — that loads from CDN)
+          jq '.files = ["diaryx_wasm.js", "diaryx_wasm_bg.js", "diaryx_wasm.d.ts", "diaryx_wasm_bg.wasm.d.ts"]' package.json > tmp.json && mv tmp.json package.json
+
+          # Dev version for non-tag pushes
+          jq --arg v "${BASE_VERSION}-dev.${SHORT_SHA}" '.version = $v' package.json > tmp.json && mv tmp.json package.json
+
+          echo "Publishing version: $(jq -r '.version' package.json)"
+          cat package.json
+
+      - name: Setup .npmrc
+        working-directory: wasm-output
+        run: echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > .npmrc
+
+      - name: Publish to npm
+        working-directory: wasm-output
+        run: npm publish --access public --tag dev
+
   # Web app unit tests
   test-web:
     name: Test Web App

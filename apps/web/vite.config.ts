@@ -46,6 +46,8 @@ export default defineConfig({
     alias: {
       // Stub out Tauri API for web builds - will be tree-shaken when not used
       "@tauri-apps/api/core": "@tauri-apps/api/core",
+      // In Tauri builds, stub out WASM (Tauri uses native Rust backend, not WASM)
+      ...(isTauri ? { "@diaryx/wasm": path.resolve("./src/lib/wasm-stub.js") } : {}),
       $lib: path.resolve("./src/lib"),
       "@": path.resolve(__dirname, "./src"),
     },
@@ -53,7 +55,7 @@ export default defineConfig({
   optimizeDeps: {
     // Exclude Tauri API from optimization since it's optional
     // Exclude wasm-pandoc so Vite doesn't try to pre-bundle the 56MB WASM
-    exclude: ["@tauri-apps/api", "wasm-pandoc"],
+    exclude: ["@tauri-apps/api", "wasm-pandoc", "@diaryx/wasm"],
   },
   // Env variables starting with the item of `envPrefix` will be exposed in tauri's source code through `import.meta.env`.
   envPrefix: ["VITE_", "TAURI_ENV_*"],

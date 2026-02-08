@@ -1,0 +1,93 @@
+name: Deploy Sync Server
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g., v0.1.0)"
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build Sync Server
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release -p diaryx_sync_server
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sync-server-binary
+          path: target/release/diaryx_sync_server
+
+  deploy:
+    name: Deploy to VPS
+    needs: [build]
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Download binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sync-server-binary
+          path: artifact/
+
+      - name: Copy binary to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_SSH_HOST }}
+          username: ${{ secrets.DEPLOY_SSH_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          source: artifact/diaryx_sync_server
+          target: /tmp/diaryx-deploy
+          strip_components: 1
+
+      - name: Deploy and restart
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_SSH_HOST }}
+          username: ${{ secrets.DEPLOY_SSH_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            BINARY="/home/adammharris/diaryx/target/release/diaryx_sync_server"
+            NEW_BINARY="/tmp/diaryx-deploy/diaryx_sync_server"
+
+            # Backup current binary
+            if [ -f "${BINARY}" ]; then
+              cp "${BINARY}" "${BINARY}.bak"
+            fi
+
+            # Move new binary into place
+            mv "${NEW_BINARY}" "${BINARY}"
+            chmod +x "${BINARY}"
+            rm -rf /tmp/diaryx-deploy
+
+            # Restart service (requires passwordless sudo for systemctl)
+            sudo systemctl restart diaryx-sync
+
+            # Health check
+            sleep 2
+            if curl -sf http://localhost:3030/health > /dev/null; then
+              echo "Deploy successful — health check passed"
+            else
+              echo "Health check failed! Rolling back..."
+              cp "${BINARY}.bak" "${BINARY}"
+              sudo systemctl restart diaryx-sync
+              exit 1
+            fi

@@ -1,0 +1,24 @@
+# Diaryx Sync Server systemd service
+# Copy to /etc/systemd/system/diaryx-sync.service
+# Then: sudo systemctl daemon-reload && sudo systemctl enable diaryx-sync
+#
+# For CI/CD auto-deploy, add passwordless sudo for systemctl:
+#   echo 'adammharris ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop diaryx-sync, /usr/bin/systemctl start diaryx-sync, /usr/bin/systemctl restart diaryx-sync' | sudo tee /etc/sudoers.d/diaryx-deploy
+
+[Unit]
+Description=Diaryx Sync Server
+After=network.target
+
+[Service]
+Type=simple
+User=adammharris
+WorkingDirectory=/home/adammharris/diaryx/crates/diaryx_sync_server
+ExecStart=/home/adammharris/diaryx/target/release/diaryx_sync_server
+EnvironmentFile=/home/adammharris/diaryx/crates/diaryx_sync_server/.env
+StandardOutput=append:/home/adammharris/diaryx-sync.log
+StandardError=append:/home/adammharris/diaryx-sync.log
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

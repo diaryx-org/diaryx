@@ -2695,54 +2695,15 @@ pub fn is_guest_mode<R: Runtime>(app: AppHandle<R>) -> Result<bool, Serializable
 }
 
 // ============================================================================
-// WebSocket Sync Commands (V2 — single WebSocket to /sync2)
+// WebSocket Sync Commands (V2 — single WebSocket to /sync2, via SyncClient)
 // ============================================================================
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use diaryx_core::crdt::{
-    DocIdKind, format_body_doc_id, format_workspace_doc_id, frame_message_v2, parse_doc_id,
-    unframe_message_v2,
+    ReconnectConfig, SyncClient, SyncClientConfig, SyncEvent, SyncEventHandler,
+    SyncStatus as WsSyncStatus,
 };
-use futures_util::{SinkExt, StreamExt};
-use tokio_tungstenite::tungstenite::Message;
-
-/// Control message from the sync server (JSON over WebSocket text frames).
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum ControlMessage {
-    SyncProgress {
-        completed: usize,
-        total: usize,
-    },
-    SyncComplete {
-        files_synced: usize,
-    },
-    PeerJoined {
-        #[serde(default)]
-        peer_count: usize,
-    },
-    PeerLeft {
-        #[serde(default)]
-        peer_count: usize,
-    },
-    FocusListChanged {
-        _files: Vec<String>,
-    },
-    FileManifest {
-        #[serde(default)]
-        _files: Vec<serde_json::Value>,
-        #[serde(default)]
-        _client_is_new: bool,
-    },
-    CrdtState {
-        state: String,
-    },
-    #[serde(alias = "session_joined")]
-    SessionJoined {},
-    #[serde(other)]
-    Other,
-}
 
 /// State for WebSocket sync connections (V2 protocol).
 ///
@@ -2772,10 +2733,71 @@ impl Default for WebSocketSyncState {
     }
 }
 
+/// Tauri event handler that forwards SyncEvents to the frontend via Tauri events.
+struct TauriEventHandler<R: Runtime> {
+    app: AppHandle<R>,
+    connected: Arc<AtomicBool>,
+}
+
+impl<R: Runtime> SyncEventHandler for TauriEventHandler<R> {
+    fn on_event(&self, event: SyncEvent) {
+        match event {
+            SyncEvent::StatusChanged(status) => {
+                let (type_str, extra) = match &status {
+                    WsSyncStatus::Connecting => ("connecting", None),
+                    WsSyncStatus::Connected => {
+                        self.connected.store(true, Ordering::SeqCst);
+                        ("connected", None)
+                    }
+                    WsSyncStatus::Syncing => ("syncing", None),
+                    WsSyncStatus::Synced => ("synced", None),
+                    WsSyncStatus::Reconnecting { attempt } => {
+                        self.connected.store(false, Ordering::SeqCst);
+                        (
+                            "reconnecting",
+                            Some(serde_json::json!({ "attempt": attempt })),
+                        )
+                    }
+                    WsSyncStatus::Disconnected => {
+                        self.connected.store(false, Ordering::SeqCst);
+                        ("disconnected", None)
+                    }
+                };
+                let mut payload = serde_json::json!({ "type": type_str });
+                if let Some(extra) = extra {
+                    if let (Some(map), Some(extra_map)) =
+                        (payload.as_object_mut(), extra.as_object())
+                    {
+                        for (k, v) in extra_map {
+                            map.insert(k.clone(), v.clone());
+                        }
+                    }
+                }
+                let _ = self.app.emit("sync-status-changed", payload);
+            }
+            SyncEvent::Progress { completed, total } => {
+                let _ = self.app.emit(
+                    "sync-progress",
+                    serde_json::json!({ "completed": completed, "total": total }),
+                );
+            }
+            SyncEvent::FilesChanged(files) => {
+                let _ = self.app.emit("sync-files-changed", &files);
+            }
+            SyncEvent::BodyChanged { file_path } => {
+                let _ = self.app.emit("sync-body-changed", &file_path);
+            }
+            SyncEvent::Error(msg) => {
+                let _ = self.app.emit("sync-error", &msg);
+            }
+        }
+    }
+}
+
 /// Start WebSocket sync connection using V2 protocol (single WS to /sync2).
 ///
 /// Connects to the specified sync server and begins real-time sync using the
-/// siphonophore multiplexed wire format.
+/// siphonophore multiplexed wire format via the centralized `SyncClient`.
 #[tauri::command]
 pub async fn start_websocket_sync<R: Runtime>(
     app: AppHandle<R>,
@@ -2811,322 +2833,32 @@ pub async fn start_websocket_sync<R: Runtime>(
             })?
     };
 
-    // Build WebSocket URL for V2 protocol
-    let ws_server = server_url
-        .replace("https://", "wss://")
-        .replace("http://", "ws://");
-    let sync_url = if let Some(ref token) = auth_token {
-        format!("{}/sync2?token={}", ws_server, token)
-    } else {
-        format!("{}/sync2", ws_server)
-    };
-
     let ws_state = app.state::<WebSocketSyncState>();
     let running = ws_state.running.clone();
     let connected = ws_state.connected.clone();
     running.store(true, Ordering::SeqCst);
     connected.store(false, Ordering::SeqCst);
 
-    let workspace_id = doc_name;
-    let app_handle = app.clone();
+    let config = SyncClientConfig {
+        server_url,
+        workspace_id: doc_name,
+        auth_token,
+        reconnect: ReconnectConfig::default(),
+    };
 
-    // Wire up the sync_manager event callback to forward local CRDT changes.
-    // We use a channel so the sync loop can pick up outgoing messages.
-    let (outgoing_tx, mut outgoing_rx) =
-        tokio::sync::mpsc::unbounded_channel::<(String, Vec<u8>)>();
+    let event_handler: Arc<dyn SyncEventHandler> = Arc::new(TauriEventHandler {
+        app: app.clone(),
+        connected: connected.clone(),
+    });
 
-    {
-        let outgoing_tx = outgoing_tx.clone();
-        let ws_id = workspace_id.clone();
-        sync_manager.set_event_callback(Arc::new(move |event| {
-            if let diaryx_core::fs::FileSystemEvent::SendSyncMessage {
-                doc_name,
-                message,
-                is_body,
-                ..
-            } = event
-            {
-                let doc_id = if *is_body {
-                    format_body_doc_id(&ws_id, doc_name)
-                } else {
-                    format_workspace_doc_id(&ws_id)
-                };
-                let _ = outgoing_tx.send((doc_id, message.clone()));
-            }
-        }));
-    }
+    let client = SyncClient::new(config, sync_manager, event_handler);
+    let task_running = running.clone();
 
     // Spawn the background sync loop
     let task = tokio::spawn(async move {
-        let mut attempt = 0u32;
-        let max_attempts = 10;
-
-        while running.load(Ordering::SeqCst) && attempt < max_attempts {
-            if attempt > 0 {
-                let delay = std::cmp::min(2u64.pow(attempt), 32);
-                log::info!(
-                    "[start_websocket_sync] Reconnecting in {}s (attempt {}/{})",
-                    delay,
-                    attempt,
-                    max_attempts
-                );
-                let _ = app_handle.emit(
-                    "sync-status-changed",
-                    serde_json::json!({ "type": "reconnecting", "attempt": attempt }),
-                );
-                tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
-                if !running.load(Ordering::SeqCst) {
-                    break;
-                }
-            }
-
-            let _ = app_handle.emit(
-                "sync-status-changed",
-                serde_json::json!({ "type": "connecting" }),
-            );
-
-            // Connect to /sync2
-            let ws = match tokio_tungstenite::connect_async(&sync_url).await {
-                Ok((ws, _)) => {
-                    log::info!("[start_websocket_sync] Connected to {}", sync_url);
-                    connected.store(true, Ordering::SeqCst);
-                    let _ = app_handle.emit(
-                        "sync-status-changed",
-                        serde_json::json!({ "type": "connected" }),
-                    );
-                    attempt = 0; // Reset backoff on success
-                    ws
-                }
-                Err(e) => {
-                    log::error!("[start_websocket_sync] Connection failed: {}", e);
-                    let _ = app_handle.emit("sync-error", &format!("Connection failed: {}", e));
-                    connected.store(false, Ordering::SeqCst);
-                    attempt += 1;
-                    continue;
-                }
-            };
-
-            let (mut ws_write, mut ws_read) = ws.split();
-
-            // Send workspace SyncStep1 (triggers server handshake)
-            let ws_doc_id = format_workspace_doc_id(&workspace_id);
-            let ws_step1 = sync_manager.create_workspace_sync_step1();
-            let ws_framed = frame_message_v2(&ws_doc_id, &ws_step1);
-            if let Err(e) = ws_write.send(Message::Binary(ws_framed.into())).await {
-                log::error!(
-                    "[start_websocket_sync] Failed to send workspace SyncStep1: {}",
-                    e
-                );
-                connected.store(false, Ordering::SeqCst);
-                attempt += 1;
-                continue;
-            }
-
-            // Handle Files-Ready handshake
-            let mut stashed_binary: Option<Vec<u8>> = None;
-            let handshake_deadline =
-                tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
-
-            'handshake: loop {
-                tokio::select! {
-                    msg = ws_read.next() => {
-                        match msg {
-                            Some(Ok(Message::Text(text))) => {
-                                if let Ok(ctrl) = serde_json::from_str::<ControlMessage>(&text) {
-                                    match ctrl {
-                                        ControlMessage::FileManifest { .. } => {
-                                            log::info!("[start_websocket_sync] Received FileManifest, sending FilesReady");
-                                            let reply = r#"{"type":"FilesReady"}"#;
-                                            if let Err(e) = ws_write.send(Message::Text(reply.into())).await {
-                                                log::error!("[start_websocket_sync] Failed to send FilesReady: {}", e);
-                                                break 'handshake;
-                                            }
-                                        }
-                                        ControlMessage::CrdtState { state } => {
-                                            match base64::Engine::decode(
-                                                &base64::engine::general_purpose::STANDARD,
-                                                &state,
-                                            ) {
-                                                Ok(state_bytes) => {
-                                                    match sync_manager.handle_crdt_state(&state_bytes).await {
-                                                        Ok(count) => {
-                                                            log::info!("[start_websocket_sync] Applied CRDT state ({} files)", count);
-                                                            let _ = app_handle.emit("sync-files-changed", &Vec::<String>::new());
-                                                        }
-                                                        Err(e) => log::error!("[start_websocket_sync] Failed to apply CRDT state: {}", e),
-                                                    }
-                                                }
-                                                Err(e) => log::error!("[start_websocket_sync] Failed to decode CRDT state: {}", e),
-                                            }
-                                            break 'handshake;
-                                        }
-                                        ControlMessage::SessionJoined { .. } => {
-                                            log::info!("[start_websocket_sync] Session joined");
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                            }
-                            Some(Ok(Message::Binary(data))) => {
-                                stashed_binary = Some(data.to_vec());
-                                break 'handshake;
-                            }
-                            Some(Ok(Message::Close(_))) | None => {
-                                log::warn!("[start_websocket_sync] Connection closed during handshake");
-                                connected.store(false, Ordering::SeqCst);
-                                attempt += 1;
-                                continue; // This continues the outer reconnect loop via break below
-                            }
-                            _ => {}
-                        }
-                    }
-                    _ = tokio::time::sleep_until(handshake_deadline) => {
-                        log::debug!("[start_websocket_sync] No handshake required, proceeding");
-                        break 'handshake;
-                    }
-                }
-            }
-
-            // Send body SyncStep1 for all known files
-            let file_paths = sync_manager.get_all_file_paths();
-            let file_count = file_paths.len();
-            for file_path in &file_paths {
-                if !running.load(Ordering::SeqCst) {
-                    break;
-                }
-                let body_doc_id = format_body_doc_id(&workspace_id, file_path);
-                let body_step1 = sync_manager.create_body_sync_step1(file_path);
-                let body_framed = frame_message_v2(&body_doc_id, &body_step1);
-                if let Err(e) = ws_write.send(Message::Binary(body_framed.into())).await {
-                    log::error!(
-                        "[start_websocket_sync] Failed to send body SyncStep1 for {}: {}",
-                        file_path,
-                        e
-                    );
-                }
-            }
-
-            if file_count > 0 {
-                log::info!(
-                    "[start_websocket_sync] Sent body SyncStep1 for {} files",
-                    file_count
-                );
-                let _ = app_handle.emit(
-                    "sync-progress",
-                    serde_json::json!({ "completed": 0, "total": file_count }),
-                );
-            }
-
-            // Process stashed binary from handshake
-            if let Some(data) = stashed_binary.take() {
-                if let Some(response_frame) =
-                    handle_binary_message(&data, &workspace_id, &sync_manager, &app_handle).await
-                {
-                    let _ = ws_write.send(Message::Binary(response_frame.into())).await;
-                }
-            }
-
-            // Main message loop
-            let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
-            ping_interval.tick().await; // Consume first immediate tick
-
-            'msg_loop: loop {
-                if !running.load(Ordering::SeqCst) {
-                    break 'msg_loop;
-                }
-
-                tokio::select! {
-                    msg = ws_read.next() => {
-                        match msg {
-                            Some(Ok(Message::Binary(data))) => {
-                                if let Some(response_frame) = handle_binary_message(
-                                    &data, &workspace_id, &sync_manager, &app_handle,
-                                ).await {
-                                    if let Err(e) = ws_write.send(Message::Binary(response_frame.into())).await {
-                                        log::error!("[start_websocket_sync] Failed to send response: {}", e);
-                                        break 'msg_loop;
-                                    }
-                                }
-                            }
-                            Some(Ok(Message::Text(text))) => {
-                                if let Ok(ctrl) = serde_json::from_str::<ControlMessage>(&text) {
-                                    match ctrl {
-                                        ControlMessage::SyncProgress { completed, total } => {
-                                            log::debug!("[start_websocket_sync] Progress: {}/{}", completed, total);
-                                            let _ = app_handle.emit(
-                                                "sync-progress",
-                                                serde_json::json!({ "completed": completed, "total": total }),
-                                            );
-                                        }
-                                        ControlMessage::SyncComplete { files_synced } => {
-                                            log::info!("[start_websocket_sync] Sync complete ({} files)", files_synced);
-                                            let _ = app_handle.emit(
-                                                "sync-status-changed",
-                                                serde_json::json!({ "type": "synced" }),
-                                            );
-                                        }
-                                        ControlMessage::PeerJoined { peer_count } => {
-                                            log::info!("[start_websocket_sync] Peer joined ({} connected)", peer_count);
-                                        }
-                                        ControlMessage::PeerLeft { peer_count } => {
-                                            log::info!("[start_websocket_sync] Peer left ({} connected)", peer_count);
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                            }
-                            Some(Ok(Message::Close(_))) => {
-                                log::info!("[start_websocket_sync] Connection closed by server");
-                                break 'msg_loop;
-                            }
-                            Some(Ok(Message::Pong(_))) => {} // keepalive
-                            Some(Err(e)) => {
-                                log::error!("[start_websocket_sync] WebSocket error: {}", e);
-                                let _ = app_handle.emit("sync-error", &format!("{}", e));
-                                break 'msg_loop;
-                            }
-                            None => break 'msg_loop,
-                            _ => {}
-                        }
-                    }
-                    outgoing = outgoing_rx.recv() => {
-                        if let Some((doc_id, message)) = outgoing {
-                            let framed = frame_message_v2(&doc_id, &message);
-                            if let Err(e) = ws_write.send(Message::Binary(framed.into())).await {
-                                log::error!("[start_websocket_sync] Failed to send outgoing: {}", e);
-                                break 'msg_loop;
-                            }
-                        }
-                    }
-                    _ = ping_interval.tick() => {
-                        if let Err(e) = ws_write.send(Message::Ping(vec![].into())).await {
-                            log::error!("[start_websocket_sync] Ping failed: {}", e);
-                            break 'msg_loop;
-                        }
-                    }
-                }
-            }
-
-            // Connection dropped — prepare for reconnect
-            connected.store(false, Ordering::SeqCst);
-            if running.load(Ordering::SeqCst) {
-                attempt += 1;
-                sync_manager.reset();
-                let _ = app_handle.emit(
-                    "sync-status-changed",
-                    serde_json::json!({ "type": "disconnected" }),
-                );
-            }
-        }
-
-        // Final cleanup
+        client.run_persistent(task_running).await;
         running.store(false, Ordering::SeqCst);
         connected.store(false, Ordering::SeqCst);
-        let _ = app_handle.emit(
-            "sync-status-changed",
-            serde_json::json!({ "type": "disconnected" }),
-        );
-        log::info!("[start_websocket_sync] Sync loop exited");
     });
 
     // Store task handle
@@ -3135,60 +2867,6 @@ pub async fn start_websocket_sync<R: Runtime>(
 
     log::info!("[start_websocket_sync] V2 sync started successfully");
     Ok(())
-}
-
-/// Handle a binary V2 message: unframe, route to sync_manager, return optional response frame.
-async fn handle_binary_message<R: Runtime>(
-    data: &[u8],
-    _workspace_id: &str,
-    sync_manager: &Arc<diaryx_core::crdt::RustSyncManager<SyncToAsyncFs<RealFileSystem>>>,
-    app_handle: &AppHandle<R>,
-) -> Option<Vec<u8>> {
-    let (doc_id, payload) = unframe_message_v2(data)?;
-    match parse_doc_id(&doc_id) {
-        Some(DocIdKind::Workspace(_)) => {
-            match sync_manager.handle_workspace_message(&payload, true).await {
-                Ok(result) => {
-                    if !result.changed_files.is_empty() {
-                        log::debug!("[sync] Workspace files changed: {:?}", result.changed_files);
-                        let _ = app_handle.emit("sync-files-changed", &result.changed_files);
-                    }
-                    result.response.map(|resp| frame_message_v2(&doc_id, &resp))
-                }
-                Err(e) => {
-                    log::error!("[sync] Error handling workspace message: {}", e);
-                    let _ = app_handle.emit("sync-error", &format!("{}", e));
-                    None
-                }
-            }
-        }
-        Some(DocIdKind::Body { file_path, .. }) => {
-            match sync_manager
-                .handle_body_message(&file_path, &payload, true)
-                .await
-            {
-                Ok(result) => {
-                    if result.content.is_some() && !result.is_echo {
-                        log::debug!("[sync] Body changed: {}", file_path);
-                        let _ = app_handle.emit("sync-body-changed", &file_path);
-                    }
-                    result.response.map(|resp| frame_message_v2(&doc_id, &resp))
-                }
-                Err(e) => {
-                    log::error!(
-                        "[sync] Error handling body message for {}: {}",
-                        file_path,
-                        e
-                    );
-                    None
-                }
-            }
-        }
-        None => {
-            log::debug!("[sync] Unknown doc_id: {}", doc_id);
-            None
-        }
-    }
 }
 
 /// Stop WebSocket sync connection.

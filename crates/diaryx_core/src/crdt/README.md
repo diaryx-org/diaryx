@@ -7,6 +7,7 @@ audience:
 attachments:
   - "[mod.rs](/crates/diaryx_core/src/crdt/mod.rs)"
   - "[body_doc.rs](/crates/diaryx_core/src/crdt/body_doc.rs)"
+  - "[control_message.rs](/crates/diaryx_core/src/crdt/control_message.rs)"
   - "[body_doc_manager.rs](/crates/diaryx_core/src/crdt/body_doc_manager.rs)"
   - "[history.rs](/crates/diaryx_core/src/crdt/history.rs)"
   - "[memory_storage.rs](/crates/diaryx_core/src/crdt/memory_storage.rs)"
@@ -306,69 +307,73 @@ let result = diaryx.execute(Command::GetHistory {
 });
 ```
 
-## Unified Sync Client
+## Native Sync Client
 
-The `SyncClient` provides a unified interface for WebSocket-based real-time sync
-across all platforms. It uses a `SyncTransport` trait for platform abstraction:
+The `SyncClient` (requires `native-sync` feature) provides a unified WebSocket
+sync client for CLI and Tauri. It consolidates the duplicated sync logic that
+was previously copy-pasted between both frontends.
 
 ```text
-┌────────────────────┐    ┌────────────────────┐
-│ TokioTransport     │    │ CallbackTransport  │
-│ (tokio-tungstenite)│    │ (JS WebSocket)     │
-│ #[cfg(native)]     │    │ #[cfg(wasm32)]     │
-└─────────┬──────────┘    └─────────┬──────────┘
-          │                         │
-          └────────────┬────────────┘
-                       ▼
-          ┌──────────────────────┐
-          │   SyncClient<T>      │
-          │   - Reconnection     │
-          │   - Dual connections │
-          │   - Message routing  │
-          └──────────────────────┘
-                       │
-                       ▼
-          ┌──────────────────────┐
-          │   RustSyncManager    │
-          └──────────────────────┘
+┌──────────────┐    ┌──────────────┐
+│   CLI        │    │   Tauri      │
+│ CliHandler   │    │ TauriHandler │
+└──────┬───────┘    └──────┬───────┘
+       │                   │
+       └─────────┬─────────┘
+                 ▼
+    ┌──────────────────────┐
+    │   SyncClient<FS>     │
+    │   - Reconnection     │
+    │   - Handshake        │
+    │   - Message routing  │
+    │   - Ping/keepalive   │
+    └──────────┬───────────┘
+               │
+    ┌──────────┴───────────┐
+    │   RustSyncManager    │
+    └──────────────────────┘
 ```
 
-The `SyncManager` filters metadata-echo updates before returning
-`changed_files`, so `FilesChanged` events are suppressed for no-op metadata
-syncs that would otherwise trigger unnecessary UI refreshes.
-
-### Native (CLI/Tauri)
-
-Use `TokioTransport` for native WebSocket connections (requires `native-sync` feature):
+Frontends implement `SyncEventHandler` to receive status changes, progress
+updates, and file change notifications. The client handles the full sync
+lifecycle: connection, Files-Ready handshake, body SyncStep1 loop, message
+routing, and reconnection with exponential backoff.
 
 ```rust,ignore
-use diaryx_core::crdt::{SyncClient, SyncClientConfig, TokioTransport};
+use diaryx_core::crdt::{SyncClient, SyncClientConfig, SyncEvent, SyncEventHandler};
 
-let transport_meta = TokioTransport::new();
-let transport_body = TokioTransport::new();
+struct MyHandler;
+impl SyncEventHandler for MyHandler {
+    fn on_event(&self, event: SyncEvent) {
+        match event {
+            SyncEvent::StatusChanged(status) => println!("Status: {:?}", status),
+            SyncEvent::Progress { completed, total } => println!("{}/{}", completed, total),
+            _ => {}
+        }
+    }
+}
 
-let config = SyncClientConfig::new(
-    "wss://sync.example.com/sync".to_string(),
-    "workspace-id".to_string(),
-    PathBuf::from("/path/to/workspace"),
-).with_auth("token".to_string());
+let config = SyncClientConfig {
+    server_url: "https://sync.example.com".to_string(),
+    workspace_id: "my-workspace".to_string(),
+    auth_token: Some("token".to_string()),
+    reconnect: Default::default(),
+};
 
-let client = SyncClient::new(config, transport_meta, transport_body, sync_manager);
-client.start().await?;
+let client = SyncClient::new(config, sync_manager, Arc::new(MyHandler));
+
+// Persistent sync with reconnection (Tauri, CLI `sync start`)
+client.run_persistent(running).await;
+
+// One-shot push/pull (CLI `sync push`, `sync pull`)
+let stats = client.run_one_shot().await?;
 ```
 
 ### WASM (Web)
 
-For WASM, use `CallbackTransport` which routes messages through JavaScript:
-
-```rust,ignore
-// In diaryx_wasm
-use CallbackTransport;
-
-let transport = CallbackTransport::new();
-// Messages are injected via inject_sync_message() from JS
-// Outgoing messages are polled via poll_outgoing_messages()
-```
+Web/WASM uses a separate TypeScript-based sync transport
+(`unifiedSyncTransport.ts`) that manages the WebSocket directly from JavaScript.
+The native `SyncClient` is not available on WASM.
 
 ## Git-Backed Version History
 

@@ -1,27 +1,85 @@
 //! Sync client command handlers.
 //!
 //! Handles start, push, and pull commands using WebSocket connections.
+//! The actual sync protocol is handled by `diaryx_core::crdt::SyncClient`.
 
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use base64::Engine;
 use diaryx_core::config::Config;
 use diaryx_core::crdt::{
-    BodyDocManager, DocIdKind, RustSyncManager, SyncHandler, SyncMessage, WorkspaceCrdt,
-    format_body_doc_id, format_workspace_doc_id, frame_message_v2, parse_doc_id,
-    unframe_message_v2,
+    BodyDocManager, ReconnectConfig, RustSyncManager, SyncClient, SyncClientConfig, SyncEvent,
+    SyncEventHandler, SyncHandler, SyncStatus, WorkspaceCrdt,
 };
 use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
-use futures_util::{SinkExt, StreamExt};
-use serde::Deserialize;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 use super::CrdtContext;
 use super::progress;
 
 const DEFAULT_SYNC_SERVER: &str = "https://sync.diaryx.org";
+
+/// CLI event handler that prints sync events to the terminal.
+struct CliEventHandler;
+
+impl SyncEventHandler for CliEventHandler {
+    fn on_event(&self, event: SyncEvent) {
+        match event {
+            SyncEvent::StatusChanged(status) => match status {
+                SyncStatus::Connecting => {
+                    println!("Connecting to sync server...");
+                    progress::show_progress(10);
+                }
+                SyncStatus::Connected => {
+                    println!("Connected to sync server");
+                    progress::show_progress(30);
+                }
+                SyncStatus::Syncing => {
+                    progress::show_progress(50);
+                    println!();
+                    println!("Sync is running. Press Ctrl+C to stop.");
+                    println!();
+                }
+                SyncStatus::Synced => {
+                    println!("\r\x1b[K  Sync complete");
+                    progress::show_progress(100);
+                    println!("Watching for changes...");
+                    progress::show_indeterminate();
+                }
+                SyncStatus::Reconnecting { attempt } => {
+                    println!("\r\x1b[K  Reconnecting (attempt {})...", attempt);
+                }
+                SyncStatus::Disconnected => {
+                    progress::hide();
+                }
+            },
+            SyncEvent::Progress { completed, total } => {
+                if total > 0 {
+                    let percent = ((completed as f64 / total as f64) * 100.0) as u8;
+                    let scaled = 50 + (percent / 2);
+                    progress::show_progress(scaled);
+                    print!(
+                        "\r\x1b[K  Progress: {}/{} files ({}%)",
+                        completed, total, percent
+                    );
+                    use std::io::Write;
+                    let _ = std::io::stdout().flush();
+                }
+            }
+            SyncEvent::FilesChanged(files) => {
+                for file in &files {
+                    println!("  Synced: {}", file);
+                }
+            }
+            SyncEvent::BodyChanged { file_path } => {
+                println!("\r\x1b[K  Body synced: {}", file_path);
+            }
+            SyncEvent::Error(msg) => {
+                eprintln!("  Error: {}", msg);
+            }
+        }
+    }
+}
 
 /// Scan the workspace and import existing files into the CRDT.
 ///
@@ -162,46 +220,6 @@ fn import_existing_files(
     imported
 }
 
-/// Control message from the sync server (JSON over WebSocket text frames).
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum ControlMessage {
-    /// Sync progress update from server
-    SyncProgress { completed: usize, total: usize },
-    /// Initial sync has completed
-    SyncComplete { files_synced: usize },
-    /// A peer joined the sync session
-    PeerJoined {
-        #[serde(default)]
-        peer_count: usize,
-    },
-    /// A peer left the sync session
-    PeerLeft {
-        #[serde(default)]
-        peer_count: usize,
-    },
-    /// Focus list changed - files that any client is focused on
-    FocusListChanged { files: Vec<String> },
-    /// Files-Ready handshake: server sends file manifest before y-sync starts.
-    FileManifest {
-        #[serde(default)]
-        _files: Vec<serde_json::Value>,
-        #[serde(default)]
-        _client_is_new: bool,
-    },
-    /// Files-Ready handshake: server sends CRDT state after client replies with FilesReady.
-    CrdtState {
-        /// Base64-encoded Y-CRDT state bytes.
-        state: String,
-    },
-    /// Share session: guest joined confirmation.
-    #[serde(alias = "session_joined")]
-    SessionJoined {},
-    /// Catch-all for other message types
-    #[serde(other)]
-    Other,
-}
-
 /// Handle the start command - start continuous sync.
 pub fn handle_start(config: &Config, workspace_root: &Path) {
     // Validate configuration
@@ -216,11 +234,10 @@ pub fn handle_start(config: &Config, workspace_root: &Path) {
         .as_deref()
         .unwrap_or(DEFAULT_SYNC_SERVER);
 
-    let workspace_id = config.sync_workspace_id.as_deref().unwrap_or_else(|| {
-        // Generate a new workspace ID if not set
-        // In a real implementation, this would be assigned by the server
-        "default"
-    });
+    let workspace_id = config
+        .sync_workspace_id
+        .as_deref()
+        .unwrap_or_else(|| "default");
 
     println!("Starting sync...");
     println!("  Server: {}", server_url);
@@ -263,12 +280,18 @@ pub fn handle_start(config: &Config, workspace_root: &Path) {
         Arc::clone(&sync_handler),
     ));
 
-    // Build WebSocket URL for v2 protocol (single connection)
-    let ws_server = server_url
-        .replace("https://", "wss://")
-        .replace("http://", "ws://");
+    let client_config = SyncClientConfig {
+        server_url: server_url.to_string(),
+        workspace_id: workspace_id.to_string(),
+        auth_token: Some(session_token.clone()),
+        reconnect: ReconnectConfig {
+            enabled: false, // CLI doesn't auto-reconnect
+            max_attempts: 1,
+            ..Default::default()
+        },
+    };
 
-    let sync_url = format!("{}/sync2?token={}", ws_server, session_token);
+    let client = SyncClient::new(client_config, sync_manager, Arc::new(CliEventHandler));
 
     // Set up shutdown flag
     let running = Arc::new(AtomicBool::new(true));
@@ -299,14 +322,7 @@ pub fn handle_start(config: &Config, workspace_root: &Path) {
             }
         });
 
-        run_sync_loop_v2(
-            &sync_url,
-            workspace_id,
-            sync_manager,
-            workspace_crdt,
-            running,
-        )
-        .await;
+        client.run_persistent(running).await;
     });
 
     println!("Sync stopped.");
@@ -365,27 +381,27 @@ pub fn handle_push(config: &Config, workspace_root: &Path) {
         Arc::clone(&sync_handler),
     ));
 
-    let ws_server = server_url
-        .replace("https://", "wss://")
-        .replace("http://", "ws://");
+    let client_config = SyncClientConfig {
+        server_url: server_url.to_string(),
+        workspace_id: workspace_id.to_string(),
+        auth_token: Some(session_token.clone()),
+        reconnect: ReconnectConfig::default(),
+    };
 
-    let sync_url = format!("{}/sync2?token={}", ws_server, session_token);
+    let client = SyncClient::new(client_config, sync_manager, Arc::new(CliEventHandler));
 
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
 
     runtime.block_on(async {
-        match do_one_shot_sync_v2(
-            &sync_url,
-            workspace_id,
-            &sync_manager,
-            &workspace_crdt,
-            &body_manager,
-            false,
-        )
-        .await
-        {
-            Ok(0) => println!("  Already up to date"),
-            Ok(count) => println!("  Pushed {} items", count),
+        match client.run_one_shot().await {
+            Ok(stats) => {
+                let count = stats.pushed;
+                if count == 0 {
+                    println!("  Already up to date");
+                } else {
+                    println!("  Pushed {} items", count);
+                }
+            }
             Err(e) => eprintln!("  Failed to push: {}", e),
         }
     });
@@ -431,38 +447,40 @@ pub fn handle_pull(config: &Config, workspace_root: &Path) {
         Arc::clone(&sync_handler),
     ));
 
-    let ws_server = server_url
-        .replace("https://", "wss://")
-        .replace("http://", "ws://");
+    let client_config = SyncClientConfig {
+        server_url: server_url.to_string(),
+        workspace_id: workspace_id.to_string(),
+        auth_token: Some(session_token.clone()),
+        reconnect: ReconnectConfig::default(),
+    };
 
-    let sync_url = format!("{}/sync2?token={}", ws_server, session_token);
+    let client = SyncClient::new(
+        client_config,
+        Arc::clone(&sync_manager),
+        Arc::new(CliEventHandler),
+    );
 
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
 
     runtime.block_on(async {
-        match do_one_shot_sync_v2(
-            &sync_url,
-            workspace_id,
-            &sync_manager,
-            &workspace_crdt,
-            &body_manager,
-            true,
-        )
-        .await
-        {
-            Ok(0) => println!("  Already up to date"),
-            Ok(count) => {
-                println!("  Received {} items", count);
+        match client.run_one_shot().await {
+            Ok(stats) => {
+                let count = stats.pulled;
+                if count == 0 {
+                    println!("  Already up to date");
+                } else {
+                    println!("  Received {} items", count);
 
-                // Write updated files to disk
-                let files = workspace_crdt.list_files();
-                if !files.is_empty() {
-                    let body_mgr_ref = Some(body_manager.as_ref());
-                    if let Err(e) = sync_handler
-                        .handle_remote_metadata_update(files, vec![], body_mgr_ref, true)
-                        .await
-                    {
-                        eprintln!("  Warning: Failed to write some files: {}", e);
+                    // Write updated files to disk
+                    let files = workspace_crdt.list_files();
+                    if !files.is_empty() {
+                        let body_mgr_ref = Some(body_manager.as_ref());
+                        if let Err(e) = sync_handler
+                            .handle_remote_metadata_update(files, vec![], body_mgr_ref, true)
+                            .await
+                        {
+                            eprintln!("  Warning: Failed to write some files: {}", e);
+                        }
                     }
                 }
             }
@@ -471,509 +489,6 @@ pub fn handle_pull(config: &Config, workspace_root: &Path) {
     });
 
     println!("Pull complete.");
-}
-
-// ===========================================================================
-// v2 Protocol (Siphonophore) - Single WebSocket Connection
-// ===========================================================================
-
-/// Run the v2 sync loop with a single WebSocket connection to /sync2.
-///
-/// This uses the siphonophore wire format:
-/// - Binary messages: `[u8: doc_id_len] [doc_id] [y-sync payload]`
-/// - Text messages: JSON control messages (unchanged)
-///
-/// Doc ID format:
-/// - Workspace: `workspace:{workspace_id}`
-/// - Body: `body:{workspace_id}/{file_path}`
-async fn run_sync_loop_v2(
-    url: &str,
-    workspace_id: &str,
-    sync_manager: Arc<RustSyncManager<SyncToAsyncFs<RealFileSystem>>>,
-    workspace_crdt: Arc<WorkspaceCrdt>,
-    running: Arc<AtomicBool>,
-) {
-    println!("Connecting to sync server (v2 protocol)...");
-    progress::show_progress(10);
-
-    // Connect to single /sync2 WebSocket
-    let mut ws = match connect_async(url).await {
-        Ok((ws, _)) => {
-            println!("Connected to sync server");
-            progress::show_progress(30);
-            ws
-        }
-        Err(e) => {
-            eprintln!("Failed to connect: {}", e);
-            progress::show_error(30);
-            return;
-        }
-    };
-
-    // Send workspace SyncStep1 (triggers server's on_before_sync handshake)
-    let ws_doc_id = format_workspace_doc_id(workspace_id);
-    let ws_step1 = sync_manager.create_workspace_sync_step1();
-    let ws_framed = frame_message_v2(&ws_doc_id, &ws_step1);
-    if let Err(e) = ws.send(Message::Binary(ws_framed.into())).await {
-        eprintln!("Failed to send workspace SyncStep1: {}", e);
-        return;
-    }
-
-    // Wait for Files-Ready handshake (if server requires it).
-    // The server sends file_manifest → we reply FilesReady → server sends crdt_state.
-    // If no files exist on server, it returns Continue (no handshake) and we get a
-    // binary SyncStep2 directly.
-    // Stash any binary message received during handshake to process later.
-    let mut stashed_binary: Option<Vec<u8>> = None;
-    let handshake_timeout = tokio::time::Duration::from_secs(10);
-    let handshake_deadline = tokio::time::Instant::now() + handshake_timeout;
-
-    loop {
-        tokio::select! {
-            msg = ws.next() => {
-                match msg {
-                    Some(Ok(Message::Text(text))) => {
-                        if let Ok(ctrl_msg) = serde_json::from_str::<ControlMessage>(&text) {
-                            match ctrl_msg {
-                                ControlMessage::FileManifest { .. } => {
-                                    println!("  Received file manifest, completing handshake...");
-                                    let files_ready = r#"{"type":"FilesReady"}"#;
-                                    if let Err(e) = ws.send(Message::Text(files_ready.into())).await {
-                                        eprintln!("Failed to send FilesReady: {}", e);
-                                        return;
-                                    }
-                                }
-                                ControlMessage::CrdtState { state } => {
-                                    match base64::engine::general_purpose::STANDARD.decode(&state) {
-                                        Ok(state_bytes) => {
-                                            match sync_manager.handle_crdt_state(&state_bytes).await {
-                                                Ok(count) => println!("  Applied CRDT state ({} files)", count),
-                                                Err(e) => eprintln!("  Warning: Failed to apply CRDT state: {}", e),
-                                            }
-                                        }
-                                        Err(e) => eprintln!("  Warning: Failed to decode CRDT state: {}", e),
-                                    }
-                                    break; // Handshake complete
-                                }
-                                ControlMessage::SessionJoined { .. } => {
-                                    println!("  Session joined");
-                                    // Continue waiting for file_manifest
-                                }
-                                _ => {} // Ignore other messages during handshake
-                            }
-                        }
-                    }
-                    Some(Ok(Message::Binary(data))) => {
-                        // Server returned Continue (no handshake) — got a binary sync response.
-                        stashed_binary = Some(data.to_vec());
-                        break;
-                    }
-                    Some(Ok(Message::Close(_))) | None => {
-                        eprintln!("Connection closed during handshake");
-                        return;
-                    }
-                    _ => {}
-                }
-            }
-            _ = tokio::time::sleep_until(handshake_deadline) => {
-                println!("  No handshake required (timeout), proceeding with sync...");
-                break;
-            }
-        }
-    }
-
-    // Send body SyncStep1 for all known files
-    let files = workspace_crdt.list_files();
-    let file_count = files.len();
-    let mut sent = 0;
-
-    const BATCH_SIZE: usize = 50;
-    for (file_path, _metadata) in files {
-        if !running.load(Ordering::SeqCst) {
-            break;
-        }
-        let body_doc_id = format_body_doc_id(workspace_id, &file_path);
-        let body_step1 = sync_manager.create_body_sync_step1(&file_path);
-        let body_framed = frame_message_v2(&body_doc_id, &body_step1);
-        if let Err(e) = ws.send(Message::Binary(body_framed.into())).await {
-            eprintln!("Failed to send body SyncStep1 for {}: {}", file_path, e);
-        }
-        sent += 1;
-
-        if sent % BATCH_SIZE == 0 {
-            print!("\r\x1b[K  Sending state: {}/{} files", sent, file_count);
-            use std::io::Write;
-            let _ = std::io::stdout().flush();
-            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-        }
-    }
-
-    if sent > 0 {
-        println!("\r\x1b[K  Sent state for {} files", sent);
-    }
-
-    progress::show_progress(50);
-    println!();
-    println!("Sync is running. Press Ctrl+C to stop.");
-    println!();
-
-    // Track sync completion
-    let workspace_synced = Arc::new(AtomicBool::new(false));
-    let body_synced = Arc::new(AtomicBool::new(file_count == 0));
-
-    // Process any binary message that arrived during handshake
-    if let Some(data) = stashed_binary.take() {
-        if let Some((doc_id, payload)) = unframe_message_v2(&data) {
-            match parse_doc_id(&doc_id) {
-                Some(DocIdKind::Workspace(_)) => {
-                    if let Ok(result) = sync_manager.handle_workspace_message(&payload, true).await
-                    {
-                        if let Some(response) = result.response {
-                            let framed = frame_message_v2(&doc_id, &response);
-                            let _ = ws.send(Message::Binary(framed.into())).await;
-                        }
-                        if !result.changed_files.is_empty() {
-                            for file in &result.changed_files {
-                                println!("  Synced: {}", file);
-                            }
-                        }
-                    }
-                }
-                Some(DocIdKind::Body { file_path, .. }) => {
-                    if let Ok(result) = sync_manager
-                        .handle_body_message(&file_path, &payload, true)
-                        .await
-                    {
-                        if let Some(response) = result.response {
-                            let framed = frame_message_v2(&doc_id, &response);
-                            let _ = ws.send(Message::Binary(framed.into())).await;
-                        }
-                    }
-                }
-                None => {}
-            }
-        }
-    }
-
-    // Message loop
-    while running.load(Ordering::SeqCst) {
-        tokio::select! {
-            msg = ws.next() => {
-                match msg {
-                    Some(Ok(Message::Binary(data))) => {
-                        // Unframe v2 message
-                        if let Some((doc_id, payload)) = unframe_message_v2(&data) {
-                            match parse_doc_id(&doc_id) {
-                                Some(DocIdKind::Workspace(_)) => {
-                                    // Handle workspace message
-                                    match sync_manager.handle_workspace_message(&payload, true).await {
-                                        Ok(result) => {
-                                            if let Some(response) = result.response {
-                                                let framed = frame_message_v2(&doc_id, &response);
-                                                if let Err(e) = ws.send(Message::Binary(framed.into())).await {
-                                                    eprintln!("Failed to send workspace response: {}", e);
-                                                }
-                                            }
-                                            if !result.changed_files.is_empty() {
-                                                for file in &result.changed_files {
-                                                    println!("  Synced: {}", file);
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            eprintln!("Error handling workspace message: {}", e);
-                                        }
-                                    }
-                                }
-                                Some(DocIdKind::Body { file_path, .. }) => {
-                                    // Handle body message
-                                    match sync_manager.handle_body_message(&file_path, &payload, true).await {
-                                        Ok(result) => {
-                                            if let Some(response) = result.response {
-                                                let framed = frame_message_v2(&doc_id, &response);
-                                                if let Err(e) = ws.send(Message::Binary(framed.into())).await {
-                                                    eprintln!("Failed to send body response: {}", e);
-                                                }
-                                            }
-                                            if result.content.is_some() && !result.is_echo {
-                                                println!("\r\x1b[K  Body synced: {}", file_path);
-                                            }
-                                        }
-                                        Err(e) => {
-                                            eprintln!("Error handling body message for {}: {}", file_path, e);
-                                        }
-                                    }
-                                }
-                                None => {
-                                    log::debug!("Unknown doc_id format: {}", doc_id);
-                                }
-                            }
-                        }
-                    }
-                    Some(Ok(Message::Text(text))) => {
-                        // Handle JSON control messages
-                        if let Ok(ctrl_msg) = serde_json::from_str::<ControlMessage>(&text) {
-                            match ctrl_msg {
-                                ControlMessage::SyncProgress { completed, total } => {
-                                    if total > 0 {
-                                        let percent = ((completed as f64 / total as f64) * 100.0) as u8;
-                                        let scaled = 50 + (percent / 2);
-                                        progress::show_progress(scaled);
-                                        print!("\r\x1b[K  Progress: {}/{} files ({}%)", completed, total, percent);
-                                        use std::io::Write;
-                                        let _ = std::io::stdout().flush();
-                                    }
-                                }
-                                ControlMessage::SyncComplete { files_synced } => {
-                                    workspace_synced.store(true, Ordering::SeqCst);
-                                    body_synced.store(true, Ordering::SeqCst);
-                                    println!("\r\x1b[K  Sync complete ({} files)", files_synced);
-                                    progress::show_progress(100);
-                                    println!("Watching for changes...");
-                                    progress::show_indeterminate();
-                                }
-                                ControlMessage::PeerJoined { peer_count } => {
-                                    println!("\r\x1b[K  Peer joined ({} connected)", peer_count);
-                                }
-                                ControlMessage::PeerLeft { peer_count } => {
-                                    println!("\r\x1b[K  Peer left ({} connected)", peer_count);
-                                }
-                                ControlMessage::FocusListChanged { files } => {
-                                    if !files.is_empty() {
-                                        log::debug!("Focus list changed: {} files", files.len());
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    Some(Ok(Message::Close(_))) => {
-                        println!("\r\x1b[KConnection closed by server");
-                        break;
-                    }
-                    Some(Ok(Message::Pong(_))) => {
-                        // Connection alive
-                    }
-                    Some(Err(e)) => {
-                        eprintln!("\r\x1b[KWebSocket error: {}", e);
-                        break;
-                    }
-                    None => break,
-                    _ => {}
-                }
-            }
-            _ = tokio::time::sleep(tokio::time::Duration::from_secs(30)) => {
-                // Send ping to keep connection alive
-                if let Err(e) = ws.send(Message::Ping(vec![].into())).await {
-                    eprintln!("Failed to send ping: {}", e);
-                    break;
-                }
-            }
-        }
-    }
-
-    // Close connection gracefully
-    let _ = ws.close(None).await;
-}
-
-/// Perform one-shot v2 sync (push or pull).
-async fn do_one_shot_sync_v2(
-    url: &str,
-    workspace_id: &str,
-    sync_manager: &RustSyncManager<SyncToAsyncFs<RealFileSystem>>,
-    workspace_crdt: &WorkspaceCrdt,
-    body_manager: &BodyDocManager,
-    pull: bool,
-) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
-    use std::collections::HashSet;
-
-    let (mut ws, _) = connect_async(url).await?;
-
-    // Send workspace SyncStep1 (triggers server's on_before_sync handshake)
-    let ws_doc_id = format_workspace_doc_id(workspace_id);
-    let sv = workspace_crdt.encode_state_vector();
-    let step1 = SyncMessage::SyncStep1(sv).encode();
-    let framed = frame_message_v2(&ws_doc_id, &step1);
-    ws.send(Message::Binary(framed.into())).await?;
-
-    // Wait for Files-Ready handshake (if server requires it).
-    // Stash any binary message received during handshake to process later.
-    let mut stashed_binary: Option<Vec<u8>> = None;
-    let hs_timeout = tokio::time::Duration::from_secs(10);
-    let hs_deadline = tokio::time::Instant::now() + hs_timeout;
-
-    loop {
-        tokio::select! {
-            msg = ws.next() => {
-                match msg {
-                    Some(Ok(Message::Text(text))) => {
-                        if let Ok(ctrl_msg) = serde_json::from_str::<ControlMessage>(&text) {
-                            match ctrl_msg {
-                                ControlMessage::FileManifest { .. } => {
-                                    let files_ready = r#"{"type":"FilesReady"}"#;
-                                    ws.send(Message::Text(files_ready.into())).await?;
-                                }
-                                ControlMessage::CrdtState { state } => {
-                                    if let Ok(state_bytes) = base64::engine::general_purpose::STANDARD.decode(&state) {
-                                        let _ = sync_manager.handle_crdt_state(&state_bytes).await;
-                                    }
-                                    break; // Handshake complete
-                                }
-                                _ => {} // Ignore other text messages during handshake
-                            }
-                        }
-                    }
-                    Some(Ok(Message::Binary(data))) => {
-                        // No handshake — server returned Continue directly.
-                        stashed_binary = Some(data.to_vec());
-                        break;
-                    }
-                    Some(Ok(Message::Close(_))) | None => {
-                        ws.close(None).await?;
-                        return Ok(0);
-                    }
-                    _ => {}
-                }
-            }
-            _ = tokio::time::sleep_until(hs_deadline) => {
-                break;
-            }
-        }
-    }
-
-    // Get list of files to sync
-    let files: Vec<String> = workspace_crdt
-        .list_files()
-        .into_iter()
-        .map(|(path, _)| path)
-        .collect();
-    let file_count = files.len();
-
-    // Send body SyncStep1 for all files
-    for file_path in &files {
-        let body_doc_id = format_body_doc_id(workspace_id, file_path);
-        let sv = body_manager
-            .get_sync_state(file_path)
-            .unwrap_or_else(Vec::new);
-        let step1 = SyncMessage::SyncStep1(sv).encode();
-        let framed = frame_message_v2(&body_doc_id, &step1);
-        ws.send(Message::Binary(framed.into())).await?;
-    }
-
-    let mut push_count = 0;
-    let mut pull_count = 0;
-    let mut ws_sent_step2 = false;
-    let mut ws_received_step2 = false;
-    let mut body_files_sent_step2: HashSet<String> = HashSet::new();
-    let mut body_files_received_step2: HashSet<String> = HashSet::new();
-
-    // Timeout based on file count
-    let timeout_secs = (10 + file_count / 100).min(60) as u64;
-    let timeout = tokio::time::Duration::from_secs(timeout_secs);
-    let deadline = tokio::time::Instant::now() + timeout;
-
-    // Collect all binary messages to process (stashed + incoming)
-    let mut pending_binaries: Vec<Vec<u8>> = Vec::new();
-    if let Some(data) = stashed_binary.take() {
-        pending_binaries.push(data);
-    }
-
-    loop {
-        // Drain pending_binaries first, then wait for new messages
-        let data = if let Some(data) = pending_binaries.pop() {
-            data
-        } else {
-            // Wait for next message from WebSocket
-            let msg = tokio::select! {
-                biased;
-                msg = ws.next() => msg,
-                _ = tokio::time::sleep_until(deadline) => break,
-            };
-            match msg {
-                Some(Ok(Message::Binary(data))) => data.to_vec(),
-                Some(Ok(Message::Text(_))) => continue, // Ignore text in main loop
-                Some(Ok(Message::Close(_))) | None => break,
-                Some(Err(e)) => return Err(e.into()),
-                _ => continue,
-            }
-        };
-
-        {
-            let data = &data;
-            if let Some((doc_id, payload)) = unframe_message_v2(&data) {
-                match parse_doc_id(&doc_id) {
-                    Some(DocIdKind::Workspace(_)) => {
-                        let messages = SyncMessage::decode_all(&payload)?;
-                        for sync_msg in messages {
-                            match sync_msg {
-                                SyncMessage::SyncStep1(remote_sv) => {
-                                    let diff = workspace_crdt.encode_diff(&remote_sv)?;
-                                    if diff.len() > 2 {
-                                        push_count = 1;
-                                    }
-                                    let step2 = SyncMessage::SyncStep2(diff).encode();
-                                    let framed = frame_message_v2(&doc_id, &step2);
-                                    ws.send(Message::Binary(framed.into())).await?;
-                                    ws_sent_step2 = true;
-                                }
-                                SyncMessage::SyncStep2(update) | SyncMessage::Update(update) => {
-                                    ws_received_step2 = true;
-                                    if update.len() > 2 {
-                                        let (_, changed_files, _) = workspace_crdt
-                                            .apply_update_tracking_changes(
-                                                &update,
-                                                diaryx_core::crdt::UpdateOrigin::Sync,
-                                            )?;
-                                        pull_count += changed_files.len();
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Some(DocIdKind::Body { file_path, .. }) => {
-                        let messages = SyncMessage::decode_all(&payload)?;
-                        for sync_msg in messages {
-                            match sync_msg {
-                                SyncMessage::SyncStep1(remote_sv) => {
-                                    let diff = body_manager.get_diff(&file_path, &remote_sv)?;
-                                    if diff.len() > 2 {
-                                        push_count += 1;
-                                    }
-                                    let step2 = SyncMessage::SyncStep2(diff).encode();
-                                    let framed = frame_message_v2(&doc_id, &step2);
-                                    ws.send(Message::Binary(framed.into())).await?;
-                                    body_files_sent_step2.insert(file_path.clone());
-                                }
-                                SyncMessage::SyncStep2(update) | SyncMessage::Update(update) => {
-                                    body_files_received_step2.insert(file_path.clone());
-                                    if update.len() > 2 {
-                                        let body_doc = body_manager.get_or_create(&file_path);
-                                        body_doc.apply_update(
-                                            &update,
-                                            diaryx_core::crdt::UpdateOrigin::Sync,
-                                        )?;
-                                        pull_count += 1;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    None => {}
-                }
-            }
-
-            // Check if sync is complete
-            let ws_complete = ws_sent_step2 && ws_received_step2;
-            let body_complete = body_files_sent_step2.len() >= file_count
-                && body_files_received_step2.len() >= file_count;
-            if ws_complete && (file_count == 0 || body_complete) {
-                break;
-            }
-        }
-    }
-
-    ws.close(None).await?;
-    Ok(if pull { pull_count } else { push_count })
 }
 
 #[cfg(test)]
@@ -1246,96 +761,8 @@ Content here."#;
     }
 
     // =========================================================================
-    // ControlMessage JSON Parsing Tests
-    // =========================================================================
-
-    #[test]
-    fn test_control_message_sync_progress() {
-        let json = r#"{"type": "sync_progress", "completed": 5, "total": 10}"#;
-        let msg: ControlMessage = serde_json::from_str(json).unwrap();
-
-        match msg {
-            ControlMessage::SyncProgress { completed, total } => {
-                assert_eq!(completed, 5);
-                assert_eq!(total, 10);
-            }
-            _ => panic!("Expected SyncProgress variant"),
-        }
-    }
-
-    #[test]
-    fn test_control_message_sync_complete() {
-        let json = r#"{"type": "sync_complete", "files_synced": 42}"#;
-        let msg: ControlMessage = serde_json::from_str(json).unwrap();
-
-        match msg {
-            ControlMessage::SyncComplete { files_synced } => {
-                assert_eq!(files_synced, 42);
-            }
-            _ => panic!("Expected SyncComplete variant"),
-        }
-    }
-
-    #[test]
-    fn test_control_message_peer_joined() {
-        let json = r#"{"type": "peer_joined", "peer_count": 3}"#;
-        let msg: ControlMessage = serde_json::from_str(json).unwrap();
-
-        match msg {
-            ControlMessage::PeerJoined { peer_count } => {
-                assert_eq!(peer_count, 3);
-            }
-            _ => panic!("Expected PeerJoined variant"),
-        }
-    }
-
-    #[test]
-    fn test_control_message_peer_joined_with_default() {
-        // Test that missing peer_count defaults to 0
-        let json = r#"{"type": "peer_joined"}"#;
-        let msg: ControlMessage = serde_json::from_str(json).unwrap();
-
-        match msg {
-            ControlMessage::PeerJoined { peer_count } => {
-                assert_eq!(peer_count, 0, "Missing peer_count should default to 0");
-            }
-            _ => panic!("Expected PeerJoined variant"),
-        }
-    }
-
-    #[test]
-    fn test_control_message_peer_left() {
-        let json = r#"{"type": "peer_left", "peer_count": 1}"#;
-        let msg: ControlMessage = serde_json::from_str(json).unwrap();
-
-        match msg {
-            ControlMessage::PeerLeft { peer_count } => {
-                assert_eq!(peer_count, 1);
-            }
-            _ => panic!("Expected PeerLeft variant"),
-        }
-    }
-
-    #[test]
-    fn test_control_message_unknown_type_is_other() {
-        let json = r#"{"type": "unknown_future_message", "data": "some value"}"#;
-        let msg: ControlMessage = serde_json::from_str(json).unwrap();
-
-        assert!(
-            matches!(msg, ControlMessage::Other),
-            "Unknown message types should parse as Other"
-        );
-    }
-
-    #[test]
-    fn test_control_message_invalid_json_fails() {
-        let json = r#"not valid json"#;
-        let result: Result<ControlMessage, _> = serde_json::from_str(json);
-        assert!(result.is_err(), "Invalid JSON should fail to parse");
-    }
-
-    // =========================================================================
     // Sync Protocol Logic Tests
+    // (ControlMessage tests are in diaryx_core::crdt::control_message)
     // =========================================================================
 
     #[test]

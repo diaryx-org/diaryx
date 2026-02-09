@@ -50,6 +50,7 @@ tokio = { version = "1", features = ["sync", "time", "macros", "rt"], optional =
 tokio-tungstenite = { version = "0.26", optional = true }
 url = { version = "2", optional = true }
 futures-util = { version = "0.3", optional = true }
+async-trait = { version = "0.1", optional = true }
 
 # WASM-specific dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -73,7 +74,7 @@ live-sync = []
 # Enable native sync transport (tokio-tungstenite WebSocket)
 # This provides TokioTransport and SyncClient for CLI and native apps.
 # Not available on WASM - use CallbackTransport instead.
-native-sync = ["crdt", "dep:tokio", "dep:tokio-tungstenite", "dep:url", "dep:futures-util"]
+native-sync = ["crdt", "dep:tokio", "dep:tokio-tungstenite", "dep:url", "dep:futures-util", "dep:async-trait"]
 
 # Enable git-backed version history (requires crdt-sqlite for storage, native only)
 git = ["crdt-sqlite", "dep:git2"]

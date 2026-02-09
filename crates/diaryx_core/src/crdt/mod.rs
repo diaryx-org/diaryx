@@ -18,6 +18,16 @@ mod sync_manager;
 mod types;
 mod workspace_doc;
 
+// Native sync client modules (CLI, Tauri) — not available on WASM
+#[cfg(all(not(target_arch = "wasm32"), feature = "native-sync"))]
+pub mod control_message;
+#[cfg(all(not(target_arch = "wasm32"), feature = "native-sync"))]
+mod sync_client;
+#[cfg(all(not(target_arch = "wasm32"), feature = "native-sync"))]
+mod tokio_transport;
+#[cfg(all(not(target_arch = "wasm32"), feature = "native-sync"))]
+mod transport;
+
 pub use body_doc::BodyDoc;
 pub use body_doc_manager::BodyDocManager;
 pub use history::{ChangeType, FileDiff, HistoryEntry, HistoryManager};
@@ -41,3 +51,14 @@ pub use materialize::{
 };
 pub use sanity::{IssueKind, SanityIssue, SanityReport, validate_workspace};
 pub use self_healing::{HealingAction, HealthTracker};
+
+// Native sync client re-exports
+#[cfg(all(not(target_arch = "wasm32"), feature = "native-sync"))]
+pub use control_message::ControlMessage;
+#[cfg(all(not(target_arch = "wasm32"), feature = "native-sync"))]
+pub use sync_client::{
+    ReconnectConfig, SyncClient, SyncClientConfig, SyncEvent, SyncEventHandler, SyncStats,
+    SyncStatus,
+};
+#[cfg(all(not(target_arch = "wasm32"), feature = "native-sync"))]
+pub use transport::{SyncTransport, TransportError, WsMessage};

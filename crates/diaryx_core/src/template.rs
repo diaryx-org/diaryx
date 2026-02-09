@@ -559,7 +559,7 @@ mod tests {
 
         assert!(result.contains("date: 2024-06-15"));
         assert!(result.contains("title: \"June 15, 2024\""));
-        assert!(result.contains("part_of: 06_june.md"));
+        assert!(result.contains("part_of: \"06_june.md\""));
     }
 
     #[test]

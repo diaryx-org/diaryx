@@ -11,27 +11,19 @@ part_of: '[README](/README.md)'
 
 # Roadmap
 
-## v0.11.0
-
-### Template support for web frontend
-
-Almost implemented
-
-### Export different file types
-
-Done, but needs more control/options, especially with multi-file export
+## v0.12.0
 
 ### Improved Sync/Backup
 
-Working on sync. Backup works, just needs scheduling/automation
+Incorporate Git
+
+## Other considerations
 
 ### Cross-platform import
 
 Import from Obsidian (add all part_of/contents properties + index files)
 
 Perhaps is already possible for Obsidian with validation fixes. The hard part is handling Wikilinks, which needs design decisions
-
-## Other considerations
 
 ### Undo/redo
 

@@ -27,6 +27,9 @@ mod normalize;
 /// Frontmatter property manipulation
 mod property;
 
+/// Preview workspace as local HTTP server
+mod preview;
+
 /// `diaryx_core` publish
 mod publish;
 
@@ -222,6 +225,16 @@ pub fn run_cli() {
                 force,
                 dry_run,
             );
+            true
+        }
+
+        Commands::Preview {
+            port,
+            no_open,
+            audience,
+            title,
+        } => {
+            preview::handle_preview(cli.workspace, port, no_open, audience, title);
             true
         }
 

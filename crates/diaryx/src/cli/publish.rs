@@ -186,7 +186,9 @@ fn walkdir_html(dir: &Path) -> Vec<PathBuf> {
 }
 
 /// Resolve the workspace root for publishing
-fn resolve_workspace_for_publish(workspace_override: Option<PathBuf>) -> Result<PathBuf, String> {
+pub(crate) fn resolve_workspace_for_publish(
+    workspace_override: Option<PathBuf>,
+) -> Result<PathBuf, String> {
     let ws = Workspace::new(SyncToAsyncFs::new(RealFileSystem));
 
     // If workspace is explicitly provided, use it

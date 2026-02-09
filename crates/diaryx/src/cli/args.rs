@@ -261,6 +261,25 @@ pub enum Commands {
         dry_run: bool,
     },
 
+    /// Preview workspace as a local website with live reload
+    Preview {
+        /// HTTP port to serve on
+        #[arg(short, long, default_value = "3456")]
+        port: u16,
+
+        /// Don't auto-open browser
+        #[arg(long)]
+        no_open: bool,
+
+        /// Target audience to preview for (filters files by audience property)
+        #[arg(short, long)]
+        audience: Option<String>,
+
+        /// Site title (defaults to workspace title)
+        #[arg(short, long)]
+        title: Option<String>,
+    },
+
     /// Manage attachments for entries
     #[command(alias = "att")]
     Attachment {

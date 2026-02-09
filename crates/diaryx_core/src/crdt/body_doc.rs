@@ -223,6 +223,7 @@ impl BodyDoc {
     }
 
     /// Emit a filesystem event to the registered callback, if any.
+    #[allow(dead_code)]
     fn emit_event(&self, event: FileSystemEvent) {
         if let Some(ref cb) = self.event_callback {
             cb(&event);

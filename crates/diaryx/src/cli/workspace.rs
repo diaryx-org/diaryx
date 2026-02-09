@@ -211,7 +211,7 @@ pub fn handle_workspace_command(
             yes,
             dry_run,
         } => {
-            if let Some(ref cfg) = config {
+            if config.is_some() {
                 handle_combine(
                     workspace_override,
                     ws,

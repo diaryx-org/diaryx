@@ -16,6 +16,7 @@ use crate::cli::{CliDiaryxAppSync, CliWorkspace, block_on};
 ///
 /// This struct caches the workspace root and link format to avoid repeated lookups
 /// when formatting multiple links.
+#[allow(dead_code)]
 pub struct LinkFormatter {
     /// The workspace root directory (parent of root index file)
     workspace_root: PathBuf,
@@ -23,6 +24,7 @@ pub struct LinkFormatter {
     link_format: LinkFormat,
 }
 
+#[allow(dead_code)]
 impl LinkFormatter {
     /// Create a new LinkFormatter by detecting workspace settings from a path.
     ///

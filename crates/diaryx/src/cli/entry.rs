@@ -2,7 +2,6 @@
 
 use std::path::Path;
 
-use diaryx_core::config::Config;
 use diaryx_core::crdt::FileMetadata;
 use diaryx_core::date::parse_date;
 use diaryx_core::frontmatter;
@@ -320,45 +319,6 @@ pub fn handle_create(
         Err(e) => {
             eprintln!("✗ Error creating entry: {}", e);
             false
-        }
-    }
-}
-
-/// Handle the 'config' command
-pub fn handle_config() {
-    match Config::load() {
-        Ok(config) => {
-            println!("Current configuration:");
-            println!(
-                "  Default workspace: {}",
-                config.default_workspace.display()
-            );
-            println!(
-                "  Daily entry folder: {}",
-                config
-                    .daily_entry_folder
-                    .as_deref()
-                    .unwrap_or("(workspace root)")
-            );
-            println!(
-                "  Editor: {}",
-                config.editor.as_deref().unwrap_or("$EDITOR")
-            );
-            println!(
-                "  Default template: {}",
-                config.default_template.as_deref().unwrap_or("none")
-            );
-            println!(
-                "  Daily template: {}",
-                config.daily_template.as_deref().unwrap_or("none")
-            );
-            if let Some(config_path) = Config::config_path() {
-                println!("\nConfig file: {}", config_path.display());
-            }
-        }
-        Err(e) => {
-            eprintln!("✗ Error loading config: {}", e);
-            eprintln!("  Run 'diaryx init' to create a config file");
         }
     }
 }

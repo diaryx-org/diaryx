@@ -2695,27 +2695,73 @@ pub fn is_guest_mode<R: Runtime>(app: AppHandle<R>) -> Result<bool, Serializable
 }
 
 // ============================================================================
-// WebSocket Sync Commands
+// WebSocket Sync Commands (V2 — single WebSocket to /sync2)
 // ============================================================================
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use diaryx_core::crdt::{
-    ConnectionStatus, SyncClient, SyncClientConfig, SyncEvent, TokioTransport,
-    create_sync_event_bridge,
+    DocIdKind, format_body_doc_id, format_workspace_doc_id, frame_message_v2, parse_doc_id,
+    unframe_message_v2,
 };
+use futures_util::{SinkExt, StreamExt};
+use tokio_tungstenite::tungstenite::Message;
 
-/// Type alias for the SyncClient used by Tauri.
-type TauriSyncClient = SyncClient<TokioTransport, SyncToAsyncFs<RealFileSystem>>;
+/// Control message from the sync server (JSON over WebSocket text frames).
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ControlMessage {
+    SyncProgress {
+        completed: usize,
+        total: usize,
+    },
+    SyncComplete {
+        files_synced: usize,
+    },
+    PeerJoined {
+        #[serde(default)]
+        peer_count: usize,
+    },
+    PeerLeft {
+        #[serde(default)]
+        peer_count: usize,
+    },
+    FocusListChanged {
+        _files: Vec<String>,
+    },
+    FileManifest {
+        #[serde(default)]
+        _files: Vec<serde_json::Value>,
+        #[serde(default)]
+        _client_is_new: bool,
+    },
+    CrdtState {
+        state: String,
+    },
+    #[serde(alias = "session_joined")]
+    SessionJoined {},
+    #[serde(other)]
+    Other,
+}
 
-/// State for WebSocket sync connections.
-/// Uses tokio::sync::Mutex to allow holding across await points.
+/// State for WebSocket sync connections (V2 protocol).
+///
+/// Holds the background sync task handle and atomic flags for status.
 pub struct WebSocketSyncState {
-    pub client: tokio::sync::Mutex<Option<TauriSyncClient>>,
+    /// Handle to the background sync task.
+    task_handle: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Whether the sync loop is running.
+    running: Arc<AtomicBool>,
+    /// Whether the WebSocket is currently connected.
+    connected: Arc<AtomicBool>,
 }
 
 impl WebSocketSyncState {
     pub fn new() -> Self {
         Self {
-            client: tokio::sync::Mutex::new(None),
+            task_handle: tokio::sync::Mutex::new(None),
+            running: Arc::new(AtomicBool::new(false)),
+            connected: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -2726,10 +2772,10 @@ impl Default for WebSocketSyncState {
     }
 }
 
-/// Start WebSocket sync connection.
+/// Start WebSocket sync connection using V2 protocol (single WS to /sync2).
 ///
-/// Connects to the specified sync server and begins real-time sync.
-/// Uses the unified SyncClient from diaryx_core for cross-platform compatibility.
+/// Connects to the specified sync server and begins real-time sync using the
+/// siphonophore multiplexed wire format.
 #[tauri::command]
 pub async fn start_websocket_sync<R: Runtime>(
     app: AppHandle<R>,
@@ -2738,54 +2784,17 @@ pub async fn start_websocket_sync<R: Runtime>(
     auth_token: Option<String>,
 ) -> Result<(), SerializableError> {
     log::info!(
-        "[start_websocket_sync] Starting sync to {} with doc {}",
+        "[start_websocket_sync] Starting V2 sync to {} with doc {}",
         server_url,
         doc_name
     );
 
-    // Get CRDT state from app
+    // Stop any existing sync first
+    stop_websocket_sync(app.clone()).await?;
+
     let crdt_state = app.state::<CrdtState>();
 
-    let ws_state = app.state::<WebSocketSyncState>();
-    let mut client_guard = ws_state.client.lock().await;
-
-    // Stop existing client if any, clearing the event callback FIRST
-    // to prevent the old event bridge from sending to a dropped receiver.
-    if client_guard.is_some() {
-        // Clear the event callback before stopping the client
-        if let Some(ref diaryx) = *crdt_state.diaryx.lock().unwrap() {
-            if let Some(sync_manager) = diaryx.sync_manager() {
-                log::info!(
-                    "[start_websocket_sync] Clearing old event callback before stopping client"
-                );
-                sync_manager.clear_event_callback();
-            }
-        }
-        // Now stop the old client
-        if let Some(ref client) = *client_guard {
-            client.stop().await;
-        }
-    }
-
-    let workspace_path = {
-        let path_guard = crdt_state
-            .workspace_path
-            .lock()
-            .map_err(|e| SerializableError {
-                kind: "SyncError".to_string(),
-                message: format!("Failed to acquire workspace path lock: {}", e),
-                path: None,
-            })?;
-        path_guard.clone().ok_or_else(|| SerializableError {
-            kind: "SyncError".to_string(),
-            message: "Workspace path not set".to_string(),
-            path: None,
-        })?
-    };
-
     // Extract sync_manager from cached Diaryx instance.
-    // This ensures the WebSocket sync uses the same CRDT instances as command execution,
-    // preventing state divergence between the two.
     let sync_manager = {
         let diaryx_guard = crdt_state.diaryx.lock().map_err(|e| SerializableError {
             kind: "SyncError".to_string(),
@@ -2802,120 +2811,384 @@ pub async fn start_websocket_sync<R: Runtime>(
             })?
     };
 
-    log::info!("[start_websocket_sync] Using sync_manager from cached Diaryx instance");
+    // Build WebSocket URL for V2 protocol
+    let ws_server = server_url
+        .replace("https://", "wss://")
+        .replace("http://", "ws://");
+    let sync_url = if let Some(ref token) = auth_token {
+        format!("{}/sync2?token={}", ws_server, token)
+    } else {
+        format!("{}/sync2", ws_server)
+    };
 
-    // Create SyncClient configuration
-    let mut config =
-        SyncClientConfig::new(server_url.clone(), doc_name.clone(), workspace_path.clone());
+    let ws_state = app.state::<WebSocketSyncState>();
+    let running = ws_state.running.clone();
+    let connected = ws_state.connected.clone();
+    running.store(true, Ordering::SeqCst);
+    connected.store(false, Ordering::SeqCst);
 
-    if let Some(token) = auth_token {
-        config = config.with_auth(token);
-    }
-
-    // Create transports for metadata and body connections
-    let metadata_transport = TokioTransport::new();
-    let body_transport = TokioTransport::new();
-
-    // Create the unified SyncClient
-    let client = SyncClient::new(
-        config,
-        metadata_transport,
-        body_transport,
-        sync_manager.clone(),
-    );
-
-    // Set up event callback to emit Tauri events for frontend
+    let workspace_id = doc_name;
     let app_handle = app.clone();
-    client.set_event_callback(Arc::new(move |event| match &event {
-        SyncEvent::StatusChanged(status) => {
-            log::info!("[start_websocket_sync] Status changed: {:?}", status);
-            let _ = app_handle.emit("sync-status-changed", status);
-        }
-        SyncEvent::FilesChanged { paths } => {
-            log::debug!("[start_websocket_sync] Files changed: {:?}", paths);
-            let _ = app_handle.emit("sync-files-changed", paths);
-        }
-        SyncEvent::BodyChanged { path, content: _ } => {
-            log::debug!("[start_websocket_sync] Body changed: {}", path);
-            let _ = app_handle.emit("sync-body-changed", path);
-        }
-        SyncEvent::Progress { completed, total } => {
-            log::debug!("[start_websocket_sync] Progress: {}/{}", completed, total);
-            let _ = app_handle.emit(
-                "sync-progress",
-                serde_json::json!({ "completed": completed, "total": total }),
-            );
-        }
-        SyncEvent::Error { message } => {
-            log::error!("[start_websocket_sync] Sync error: {}", message);
-            let _ = app_handle.emit("sync-error", message);
-        }
-        _ => {}
-    }));
 
-    // Start the sync client BEFORE setting up the event bridge.
-    // This ensures that if start() fails, we don't leave a dangling sender
-    // on the sync_manager's event callback.
-    client.start().await.map_err(|e| SerializableError {
-        kind: "SyncError".to_string(),
-        message: format!("Failed to start sync: {}", e),
-        path: None,
-    })?;
+    // Wire up the sync_manager event callback to forward local CRDT changes.
+    // We use a channel so the sync loop can pick up outgoing messages.
+    let (outgoing_tx, mut outgoing_rx) =
+        tokio::sync::mpsc::unbounded_channel::<(String, Vec<u8>)>();
 
-    // Store the client first, then set up the event bridge.
-    // This ensures the receiver (in the client) is stored before we
-    // register the sender (in the event bridge) with the sync_manager.
-    *client_guard = Some(client);
-
-    // Now wire up the event bridge AFTER the client is successfully started and stored.
-    // When the sync_manager emits SendSyncMessage events (from local changes),
-    // the bridge forwards them to the SyncClient's outgoing message queue.
-    if let Some(ref client) = *client_guard {
-        let outgoing_sender = client.outgoing_sender();
-        let event_bridge = create_sync_event_bridge(outgoing_sender);
-        sync_manager.set_event_callback(event_bridge);
-        log::info!(
-            "[start_websocket_sync] Event bridge connected: local CRDT changes will be sent via WebSocket"
-        );
+    {
+        let outgoing_tx = outgoing_tx.clone();
+        let ws_id = workspace_id.clone();
+        sync_manager.set_event_callback(Arc::new(move |event| {
+            if let diaryx_core::fs::FileSystemEvent::SendSyncMessage {
+                doc_name,
+                message,
+                is_body,
+                ..
+            } = event
+            {
+                let doc_id = if *is_body {
+                    format_body_doc_id(&ws_id, doc_name)
+                } else {
+                    format_workspace_doc_id(&ws_id)
+                };
+                let _ = outgoing_tx.send((doc_id, message.clone()));
+            }
+        }));
     }
 
-    // Drop the guard before spawning the background task
-    drop(client_guard);
+    // Spawn the background sync loop
+    let task = tokio::spawn(async move {
+        let mut attempt = 0u32;
+        let max_attempts = 10;
 
-    // Spawn a background task to process outgoing messages.
-    // This periodically drains the outgoing message queue and sends them via WebSocket.
-    let app_handle_bg = app.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(50));
-        loop {
-            interval.tick().await;
-
-            // Get state and try to lock the client
-            let ws_state = app_handle_bg.state::<WebSocketSyncState>();
-            let guard = ws_state.client.lock().await;
-            if let Some(ref client) = *guard {
-                if !client.is_running() {
-                    log::debug!("[start_websocket_sync] Background task: client stopped, exiting");
+        while running.load(Ordering::SeqCst) && attempt < max_attempts {
+            if attempt > 0 {
+                let delay = std::cmp::min(2u64.pow(attempt), 32);
+                log::info!(
+                    "[start_websocket_sync] Reconnecting in {}s (attempt {}/{})",
+                    delay,
+                    attempt,
+                    max_attempts
+                );
+                let _ = app_handle.emit(
+                    "sync-status-changed",
+                    serde_json::json!({ "type": "reconnecting", "attempt": attempt }),
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                if !running.load(Ordering::SeqCst) {
                     break;
                 }
-                let count = client.process_outgoing().await;
-                if count > 0 {
-                    log::debug!(
-                        "[start_websocket_sync] Background task: sent {} outgoing messages",
-                        count
+            }
+
+            let _ = app_handle.emit(
+                "sync-status-changed",
+                serde_json::json!({ "type": "connecting" }),
+            );
+
+            // Connect to /sync2
+            let ws = match tokio_tungstenite::connect_async(&sync_url).await {
+                Ok((ws, _)) => {
+                    log::info!("[start_websocket_sync] Connected to {}", sync_url);
+                    connected.store(true, Ordering::SeqCst);
+                    let _ = app_handle.emit(
+                        "sync-status-changed",
+                        serde_json::json!({ "type": "connected" }),
+                    );
+                    attempt = 0; // Reset backoff on success
+                    ws
+                }
+                Err(e) => {
+                    log::error!("[start_websocket_sync] Connection failed: {}", e);
+                    let _ = app_handle.emit("sync-error", &format!("Connection failed: {}", e));
+                    connected.store(false, Ordering::SeqCst);
+                    attempt += 1;
+                    continue;
+                }
+            };
+
+            let (mut ws_write, mut ws_read) = ws.split();
+
+            // Send workspace SyncStep1 (triggers server handshake)
+            let ws_doc_id = format_workspace_doc_id(&workspace_id);
+            let ws_step1 = sync_manager.create_workspace_sync_step1();
+            let ws_framed = frame_message_v2(&ws_doc_id, &ws_step1);
+            if let Err(e) = ws_write.send(Message::Binary(ws_framed.into())).await {
+                log::error!(
+                    "[start_websocket_sync] Failed to send workspace SyncStep1: {}",
+                    e
+                );
+                connected.store(false, Ordering::SeqCst);
+                attempt += 1;
+                continue;
+            }
+
+            // Handle Files-Ready handshake
+            let mut stashed_binary: Option<Vec<u8>> = None;
+            let handshake_deadline =
+                tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
+
+            'handshake: loop {
+                tokio::select! {
+                    msg = ws_read.next() => {
+                        match msg {
+                            Some(Ok(Message::Text(text))) => {
+                                if let Ok(ctrl) = serde_json::from_str::<ControlMessage>(&text) {
+                                    match ctrl {
+                                        ControlMessage::FileManifest { .. } => {
+                                            log::info!("[start_websocket_sync] Received FileManifest, sending FilesReady");
+                                            let reply = r#"{"type":"FilesReady"}"#;
+                                            if let Err(e) = ws_write.send(Message::Text(reply.into())).await {
+                                                log::error!("[start_websocket_sync] Failed to send FilesReady: {}", e);
+                                                break 'handshake;
+                                            }
+                                        }
+                                        ControlMessage::CrdtState { state } => {
+                                            match base64::Engine::decode(
+                                                &base64::engine::general_purpose::STANDARD,
+                                                &state,
+                                            ) {
+                                                Ok(state_bytes) => {
+                                                    match sync_manager.handle_crdt_state(&state_bytes).await {
+                                                        Ok(count) => {
+                                                            log::info!("[start_websocket_sync] Applied CRDT state ({} files)", count);
+                                                            let _ = app_handle.emit("sync-files-changed", &Vec::<String>::new());
+                                                        }
+                                                        Err(e) => log::error!("[start_websocket_sync] Failed to apply CRDT state: {}", e),
+                                                    }
+                                                }
+                                                Err(e) => log::error!("[start_websocket_sync] Failed to decode CRDT state: {}", e),
+                                            }
+                                            break 'handshake;
+                                        }
+                                        ControlMessage::SessionJoined { .. } => {
+                                            log::info!("[start_websocket_sync] Session joined");
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            Some(Ok(Message::Binary(data))) => {
+                                stashed_binary = Some(data.to_vec());
+                                break 'handshake;
+                            }
+                            Some(Ok(Message::Close(_))) | None => {
+                                log::warn!("[start_websocket_sync] Connection closed during handshake");
+                                connected.store(false, Ordering::SeqCst);
+                                attempt += 1;
+                                continue; // This continues the outer reconnect loop via break below
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ = tokio::time::sleep_until(handshake_deadline) => {
+                        log::debug!("[start_websocket_sync] No handshake required, proceeding");
+                        break 'handshake;
+                    }
+                }
+            }
+
+            // Send body SyncStep1 for all known files
+            let file_paths = sync_manager.get_all_file_paths();
+            let file_count = file_paths.len();
+            for file_path in &file_paths {
+                if !running.load(Ordering::SeqCst) {
+                    break;
+                }
+                let body_doc_id = format_body_doc_id(&workspace_id, file_path);
+                let body_step1 = sync_manager.create_body_sync_step1(file_path);
+                let body_framed = frame_message_v2(&body_doc_id, &body_step1);
+                if let Err(e) = ws_write.send(Message::Binary(body_framed.into())).await {
+                    log::error!(
+                        "[start_websocket_sync] Failed to send body SyncStep1 for {}: {}",
+                        file_path,
+                        e
                     );
                 }
-            } else {
-                // Client was removed, stop the background task
-                log::debug!("[start_websocket_sync] Background task: client removed, exiting");
-                break;
             }
-            drop(guard);
+
+            if file_count > 0 {
+                log::info!(
+                    "[start_websocket_sync] Sent body SyncStep1 for {} files",
+                    file_count
+                );
+                let _ = app_handle.emit(
+                    "sync-progress",
+                    serde_json::json!({ "completed": 0, "total": file_count }),
+                );
+            }
+
+            // Process stashed binary from handshake
+            if let Some(data) = stashed_binary.take() {
+                if let Some(response_frame) =
+                    handle_binary_message(&data, &workspace_id, &sync_manager, &app_handle).await
+                {
+                    let _ = ws_write.send(Message::Binary(response_frame.into())).await;
+                }
+            }
+
+            // Main message loop
+            let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            ping_interval.tick().await; // Consume first immediate tick
+
+            'msg_loop: loop {
+                if !running.load(Ordering::SeqCst) {
+                    break 'msg_loop;
+                }
+
+                tokio::select! {
+                    msg = ws_read.next() => {
+                        match msg {
+                            Some(Ok(Message::Binary(data))) => {
+                                if let Some(response_frame) = handle_binary_message(
+                                    &data, &workspace_id, &sync_manager, &app_handle,
+                                ).await {
+                                    if let Err(e) = ws_write.send(Message::Binary(response_frame.into())).await {
+                                        log::error!("[start_websocket_sync] Failed to send response: {}", e);
+                                        break 'msg_loop;
+                                    }
+                                }
+                            }
+                            Some(Ok(Message::Text(text))) => {
+                                if let Ok(ctrl) = serde_json::from_str::<ControlMessage>(&text) {
+                                    match ctrl {
+                                        ControlMessage::SyncProgress { completed, total } => {
+                                            log::debug!("[start_websocket_sync] Progress: {}/{}", completed, total);
+                                            let _ = app_handle.emit(
+                                                "sync-progress",
+                                                serde_json::json!({ "completed": completed, "total": total }),
+                                            );
+                                        }
+                                        ControlMessage::SyncComplete { files_synced } => {
+                                            log::info!("[start_websocket_sync] Sync complete ({} files)", files_synced);
+                                            let _ = app_handle.emit(
+                                                "sync-status-changed",
+                                                serde_json::json!({ "type": "synced" }),
+                                            );
+                                        }
+                                        ControlMessage::PeerJoined { peer_count } => {
+                                            log::info!("[start_websocket_sync] Peer joined ({} connected)", peer_count);
+                                        }
+                                        ControlMessage::PeerLeft { peer_count } => {
+                                            log::info!("[start_websocket_sync] Peer left ({} connected)", peer_count);
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            Some(Ok(Message::Close(_))) => {
+                                log::info!("[start_websocket_sync] Connection closed by server");
+                                break 'msg_loop;
+                            }
+                            Some(Ok(Message::Pong(_))) => {} // keepalive
+                            Some(Err(e)) => {
+                                log::error!("[start_websocket_sync] WebSocket error: {}", e);
+                                let _ = app_handle.emit("sync-error", &format!("{}", e));
+                                break 'msg_loop;
+                            }
+                            None => break 'msg_loop,
+                            _ => {}
+                        }
+                    }
+                    outgoing = outgoing_rx.recv() => {
+                        if let Some((doc_id, message)) = outgoing {
+                            let framed = frame_message_v2(&doc_id, &message);
+                            if let Err(e) = ws_write.send(Message::Binary(framed.into())).await {
+                                log::error!("[start_websocket_sync] Failed to send outgoing: {}", e);
+                                break 'msg_loop;
+                            }
+                        }
+                    }
+                    _ = ping_interval.tick() => {
+                        if let Err(e) = ws_write.send(Message::Ping(vec![].into())).await {
+                            log::error!("[start_websocket_sync] Ping failed: {}", e);
+                            break 'msg_loop;
+                        }
+                    }
+                }
+            }
+
+            // Connection dropped — prepare for reconnect
+            connected.store(false, Ordering::SeqCst);
+            if running.load(Ordering::SeqCst) {
+                attempt += 1;
+                sync_manager.reset();
+                let _ = app_handle.emit(
+                    "sync-status-changed",
+                    serde_json::json!({ "type": "disconnected" }),
+                );
+            }
         }
+
+        // Final cleanup
+        running.store(false, Ordering::SeqCst);
+        connected.store(false, Ordering::SeqCst);
+        let _ = app_handle.emit(
+            "sync-status-changed",
+            serde_json::json!({ "type": "disconnected" }),
+        );
+        log::info!("[start_websocket_sync] Sync loop exited");
     });
 
-    log::info!("[start_websocket_sync] Sync started successfully");
+    // Store task handle
+    let mut handle_guard = ws_state.task_handle.lock().await;
+    *handle_guard = Some(task);
+
+    log::info!("[start_websocket_sync] V2 sync started successfully");
     Ok(())
+}
+
+/// Handle a binary V2 message: unframe, route to sync_manager, return optional response frame.
+async fn handle_binary_message<R: Runtime>(
+    data: &[u8],
+    _workspace_id: &str,
+    sync_manager: &Arc<diaryx_core::crdt::RustSyncManager<SyncToAsyncFs<RealFileSystem>>>,
+    app_handle: &AppHandle<R>,
+) -> Option<Vec<u8>> {
+    let (doc_id, payload) = unframe_message_v2(data)?;
+    match parse_doc_id(&doc_id) {
+        Some(DocIdKind::Workspace(_)) => {
+            match sync_manager.handle_workspace_message(&payload, true).await {
+                Ok(result) => {
+                    if !result.changed_files.is_empty() {
+                        log::debug!("[sync] Workspace files changed: {:?}", result.changed_files);
+                        let _ = app_handle.emit("sync-files-changed", &result.changed_files);
+                    }
+                    result.response.map(|resp| frame_message_v2(&doc_id, &resp))
+                }
+                Err(e) => {
+                    log::error!("[sync] Error handling workspace message: {}", e);
+                    let _ = app_handle.emit("sync-error", &format!("{}", e));
+                    None
+                }
+            }
+        }
+        Some(DocIdKind::Body { file_path, .. }) => {
+            match sync_manager
+                .handle_body_message(&file_path, &payload, true)
+                .await
+            {
+                Ok(result) => {
+                    if result.content.is_some() && !result.is_echo {
+                        log::debug!("[sync] Body changed: {}", file_path);
+                        let _ = app_handle.emit("sync-body-changed", &file_path);
+                    }
+                    result.response.map(|resp| frame_message_v2(&doc_id, &resp))
+                }
+                Err(e) => {
+                    log::error!(
+                        "[sync] Error handling body message for {}: {}",
+                        file_path,
+                        e
+                    );
+                    None
+                }
+            }
+        }
+        None => {
+            log::debug!("[sync] Unknown doc_id: {}", doc_id);
+            None
+        }
+    }
 }
 
 /// Stop WebSocket sync connection.
@@ -2923,23 +3196,25 @@ pub async fn start_websocket_sync<R: Runtime>(
 pub async fn stop_websocket_sync<R: Runtime>(app: AppHandle<R>) -> Result<(), SerializableError> {
     log::info!("[stop_websocket_sync] Stopping sync");
 
-    // Clear the event callback on the sync_manager BEFORE dropping the client.
-    // This prevents the old event bridge from trying to send to a disconnected channel.
+    // Clear the event callback on the sync_manager
     let crdt_state = app.state::<CrdtState>();
     if let Some(ref diaryx) = *crdt_state.diaryx.lock().unwrap() {
         if let Some(sync_manager) = diaryx.sync_manager() {
-            log::info!("[stop_websocket_sync] Clearing sync_manager event callback");
             sync_manager.clear_event_callback();
         }
     }
 
     let ws_state = app.state::<WebSocketSyncState>();
-    let mut client_guard = ws_state.client.lock().await;
 
-    if let Some(ref client) = *client_guard {
-        client.stop().await;
+    // Signal the loop to stop
+    ws_state.running.store(false, Ordering::SeqCst);
+
+    // Abort the background task
+    let mut handle_guard = ws_state.task_handle.lock().await;
+    if let Some(handle) = handle_guard.take() {
+        handle.abort();
     }
-    *client_guard = None;
+    ws_state.connected.store(false, Ordering::SeqCst);
 
     log::info!("[stop_websocket_sync] Sync stopped");
     Ok(())
@@ -2951,35 +3226,19 @@ pub async fn get_websocket_sync_status<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<WebSocketSyncStatusResponse, SerializableError> {
     let ws_state = app.state::<WebSocketSyncState>();
-    let client_guard = ws_state.client.lock().await;
-
-    if let Some(ref client) = *client_guard {
-        let status = client.status();
-        let connected = client.is_connected();
-        let running = client.is_running();
-        Ok(WebSocketSyncStatusResponse {
-            connected,
-            running,
-            status: Some(status),
-        })
-    } else {
-        Ok(WebSocketSyncStatusResponse {
-            connected: false,
-            running: false,
-            status: None,
-        })
-    }
+    Ok(WebSocketSyncStatusResponse {
+        connected: ws_state.connected.load(Ordering::SeqCst),
+        running: ws_state.running.load(Ordering::SeqCst),
+    })
 }
 
 /// WebSocket sync status response.
 #[derive(Debug, Serialize)]
 pub struct WebSocketSyncStatusResponse {
-    /// Whether both metadata and body connections are established.
+    /// Whether the WebSocket is currently connected.
     pub connected: bool,
-    /// Whether the sync client is running (may be reconnecting).
+    /// Whether the sync loop is running (may be reconnecting).
     pub running: bool,
-    /// Detailed connection status.
-    pub status: Option<ConnectionStatus>,
 }
 
 #[cfg(test)]

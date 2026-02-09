@@ -185,9 +185,9 @@ enum ControlMessage {
     /// Files-Ready handshake: server sends file manifest before y-sync starts.
     FileManifest {
         #[serde(default)]
-        files: Vec<serde_json::Value>,
+        _files: Vec<serde_json::Value>,
         #[serde(default)]
-        client_is_new: bool,
+        _client_is_new: bool,
     },
     /// Files-Ready handshake: server sends CRDT state after client replies with FilesReady.
     CrdtState {

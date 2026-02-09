@@ -209,6 +209,64 @@ jobs:
         working-directory: wasm-output
         run: npm publish --provenance --access public --tag ${{ env.NPM_TAG }}
 
+  # Publish WASM Node.js bindings to npm (JS glue + types + .wasm binary)
+  publish-wasm-node-npm:
+    name: Publish WASM Node to npm
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: github.event_name == 'push' && needs.changes.outputs.wasm == 'true'
+    permissions:
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack
+
+      - name: Build WASM (Node.js, no browser features)
+        run: wasm-pack build crates/diaryx_wasm --target web --no-default-features --features crdt
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Patch package.json for npm
+        working-directory: crates/diaryx_wasm/pkg
+        run: |
+          BASE_VERSION=$(jq -r '.version' package.json)
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+
+          # Set scoped package name
+          jq '.name = "@diaryx/wasm-node"' package.json > tmp.json && mv tmp.json package.json
+
+          # Include .wasm binary (Node.js loads it from disk via readFileSync)
+          jq '.files = ["diaryx_wasm_bg.wasm", "diaryx_wasm.js", "diaryx_wasm_bg.js", "diaryx_wasm.d.ts", "diaryx_wasm_bg.wasm.d.ts"]' package.json > tmp.json && mv tmp.json package.json
+
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "NPM_TAG=latest" >> $GITHUB_ENV
+          else
+            jq --arg v "${BASE_VERSION}-dev.${SHORT_SHA}" '.version = $v' package.json > tmp.json && mv tmp.json package.json
+            echo "NPM_TAG=dev" >> $GITHUB_ENV
+          fi
+
+          echo "Publishing version: $(jq -r '.version' package.json) with tag: ${NPM_TAG:-pending}"
+          cat package.json
+
+      - name: Publish to npm
+        working-directory: crates/diaryx_wasm/pkg
+        run: npm publish --provenance --access public --tag ${{ env.NPM_TAG }}
+
   # Web app unit tests
   test-web:
     name: Test Web App

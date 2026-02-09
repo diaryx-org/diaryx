@@ -32,9 +32,12 @@
 mod backend;
 mod callback_transport;
 mod error;
+#[cfg(feature = "browser")]
 mod fsa_fs;
+#[cfg(feature = "browser")]
 mod indexeddb_fs;
 mod js_async_fs;
+#[cfg(feature = "browser")]
 mod opfs_fs;
 mod utils;
 mod wasm_sqlite_storage;
@@ -53,9 +56,12 @@ pub use backend::DiaryxBackend;
 pub use wasm_sync_client::WasmSyncClient;
 
 // Re-export filesystem implementations
+#[cfg(feature = "browser")]
 pub use fsa_fs::FsaFileSystem;
+#[cfg(feature = "browser")]
 pub use indexeddb_fs::IndexedDbFileSystem;
 pub use js_async_fs::JsAsyncFileSystem;
+#[cfg(feature = "browser")]
 pub use opfs_fs::OpfsFileSystem;
 
 // Re-export utility functions

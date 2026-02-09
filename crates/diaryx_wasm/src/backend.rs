@@ -54,8 +54,11 @@ use js_sys::Promise;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 
+#[cfg(feature = "browser")]
 use crate::fsa_fs::FsaFileSystem;
+#[cfg(feature = "browser")]
 use crate::indexeddb_fs::IndexedDbFileSystem;
+#[cfg(feature = "browser")]
 use crate::opfs_fs::OpfsFileSystem;
 use crate::wasm_sqlite_storage::WasmSqliteStorage;
 
@@ -66,9 +69,12 @@ use crate::wasm_sqlite_storage::WasmSqliteStorage;
 /// Internal enum to hold either storage backend.
 /// Exposed for use by wasm_sync_client module.
 pub(crate) enum StorageBackend {
+    #[cfg(feature = "browser")]
     Opfs(OpfsFileSystem),
+    #[cfg(feature = "browser")]
     IndexedDb(IndexedDbFileSystem),
     /// File System Access API - user-selected directory on their real filesystem
+    #[cfg(feature = "browser")]
     Fsa(FsaFileSystem),
     /// In-memory filesystem - used for guest mode in share sessions (web only)
     InMemory(SyncToAsyncFs<InMemoryFileSystem>),
@@ -77,8 +83,11 @@ pub(crate) enum StorageBackend {
 impl Clone for StorageBackend {
     fn clone(&self) -> Self {
         match self {
+            #[cfg(feature = "browser")]
             StorageBackend::Opfs(fs) => StorageBackend::Opfs(fs.clone()),
+            #[cfg(feature = "browser")]
             StorageBackend::IndexedDb(fs) => StorageBackend::IndexedDb(fs.clone()),
+            #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => StorageBackend::Fsa(fs.clone()),
             StorageBackend::InMemory(fs) => StorageBackend::InMemory(fs.clone()),
         }
@@ -92,8 +101,11 @@ impl AsyncFileSystem for StorageBackend {
         path: &'a Path,
     ) -> diaryx_core::fs::BoxFuture<'a, IoResult<String>> {
         match self {
+            #[cfg(feature = "browser")]
             StorageBackend::Opfs(fs) => fs.read_to_string(path),
+            #[cfg(feature = "browser")]
             StorageBackend::IndexedDb(fs) => fs.read_to_string(path),
+            #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => fs.read_to_string(path),
             StorageBackend::InMemory(fs) => fs.read_to_string(path),
         }
@@ -105,8 +117,11 @@ impl AsyncFileSystem for StorageBackend {
         content: &'a str,
     ) -> diaryx_core::fs::BoxFuture<'a, IoResult<()>> {
         match self {
+            #[cfg(feature = "browser")]
             StorageBackend::Opfs(fs) => fs.write_file(path, content),
+            #[cfg(feature = "browser")]
             StorageBackend::IndexedDb(fs) => fs.write_file(path, content),
+            #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => fs.write_file(path, content),
             StorageBackend::InMemory(fs) => fs.write_file(path, content),
         }
@@ -118,8 +133,11 @@ impl AsyncFileSystem for StorageBackend {
         content: &'a str,
     ) -> diaryx_core::fs::BoxFuture<'a, IoResult<()>> {
         match self {
+            #[cfg(feature = "browser")]
             StorageBackend::Opfs(fs) => fs.create_new(path, content),
+            #[cfg(feature = "browser")]
             StorageBackend::IndexedDb(fs) => fs.create_new(path, content),
+            #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => fs.create_new(path, content),
             StorageBackend::InMemory(fs) => fs.create_new(path, content),
         }
@@ -127,8 +145,11 @@ impl AsyncFileSystem for StorageBackend {
 
     fn delete_file<'a>(&'a self, path: &'a Path) -> diaryx_core::fs::BoxFuture<'a, IoResult<()>> {
         match self {
+            #[cfg(feature = "browser")]
             StorageBackend::Opfs(fs) => fs.delete_file(path),
+            #[cfg(feature = "browser")]
             StorageBackend::IndexedDb(fs) => fs.delete_file(path),
+            #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => fs.delete_file(path),
             StorageBackend::InMemory(fs) => fs.delete_file(path),
         }
@@ -139,8 +160,11 @@ impl AsyncFileSystem for StorageBackend {
         dir: &'a Path,
     ) -> diaryx_core::fs::BoxFuture<'a, IoResult<Vec<PathBuf>>> {
         match self {
+            #[cfg(feature = "browser")]
             StorageBackend::Opfs(fs) => fs.list_md_files(dir),
+            #[cfg(feature = "browser")]
             StorageBackend::IndexedDb(fs) => fs.list_md_files(dir),
+            #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => fs.list_md_files(dir),
             StorageBackend::InMemory(fs) => fs.list_md_files(dir),
         }
@@ -148,8 +172,11 @@ impl AsyncFileSystem for StorageBackend {
 
     fn exists<'a>(&'a self, path: &'a Path) -> diaryx_core::fs::BoxFuture<'a, bool> {
         match self {
+            #[cfg(feature = "browser")]
             StorageBackend::Opfs(fs) => fs.exists(path),
+            #[cfg(feature = "browser")]
             StorageBackend::IndexedDb(fs) => fs.exists(path),
+            #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => fs.exists(path),
             StorageBackend::InMemory(fs) => fs.exists(path),
         }
@@ -160,8 +187,11 @@ impl AsyncFileSystem for StorageBackend {
         path: &'a Path,
     ) -> diaryx_core::fs::BoxFuture<'a, IoResult<()>> {
         match self {
+            #[cfg(feature = "browser")]
             StorageBackend::Opfs(fs) => fs.create_dir_all(path),
+            #[cfg(feature = "browser")]
             StorageBackend::IndexedDb(fs) => fs.create_dir_all(path),
+            #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => fs.create_dir_all(path),
             StorageBackend::InMemory(fs) => fs.create_dir_all(path),
         }
@@ -169,8 +199,11 @@ impl AsyncFileSystem for StorageBackend {
 
     fn is_dir<'a>(&'a self, path: &'a Path) -> diaryx_core::fs::BoxFuture<'a, bool> {
         match self {
+            #[cfg(feature = "browser")]
             StorageBackend::Opfs(fs) => fs.is_dir(path),
+            #[cfg(feature = "browser")]
             StorageBackend::IndexedDb(fs) => fs.is_dir(path),
+            #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => fs.is_dir(path),
             StorageBackend::InMemory(fs) => fs.is_dir(path),
         }
@@ -182,8 +215,11 @@ impl AsyncFileSystem for StorageBackend {
         to: &'a Path,
     ) -> diaryx_core::fs::BoxFuture<'a, IoResult<()>> {
         match self {
+            #[cfg(feature = "browser")]
             StorageBackend::Opfs(fs) => fs.move_file(from, to),
+            #[cfg(feature = "browser")]
             StorageBackend::IndexedDb(fs) => fs.move_file(from, to),
+            #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => fs.move_file(from, to),
             StorageBackend::InMemory(fs) => fs.move_file(from, to),
         }
@@ -194,8 +230,11 @@ impl AsyncFileSystem for StorageBackend {
         path: &'a Path,
     ) -> diaryx_core::fs::BoxFuture<'a, IoResult<Vec<u8>>> {
         match self {
+            #[cfg(feature = "browser")]
             StorageBackend::Opfs(fs) => fs.read_binary(path),
+            #[cfg(feature = "browser")]
             StorageBackend::IndexedDb(fs) => fs.read_binary(path),
+            #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => fs.read_binary(path),
             StorageBackend::InMemory(fs) => fs.read_binary(path),
         }
@@ -207,8 +246,11 @@ impl AsyncFileSystem for StorageBackend {
         content: &'a [u8],
     ) -> diaryx_core::fs::BoxFuture<'a, IoResult<()>> {
         match self {
+            #[cfg(feature = "browser")]
             StorageBackend::Opfs(fs) => fs.write_binary(path, content),
+            #[cfg(feature = "browser")]
             StorageBackend::IndexedDb(fs) => fs.write_binary(path, content),
+            #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => fs.write_binary(path, content),
             StorageBackend::InMemory(fs) => fs.write_binary(path, content),
         }
@@ -219,8 +261,11 @@ impl AsyncFileSystem for StorageBackend {
         dir: &'a Path,
     ) -> diaryx_core::fs::BoxFuture<'a, IoResult<Vec<PathBuf>>> {
         match self {
+            #[cfg(feature = "browser")]
             StorageBackend::Opfs(fs) => fs.list_files(dir),
+            #[cfg(feature = "browser")]
             StorageBackend::IndexedDb(fs) => fs.list_files(dir),
+            #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => fs.list_files(dir),
             StorageBackend::InMemory(fs) => fs.list_files(dir),
         }
@@ -231,8 +276,11 @@ impl AsyncFileSystem for StorageBackend {
         path: &'a Path,
     ) -> diaryx_core::fs::BoxFuture<'a, Option<i64>> {
         match self {
+            #[cfg(feature = "browser")]
             StorageBackend::Opfs(fs) => fs.get_modified_time(path),
+            #[cfg(feature = "browser")]
             StorageBackend::IndexedDb(fs) => fs.get_modified_time(path),
+            #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => fs.get_modified_time(path),
             StorageBackend::InMemory(fs) => fs.get_modified_time(path),
         }
@@ -492,6 +540,7 @@ impl DiaryxBackend {
     /// await initializeSqliteStorage();
     /// const backend = await DiaryxBackend.createOpfs();
     /// ```
+    #[cfg(feature = "browser")]
     #[wasm_bindgen(js_name = "createOpfs")]
     pub async fn create_opfs() -> std::result::Result<DiaryxBackend, JsValue> {
         let opfs = OpfsFileSystem::create().await?;
@@ -600,6 +649,7 @@ impl DiaryxBackend {
     ///
     /// This attempts to use persistent SQLite-based CRDT storage (via sql.js).
     /// If SQLite storage is not available, falls back to in-memory CRDT storage.
+    #[cfg(feature = "browser")]
     #[wasm_bindgen(js_name = "createIndexedDb")]
     pub async fn create_indexed_db() -> std::result::Result<DiaryxBackend, JsValue> {
         let idb = IndexedDbFileSystem::create().await?;
@@ -707,7 +757,9 @@ impl DiaryxBackend {
     #[wasm_bindgen(js_name = "create")]
     pub async fn create(storage_type: &str) -> std::result::Result<DiaryxBackend, JsValue> {
         match storage_type.to_lowercase().as_str() {
+            #[cfg(feature = "browser")]
             "opfs" => Self::create_opfs().await,
+            #[cfg(feature = "browser")]
             "indexeddb" | "indexed_db" => Self::create_indexed_db().await,
             "memory" | "inmemory" | "in_memory" => Self::create_in_memory(),
             _ => Err(JsValue::from_str(&format!(
@@ -839,6 +891,7 @@ impl DiaryxBackend {
     /// const dirHandle = await window.showDirectoryPicker();
     /// const backend = await DiaryxBackend.createFromDirectoryHandle(dirHandle);
     /// ```
+    #[cfg(feature = "browser")]
     #[wasm_bindgen(js_name = "createFromDirectoryHandle")]
     pub fn create_from_directory_handle(
         handle: web_sys::FileSystemDirectoryHandle,

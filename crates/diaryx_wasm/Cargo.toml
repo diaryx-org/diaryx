@@ -12,9 +12,11 @@ crate-type = ["cdylib", "rlib"]
 doctest = false
 
 [features]
-default = ["console_error_panic_hook"]
+default = ["console_error_panic_hook", "browser"]
 # Enable CRDT support for sync and collaboration
 crdt = ["diaryx_core/crdt"]
+# Enable browser-specific storage backends (OPFS, IndexedDB, File System Access)
+browser = ["dep:opfs", "dep:indexed-db", "dep:web-sys"]
 
 [dependencies]
 diaryx_core = { path = "../diaryx_core", features = ["crdt"] }
@@ -33,13 +35,13 @@ comrak = "0.49"
 log = "0.4"
 console_log = { version = "1.0", features = ["color"] }
 
-# Native storage backends (OPFS and IndexedDB)
-opfs = "0.1.4"
-indexed-db = "0.4.2"
+# Browser-only storage backends (gated behind "browser" feature)
+opfs = { version = "0.1.4", optional = true }
+indexed-db = { version = "0.4.2", optional = true }
 futures = "0.3"
 
-# Web APIs for worker-compatible OPFS access
-web-sys = { version = "0.3", features = [
+# Web APIs for browser storage backends (gated behind "browser" feature)
+web-sys = { version = "0.3", optional = true, features = [
   "Navigator",
   "StorageManager",
   "WorkerGlobalScope",

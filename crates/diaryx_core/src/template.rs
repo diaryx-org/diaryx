@@ -53,7 +53,7 @@ pub const DEFAULT_DAILY_TEMPLATE: &str = r#"---
 date: {{date}}
 title: "{{title}}"
 created: {{timestamp}}
-part_of: {{part_of}}
+part_of: "{{part_of}}"
 ---
 
 # {{title}}

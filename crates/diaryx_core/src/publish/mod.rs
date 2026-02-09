@@ -93,6 +93,7 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
             files.insert(0, root_file);
         }
 
+        let workspace_dir = workspace_root.parent().unwrap_or(workspace_root);
         let mut pages = Vec::new();
         let mut path_to_filename: HashMap<PathBuf, String> = HashMap::new();
 
@@ -101,7 +102,7 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
             let filename = if idx == 0 {
                 "index.html".to_string()
             } else {
-                self.path_to_html_filename(file_path)
+                self.path_to_html_filename(file_path, workspace_dir)
             };
             path_to_filename.insert(file_path.to_path_buf(), filename);
         }
@@ -131,6 +132,7 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
             .plan_export(workspace_root, audience, destination)
             .await?;
 
+        let workspace_dir = workspace_root.parent().unwrap_or(workspace_root);
         let mut pages = Vec::new();
         let mut path_to_filename: HashMap<PathBuf, String> = HashMap::new();
 
@@ -139,7 +141,7 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
             let filename = if idx == 0 {
                 "index.html".to_string()
             } else {
-                self.path_to_html_filename(&export_file.source_path)
+                self.path_to_html_filename(&export_file.source_path, workspace_dir)
             };
             path_to_filename.insert(export_file.source_path.clone(), filename);
         }
@@ -156,7 +158,7 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
                 .await?
             {
                 // Filter out excluded children from contents_links
-                let filtered_page = self.filter_contents_links(page, &plan);
+                let filtered_page = self.filter_contents_links(page, &plan, workspace_dir);
                 pages.push(filtered_page);
             }
         }
@@ -165,11 +167,16 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
     }
 
     /// Filter contents links to only include files that are in the export plan
-    fn filter_contents_links(&self, mut page: PublishedPage, plan: &ExportPlan) -> PublishedPage {
+    fn filter_contents_links(
+        &self,
+        mut page: PublishedPage,
+        plan: &ExportPlan,
+        workspace_dir: &Path,
+    ) -> PublishedPage {
         let included_filenames: std::collections::HashSet<String> = plan
             .included
             .iter()
-            .map(|f| self.path_to_html_filename(&f.source_path))
+            .map(|f| self.path_to_html_filename(&f.source_path, workspace_dir))
             .collect();
 
         // Also include index.html for the root
@@ -188,8 +195,9 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
         path: &Path,
         is_root: bool,
         path_to_filename: &HashMap<PathBuf, String>,
-        _workspace_root: &Path,
+        workspace_root: &Path,
     ) -> Result<Option<PublishedPage>> {
+        let workspace_dir = workspace_root.parent().unwrap_or(workspace_root);
         let content = match self.fs.read_to_string(path).await {
             Ok(c) => c,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -214,20 +222,27 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
         let dest_filename = path_to_filename
             .get(path)
             .cloned()
-            .unwrap_or_else(|| self.path_to_html_filename(path));
+            .unwrap_or_else(|| self.path_to_html_filename(path, workspace_dir));
 
         // Build contents links
         let contents_links = self
-            .build_contents_links(&parsed.frontmatter, path, path_to_filename)
+            .build_contents_links(&parsed.frontmatter, path, path_to_filename, workspace_dir)
             .await;
 
         // Build parent link
         let parent_link = self
-            .build_parent_link(&parsed.frontmatter, path, path_to_filename)
+            .build_parent_link(&parsed.frontmatter, path, path_to_filename, workspace_dir)
             .await;
 
-        // Convert markdown to HTML
+        // Convert markdown to HTML and transform .md links to .html
         let html_body = self.markdown_to_html(&parsed.body);
+        let html_body = self.transform_html_links(
+            &html_body,
+            path,
+            path_to_filename,
+            workspace_dir,
+            &dest_filename,
+        );
 
         Ok(Some(PublishedPage {
             source_path: path.to_path_buf(),
@@ -247,26 +262,26 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
         fm: &indexmap::IndexMap<String, serde_yaml::Value>,
         current_path: &Path,
         path_to_filename: &HashMap<PathBuf, String>,
+        workspace_dir: &Path,
     ) -> Vec<NavLink> {
         let contents = frontmatter::get_string_array(fm, "contents");
-        let current_dir = current_path.parent();
+        // to_canonical expects workspace-relative paths, not absolute
+        let current_relative = current_path
+            .strip_prefix(workspace_dir)
+            .unwrap_or(current_path);
 
         let mut links = Vec::new();
         for child_ref in contents {
-            // Parse markdown link to extract the actual path
             let parsed = link_parser::parse_link(&child_ref);
-            let canonical = link_parser::to_canonical(&parsed, current_path);
-            let child_path = current_dir
-                .map(|d| d.join(&canonical))
-                .unwrap_or_else(|| PathBuf::from(&canonical));
+            let canonical = link_parser::to_canonical(&parsed, current_relative);
+            // Rejoin with workspace_dir to get absolute path for path_to_filename lookup
+            let child_path = workspace_dir.join(&canonical);
 
-            // Try to find the HTML filename for this path
             let href = path_to_filename
                 .get(&child_path)
                 .cloned()
-                .unwrap_or_else(|| self.path_to_html_filename(&child_path));
+                .unwrap_or_else(|| self.path_to_html_filename(&child_path, workspace_dir));
 
-            // Try to get the title from the file, or use parsed title if available
             let title = self
                 .get_title_from_file(&child_path)
                 .await
@@ -284,23 +299,23 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
         fm: &indexmap::IndexMap<String, serde_yaml::Value>,
         current_path: &Path,
         path_to_filename: &HashMap<PathBuf, String>,
+        workspace_dir: &Path,
     ) -> Option<NavLink> {
         let part_of = frontmatter::get_string(fm, "part_of")?;
-        let current_dir = current_path.parent();
+        // to_canonical expects workspace-relative paths, not absolute
+        let current_relative = current_path
+            .strip_prefix(workspace_dir)
+            .unwrap_or(current_path);
 
-        // Parse markdown link to extract the actual path
         let parsed = link_parser::parse_link(part_of);
-        let canonical = link_parser::to_canonical(&parsed, current_path);
-        let parent_path = current_dir
-            .map(|d| d.join(&canonical))
-            .unwrap_or_else(|| PathBuf::from(&canonical));
+        let canonical = link_parser::to_canonical(&parsed, current_relative);
+        let parent_path = workspace_dir.join(&canonical);
 
         let href = path_to_filename
             .get(&parent_path)
             .cloned()
-            .unwrap_or_else(|| self.path_to_html_filename(&parent_path));
+            .unwrap_or_else(|| self.path_to_html_filename(&parent_path, workspace_dir));
 
-        // Use parsed title if available, otherwise try to read from file
         let title = self
             .get_title_from_file(&parent_path)
             .await
@@ -317,11 +332,16 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
         frontmatter::get_string(&parsed.frontmatter, "title").map(String::from)
     }
 
-    /// Convert a path to an HTML filename
-    fn path_to_html_filename(&self, path: &Path) -> String {
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("page");
-
-        format!("{}.html", slugify(stem))
+    /// Convert a source file path to an HTML output path relative to the destination.
+    ///
+    /// Preserves the directory structure from the workspace, only changing the extension.
+    /// e.g. `workspace/notes/file.md` → `notes/file.html`
+    fn path_to_html_filename(&self, path: &Path, workspace_dir: &Path) -> String {
+        let relative = path.strip_prefix(workspace_dir).unwrap_or(path);
+        relative
+            .with_extension("html")
+            .to_string_lossy()
+            .into_owned()
     }
 
     /// Convert a filename to a display title
@@ -366,6 +386,76 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
         format!("<pre>{}</pre>", markdown)
     }
 
+    /// Transform links in rendered HTML from `.md` paths to `.html` filenames.
+    ///
+    /// After comrak converts markdown to HTML, links like `<a href="./sibling.md">`
+    /// still point to `.md` files. This rewrites them to point to the corresponding
+    /// `.html` output files, matching the Astro site template's remark plugin behavior.
+    ///
+    /// Uses `link_parser` to resolve paths the same way frontmatter links are resolved:
+    /// hrefs are parsed as plain paths and resolved to canonical (workspace-relative)
+    /// form, then looked up in the path_to_filename map.
+    fn transform_html_links(
+        &self,
+        html: &str,
+        current_path: &Path,
+        path_to_filename: &HashMap<PathBuf, String>,
+        workspace_dir: &Path,
+        dest_filename: &str,
+    ) -> String {
+        let prefix = Self::root_prefix(dest_filename);
+        // to_canonical expects workspace-relative paths
+        let current_relative = current_path
+            .strip_prefix(workspace_dir)
+            .unwrap_or(current_path);
+
+        let mut result = String::with_capacity(html.len());
+        let mut remaining = html;
+
+        while let Some(href_start) = remaining.find("href=\"") {
+            result.push_str(&remaining[..href_start + 6]);
+            remaining = &remaining[href_start + 6..];
+
+            if let Some(href_end) = remaining.find('"') {
+                let rest = &remaining[href_end..];
+                let raw_href = &remaining[..href_end];
+
+                if raw_href.ends_with(".md")
+                    && !raw_href.starts_with("http://")
+                    && !raw_href.starts_with("https://")
+                    && !raw_href.starts_with('#')
+                {
+                    // Use link_parser to resolve the href to a canonical
+                    // (workspace-relative) path, then look up the HTML filename
+                    let parsed = link_parser::parse_link(raw_href);
+                    let canonical = link_parser::to_canonical(&parsed, current_relative);
+                    let target_path = workspace_dir.join(&canonical);
+
+                    let html_path =
+                        path_to_filename
+                            .get(&target_path)
+                            .cloned()
+                            .unwrap_or_else(|| {
+                                // Fallback: just swap .md → .html on the canonical path
+                                Path::new(&canonical)
+                                    .with_extension("html")
+                                    .to_string_lossy()
+                                    .into_owned()
+                            });
+
+                    result.push_str(&format!("{}{}", prefix, html_path));
+                } else {
+                    result.push_str(raw_href);
+                }
+
+                remaining = rest;
+            }
+        }
+        result.push_str(remaining);
+
+        result
+    }
+
     /// Write multiple HTML files
     #[cfg(not(target_arch = "wasm32"))]
     async fn write_multi_file(
@@ -387,7 +477,29 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
         for page in pages {
             let html = self.render_page(page, &site_title, false);
             let dest_path = destination.join(&page.dest_filename);
+
+            // Create subdirectories as needed (dest_filename may contain paths)
+            if let Some(parent) = dest_path.parent() {
+                self.fs.create_dir_all(parent).await?;
+            }
+
             self.fs.write_file(&dest_path, &html).await?;
+
+            // Write root page under its original filename too, so both
+            // localhost/ and localhost/readme.html (or similar) work
+            if page.is_root && page.dest_filename == "index.html" {
+                let original_filename = page
+                    .source_path
+                    .with_extension("html")
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned());
+                if let Some(name) = original_filename
+                    && name != "index.html"
+                {
+                    let alias_path = destination.join(&name);
+                    self.fs.write_file(&alias_path, &html).await?;
+                }
+            }
         }
 
         // Write CSS file
@@ -424,14 +536,29 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
         Ok(())
     }
 
+    /// Compute the relative prefix to get from a page back to the site root.
+    /// e.g. `notes/file.html` → `../`, `deeply/nested/page.html` → `../../`, `index.html` → ``
+    fn root_prefix(dest_filename: &str) -> String {
+        let depth = dest_filename.matches('/').count();
+        if depth == 0 {
+            String::new()
+        } else {
+            "../".repeat(depth)
+        }
+    }
+
     /// Render a single page to HTML
     fn render_page(&self, page: &PublishedPage, site_title: &str, single_file: bool) -> String {
-        let nav_html = self.render_navigation(page, single_file);
+        let prefix = Self::root_prefix(&page.dest_filename);
         let css_link = if single_file {
             format!("<style>{}</style>", Self::get_css())
         } else {
-            r#"<link rel="stylesheet" href="style.css">"#.to_string()
+            format!(r#"<link rel="stylesheet" href="{}style.css">"#, prefix)
         };
+
+        // Split navigation into breadcrumb (above title) and children (after content)
+        let breadcrumb_html = self.render_breadcrumb(page, single_file);
+        let children_html = self.render_children(page, single_file);
 
         format!(
             r#"<!DOCTYPE html>
@@ -444,15 +571,16 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
 </head>
 <body>
     <header>
-        <h1 class="site-title"><a href="index.html">{site_title}</a></h1>
+        <h1 class="site-title"><a href="{root_prefix}index.html">{site_title}</a></h1>
     </header>
     <main>
         <article>
+            {breadcrumb}
             <h1 class="page-title">{page_title}</h1>
-            {nav_html}
             <div class="content">
                 {content}
             </div>
+            {children}
         </article>
     </main>
     <footer>
@@ -462,50 +590,55 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
 </html>"#,
             page_title = html_escape(&page.title),
             site_title = html_escape(site_title),
+            root_prefix = prefix,
             css_link = css_link,
-            nav_html = nav_html,
+            breadcrumb = breadcrumb_html,
             content = page.html_body,
+            children = children_html,
         )
     }
 
-    /// Render navigation links
-    fn render_navigation(&self, page: &PublishedPage, single_file: bool) -> String {
-        let mut nav_parts = Vec::new();
-
-        // Parent link (breadcrumb style)
+    /// Render breadcrumb navigation (parent link above the title)
+    fn render_breadcrumb(&self, page: &PublishedPage, single_file: bool) -> String {
+        let prefix = Self::root_prefix(&page.dest_filename);
         if let Some(ref parent) = page.parent_link {
             let href = if single_file {
                 format!("#{}", self.title_to_anchor(&parent.title))
             } else {
-                parent.href.clone()
+                format!("{}{}", prefix, parent.href)
             };
-            nav_parts.push(format!(
-                r#"<div class="parent-link">↑ <a href="{}">{}</a></div>"#,
+            format!(
+                r#"<nav class="breadcrumb" aria-label="Breadcrumb"><a href="{}">{}</a></nav>"#,
                 html_escape(&href),
-                html_escape(&parent.title)
+                html_escape(&parent.title),
+            )
+        } else {
+            String::new()
+        }
+    }
+
+    /// Render child page links (contents list after the body)
+    fn render_children(&self, page: &PublishedPage, single_file: bool) -> String {
+        if page.contents_links.is_empty() {
+            return String::new();
+        }
+
+        let prefix = Self::root_prefix(&page.dest_filename);
+        let mut html = String::from(r#"<nav class="page-children" aria-label="Child pages"><ul>"#);
+        for link in &page.contents_links {
+            let href = if single_file {
+                format!("#{}", self.title_to_anchor(&link.title))
+            } else {
+                format!("{}{}", prefix, link.href)
+            };
+            html.push_str(&format!(
+                r#"<li><a href="{}">{}</a></li>"#,
+                html_escape(&href),
+                html_escape(&link.title)
             ));
         }
-
-        // Contents links
-        if !page.contents_links.is_empty() {
-            let mut contents_html = String::from(r#"<nav class="contents"><h3>Contents</h3><ul>"#);
-            for link in &page.contents_links {
-                let href = if single_file {
-                    format!("#{}", self.title_to_anchor(&link.title))
-                } else {
-                    link.href.clone()
-                };
-                contents_html.push_str(&format!(
-                    r#"<li><a href="{}">{}</a></li>"#,
-                    html_escape(&href),
-                    html_escape(&link.title)
-                ));
-            }
-            contents_html.push_str("</ul></nav>");
-            nav_parts.push(contents_html);
-        }
-
-        nav_parts.join("\n")
+        html.push_str("</ul></nav>");
+        html
     }
 
     /// Render all pages into a single HTML file
@@ -514,20 +647,23 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
 
         for page in pages {
             let anchor = self.title_to_anchor(&page.title);
-            let nav_html = self.render_navigation(page, true);
+            let breadcrumb = self.render_breadcrumb(page, true);
+            let children = self.render_children(page, true);
 
             sections.push(format!(
                 r#"<section id="{anchor}">
+    {breadcrumb}
     <h2 class="page-title">{title}</h2>
-    {nav_html}
     <div class="content">
         {content}
     </div>
+    {children}
 </section>"#,
                 anchor = html_escape(&anchor),
+                breadcrumb = breadcrumb,
                 title = html_escape(&page.title),
-                nav_html = nav_html,
                 content = page.html_body,
+                children = children,
             ));
         }
 
@@ -646,35 +782,55 @@ header {
     margin-bottom: 1rem;
 }
 
-.parent-link {
-    margin-bottom: 1rem;
-    font-size: 0.9rem;
+.breadcrumb {
+    margin-bottom: 0.25rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
 }
 
-.parent-link a {
+.breadcrumb a {
+    color: var(--text-muted);
+    text-decoration: none;
+}
+
+.breadcrumb a:hover {
     color: var(--accent);
+    text-decoration: underline;
 }
 
-nav.contents {
-    background: var(--code-bg);
-    padding: 1rem;
-    border-radius: 0.5rem;
-    margin-bottom: 1.5rem;
+.page-children {
+    margin-top: 2rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
 }
 
-nav.contents h3 {
-    margin-top: 0;
-    margin-bottom: 0.5rem;
-    font-size: 1rem;
-}
-
-nav.contents ul {
+.page-children ul {
     margin: 0;
-    padding-left: 1.5rem;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
 }
 
-nav.contents li {
-    margin: 0.25rem 0;
+.page-children li {
+    margin: 0;
+}
+
+.page-children li a {
+    display: block;
+    padding: 0.4rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 0.375rem;
+    font-size: 0.9rem;
+    text-decoration: none;
+    color: var(--text);
+    transition: border-color 0.15s, color 0.15s;
+}
+
+.page-children li a:hover {
+    border-color: var(--accent);
+    color: var(--accent);
 }
 
 nav.toc {

@@ -47,7 +47,9 @@ export default defineConfig({
       // Stub out Tauri API for web builds - will be tree-shaken when not used
       "@tauri-apps/api/core": "@tauri-apps/api/core",
       // In Tauri builds, stub out WASM (Tauri uses native Rust backend, not WASM)
-      ...(isTauri ? { "@diaryx/wasm": path.resolve("./src/lib/wasm-stub.js") } : {}),
+      "@diaryx/wasm": path.resolve(
+        isTauri ? "./src/lib/wasm-stub.js" : "./src/lib/wasm/diaryx_wasm.js"
+      ),
       $lib: path.resolve("./src/lib"),
       "@": path.resolve(__dirname, "./src"),
     },

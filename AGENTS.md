@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-02-09T05:29:09Z
+updated: 2026-02-09T17:16:35Z
 part_of: '[README](/README.md)'
 ---
 
@@ -13,7 +13,7 @@ Always read the relevant docs before making changes, and update the relevant doc
 ## Workspace Overview
 
 <!-- BEGIN:WORKSPACE_INDEX -->
-README - Repository for the Diaryx project - README.md
+Diaryx Monorepo - README/repo for the Diaryx project - README.md
 ├── crates - Cargo crates for Diaryx - crates/README.md
 │   ├── diaryx - CLI frontend - crates/diaryx/README.md
 │   │   └── diaryx src - Source code for the Diaryx CLI application - crates/diaryx/src/README.md

@@ -47,6 +47,8 @@ pub struct PublishedPage {
     pub parent_link: Option<NavLink>,
     /// Whether this is the root index
     pub is_root: bool,
+    /// Raw frontmatter key-value pairs for metadata pill display
+    pub frontmatter: indexmap::IndexMap<String, serde_yaml::Value>,
 }
 
 /// Result of publishing operation

@@ -4,6 +4,7 @@ import { svelte } from "@sveltejs/vite-plugin-svelte";
 import path from "path";
 
 const isTauri = !!process.env.TAURI_ENV_PLATFORM;
+const useWasmCdn = !!process.env.VITE_WASM_CDN_URL;
 const tauriDevHost = process.env.TAURI_DEV_HOST;
 
 // https://vitejs.dev/config/
@@ -46,8 +47,13 @@ export default defineConfig({
     alias: {
       // Stub out Tauri API for web builds - will be tree-shaken when not used
       "@tauri-apps/api/core": "@tauri-apps/api/core",
-      // In Tauri builds, stub out WASM (Tauri uses native Rust backend, not WASM)
-      ...(isTauri ? { "@diaryx/wasm": path.resolve("./src/lib/wasm-stub.js") } : {}),
+      // In Tauri builds, stub out WASM (Tauri uses native Rust backend, not WASM).
+      // When using CDN, also stub it out — the worker loads from CDN via dynamic import.
+      "@diaryx/wasm": path.resolve(
+        isTauri || useWasmCdn
+          ? "./src/lib/wasm-stub.js"
+          : "./src/lib/wasm/diaryx_wasm.js"
+      ),
       $lib: path.resolve("./src/lib"),
       "@": path.resolve(__dirname, "./src"),
     },

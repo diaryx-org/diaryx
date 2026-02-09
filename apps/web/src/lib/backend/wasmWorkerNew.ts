@@ -90,13 +90,17 @@ async function init(port: MessagePort, storageType: StorageType, directoryHandle
   }
 
   // Import WASM module
-  // Load the .wasm binary from CDN if configured (same pattern as pandoc/typst workers),
-  // otherwise fall back to the local build (dev / Tauri).
-  const wasm = await import('@diaryx/wasm');
+  // When CDN is configured, load BOTH the JS glue and .wasm binary from CDN
+  // to guarantee they come from the same wasm-pack build. wasm-bindgen generates
+  // hashed function names that must match between JS and WASM; loading them from
+  // different sources (npm JS + CDN WASM) causes "is not a function" errors.
   const wasmCdnUrl = (import.meta as any).env?.VITE_WASM_CDN_URL as string | undefined;
+  let wasm: any;
   if (wasmCdnUrl) {
-    await wasm.default(`${wasmCdnUrl}/diaryx_wasm_bg.wasm`);
+    wasm = await import(/* @vite-ignore */ `${wasmCdnUrl}/diaryx_wasm.js`);
+    await wasm.default({ module_or_path: `${wasmCdnUrl}/diaryx_wasm_bg.wasm` });
   } else {
+    wasm = await import('@diaryx/wasm');
     await wasm.default();
   }
 

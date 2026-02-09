@@ -31,6 +31,7 @@ pub mod auth;
 pub mod config;
 pub mod db;
 pub mod email;
+pub mod git_ops;
 pub mod handlers;
 pub mod sync_v2;
 

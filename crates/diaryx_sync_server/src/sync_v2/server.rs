@@ -12,7 +12,7 @@ use tracing::info;
 
 use crate::db::AuthRepo;
 
-use super::hooks::DiaryxHook;
+use super::hooks::{DiaryxHook, DirtyWorkspaces};
 use super::store::{StorageCache, WorkspaceStore};
 
 /// State for the sync v2 server, shared with HTTP handlers.
@@ -27,6 +27,10 @@ pub struct SyncV2State {
     pub store: Arc<WorkspaceStore>,
     /// Session code -> workspace ID mapping for peer count lookups and broadcasts.
     session_to_workspace: Arc<RwLock<HashMap<String, String>>>,
+    /// Tracks last-change timestamp per workspace for git auto-commit.
+    pub dirty_workspaces: DirtyWorkspaces,
+    /// Shared storage cache for git operations.
+    pub storage_cache: Arc<StorageCache>,
 }
 
 impl SyncV2State {
@@ -97,6 +101,7 @@ pub struct SyncV2Server {
     server: Server,
     storage_cache: Arc<StorageCache>,
     session_to_workspace: Arc<RwLock<HashMap<String, String>>>,
+    dirty_workspaces: DirtyWorkspaces,
 }
 
 impl SyncV2Server {
@@ -104,9 +109,14 @@ impl SyncV2Server {
     pub fn new(repo: Arc<AuthRepo>, workspaces_dir: PathBuf) -> Self {
         let storage_cache = Arc::new(StorageCache::new(workspaces_dir));
         let session_to_workspace = Arc::new(RwLock::new(HashMap::new()));
+        let dirty_workspaces: DirtyWorkspaces = Arc::new(RwLock::new(HashMap::new()));
 
-        let (hook, handle_cell) =
-            DiaryxHook::new(repo, storage_cache.clone(), session_to_workspace.clone());
+        let (hook, handle_cell) = DiaryxHook::new(
+            repo,
+            storage_cache.clone(),
+            session_to_workspace.clone(),
+            dirty_workspaces.clone(),
+        );
         let server = Server::with_hooks(vec![Box::new(hook)]);
         // Set the handle so the hook can broadcast messages to clients
         handle_cell.set(server.handle()).ok();
@@ -115,6 +125,7 @@ impl SyncV2Server {
             server,
             storage_cache,
             session_to_workspace,
+            dirty_workspaces,
         }
     }
 
@@ -124,6 +135,8 @@ impl SyncV2Server {
             handle: self.server.handle(),
             store: Arc::new(WorkspaceStore::new(self.storage_cache.clone())),
             session_to_workspace: self.session_to_workspace.clone(),
+            dirty_workspaces: self.dirty_workspaces.clone(),
+            storage_cache: self.storage_cache.clone(),
         }
     }
 

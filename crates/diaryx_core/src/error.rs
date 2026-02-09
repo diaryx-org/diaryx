@@ -181,6 +181,11 @@ pub enum DiaryxError {
     #[cfg(all(feature = "crdt-sqlite", not(target_arch = "wasm32")))]
     #[error("Database error: {0}")]
     Database(#[from] rusqlite::Error),
+
+    /// Error from git operations
+    #[cfg(feature = "git")]
+    #[error("Git error: {0}")]
+    Git(String),
 }
 
 /// Result type alias for Diaryx operations
@@ -225,6 +230,8 @@ impl From<&DiaryxError> for SerializableError {
             DiaryxError::Crdt(_) => "Crdt",
             #[cfg(all(feature = "crdt-sqlite", not(target_arch = "wasm32")))]
             DiaryxError::Database(_) => "Database",
+            #[cfg(feature = "git")]
+            DiaryxError::Git(_) => "Git",
         }
         .to_string();
 

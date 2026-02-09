@@ -275,6 +275,24 @@ pub enum Commands {
         command: SyncCommands,
     },
 
+    /// Create a git snapshot of the current workspace state
+    Commit {
+        /// Commit message (auto-generated if not provided)
+        #[arg(short, long)]
+        message: Option<String>,
+
+        /// Skip validation before committing
+        #[arg(long)]
+        skip_validation: bool,
+    },
+
+    /// Show git commit history for the workspace
+    Log {
+        /// Maximum number of commits to show (default: 10)
+        #[arg(short = 'n', long, default_value = "10")]
+        count: usize,
+    },
+
     /// Navigate workspace hierarchy with interactive TUI
     /// Opens a tree view with preview pane for browsing entries
     #[command(alias = "go")]

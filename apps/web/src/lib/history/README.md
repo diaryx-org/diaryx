@@ -7,6 +7,7 @@ attachments:
   - '[HistoryEntry.svelte](/apps/web/src/lib/history/HistoryEntry.svelte)'
   - '[HistoryPanel.svelte](/apps/web/src/lib/history/HistoryPanel.svelte)'
   - '[VersionDiff.svelte](/apps/web/src/lib/history/VersionDiff.svelte)'
+  - '[GitHistoryPanel.svelte](/apps/web/src/lib/history/GitHistoryPanel.svelte)'
 exclude:
   - '*.lock'
 ---
@@ -22,3 +23,4 @@ Version history components for time travel and diff viewing.
 | `HistoryEntry.svelte` | Single history entry display |
 | `HistoryPanel.svelte` | History panel container |
 | `VersionDiff.svelte` | Version diff viewer |
+| `GitHistoryPanel.svelte` | Git snapshot history panel (commit, restore) |

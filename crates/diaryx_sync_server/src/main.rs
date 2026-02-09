@@ -161,6 +161,84 @@ async fn main() {
         }
     });
 
+    // Start git auto-commit background task
+    {
+        let sync_v2_state = sync_v2_state.clone();
+        let quiescence_mins = config.git_quiescence_minutes;
+        let max_staleness_hours = config.git_max_staleness_hours;
+        info!(
+            "Git auto-commit: quiescence={}min, max_staleness={}h",
+            quiescence_mins, max_staleness_hours
+        );
+        tokio::spawn(async move {
+            let check_interval = tokio::time::Duration::from_secs(60);
+            let quiescence = tokio::time::Duration::from_secs(u64::from(quiescence_mins) * 60);
+            let max_staleness =
+                tokio::time::Duration::from_secs(u64::from(max_staleness_hours) * 3600);
+            let mut interval = tokio::time::interval(check_interval);
+
+            loop {
+                interval.tick().await;
+
+                // Collect workspaces that are ready to commit
+                let candidates: Vec<String> = {
+                    let dirty = sync_v2_state.dirty_workspaces.read().await;
+                    let now = tokio::time::Instant::now();
+                    dirty
+                        .iter()
+                        .filter(|(_, last_change)| {
+                            let elapsed = now.duration_since(**last_change);
+                            elapsed >= quiescence || elapsed >= max_staleness
+                        })
+                        .map(|(id, _)| id.clone())
+                        .collect()
+                };
+
+                for workspace_id in candidates {
+                    // Check peer count — prefer committing when no one is connected
+                    let doc_id = format!("workspace:{}", workspace_id);
+                    let peer_count = sync_v2_state.handle.get_peer_count(&doc_id).await;
+
+                    // Check if past max staleness (commit even with peers)
+                    let force = {
+                        let dirty = sync_v2_state.dirty_workspaces.read().await;
+                        dirty.get(&workspace_id).is_some_and(|last_change| {
+                            tokio::time::Instant::now().duration_since(*last_change)
+                                >= max_staleness
+                        })
+                    };
+
+                    if peer_count > 0 && !force {
+                        continue;
+                    }
+
+                    // Attempt commit
+                    match diaryx_sync_server::git_ops::commit_workspace_by_id(
+                        &sync_v2_state.storage_cache,
+                        &workspace_id,
+                        None,
+                    ) {
+                        Ok(result) => {
+                            sync_v2_state
+                                .dirty_workspaces
+                                .write()
+                                .await
+                                .remove(&workspace_id);
+                            info!(
+                                "Auto-committed workspace {}: {} files [{}]",
+                                workspace_id, result.file_count, result.commit_id
+                            );
+                        }
+                        Err(e) => {
+                            // Don't remove from dirty — will retry next cycle
+                            error!("Auto-commit failed for {}: {}", workspace_id, e);
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     // Run server with graceful shutdown
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())

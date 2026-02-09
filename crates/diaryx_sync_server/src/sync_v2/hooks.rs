@@ -79,6 +79,9 @@ impl DocType {
     }
 }
 
+/// Tracks when workspaces were last modified (for git auto-commit quiescence detection).
+pub type DirtyWorkspaces = Arc<RwLock<HashMap<String, tokio::time::Instant>>>;
+
 /// Diaryx hook implementation for siphonophore.
 ///
 /// This hook provides:
@@ -95,6 +98,8 @@ pub struct DiaryxHook {
     handle: Arc<OnceLock<Handle>>,
     /// Shared session-to-workspace mapping (also used by SyncV2State for peer counts).
     session_to_workspace: Arc<RwLock<HashMap<String, String>>>,
+    /// Tracks last-change timestamp per workspace for git auto-commit.
+    dirty_workspaces: DirtyWorkspaces,
 }
 
 impl DiaryxHook {
@@ -106,6 +111,7 @@ impl DiaryxHook {
         repo: Arc<AuthRepo>,
         storage_cache: Arc<StorageCache>,
         session_to_workspace: Arc<RwLock<HashMap<String, String>>>,
+        dirty_workspaces: DirtyWorkspaces,
     ) -> (Self, Arc<OnceLock<Handle>>) {
         let handle = Arc::new(OnceLock::new());
         let hook = Self {
@@ -113,6 +119,7 @@ impl DiaryxHook {
             storage_cache,
             handle: handle.clone(),
             session_to_workspace,
+            dirty_workspaces,
         };
         (hook, handle)
     }
@@ -359,6 +366,13 @@ impl Hook for DiaryxHook {
             error!("Failed to persist update for {}: {}", doc_id, e);
         } else {
             debug!("Persisted {} byte update for {}", update.len(), doc_id);
+
+            // Mark workspace as dirty for git auto-commit
+            let workspace_id = doc_type.workspace_id().to_string();
+            self.dirty_workspaces
+                .write()
+                .await
+                .insert(workspace_id, tokio::time::Instant::now());
         }
 
         Ok(())

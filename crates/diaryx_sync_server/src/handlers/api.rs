@@ -7,11 +7,11 @@ use axum::{
     extract::{Query, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Json},
-    routing::get,
+    routing::{get, post},
 };
 use serde::Serialize;
 use std::sync::Arc;
-use tracing::error;
+use tracing::{error, info};
 
 /// Shared state for API handlers
 #[derive(Clone)]
@@ -43,6 +43,31 @@ pub struct UserHasDataResponse {
     pub file_count: usize,
 }
 
+/// Git commit log entry
+#[derive(Debug, Serialize)]
+pub struct CommitLogEntry {
+    pub id: String,
+    pub short_id: String,
+    pub message: String,
+    pub timestamp: String,
+    pub file_count: usize,
+}
+
+/// Git commit response
+#[derive(Debug, Serialize)]
+pub struct CommitResponse {
+    pub commit_id: String,
+    pub file_count: usize,
+    pub compacted: bool,
+}
+
+/// Restore response
+#[derive(Debug, Serialize)]
+pub struct RestoreResponse {
+    pub restored_from: String,
+    pub file_count: usize,
+}
+
 /// Create API routes
 pub fn api_routes(state: ApiState) -> Router {
     Router::new()
@@ -52,6 +77,18 @@ pub fn api_routes(state: ApiState) -> Router {
         .route(
             "/workspaces/{workspace_id}/snapshot",
             get(get_workspace_snapshot).post(upload_workspace_snapshot),
+        )
+        .route(
+            "/workspaces/{workspace_id}/history",
+            get(get_workspace_history),
+        )
+        .route(
+            "/workspaces/{workspace_id}/commit",
+            post(trigger_workspace_commit),
+        )
+        .route(
+            "/workspaces/{workspace_id}/restore",
+            post(restore_workspace),
         )
         .route("/user/has-data", get(check_user_has_data))
         .with_state(state)
@@ -221,4 +258,210 @@ async fn check_user_has_data(
         has_data: false,
         file_count: 0,
     })
+}
+
+/// GET /api/workspaces/:workspace_id/history - Get git commit history
+async fn get_workspace_history(
+    State(state): State<ApiState>,
+    RequireAuth(auth): RequireAuth,
+    axum::extract::Path(workspace_id): axum::extract::Path<String>,
+    Query(query): Query<HistoryQuery>,
+) -> impl IntoResponse {
+    let workspace = match state.repo.get_workspace(&workspace_id) {
+        Ok(Some(w)) => w,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+
+    if workspace.user_id != auth.user.id {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    let repo_path = state.sync_v2.storage_cache.git_repo_path(&workspace_id);
+    let repo = match git2::Repository::open(&repo_path) {
+        Ok(r) => r,
+        Err(_) => return Json(Vec::<CommitLogEntry>::new()).into_response(),
+    };
+
+    let head = match repo.head() {
+        Ok(h) => h,
+        Err(_) => return Json(Vec::<CommitLogEntry>::new()).into_response(),
+    };
+
+    let mut revwalk = match repo.revwalk() {
+        Ok(r) => r,
+        Err(e) => {
+            error!("Failed to walk commits for {}: {}", workspace_id, e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    if revwalk.push(head.target().unwrap()).is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    let count = query.count.unwrap_or(20).min(100);
+    let mut entries = Vec::new();
+
+    for oid in revwalk {
+        if entries.len() >= count {
+            break;
+        }
+        let oid = match oid {
+            Ok(o) => o,
+            Err(_) => continue,
+        };
+        let commit = match repo.find_commit(oid) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let file_count = commit.tree().map(|t| t.len()).unwrap_or(0);
+
+        let time = commit.time();
+        let dt = chrono::DateTime::from_timestamp(time.seconds(), 0).unwrap_or_default();
+
+        entries.push(CommitLogEntry {
+            id: oid.to_string(),
+            short_id: oid.to_string()[..8].to_string(),
+            message: commit
+                .message()
+                .unwrap_or("")
+                .lines()
+                .next()
+                .unwrap_or("")
+                .to_string(),
+            timestamp: dt.to_rfc3339(),
+            file_count,
+        });
+    }
+
+    Json(entries).into_response()
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct HistoryQuery {
+    count: Option<usize>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CommitMessage {
+    message: Option<String>,
+}
+
+/// POST /api/workspaces/:workspace_id/commit - Trigger an immediate git commit
+async fn trigger_workspace_commit(
+    State(state): State<ApiState>,
+    RequireAuth(auth): RequireAuth,
+    axum::extract::Path(workspace_id): axum::extract::Path<String>,
+    Json(body): Json<CommitMessage>,
+) -> impl IntoResponse {
+    let workspace = match state.repo.get_workspace(&workspace_id) {
+        Ok(Some(w)) => w,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+
+    if workspace.user_id != auth.user.id {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    match crate::git_ops::commit_workspace_by_id(
+        &state.sync_v2.storage_cache,
+        &workspace_id,
+        body.message,
+    ) {
+        Ok(result) => {
+            // Clear dirty flag since we just committed
+            state
+                .sync_v2
+                .dirty_workspaces
+                .write()
+                .await
+                .remove(&workspace_id);
+
+            info!(
+                "Manual commit for workspace {}: {} files [{}]",
+                workspace_id, result.file_count, result.commit_id
+            );
+
+            Json(CommitResponse {
+                commit_id: result.commit_id.to_string(),
+                file_count: result.file_count,
+                compacted: result.compacted,
+            })
+            .into_response()
+        }
+        Err(e) => {
+            error!("Commit failed for {}: {}", workspace_id, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+        }
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RestoreRequest {
+    commit_id: String,
+}
+
+/// POST /api/workspaces/:workspace_id/restore - Restore CRDT from a git commit
+async fn restore_workspace(
+    State(state): State<ApiState>,
+    RequireAuth(auth): RequireAuth,
+    axum::extract::Path(workspace_id): axum::extract::Path<String>,
+    Json(body): Json<RestoreRequest>,
+) -> impl IntoResponse {
+    let workspace = match state.repo.get_workspace(&workspace_id) {
+        Ok(Some(w)) => w,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+
+    if workspace.user_id != auth.user.id {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    // Check peer count — only allow restore when no other clients are connected
+    let doc_id = format!("workspace:{}", workspace_id);
+    let peer_count = state.sync_v2.handle.get_peer_count(&doc_id).await;
+    if peer_count > 1 {
+        return (
+            StatusCode::CONFLICT,
+            format!(
+                "Cannot restore while {} peers are connected. Disconnect other clients first.",
+                peer_count
+            ),
+        )
+            .into_response();
+    }
+
+    let oid = match git2::Oid::from_str(&body.commit_id) {
+        Ok(o) => o,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, "Invalid commit ID").into_response();
+        }
+    };
+
+    match crate::git_ops::restore_workspace_by_id(&state.sync_v2.storage_cache, &workspace_id, oid)
+    {
+        Ok(file_count) => {
+            info!(
+                "Restored workspace {} from commit {} ({} files)",
+                workspace_id, body.commit_id, file_count
+            );
+
+            Json(RestoreResponse {
+                restored_from: body.commit_id,
+                file_count,
+            })
+            .into_response()
+        }
+        Err(e) => {
+            error!(
+                "Restore failed for {} from {}: {}",
+                workspace_id, body.commit_id, e
+            );
+            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+        }
+    }
 }

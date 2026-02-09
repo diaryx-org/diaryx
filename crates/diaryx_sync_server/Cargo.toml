@@ -11,7 +11,7 @@ license-file.workspace = true
 
 [dependencies]
 # Internal crate
-diaryx_core = { workspace = true, features = ["crdt", "crdt-sqlite"] }
+diaryx_core = { workspace = true, features = ["crdt", "crdt-sqlite", "git"] }
 
 # Web framework
 axum = { version = "0.8", features = ["ws"] }
@@ -29,6 +29,9 @@ serde_yaml = { workspace = true }
 
 # Email (Resend HTTP API)
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Git (for history API endpoints)
+git2 = { version = "0.19", default-features = false }
 
 # Utilities
 rand = "0.8"

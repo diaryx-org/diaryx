@@ -15,6 +15,9 @@ mod content;
 /// `today`, `yesterday`, `open`, `create` commands
 mod entry;
 
+/// Git version history commands
+mod git;
+
 /// `diaryx_core` export with audience filtering
 mod export;
 
@@ -238,11 +241,35 @@ pub fn run_cli() {
             let config = Config::load().ok();
             nav::handle_nav(cli.workspace, &ws, &config, &current_dir, path, depth)
         }
+
+        Commands::Commit {
+            message,
+            skip_validation,
+        } => {
+            let workspace_root = resolve_workspace_root(cli.workspace);
+            git::handle_commit(&workspace_root, message, skip_validation)
+        }
+
+        Commands::Log { count } => {
+            let workspace_root = resolve_workspace_root(cli.workspace);
+            git::handle_log(&workspace_root, count)
+        }
     };
 
     if !success {
         std::process::exit(1);
     }
+}
+
+/// Resolve the workspace root directory from CLI arg or config.
+fn resolve_workspace_root(workspace_arg: Option<PathBuf>) -> PathBuf {
+    if let Some(ws) = workspace_arg {
+        return ws;
+    }
+    Config::load()
+        .ok()
+        .map(|c| c.default_workspace)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
 /// Handle the uninstall command

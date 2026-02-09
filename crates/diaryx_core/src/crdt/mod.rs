@@ -2,8 +2,13 @@
 
 mod body_doc;
 mod body_doc_manager;
+#[cfg(all(not(target_arch = "wasm32"), feature = "git"))]
+pub mod git;
 mod history;
+pub mod materialize;
 mod memory_storage;
+pub mod sanity;
+pub mod self_healing;
 #[cfg(all(not(target_arch = "wasm32"), feature = "crdt-sqlite"))]
 mod sqlite_storage;
 mod storage;
@@ -40,3 +45,10 @@ pub use tokio_transport::TokioTransport;
 pub use transport::{ConnectionStatus, MessageCallback, StatusCallback, SyncConfig, SyncTransport};
 pub use types::{BinaryRef, CrdtUpdate, FileMetadata, UpdateOrigin};
 pub use workspace_doc::WorkspaceCrdt;
+
+// Re-exports for materialization, validation, and self-healing
+pub use materialize::{
+    MaterializationResult, MaterializedFile, materialize_workspace, parse_snapshot_markdown,
+};
+pub use sanity::{IssueKind, SanityIssue, SanityReport, validate_workspace};
+pub use self_healing::{HealingAction, HealthTracker};

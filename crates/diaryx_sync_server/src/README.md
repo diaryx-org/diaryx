@@ -12,6 +12,7 @@ attachments:
   - '[lib.rs](/crates/diaryx_sync_server/src/lib.rs)'
   - '[main.rs](/crates/diaryx_sync_server/src/main.rs)'
   - '[config.rs](/crates/diaryx_sync_server/src/config.rs)'
+  - '[git_ops.rs](/crates/diaryx_sync_server/src/git_ops.rs)'
 exclude:
   - '*.lock'
 ---
@@ -33,6 +34,6 @@ This directory contains the source code for the Diaryx sync server.
 - `auth/` - Authentication middleware and magic link handling
 - `db/` - SQLite database schema and repository
 - `email/` - SMTP email sending
+- `git_ops.rs` - Git operations (commit, restore) for server-side workspaces
 - `handlers/` - HTTP route handlers
-- `sync/` - WebSocket sync room management (v1)
-- `sync_v2/` - Siphonophore-based sync implementation (experimental)
+- `sync_v2/` - Siphonophore-based sync implementation

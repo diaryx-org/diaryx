@@ -37,6 +37,7 @@ futures-lite = "2"
 
 # Optional dependencies
 comrak = { version = "0.49", optional = true }
+git2 = { version = "0.19", optional = true, default-features = false }
 
 # Native-only dependencies (not available in WASM)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -73,6 +74,9 @@ live-sync = []
 # This provides TokioTransport and SyncClient for CLI and native apps.
 # Not available on WASM - use CallbackTransport instead.
 native-sync = ["crdt", "dep:tokio", "dep:tokio-tungstenite", "dep:url", "dep:futures-util"]
+
+# Enable git-backed version history (requires crdt-sqlite for storage, native only)
+git = ["crdt-sqlite", "dep:git2"]
 
 # Enable native pandoc binary invocation for multi-format export (CLI/Tauri only)
 native-pandoc = []

@@ -20,6 +20,10 @@ pub struct Config {
     pub magic_link_expiry_minutes: i64,
     /// CORS allowed origins (comma-separated)
     pub cors_origins: Vec<String>,
+    /// Git auto-commit: minutes of inactivity before committing (default: 30)
+    pub git_quiescence_minutes: u32,
+    /// Git auto-commit: max hours before forcing a commit even with activity (default: 24)
+    pub git_max_staleness_hours: u32,
 }
 
 /// Email configuration (Resend HTTP API)
@@ -74,6 +78,16 @@ impl Config {
             .filter(|s| !s.is_empty())
             .collect();
 
+        let git_quiescence_minutes = env::var("GIT_QUIESCENCE_MINUTES")
+            .unwrap_or_else(|_| "30".to_string())
+            .parse()
+            .unwrap_or(30);
+
+        let git_max_staleness_hours = env::var("GIT_MAX_STALENESS_HOURS")
+            .unwrap_or_else(|_| "24".to_string())
+            .parse()
+            .unwrap_or(24);
+
         Ok(Config {
             host,
             port,
@@ -83,6 +97,8 @@ impl Config {
             session_expiry_days,
             magic_link_expiry_minutes,
             cors_origins,
+            git_quiescence_minutes,
+            git_max_staleness_hours,
         })
     }
 

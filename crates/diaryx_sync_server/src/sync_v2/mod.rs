@@ -40,7 +40,7 @@ pub use handshake::{
     ClientControlMessage, ConnectionContext, HandshakeState, ManifestFileEntry,
     ServerControlMessage, handle_control_message, perform_handshake,
 };
-pub use hooks::{AuthenticatedUser, DiaryxHook, DocType};
+pub use hooks::{AuthenticatedUser, DiaryxHook, DirtyWorkspaces, DocType};
 pub use server::{SyncV2Server, SyncV2State};
 pub use store::{
     SnapshotError, SnapshotImportMode, SnapshotImportResult, StorageCache, WorkspaceStore,

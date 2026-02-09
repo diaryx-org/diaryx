@@ -20,6 +20,13 @@ attachments:
   - "[transport.rs](/crates/diaryx_core/src/crdt/transport.rs)"
   - "[types.rs](/crates/diaryx_core/src/crdt/types.rs)"
   - "[workspace_doc.rs](/crates/diaryx_core/src/crdt/workspace_doc.rs)"
+  - "[materialize.rs](/crates/diaryx_core/src/crdt/materialize.rs)"
+  - "[sanity.rs](/crates/diaryx_core/src/crdt/sanity.rs)"
+  - "[self_healing.rs](/crates/diaryx_core/src/crdt/self_healing.rs)"
+  - "[git/mod.rs](/crates/diaryx_core/src/crdt/git/mod.rs)"
+  - "[git/commit.rs](/crates/diaryx_core/src/crdt/git/commit.rs)"
+  - "[git/rebuild.rs](/crates/diaryx_core/src/crdt/git/rebuild.rs)"
+  - "[git/repo.rs](/crates/diaryx_core/src/crdt/git/repo.rs)"
 exclude:
   - "*.lock"
 ---
@@ -361,6 +368,58 @@ use CallbackTransport;
 let transport = CallbackTransport::new();
 // Messages are injected via inject_sync_message() from JS
 // Outgoing messages are polled via poll_outgoing_messages()
+```
+
+## Git-Backed Version History
+
+The `git` submodule (requires `git` feature, native only) provides commit, compact,
+and rebuild operations that use git as the authoritative history store.
+
+```toml
+[dependencies]
+diaryx_core = { version = "...", features = ["git"] }
+```
+
+### Architecture
+
+After each commit, CRDT update logs can be compacted since the workspace state
+is captured in git. Git becomes the authoritative history; CRDT becomes a thin
+sync buffer.
+
+- **Materialize** (`materialize.rs`): Extracts CRDT state into file content
+  (frontmatter YAML + body markdown).
+- **Validate** (`sanity.rs`): Checks for empty body docs, broken parent chains,
+  orphan body docs, missing children.
+- **Self-Healing** (`self_healing.rs`): Tracks consecutive validation failures.
+  After 3 failures, recommends CRDT rebuild from git.
+- **Commit** (`git/commit.rs`): Materializes workspace, validates, builds git tree,
+  creates commit, compacts all CRDT docs.
+- **Rebuild** (`git/rebuild.rs`): Clears CRDT state and repopulates from a git commit.
+  Used for self-healing and restore operations.
+- **Repo** (`git/repo.rs`): Creates and opens Standard or Bare git repositories.
+
+### Usage
+
+```rust,ignore
+use diaryx_core::crdt::git::{
+    CommitOptions, commit_workspace, init_repo, open_repo, RepoKind,
+    rebuild_crdt_from_git,
+};
+use diaryx_core::crdt::self_healing::HealthTracker;
+
+// Open or init a repo
+let repo = open_repo(workspace_root)
+    .unwrap_or_else(|_| init_repo(workspace_root, RepoKind::Standard).unwrap());
+
+// Commit workspace state
+let mut tracker = HealthTracker::new();
+let result = commit_workspace(
+    &storage, &workspace, &body_docs, &repo,
+    workspace_id, &CommitOptions::default(), &mut tracker,
+).unwrap();
+
+// Rebuild CRDT from git (self-healing)
+let file_count = rebuild_crdt_from_git(&repo, &storage, workspace_id, None).unwrap();
 ```
 
 ## Relationship to Cloud Sync

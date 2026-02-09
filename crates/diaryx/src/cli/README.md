@@ -24,6 +24,7 @@ attachments:
   - '[template.rs](/crates/diaryx/src/cli/template.rs)'
   - '[util.rs](/crates/diaryx/src/cli/util.rs)'
   - '[workspace.rs](/crates/diaryx/src/cli/workspace.rs)'
+  - '[git.rs](/crates/diaryx/src/cli/git.rs)'
 exclude:
   - '*.lock'
 ---
@@ -31,3 +32,9 @@ exclude:
 # Command-line module
 
 In the Diaryx CLI, this module provides the majority of the functionality.
+
+## Git Version History Commands
+
+- `diaryx commit` — Snapshot workspace state as a git commit and compact CRDT storage.
+  Options: `--message <msg>`, `--skip-validation`.
+- `diaryx log` — Show git commit history. Options: `--count <n>` (default: 20).

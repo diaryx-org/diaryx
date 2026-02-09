@@ -46,3 +46,13 @@ export {
   cleanupGuestStorage,
   cleanupAllGuestStorage,
 } from './shareService';
+
+export {
+  getCommitHistory,
+  commitWorkspace,
+  restoreWorkspace,
+  isHistoryAvailable,
+  type CommitLogEntry,
+  type CommitResponse,
+  type RestoreResponse,
+} from './historyService';

@@ -4,9 +4,9 @@
 //! - `StorageCache`: shared cache of per-workspace `SqliteStorage` connections
 //! - `WorkspaceStore`: snapshot export/import and file queries for HTTP API handlers
 
-use diaryx_core::crdt::{BodyDocManager, FileMetadata, SqliteStorage, WorkspaceCrdt};
-use diaryx_core::metadata_writer::FrontmatterMetadata;
-use diaryx_core::{frontmatter, link_parser};
+use diaryx_core::crdt::{
+    BodyDocManager, SqliteStorage, WorkspaceCrdt, materialize_workspace, parse_snapshot_markdown,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
@@ -93,6 +93,11 @@ impl StorageCache {
         }
     }
 
+    /// Get the path where the bare git repo for a workspace lives.
+    pub fn git_repo_path(&self, workspace_id: &str) -> PathBuf {
+        self.workspaces_dir.join(format!("{}.git", workspace_id))
+    }
+
     /// Get or create storage for a workspace.
     pub fn get_storage(&self, workspace_id: &str) -> Result<Arc<SqliteStorage>, String> {
         // Check cache first
@@ -163,14 +168,14 @@ impl WorkspaceStore {
             .map_err(|e| SnapshotError::Storage(e.to_string()))?;
         let body_docs = BodyDocManager::new(storage);
 
-        let files = workspace.list_files();
+        let result = materialize_workspace(&workspace, &body_docs, workspace_id);
 
-        let mut id_to_path: HashMap<String, String> = HashMap::new();
-        for (key, _meta) in &files {
-            if key.contains('/') || key.ends_with(".md") {
-                id_to_path.insert(key.clone(), key.clone());
-            } else if let Some(path) = workspace.get_path(key) {
-                id_to_path.insert(key.clone(), path.to_string_lossy().to_string());
+        for skipped in &result.skipped {
+            if skipped.reason == diaryx_core::crdt::materialize::SkipReason::UnresolvedPath {
+                warn!(
+                    "Snapshot export: skipping unresolved path for {}",
+                    skipped.key
+                );
             }
         }
 
@@ -180,50 +185,9 @@ impl WorkspaceStore {
             .compression_method(CompressionMethod::Deflated)
             .unix_permissions(0o644);
 
-        for (key, meta) in files {
-            if meta.deleted {
-                continue;
-            }
-
-            let path = match Self::resolve_snapshot_path(&key, &id_to_path) {
-                Some(path) => path,
-                None => {
-                    warn!("Snapshot export: skipping unresolved path for {}", key);
-                    continue;
-                }
-            };
-
-            let mut export_meta = meta.clone();
-            export_meta.part_of = export_meta
-                .part_of
-                .and_then(|value| Self::resolve_snapshot_path(&value, &id_to_path));
-
-            if let Some(contents) = export_meta.contents.take() {
-                let resolved: Vec<String> = contents
-                    .into_iter()
-                    .filter_map(|value| Self::resolve_snapshot_path(&value, &id_to_path))
-                    .collect();
-                export_meta.contents = Some(resolved);
-            }
-
-            let metadata_json = serde_json::to_value(&export_meta)?;
-            let fm = FrontmatterMetadata::from_json_with_file_path(&metadata_json, Some(&path));
-            let yaml = fm.to_yaml();
-
-            let body_key = format!("body:{}/{}", workspace_id, path);
-            let mut body = body_docs.get_or_create(&body_key).get_body();
-            if body.is_empty() && key != path {
-                let alt_key = format!("body:{}/{}", workspace_id, key);
-                body = body_docs.get_or_create(&alt_key).get_body();
-            }
-            let content = if yaml.is_empty() {
-                body
-            } else {
-                format!("---\n{}\n---\n\n{}", yaml, body)
-            };
-
-            zip.start_file(path.replace('\\', "/"), options)?;
-            zip.write_all(content.as_bytes())?;
+        for file in result.files {
+            zip.start_file(file.path.replace('\\', "/"), options)?;
+            zip.write_all(file.content.as_bytes())?;
         }
 
         let cursor = zip.finish()?;
@@ -281,7 +245,8 @@ impl WorkspaceStore {
                 .read_to_string(&mut content)
                 .map_err(|e| SnapshotError::Parse(format!("Failed reading {}: {}", name, e)))?;
 
-            let (metadata, body) = Self::parse_snapshot_markdown(&name, &content)?;
+            let (metadata, body) =
+                parse_snapshot_markdown(&name, &content).map_err(SnapshotError::Parse)?;
 
             workspace.set_file(&name, metadata.clone())?;
             let body_key = format!("body:{}/{}", workspace_id, name);
@@ -305,124 +270,5 @@ impl WorkspaceStore {
         );
 
         Ok(SnapshotImportResult { files_imported })
-    }
-
-    // ==================== Private Helpers ====================
-
-    fn resolve_snapshot_path(value: &str, id_to_path: &HashMap<String, String>) -> Option<String> {
-        if value.contains('/') || value.ends_with(".md") {
-            Some(value.to_string())
-        } else {
-            id_to_path.get(value).cloned()
-        }
-    }
-
-    fn parse_updated_value(value: &serde_yaml::Value) -> Option<i64> {
-        if let Some(num) = value.as_i64() {
-            return Some(num);
-        }
-        if let Some(num) = value.as_f64() {
-            return Some(num as i64);
-        }
-        if let Some(raw) = value.as_str() {
-            if let Ok(num) = raw.parse::<i64>() {
-                return Some(num);
-            }
-            if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(raw) {
-                return Some(parsed.timestamp_millis());
-            }
-        }
-        None
-    }
-
-    fn parse_snapshot_markdown(
-        path: &str,
-        content: &str,
-    ) -> Result<(FileMetadata, String), SnapshotError> {
-        let parsed = frontmatter::parse_or_empty(content)
-            .map_err(|e| SnapshotError::Parse(e.to_string()))?;
-        let fm = &parsed.frontmatter;
-        let body = parsed.body;
-        let file_path = std::path::Path::new(path);
-
-        let filename = file_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string();
-
-        let part_of = fm.get("part_of").and_then(|v| v.as_str()).map(|raw| {
-            let parsed = link_parser::parse_link(raw);
-            link_parser::to_canonical(&parsed, file_path)
-        });
-
-        let contents = fm.get("contents").and_then(|v| {
-            v.as_sequence().map(|seq| {
-                seq.iter()
-                    .filter_map(|v| v.as_str())
-                    .map(|raw| {
-                        let parsed = link_parser::parse_link(raw);
-                        link_parser::to_canonical(&parsed, file_path)
-                    })
-                    .collect::<Vec<String>>()
-            })
-        });
-
-        let audience = fm.get("audience").and_then(|v| {
-            v.as_sequence().map(|seq| {
-                seq.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect::<Vec<String>>()
-            })
-        });
-
-        let description = fm
-            .get("description")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-
-        let attachments = fm
-            .get("attachments")
-            .and_then(|v| {
-                v.as_sequence().map(|seq| {
-                    seq.iter()
-                        .filter_map(|v| v.as_str())
-                        .map(|raw| {
-                            let parsed = link_parser::parse_link(raw);
-                            let canonical = link_parser::to_canonical(&parsed, file_path);
-                            diaryx_core::crdt::BinaryRef {
-                                path: canonical,
-                                source: "local".to_string(),
-                                hash: String::new(),
-                                mime_type: String::new(),
-                                size: 0,
-                                uploaded_at: None,
-                                deleted: false,
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                })
-            })
-            .unwrap_or_default();
-
-        let modified_at = fm
-            .get("updated")
-            .and_then(Self::parse_updated_value)
-            .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
-
-        let metadata = FileMetadata {
-            filename,
-            title: fm.get("title").and_then(|v| v.as_str()).map(String::from),
-            part_of,
-            contents,
-            attachments,
-            deleted: fm.get("deleted").and_then(|v| v.as_bool()).unwrap_or(false),
-            audience,
-            description,
-            extra: HashMap::new(),
-            modified_at,
-        };
-
-        Ok((metadata, body))
     }
 }

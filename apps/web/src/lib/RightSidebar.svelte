@@ -34,6 +34,7 @@
   } from "@lucide/svelte";
   import type { Component } from "svelte";
   import VersionDiff from "./history/VersionDiff.svelte";
+  import GitHistoryPanel from "./history/GitHistoryPanel.svelte";
   import ShareTab from "./share/ShareTab.svelte";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
@@ -68,7 +69,7 @@
     // API for share tab
     api?: Api | null;
     // External tab/session control
-    requestedTab?: "properties" | "history" | "share" | null;
+    requestedTab?: "properties" | "history" | "share" | "snapshots" | null;
     onRequestedTabConsumed?: () => void;
     triggerStartSession?: boolean;
     onTriggerStartSessionConsumed?: () => void;
@@ -97,8 +98,8 @@
     onTriggerStartSessionConsumed,
   }: Props = $props();
 
-  // Tab state: "properties" | "history" | "share"
-  type TabType = "properties" | "history" | "share";
+  // Tab state: "properties" | "history" | "share" | "snapshots"
+  type TabType = "properties" | "history" | "share" | "snapshots";
   let activeTab: TabType = $state("properties");
 
   // Handle external tab request
@@ -490,6 +491,13 @@
         onclick={() => activeTab = "share"}
       >
         Share <span class="text-[8px] font-semibold uppercase px-1 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">α</span>
+      </button>
+      <button
+        type="button"
+        class="px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === 'snapshots' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+        onclick={() => activeTab = "snapshots"}
+      >
+        Snapshots <span class="text-[8px] font-semibold uppercase px-1 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">α</span>
       </button>
     </div>
   </div>
@@ -895,6 +903,9 @@
           </p>
         </div>
       {/if}
+    {:else if activeTab === "snapshots"}
+      <!-- Snapshots Tab (Git History) -->
+      <GitHistoryPanel />
     {:else if activeTab === "share"}
       <!-- Share Tab -->
       <ShareTab

@@ -29,3 +29,9 @@ HTTP route handlers for the sync server API.
 `api.rs` also serves workspace snapshot downloads and uploads at
 `GET /api/workspaces/{workspace_id}/snapshot` and
 `POST /api/workspaces/{workspace_id}/snapshot`.
+
+### Git Version History Endpoints
+
+- `GET /api/workspaces/{id}/history?count=N` — Commit log from bare repo
+- `POST /api/workspaces/{id}/commit` — Trigger immediate git commit (body: `{"message": "..."}`)
+- `POST /api/workspaces/{id}/restore` — Rebuild CRDT from target commit (body: `{"commit_id": "..."}`, requires peer_count <= 1)

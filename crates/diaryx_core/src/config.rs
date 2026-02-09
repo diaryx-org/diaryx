@@ -91,6 +91,44 @@ pub struct Config {
     /// Workspace ID for sync (identifies the remote workspace)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sync_workspace_id: Option<String>,
+
+    // ========================================================================
+    // Git version history configuration
+    // ========================================================================
+    /// Git-backed version history settings
+    #[serde(default, skip_serializing_if = "GitConfig::is_default")]
+    pub git: GitConfig,
+}
+
+/// Configuration for git-backed version history.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GitConfig {
+    /// Whether to automatically commit on workspace changes
+    #[serde(default)]
+    pub auto_commit: bool,
+
+    /// Interval in minutes between auto-commits (default: 30)
+    #[serde(default = "default_auto_commit_interval")]
+    pub auto_commit_interval_minutes: u32,
+}
+
+fn default_auto_commit_interval() -> u32 {
+    30
+}
+
+impl Default for GitConfig {
+    fn default() -> Self {
+        Self {
+            auto_commit: false,
+            auto_commit_interval_minutes: default_auto_commit_interval(),
+        }
+    }
+}
+
+impl GitConfig {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 fn is_default_link_format(format: &LinkFormat) -> bool {
@@ -130,6 +168,7 @@ impl Config {
             sync_session_token: None,
             sync_email: None,
             sync_workspace_id: None,
+            git: GitConfig::default(),
         }
     }
 
@@ -152,6 +191,7 @@ impl Config {
             sync_session_token: None,
             sync_email: None,
             sync_workspace_id: None,
+            git: GitConfig::default(),
         }
     }
 
@@ -260,6 +300,7 @@ impl Default for Config {
             sync_session_token: None,
             sync_email: None,
             sync_workspace_id: None,
+            git: GitConfig::default(),
         }
     }
 }
@@ -326,6 +367,7 @@ impl Config {
             sync_session_token: None,
             sync_email: None,
             sync_workspace_id: None,
+            git: GitConfig::default(),
         };
 
         config.save()?;
@@ -353,6 +395,7 @@ impl Default for Config {
             sync_session_token: None,
             sync_email: None,
             sync_workspace_id: None,
+            git: GitConfig::default(),
         }
     }
 }

@@ -310,6 +310,18 @@
     return { title: m[1], path: m[2] };
   }
 
+  // Resolve a link string to a workspace path and navigate to it
+  async function navigateToLink(link: string) {
+    if (!api || !entry) return;
+    try {
+      const resolved = await api.canonicalizeLink(link, entry.path);
+      await onOpenEntry?.(resolved);
+    } catch {
+      // Fallback: try the raw value
+      await onOpenEntry?.(link);
+    }
+  }
+
   // Format a selected file as a markdown link using the WASM api
   async function formatAsLink(filePath: string, fileName: string): Promise<string> {
     if (!api || !entry) return `[${fileName}](/${filePath})`;
@@ -563,7 +575,7 @@
                             <button
                               type="button"
                               class="hover:underline cursor-pointer"
-                              onclick={() => onOpenEntry?.(parsed.path)}
+                              onclick={() => navigateToLink(String(item))}
                               title={parsed.path}
                             >
                               {parsed.title || parsed.path}
@@ -699,10 +711,7 @@
                         <button
                           type="button"
                           class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-secondary text-secondary-foreground hover:underline cursor-pointer"
-                          onclick={() => {
-                            const p = partOfParsed?.path ?? String(value);
-                            onOpenEntry?.(p);
-                          }}
+                          onclick={() => navigateToLink(String(value))}
                           title={partOfParsed?.path ?? String(value)}
                         >
                           <ArrowUpRight class="size-3" />

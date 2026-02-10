@@ -6,6 +6,7 @@
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import * as Alert from "$lib/components/ui/alert";
+  import FilePickerPopover from "$lib/components/FilePickerPopover.svelte";
   import {
     Calendar,
     Clock,
@@ -31,6 +32,8 @@
     History,
     RefreshCw,
     RotateCcw,
+    ArrowUpRight,
+    Replace,
   } from "@lucide/svelte";
   import type { Component } from "svelte";
   import VersionDiff from "./history/VersionDiff.svelte";
@@ -298,6 +301,25 @@
   let addingArrayItemKey = $state<string | null>(null);
   let newArrayItem = $state("");
 
+  // Inline regex to parse markdown link [title](/path) synchronously for display
+  const LINK_RE = /^\[([^\]]*)\]\(([^)]+)\)$/;
+
+  function parseLinkDisplay(link: string): { title: string; path: string } | null {
+    const m = LINK_RE.exec(link);
+    if (!m) return null;
+    return { title: m[1], path: m[2] };
+  }
+
+  // Format a selected file as a markdown link using the WASM api
+  async function formatAsLink(filePath: string, fileName: string): Promise<string> {
+    if (!api || !entry) return `[${fileName}](/${filePath})`;
+    try {
+      return await api.formatLink(filePath, fileName, "markdown_root", entry.path);
+    } catch {
+      return `[${fileName}](/${filePath})`;
+    }
+  }
+
   // Get an icon for a frontmatter key
   function getIcon(key: string) {
     const lowerKey = key.toLowerCase();
@@ -528,8 +550,59 @@
                 </Button>
               </div>
               <div class="pl-5.5">
-                {#if isArray(value)}
-                  <!-- Array editor -->
+                {#if isArray(value) && key === 'contents'}
+                  <!-- Contents array with file picker -->
+                  <div class="space-y-1">
+                    <div class="flex flex-wrap gap-1">
+                      {#each value as item, i}
+                        {@const parsed = parseLinkDisplay(String(item))}
+                        <span
+                          class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-secondary text-secondary-foreground group/tag"
+                        >
+                          {#if parsed}
+                            <button
+                              type="button"
+                              class="hover:underline cursor-pointer"
+                              onclick={() => onOpenEntry?.(parsed.path)}
+                              title={parsed.path}
+                            >
+                              {parsed.title || parsed.path}
+                            </button>
+                          {:else}
+                            {item}
+                          {/if}
+                          <button
+                            type="button"
+                            class="opacity-0 group-hover/tag:opacity-100 hover:text-destructive transition-opacity"
+                            onclick={() => handleArrayItemRemove(key, i)}
+                            aria-label="Remove item"
+                          >
+                            <X class="size-3" />
+                          </button>
+                        </span>
+                      {/each}
+                    </div>
+                    <FilePickerPopover
+                      excludePaths={value.map(String).map((v) => parseLinkDisplay(v)?.path).filter((p): p is string => !!p)}
+                      placeholder="Add child entry..."
+                      onSelect={async (file) => {
+                        const link = await formatAsLink(file.path, file.name);
+                        const currentArray = (entry?.frontmatter[key] as unknown[]) || [];
+                        onPropertyChange?.(key, [...currentArray, link]);
+                      }}
+                    >
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        class="h-6 text-xs px-2 mt-1"
+                      >
+                        <Plus class="size-3 mr-1" />
+                        Add
+                      </Button>
+                    </FilePickerPopover>
+                  </div>
+                {:else if isArray(value)}
+                  <!-- Generic array editor -->
                   <div class="space-y-1">
                     <div class="flex flex-wrap gap-1">
                       {#each value as item, i}
@@ -617,6 +690,58 @@
                       onPropertyChange?.(key, parseDateFromInput(target.value));
                     }}
                   />
+                {:else if key === 'part_of'}
+                  <!-- part_of with file picker -->
+                  {@const partOfParsed = parseLinkDisplay(String(value ?? ""))}
+                  <div class="space-y-1">
+                    {#if value}
+                      <div class="flex items-center gap-1">
+                        <button
+                          type="button"
+                          class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-secondary text-secondary-foreground hover:underline cursor-pointer"
+                          onclick={() => {
+                            const p = partOfParsed?.path ?? String(value);
+                            onOpenEntry?.(p);
+                          }}
+                          title={partOfParsed?.path ?? String(value)}
+                        >
+                          <ArrowUpRight class="size-3" />
+                          {partOfParsed?.title || partOfParsed?.path || String(value)}
+                        </button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          class="size-5"
+                          onclick={() => onPropertyChange?.(key, "")}
+                          aria-label="Clear parent"
+                        >
+                          <X class="size-3" />
+                        </Button>
+                      </div>
+                    {/if}
+                    <FilePickerPopover
+                      excludePaths={entry ? [entry.path] : []}
+                      placeholder="Search for parent..."
+                      onSelect={async (file) => {
+                        const link = await formatAsLink(file.path, file.name);
+                        onPropertyChange?.(key, link);
+                      }}
+                    >
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        class="h-6 text-xs px-2"
+                      >
+                        {#if value}
+                          <Replace class="size-3 mr-1" />
+                          Change
+                        {:else}
+                          <Plus class="size-3 mr-1" />
+                          Set parent
+                        {/if}
+                      </Button>
+                    </FilePickerPopover>
+                  </div>
                 {:else}
                   <!-- String input -->
                   <Input
@@ -776,6 +901,24 @@
         {:else}
           <p class="text-xs text-muted-foreground mb-2">No attachments</p>
         {/if}
+
+        <FilePickerPopover
+          excludePaths={getAttachments()}
+          placeholder="Add attachment..."
+          onSelect={(file) => {
+            const currentAttachments = getAttachments();
+            onPropertyChange?.("attachments", [...currentAttachments, file.path]);
+          }}
+        >
+          <Button
+            variant="outline"
+            size="sm"
+            class="w-full h-7 text-xs"
+          >
+            <Plus class="size-3 mr-1" />
+            Add Attachment
+          </Button>
+        </FilePickerPopover>
       </div>
       {:else}
         <div

@@ -63,8 +63,11 @@ class CollaborationStore {
   /**
    * Effective sync status that only shows 'synced' when BOTH metadata AND body are synced.
    * Use this in UI components to accurately represent sync completion.
+   *
+   * Uses $derived.by instead of a getter so Svelte 5 creates a proper signal node
+   * in the reactive graph, ensuring reliable UI updates when dependencies change.
    */
-  get effectiveSyncStatus(): SyncStatus {
+  effectiveSyncStatus: SyncStatus = $derived.by(() => {
     // If there's an error, show error
     if (this.syncStatus === 'error') return 'error';
     // If not configured, show not configured
@@ -78,7 +81,7 @@ class CollaborationStore {
     // Otherwise show idle (metadata synced but body not yet synced)
     if (this.syncStatus === 'synced' && this.bodySyncStatus === 'idle') return 'syncing';
     return this.syncStatus;
-  }
+  });
 
   // Y.Doc management
   setYDoc(ydoc: YDoc | null) {

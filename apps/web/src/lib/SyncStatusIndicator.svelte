@@ -39,7 +39,7 @@
   let authState = $derived(getAuthState());
 
   // Combined progress: show body sync progress when metadata is synced but body is still syncing
-  let displayProgress = $derived(() => {
+  let displayProgress = $derived.by(() => {
     // If body sync has progress and metadata is synced, show body sync progress
     if (bodySyncProgress && collaborationStore.syncStatus === 'synced') {
       return bodySyncProgress;
@@ -125,8 +125,8 @@
 
       <!-- Label (hidden on mobile) -->
       <span class="hidden sm:inline text-xs">
-        {#if syncStatus === 'syncing' && displayProgress() && displayProgress()!.total > 0}
-          {displayProgress()!.completed}/{displayProgress()!.total}
+        {#if syncStatus === 'syncing' && displayProgress && displayProgress.total > 0}
+          {displayProgress.completed}/{displayProgress.total}
         {:else if authState.isAuthenticated && syncStatus === 'synced'}
           Synced
         {:else if authState.isAuthenticated}
@@ -149,8 +149,8 @@
       </div>
 
       <!-- Progress bar when syncing -->
-      {#if syncStatus === 'syncing' && displayProgress()}
-        {@const progress = displayProgress()!}
+      {#if syncStatus === 'syncing' && displayProgress}
+        {@const progress = displayProgress}
         {@const percent = progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0}
         <div class="space-y-1">
           <Progress value={percent} class="h-2" />

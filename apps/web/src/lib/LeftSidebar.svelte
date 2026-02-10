@@ -163,7 +163,7 @@
   }
 
   // Extract unlinked entries (files/directories not in hierarchy) from validation result
-  let unlinkedPaths = $derived(() => {
+  let unlinkedPaths = $derived.by(() => {
     const paths = new Set<string>();
     if (validationResult?.warnings) {
       for (const warning of validationResult.warnings) {
@@ -177,7 +177,7 @@
 
   // Check if a path is unlinked
   function isUnlinked(path: string): boolean {
-    return unlinkedPaths().has(path);
+    return unlinkedPaths.has(path);
   }
 
   // =========================================================================
@@ -285,7 +285,7 @@
   // Derived state: map of index paths to their inherited warnings
   // Only active when showUnlinkedFiles is OFF (hierarchy mode)
   // When showUnlinkedFiles is ON, orphan files appear directly in the tree
-  let inheritedWarnings = $derived(() => {
+  let inheritedWarnings = $derived.by(() => {
     const map = new Map<string, ValidationWarningWithMeta[]>();
 
     // Skip inherited warnings when showing all files - orphans are visible directly
@@ -331,13 +331,13 @@
 
   // Check if an index has inherited warnings
   function hasInheritedWarnings(path: string): boolean {
-    const warnings = inheritedWarnings().get(path);
+    const warnings = inheritedWarnings.get(path);
     return warnings !== undefined && warnings.length > 0;
   }
 
   // Get inherited warnings for an index
   function getInheritedWarnings(path: string): ValidationWarningWithMeta[] {
-    return inheritedWarnings().get(path) ?? [];
+    return inheritedWarnings.get(path) ?? [];
   }
 
   // =========================================================================
@@ -520,13 +520,13 @@
   }
 
   // Count total problems
-  let totalProblems = $derived(() => {
+  let totalProblems = $derived.by(() => {
     if (!validationResult) return 0;
     return validationResult.errors.length + validationResult.warnings.length;
   });
 
   // Count fixable problems
-  let fixableCount = $derived(() => {
+  let fixableCount = $derived.by(() => {
     if (!validationResult) return 0;
     let count = validationResult.errors.length; // All errors are fixable
     for (const warning of validationResult.warnings) {
@@ -1006,7 +1006,7 @@
   </div>
 
   <!-- Problems Panel -->
-  {#if totalProblems() > 0}
+  {#if totalProblems > 0}
     <div class="border-t border-sidebar-border shrink-0">
       <button
         type="button"
@@ -1021,7 +1021,7 @@
           {/if}
           <span class="text-sm font-medium">Problems</span>
           <span class="text-xs px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-600 dark:text-amber-400">
-            {totalProblems()}
+            {totalProblems}
           </span>
         </div>
       </button>
@@ -1131,7 +1131,7 @@
           {/if}
 
           <!-- Fix All Button -->
-          {#if fixableCount() > 0 && api}
+          {#if fixableCount > 0 && api}
             <Button
               variant="outline"
               size="sm"
@@ -1144,7 +1144,7 @@
                 Fixing...
               {:else}
                 <Wrench class="size-3" />
-                Fix All ({fixableCount()})
+                Fix All ({fixableCount})
               {/if}
             </Button>
           {/if}

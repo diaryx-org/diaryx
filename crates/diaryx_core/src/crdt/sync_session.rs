@@ -183,7 +183,10 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
             SessionState::WaitingForHandshake => {
                 // Server returned binary during handshake — no handshake needed,
                 // transition to active and process the message.
-                self.transition_to_active().await
+                let mut actions = self.transition_to_active().await;
+                let mut routed = self.route_binary_message(data).await;
+                actions.append(&mut routed);
+                actions
             }
             SessionState::Active => self.route_binary_message(data).await,
             SessionState::AwaitingConnect => {
@@ -467,6 +470,14 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
         let file_paths = self.sync_manager.get_all_file_paths();
         let file_count = file_paths.len();
 
+        if file_count > 0 {
+            // Emit initial progress before sending any SyncStep1s
+            actions.push(SessionAction::Emit(SyncEvent::Progress {
+                completed: 0,
+                total: file_count,
+            }));
+        }
+
         for (i, file_path) in file_paths.iter().enumerate() {
             let body_doc_id = format_body_doc_id(&self.config.workspace_id, file_path);
             let body_step1 = self.sync_manager.create_body_sync_step1(file_path);
@@ -484,10 +495,6 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
 
         if file_count > 0 {
             log::info!("[SyncSession] Sent body SyncStep1 for {} files", file_count);
-            actions.push(SessionAction::Emit(SyncEvent::Progress {
-                completed: 0,
-                total: file_count,
-            }));
         }
 
         actions

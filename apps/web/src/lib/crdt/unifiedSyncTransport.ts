@@ -361,7 +361,7 @@ export class UnifiedSyncTransport {
 
       switch (event.type) {
         case 'statusChanged':
-          if (event.status === 'synced' || event.status === 'Synced') {
+          if (event.status?.state === 'synced') {
             if (!this.workspaceSynced) {
               this.workspaceSynced = true;
               this.options.onWorkspaceSynced?.();

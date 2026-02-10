@@ -385,7 +385,11 @@ pub fn handle_push(config: &Config, workspace_root: &Path) {
         server_url: server_url.to_string(),
         workspace_id: workspace_id.to_string(),
         auth_token: Some(session_token.clone()),
-        reconnect: ReconnectConfig::default(),
+        reconnect: ReconnectConfig {
+            enabled: false,
+            max_attempts: 1,
+            ..Default::default()
+        },
     };
 
     let client = SyncClient::new(client_config, sync_manager, Arc::new(CliEventHandler));
@@ -451,7 +455,11 @@ pub fn handle_pull(config: &Config, workspace_root: &Path) {
         server_url: server_url.to_string(),
         workspace_id: workspace_id.to_string(),
         auth_token: Some(session_token.clone()),
-        reconnect: ReconnectConfig::default(),
+        reconnect: ReconnectConfig {
+            enabled: false,
+            max_attempts: 1,
+            ..Default::default()
+        },
     };
 
     let client = SyncClient::new(

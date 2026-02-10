@@ -350,14 +350,6 @@ thread_local! {
     static CRDT_SYNC_CALLBACK: RefCell<Option<Box<dyn Fn(&[u8])>>> = RefCell::new(None);
 }
 
-// Thread-local flag to track when we're handling a remote update.
-// This prevents the observe_updates callback from emitting sync messages for
-// updates that came from the server (which would cause an infinite loop).
-// Safe because WASM is single-threaded.
-thread_local! {
-    static IS_HANDLING_REMOTE_UPDATE: RefCell<bool> = const { RefCell::new(false) };
-}
-
 /// Create a bridge callback that forwards events from Rust's CallbackRegistry
 /// to the WASM-specific WasmCallbackRegistry (which holds JS functions).
 fn create_event_bridge() -> Arc<dyn Fn(&FileSystemEvent) + Send + Sync> {
@@ -376,11 +368,6 @@ fn setup_crdt_sync_callback(wasm_registry: &Rc<WasmCallbackRegistry>) {
     let registry = Rc::clone(wasm_registry);
     CRDT_SYNC_CALLBACK.with(|cb| {
         *cb.borrow_mut() = Some(Box::new(move |update: &[u8]| {
-            // Note: We intentionally do NOT check IS_HANDLING_REMOTE_UPDATE here.
-            // The y-sync protocol handles duplicate updates (applying them is a no-op),
-            // and the server excludes the sender from broadcasts. Checking the flag
-            // caused local updates to be suppressed when they occurred during an async
-            // suspension of a remote update handler (the flag leaked across .await points).
             if registry.subscriber_count() > 0 {
                 log::trace!(
                     "[CRDT_SYNC_CALLBACK] Emitting {} byte update, subscribers: {}",
@@ -398,39 +385,6 @@ fn setup_crdt_sync_callback(wasm_registry: &Rc<WasmCallbackRegistry>) {
             }
         }));
     });
-}
-
-/// RAII guard to set/clear the IS_HANDLING_REMOTE_UPDATE flag.
-struct RemoteUpdateGuard;
-
-impl RemoteUpdateGuard {
-    fn new() -> Self {
-        IS_HANDLING_REMOTE_UPDATE.with(|flag| {
-            *flag.borrow_mut() = true;
-        });
-        Self
-    }
-}
-
-impl Drop for RemoteUpdateGuard {
-    fn drop(&mut self) {
-        IS_HANDLING_REMOTE_UPDATE.with(|flag| {
-            *flag.borrow_mut() = false;
-        });
-    }
-}
-
-/// Check if a command is a sync-related command that handles remote updates.
-/// These commands apply updates from the server to our local CRDT, and we
-/// should NOT emit sync messages for these (to avoid feedback loops).
-fn is_remote_sync_command(cmd: &diaryx_core::Command) -> bool {
-    use diaryx_core::Command;
-    matches!(
-        cmd,
-        Command::HandleSyncMessage { .. }
-            | Command::HandleWorkspaceSyncMessage { .. }
-            | Command::HandleBodySyncMessage { .. }
-    )
 }
 
 /// Create a subscription to workspace CRDT updates that emits sync messages.
@@ -993,14 +947,6 @@ impl DiaryxBackend {
         let cmd: Command = serde_json::from_str(command_json)
             .map_err(|e| JsValue::from_str(&format!("Invalid command JSON: {}", e)))?;
 
-        // Check if this is a sync message command that handles remote updates.
-        // If so, set a guard to prevent feedback loops in the CRDT observer.
-        let _guard = if is_remote_sync_command(&cmd) {
-            Some(RemoteUpdateGuard::new())
-        } else {
-            None
-        };
-
         // Execute the command using the shared Diaryx instance
         // (callbacks were configured once during backend creation)
         let result = self
@@ -1023,14 +969,6 @@ impl DiaryxBackend {
 
         // Parse command from JS object
         let cmd: Command = serde_wasm_bindgen::from_value(command)?;
-
-        // Check if this is a sync message command that handles remote updates.
-        // If so, set a guard to prevent feedback loops in the CRDT observer.
-        let _guard = if is_remote_sync_command(&cmd) {
-            Some(RemoteUpdateGuard::new())
-        } else {
-            None
-        };
 
         // Execute the command using the shared Diaryx instance
         // (callbacks were configured once during backend creation)

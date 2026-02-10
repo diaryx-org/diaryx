@@ -161,12 +161,15 @@ impl<FS: AsyncFileSystem + 'static> SyncClient<FS> {
                     self.handler.on_event(event);
                 }
                 SessionAction::DownloadSnapshot { workspace_id } => {
-                    // Native clients don't use snapshot downloads (handled by handshake).
-                    // Log and continue.
+                    // Native clients don't download snapshots via HTTP — send FilesReady
+                    // immediately so the handshake continues (server will send CrdtState).
                     log::info!(
-                        "[SyncClient] Snapshot download requested for {} (not implemented for native)",
+                        "[SyncClient] Snapshot download requested for {} — sending FilesReady (native)",
                         workspace_id
                     );
+                    transport
+                        .send_text(r#"{"type":"FilesReady"}"#.to_string())
+                        .await?;
                 }
             }
         }
@@ -330,17 +333,34 @@ impl<FS: AsyncFileSystem + 'static> SyncClient<FS> {
                     match msg {
                         Some(Ok(WsMessage::Text(text))) => {
                             let actions = one_shot_session.process(IncomingEvent::TextMessage(text)).await;
+
+                            // Check if session transitioned to Active (Syncing status emitted)
+                            let has_syncing = actions.iter().any(|a| matches!(
+                                a, SessionAction::Emit(SyncEvent::StatusChanged { status: SyncStatus::Syncing })
+                            ));
+
                             for action in actions {
                                 match action {
                                     SessionAction::SendBinary(data) => transport.send_binary(data).await?,
                                     SessionAction::SendText(text) => transport.send_text(text).await?,
+                                    SessionAction::DownloadSnapshot { workspace_id } => {
+                                        // Native one-shot: send FilesReady to continue handshake
+                                        log::info!(
+                                            "[SyncClient] One-shot snapshot request for {} — sending FilesReady",
+                                            workspace_id
+                                        );
+                                        transport
+                                            .send_text(r#"{"type":"FilesReady"}"#.to_string())
+                                            .await?;
+                                    }
                                     _ => {}
                                 }
                             }
-                            // Check if session transitioned to active (body step1s sent)
-                            // We can't directly check session state, so we break after CrdtState
-                            // The session will have transitioned to Active after CrdtState
-                            break;
+
+                            if has_syncing {
+                                break; // Handshake complete, session is Active
+                            }
+                            // Otherwise keep looping (e.g., FileManifest received, waiting for CrdtState)
                         }
                         Some(Ok(WsMessage::Binary(data))) => {
                             // Server skipped handshake, process body step1s

@@ -56,7 +56,7 @@ pub struct BodyDoc {
     storage: Arc<dyn CrdtStorage>,
     /// The document name (file path). Uses RwLock for interior mutability
     /// to allow renaming via `set_doc_name()` without mutable access.
-    doc_name: RwLock<String>,
+    doc_name: Arc<RwLock<String>>,
     /// Optional callback for emitting filesystem events on remote/sync updates.
     event_callback: Option<Arc<dyn Fn(&FileSystemEvent) + Send + Sync>>,
     /// Flag set during apply_update to prevent observer from firing for remote updates.
@@ -83,7 +83,7 @@ impl BodyDoc {
             body_text,
             frontmatter_map,
             storage,
-            doc_name: RwLock::new(doc_name),
+            doc_name: Arc::new(RwLock::new(doc_name)),
             event_callback: None,
             applying_remote: Arc::new(AtomicBool::new(false)),
             sync_callback: RwLock::new(None),
@@ -138,7 +138,7 @@ impl BodyDoc {
             body_text,
             frontmatter_map,
             storage,
-            doc_name: RwLock::new(doc_name),
+            doc_name: Arc::new(RwLock::new(doc_name)),
             event_callback: None,
             applying_remote: Arc::new(AtomicBool::new(false)),
             sync_callback: RwLock::new(None),
@@ -189,16 +189,18 @@ impl BodyDoc {
 
         // Set up the update observer
         let applying_remote = Arc::clone(&self.applying_remote);
-        let doc_name_for_observer = doc_name.clone();
+        let doc_name_ref = Arc::clone(&self.doc_name);
 
         let subscription = self
             .doc
             .observe_update_v1(move |_, event| {
+                let current_doc_name = doc_name_ref.read().unwrap().clone();
+
                 // Skip if this is a remote update (we don't want to echo it back)
                 if applying_remote.load(Ordering::SeqCst) {
                     log::trace!(
                         "[BodyDoc] Observer skipping remote update for '{}'",
-                        doc_name_for_observer
+                        current_doc_name
                     );
                     return;
                 }
@@ -206,10 +208,10 @@ impl BodyDoc {
                 // Emit sync message with the update bytes
                 log::trace!(
                     "[BodyDoc] Observer fired for '{}', update_len={}",
-                    doc_name_for_observer,
+                    current_doc_name,
                     event.update.len()
                 );
-                callback(&doc_name_for_observer, &event.update);
+                callback(&current_doc_name, &event.update);
             })
             .expect("Failed to observe document updates");
 
@@ -809,5 +811,30 @@ mod tests {
     fn test_doc_name() {
         let doc = create_body_doc("workspace/notes/hello.md");
         assert_eq!(doc.doc_name(), "workspace/notes/hello.md");
+    }
+
+    #[test]
+    fn test_sync_callback_uses_updated_doc_name_after_rename() {
+        use std::sync::{Arc, Mutex};
+
+        let doc = create_body_doc("old-name.md");
+        let emitted_names = Arc::new(Mutex::new(Vec::<String>::new()));
+        let emitted_names_clone = Arc::clone(&emitted_names);
+
+        doc.set_sync_callback(Arc::new(move |doc_name: &str, _update: &[u8]| {
+            emitted_names_clone
+                .lock()
+                .unwrap()
+                .push(doc_name.to_string());
+        }));
+
+        doc.set_body("v1").unwrap();
+        doc.set_doc_name("new-name.md".to_string());
+        doc.set_body("v2").unwrap();
+
+        let names = emitted_names.lock().unwrap();
+        assert!(!names.is_empty(), "expected sync callbacks to fire");
+        assert!(names.iter().any(|name| name == "old-name.md"));
+        assert_eq!(names.last().map(String::as_str), Some("new-name.md"));
     }
 }

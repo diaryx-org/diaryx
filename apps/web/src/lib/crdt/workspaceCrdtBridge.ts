@@ -201,6 +201,10 @@ async function acquireFileLock(path: string): Promise<() => void> {
 type FileChangeCallback = (path: string | null, metadata: FileMetadata | null) => void;
 const fileChangeCallbacks = new Set<FileChangeCallback>();
 
+// File rename callbacks - called when a file path changes
+type FileRenamedCallback = (oldPath: string, newPath: string) => void;
+const fileRenamedCallbacks = new Set<FileRenamedCallback>();
+
 // Session sync callbacks - called when session data is received and synced
 type SessionSyncCallback = () => void;
 const sessionSyncCallbacks = new Set<SessionSyncCallback>();
@@ -1897,6 +1901,14 @@ export function onFileChange(callback: FileChangeCallback): () => void {
 }
 
 /**
+ * Subscribe to file rename events.
+ */
+export function onFileRenamed(callback: FileRenamedCallback): () => void {
+  fileRenamedCallbacks.add(callback);
+  return () => fileRenamedCallbacks.delete(callback);
+}
+
+/**
  * Subscribe to session sync events.
  * Called when session data is received and synced to Rust.
  * Use this to trigger UI refreshes after receiving data from a share session.
@@ -2075,6 +2087,19 @@ function notifyFileChange(path: string | null, metadata: FileMetadata | null): v
   }
 }
 
+function notifyFileRenamed(oldPath: string, newPath: string): void {
+  if (isTempFile(oldPath) || isTempFile(newPath)) {
+    return;
+  }
+  for (const callback of fileRenamedCallbacks) {
+    try {
+      callback(oldPath, newPath);
+    } catch (error) {
+      console.error('[WorkspaceCrdtBridge] File renamed callback error:', error);
+    }
+  }
+}
+
 /**
  * Update the file index from Rust CRDT state.
  * Called after remote sync updates to keep the SQLite index in sync.
@@ -2204,9 +2229,24 @@ function handleFileSystemEvent(event: FileSystemEvent): void {
     case 'FileRenamed':
       // Close body sync bridge for old path (cleanup)
       closeBodySync(event.old_path);
-      // File renamed - notify both old and new paths
+      // File renamed - notify rename listeners so open-entry path can be remapped.
+      notifyFileRenamed(event.old_path, event.new_path);
+
+      // Notify old path deletion and new path metadata updates.
       notifyFileChange(event.old_path, null);
-      notifyFileChange(event.new_path, null);
+      if (rustApi) {
+        rustApi
+          .getFile(event.new_path)
+          .then((metadata) => {
+            notifyFileChange(event.new_path, metadata ?? null);
+          })
+          .catch((error) => {
+            console.warn('[WorkspaceCrdtBridge] Failed to read metadata for renamed file:', error);
+            notifyFileChange(event.new_path, null);
+          });
+      } else {
+        notifyFileChange(event.new_path, null);
+      }
       if (!shareSessionStore.isGuest) {
         notifyFileChange(null, null);
       }

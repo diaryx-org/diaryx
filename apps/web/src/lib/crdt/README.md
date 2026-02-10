@@ -76,6 +76,12 @@ unavailable.
 the currently open entry. This avoids alias mismatches such as `./README.md`
 vs `README.md` and prevents duplicate or missed UI updates.
 
+`workspaceCrdtBridge.ts` also exposes `onFileRenamed(oldPath, newPath)` so UI
+state can remap the currently open entry path immediately when a rename arrives.
+For `FileRenamed` events, the bridge fetches fresh metadata for `new_path` from
+Rust and emits it through `onFileChange`, which keeps sidebar properties in sync
+after remote renames.
+
 When `SendSyncMessage` events arrive before the transport is ready (for
 example, during reconnect/setup transitions), `workspaceCrdtBridge` queues the
 local updates and flushes them after connect so local saves are not dropped.

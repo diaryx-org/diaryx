@@ -182,6 +182,10 @@ BodyDoc sync observers are registered once per document. Repeated calls to
 `set_sync_callback` for the same doc are ignored to avoid duplicate observers
 and unnecessary overhead during bulk downloads.
 
+When a file is renamed, an existing BodyDoc now emits sync updates using the
+current doc name (not the originally captured name), so post-rename edits
+continue syncing under the renamed path.
+
 ## Initial Sync Readiness
 
 `SyncSession` marks initial sync as ready only after:

@@ -1691,33 +1691,49 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 source: e,
             })?;
 
-        // Remove from old parent's contents (if old parent has an index)
-        if let Ok(Some(old_index_path)) = self.find_any_index_in_dir(old_parent).await {
-            let _ = self
-                .remove_from_index_contents(&old_index_path, &old_file_name)
-                .await;
-        }
+        // Discover index files after move.
+        let old_index_path = self.find_any_index_in_dir(old_parent).await.ok().flatten();
+        let new_index_path = self.find_any_index_in_dir(new_parent).await.ok().flatten();
+        let same_index_parent = old_index_path
+            .as_ref()
+            .zip(new_index_path.as_ref())
+            .is_some_and(|(old_idx, new_idx)| old_idx == new_idx);
 
-        // Add to new parent's contents and update part_of (if new parent has an index)
-        if let Ok(Some(new_index_path)) = self.find_any_index_in_dir(new_parent).await {
+        // Add to new parent's contents first. This avoids "disappearing entry" states
+        // if a transient write error occurs during index updates.
+        if let Some(new_index_path) = new_index_path.as_ref() {
             // Add with proper formatting
             let to_path_canonical = self.get_canonical_path(to_path);
             let title = self.resolve_title(&to_path_canonical).await;
-            let _ = self
-                .add_to_index_contents_canonical(&new_index_path, &to_path_canonical, &title)
-                .await;
+            self.add_to_index_contents_canonical(new_index_path, &to_path_canonical, &title)
+                .await?;
 
-            // Update moved entry's part_of with proper formatting
-            let part_of_value = if self.root_path.is_some() {
-                let new_index_canonical = self.get_canonical_path(&new_index_path);
-                let parent_title = self.resolve_title(&new_index_canonical).await;
-                self.format_link_sync(&new_index_canonical, &parent_title, &to_path_canonical)
-            } else {
-                relative_path_from_file_to_target(to_path, &new_index_path)
-            };
-            let _ = self
-                .set_frontmatter_property(to_path, "part_of", Value::String(part_of_value))
-                .await;
+            // Update moved entry's part_of only when parent index actually changes.
+            if !same_index_parent {
+                let part_of_value = if self.root_path.is_some() {
+                    let new_index_canonical = self.get_canonical_path(new_index_path);
+                    let parent_title = self.resolve_title(&new_index_canonical).await;
+                    self.format_link_sync(&new_index_canonical, &parent_title, &to_path_canonical)
+                } else {
+                    relative_path_from_file_to_target(to_path, new_index_path)
+                };
+                self.set_frontmatter_property(to_path, "part_of", Value::String(part_of_value))
+                    .await?;
+            }
+        }
+
+        // Remove from old parent's contents after successful add to avoid lossy updates.
+        if let Some(old_index_path) = old_index_path.as_ref()
+            && let Err(e) = self
+                .remove_from_index_contents(old_index_path, &old_file_name)
+                .await
+        {
+            log::warn!(
+                "move_entry: failed to remove old contents reference '{}' from '{}': {}",
+                old_file_name,
+                old_index_path.display(),
+                e
+            );
         }
 
         Ok(())
@@ -2046,9 +2062,16 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     use crate::path_utils::relative_path_from_file_to_target;
                     relative_path_from_file_to_target(child_path, &new_file_path)
                 };
-                let _ = self
+                if let Err(e) = self
                     .set_frontmatter_property(child_path, "part_of", Value::String(part_of_value))
-                    .await;
+                    .await
+                {
+                    log::warn!(
+                        "rename_entry: failed to update child part_of for '{}': {}",
+                        child_path.display(),
+                        e
+                    );
+                }
             }
 
             // Update grandparent's contents if it exists
@@ -2058,20 +2081,26 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     .and_then(|n| n.to_str())
                     .unwrap_or_default();
 
-                // Remove old entry
                 let old_rel = format!("{}/{}.md", old_dir_name, old_dir_name);
-                let _ = self
-                    .remove_from_index_contents(&grandparent_index, &old_rel)
-                    .await;
+                // Add new entry first to avoid transient "missing child" states.
+                self.add_to_index_contents_canonical(
+                    &grandparent_index,
+                    &new_file_canonical,
+                    &new_file_title,
+                )
+                .await?;
 
-                // Add new entry with proper formatting
-                let _ = self
-                    .add_to_index_contents_canonical(
-                        &grandparent_index,
-                        &new_file_canonical,
-                        &new_file_title,
-                    )
-                    .await;
+                if let Err(e) = self
+                    .remove_from_index_contents(&grandparent_index, &old_rel)
+                    .await
+                {
+                    log::warn!(
+                        "rename_entry: failed to remove old grandparent contents reference '{}' from '{}': {}",
+                        old_rel,
+                        grandparent_index.display(),
+                        e
+                    );
+                }
             }
 
             Ok(new_file_path)
@@ -2111,17 +2140,23 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
 
             // Update parent's contents if it exists
             if let Ok(Some(parent_index)) = self.find_any_index_in_dir(parent).await {
-                // Remove old entry
-                let _ = self
-                    .remove_from_index_contents(&parent_index, &old_filename)
-                    .await;
-
-                // Add new entry with proper formatting
+                // Add new entry first to avoid transient "missing child" states.
                 let new_path_canonical = self.get_canonical_path(&new_path);
                 let title = self.resolve_title(&new_path_canonical).await;
-                let _ = self
-                    .add_to_index_contents_canonical(&parent_index, &new_path_canonical, &title)
-                    .await;
+                self.add_to_index_contents_canonical(&parent_index, &new_path_canonical, &title)
+                    .await?;
+
+                if let Err(e) = self
+                    .remove_from_index_contents(&parent_index, &old_filename)
+                    .await
+                {
+                    log::warn!(
+                        "rename_entry: failed to remove old parent contents reference '{}' from '{}': {}",
+                        old_filename,
+                        parent_index.display(),
+                        e
+                    );
+                }
             }
 
             Ok(new_path)
@@ -2767,5 +2802,43 @@ mod tests {
 
         assert!(block_on_test(ws.is_root_index(Path::new("root.md"))));
         assert!(!block_on_test(ws.is_root_index(Path::new("child.md"))));
+    }
+
+    #[test]
+    fn test_rename_entry_updates_parent_contents_without_dropping_child() {
+        let fs = InMemoryFileSystem::new();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents:\n  - new-entry.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("new-entry.md"),
+            "---\ntitle: New Entry\npart_of: README.md\n---\n\n# New Entry\n",
+        )
+        .unwrap();
+
+        let async_fs = SyncToAsyncFs::new(fs);
+        let ws = Workspace::new(async_fs);
+
+        let renamed = block_on_test(ws.rename_entry(Path::new("new-entry.md"), "test.md")).unwrap();
+        assert_eq!(renamed, PathBuf::from("test.md"));
+
+        let contents =
+            block_on_test(ws.get_frontmatter_property(Path::new("README.md"), "contents")).unwrap();
+        let entries = match contents {
+            Some(Value::Sequence(items)) => items
+                .into_iter()
+                .filter_map(|item| item.as_str().map(ToString::to_string))
+                .collect::<Vec<_>>(),
+            other => panic!("expected contents sequence, got {:?}", other),
+        };
+
+        assert!(entries.iter().any(|entry| entry.contains("test.md")));
+        assert!(!entries.iter().any(|entry| entry.contains("new-entry.md")));
+
+        let tree = block_on_test(ws.build_tree(Path::new("README.md"))).unwrap();
+        assert_eq!(tree.children.len(), 1);
+        assert_eq!(tree.children[0].path, PathBuf::from("test.md"));
     }
 }

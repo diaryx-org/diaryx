@@ -51,6 +51,7 @@ import {
   destroyWorkspace,
   discardQueuedLocalSyncUpdates,
   onFileChange,
+  onFileRenamed,
   onSessionSync,
   onBodyChange,
   initEventSubscription,
@@ -208,6 +209,52 @@ describe('workspaceCrdtBridge', () => {
 
       expect(typeof unsubscribe).toBe('function')
       unsubscribe()
+    })
+
+    it('should notify rename listeners and emit metadata for renamed path', async () => {
+      await initWorkspace({
+        rustApi: mockRustApi as any,
+      })
+
+      mockRustApi.getFile.mockResolvedValueOnce({
+        title: 'Renamed Note',
+      } as any)
+
+      let eventHandler: ((event: any) => void) | null = null
+      const backend = {
+        onFileSystemEvent: vi.fn((cb: (event: any) => void) => {
+          eventHandler = cb
+          return 43
+        }),
+        offFileSystemEvent: vi.fn(),
+      }
+
+      const cleanup = initEventSubscription(backend as any)
+      const renameCb = vi.fn()
+      const fileCb = vi.fn()
+      const unsubRename = onFileRenamed(renameCb)
+      const unsubFile = onFileChange(fileCb)
+
+      eventHandler!({
+        type: 'FileRenamed',
+        old_path: 'new-entry.md',
+        new_path: 'test.md',
+      })
+
+      // allow async metadata fetch callback to run
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(renameCb).toHaveBeenCalledWith('new-entry.md', 'test.md')
+      expect(fileCb).toHaveBeenCalledWith('new-entry.md', null)
+      expect(fileCb).toHaveBeenCalledWith(
+        'test.md',
+        expect.objectContaining({ title: 'Renamed Note' })
+      )
+
+      unsubRename()
+      unsubFile()
+      cleanup()
     })
 
     it('should ignore temp-file event churn across event types', async () => {

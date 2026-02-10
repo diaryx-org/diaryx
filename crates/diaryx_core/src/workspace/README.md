@@ -17,3 +17,13 @@ This module organizes collections of markdown files into hierarchical workspaces
 
 - `mod.rs` - Workspace implementation with tree building
 - `types.rs` - TreeNode and related types
+
+## Rename/Move Consistency
+
+Workspace rename/move operations now prefer non-lossy index updates:
+
+- Parent `contents` updates add the new canonical reference before removing the old one.
+- Same-parent renames skip unnecessary `part_of` rewrites.
+- Cleanup failures when removing old `contents` references are logged as warnings instead of silently ignored.
+
+This reduces transient states where a renamed child disappears from workspace trees.

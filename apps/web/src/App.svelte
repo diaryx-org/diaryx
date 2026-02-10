@@ -13,6 +13,7 @@
     onSessionSync,
     onBodyChange,
     onFileChange,
+    onFileRenamed,
     onSyncProgress,
     onSyncStatus,
     getTreeFromCrdt,
@@ -185,6 +186,7 @@
   let cleanupSessionSync: (() => void) | null = null;
   let cleanupBodyChange: (() => void) | null = null;
   let cleanupFileChange: (() => void) | null = null;
+  let cleanupFileRenamed: (() => void) | null = null;
   let cleanupSyncProgress: (() => void) | null = null;
   let cleanupSyncStatus: (() => void) | null = null;
 
@@ -441,6 +443,29 @@
         }
       });
 
+      // Register callback to remap the currently open entry when a file is renamed.
+      // This keeps metadata/body updates targeting the renamed canonical path.
+      cleanupFileRenamed = onFileRenamed(async (oldPath, newPath) => {
+        if (!api || !currentEntry) return;
+
+        const currentCanonical = await getCanonicalPathForSync(currentEntry.path);
+        if (currentCanonical !== oldPath) return;
+
+        console.log('[App] Current entry renamed:', oldPath, '->', newPath);
+
+        // Remap path immediately so upcoming metadata/body events match this entry.
+        entryStore.setCurrentEntry({
+          ...currentEntry,
+          path: newPath,
+        });
+
+        // If there are no unsaved local edits, reopen the entry at its new path to
+        // refresh frontmatter and keep body sync subscriptions aligned.
+        if (!isDirty) {
+          await openEntryController(api, newPath, tree, collaborationEnabled);
+        }
+      });
+
       // Register sync progress callback to update collaborationStore
       cleanupSyncProgress = onSyncProgress((completed, total) => {
         collaborationStore.setSyncProgress({ completed, total });
@@ -528,6 +553,7 @@
     cleanupSessionSync?.();
     cleanupBodyChange?.();
     cleanupFileChange?.();
+    cleanupFileRenamed?.();
     cleanupSyncProgress?.();
     cleanupSyncStatus?.();
     // Disconnect workspace CRDT (keeps local state for quick reconnect)

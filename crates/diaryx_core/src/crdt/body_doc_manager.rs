@@ -102,9 +102,8 @@ impl BodyDocManager {
             );
             doc.set_sync_callback(Arc::new({
                 let callback = callback.clone();
-                let doc_name = doc_name.clone();
-                move |_name: &str, update: &[u8]| {
-                    callback(&doc_name, update);
+                move |name: &str, update: &[u8]| {
+                    callback(name, update);
                 }
             }));
         }
@@ -127,9 +126,8 @@ impl BodyDocManager {
                 doc_name
             );
             let callback = callback.clone();
-            let doc_name = doc_name.to_string();
-            doc.set_sync_callback(Arc::new(move |_name: &str, update: &[u8]| {
-                callback(&doc_name, update);
+            doc.set_sync_callback(Arc::new(move |name: &str, update: &[u8]| {
+                callback(name, update);
             }));
         } else {
             log::trace!(
@@ -655,5 +653,38 @@ mod tests {
         );
         assert_eq!(calls[0].0, "test.md", "Callback should receive doc name");
         assert!(!calls[0].1.is_empty(), "Update bytes should not be empty");
+    }
+
+    #[test]
+    fn test_sync_callback_uses_new_name_after_manager_rename() {
+        use std::sync::{Arc, Mutex};
+
+        let storage: Arc<dyn CrdtStorage> = Arc::new(MemoryStorage::new());
+        let manager = BodyDocManager::new(Arc::clone(&storage));
+
+        let sync_calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let sync_calls_clone = Arc::clone(&sync_calls);
+        manager.set_sync_callback(Arc::new(move |doc_name: &str, _update: &[u8]| {
+            sync_calls_clone.lock().unwrap().push(doc_name.to_string());
+        }));
+
+        let doc = manager.get_or_create("old.md");
+        let _ = doc.set_body("before rename");
+
+        manager.rename("old.md", "new.md").unwrap();
+
+        let renamed_doc = manager.get("new.md").expect("renamed doc should exist");
+        let _ = renamed_doc.set_body("after rename");
+
+        let calls = sync_calls.lock().unwrap();
+        assert!(
+            calls.iter().any(|name| name == "old.md"),
+            "expected pre-rename callback under old name"
+        );
+        assert_eq!(
+            calls.last().map(String::as_str),
+            Some("new.md"),
+            "latest callback should use renamed path"
+        );
     }
 }

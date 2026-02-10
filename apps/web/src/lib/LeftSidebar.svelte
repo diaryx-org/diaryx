@@ -944,9 +944,10 @@
   >
     <a
       href="/"
-      class="text-xl font-semibold text-sidebar-foreground hover:text-sidebar-foreground/80 transition-colors"
+      class="text-xl font-semibold text-sidebar-foreground hover:text-sidebar-foreground/80 transition-colors flex items-baseline gap-1.5"
     >
       Diaryx
+      <span class="text-xs font-normal text-sidebar-foreground/50">v{__APP_VERSION__}</span>
     </a>
     <div class="flex items-center gap-1">
       <Tooltip.Root>

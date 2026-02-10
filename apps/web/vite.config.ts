@@ -2,13 +2,20 @@ import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import path from "path";
+import { readFileSync } from "fs";
 
+const pkg = JSON.parse(
+  readFileSync(path.resolve(__dirname, "package.json"), "utf-8")
+);
 const isTauri = !!process.env.TAURI_ENV_PLATFORM;
 const useWasmCdn = !!process.env.VITE_WASM_CDN_URL;
 const tauriDevHost = process.env.TAURI_DEV_HOST;
 
 // https://vitejs.dev/config/
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   plugins: [tailwindcss(), svelte() as any],
   // Base path for GitHub Pages deployment
   // Set VITE_BASE_PATH env var to deploy to a subdirectory (e.g., "/repo-name/")

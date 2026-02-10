@@ -32,7 +32,7 @@
 //! - `readBinary` / `writeBinary`: Efficient Uint8Array handling without base64 overhead
 
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::io::Result as IoResult;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -40,8 +40,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use diaryx_core::crdt::{
-    BodyDocManager, CrdtStorage, MemoryStorage, OutgoingSyncMessage, RustSyncManager, SyncHandler,
-    SyncMessage, WorkspaceCrdt,
+    BodyDocManager, CrdtStorage, MemoryStorage, RustSyncManager, SyncHandler, SyncMessage,
+    SyncSessionConfig, WorkspaceCrdt,
 };
 use diaryx_core::diaryx::Diaryx;
 use diaryx_core::frontmatter;
@@ -358,28 +358,6 @@ thread_local! {
     static IS_HANDLING_REMOTE_UPDATE: RefCell<bool> = const { RefCell::new(false) };
 }
 
-// Thread-local storage for outgoing sync messages.
-// This allows the event callback (which must be Send + Sync) to queue messages
-// without holding a direct reference to the DiaryxBackend.
-thread_local! {
-    static OUTGOING_SYNC_QUEUE: RefCell<Option<Rc<RefCell<VecDeque<OutgoingSyncMessage>>>>> = RefCell::new(None);
-}
-
-/// Create an event bridge that forwards SendSyncMessage events to the outgoing queue.
-fn create_sync_outgoing_bridge() -> Arc<dyn Fn(&FileSystemEvent) + Send + Sync> {
-    Arc::new(|event: &FileSystemEvent| {
-        if let Some(msg) = OutgoingSyncMessage::from_event(event) {
-            OUTGOING_SYNC_QUEUE.with(|queue| {
-                if let Some(q) = queue.borrow().as_ref() {
-                    if let Ok(mut q) = q.try_borrow_mut() {
-                        q.push_back(msg);
-                    }
-                }
-            });
-        }
-    })
-}
-
 /// Create a bridge callback that forwards events from Rust's CallbackRegistry
 /// to the WASM-specific WasmCallbackRegistry (which holds JS functions).
 fn create_event_bridge() -> Arc<dyn Fn(&FileSystemEvent) + Send + Sync> {
@@ -512,9 +490,6 @@ pub struct DiaryxBackend {
     /// Sync manager for handling sync protocol messages.
     /// Shared across all sync operations for persistent state.
     sync_manager: Arc<RustSyncManager<EventEmittingFs<CrdtFs<StorageBackend>>>>,
-    /// Queue for outgoing sync messages.
-    /// JS polls this queue and sends messages over WebSocket.
-    outgoing_sync_messages: RefCell<VecDeque<OutgoingSyncMessage>>,
     /// Shared Diaryx instance for command execution.
     /// Created once during backend initialization with callbacks pre-configured.
     diaryx: Diaryx<EventEmittingFs<CrdtFs<StorageBackend>>>,
@@ -640,7 +615,7 @@ impl DiaryxBackend {
             rust_event_registry,
             crdt_update_subscription: Some(crdt_update_subscription),
             sync_manager,
-            outgoing_sync_messages: RefCell::new(VecDeque::new()),
+
             diaryx,
         })
     }
@@ -748,7 +723,7 @@ impl DiaryxBackend {
             rust_event_registry,
             crdt_update_subscription: Some(crdt_update_subscription),
             sync_manager,
-            outgoing_sync_messages: RefCell::new(VecDeque::new()),
+
             diaryx,
         })
     }
@@ -869,7 +844,7 @@ impl DiaryxBackend {
             rust_event_registry,
             crdt_update_subscription: Some(crdt_update_subscription),
             sync_manager,
-            outgoing_sync_messages: RefCell::new(VecDeque::new()),
+
             diaryx,
         })
     }
@@ -991,7 +966,7 @@ impl DiaryxBackend {
             rust_event_registry,
             crdt_update_subscription: Some(crdt_update_subscription),
             sync_manager,
-            outgoing_sync_messages: RefCell::new(VecDeque::new()),
+
             diaryx,
         })
     }
@@ -1344,303 +1319,52 @@ impl DiaryxBackend {
     }
 
     // ========================================================================
-    // Sync Control API
+    // Sync Client API
     // ========================================================================
     //
-    // These methods provide unified sync control for WASM, matching the
-    // SyncClient architecture used by Tauri and CLI. JavaScript manages
-    // WebSocket connections while Rust handles all sync protocol logic.
-    //
-    // Workflow:
-    // 1. Call startSync() to set up the event bridge
-    // 2. Connect WebSocket in JavaScript
-    // 3. Call getWorkspaceSyncStep1() and getBodySyncStep1() for initial sync
-    // 4. When JS receives WebSocket messages, call injectWorkspaceSyncMessage()
-    //    or injectBodySyncMessage()
-    // 5. Poll pollOutgoingSyncMessage() and send results via WebSocket
-    // 6. Call stopSync() when disconnecting
-
-    /// Start sync session and set up event bridge.
-    ///
-    /// This wires up the sync manager's event callback to queue outgoing
-    /// messages. Call this before connecting WebSocket.
-    ///
-    /// ## Example
-    /// ```javascript
-    /// backend.startSync();
-    /// const ws = new WebSocket(url);
-    /// // ... rest of setup
-    /// ```
-    #[wasm_bindgen(js_name = "startSync")]
-    pub fn start_sync(&self) {
-        // Store the outgoing queue in thread-local so the event bridge can access it
-        let queue = Rc::new(self.outgoing_sync_messages.clone());
-        OUTGOING_SYNC_QUEUE.with(|tls| {
-            *tls.borrow_mut() = Some(queue);
-        });
-
-        // Set the event callback on the sync manager to use the thread-local bridge
-        self.sync_manager
-            .set_event_callback(create_sync_outgoing_bridge());
-
-        log::info!("[DiaryxBackend] Sync session started, event bridge connected");
-    }
-
-    /// Stop sync session.
-    ///
-    /// Clears the outgoing message queue. Call after disconnecting WebSocket.
-    #[wasm_bindgen(js_name = "stopSync")]
-    pub fn stop_sync(&self) {
-        // Clear the thread-local queue reference
-        OUTGOING_SYNC_QUEUE.with(|tls| {
-            *tls.borrow_mut() = None;
-        });
-        self.outgoing_sync_messages.borrow_mut().clear();
-        log::info!("[DiaryxBackend] Sync session stopped");
-    }
-
-    /// Get initial workspace sync step1 message.
-    ///
-    /// Returns a Uint8Array containing the Y-sync step1 message to send
-    /// over the WebSocket to initiate workspace metadata sync.
-    ///
-    /// ## Example
-    /// ```javascript
-    /// const step1 = backend.getWorkspaceSyncStep1();
-    /// ws.send(step1);
-    /// ```
-    #[wasm_bindgen(js_name = "getWorkspaceSyncStep1")]
-    pub fn get_workspace_sync_step1(&self) -> js_sys::Uint8Array {
-        let step1 = self.sync_manager.create_workspace_sync_step1();
-        js_sys::Uint8Array::from(step1.as_slice())
-    }
-
-    /// Get initial body sync step1 message for a document.
-    ///
-    /// Returns a Uint8Array containing the Y-sync step1 message for
-    /// the specified document's body content.
-    ///
-    /// ## Example
-    /// ```javascript
-    /// const step1 = backend.getBodySyncStep1("notes/my-note.md");
-    /// // Frame it for multiplexed connection and send
-    /// ```
-    #[wasm_bindgen(js_name = "getBodySyncStep1")]
-    pub fn get_body_sync_step1(&self, doc_name: &str) -> js_sys::Uint8Array {
-        let step1 = self.sync_manager.create_body_sync_step1(doc_name);
-        js_sys::Uint8Array::from(step1.as_slice())
-    }
-
-    /// Inject an incoming workspace sync message.
-    ///
-    /// Call this when the WebSocket receives a message for the workspace
-    /// (metadata) connection. Returns a response message to send back,
-    /// or null if no response is needed.
-    ///
-    /// ## Example
-    /// ```javascript
-    /// ws.onmessage = (event) => {
-    ///   const data = new Uint8Array(event.data);
-    ///   const response = backend.injectWorkspaceSyncMessage(data, true);
-    ///   if (response) ws.send(response);
-    /// };
-    /// ```
-    #[wasm_bindgen(js_name = "injectWorkspaceSyncMessage")]
-    pub fn inject_workspace_sync_message(&self, message: &[u8], write_to_disk: bool) -> Promise {
-        let sync_manager = Arc::clone(&self.sync_manager);
-        let message = message.to_vec();
-        let registry = Rc::clone(&self.wasm_event_registry);
-
-        future_to_promise(async move {
-            // Set guard to prevent feedback loop
-            let _guard = RemoteUpdateGuard::new();
-
-            match sync_manager
-                .handle_workspace_message(&message, write_to_disk)
-                .await
-            {
-                Ok(result) => {
-                    // Emit file change events for UI updates
-                    for path in &result.changed_files {
-                        let event = FileSystemEvent::MetadataChanged {
-                            path: PathBuf::from(path),
-                            frontmatter: serde_json::json!({}),
-                        };
-                        registry.emit(&event);
-                    }
-
-                    // Return response if any
-                    match result.response {
-                        Some(resp) => Ok(js_sys::Uint8Array::from(resp.as_slice()).into()),
-                        None => Ok(JsValue::NULL),
-                    }
-                }
-                Err(e) => Err(JsValue::from_str(&format!("Sync error: {}", e))),
-            }
-        })
-    }
-
-    /// Inject an incoming body sync message.
-    ///
-    /// Call this when the WebSocket receives a message for a body document.
-    /// The message should already be unframed (doc_name extracted separately).
-    /// Returns a response message to send back, or null if no response is needed.
-    ///
-    /// ## Example
-    /// ```javascript
-    /// // After unframing the multiplexed message:
-    /// const response = await backend.injectBodySyncMessage(docName, data, true);
-    /// if (response) ws.send(frameBodyMessage(docName, response));
-    /// ```
-    #[wasm_bindgen(js_name = "injectBodySyncMessage")]
-    pub fn inject_body_sync_message(
-        &self,
-        doc_name: &str,
-        message: &[u8],
-        write_to_disk: bool,
-    ) -> Promise {
-        let sync_manager = Arc::clone(&self.sync_manager);
-        let doc_name = doc_name.to_string();
-        let message = message.to_vec();
-        let registry = Rc::clone(&self.wasm_event_registry);
-
-        future_to_promise(async move {
-            // Set guard to prevent feedback loop
-            let _guard = RemoteUpdateGuard::new();
-
-            match sync_manager
-                .handle_body_message(&doc_name, &message, write_to_disk)
-                .await
-            {
-                Ok(result) => {
-                    // Emit content change event if not echo
-                    if !result.is_echo {
-                        if let Some(content) = &result.content {
-                            let event = FileSystemEvent::ContentsChanged {
-                                path: PathBuf::from(&doc_name),
-                                body: content.clone(),
-                            };
-                            registry.emit(&event);
-                        }
-                    }
-
-                    // Return response if any
-                    match result.response {
-                        Some(resp) => Ok(js_sys::Uint8Array::from(resp.as_slice()).into()),
-                        None => Ok(JsValue::NULL),
-                    }
-                }
-                Err(e) => Err(JsValue::from_str(&format!("Body sync error: {}", e))),
-            }
-        })
-    }
-
-    /// Poll for an outgoing sync message.
-    ///
-    /// Returns the next outgoing message as a JavaScript object with:
-    /// - `docName`: Document name ("workspace" or file path)
-    /// - `message`: Uint8Array message data
-    /// - `isBody`: Boolean indicating body (true) or workspace (false)
-    ///
-    /// Returns null if no messages are queued.
-    ///
-    /// ## Example
-    /// ```javascript
-    /// setInterval(() => {
-    ///   let msg;
-    ///   while ((msg = backend.pollOutgoingSyncMessage()) !== null) {
-    ///     if (msg.isBody) {
-    ///       bodyWs.send(frameBodyMessage(msg.docName, msg.message));
-    ///     } else {
-    ///       workspaceWs.send(msg.message);
-    ///     }
-    ///   }
-    /// }, 50);
-    /// ```
-    #[wasm_bindgen(js_name = "pollOutgoingSyncMessage")]
-    pub fn poll_outgoing_sync_message(&self) -> JsValue {
-        if let Some(msg) = self.outgoing_sync_messages.borrow_mut().pop_front() {
-            let obj = js_sys::Object::new();
-            let _ = js_sys::Reflect::set(
-                &obj,
-                &JsValue::from_str("docName"),
-                &JsValue::from_str(&msg.doc_name),
-            );
-            let _ = js_sys::Reflect::set(
-                &obj,
-                &JsValue::from_str("message"),
-                &js_sys::Uint8Array::from(msg.message.as_slice()),
-            );
-            let _ = js_sys::Reflect::set(
-                &obj,
-                &JsValue::from_str("isBody"),
-                &JsValue::from_bool(msg.is_body),
-            );
-            obj.into()
-        } else {
-            JsValue::NULL
-        }
-    }
-
-    /// Check if there are pending outgoing sync messages.
-    #[wasm_bindgen(js_name = "hasOutgoingSyncMessages")]
-    pub fn has_outgoing_sync_messages(&self) -> bool {
-        !self.outgoing_sync_messages.borrow().is_empty()
-    }
-
-    /// Get count of pending outgoing sync messages.
-    #[wasm_bindgen(js_name = "outgoingSyncMessageCount")]
-    pub fn outgoing_sync_message_count(&self) -> usize {
-        self.outgoing_sync_messages.borrow().len()
-    }
-
-    // ========================================================================
-    // New Unified Sync Client API
-    // ========================================================================
-    //
-    // This API provides a unified SyncClient<CallbackTransport> wrapper that
-    // keeps all sync protocol logic in Rust while JavaScript manages WebSocket
-    // connections. This matches the native architecture where Tauri uses
-    // SyncClient<TokioTransport>.
+    // Creates a WasmSyncClient backed by the shared SyncSession protocol
+    // handler. JavaScript manages WebSocket connections while Rust handles
+    // all sync protocol logic (handshake, framing, routing).
 
     /// Create a new sync client for the given server and workspace.
     ///
-    /// This creates a `WasmSyncClient` that wraps `SyncClient<CallbackTransport>`.
-    /// JavaScript manages WebSocket connections while Rust handles all sync logic.
+    /// Creates a `WasmSyncClient` backed by the shared `SyncSession` protocol
+    /// handler. JavaScript manages the WebSocket while Rust handles all sync
+    /// protocol logic (handshake, message routing, framing).
     ///
     /// ## Example
     ///
     /// ```javascript
     /// const client = backend.createSyncClient(
-    ///   'wss://sync.example.com/sync',
+    ///   'https://sync.example.com',
     ///   'my-workspace-id',
     ///   'auth-token-optional'
     /// );
     ///
-    /// // Get URLs and create WebSocket connections
-    /// const metaUrl = client.getMetadataUrl();
-    /// const bodyUrl = client.getBodyUrl();
+    /// // Get the WebSocket URL
+    /// const wsUrl = client.getWsUrl();
+    /// const ws = new WebSocket(wsUrl);
+    /// ws.binaryType = 'arraybuffer';
     ///
-    /// // Create WebSockets and connect them to the client
-    /// const metaWs = new WebSocket(metaUrl);
-    /// metaWs.binaryType = 'arraybuffer';
-    /// metaWs.onopen = () => client.markMetadataConnected();
-    /// metaWs.onclose = () => client.markMetadataDisconnected();
-    /// metaWs.onmessage = async (e) => {
-    ///   const response = await client.injectMetadataMessage(new Uint8Array(e.data));
-    ///   if (response) metaWs.send(response);
-    /// };
-    /// // Similar for body WebSocket...
-    ///
-    /// // Poll for outgoing messages
-    /// setInterval(() => {
+    /// ws.onopen = async () => {
+    ///   await client.onConnected();
+    ///   // Drain outgoing messages
     ///   let msg;
-    ///   while ((msg = client.pollMetadataOutgoing())) metaWs.send(msg);
-    ///   while ((msg = client.pollBodyOutgoing())) bodyWs.send(msg);
-    /// }, 50);
+    ///   while ((msg = client.pollOutgoingBinary())) ws.send(msg);
+    ///   while ((msg = client.pollOutgoingText())) ws.send(msg);
+    /// };
     ///
-    /// // Start sync
-    /// await client.start();
+    /// ws.onmessage = async (e) => {
+    ///   if (typeof e.data === 'string') {
+    ///     await client.onTextMessage(e.data);
+    ///   } else {
+    ///     await client.onBinaryMessage(new Uint8Array(e.data));
+    ///   }
+    ///   // Drain outgoing messages and events
+    ///   let msg;
+    ///   while ((msg = client.pollOutgoingBinary())) ws.send(msg);
+    ///   while ((msg = client.pollOutgoingText())) ws.send(msg);
+    /// };
     /// ```
     #[wasm_bindgen(js_name = "createSyncClient")]
     pub fn create_sync_client(
@@ -1649,27 +1373,23 @@ impl DiaryxBackend {
         workspace_id: String,
         auth_token: Option<String>,
     ) -> crate::wasm_sync_client::WasmSyncClient {
-        use diaryx_core::crdt::SyncClientConfig;
-
-        // Build configuration
-        let mut config = SyncClientConfig::new(
-            server_url,
-            workspace_id,
-            PathBuf::new(), // WASM doesn't use workspace_root path
-        )
-        .with_write_to_disk(true);
-
-        if let Some(token) = auth_token {
-            config = config.with_auth(token);
-        }
+        let session_config = SyncSessionConfig {
+            workspace_id: workspace_id.clone(),
+            write_to_disk: true,
+        };
 
         log::info!(
             "[DiaryxBackend] Creating WasmSyncClient for workspace: {}",
-            config.workspace_id
+            workspace_id
         );
 
-        // Create WasmSyncClient with the shared sync_manager
-        crate::wasm_sync_client::WasmSyncClient::new(config, Arc::clone(&self.sync_manager))
+        crate::wasm_sync_client::WasmSyncClient::new(
+            server_url,
+            workspace_id,
+            auth_token,
+            session_config,
+            Arc::clone(&self.sync_manager),
+        )
     }
 
     /// Check if this backend has native sync support.

@@ -27,7 +27,6 @@ import type { Api } from '../backend/api';
 import { shareSessionStore } from '@/models/stores/shareSessionStore.svelte';
 import { collaborationStore } from '@/models/stores/collaborationStore.svelte';
 import { getToken } from '$lib/auth/authStore.svelte';
-// New Rust sync helpers - progressively replacing TypeScript implementations
 import * as syncHelpers from './syncHelpers';
 
 /**
@@ -38,8 +37,7 @@ function toWebSocketUrl(httpUrl: string): string {
     .replace(/^https:\/\//, 'wss://')
     .replace(/^http:\/\//, 'ws://')
     .replace(/\/sync2?$/, '')
-    .replace(/\/$/, '')
-    + '/sync2';
+    .replace(/\/$/, '');
 }
 
 /**
@@ -71,7 +69,6 @@ function registerBridgeOnGlobal(): void {
 let rustApi: RustCrdtApi | null = null;
 let _originalRustApi: RustCrdtApi | null = null; // Saved before guest override, restored on session end
 let _originalServerUrl: string | null = null; // Saved before session override, restored on session end
-let backendApi: Api | null = null;
 let _backend: Backend | null = null;
 
 // Native sync state (Tauri only)
@@ -92,9 +89,6 @@ let unifiedSyncTransport: UnifiedSyncTransport | null = null;
 
 // Cached server URL (WebSocket) for sync readiness checks
 let _serverUrl: string | null = null;
-
-// Pending body sync requests when sync config isn't ready yet
-const pendingBodySync = new Set<string>();
 
 // Flag: true when this client loaded from server (load_server mode).
 // When set, body CRDTs are cleared before sync to prevent duplication
@@ -140,30 +134,6 @@ async function acquireFileLock(path: string): Promise<() => void> {
     fileLocks.delete(path);
     releaseLock!();
   };
-}
-
-async function flushPendingBodySync(reason: string): Promise<void> {
-  if (pendingBodySync.size === 0) return;
-  if (!_backend || _backend?.hasNativeSync?.()) return;
-  if (!_workspaceId || !_serverUrl || !rustApi) return;
-
-  const files = Array.from(pendingBodySync);
-  pendingBodySync.clear();
-  console.log(
-    `[WorkspaceCrdtBridge] Flushing ${files.length} pending body sync request(s) (${reason})`,
-  );
-
-  for (const filePath of files) {
-    try {
-      await getOrCreateBodyBridge(filePath);
-    } catch (err) {
-      console.warn(
-        `[WorkspaceCrdtBridge] Failed to flush pending body sync for ${filePath}:`,
-        err,
-      );
-      pendingBodySync.add(filePath);
-    }
-  }
 }
 
 // Callbacks
@@ -282,54 +252,27 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
             notifyFileChange(null, null);
             await updateFileIndexFromCrdt();
             markInitialSyncComplete();
-
-            // Proactively subscribe body sync for all files
-            let filePaths: string[] = [];
-            try {
-              const allFiles = await getAllFiles();
-              filePaths = Array.from(allFiles.keys());
-              if (filePaths.length > 0) {
-                console.log(`[UnifiedSync] Subscribing body sync for ${filePaths.length} files`);
-                // Subscribe in batches with concurrency limit
-                const concurrency = 5;
-                for (let i = 0; i < filePaths.length; i += concurrency) {
-                  const batch = filePaths.slice(i, i + concurrency);
-                  await Promise.all(batch.map(fp => getOrCreateBodyBridge(fp)));
-                }
-                console.log(`[UnifiedSync] All body subscriptions complete`);
-              }
-            } catch (e) {
-              console.warn('[UnifiedSync] Failed to start body sync:', e);
-            }
-
-            // Wait for all body syncs to complete (SyncStep2 responses) before marking synced.
-            // Without this, body CRDTs may not yet have the server's content when we mark "synced",
-            // which can cause edits to overwrite the original content.
-            if (unifiedSyncTransport && filePaths.length > 0) {
-              console.log(`[UnifiedSync] Waiting for ${filePaths.length} body syncs to complete...`);
-              const waitPromises = filePaths.map(fp =>
-                unifiedSyncTransport!.waitForBodySync(fp, 15000).catch(() => false)
-              );
-              await Promise.all(waitPromises);
-              console.log(`[UnifiedSync] All body syncs complete`);
-            }
-
-            _freshFromServerLoad = false; // Reset after body sync is truly complete
+            // Body sync is handled automatically by SyncSession in Rust
+            _freshFromServerLoad = false;
             collaborationStore.setBodySyncStatus('synced');
           },
           onSyncComplete: (filesSynced) => {
             console.log(`[UnifiedSync] Sync complete: ${filesSynced} files synced`);
             collaborationStore.setBodySyncStatus('synced');
           },
-          onFilesChanged: async (changedFiles) => {
+          onFilesChanged: async () => {
             notifyFileChange(null, null);
-            // Subscribe body sync for any new/changed files
-            for (const filePath of changedFiles) {
-              try {
-                await getOrCreateBodyBridge(filePath);
-              } catch (err) {
-                console.warn(`[UnifiedSync] Failed to subscribe body for changed file ${filePath}:`, err);
-              }
+          },
+          onBodyChanged: (filePath) => {
+            // Body content changed remotely — read from CRDT and notify UI
+            if (rustApi) {
+              rustApi.getBodyContent(filePath).then(content => {
+                if (content) {
+                  notifyBodyChange(filePath, content);
+                }
+              }).catch(e => {
+                console.warn('[WorkspaceCrdtBridge] Failed to get body content:', e);
+              });
             }
           },
           onProgress: (completed, total) => {
@@ -345,7 +288,6 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
     }
 
     registerBridgeOnGlobal();
-    await flushPendingBodySync('setWorkspaceServer');
   }
 }
 
@@ -455,38 +397,12 @@ async function disconnectExistingSync(): Promise<void> {
 
 /**
  * Auto-sync body content for all files in background.
+ * Body sync is now automatic via SyncSession, so this is a no-op.
  *
- * NOTE: When backend has native sync capability (Tauri), this is a no-op because
- * the native SyncClient handles body sync internally.
+ * @deprecated Body sync is automatic via SyncSession.
  */
 async function autoSyncBodiesInBackground(): Promise<void> {
-  // Skip if backend supports native sync - it handles body sync internally
-  // We check hasNativeSync() (capability) not _nativeSyncActive (state) to prevent
-  // fallback to TypeScript sync even if native sync fails to start
-  if (_backend?.hasNativeSync?.()) {
-    console.log('[WorkspaceCrdtBridge] autoSyncBodiesInBackground skipped (native sync capable)');
-    return;
-  }
-
-  // Skip if using v2 UnifiedSyncTransport - body sync is multiplexed on the same connection
-  if (unifiedSyncTransport) {
-    console.log('[WorkspaceCrdtBridge] autoSyncBodiesInBackground skipped (using v2 UnifiedSyncTransport)');
-    return;
-  }
-
-  try {
-    const allFiles = await getAllFiles();
-    const filePaths = Array.from(allFiles.keys());
-    if (filePaths.length > 0) {
-      console.log(`[WorkspaceCrdtBridge] Auto-syncing ${filePaths.length} body docs in background`);
-      // Don't wait for completion since this runs in background
-      proactivelySyncBodies(filePaths, { concurrency: 5, waitForComplete: false }).catch(e => {
-        console.warn('[WorkspaceCrdtBridge] Background body sync error:', e);
-      });
-    }
-  } catch (e) {
-    console.warn('[WorkspaceCrdtBridge] Failed to start background body sync:', e);
-  }
+  // Body sync is automatic via SyncSession in Rust.
 }
 
 
@@ -522,16 +438,18 @@ export async function setWorkspaceId(id: string | null): Promise<void> {
     serverUrl = null;
     await setWorkspaceServer(savedUrl);
   }
-
-  await flushPendingBodySync('setWorkspaceId');
 }
 
 /**
  * Set the backend API for file operations.
  * This is used to write synced file content to disk for guests.
  */
-export function setBackendApi(api: Api): void {
-  backendApi = api;
+/**
+ * @deprecated Body content loading is now handled in Rust via SyncSession.
+ * This function is kept for backward compatibility.
+ */
+export function setBackendApi(_api: Api): void {
+  // No-op: body content loading is handled by SyncSession in Rust.
 }
 
 /**
@@ -743,46 +661,23 @@ export async function startSessionSync(
       notifySyncStatus('synced');
       if (!isHost) notifySessionSync();
       syncResolve();
-
-      // Proactively subscribe body sync for all files
-      let filePaths: string[] = [];
-      try {
-        const allFiles = await getAllFiles();
-        filePaths = Array.from(allFiles.keys());
-        if (filePaths.length > 0) {
-          console.log(`[SessionSync] Subscribing body sync for ${filePaths.length} files`);
-          const concurrency = 5;
-          for (let i = 0; i < filePaths.length; i += concurrency) {
-            const batch = filePaths.slice(i, i + concurrency);
-            await Promise.all(batch.map(fp => getOrCreateBodyBridge(fp)));
-          }
-          console.log(`[SessionSync] All body subscriptions complete`);
-        }
-      } catch (e) {
-        console.warn('[SessionSync] Failed to start body sync:', e);
-      }
-
-      // Wait for all body syncs to complete
-      if (unifiedSyncTransport && filePaths.length > 0) {
-        console.log(`[SessionSync] Waiting for ${filePaths.length} body syncs to complete...`);
-        const waitPromises = filePaths.map(fp =>
-          unifiedSyncTransport!.waitForBodySync(fp, 15000).catch(() => false)
-        );
-        await Promise.all(waitPromises);
-        console.log(`[SessionSync] All body syncs complete`);
-      }
-
+      // Body sync is handled automatically by SyncSession in Rust
       _freshFromServerLoad = false;
       collaborationStore.setBodySyncStatus('synced');
     },
-    onFilesChanged: async (changedFiles) => {
+    onFilesChanged: async () => {
       shareSessionStore.isGuest ? notifySessionSync() : notifyFileChange(null, null);
-      for (const filePath of changedFiles) {
-        try {
-          await getOrCreateBodyBridge(filePath);
-        } catch (err) {
-          console.warn(`[SessionSync] Failed to subscribe body for changed file ${filePath}:`, err);
-        }
+    },
+    onBodyChanged: (filePath) => {
+      // Body content changed remotely — read from CRDT and notify UI
+      if (rustApi) {
+        rustApi.getBodyContent(filePath).then(content => {
+          if (content) {
+            notifyBodyChange(filePath, content);
+          }
+        }).catch(e => {
+          console.warn('[WorkspaceCrdtBridge] Failed to get body content:', e);
+        });
       }
     },
     onProgress: (completed, total) => {
@@ -985,35 +880,7 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
               notifyFileChange(null, null);
               await updateFileIndexFromCrdt();
               markInitialSyncComplete();
-
-              // Proactively subscribe body sync for all files
-              let filePaths: string[] = [];
-              try {
-                const allFiles = await getAllFiles();
-                filePaths = Array.from(allFiles.keys());
-                if (filePaths.length > 0) {
-                  console.log(`[UnifiedSync] Subscribing body sync for ${filePaths.length} files (init)`);
-                  const concurrency = 5;
-                  for (let i = 0; i < filePaths.length; i += concurrency) {
-                    const batch = filePaths.slice(i, i + concurrency);
-                    await Promise.all(batch.map(fp => getOrCreateBodyBridge(fp)));
-                  }
-                  console.log(`[UnifiedSync] All body subscriptions complete (init)`);
-                }
-              } catch (e) {
-                console.warn('[UnifiedSync] Failed to start body sync (init):', e);
-              }
-
-              // Wait for all body syncs to complete (SyncStep2 responses) before marking synced.
-              if (unifiedSyncTransport && filePaths.length > 0) {
-                console.log(`[UnifiedSync] Waiting for ${filePaths.length} body syncs to complete (init)...`);
-                const waitPromises = filePaths.map(fp =>
-                  unifiedSyncTransport!.waitForBodySync(fp, 15000).catch(() => false)
-                );
-                await Promise.all(waitPromises);
-                console.log(`[UnifiedSync] All body syncs complete (init)`);
-              }
-
+              // Body sync is handled automatically by SyncSession in Rust
               _freshFromServerLoad = false;
               collaborationStore.setBodySyncStatus('synced');
             },
@@ -1021,15 +888,18 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
               console.log(`[UnifiedSync] Sync complete (init): ${filesSynced} files synced`);
               collaborationStore.setBodySyncStatus('synced');
             },
-            onFilesChanged: async (changedFiles) => {
+            onFilesChanged: async () => {
               notifyFileChange(null, null);
-              // Subscribe body sync for any new/changed files
-              for (const filePath of changedFiles) {
-                try {
-                  await getOrCreateBodyBridge(filePath);
-                } catch (err) {
-                  console.warn(`[UnifiedSync] Failed to subscribe body for changed file ${filePath}:`, err);
-                }
+            },
+            onBodyChanged: (filePath) => {
+              if (rustApi) {
+                rustApi.getBodyContent(filePath).then(content => {
+                  if (content) {
+                    notifyBodyChange(filePath, content);
+                  }
+                }).catch(e => {
+                  console.warn('[WorkspaceCrdtBridge] Failed to get body content:', e);
+                });
               }
             },
             onProgress: (completed, total) => {
@@ -1049,7 +919,6 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
 
     initialized = true;
     registerBridgeOnGlobal();
-    await flushPendingBodySync('initWorkspace');
     options.onReady?.();
   } finally {
     _initializing = false;
@@ -1385,148 +1254,13 @@ function isReadOnlyBlocked(): boolean {
 }
 
 /**
- * Get or create a body sync subscription for a specific file via UnifiedSyncTransport.
- *
- * NOTE: When native sync is active (Tauri), this is a no-op because
- * the native SyncClient handles body sync internally.
- */
-async function getOrCreateBodyBridge(filePath: string): Promise<void> {
-  // Skip temporary files - they should never be synced
-  if (isTempFile(filePath)) {
-    return;
-  }
-
-  // Skip if backend supports native sync - it handles body sync internally
-  // We check hasNativeSync() (capability) not _nativeSyncActive (state) to prevent
-  // fallback to TypeScript sync even if native sync fails to start
-  if (_backend?.hasNativeSync?.()) {
-    console.log('[WorkspaceCrdtBridge] getOrCreateBodyBridge skipped (native sync capable):', filePath);
-    return;
-  }
-
-  if (!rustApi || !_serverUrl || !_workspaceId || !_backend) {
-    // Missing config - caller should handle local-only mode before calling this
-    return;
-  }
-
-  const canonicalPath = getCanonicalPath(filePath);
-
-  if (unifiedSyncTransport) {
-    // Already subscribed? Skip (prevents re-subscribe loop from SendSyncMessage events).
-    if (unifiedSyncTransport.isBodySubscribed(canonicalPath)) {
-      return;
-    }
-
-    // Load body content from disk into CRDT BEFORE syncing (same as v1 path).
-    // This ensures local content is present for the Y-CRDT protocol to send.
-    try {
-      const existingBodyContent = await rustApi.getBodyContent(canonicalPath);
-      if (existingBodyContent && existingBodyContent.length > 0) {
-        if (_freshFromServerLoad) {
-          // Reset the body doc to a fresh empty Y.Doc to prevent duplication with server content.
-          // importFromZip writes files to disk which populates body CRDTs (local actor).
-          // When the server sends its Y-CRDT state (original actor), Y-CRDT merges
-          // both independent inserts → text appears twice.
-          //
-          // CRITICAL: We use resetBodyDoc() instead of setBodyContent('', ...) because
-          // setBodyContent creates Y-CRDT DELETE operations. These DELETEs would be sent
-          // to the server during the Y-sync handshake response, propagating to other clients
-          // and emptying their editors. resetBodyDoc() creates a fresh Y.Doc with NO operations.
-          console.log(`[UnifiedSync] Resetting body doc for ${canonicalPath} (freshFromServerLoad)`);
-          await rustApi.resetBodyDoc(canonicalPath);
-        } else {
-          await syncHelpers.trackContent(_backend!, canonicalPath, existingBodyContent);
-          console.log(`[UnifiedSync] Body CRDT already has ${existingBodyContent.length} chars for ${canonicalPath}`);
-        }
-      } else if (backendApi && !shareSessionStore.isGuest) {
-        if (_sessionCode) {
-          // Share session host: load body from disk so it's available for the y-sync handshake.
-          // Without this, both host and server have empty body CRDTs, so the guest
-          // completes body sync with empty content and never sees file bodies.
-          const entry = await backendApi.getEntry(canonicalPath);
-          if (entry?.content && entry.content.length > 0) {
-            await rustApi!.setBodyContent(canonicalPath, entry.content);
-            console.log(`[UnifiedSync] Share host: loaded ${entry.content.length} chars from disk for ${canonicalPath}`);
-          }
-        } else {
-          // Regular multi-device sync: server is source of truth. Loading from disk here
-          // creates NEW operations (fresh actor ID after reload) that duplicate with server's.
-          console.log(`[UnifiedSync] Body CRDT empty for ${canonicalPath}, letting sync deliver content`);
-        }
-      }
-    } catch (err) {
-      console.warn(`[UnifiedSync] Could not get body content for ${canonicalPath}:`, err);
-    }
-
-    await unifiedSyncTransport.subscribeBody(
-      canonicalPath,
-      async (message) => {
-        // Handle incoming body sync message via Rust
-        const result = await syncHelpers.handleBodySyncMessage(_backend!, canonicalPath, message, true);
-        // Send response back if Rust returns one
-        if (result.response && result.response.length > 0) {
-          unifiedSyncTransport!.sendBodyMessage(canonicalPath, new Uint8Array(result.response));
-        }
-        // Notify UI of body content change directly from the result.
-        // The Rust-side ContentsChanged event is not reliable here because
-        // sync_manager.event_callback may not be set (it's only wired up
-        // when start_sync() is called, which doesn't happen in the v2 path).
-        if (result.content && !result.isEcho) {
-          notifyBodyChange(canonicalPath, result.content);
-        }
-      },
-      async () => {
-        console.log(`[WorkspaceCrdtBridge] v2 body synced: ${canonicalPath}`);
-        if (shareSessionStore.isGuest && rustApi) {
-          // For guests, read body content from CRDT and notify UI
-          try {
-            const bodyContent = await rustApi.getBodyContent(canonicalPath);
-            if (bodyContent && bodyContent.length > 0) {
-              console.log(`[UnifiedSync] Guest: body synced with ${bodyContent.length} chars for ${canonicalPath}`);
-              notifyBodyChange(canonicalPath, bodyContent);
-            } else {
-              console.log(`[UnifiedSync] Guest: No body content in CRDT for ${canonicalPath}`);
-            }
-          } catch (err) {
-            console.warn(`[UnifiedSync] Guest: Failed to read body from CRDT for ${canonicalPath}:`, err);
-          }
-        } else if (rustApi && backendApi) {
-          // If CRDT is still empty after sync, load from disk (offline-created file)
-          try {
-            const contentAfterSync = await rustApi.getBodyContent(canonicalPath);
-            if (!contentAfterSync || contentAfterSync.length === 0) {
-              const entry = await backendApi.getEntry(canonicalPath);
-              if (entry?.content && entry.content.length > 0) {
-                console.log(`[UnifiedSync] Post-sync: loading ${entry.content.length} chars from disk for ${canonicalPath}`);
-                await rustApi.setBodyContent(canonicalPath, entry.content);
-                const update = await syncHelpers.createBodyUpdate(_backend!, canonicalPath, entry.content);
-                if (update && update.length > 0) {
-                  unifiedSyncTransport!.sendBodyMessage(canonicalPath, new Uint8Array(update));
-                }
-              }
-            }
-          } catch (e) {
-            console.warn(`[UnifiedSync] Post-sync disk load failed for ${canonicalPath}:`, e);
-          }
-        }
-      }
-    );
-  }
-}
-
-
-/**
  * Close body sync for a specific file.
- * Call when the file is no longer being actively edited.
+ * Body sync is now automatic via SyncSession, so this is a no-op.
+ *
+ * @deprecated Body sync lifecycle is managed by SyncSession.
  */
-export function closeBodySync(filePath: string): void {
-  const canonicalPath = getCanonicalPath(filePath);
-
-  // Unsubscribe from unified transport
-  if (unifiedSyncTransport?.isBodySubscribed(canonicalPath)) {
-    console.log(`[UnifiedSync] Unsubscribing body: ${canonicalPath}`);
-    unifiedSyncTransport.unsubscribeBody(canonicalPath);
-  }
+export function closeBodySync(_filePath: string): void {
+  // Body sync lifecycle is managed by SyncSession in Rust.
 }
 
 /**
@@ -1549,30 +1283,9 @@ export async function ensureBodySync(filePath: string): Promise<void> {
   return _ensureBodySyncImpl(filePath);
 }
 
-async function _ensureBodySyncImpl(filePath: string): Promise<void> {
-  // Skip if backend supports native sync - it handles body sync internally
-  // We check hasNativeSync() (capability) not _nativeSyncActive (state) to prevent
-  // fallback to TypeScript sync even if native sync fails to start
-  if (_backend?.hasNativeSync?.()) {
-    console.log('[WorkspaceCrdtBridge] ensureBodySync skipped (native sync capable):', filePath);
-    return;
-  }
-
-  const canonicalPath = getCanonicalPath(filePath);
-
-  if (!_workspaceId || !_serverUrl || !rustApi) {
-    console.log('[WorkspaceCrdtBridge] ensureBodySync deferred - not in sync mode yet:', {
-      hasWorkspaceId: !!_workspaceId,
-      hasServerUrl: !!_serverUrl,
-      hasRustApi: !!rustApi,
-      queuedPath: canonicalPath,
-    });
-    pendingBodySync.add(canonicalPath);
-    return;
-  }
-
-  console.log('[WorkspaceCrdtBridge] ensureBodySync for:', canonicalPath);
-  await getOrCreateBodyBridge(canonicalPath);
+async function _ensureBodySyncImpl(_filePath: string): Promise<void> {
+  // Body sync is now automatic via SyncSession in Rust.
+  // All body files are synced after the workspace handshake completes.
 }
 
 /**
@@ -1621,85 +1334,16 @@ export interface ProactiveSyncOptions {
 
 /**
  * Proactively sync body docs for multiple files.
- * Call this after the tree loads to pre-fetch body content for all files,
- * so they're ready when the user opens them.
+ * Body sync is now automatic via SyncSession in Rust, so this is a no-op.
  *
- * NOTE: When backend has native sync capability (Tauri), this is a no-op because
- * the native SyncClient handles body sync internally.
- *
- * @param filePaths Array of file paths to sync bodies for
- * @param optionsOrConcurrency Options object, or concurrency number for backward compatibility
+ * @deprecated Body sync is automatic via SyncSession.
  */
 export async function proactivelySyncBodies(
-  filePaths: string[],
-  optionsOrConcurrency?: number | ProactiveSyncOptions
+  _filePaths: string[],
+  _optionsOrConcurrency?: number | ProactiveSyncOptions
 ): Promise<void> {
-  // Skip if backend supports native sync - it handles body sync internally
-  // We check hasNativeSync() (capability) not _nativeSyncActive (state) to prevent
-  // fallback to TypeScript sync even if native sync fails to start
-  if (_backend?.hasNativeSync?.()) {
-    console.log('[WorkspaceCrdtBridge] proactivelySyncBodies skipped (native sync capable)');
-    return;
-  }
-
-  if (!_workspaceId || !_serverUrl || !rustApi) {
-    console.log('[WorkspaceCrdtBridge] proactivelySyncBodies skipped - not in sync mode');
-    return;
-  }
-
-  // Handle backward compatibility: number arg means concurrency
-  const options = typeof optionsOrConcurrency === 'number'
-    ? { concurrency: optionsOrConcurrency }
-    : optionsOrConcurrency ?? {};
-  const concurrency = options.concurrency ?? 3;
-  const onProgress = options.onProgress;
-  const waitForComplete = options.waitForComplete ?? true;
-  const syncTimeout = options.syncTimeout ?? 120000; // 2 minutes default
-
-  console.log(`[WorkspaceCrdtBridge] Proactively syncing ${filePaths.length} body docs with concurrency ${concurrency}`);
-
-  // Mark body sync as in progress
-  collaborationStore.setBodySyncStatus('syncing');
-
-  let completed = 0;
-  const total = filePaths.length;
-
-  // Report initial progress
-  collaborationStore.setBodySyncProgress({ completed, total });
-  onProgress?.(completed, total);
-
-  // Process in batches to avoid overwhelming the server
-  for (let i = 0; i < filePaths.length; i += concurrency) {
-    const batch = filePaths.slice(i, i + concurrency);
-    await Promise.all(
-      batch.map(async (path) => {
-        try {
-          const canonicalPath = getCanonicalPath(path);
-          await getOrCreateBodyBridge(canonicalPath);
-        } catch (e) {
-          console.warn(`[WorkspaceCrdtBridge] Failed to sync body for ${path}:`, e);
-        } finally {
-          completed++;
-          onProgress?.(completed, total);
-        }
-      })
-    );
-  }
-
-  console.log(`[WorkspaceCrdtBridge] All ${filePaths.length} body subscriptions sent`);
-
-  // Wait for body syncs to complete via unified transport
-  if (waitForComplete && unifiedSyncTransport) {
-    console.log(`[WorkspaceCrdtBridge] Waiting for body sync to complete (timeout: ${syncTimeout}ms)...`);
-    const waitPromises = filePaths.map(fp => {
-      const cp = getCanonicalPath(fp);
-      return unifiedSyncTransport!.waitForBodySync(cp, syncTimeout).catch(() => false);
-    });
-    await Promise.all(waitPromises);
-    console.log(`[WorkspaceCrdtBridge] Body sync complete for ${filePaths.length} files`);
-  } else {
-    console.log(`[WorkspaceCrdtBridge] Proactive body sync complete for ${filePaths.length} files (not waiting for server)`);
-  }
+  // Body sync is automatic via SyncSession — all body files are synced
+  // after the workspace handshake completes.
 }
 
 
@@ -2524,56 +2168,22 @@ function handleFileSystemEvent(event: FileSystemEvent): void {
       // Rust is requesting that we send a sync message over WebSocket.
       // This happens after CRDT updates (SaveEntry, CreateEntry, DeleteEntry, RenameEntry).
       //
-      // For native sync (Tauri): Skip this event - the native sync client (TokioTransport)
-      // handles WebSocket communication directly via the event bridge set up in start_websocket_sync.
-      //
-      // For browser sync (WASM/web): Forward to JavaScript WebSocket bridges.
-      // We check hasNativeSync() (capability) not _nativeSyncActive (state) to prevent
-      // fallback to TypeScript sync even if native sync fails to start
+      // For native sync (Tauri): Skip - native SyncClient handles this internally.
       if (_backend?.hasNativeSync?.()) {
-        // Native sync handles this internally via the event bridge
-        console.log('[WorkspaceCrdtBridge] SendSyncMessage skipped (native sync capable)');
         break;
       }
 
       const { doc_name, message, is_body } = event as any;
       const bytes = new Uint8Array(message);
 
-      console.log(`[WorkspaceCrdtBridge] SendSyncMessage received: doc=${doc_name}, is_body=${is_body}, bytes=${bytes.length}`);
-
-      if (is_body) {
-        // Send via v2 unified transport or multiplexed body sync
-        (async () => {
-          try {
-            if (unifiedSyncTransport) {
-              // Only send if this body file has been subscribed (SyncStep1 sent).
-              // This prevents phantom messages from importFromZip and CRDT clearing
-              // from reaching the server before the Y-sync handshake.
-              if (unifiedSyncTransport.isBodySubscribed(doc_name)) {
-                unifiedSyncTransport.sendBodyMessage(doc_name, bytes);
-                console.log('[WorkspaceCrdtBridge] v2 body sync message sent/queued for', doc_name, bytes.length, 'bytes');
-              } else {
-                console.log('[WorkspaceCrdtBridge] Body sync message dropped (not subscribed):', doc_name);
-              }
-            } else if (!_serverUrl) {
-              // No server configured — local-only mode, skip
-            } else {
-              // v2 transport not ready yet (still connecting), drop the message
-              console.warn('[WorkspaceCrdtBridge] Body sync message dropped (no transport ready):', doc_name);
-            }
-          } catch (err) {
-            console.warn('[WorkspaceCrdtBridge] Failed to send body sync for', doc_name, err);
-          }
-        })();
-      } else {
-        // Send via unified transport
-        if (unifiedSyncTransport) {
-          unifiedSyncTransport.sendWorkspaceMessage(bytes);
-          console.log('[WorkspaceCrdtBridge] Workspace sync message sent', bytes.length, 'bytes');
-        } else {
-          // No workspace sync configured - that's OK for local-only mode
-          console.log('[WorkspaceCrdtBridge] Workspace sync skipped (no server)');
-        }
+      // Route through WasmSyncClient (Rust handles framing and queuing)
+      if (unifiedSyncTransport) {
+        const docId = is_body
+          ? `body:${_workspaceId}/${doc_name}`
+          : `workspace:${_workspaceId}`;
+        unifiedSyncTransport.queueLocalUpdate(docId, bytes).catch(err => {
+          console.warn('[WorkspaceCrdtBridge] Failed to queue sync message:', err);
+        });
       }
       break;
     }
@@ -2626,7 +2236,3 @@ if (typeof window !== 'undefined') {
 
 // Re-export types
 export type { FileMetadata, BinaryRef };
-
-// Re-export sync helpers for progressive integration
-// These can replace TypeScript implementations with Rust-backed versions
-export { syncHelpers };

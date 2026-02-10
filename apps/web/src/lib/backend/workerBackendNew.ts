@@ -386,6 +386,62 @@ export class WorkerBackendNew implements Backend {
   fixAll = (validationResult: any): Promise<any> =>
     this.remote!.call('fixAll', [validationResult]) as Promise<any>;
 
+  // =========================================================================
+  // WasmSyncClient (inject/poll bridge)
+  // =========================================================================
+
+  async createSyncClient(serverUrl: string, workspaceId: string, authToken?: string): Promise<void> {
+    return this.remote!.createSyncClient(serverUrl, workspaceId, authToken);
+  }
+
+  async destroySyncClient(): Promise<void> {
+    return this.remote!.destroySyncClient();
+  }
+
+  async syncGetWsUrl(): Promise<string> {
+    return this.remote!.syncGetWsUrl();
+  }
+
+  async syncSetSessionCode(code: string): Promise<void> {
+    return this.remote!.syncSetSessionCode(code);
+  }
+
+  async syncOnConnected(): Promise<void> {
+    return this.remote!.syncOnConnected();
+  }
+
+  async syncOnBinaryMessage(data: Uint8Array): Promise<void> {
+    return this.remote!.syncOnBinaryMessage(data);
+  }
+
+  async syncOnTextMessage(text: string): Promise<void> {
+    return this.remote!.syncOnTextMessage(text);
+  }
+
+  async syncOnDisconnected(): Promise<void> {
+    return this.remote!.syncOnDisconnected();
+  }
+
+  async syncOnSnapshotImported(): Promise<void> {
+    return this.remote!.syncOnSnapshotImported();
+  }
+
+  async syncQueueLocalUpdate(docId: string, data: Uint8Array): Promise<void> {
+    return this.remote!.syncQueueLocalUpdate(docId, data);
+  }
+
+  async syncDrain(): Promise<{ binary: Uint8Array[]; text: string[]; events: string[] }> {
+    return this.remote!.syncDrain();
+  }
+
+  async syncFocusFiles(files: string[]): Promise<void> {
+    return this.remote!.syncFocusFiles(files);
+  }
+
+  async syncUnfocusFiles(files: string[]): Promise<void> {
+    return this.remote!.syncUnfocusFiles(files);
+  }
+
   importFromZip = async (
     file: File,
     workspacePath?: string,

@@ -506,6 +506,37 @@ export interface Backend {
    * @returns Unsubscribe function
    */
   onSyncEvent?(callback: SyncEventCallback): () => void;
+
+  // =========================================================================
+  // WasmSyncClient (inject/poll bridge for WASM/web)
+  // =========================================================================
+
+  /** Create a WasmSyncClient in the worker. */
+  createSyncClient?(serverUrl: string, workspaceId: string, authToken?: string): Promise<void>;
+  /** Destroy the sync client. */
+  destroySyncClient?(): Promise<void>;
+  /** Get the WebSocket URL for the sync client. */
+  syncGetWsUrl?(): Promise<string>;
+  /** Set the session code on the sync client. */
+  syncSetSessionCode?(code: string): Promise<void>;
+  /** Notify connected — returns void; drain outgoing after. */
+  syncOnConnected?(): Promise<void>;
+  /** Inject a binary WebSocket message. */
+  syncOnBinaryMessage?(data: Uint8Array): Promise<void>;
+  /** Inject a text WebSocket message. */
+  syncOnTextMessage?(text: string): Promise<void>;
+  /** Notify disconnected. */
+  syncOnDisconnected?(): Promise<void>;
+  /** Notify snapshot imported. */
+  syncOnSnapshotImported?(): Promise<void>;
+  /** Queue a local CRDT update for sending. */
+  syncQueueLocalUpdate?(docId: string, data: Uint8Array): Promise<void>;
+  /** Drain all outgoing data and events from the sync client. */
+  syncDrain?(): Promise<{ binary: Uint8Array[]; text: string[]; events: string[] }>;
+  /** Send focus messages. */
+  syncFocusFiles?(files: string[]): Promise<void>;
+  /** Send unfocus messages. */
+  syncUnfocusFiles?(files: string[]): Promise<void>;
 }
 
 // ============================================================================

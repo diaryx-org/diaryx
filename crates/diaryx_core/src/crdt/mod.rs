@@ -18,9 +18,12 @@ mod sync_manager;
 mod types;
 mod workspace_doc;
 
-// Native sync client modules (CLI, Tauri) — not available on WASM
-#[cfg(all(not(target_arch = "wasm32"), feature = "native-sync"))]
+// Protocol types shared across all platforms (native + WASM)
 pub mod control_message;
+mod sync_session;
+mod sync_types;
+
+// Native sync client modules (CLI, Tauri) — not available on WASM
 #[cfg(all(not(target_arch = "wasm32"), feature = "native-sync"))]
 mod sync_client;
 #[cfg(all(not(target_arch = "wasm32"), feature = "native-sync"))]
@@ -52,13 +55,13 @@ pub use materialize::{
 pub use sanity::{IssueKind, SanityIssue, SanityReport, validate_workspace};
 pub use self_healing::{HealingAction, HealthTracker};
 
+// Shared sync types (all platforms)
+pub use control_message::ControlMessage;
+pub use sync_session::{IncomingEvent, SessionAction, SyncSession};
+pub use sync_types::{SyncEvent, SyncSessionConfig, SyncStatus};
+
 // Native sync client re-exports
 #[cfg(all(not(target_arch = "wasm32"), feature = "native-sync"))]
-pub use control_message::ControlMessage;
-#[cfg(all(not(target_arch = "wasm32"), feature = "native-sync"))]
-pub use sync_client::{
-    ReconnectConfig, SyncClient, SyncClientConfig, SyncEvent, SyncEventHandler, SyncStats,
-    SyncStatus,
-};
+pub use sync_client::{ReconnectConfig, SyncClient, SyncClientConfig, SyncEventHandler, SyncStats};
 #[cfg(all(not(target_arch = "wasm32"), feature = "native-sync"))]
 pub use transport::{SyncTransport, TransportError, WsMessage};

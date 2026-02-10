@@ -25,7 +25,7 @@ struct CliEventHandler;
 impl SyncEventHandler for CliEventHandler {
     fn on_event(&self, event: SyncEvent) {
         match event {
-            SyncEvent::StatusChanged(status) => match status {
+            SyncEvent::StatusChanged { status } => match status {
                 SyncStatus::Connecting => {
                     println!("Connecting to sync server...");
                     progress::show_progress(10);
@@ -66,7 +66,7 @@ impl SyncEventHandler for CliEventHandler {
                     let _ = std::io::stdout().flush();
                 }
             }
-            SyncEvent::FilesChanged(files) => {
+            SyncEvent::FilesChanged { files } => {
                 for file in &files {
                     println!("  Synced: {}", file);
                 }
@@ -74,8 +74,8 @@ impl SyncEventHandler for CliEventHandler {
             SyncEvent::BodyChanged { file_path } => {
                 println!("\r\x1b[K  Body synced: {}", file_path);
             }
-            SyncEvent::Error(msg) => {
-                eprintln!("  Error: {}", msg);
+            SyncEvent::Error { message } => {
+                eprintln!("  Error: {}", message);
             }
         }
     }

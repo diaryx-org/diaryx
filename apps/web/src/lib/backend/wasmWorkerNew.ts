@@ -25,6 +25,9 @@ let eventPort: MessagePort | null = null;
 // Subscription ID for filesystem events (to clean up on shutdown)
 let fsEventSubscriptionId: number | null = null;
 
+// WasmSyncClient instance (created by createSyncClient, lives in worker)
+let syncClient: any | null = null;
+
 // Clear cached root path (call after rename operations)
 function clearRootPathCache() {
   rootPath = null;
@@ -418,6 +421,142 @@ const workerApi = {
 
   async exportBinaryAttachments(rootPath: string, audience: string): Promise<{ source_path: string; relative_path: string }[]> {
     return executeAndExtract('ExportBinaryAttachments', { root_path: rootPath, audience }, 'BinaryFilePaths');
+  },
+
+  // =========================================================================
+  // Sync Client (WasmSyncClient inject/poll bridge)
+  // =========================================================================
+
+  /**
+   * Create a WasmSyncClient for the given workspace.
+   * The client is stored in the worker and accessed via inject/poll methods below.
+   */
+  createSyncClient(serverUrl: string, workspaceId: string, authToken?: string): void {
+    if (syncClient) {
+      console.warn('[WasmWorker] Destroying existing sync client');
+      syncClient.free?.();
+      syncClient = null;
+    }
+    syncClient = getBackend().createSyncClient(serverUrl, workspaceId, authToken ?? null);
+    console.log('[WasmWorker] Created WasmSyncClient for workspace:', workspaceId);
+  },
+
+  /**
+   * Destroy the sync client.
+   */
+  destroySyncClient(): void {
+    if (syncClient) {
+      syncClient.free?.();
+      syncClient = null;
+      console.log('[WasmWorker] Sync client destroyed');
+    }
+  },
+
+  /**
+   * Get the WebSocket URL from the sync client.
+   */
+  syncGetWsUrl(): string {
+    if (!syncClient) throw new Error('Sync client not created');
+    return syncClient.getWsUrl();
+  },
+
+  /**
+   * Set the session code on the sync client.
+   */
+  syncSetSessionCode(code: string): void {
+    if (!syncClient) throw new Error('Sync client not created');
+    syncClient.setSessionCode(code);
+  },
+
+  /**
+   * Notify the sync client that the WebSocket connected.
+   * Returns void — poll outgoing queues and events after this.
+   */
+  async syncOnConnected(): Promise<void> {
+    if (!syncClient) throw new Error('Sync client not created');
+    await syncClient.onConnected();
+  },
+
+  /**
+   * Inject a binary WebSocket message into the sync client.
+   */
+  async syncOnBinaryMessage(data: Uint8Array): Promise<void> {
+    if (!syncClient) throw new Error('Sync client not created');
+    await syncClient.onBinaryMessage(data);
+  },
+
+  /**
+   * Inject a text WebSocket message into the sync client.
+   */
+  async syncOnTextMessage(text: string): Promise<void> {
+    if (!syncClient) throw new Error('Sync client not created');
+    await syncClient.onTextMessage(text);
+  },
+
+  /**
+   * Notify the sync client that the WebSocket disconnected.
+   */
+  async syncOnDisconnected(): Promise<void> {
+    if (!syncClient) throw new Error('Sync client not created');
+    await syncClient.onDisconnected();
+  },
+
+  /**
+   * Notify the sync client that a snapshot was imported.
+   */
+  async syncOnSnapshotImported(): Promise<void> {
+    if (!syncClient) throw new Error('Sync client not created');
+    await syncClient.onSnapshotImported();
+  },
+
+  /**
+   * Queue a local CRDT update for the sync client to send.
+   */
+  async syncQueueLocalUpdate(docId: string, data: Uint8Array): Promise<void> {
+    if (!syncClient) throw new Error('Sync client not created');
+    await syncClient.queueLocalUpdate(docId, data);
+  },
+
+  /**
+   * Drain all outgoing data and events from the sync client.
+   * Returns an object with binary messages, text messages, and events.
+   * This is more efficient than individual poll calls across the worker boundary.
+   */
+  syncDrain(): { binary: Uint8Array[]; text: string[]; events: string[] } {
+    if (!syncClient) return { binary: [], text: [], events: [] };
+
+    const binary: Uint8Array[] = [];
+    const text: string[] = [];
+    const events: string[] = [];
+
+    let msg;
+    while ((msg = syncClient.pollOutgoingBinary())) {
+      binary.push(msg);
+    }
+    while ((msg = syncClient.pollOutgoingText())) {
+      text.push(msg);
+    }
+    while ((msg = syncClient.pollEvent())) {
+      events.push(msg);
+    }
+
+    return { binary, text, events };
+  },
+
+  /**
+   * Send focus messages for specific files.
+   */
+  syncFocusFiles(files: string[]): void {
+    if (!syncClient) return;
+    syncClient.focusFiles(files);
+  },
+
+  /**
+   * Send unfocus messages for specific files.
+   */
+  syncUnfocusFiles(files: string[]): void {
+    if (!syncClient) return;
+    syncClient.unfocusFiles(files);
   },
 
   // Generic method call for any other operations (fallback to native)

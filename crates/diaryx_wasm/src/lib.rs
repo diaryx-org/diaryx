@@ -30,7 +30,6 @@
 //! All methods return `Result<T, JsValue>` for JavaScript interop.
 
 mod backend;
-mod callback_transport;
 mod error;
 #[cfg(feature = "browser")]
 mod fsa_fs;
@@ -45,9 +44,6 @@ mod wasm_sync_client;
 
 // Re-export WASM SQLite storage for external use
 pub use wasm_sqlite_storage::WasmSqliteStorage;
-
-// Re-export callback transport for sync
-pub use callback_transport::CallbackTransport;
 
 // Re-export the main backend class
 pub use backend::DiaryxBackend;

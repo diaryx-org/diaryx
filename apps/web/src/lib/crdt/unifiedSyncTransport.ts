@@ -1,16 +1,19 @@
 /**
  * Unified Sync Transport for v2 protocol (siphonophore).
  *
- * This transport uses a single WebSocket connection to the /sync2 endpoint,
- * handling both workspace and body document synchronization via doc_id prefixes.
+ * This transport manages a WebSocket connection to /sync2 and delegates all
+ * protocol logic (handshake, message routing, framing) to WasmSyncClient
+ * running in the WASM worker. The transport only handles:
  *
- * Wire format (v2):
+ * - WebSocket lifecycle (connect, disconnect, reconnect)
+ * - Forwarding raw messages to/from the worker
+ * - Draining outgoing messages and events after each injection
+ * - Snapshot download (HTTP, main thread)
+ * - Reconnection with exponential backoff
+ *
+ * Wire format (v2, handled by Rust):
  * - Binary messages: `[u8: doc_id_len] [doc_id_bytes] [y-sync payload]`
- * - Text messages: JSON control messages (unchanged from v1)
- *
- * Doc ID format:
- * - Workspace: `workspace:{workspace_id}`
- * - Body: `body:{workspace_id}/{file_path}`
+ * - Text messages: JSON control messages
  */
 
 import type { Backend } from "../backend/interface";
@@ -23,7 +26,7 @@ export interface UnifiedSyncTransportOptions {
   serverUrl: string;
   /** Workspace ID for document namespacing. */
   workspaceId: string;
-  /** Backend for executing Rust commands. */
+  /** Backend for executing Rust commands and sync client operations. */
   backend: Backend;
   /** Whether to write changes to disk. */
   writeToDisk: boolean;
@@ -51,35 +54,17 @@ export interface UnifiedSyncTransportOptions {
   onPeerLeft?: (guestId: string, peerCount: number) => void;
   /** Callback when the session has ended (host disconnected). */
   onSessionEnded?: () => void;
+  /** Callback when a body file's content changes remotely. */
+  onBodyChanged?: (filePath: string) => void;
   /** Callback when a fatal connection error occurs (e.g. server rejected protocol). */
   onError?: (message: string) => void;
 }
 
 /**
- * Per-body-file subscription callbacks.
- */
-interface BodySubscription {
-  /** Called when a sync message is received for this file. */
-  onMessage: (msg: Uint8Array) => Promise<void>;
-  /** Called when initial sync completes for this file. */
-  onSynced?: () => void;
-  /** Promise that resolves when this file's sync is complete. */
-  syncedPromise?: Promise<void>;
-  /** Resolver for the synced promise. */
-  syncedResolver?: () => void;
-  /** Whether this file has received actual sync data. */
-  receivedData: boolean;
-  /** Whether this file has been marked synced. */
-  synced: boolean;
-  /** Number of messages received for this file. */
-  messageCount: number;
-}
-
-/**
  * Unified sync transport for v2 protocol.
  *
- * Manages a single WebSocket connection for both workspace and body document syncs,
- * using v2 message framing (u8 length prefix) to route messages.
+ * Manages a WebSocket connection and delegates all protocol logic to
+ * WasmSyncClient (Rust) running in the WASM worker.
  */
 export class UnifiedSyncTransport {
   private ws: WebSocket | null = null;
@@ -92,23 +77,17 @@ export class UnifiedSyncTransport {
   /** Incremented on each connect() call to detect stale async handlers. */
   private connectionGeneration = 0;
 
+  /** Whether the sync client has been created in the worker. */
+  private syncClientCreated = false;
+
   /** Whether initial workspace sync is complete. */
   private workspaceSynced = false;
 
-  /** Per-body-file callbacks: file_path -> callbacks */
-  private bodyCallbacks = new Map<string, BodySubscription>();
-
-  /** Pending body subscriptions for when we reconnect */
-  private pendingBodySubscriptions = new Set<string>();
-
-  /** Pending messages to send when connection is established */
-  private pendingMessages: Uint8Array[] = [];
+  /** Whether handshake is complete. */
+  private handshakeComplete = false;
 
   /** Files this client is currently focused on */
   private focusedFiles = new Set<string>();
-
-  /** Whether handshake is complete (FileManifest → FilesReady → CrdtState) */
-  private handshakeComplete = false;
 
   constructor(options: UnifiedSyncTransportOptions) {
     this.options = options;
@@ -124,7 +103,29 @@ export class UnifiedSyncTransport {
   async connect(): Promise<void> {
     if (this.destroyed || this.ws) return;
 
-    const url = this.buildUrl();
+    const backend = this.options.backend;
+
+    // Create the WasmSyncClient in the worker if not already created
+    if (!this.syncClientCreated && backend.createSyncClient) {
+      await backend.createSyncClient(
+        this.options.serverUrl,
+        this.options.workspaceId,
+        this.options.authToken,
+      );
+      if (this.options.sessionCode && backend.syncSetSessionCode) {
+        await backend.syncSetSessionCode(this.options.sessionCode);
+      }
+      this.syncClientCreated = true;
+    }
+
+    // Get the WebSocket URL from Rust
+    let url: string;
+    if (backend.syncGetWsUrl) {
+      url = await backend.syncGetWsUrl();
+    } else {
+      url = this.buildUrl();
+    }
+
     console.log(`[UnifiedSyncTransport] Connecting to: ${url.replace(/token=[^&]+/, 'token=***')}`);
     this.connectionGeneration++;
     const gen = this.connectionGeneration;
@@ -136,47 +137,42 @@ export class UnifiedSyncTransport {
       console.log('[UnifiedSyncTransport] WebSocket opened');
       if (gen !== this.connectionGeneration) return;
 
-      // Don't reset reconnectAttempts here — wait until we receive a message
-      // (handleWorkspaceMessage/handleBodyMessage/handleControlMessage).
-      // This ensures exponential backoff works when the server accepts the
-      // upgrade but immediately closes the connection (e.g., protocol mismatch).
       this.options.onStatusChange?.(true);
 
-      // Send workspace SyncStep1 first
-      await this.sendWorkspaceSyncStep1();
-      if (gen !== this.connectionGeneration) return;
-
-      // Send SyncStep1 for any body files that were subscribed while disconnected
-      for (const filePath of this.pendingBodySubscriptions) {
-        await this.sendBodySyncStep1(filePath);
+      // Notify Rust sync client that the WebSocket connected
+      if (backend.syncOnConnected) {
+        await backend.syncOnConnected();
         if (gen !== this.connectionGeneration) return;
+        await this.drainAndSend();
       }
-      this.pendingBodySubscriptions.clear();
-
-      // Flush any queued messages
-      for (const msg of this.pendingMessages) {
-        this.safeSend(msg);
-      }
-      this.pendingMessages = [];
 
       // Resend focus list after reconnect
-      if (this.focusedFiles.size > 0) {
-        this.sendFocusMessage(Array.from(this.focusedFiles));
+      if (this.focusedFiles.size > 0 && backend.syncFocusFiles) {
+        await backend.syncFocusFiles(Array.from(this.focusedFiles));
+        await this.drainAndSend();
       }
     };
 
     this.ws.onmessage = async (event) => {
       if (this.destroyed) return;
 
-      // Handle text messages (JSON control messages)
-      if (typeof event.data === "string") {
-        await this.handleControlMessage(event.data);
-        return;
-      }
+      // Successfully received a message — reset reconnect backoff
+      this.reconnectAttempts = 0;
 
-      // Handle binary messages (sync protocol)
-      const data = new Uint8Array(event.data as ArrayBuffer);
-      await this.handleBinaryMessage(data);
+      if (typeof event.data === "string") {
+        // Text message (JSON control message) → inject into Rust
+        if (backend.syncOnTextMessage) {
+          await backend.syncOnTextMessage(event.data);
+          await this.drainAndSend();
+        }
+      } else {
+        // Binary message (sync protocol) → inject into Rust
+        const data = new Uint8Array(event.data as ArrayBuffer);
+        if (backend.syncOnBinaryMessage) {
+          await backend.syncOnBinaryMessage(data);
+          await this.drainAndSend();
+        }
+      }
     };
 
     this.ws.onclose = (event) => {
@@ -184,6 +180,14 @@ export class UnifiedSyncTransport {
       this.ws = null;
       this.handshakeComplete = false;
       this.options.onStatusChange?.(false);
+
+      // Notify Rust of disconnect
+      if (backend.syncOnDisconnected) {
+        backend.syncOnDisconnected().catch(e => {
+          console.warn('[UnifiedSyncTransport] Error notifying disconnect:', e);
+        });
+      }
+
       if (!this.destroyed) {
         // Don't reconnect on fatal server errors (4000-4999 are application-level rejections)
         if (event.code >= 4000 && event.code < 5000) {
@@ -226,9 +230,16 @@ export class UnifiedSyncTransport {
   destroy(): void {
     this.destroyed = true;
     this.disconnect();
-    this.bodyCallbacks.clear();
-    this.pendingBodySubscriptions.clear();
-    this.pendingMessages = [];
+
+    // Destroy the sync client in the worker
+    if (this.syncClientCreated && this.options.backend.destroySyncClient) {
+      this.options.backend.destroySyncClient().catch(e => {
+        console.warn('[UnifiedSyncTransport] Error destroying sync client:', e);
+      });
+      this.syncClientCreated = false;
+    }
+
+    this.focusedFiles.clear();
   }
 
   /**
@@ -236,22 +247,6 @@ export class UnifiedSyncTransport {
    */
   get isConnected(): boolean {
     return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
-  }
-
-  /**
-   * Send data on the WebSocket, guarding against CLOSING/CLOSED state.
-   * Returns true if the message was sent, false otherwise.
-   */
-  private safeSend(data: Uint8Array | string): boolean {
-    try {
-      if (this.isConnected) {
-        this.ws!.send(data);
-        return true;
-      }
-    } catch (e) {
-      console.warn("[UnifiedSyncTransport] Send failed:", e);
-    }
-    return false;
   }
 
   /**
@@ -269,473 +264,179 @@ export class UnifiedSyncTransport {
   }
 
   /**
-   * Subscribe to body sync for a specific file.
+   * Queue a local CRDT update for sending to the server.
+   * Call this when local CRDT changes need to be synced.
    */
-  async subscribeBody(
-    filePath: string,
-    onMessage: (msg: Uint8Array) => Promise<void>,
-    onSynced?: () => void,
-  ): Promise<void> {
-    let syncedResolver: () => void;
-    const syncedPromise = new Promise<void>((resolve) => {
-      syncedResolver = resolve;
-    });
-
-    this.bodyCallbacks.set(filePath, {
-      onMessage,
-      onSynced,
-      syncedPromise,
-      syncedResolver: syncedResolver!,
-      receivedData: false,
-      synced: false,
-      messageCount: 0,
-    });
-
-    if (this.isConnected) {
-      await this.sendBodySyncStep1(filePath);
-    } else {
-      this.pendingBodySubscriptions.add(filePath);
+  async queueLocalUpdate(docId: string, data: Uint8Array): Promise<void> {
+    const backend = this.options.backend;
+    if (backend.syncQueueLocalUpdate) {
+      await backend.syncQueueLocalUpdate(docId, data);
+      await this.drainAndSend();
     }
-  }
-
-  /**
-   * Check if a body file is already subscribed.
-   */
-  isBodySubscribed(filePath: string): boolean {
-    return this.bodyCallbacks.has(filePath);
-  }
-
-  /**
-   * Unsubscribe from body sync for a specific file.
-   */
-  unsubscribeBody(filePath: string): void {
-    this.bodyCallbacks.delete(filePath);
-    this.pendingBodySubscriptions.delete(filePath);
-  }
-
-  /**
-   * Wait for a specific file's body sync to complete.
-   */
-  async waitForBodySync(filePath: string, timeoutMs = 30000): Promise<boolean> {
-    const callbacks = this.bodyCallbacks.get(filePath);
-    if (!callbacks?.syncedPromise) {
-      return true;
-    }
-
-    try {
-      await Promise.race([
-        callbacks.syncedPromise,
-        new Promise<void>((_, reject) =>
-          setTimeout(() => reject(new Error("Sync timeout")), timeoutMs),
-        ),
-      ]);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Send a body sync message for a specific file.
-   */
-  sendBodyMessage(filePath: string, message: Uint8Array): void {
-    const docId = this.formatBodyDocId(filePath);
-    const framed = this.frameMessageV2(docId, message);
-
-    if (!this.isConnected) {
-      this.pendingMessages.push(framed);
-      return;
-    }
-
-    this.safeSend(framed);
-  }
-
-  /**
-   * Send a workspace sync message.
-   */
-  sendWorkspaceMessage(message: Uint8Array): void {
-    const docId = this.formatWorkspaceDocId();
-    const framed = this.frameMessageV2(docId, message);
-
-    if (!this.isConnected) {
-      this.pendingMessages.push(framed);
-      return;
-    }
-
-    this.safeSend(framed);
   }
 
   /**
    * Focus on specific files for sync.
    */
-  focus(filePaths: string[]): void {
+  async focus(filePaths: string[]): Promise<void> {
     for (const filePath of filePaths) {
       this.focusedFiles.add(filePath);
     }
 
-    if (this.isConnected) {
-      this.sendFocusMessage(filePaths);
+    const backend = this.options.backend;
+    if (this.isConnected && backend.syncFocusFiles) {
+      await backend.syncFocusFiles(filePaths);
+      await this.drainAndSend();
     }
   }
 
   /**
    * Unfocus specific files.
    */
-  unfocus(filePaths: string[]): void {
-    // Only unfocus files that were actually focused (prevents duplicate unfocus messages)
+  async unfocus(filePaths: string[]): Promise<void> {
     const actuallyFocused = filePaths.filter((fp) => this.focusedFiles.has(fp));
-    if (actuallyFocused.length === 0) {
-      return;
-    }
+    if (actuallyFocused.length === 0) return;
 
     for (const filePath of actuallyFocused) {
       this.focusedFiles.delete(filePath);
     }
 
-    if (this.isConnected) {
-      const unfocusMsg = JSON.stringify({
-        type: "unfocus",
-        files: actuallyFocused,
-      });
-      this.safeSend(unfocusMsg);
+    const backend = this.options.backend;
+    if (this.isConnected && backend.syncUnfocusFiles) {
+      await backend.syncUnfocusFiles(actuallyFocused);
+      await this.drainAndSend();
     }
   }
 
   // =========================================================================
-  // v2 Wire Format
+  // Internal: Drain outgoing messages and events from Rust
   // =========================================================================
 
   /**
-   * Frame a message for v2 protocol with fixed u8 length prefix.
+   * Drain outgoing messages and events from the WasmSyncClient and send/dispatch them.
    */
-  private frameMessageV2(docId: string, message: Uint8Array): Uint8Array {
-    const docIdBytes = new TextEncoder().encode(docId);
-    const len = Math.min(docIdBytes.length, 255);
-    const result = new Uint8Array(1 + len + message.length);
-    result[0] = len;
-    result.set(docIdBytes.subarray(0, len), 1);
-    result.set(message, 1 + len);
-    return result;
-  }
+  private async drainAndSend(): Promise<void> {
+    const backend = this.options.backend;
+    if (!backend.syncDrain) return;
 
-  /**
-   * Unframe a v2 message with fixed u8 length prefix.
-   */
-  private unframeMessageV2(data: Uint8Array): {
-    docId: string | null;
-    message: Uint8Array;
-  } {
-    if (data.length < 1) {
-      return { docId: null, message: new Uint8Array(0) };
+    const { binary, text, events } = await backend.syncDrain();
+
+    // Send binary messages
+    for (const msg of binary) {
+      this.safeSend(msg);
     }
-    const len = data[0];
-    if (data.length < 1 + len) {
-      return { docId: null, message: new Uint8Array(0) };
+
+    // Send text messages
+    for (const msg of text) {
+      this.safeSend(msg);
     }
-    const docId = new TextDecoder().decode(data.slice(1, 1 + len));
-    return { docId, message: data.slice(1 + len) };
-  }
 
-  /**
-   * Format workspace document ID for v2 protocol.
-   */
-  private formatWorkspaceDocId(): string {
-    return `workspace:${this.options.workspaceId}`;
-  }
-
-  /**
-   * Format body document ID for v2 protocol.
-   */
-  private formatBodyDocId(filePath: string): string {
-    return `body:${this.options.workspaceId}/${filePath}`;
-  }
-
-  /**
-   * Parse a document ID to determine its type and extract components.
-   */
-  private parseDocId(
-    docId: string,
-  ):
-    | { type: "workspace"; workspaceId: string }
-    | { type: "body"; workspaceId: string; filePath: string }
-    | null {
-    if (docId.startsWith("workspace:")) {
-      return {
-        type: "workspace",
-        workspaceId: docId.slice("workspace:".length),
-      };
+    // Process events
+    for (const eventJson of events) {
+      this.handleSyncEvent(eventJson);
     }
-    if (docId.startsWith("body:")) {
-      const rest = docId.slice("body:".length);
-      const slashIndex = rest.indexOf("/");
-      if (slashIndex === -1) return null;
-      return {
-        type: "body",
-        workspaceId: rest.slice(0, slashIndex),
-        filePath: rest.slice(slashIndex + 1),
-      };
-    }
-    return null;
   }
 
-  // =========================================================================
-  // Message Handlers
-  // =========================================================================
-
   /**
-   * Handle JSON control messages from server.
+   * Send data on the WebSocket, guarding against CLOSING/CLOSED state.
    */
-  private async handleControlMessage(text: string): Promise<void> {
-    // Successfully received a message — reset reconnect backoff
-    this.reconnectAttempts = 0;
-
+  private safeSend(data: Uint8Array | string): boolean {
     try {
-      const msg = JSON.parse(text);
+      if (this.isConnected) {
+        this.ws!.send(data);
+        return true;
+      }
+    } catch (e) {
+      console.warn("[UnifiedSyncTransport] Send failed:", e);
+    }
+    return false;
+  }
 
-      switch (msg.type) {
-        case "sync_progress":
-          this.options.onProgress?.(msg.completed, msg.total);
-          break;
+  /**
+   * Handle a JSON-serialized SyncEvent from Rust.
+   */
+  private handleSyncEvent(eventJson: string): void {
+    try {
+      const event = JSON.parse(eventJson);
 
-        case "sync_complete":
-          this.options.onSyncComplete?.(msg.files_synced);
-          // Mark all body subscriptions as synced
-          for (const [, callbacks] of this.bodyCallbacks) {
-            if (!callbacks.synced) {
-              callbacks.synced = true;
-              callbacks.onSynced?.();
-              callbacks.syncedResolver?.();
+      switch (event.type) {
+        case 'statusChanged':
+          if (event.status === 'synced' || event.status === 'Synced') {
+            if (!this.workspaceSynced) {
+              this.workspaceSynced = true;
+              this.options.onWorkspaceSynced?.();
             }
           }
           break;
 
-        case "focus_list_changed":
-          this.options.onFocusListChanged?.(msg.files ?? []);
+        case 'progress':
+          this.options.onProgress?.(event.completed, event.total);
           break;
 
-        case "FileManifest":
-        case "file_manifest":
-          await this.handleFileManifest(msg);
+        case 'filesChanged':
+          this.options.onFilesChanged?.(event.files ?? []);
           break;
 
-        case "CrdtState":
-        case "crdt_state":
-          await this.handleCrdtState(msg);
+        case 'bodyChanged':
+          this.options.onBodyChanged?.(event.filePath ?? event.file_path);
           break;
 
-        case "session_joined":
-          console.log("[UnifiedSyncTransport] Received session_joined:", msg.joinCode, msg.workspaceId);
-          this.options.onSessionJoined?.({
-            joinCode: msg.joinCode,
-            workspaceId: msg.workspaceId,
-            readOnly: msg.readOnly ?? false,
+        case 'error':
+          console.error('[UnifiedSyncTransport] Sync error:', event.message);
+          this.options.onError?.(event.message);
+          break;
+
+        // Special event from Rust: download snapshot (not a SyncEvent, but a SessionAction)
+        case 'downloadSnapshot':
+          this.handleDownloadSnapshot(event.workspaceId).catch(e => {
+            console.error('[UnifiedSyncTransport] Snapshot download failed:', e);
           });
           break;
 
-        case "peer_joined":
-          console.log("[UnifiedSyncTransport] Peer joined:", msg.guestId, "count:", msg.peer_count);
-          this.options.onPeerJoined?.(msg.guestId, msg.peer_count);
+        // Control messages forwarded as events by SyncSession
+        case 'syncComplete':
+          this.options.onSyncComplete?.(event.filesSynced ?? 0);
           break;
 
-        case "peer_left":
-          console.log("[UnifiedSyncTransport] Peer left:", msg.guestId, "count:", msg.peer_count);
-          this.options.onPeerLeft?.(msg.guestId, msg.peer_count);
+        case 'focusListChanged':
+          this.options.onFocusListChanged?.(event.files ?? []);
           break;
 
-        case "session_ended":
-          console.log("[UnifiedSyncTransport] Session ended");
+        case 'sessionJoined':
+          this.options.onSessionJoined?.({
+            joinCode: event.joinCode,
+            workspaceId: event.workspaceId,
+            readOnly: event.readOnly ?? false,
+          });
+          break;
+
+        case 'peerJoined':
+          this.options.onPeerJoined?.(event.guestId, event.peerCount ?? event.peer_count);
+          break;
+
+        case 'peerLeft':
+          this.options.onPeerLeft?.(event.guestId, event.peerCount ?? event.peer_count);
+          break;
+
+        case 'sessionEnded':
           this.options.onSessionEnded?.();
           break;
 
         default:
-          // Unknown control message, ignore
+          // Unknown event type — ignore
           break;
       }
     } catch (e) {
-      console.warn(
-        "[UnifiedSyncTransport] Failed to parse control message:",
-        e,
-      );
-    }
-  }
-
-  /**
-   * Handle binary sync messages from server.
-   */
-  private async handleBinaryMessage(data: Uint8Array): Promise<void> {
-    // Successfully received a message — reset reconnect backoff
-    this.reconnectAttempts = 0;
-
-    const { docId, message } = this.unframeMessageV2(data);
-    if (!docId) {
-      console.warn("[UnifiedSyncTransport] Invalid framed message");
-      return;
-    }
-
-    const parsed = this.parseDocId(docId);
-    if (!parsed) {
-      console.warn("[UnifiedSyncTransport] Unknown doc_id format:", docId);
-      return;
-    }
-
-    if (parsed.type === "workspace") {
-      await this.handleWorkspaceMessage(message);
-    } else {
-      await this.handleBodyMessage(parsed.filePath, message);
-    }
-  }
-
-  /**
-   * Handle workspace sync message.
-   */
-  private async handleWorkspaceMessage(message: Uint8Array): Promise<void> {
-    try {
-      const response = await this.options.backend.execute({
-        type: "HandleWorkspaceSyncMessage" as any,
-        params: {
-          message: Array.from(message),
-          write_to_disk: this.options.writeToDisk,
-        },
-      } as any);
-
-      if ((response.type as string) === "WorkspaceSyncResult") {
-        const result = response as any;
-
-        // Send response if Rust returns one
-        if (result.data?.response && result.data.response.length > 0) {
-          const docId = this.formatWorkspaceDocId();
-          const framed = this.frameMessageV2(
-            docId,
-            new Uint8Array(result.data.response),
-          );
-          this.safeSend(framed);
-        }
-
-        // Handle changed files notification
-        if (result.data?.changed_files && result.data.changed_files.length > 0) {
-          this.options.onFilesChanged?.(result.data.changed_files);
-        }
-
-        // Mark workspace synced on first successful message
-        if (!this.workspaceSynced) {
-          this.workspaceSynced = true;
-          this.options.onWorkspaceSynced?.();
-        }
-      }
-    } catch (error) {
-      console.error(
-        "[UnifiedSyncTransport] Error handling workspace message:",
-        error,
-      );
-    }
-  }
-
-  /**
-   * Handle body sync message.
-   */
-  private async handleBodyMessage(
-    filePath: string,
-    message: Uint8Array,
-  ): Promise<void> {
-    const callbacks = this.bodyCallbacks.get(filePath);
-    if (callbacks) {
-      callbacks.receivedData = true;
-      callbacks.messageCount++;
-      await callbacks.onMessage(message);
-
-      // Mark synced after first message receipt. Siphonophore doesn't send a
-      // `sync_complete` control message, so we rely on receiving data.
-      // NOTE: Server sends SyncStep1 first (state vector), then SyncStep2 (content).
-      // Ideally we'd wait for the 2nd message, but some server configurations
-      // may only send SyncStep2 (if the doc is new). Use messageCount >= 1 for
-      // robustness, with the ResetBodyDoc fix ensuring no phantom deletes.
-      if (!callbacks.synced && callbacks.messageCount >= 1) {
-        callbacks.synced = true;
-        callbacks.onSynced?.();
-        callbacks.syncedResolver?.();
-      }
-    } else {
-      console.log(
-        `[UnifiedSyncTransport] Dropped message for unsubscribed file: ${filePath}`,
-      );
+      console.warn('[UnifiedSyncTransport] Failed to parse sync event:', e, eventJson);
     }
   }
 
   // =========================================================================
-  // Send Methods
+  // Snapshot Download (HTTP, main thread)
   // =========================================================================
 
   /**
-   * Send workspace SyncStep1 to initiate sync.
-   */
-  private async sendWorkspaceSyncStep1(): Promise<void> {
-    try {
-      const response = await this.options.backend.execute({
-        type: "CreateWorkspaceSyncStep1",
-      } as any);
-
-      if ((response.type as string) === "Binary" && (response as any).data) {
-        const docId = this.formatWorkspaceDocId();
-        const framed = this.frameMessageV2(
-          docId,
-          new Uint8Array((response as any).data),
-        );
-        this.safeSend(framed);
-      }
-    } catch (error) {
-      console.error("[UnifiedSyncTransport] Failed to send workspace SyncStep1:", error);
-    }
-  }
-
-  /**
-   * Send body SyncStep1 for a specific file.
-   */
-  private async sendBodySyncStep1(filePath: string): Promise<void> {
-    try {
-      // Initialize body sync in Rust
-      await this.options.backend.execute({
-        type: "InitBodySync" as any,
-        params: { doc_name: filePath },
-      } as any);
-
-      // Get SyncStep1 message
-      const response = await this.options.backend.execute({
-        type: "CreateBodySyncStep1" as any,
-        params: { doc_name: filePath },
-      } as any);
-
-      if ((response.type as string) === "Binary" && (response as any).data) {
-        const docId = this.formatBodyDocId(filePath);
-        const framed = this.frameMessageV2(
-          docId,
-          new Uint8Array((response as any).data),
-        );
-        this.safeSend(framed);
-      }
-    } catch (error) {
-      console.error(`[UnifiedSyncTransport] Failed to send body SyncStep1 for ${filePath}:`, error);
-    }
-  }
-
-  /**
-   * Send focus message to server.
-   */
-  private sendFocusMessage(filePaths: string[]): void {
-    if (!this.isConnected) return;
-
-    const focusMsg = JSON.stringify({
-      type: "focus",
-      files: filePaths,
-    });
-    this.safeSend(focusMsg);
-  }
-
-  // =========================================================================
-  // Files-Ready Handshake (v2 protocol)
-  // =========================================================================
-
-  /**
-   * Convert WebSocket URL to HTTP URL for API calls.
+   * Convert server URL to HTTP URL for API calls.
    */
   private getHttpServerUrl(): string {
     return this.options.serverUrl
@@ -746,11 +447,9 @@ export class UnifiedSyncTransport {
   }
 
   /**
-   * Download workspace snapshot from HTTP endpoint.
+   * Download and import a workspace snapshot, then notify Rust.
    */
-  private async downloadWorkspaceSnapshot(
-    workspaceId: string,
-  ): Promise<Blob | null> {
+  private async handleDownloadSnapshot(workspaceId: string): Promise<void> {
     const httpUrl = this.getHttpServerUrl();
     const url = `${httpUrl}/api/workspaces/${encodeURIComponent(workspaceId)}/snapshot`;
     const authToken = this.options.authToken;
@@ -761,55 +460,21 @@ export class UnifiedSyncTransport {
       });
 
       if (!response.ok) {
-        console.warn(
-          `[UnifiedSyncTransport] Snapshot download failed: ${response.status}`,
-        );
-        return null;
+        console.warn(`[UnifiedSyncTransport] Snapshot download failed: ${response.status}`);
+        // Still notify Rust so handshake continues
+        if (this.options.backend.syncOnSnapshotImported) {
+          await this.options.backend.syncOnSnapshotImported();
+          await this.drainAndSend();
+        }
+        return;
       }
 
-      return await response.blob();
-    } catch (error) {
-      console.error("[UnifiedSyncTransport] Snapshot download error:", error);
-      return null;
-    }
-  }
-
-  /**
-   * Handle FileManifest message - download files before CRDT sync.
-   */
-  private async handleFileManifest(msg: {
-    type: string;
-    files: Array<{
-      doc_id: string;
-      filename: string;
-      title: string | null;
-      part_of: string | null;
-      deleted: boolean;
-    }>;
-    client_is_new: boolean;
-  }): Promise<void> {
-    // If not a new client, skip file download
-    if (!msg.client_is_new) {
-      this.sendFilesReady();
-      return;
-    }
-
-    // Filter to non-deleted files
-    const activeFiles = msg.files.filter((f) => !f.deleted);
-    if (activeFiles.length === 0) {
-      this.sendFilesReady();
-      return;
-    }
-
-    try {
-      const snapshot = await this.downloadWorkspaceSnapshot(
-        this.options.workspaceId,
-      );
+      const snapshot = await response.blob();
 
       if (snapshot && snapshot.size > 100) {
         const snapshotFile = new File(
           [snapshot],
-          `snapshot-${this.options.workspaceId}.zip`,
+          `snapshot-${workspaceId}.zip`,
           { type: "application/zip" },
         );
 
@@ -822,52 +487,12 @@ export class UnifiedSyncTransport {
       }
     } catch (error) {
       console.error("[UnifiedSyncTransport] Download/import error:", error);
-      // Continue anyway - CRDT sync may partially work
     }
 
-    this.sendFilesReady();
-  }
-
-  /**
-   * Send FilesReady message to proceed with CRDT sync.
-   */
-  private sendFilesReady(): void {
-    if (!this.safeSend(JSON.stringify({ type: "FilesReady" }))) {
-      console.warn("[UnifiedSyncTransport] Cannot send FilesReady - not connected");
-    }
-  }
-
-  /**
-   * Handle CrdtState message - apply authoritative CRDT state.
-   */
-  private async handleCrdtState(msg: {
-    type: string;
-    state: string; // Base64 encoded
-  }): Promise<void> {
-
-    try {
-      // Decode base64 to binary
-      const binaryString = atob(msg.state);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-
-      // Apply the CRDT state via backend command
-      await this.options.backend.execute({
-        type: "HandleCrdtState",
-        params: { state: Array.from(bytes) },
-      } as any);
-
-      this.handshakeComplete = true;
-
-      // Mark workspace as synced
-      if (!this.workspaceSynced) {
-        this.workspaceSynced = true;
-        this.options.onWorkspaceSynced?.();
-      }
-    } catch (error) {
-      console.error("[UnifiedSyncTransport] CrdtState error:", error);
+    // Notify Rust that snapshot was imported (or failed)
+    if (this.options.backend.syncOnSnapshotImported) {
+      await this.options.backend.syncOnSnapshotImported();
+      await this.drainAndSend();
     }
   }
 
@@ -876,16 +501,14 @@ export class UnifiedSyncTransport {
   // =========================================================================
 
   /**
-   * Build the WebSocket URL for /sync2 endpoint.
+   * Build the WebSocket URL for /sync2 endpoint (fallback if Rust URL not available).
    */
   private buildUrl(): string {
-    // Replace /sync with /sync2, or append /sync2 if not present
     let url = this.options.serverUrl.replace(/\/sync$/, "/sync2");
     if (!url.endsWith("/sync2")) {
       url = url.replace(/\/$/, "") + "/sync2";
     }
 
-    // Add auth token as query param
     const params = new URLSearchParams();
     if (this.options.authToken) {
       params.set("token", this.options.authToken);

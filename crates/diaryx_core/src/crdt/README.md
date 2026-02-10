@@ -17,6 +17,8 @@ attachments:
   - "[sync_client.rs](/crates/diaryx_core/src/crdt/sync_client.rs)"
   - "[sync_handler.rs](/crates/diaryx_core/src/crdt/sync_handler.rs)"
   - "[sync_manager.rs](/crates/diaryx_core/src/crdt/sync_manager.rs)"
+  - "[sync_session.rs](/crates/diaryx_core/src/crdt/sync_session.rs)"
+  - "[sync_types.rs](/crates/diaryx_core/src/crdt/sync_types.rs)"
   - "[tokio_transport.rs](/crates/diaryx_core/src/crdt/tokio_transport.rs)"
   - "[transport.rs](/crates/diaryx_core/src/crdt/transport.rs)"
   - "[types.rs](/crates/diaryx_core/src/crdt/types.rs)"
@@ -307,37 +309,49 @@ let result = diaryx.execute(Command::GetHistory {
 });
 ```
 
-## Native Sync Client
+## Sync Client
 
-The `SyncClient` (requires `native-sync` feature) provides a unified WebSocket
-sync client for CLI and Tauri. It consolidates the duplicated sync logic that
-was previously copy-pasted between both frontends.
+### SyncSession (all platforms)
+
+`SyncSession` (`sync_session.rs`) is a message-driven protocol handler shared
+by all platforms (native and WASM). It encapsulates the entire sync protocol:
+message framing, binary routing, control message parsing, handshake state
+machine, and body SyncStep1 loop.
 
 ```text
-┌──────────────┐    ┌──────────────┐
-│   CLI        │    │   Tauri      │
-│ CliHandler   │    │ TauriHandler │
-└──────┬───────┘    └──────┬───────┘
-       │                   │
-       └─────────┬─────────┘
-                 ▼
-    ┌──────────────────────┐
-    │   SyncClient<FS>     │
-    │   - Reconnection     │
-    │   - Handshake        │
-    │   - Message routing  │
-    │   - Ping/keepalive   │
-    └──────────┬───────────┘
-               │
-    ┌──────────┴───────────┐
-    │   RustSyncManager    │
-    └──────────────────────┘
+         Platform-specific layer
+         ┌──────────────┬──────────────┐
+         │ SyncClient   │ WasmSyncCli  │  ← owns transport, reconnection
+         │ (tokio)      │ (JS bridge)  │
+         └──────┬───────┴──────┬───────┘
+                │              │
+                └──────┬───────┘
+                       ▼
+              ┌──────────────────┐
+              │   SyncSession    │  ← message-driven protocol handler
+              │  (diaryx_core)   │    handshake, routing, framing, control messages
+              └────────┬─────────┘
+                       ▼
+              ┌──────────────────┐
+              │ RustSyncManager  │  ← Y-sync protocol, CRDT operations
+              └──────────────────┘
 ```
 
+`SyncSession` uses an inject/process pattern: the platform feeds `IncomingEvent`s
+(Connected, BinaryMessage, TextMessage, Disconnected, etc.) and receives back a
+`Vec<SessionAction>` (SendBinary, SendText, Emit, DownloadSnapshot) that the
+platform executes using its own transport.
+
+Shared types (`sync_types.rs`) define `SyncEvent` and `SyncStatus`, available
+on all platforms without feature gates.
+
+### Native (CLI, Tauri)
+
+`SyncClient` (requires `native-sync` feature) wraps `SyncSession` with tokio
+WebSocket transport, reconnection with exponential backoff, and ping/keepalive.
+
 Frontends implement `SyncEventHandler` to receive status changes, progress
-updates, and file change notifications. The client handles the full sync
-lifecycle: connection, Files-Ready handshake, body SyncStep1 loop, message
-routing, and reconnection with exponential backoff.
+updates, and file change notifications.
 
 ```rust,ignore
 use diaryx_core::crdt::{SyncClient, SyncClientConfig, SyncEvent, SyncEventHandler};
@@ -371,9 +385,15 @@ let stats = client.run_one_shot().await?;
 
 ### WASM (Web)
 
-Web/WASM uses a separate TypeScript-based sync transport
-(`unifiedSyncTransport.ts`) that manages the WebSocket directly from JavaScript.
-The native `SyncClient` is not available on WASM.
+`WasmSyncClient` (in `diaryx_wasm`) wraps `SyncSession` for the browser.
+The WebSocket lives on the main thread; `WasmSyncClient` lives in a Web Worker.
+The main thread injects messages via `onBinaryMessage()`/`onTextMessage()`, then
+drains outgoing data via `syncDrain()` (a batched poll that returns all queued
+binary, text, and JSON event messages in a single worker round-trip).
+
+TypeScript's `UnifiedSyncTransport` handles only WebSocket lifecycle, reconnection,
+and snapshot download (HTTP). All protocol logic (framing, routing, handshake)
+is handled by `SyncSession` in Rust.
 
 ## Git-Backed Version History
 

@@ -2742,7 +2742,7 @@ struct TauriEventHandler<R: Runtime> {
 impl<R: Runtime> SyncEventHandler for TauriEventHandler<R> {
     fn on_event(&self, event: SyncEvent) {
         match event {
-            SyncEvent::StatusChanged(status) => {
+            SyncEvent::StatusChanged { status } => {
                 let (type_str, extra) = match &status {
                     WsSyncStatus::Connecting => ("connecting", None),
                     WsSyncStatus::Connected => {
@@ -2781,14 +2781,14 @@ impl<R: Runtime> SyncEventHandler for TauriEventHandler<R> {
                     serde_json::json!({ "completed": completed, "total": total }),
                 );
             }
-            SyncEvent::FilesChanged(files) => {
+            SyncEvent::FilesChanged { files } => {
                 let _ = self.app.emit("sync-files-changed", &files);
             }
             SyncEvent::BodyChanged { file_path } => {
                 let _ = self.app.emit("sync-body-changed", &file_path);
             }
-            SyncEvent::Error(msg) => {
-                let _ = self.app.emit("sync-error", &msg);
+            SyncEvent::Error { message } => {
+                let _ = self.app.emit("sync-error", &message);
             }
         }
     }

@@ -4,13 +4,12 @@
 //! previously copy-pasted between the CLI and Tauri frontends. It handles:
 //!
 //! - WebSocket connection via the `SyncTransport` trait
-//! - Files-Ready handshake protocol
-//! - Body SyncStep1 loop for all tracked files
-//! - Binary message routing (workspace vs body)
-//! - JSON control message dispatch
-//! - Outgoing message channel (local CRDT changes → WebSocket)
 //! - Reconnection with exponential backoff
 //! - Ping/keepalive
+//! - Outgoing message channel (local CRDT changes → WebSocket)
+//!
+//! Protocol logic (handshake, message routing, framing, control messages) is
+//! delegated to `SyncSession` in `sync_session.rs`, which is shared with WASM.
 //!
 //! # Usage
 //!
@@ -21,7 +20,7 @@
 //! impl SyncEventHandler for MyHandler {
 //!     fn on_event(&self, event: SyncEvent) {
 //!         match event {
-//!             SyncEvent::StatusChanged(status) => println!("Status: {:?}", status),
+//!             SyncEvent::StatusChanged { status } => println!("Status: {:?}", status),
 //!             SyncEvent::Progress { completed, total } => println!("{}/{}", completed, total),
 //!             _ => {}
 //!         }
@@ -35,11 +34,10 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use base64::Engine;
-
-use super::control_message::ControlMessage;
-use super::sync::{format_body_doc_id, format_workspace_doc_id, frame_message_v2};
+use super::sync::{format_body_doc_id, format_workspace_doc_id};
 use super::sync_manager::RustSyncManager;
+use super::sync_session::{IncomingEvent, SessionAction, SyncSession};
+use super::sync_types::{SyncEvent, SyncSessionConfig, SyncStatus};
 use super::tokio_transport::TokioTransport;
 use super::transport::{SyncTransport, TransportError, WsMessage};
 use crate::fs::{AsyncFileSystem, FileSystemEvent};
@@ -81,49 +79,6 @@ impl Default for ReconnectConfig {
     }
 }
 
-/// Events emitted by the sync client to the frontend.
-#[derive(Debug)]
-pub enum SyncEvent {
-    /// Sync status changed.
-    StatusChanged(SyncStatus),
-    /// Sync progress update.
-    Progress {
-        /// Number of files completed.
-        completed: usize,
-        /// Total number of files.
-        total: usize,
-    },
-    /// Workspace files changed (metadata sync).
-    FilesChanged(Vec<String>),
-    /// A body document changed.
-    BodyChanged {
-        /// Path of the changed file.
-        file_path: String,
-    },
-    /// An error occurred.
-    Error(String),
-}
-
-/// Current sync status.
-#[derive(Debug, Clone)]
-pub enum SyncStatus {
-    /// Connecting to the server.
-    Connecting,
-    /// Connected to the server.
-    Connected,
-    /// Performing initial sync.
-    Syncing,
-    /// Initial sync complete, watching for changes.
-    Synced,
-    /// Reconnecting after disconnect.
-    Reconnecting {
-        /// Current reconnection attempt number.
-        attempt: u32,
-    },
-    /// Disconnected from the server.
-    Disconnected,
-}
-
 /// Trait for receiving sync events.
 ///
 /// Implementors translate `SyncEvent`s into frontend-specific actions
@@ -144,12 +99,14 @@ pub struct SyncStats {
 
 /// Centralized sync client for native platforms.
 ///
-/// Wraps `RustSyncManager` and handles the full WebSocket sync lifecycle
-/// including connection, handshake, message routing, and reconnection.
+/// Wraps `SyncSession` and handles the WebSocket transport lifecycle
+/// including connection, reconnection, and outgoing message channel.
+/// Protocol logic is delegated to the shared `SyncSession`.
 pub struct SyncClient<FS: AsyncFileSystem> {
     config: SyncClientConfig,
     sync_manager: Arc<RustSyncManager<FS>>,
     handler: Arc<dyn SyncEventHandler>,
+    session: SyncSession<FS>,
 }
 
 impl<FS: AsyncFileSystem + 'static> SyncClient<FS> {
@@ -159,10 +116,16 @@ impl<FS: AsyncFileSystem + 'static> SyncClient<FS> {
         sync_manager: Arc<RustSyncManager<FS>>,
         handler: Arc<dyn SyncEventHandler>,
     ) -> Self {
+        let session_config = SyncSessionConfig {
+            workspace_id: config.workspace_id.clone(),
+            write_to_disk: true,
+        };
+        let session = SyncSession::new(session_config, Arc::clone(&sync_manager));
         Self {
             config,
             sync_manager,
             handler,
+            session,
         }
     }
 
@@ -178,6 +141,36 @@ impl<FS: AsyncFileSystem + 'static> SyncClient<FS> {
         } else {
             format!("{}/sync2", ws_server)
         }
+    }
+
+    /// Execute a list of session actions via the transport.
+    async fn execute_actions(
+        &self,
+        actions: Vec<SessionAction>,
+        transport: &mut TokioTransport,
+    ) -> Result<(), TransportError> {
+        for action in actions {
+            match action {
+                SessionAction::SendBinary(data) => {
+                    transport.send_binary(data).await?;
+                }
+                SessionAction::SendText(text) => {
+                    transport.send_text(text).await?;
+                }
+                SessionAction::Emit(event) => {
+                    self.handler.on_event(event);
+                }
+                SessionAction::DownloadSnapshot { workspace_id } => {
+                    // Native clients don't use snapshot downloads (handled by handshake).
+                    // Log and continue.
+                    log::info!(
+                        "[SyncClient] Snapshot download requested for {} (not implemented for native)",
+                        workspace_id
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Run persistent sync with reconnection.
@@ -227,10 +220,9 @@ impl<FS: AsyncFileSystem + 'static> SyncClient<FS> {
             // Backoff delay on reconnection
             if attempt > 0 {
                 let delay = std::cmp::min(rc.base_delay_secs.pow(attempt), rc.max_delay_secs);
-                self.handler
-                    .on_event(SyncEvent::StatusChanged(SyncStatus::Reconnecting {
-                        attempt,
-                    }));
+                self.handler.on_event(SyncEvent::StatusChanged {
+                    status: SyncStatus::Reconnecting { attempt },
+                });
                 log::info!(
                     "[SyncClient] Reconnecting in {}s (attempt {}/{})",
                     delay,
@@ -247,22 +239,22 @@ impl<FS: AsyncFileSystem + 'static> SyncClient<FS> {
                 }
             }
 
-            self.handler
-                .on_event(SyncEvent::StatusChanged(SyncStatus::Connecting));
+            self.handler.on_event(SyncEvent::StatusChanged {
+                status: SyncStatus::Connecting,
+            });
 
             // Connect
             let mut transport = match TokioTransport::connect(&ws_url).await {
                 Ok(t) => {
                     log::info!("[SyncClient] Connected to {}", ws_url);
-                    self.handler
-                        .on_event(SyncEvent::StatusChanged(SyncStatus::Connected));
                     attempt = 0; // Reset backoff on success
                     t
                 }
                 Err(e) => {
                     log::error!("[SyncClient] Connection failed: {}", e);
-                    self.handler
-                        .on_event(SyncEvent::Error(format!("Connection failed: {}", e)));
+                    self.handler.on_event(SyncEvent::Error {
+                        message: format!("Connection failed: {}", e),
+                    });
                     attempt += 1;
                     continue;
                 }
@@ -278,19 +270,24 @@ impl<FS: AsyncFileSystem + 'static> SyncClient<FS> {
             if running.load(Ordering::SeqCst) {
                 if let Err(e) = result {
                     log::error!("[SyncClient] Session error: {}", e);
-                    self.handler.on_event(SyncEvent::Error(e.to_string()));
+                    self.handler.on_event(SyncEvent::Error {
+                        message: e.to_string(),
+                    });
                 }
                 attempt += 1;
+                self.session.reset();
                 self.sync_manager.reset();
-                self.handler
-                    .on_event(SyncEvent::StatusChanged(SyncStatus::Disconnected));
+                self.handler.on_event(SyncEvent::StatusChanged {
+                    status: SyncStatus::Disconnected,
+                });
             }
         }
 
         // Final cleanup
         self.sync_manager.clear_event_callback();
-        self.handler
-            .on_event(SyncEvent::StatusChanged(SyncStatus::Disconnected));
+        self.handler.on_event(SyncEvent::StatusChanged {
+            status: SyncStatus::Disconnected,
+        });
         log::info!("[SyncClient] Sync loop exited");
     }
 
@@ -305,14 +302,26 @@ impl<FS: AsyncFileSystem + 'static> SyncClient<FS> {
         let ws_url = self.build_ws_url();
         let mut transport = TokioTransport::connect(&ws_url).await?;
 
-        // Send workspace SyncStep1
-        let ws_doc_id = format_workspace_doc_id(&self.config.workspace_id);
-        let ws_step1 = self.sync_manager.create_workspace_sync_step1();
-        let ws_framed = frame_message_v2(&ws_doc_id, &ws_step1);
-        transport.send_binary(ws_framed).await?;
+        // Use a one-shot session config (write_to_disk = false for push)
+        let one_shot_session = SyncSession::new(
+            SyncSessionConfig {
+                workspace_id: self.config.workspace_id.clone(),
+                write_to_disk: false,
+            },
+            Arc::clone(&self.sync_manager),
+        );
 
-        // Handshake
-        let mut stashed_binary: Option<Vec<u8>> = None;
+        // Process Connected event
+        let actions = one_shot_session.process(IncomingEvent::Connected).await;
+        for action in actions {
+            match action {
+                SessionAction::SendBinary(data) => transport.send_binary(data).await?,
+                SessionAction::SendText(text) => transport.send_text(text).await?,
+                _ => {}
+            }
+        }
+
+        // Handshake + collect SyncStep1s
         let hs_deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
 
         loop {
@@ -320,23 +329,29 @@ impl<FS: AsyncFileSystem + 'static> SyncClient<FS> {
                 msg = transport.recv() => {
                     match msg {
                         Some(Ok(WsMessage::Text(text))) => {
-                            if let Ok(ctrl) = serde_json::from_str::<ControlMessage>(&text) {
-                                match ctrl {
-                                    ControlMessage::FileManifest { .. } => {
-                                        transport.send_text(r#"{"type":"FilesReady"}"#.to_string()).await?;
-                                    }
-                                    ControlMessage::CrdtState { state } => {
-                                        if let Ok(state_bytes) = base64::engine::general_purpose::STANDARD.decode(&state) {
-                                            let _ = self.sync_manager.handle_crdt_state(&state_bytes).await;
-                                        }
-                                        break;
-                                    }
+                            let actions = one_shot_session.process(IncomingEvent::TextMessage(text)).await;
+                            for action in actions {
+                                match action {
+                                    SessionAction::SendBinary(data) => transport.send_binary(data).await?,
+                                    SessionAction::SendText(text) => transport.send_text(text).await?,
                                     _ => {}
                                 }
                             }
+                            // Check if session transitioned to active (body step1s sent)
+                            // We can't directly check session state, so we break after CrdtState
+                            // The session will have transitioned to Active after CrdtState
+                            break;
                         }
                         Some(Ok(WsMessage::Binary(data))) => {
-                            stashed_binary = Some(data);
+                            // Server skipped handshake, process body step1s
+                            let actions = one_shot_session.process(IncomingEvent::BinaryMessage(data)).await;
+                            for action in actions {
+                                match action {
+                                    SessionAction::SendBinary(data) => transport.send_binary(data).await?,
+                                    SessionAction::SendText(text) => transport.send_text(text).await?,
+                                    _ => {}
+                                }
+                            }
                             break;
                         }
                         Some(Ok(WsMessage::Close)) | None => {
@@ -352,93 +367,75 @@ impl<FS: AsyncFileSystem + 'static> SyncClient<FS> {
             }
         }
 
-        // Get files to sync
+        // Now in active state — exchange messages until sync is complete
         let file_paths = self.sync_manager.get_all_file_paths();
         let file_count = file_paths.len();
-
-        // Send body SyncStep1 for all files
-        for file_path in &file_paths {
-            let body_doc_id = format_body_doc_id(&self.config.workspace_id, file_path);
-            let body_step1 = self.sync_manager.create_body_sync_step1(file_path);
-            let body_framed = frame_message_v2(&body_doc_id, &body_step1);
-            transport.send_binary(body_framed).await?;
-        }
-
         let mut stats = SyncStats::default();
         let mut ws_handled = false;
         let mut body_files_handled: HashSet<String> = HashSet::new();
 
-        // Timeout based on file count
         let timeout_secs = (10 + file_count / 100).min(60) as u64;
         let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_secs);
 
-        // Process stashed binary + incoming
-        let mut pending: Vec<Vec<u8>> = Vec::new();
-        if let Some(data) = stashed_binary.take() {
-            pending.push(data);
-        }
-
         loop {
-            let data = if let Some(data) = pending.pop() {
-                data
-            } else {
-                let msg = tokio::select! {
-                    biased;
-                    msg = transport.recv() => msg,
-                    _ = tokio::time::sleep_until(deadline) => break,
-                };
-                match msg {
-                    Some(Ok(WsMessage::Binary(data))) => data,
-                    Some(Ok(WsMessage::Text(_))) => continue,
-                    Some(Ok(WsMessage::Close)) | None => break,
-                    Some(Err(e)) => return Err(e),
-                    _ => continue,
-                }
+            let msg = tokio::select! {
+                biased;
+                msg = transport.recv() => msg,
+                _ = tokio::time::sleep_until(deadline) => break,
             };
+            match msg {
+                Some(Ok(WsMessage::Binary(data))) => {
+                    // Track stats before processing
+                    if let Some((doc_id, _payload)) = unframe_message_v2(&data) {
+                        match parse_doc_id(&doc_id) {
+                            Some(DocIdKind::Workspace(_)) => {
+                                ws_handled = true;
+                            }
+                            Some(DocIdKind::Body { file_path, .. }) => {
+                                body_files_handled.insert(file_path);
+                            }
+                            None => {}
+                        }
+                    }
 
-            if let Some((doc_id, payload)) = unframe_message_v2(&data) {
-                match parse_doc_id(&doc_id) {
-                    Some(DocIdKind::Workspace(_)) => {
-                        // Delegate to sync_manager which decodes and processes internally
-                        if let Ok(result) = self
-                            .sync_manager
-                            .handle_workspace_message(&payload, false)
-                            .await
-                        {
-                            if let Some(response) = result.response {
-                                let framed = frame_message_v2(&doc_id, &response);
-                                transport.send_binary(framed).await?;
+                    let actions = one_shot_session
+                        .process(IncomingEvent::BinaryMessage(data))
+                        .await;
+                    for action in actions {
+                        match action {
+                            SessionAction::SendBinary(data) => {
+                                transport.send_binary(data).await?;
                                 stats.pushed += 1;
                             }
-                            if !result.changed_files.is_empty() {
-                                stats.pulled += result.changed_files.len();
+                            SessionAction::Emit(SyncEvent::FilesChanged { files })
+                                if !files.is_empty() =>
+                            {
+                                stats.pulled += files.len();
                             }
-                        }
-                        ws_handled = true;
-                    }
-                    Some(DocIdKind::Body { file_path, .. }) => {
-                        // Delegate to sync_manager which decodes and processes internally
-                        if let Ok(result) = self
-                            .sync_manager
-                            .handle_body_message(&file_path, &payload, false)
-                            .await
-                        {
-                            if let Some(response) = result.response {
-                                let framed = frame_message_v2(&doc_id, &response);
-                                transport.send_binary(framed).await?;
-                            }
-                            if result.content.is_some() {
+                            SessionAction::Emit(SyncEvent::BodyChanged { .. }) => {
                                 stats.pulled += 1;
                             }
+                            _ => {}
                         }
-                        body_files_handled.insert(file_path);
                     }
-                    None => {}
                 }
+                Some(Ok(WsMessage::Text(text))) => {
+                    let actions = one_shot_session
+                        .process(IncomingEvent::TextMessage(text))
+                        .await;
+                    for action in actions {
+                        match action {
+                            SessionAction::SendBinary(data) => transport.send_binary(data).await?,
+                            SessionAction::SendText(text) => transport.send_text(text).await?,
+                            _ => {}
+                        }
+                    }
+                }
+                Some(Ok(WsMessage::Close)) | None => break,
+                Some(Err(e)) => return Err(e),
+                _ => continue,
             }
 
-            // Check if sync is complete (received at least one workspace message
-            // and handled all body files)
             if ws_handled && body_files_handled.len() >= file_count {
                 break;
             }
@@ -450,24 +447,18 @@ impl<FS: AsyncFileSystem + 'static> SyncClient<FS> {
 
     /// Run a single sync session (after connection is established).
     ///
-    /// Performs handshake, sends body SyncStep1s, then enters the main message loop.
-    /// Returns `Ok(())` on graceful close, `Err` on transport errors.
+    /// Feeds transport messages into `SyncSession::process()` and executes actions.
     async fn run_session(
         &self,
         transport: &mut TokioTransport,
         outgoing_rx: &mut tokio::sync::mpsc::UnboundedReceiver<(String, Vec<u8>)>,
         running: &Arc<AtomicBool>,
     ) -> Result<(), TransportError> {
-        let workspace_id = &self.config.workspace_id;
+        // Process Connected event
+        let actions = self.session.process(IncomingEvent::Connected).await;
+        self.execute_actions(actions, transport).await?;
 
-        // --- Send workspace SyncStep1 ---
-        let ws_doc_id = format_workspace_doc_id(workspace_id);
-        let ws_step1 = self.sync_manager.create_workspace_sync_step1();
-        let ws_framed = frame_message_v2(&ws_doc_id, &ws_step1);
-        transport.send_binary(ws_framed).await?;
-
-        // --- Files-Ready handshake ---
-        let mut stashed_binary: Option<Vec<u8>> = None;
+        // Handshake loop: feed messages until session transitions to Active
         let handshake_deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
 
         loop {
@@ -475,41 +466,23 @@ impl<FS: AsyncFileSystem + 'static> SyncClient<FS> {
                 msg = transport.recv() => {
                     match msg {
                         Some(Ok(WsMessage::Text(text))) => {
-                            if let Ok(ctrl) = serde_json::from_str::<ControlMessage>(&text) {
-                                match ctrl {
-                                    ControlMessage::FileManifest { .. } => {
-                                        log::info!("[SyncClient] Received FileManifest, sending FilesReady");
-                                        transport.send_text(r#"{"type":"FilesReady"}"#.to_string()).await?;
-                                    }
-                                    ControlMessage::CrdtState { state } => {
-                                        match base64::engine::general_purpose::STANDARD.decode(&state) {
-                                            Ok(state_bytes) => {
-                                                match self.sync_manager.handle_crdt_state(&state_bytes).await {
-                                                    Ok(count) => {
-                                                        log::info!("[SyncClient] Applied CRDT state ({} files)", count);
-                                                        self.handler.on_event(SyncEvent::FilesChanged(vec![]));
-                                                    }
-                                                    Err(e) => {
-                                                        log::error!("[SyncClient] Failed to apply CRDT state: {}", e);
-                                                    }
-                                                }
-                                            }
-                                            Err(e) => {
-                                                log::error!("[SyncClient] Failed to decode CRDT state: {}", e);
-                                            }
-                                        }
-                                        break; // Handshake complete
-                                    }
-                                    ControlMessage::SessionJoined { .. } => {
-                                        log::info!("[SyncClient] Session joined");
-                                    }
-                                    _ => {}
-                                }
+                            let actions = self.session.process(IncomingEvent::TextMessage(text)).await;
+
+                            // Check if we transitioned to Active (CrdtState triggers body SyncStep1s)
+                            let has_syncing = actions.iter().any(|a| matches!(
+                                a, SessionAction::Emit(SyncEvent::StatusChanged { status: SyncStatus::Syncing })
+                            ));
+
+                            self.execute_actions(actions, transport).await?;
+
+                            if has_syncing {
+                                break; // Handshake complete
                             }
                         }
                         Some(Ok(WsMessage::Binary(data))) => {
-                            // Server returned Continue (no handshake needed).
-                            stashed_binary = Some(data);
+                            // Server skipped handshake
+                            let actions = self.session.process(IncomingEvent::BinaryMessage(data)).await;
+                            self.execute_actions(actions, transport).await?;
                             break;
                         }
                         Some(Ok(WsMessage::Close)) | None => {
@@ -526,49 +499,7 @@ impl<FS: AsyncFileSystem + 'static> SyncClient<FS> {
             }
         }
 
-        self.handler
-            .on_event(SyncEvent::StatusChanged(SyncStatus::Syncing));
-
-        // --- Send body SyncStep1 for all known files ---
-        let file_paths = self.sync_manager.get_all_file_paths();
-        let file_count = file_paths.len();
-        let mut sent = 0;
-        for file_path in &file_paths {
-            if !running.load(Ordering::SeqCst) {
-                break;
-            }
-            let body_doc_id = format_body_doc_id(workspace_id, file_path);
-            let body_step1 = self.sync_manager.create_body_sync_step1(file_path);
-            let body_framed = frame_message_v2(&body_doc_id, &body_step1);
-            transport.send_binary(body_framed).await?;
-            sent += 1;
-
-            // Yield periodically for large workspaces
-            if sent % 50 == 0 {
-                self.handler.on_event(SyncEvent::Progress {
-                    completed: sent,
-                    total: file_count,
-                });
-                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-            }
-        }
-
-        if file_count > 0 {
-            log::info!("[SyncClient] Sent body SyncStep1 for {} files", file_count);
-            self.handler.on_event(SyncEvent::Progress {
-                completed: 0,
-                total: file_count,
-            });
-        }
-
-        // --- Process stashed binary from handshake ---
-        if let Some(data) = stashed_binary.take() {
-            if let Some(response) = self.handle_binary_message(&data).await {
-                transport.send_binary(response).await?;
-            }
-        }
-
-        // --- Main message loop ---
+        // Main message loop
         let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
         ping_interval.tick().await; // Consume first immediate tick
 
@@ -581,12 +512,12 @@ impl<FS: AsyncFileSystem + 'static> SyncClient<FS> {
                 msg = transport.recv() => {
                     match msg {
                         Some(Ok(WsMessage::Binary(data))) => {
-                            if let Some(response) = self.handle_binary_message(&data).await {
-                                transport.send_binary(response).await?;
-                            }
+                            let actions = self.session.process(IncomingEvent::BinaryMessage(data)).await;
+                            self.execute_actions(actions, transport).await?;
                         }
                         Some(Ok(WsMessage::Text(text))) => {
-                            self.handle_control_message(&text);
+                            let actions = self.session.process(IncomingEvent::TextMessage(text)).await;
+                            self.execute_actions(actions, transport).await?;
                         }
                         Some(Ok(WsMessage::Close)) => {
                             log::info!("[SyncClient] Connection closed by server");
@@ -595,7 +526,7 @@ impl<FS: AsyncFileSystem + 'static> SyncClient<FS> {
                         Some(Ok(WsMessage::Pong(_))) => {} // keepalive
                         Some(Err(e)) => {
                             log::error!("[SyncClient] WebSocket error: {}", e);
-                            self.handler.on_event(SyncEvent::Error(e.to_string()));
+                            self.handler.on_event(SyncEvent::Error { message: e.to_string() });
                             break;
                         }
                         None => break,
@@ -604,8 +535,8 @@ impl<FS: AsyncFileSystem + 'static> SyncClient<FS> {
                 }
                 outgoing = outgoing_rx.recv() => {
                     if let Some((doc_id, message)) = outgoing {
-                        let framed = frame_message_v2(&doc_id, &message);
-                        transport.send_binary(framed).await?;
+                        let actions = self.session.process(IncomingEvent::LocalUpdate { doc_id, data: message }).await;
+                        self.execute_actions(actions, transport).await?;
                     }
                 }
                 _ = ping_interval.tick() => {
@@ -615,97 +546,5 @@ impl<FS: AsyncFileSystem + 'static> SyncClient<FS> {
         }
 
         Ok(())
-    }
-
-    /// Handle a binary V2 message: unframe, route to sync_manager, return optional response.
-    async fn handle_binary_message(&self, data: &[u8]) -> Option<Vec<u8>> {
-        use super::sync::{DocIdKind, parse_doc_id, unframe_message_v2};
-
-        let (doc_id, payload) = unframe_message_v2(data)?;
-        match parse_doc_id(&doc_id) {
-            Some(DocIdKind::Workspace(_)) => {
-                match self
-                    .sync_manager
-                    .handle_workspace_message(&payload, true)
-                    .await
-                {
-                    Ok(result) => {
-                        if !result.changed_files.is_empty() {
-                            log::debug!(
-                                "[SyncClient] Workspace files changed: {:?}",
-                                result.changed_files
-                            );
-                            self.handler
-                                .on_event(SyncEvent::FilesChanged(result.changed_files));
-                        }
-                        result.response.map(|resp| frame_message_v2(&doc_id, &resp))
-                    }
-                    Err(e) => {
-                        log::error!("[SyncClient] Error handling workspace message: {}", e);
-                        self.handler.on_event(SyncEvent::Error(e.to_string()));
-                        None
-                    }
-                }
-            }
-            Some(DocIdKind::Body { file_path, .. }) => {
-                match self
-                    .sync_manager
-                    .handle_body_message(&file_path, &payload, true)
-                    .await
-                {
-                    Ok(result) => {
-                        if result.content.is_some() && !result.is_echo {
-                            log::debug!("[SyncClient] Body changed: {}", file_path);
-                            self.handler.on_event(SyncEvent::BodyChanged {
-                                file_path: file_path.clone(),
-                            });
-                        }
-                        result.response.map(|resp| frame_message_v2(&doc_id, &resp))
-                    }
-                    Err(e) => {
-                        log::error!(
-                            "[SyncClient] Error handling body message for {}: {}",
-                            file_path,
-                            e
-                        );
-                        None
-                    }
-                }
-            }
-            None => {
-                log::debug!("[SyncClient] Unknown doc_id: {}", doc_id);
-                None
-            }
-        }
-    }
-
-    /// Handle a JSON control message.
-    fn handle_control_message(&self, text: &str) {
-        if let Ok(ctrl) = serde_json::from_str::<ControlMessage>(text) {
-            match ctrl {
-                ControlMessage::SyncProgress { completed, total } => {
-                    log::debug!("[SyncClient] Progress: {}/{}", completed, total);
-                    self.handler
-                        .on_event(SyncEvent::Progress { completed, total });
-                }
-                ControlMessage::SyncComplete { files_synced } => {
-                    log::info!("[SyncClient] Sync complete ({} files)", files_synced);
-                    self.handler
-                        .on_event(SyncEvent::StatusChanged(SyncStatus::Synced));
-                }
-                ControlMessage::PeerJoined { peer_count } => {
-                    log::info!("[SyncClient] Peer joined ({} connected)", peer_count);
-                }
-                ControlMessage::PeerLeft { peer_count } => {
-                    log::info!("[SyncClient] Peer left ({} connected)", peer_count);
-                }
-                ControlMessage::FocusListChanged { files } => {
-                    if !files.is_empty() {
-                        log::debug!("[SyncClient] Focus list changed: {} files", files.len());
-                    }
-                }
-                _ => {}
-            }
-        }
     }
 }

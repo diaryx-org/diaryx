@@ -420,7 +420,7 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
 
         // Skip temporary files created by the metadata writer's safe write process
         // These files should never be synced to the server
-        if path_str.ends_with(".tmp") || path_str.ends_with(".bak") || path_str.ends_with(".swap") {
+        if super::is_temp_file(&path_str) {
             log::debug!(
                 "CrdtFs: Skipping CRDT update for temporary file: {}",
                 path_str

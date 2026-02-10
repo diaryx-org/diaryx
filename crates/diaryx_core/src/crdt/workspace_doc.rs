@@ -217,7 +217,7 @@ impl WorkspaceCrdt {
     /// Returns an error if the update fails to persist to storage.
     pub fn set_file(&self, path: &str, metadata: FileMetadata) -> StorageResult<()> {
         // Skip temporary files - they should never enter the workspace CRDT
-        if path.ends_with(".tmp") || path.ends_with(".bak") || path.ends_with(".swap") {
+        if crate::fs::is_temp_file(path) {
             log::debug!(
                 "[WorkspaceCrdt] Skipping set_file for temporary file: {}",
                 path

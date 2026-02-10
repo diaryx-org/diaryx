@@ -84,6 +84,13 @@ pub use decorator_stack::{DecoratedFs, DecoratedFsBuilder};
 use std::io::{Error, ErrorKind, Result};
 use std::path::{Path, PathBuf};
 
+/// Returns true if the path refers to a temporary file created by the metadata
+/// writer's safe-write process (`.tmp`, `.bak`, `.swap` extensions).
+/// These should be excluded from workspace trees, CRDT updates, and sync.
+pub fn is_temp_file(path: &str) -> bool {
+    path.ends_with(".tmp") || path.ends_with(".bak") || path.ends_with(".swap")
+}
+
 /// Abstraction over filesystem operations
 /// Allows for different implementations: real filesystem, in-memory (for WASM), etc.
 /// Send + Sync required for multi-threaded environments (e.g., Tauri)

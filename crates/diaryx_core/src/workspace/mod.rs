@@ -925,7 +925,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             let mut entries: Vec<_> = entries.into_iter().collect();
             entries.sort(); // Sort alphabetically
 
-            // Filter out hidden files first to get accurate count
+            // Filter out hidden files and temporary files to get accurate count
             let entries: Vec<_> = entries
                 .into_iter()
                 .filter(|entry| {
@@ -933,7 +933,9 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                         .file_name()
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_default();
-                    show_hidden || !file_name.starts_with('.')
+                    let hidden = !show_hidden && file_name.starts_with('.');
+                    let temp = crate::fs::is_temp_file(&file_name);
+                    !hidden && !temp
                 })
                 .collect();
 

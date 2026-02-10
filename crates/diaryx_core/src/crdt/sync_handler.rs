@@ -542,10 +542,7 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
     ) -> Result<()> {
         // Skip temporary files created by the metadata writer's safe write process
         // These files should never be processed from remote updates
-        if canonical_path.ends_with(".tmp")
-            || canonical_path.ends_with(".bak")
-            || canonical_path.ends_with(".swap")
-        {
+        if crate::fs::is_temp_file(canonical_path) {
             log::debug!(
                 "[SyncHandler] Skipping remote body update for temporary file: {}",
                 canonical_path

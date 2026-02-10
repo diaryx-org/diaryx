@@ -31,6 +31,7 @@ use crate::config::Config;
 use crate::error::{DiaryxError, Result};
 use crate::fs::AsyncFileSystem;
 use crate::link_parser::{self, LinkFormat};
+use crate::path_utils::normalize_sync_path;
 
 /// Workspace-level configuration stored in the root index file's frontmatter.
 ///
@@ -109,10 +110,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             path.to_string_lossy().replace('\\', "/")
         };
 
-        // Normalize: strip leading "./" or "/" to get clean canonical path
-        raw.trim_start_matches("./")
-            .trim_start_matches('/')
-            .to_string()
+        normalize_sync_path(&raw)
     }
 
     /// Resolve a title for a canonical path by reading the file's frontmatter.

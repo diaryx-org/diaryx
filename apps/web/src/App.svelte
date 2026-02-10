@@ -18,7 +18,7 @@
     getTreeFromCrdt,
     initEventSubscription,
     waitForInitialSync,
-    getCanonicalPath,
+    getCanonicalPathForSync,
     isFreshFromServerLoad,
   } from "./lib/crdt/workspaceCrdtBridge";
   // Note: YDoc and HocuspocusProvider types are now handled by collaborationStore
@@ -204,6 +204,16 @@
     return frontmatter;
   }
 
+  function isTransientEntryReadError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return (
+      message.includes("NotFoundError") ||
+      message.includes("Failed to read file") ||
+      message.includes("A requested file or directory could not be found") ||
+      message.includes("The object can not be found here")
+    );
+  }
+
   // Attachment state
   let attachmentError: string | null = $state(null);
   let attachmentFileInput: HTMLInputElement | null = $state(null);
@@ -368,7 +378,7 @@
       cleanupBodyChange = onBodyChange(async (path, body) => {
         // path is canonical (e.g., "file.md"), but currentEntry.path may be storage path
         // (e.g., "guest/abc123/file.md" for guests). Normalize for comparison.
-        const currentCanonical = currentEntry ? getCanonicalPath(currentEntry.path) : null;
+        const currentCanonical = currentEntry ? await getCanonicalPathForSync(currentEntry.path) : null;
         console.log('[App] Body change received for:', path, 'current entry canonical:', currentCanonical);
         // Only update if this is the currently open file
         if (currentEntry && path === currentCanonical) {
@@ -383,18 +393,41 @@
       // This ensures the RightSidebar shows updated properties from sync
       cleanupFileChange = onFileChange(async (path, metadata) => {
         // path is canonical, but currentEntry.path may be storage path. Normalize for comparison.
-        const currentCanonical = currentEntry ? getCanonicalPath(currentEntry.path) : null;
+        const currentCanonical = currentEntry ? await getCanonicalPathForSync(currentEntry.path) : null;
         // Only update if this is the currently open file and we have valid metadata
         if (currentEntry && api && metadata && path === currentCanonical) {
           console.log('[App] Metadata change received for current entry:', path);
           try {
-            // Reload the entry to get the updated frontmatter from disk
-            const entry = await api.getEntry(currentEntry.path);
+            // Reload with bounded retry: safe-write swaps can create brief NotFound windows.
+            let entry = null;
+            let lastError: unknown = null;
+            for (let attempt = 0; attempt < 8; attempt++) {
+              try {
+                entry = await api.getEntry(currentEntry.path);
+                break;
+              } catch (e) {
+                lastError = e;
+                if (!isTransientEntryReadError(e)) {
+                  throw e;
+                }
+                if (attempt < 7) {
+                  await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
+                }
+              }
+            }
+            if (!entry) throw lastError ?? new Error('Failed to reload entry after metadata change');
+
             entry.frontmatter = normalizeFrontmatter(entry.frontmatter);
             // Update the current entry - this will trigger RightSidebar to re-render
             entryStore.setCurrentEntry(entry);
           } catch (e) {
-            console.warn('[App] Failed to reload entry after metadata change:', e);
+            // Sync-safe writes can briefly make files unreadable; avoid noisy warnings
+            // for transient NotFound windows and let later file events refresh again.
+            if (isTransientEntryReadError(e)) {
+              console.log('[App] Metadata reload deferred due to transient file state');
+            } else {
+              console.warn('[App] Failed to reload entry after metadata change:', e);
+            }
           }
         }
 
@@ -1367,8 +1400,8 @@
   onOpenChange={(open) => showSyncWizard = open}
   onComplete={() => {
     showSyncWizard = false;
-    // Refresh tree after sync setup
-    refreshTree();
+    // Let final sync writes settle, then refresh tree.
+    debouncedRefreshTree();
   }}
 />
 

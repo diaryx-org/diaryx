@@ -26,6 +26,42 @@ import {
 // Note: CRDT sync for entry operations (save, create, delete, rename) is now handled by Rust.
 // TypeScript only manages body sync bridges for real-time collaboration.
 
+const SAVE_RETRY_DELAYS_MS = [100, 200, 400, 800, 1600, 3200];
+
+function isTransientSaveError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes('NotFoundError') ||
+    message.includes('NoModificationAllowedError') ||
+    message.includes('Failed to write file') ||
+    message.includes('A requested file or directory could not be found') ||
+    message.includes('An attempt was made to modify an object where modifications are not allowed')
+  );
+}
+
+async function saveEntryWithRetry(
+  api: Api,
+  path: string,
+  markdown: string
+): Promise<void> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt <= SAVE_RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      await api.saveEntry(path, markdown);
+      return;
+    } catch (e) {
+      lastError = e;
+      const shouldRetry = isTransientSaveError(e) && attempt < SAVE_RETRY_DELAYS_MS.length;
+      if (!shouldRetry) break;
+      const delayMs = SAVE_RETRY_DELAYS_MS[attempt];
+      console.log(`[EntryController] saveEntry transient failure for '${path}', retrying in ${delayMs}ms`);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  console.warn(`[EntryController] saveEntry failed for '${path}' after retries:`, lastError);
+  throw lastError;
+}
+
 /**
  * Helper to handle mixed frontmatter types (Map from WASM vs Object from JSON/Tauri).
  */
@@ -160,7 +196,7 @@ export async function saveEntry(
 
     // Note: saveEntry expects only the body content, not frontmatter.
     // Frontmatter is preserved by the backend's save_content() method.
-    await api.saveEntry(currentEntry.path, markdown);
+    await saveEntryWithRetry(api, currentEntry.path, markdown);
     entryStore.markClean();
   } catch (e) {
     uiStore.setError(e instanceof Error ? e.message : String(e));
@@ -688,7 +724,7 @@ export async function saveEntryWithSync(
     const markdown = reverseBlobUrlsToAttachmentPaths(markdownWithBlobUrls || '');
 
     // Save to backend - Rust handles CRDT sync automatically
-    await api.saveEntry(currentEntry.path, markdown);
+    await saveEntryWithRetry(api, currentEntry.path, markdown);
     entryStore.markClean();
   } catch (e) {
     uiStore.setError(e instanceof Error ? e.message : String(e));

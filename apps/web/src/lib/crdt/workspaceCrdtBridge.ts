@@ -47,6 +47,26 @@ function isTempFile(path: string): boolean {
   return path.endsWith('.tmp') || path.endsWith('.bak') || path.endsWith('.swap');
 }
 
+function eventTouchesTempFile(event: FileSystemEvent): boolean {
+  switch (event.type) {
+    case 'FileCreated':
+    case 'FileDeleted':
+    case 'MetadataChanged':
+    case 'ContentsChanged':
+      return isTempFile(event.path);
+    case 'FileRenamed':
+      return isTempFile(event.old_path) || isTempFile(event.new_path);
+    case 'FileMoved': {
+      const oldPath = event.old_parent && event.old_parent.length > 0
+        ? `${event.old_parent}/${event.path.split('/').pop() ?? ''}`
+        : event.path;
+      return isTempFile(event.path) || isTempFile(oldPath);
+    }
+    default:
+      return false;
+  }
+}
+
 // Cross-module singleton support.
 // Vite dev server may create separate module instances when the same file is
 // imported via different paths (e.g., "$lib/crdt/workspaceCrdtBridge" from app
@@ -87,6 +107,10 @@ let _initialSyncResolvers: Array<() => void> = [];
 // Unified sync v2 transport (single WebSocket for workspace + body)
 let unifiedSyncTransport: UnifiedSyncTransport | null = null;
 
+// Outgoing local updates captured before the transport is available.
+// This can happen during reconnects or sync mode transitions.
+let pendingLocalSyncUpdates: Array<{ docId: string; bytes: Uint8Array }> = [];
+
 // Cached server URL (WebSocket) for sync readiness checks
 let _serverUrl: string | null = null;
 
@@ -110,6 +134,43 @@ const fileLocks = new Map<string, Promise<void>>();
 // Track pending intervals/timeouts for proper cleanup
 const pendingIntervals: Set<ReturnType<typeof setInterval>> = new Set();
 const pendingTimeouts: Set<ReturnType<typeof setTimeout>> = new Set();
+
+async function flushPendingLocalSyncUpdates(): Promise<void> {
+  if (!unifiedSyncTransport || pendingLocalSyncUpdates.length === 0) {
+    return;
+  }
+
+  const pending = pendingLocalSyncUpdates;
+  pendingLocalSyncUpdates = [];
+  console.log(`[WorkspaceCrdtBridge] Flushing ${pending.length} queued local sync update(s)`);
+
+  for (const { docId, bytes } of pending) {
+    try {
+      await unifiedSyncTransport.queueLocalUpdate(docId, bytes);
+    } catch (err) {
+      console.warn('[WorkspaceCrdtBridge] Failed to flush queued sync update, re-queueing:', err);
+      pendingLocalSyncUpdates.unshift({ docId, bytes });
+      break;
+    }
+  }
+}
+
+/**
+ * Discard queued local sync updates that were captured while no transport was connected.
+ *
+ * This is used by bootstrap flows (snapshot load/upload) where replaying pre-connect
+ * local updates would duplicate or conflict with snapshot state.
+ *
+ * Returns the number of dropped updates.
+ */
+export function discardQueuedLocalSyncUpdates(reason: string = 'manual'): number {
+  const dropped = pendingLocalSyncUpdates.length;
+  if (dropped > 0) {
+    console.log(`[WorkspaceCrdtBridge] Discarding ${dropped} queued local sync update(s): ${reason}`);
+    pendingLocalSyncUpdates = [];
+  }
+  return dropped;
+}
 
 /**
  * Acquire a lock for a specific file path.
@@ -284,6 +345,7 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
         notifySyncStatus('connecting');
 
         await unifiedSyncTransport.connect();
+        await flushPendingLocalSyncUpdates();
       }
     }
 
@@ -430,6 +492,10 @@ export async function setWorkspaceId(id: string | null): Promise<void> {
   const previousId = _workspaceId;
   _workspaceId = id;
 
+  if (id !== previousId) {
+    discardQueuedLocalSyncUpdates('workspace id changed');
+  }
+
   // If we have a server URL and the ID changed, reconnect with the new doc name
   if (serverUrl && id && id !== previousId) {
     console.log('[WorkspaceCrdtBridge] Workspace ID changed, reconnecting workspace sync');
@@ -498,15 +564,7 @@ function getGuestStoragePath(originalPath: string): string {
   return guestPath;
 }
 
-/**
- * Convert a guest storage path back to the canonical path.
- * This strips the guest/{joinCode}/ prefix if present.
- * Used when syncing to Y.Doc to ensure consistent keys across host and guest.
- *
- * For guests using in-memory storage: paths are already canonical (no prefix).
- * For guests using OPFS: strips the guest/{joinCode}/ prefix.
- */
-export function getCanonicalPath(storagePath: string): string {
+function getCanonicalPathFallback(storagePath: string): string {
   let path = storagePath;
 
   // Strip leading "./" for consistent path format (server uses paths without ./ prefix)
@@ -534,6 +592,35 @@ export function getCanonicalPath(storagePath: string): string {
   }
 
   return path;
+}
+
+/**
+ * Convert a storage path to canonical form using backend sync-path rules.
+ *
+ * This is the preferred path normalizer for sync comparisons because it
+ * delegates to Rust (`GetCanonicalPath`) so host/guest rules stay consistent
+ * with the backend.
+ *
+ * Falls back to local canonicalization when backend is unavailable.
+ */
+export async function getCanonicalPathForSync(storagePath: string): Promise<string> {
+  if (_backend) {
+    try {
+      return await syncHelpers.getCanonicalPath(_backend, storagePath);
+    } catch (error) {
+      console.warn('[WorkspaceCrdtBridge] Backend canonical path failed, using fallback:', error);
+    }
+  }
+  return getCanonicalPathFallback(storagePath);
+}
+
+/**
+ * Convert a guest storage path back to canonical path (fallback-only helper).
+ *
+ * Prefer `getCanonicalPathForSync()` for sync decisions.
+ */
+export function getCanonicalPath(storagePath: string): string {
+  return getCanonicalPathFallback(storagePath);
 }
 
 // Session code for share sessions
@@ -697,6 +784,7 @@ export async function startSessionSync(
 
   notifySyncStatus('connecting');
   await unifiedSyncTransport.connect();
+  await flushPendingLocalSyncUpdates();
 
   // Wait for initial sync to complete (with timeout)
   const timeoutPromise = new Promise<void>((_, reject) => {
@@ -909,6 +997,7 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
 
           notifySyncStatus('connecting');
           await unifiedSyncTransport.connect();
+          await flushPendingLocalSyncUpdates();
         }
       }
     } else {
@@ -942,6 +1031,8 @@ export function disconnectWorkspace(): void {
 export async function destroyWorkspace(): Promise<void> {
   // Disconnect existing sync (native or browser-based)
   await disconnectExistingSync();
+
+  discardQueuedLocalSyncUpdates('destroyWorkspace');
 
   // Clear pending intervals/timeouts to prevent memory leaks
   for (const interval of pendingIntervals) {
@@ -1308,7 +1399,7 @@ async function _getBodyContentFromCrdtImpl(filePath: string): Promise<string | n
   if (!rustApi) {
     return null;
   }
-  const canonicalPath = getCanonicalPath(filePath);
+  const canonicalPath = await getCanonicalPathForSync(filePath);
   try {
     const content = await rustApi.getBodyContent(canonicalPath);
     return content || null;
@@ -1972,6 +2063,9 @@ async function _fireSessionSyncCallbacks(): Promise<void> {
 // Private helpers
 
 function notifyFileChange(path: string | null, metadata: FileMetadata | null): void {
+  if (path && isTempFile(path)) {
+    return;
+  }
   for (const callback of fileChangeCallbacks) {
     try {
       callback(path, metadata);
@@ -2082,11 +2176,12 @@ export function initEventSubscription(backend: Backend): () => void {
  * and CRDT synchronization.
  */
 function handleFileSystemEvent(event: FileSystemEvent): void {
+  if (eventTouchesTempFile(event)) {
+    return;
+  }
 
   switch (event.type) {
     case 'FileCreated':
-      // Skip temporary files
-      if (isTempFile(event.path)) return;
       // New file created - notify UI
       notifyFileChange(event.path, event.frontmatter ? (event.frontmatter as FileMetadata) : null);
       // Trigger tree refresh (guests get tree rebuilds from sync transport
@@ -2176,14 +2271,27 @@ function handleFileSystemEvent(event: FileSystemEvent): void {
       const { doc_name, message, is_body } = event as any;
       const bytes = new Uint8Array(message);
 
+      if (!_workspaceId) {
+        console.warn('[WorkspaceCrdtBridge] Dropping sync message: missing workspace ID');
+        break;
+      }
+
       // Route through WasmSyncClient (Rust handles framing and queuing)
+      const docId = is_body
+        ? `body:${_workspaceId}/${doc_name}`
+        : `workspace:${_workspaceId}`;
+
       if (unifiedSyncTransport) {
-        const docId = is_body
-          ? `body:${_workspaceId}/${doc_name}`
-          : `workspace:${_workspaceId}`;
         unifiedSyncTransport.queueLocalUpdate(docId, bytes).catch(err => {
           console.warn('[WorkspaceCrdtBridge] Failed to queue sync message:', err);
         });
+      } else {
+        // Queue until a transport is connected (reconnect / setup transition).
+        pendingLocalSyncUpdates.push({ docId, bytes });
+        // Keep bounded to avoid unbounded memory growth if sync is down.
+        if (pendingLocalSyncUpdates.length > 2000) {
+          pendingLocalSyncUpdates = pendingLocalSyncUpdates.slice(-2000);
+        }
       }
       break;
     }

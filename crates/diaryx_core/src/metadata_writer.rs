@@ -17,6 +17,7 @@
 //! frontmatter updates if the process is interrupted mid-write.
 
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use chrono::TimeZone;
@@ -384,43 +385,87 @@ pub async fn write_file_with_metadata_and_canonical_path<FS: AsyncFileSystem>(
     let temp_path = temp_path_for(path);
     let backup_path = backup_path_for(path);
 
-    if fs.exists(&temp_path).await {
-        let _ = fs.delete_file(&temp_path).await;
-    }
+    let safe_write_result: Result<()> = async {
+        if fs.exists(&temp_path).await {
+            let _ = fs.delete_file(&temp_path).await;
+        }
 
-    fs.write_file(&temp_path, &content)
-        .await
-        .map_err(|e| DiaryxError::FileWrite {
-            path: temp_path.clone(),
-            source: e,
-        })?;
-
-    // Move existing file out of the way (backup) before swapping in the new content.
-    if fs.exists(path).await {
-        fs.move_file(path, &backup_path)
+        fs.write_file(&temp_path, &content)
             .await
             .map_err(|e| DiaryxError::FileWrite {
-                path: backup_path.clone(),
+                path: temp_path.clone(),
                 source: e,
             })?;
-    }
 
-    if let Err(e) = fs.move_file(&temp_path, path).await {
-        // Attempt to restore the backup if swap failed.
-        if fs.exists(&backup_path).await {
-            let _ = fs.move_file(&backup_path, path).await;
+        // Move existing file out of the way (backup) before swapping in the new content.
+        if fs.exists(path).await
+            && let Err(e) = fs.move_file(path, &backup_path).await
+        {
+            if is_not_found_io_error(&e) {
+                // OPFS/FSA can race between exists() and move(). If the source
+                // disappeared, continue with temp->path swap.
+                log::warn!(
+                    "metadata_writer: backup move skipped for '{}': {}",
+                    path.display(),
+                    e
+                );
+            } else {
+                return Err(DiaryxError::FileWrite {
+                    path: backup_path.clone(),
+                    source: e,
+                });
+            }
         }
-        return Err(DiaryxError::FileWrite {
-            path: path.to_path_buf(),
-            source: e,
-        });
-    }
 
-    if fs.exists(&backup_path).await {
-        let _ = fs.delete_file(&backup_path).await;
-    }
+        if let Err(e) = fs.move_file(&temp_path, path).await {
+            // Attempt to restore the backup if swap failed.
+            if fs.exists(&backup_path).await {
+                let _ = fs.move_file(&backup_path, path).await;
+            }
+            return Err(DiaryxError::FileWrite {
+                path: path.to_path_buf(),
+                source: e,
+            });
+        }
 
-    Ok(())
+        if fs.exists(&backup_path).await {
+            let _ = fs.delete_file(&backup_path).await;
+        }
+
+        Ok(())
+    }
+    .await;
+
+    match safe_write_result {
+        Ok(()) => Ok(()),
+        Err(e) if should_fallback_to_direct_write(&e) => {
+            log::warn!(
+                "metadata_writer: safe-write failed for '{}', falling back to direct overwrite: {}",
+                path.display(),
+                e
+            );
+
+            // Best-effort cleanup before fallback.
+            if fs.exists(&temp_path).await {
+                let _ = fs.delete_file(&temp_path).await;
+            }
+
+            fs.write_file(path, &content)
+                .await
+                .map_err(|source| DiaryxError::FileWrite {
+                    path: path.to_path_buf(),
+                    source,
+                })?;
+
+            // If fallback succeeded, stale backup should not remain.
+            if fs.exists(&backup_path).await {
+                let _ = fs.delete_file(&backup_path).await;
+            }
+
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Update a file's frontmatter metadata, preserving or replacing the body.
@@ -493,6 +538,35 @@ fn backup_path_for(path: &Path) -> PathBuf {
     }
 }
 
+fn should_fallback_to_direct_write(err: &DiaryxError) -> bool {
+    if let DiaryxError::FileWrite { source, .. } = err {
+        if is_not_found_io_error(source) {
+            return true;
+        }
+        if source.kind() == ErrorKind::AlreadyExists {
+            return true;
+        }
+    }
+
+    let msg = err.to_string();
+    msg.contains("NoModificationAllowedError")
+        || msg.contains("InvalidStateError")
+        || msg.contains("NotAllowedError")
+        || msg.contains("NotFoundError")
+        || msg.contains("A requested file or directory could not be found")
+        || msg.contains("The object can not be found here")
+        || msg.contains("already exists")
+}
+
+fn is_not_found_io_error(err: &std::io::Error) -> bool {
+    err.kind() == ErrorKind::NotFound
+        || err.to_string().contains("NotFoundError")
+        || err
+            .to_string()
+            .contains("A requested file or directory could not be found")
+        || err.to_string().contains("The object can not be found here")
+}
+
 async fn recover_backup_if_needed<FS: AsyncFileSystem>(fs: &FS, path: &Path) -> Result<()> {
     let backup_path = backup_path_for(path);
     if fs.exists(&backup_path).await {
@@ -513,6 +587,92 @@ async fn recover_backup_if_needed<FS: AsyncFileSystem>(fs: &FS, path: &Path) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fs::{FileSystem, InMemoryFileSystem, SyncToAsyncFs, block_on_test};
+    use std::io;
+    use std::sync::Mutex;
+
+    struct NotFoundOnBackupMoveFs {
+        inner: InMemoryFileSystem,
+        always_fail_backup_move: bool,
+        fail_backup_move_once: Mutex<bool>,
+    }
+
+    impl NotFoundOnBackupMoveFs {
+        fn fail_once() -> Self {
+            Self {
+                inner: InMemoryFileSystem::new(),
+                always_fail_backup_move: false,
+                fail_backup_move_once: Mutex::new(true),
+            }
+        }
+
+        fn fail_always() -> Self {
+            Self {
+                inner: InMemoryFileSystem::new(),
+                always_fail_backup_move: true,
+                fail_backup_move_once: Mutex::new(false),
+            }
+        }
+
+        fn should_fail_backup_move(&self, to: &Path) -> bool {
+            if !to.to_string_lossy().ends_with(".bak") {
+                return false;
+            }
+            if self.always_fail_backup_move {
+                return true;
+            }
+            let mut once = self.fail_backup_move_once.lock().unwrap();
+            if *once {
+                *once = false;
+                return true;
+            }
+            false
+        }
+    }
+
+    impl FileSystem for NotFoundOnBackupMoveFs {
+        fn read_to_string(&self, path: &Path) -> io::Result<String> {
+            self.inner.read_to_string(path)
+        }
+
+        fn write_file(&self, path: &Path, content: &str) -> io::Result<()> {
+            self.inner.write_file(path, content)
+        }
+
+        fn create_new(&self, path: &Path, content: &str) -> io::Result<()> {
+            self.inner.create_new(path, content)
+        }
+
+        fn delete_file(&self, path: &Path) -> io::Result<()> {
+            self.inner.delete_file(path)
+        }
+
+        fn list_md_files(&self, dir: &Path) -> io::Result<Vec<PathBuf>> {
+            self.inner.list_md_files(dir)
+        }
+
+        fn exists(&self, path: &Path) -> bool {
+            self.inner.exists(path)
+        }
+
+        fn create_dir_all(&self, path: &Path) -> io::Result<()> {
+            self.inner.create_dir_all(path)
+        }
+
+        fn is_dir(&self, path: &Path) -> bool {
+            self.inner.is_dir(path)
+        }
+
+        fn move_file(&self, from: &Path, to: &Path) -> io::Result<()> {
+            if self.should_fail_backup_move(to) {
+                return Err(io::Error::new(
+                    ErrorKind::NotFound,
+                    "NotFoundError: A requested file or directory could not be found",
+                ));
+            }
+            self.inner.move_file(from, to)
+        }
+    }
 
     #[test]
     fn test_yaml_string_simple() {
@@ -768,5 +928,40 @@ mod tests {
                 "[Already Formatted](/folder/formatted.md)".to_string(),
             ])
         );
+    }
+
+    #[test]
+    fn test_write_file_with_metadata_tolerates_not_found_during_backup_move_once() {
+        let fs = SyncToAsyncFs::new(NotFoundOnBackupMoveFs::fail_once());
+        let path = Path::new("README.md");
+
+        block_on_test(fs.write_file(path, "original")).unwrap();
+
+        let metadata = serde_json::json!({ "title": "My Journal" });
+        block_on_test(write_file_with_metadata(
+            &fs,
+            path,
+            &metadata,
+            "# first edit",
+        ))
+        .unwrap();
+
+        let updated = block_on_test(fs.read_to_string(path)).unwrap();
+        assert!(updated.contains("# first edit"));
+    }
+
+    #[test]
+    fn test_write_file_with_metadata_tolerates_not_found_during_backup_move_every_time() {
+        let fs = SyncToAsyncFs::new(NotFoundOnBackupMoveFs::fail_always());
+        let path = Path::new("README.md");
+
+        block_on_test(fs.write_file(path, "original")).unwrap();
+        let metadata = serde_json::json!({ "title": "My Journal" });
+
+        block_on_test(write_file_with_metadata(&fs, path, &metadata, "# edit one")).unwrap();
+        block_on_test(write_file_with_metadata(&fs, path, &metadata, "# edit two")).unwrap();
+
+        let updated = block_on_test(fs.read_to_string(path)).unwrap();
+        assert!(updated.contains("# edit two"));
     }
 }

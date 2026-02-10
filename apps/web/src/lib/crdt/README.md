@@ -54,6 +54,37 @@ Sync status is tracked at two levels to ensure accurate UI representation:
 
 The `effectiveSyncStatus` getter in `collaborationStore` combines these, only showing "synced" when BOTH metadata AND body content are fully synchronized. This prevents UI issues where the indicator shows completion before file content has actually downloaded.
 
+`waitForInitialSync()` follows the same rule: it resolves only when metadata
+and active body bootstrap are ready.
+
+`UnifiedSyncTransport` now treats Rust `statusChanged: synced` as authoritative
+for workspace readiness. `SyncSession` emits this only after metadata and
+pending body bootstrap are complete, so the UI no longer waits on an extra
+fallback timer.
+
+`sync_complete` (when present) is still surfaced for metrics/progress callbacks,
+but it is not required to mark the workspace as synced.
+
+## Canonical Path Resolution for Sync Events
+
+`workspaceCrdtBridge.ts` resolves canonical paths for sync decisions via
+backend `GetCanonicalPath` (`syncHelpers.getCanonicalPath`) when available, and
+falls back to local normalization only if backend canonicalization is
+unavailable.
+
+`App.svelte` uses the async bridge method when matching metadata/body events to
+the currently open entry. This avoids alias mismatches such as `./README.md`
+vs `README.md` and prevents duplicate or missed UI updates.
+
+When `SendSyncMessage` events arrive before the transport is ready (for
+example, during reconnect/setup transitions), `workspaceCrdtBridge` queues the
+local updates and flushes them after connect so local saves are not dropped.
+
+For snapshot bootstrap flows (`load_server`, and `sync_local` after successful
+snapshot upload), `SyncSetupWizard` explicitly discards queued pre-connect local
+updates before opening the WebSocket. This prevents replaying stale bootstrap
+create/delete/body events on top of already-imported snapshot state.
+
 ### Per-file tracking
 
 `MultiplexedBodySync` tracks per-file sync completion via:

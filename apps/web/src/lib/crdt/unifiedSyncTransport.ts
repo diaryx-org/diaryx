@@ -362,6 +362,8 @@ export class UnifiedSyncTransport {
       switch (event.type) {
         case 'statusChanged':
           if (event.status?.state === 'synced') {
+            // Rust SyncSession only emits `synced` after metadata + pending body
+            // bootstrap are complete.
             if (!this.workspaceSynced) {
               this.workspaceSynced = true;
               this.options.onWorkspaceSynced?.();

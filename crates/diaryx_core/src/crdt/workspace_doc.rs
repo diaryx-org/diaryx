@@ -51,6 +51,7 @@ use super::types::{CrdtUpdate, FileMetadata, UpdateOrigin};
 use crate::error::DiaryxError;
 use crate::fs::FileSystemEvent;
 use crate::link_parser;
+use crate::path_utils::normalize_sync_path;
 
 /// The name of the Y.Map containing file metadata.
 const FILES_MAP_NAME: &str = "files";
@@ -195,13 +196,27 @@ impl WorkspaceCrdt {
         &self.storage
     }
 
+    /// Normalize a CRDT key to a canonical workspace-relative path form.
+    fn normalize_file_key(path: &str) -> String {
+        normalize_sync_path(path)
+    }
+
     // ==================== File Operations ====================
 
     /// Get metadata for a file at the given path.
     pub fn get_file(&self, path: &str) -> Option<FileMetadata> {
         let txn = self.doc.transact();
+        let normalized = Self::normalize_file_key(path);
 
-        self.files_map.get(&txn, path).and_then(|value| {
+        let primary = self.files_map.get(&txn, &normalized);
+        let fallback = if normalized != path {
+            self.files_map.get(&txn, path)
+        } else {
+            let dotted = format!("./{}", normalized);
+            self.files_map.get(&txn, dotted.as_str())
+        };
+
+        primary.or(fallback).and_then(|value| {
             let json = value.to_string(&txn);
             serde_json::from_str(&json).ok()
         })
@@ -216,11 +231,13 @@ impl WorkspaceCrdt {
     ///
     /// Returns an error if the update fails to persist to storage.
     pub fn set_file(&self, path: &str, metadata: FileMetadata) -> StorageResult<()> {
+        let normalized_path = Self::normalize_file_key(path);
+
         // Skip temporary files - they should never enter the workspace CRDT
-        if crate::fs::is_temp_file(path) {
+        if crate::fs::is_temp_file(&normalized_path) {
             log::debug!(
                 "[WorkspaceCrdt] Skipping set_file for temporary file: {}",
-                path
+                normalized_path
             );
             return Ok(());
         }
@@ -235,7 +252,19 @@ impl WorkspaceCrdt {
         {
             let mut txn = self.doc.transact_mut();
             let json = serde_json::to_string(&metadata).unwrap_or_default();
-            self.files_map.insert(&mut txn, path, json);
+            self.files_map
+                .insert(&mut txn, normalized_path.as_str(), json);
+
+            // Remove legacy aliases so one canonical key remains.
+            if path != normalized_path {
+                self.files_map.remove(&mut txn, path);
+            }
+            let dotted_alias = format!("./{}", normalized_path);
+            if dotted_alias != normalized_path {
+                self.files_map.remove(&mut txn, dotted_alias.as_str());
+            }
+            let rooted_alias = format!("/{}", normalized_path);
+            self.files_map.remove(&mut txn, rooted_alias.as_str());
         }
 
         // Capture the incremental update and store it
@@ -249,20 +278,20 @@ impl WorkspaceCrdt {
                 "[WorkspaceCrdt] set_file: Appending {} bytes to storage for '{}' (path='{}')",
                 update.len(),
                 self.doc_name,
-                path
+                normalized_path
             );
             self.storage
                 .append_update(&self.doc_name, &update, UpdateOrigin::Local)?;
             log::trace!(
                 "[WorkspaceCrdt] set_file: Append complete for '{}' (path='{}')",
                 self.doc_name,
-                path
+                normalized_path
             );
         } else {
             log::trace!(
                 "[WorkspaceCrdt] set_file: No update to append for '{}' (path='{}', empty update)",
                 self.doc_name,
-                path
+                normalized_path
             );
         }
         Ok(())
@@ -294,6 +323,8 @@ impl WorkspaceCrdt {
     ///
     /// Returns an error if the update fails to persist to storage.
     pub fn remove_file(&self, path: &str) -> StorageResult<()> {
+        let normalized_path = Self::normalize_file_key(path);
+
         // Get state vector before the change
         let sv_before = {
             let txn = self.doc.transact();
@@ -303,7 +334,16 @@ impl WorkspaceCrdt {
         // Make the change
         {
             let mut txn = self.doc.transact_mut();
-            self.files_map.remove(&mut txn, path);
+            self.files_map.remove(&mut txn, normalized_path.as_str());
+            if path != normalized_path {
+                self.files_map.remove(&mut txn, path);
+            }
+            let dotted_alias = format!("./{}", normalized_path);
+            if dotted_alias != normalized_path {
+                self.files_map.remove(&mut txn, dotted_alias.as_str());
+            }
+            let rooted_alias = format!("/{}", normalized_path);
+            self.files_map.remove(&mut txn, rooted_alias.as_str());
         }
 
         // Capture the incremental update and store it
@@ -325,16 +365,35 @@ impl WorkspaceCrdt {
     /// including deleted ones (check `metadata.deleted`).
     pub fn list_files(&self) -> Vec<(String, FileMetadata)> {
         let txn = self.doc.transact();
+        let mut deduped: HashMap<String, FileMetadata> = HashMap::new();
 
-        self.files_map
-            .iter(&txn)
-            .filter_map(|(key, value)| {
-                let path = key.to_string();
-                let json = value.to_string(&txn);
-                let metadata: FileMetadata = serde_json::from_str(&json).ok()?;
-                Some((path, metadata))
-            })
-            .collect()
+        for (key, value) in self.files_map.iter(&txn) {
+            let path = Self::normalize_file_key(&key.to_string());
+            if crate::fs::is_temp_file(&path) {
+                continue;
+            }
+
+            let json = value.to_string(&txn);
+            let Some(metadata) = serde_json::from_str::<FileMetadata>(&json).ok() else {
+                continue;
+            };
+
+            let should_replace = match deduped.get(&path) {
+                Some(existing) => {
+                    metadata.modified_at > existing.modified_at
+                        || (metadata.modified_at == existing.modified_at
+                            && !metadata.deleted
+                            && existing.deleted)
+                }
+                None => true,
+            };
+
+            if should_replace {
+                deduped.insert(path, metadata);
+            }
+        }
+
+        deduped.into_iter().collect()
     }
 
     /// List all non-deleted files in the workspace.

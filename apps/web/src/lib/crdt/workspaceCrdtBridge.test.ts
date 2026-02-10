@@ -49,9 +49,11 @@ import {
   getWorkspaceServer,
   initWorkspace,
   destroyWorkspace,
+  discardQueuedLocalSyncUpdates,
   onFileChange,
   onSessionSync,
   onBodyChange,
+  initEventSubscription,
   getWorkspaceStats,
   setBackendApi,
   startSessionSync,
@@ -206,6 +208,95 @@ describe('workspaceCrdtBridge', () => {
 
       expect(typeof unsubscribe).toBe('function')
       unsubscribe()
+    })
+
+    it('should ignore temp-file event churn across event types', async () => {
+      await initWorkspace({
+        rustApi: mockRustApi as any,
+      })
+
+      let eventHandler: ((event: any) => void) | null = null
+      const backend = {
+        onFileSystemEvent: vi.fn((cb: (event: any) => void) => {
+          eventHandler = cb
+          return 42
+        }),
+        offFileSystemEvent: vi.fn(),
+      }
+
+      const cleanup = initEventSubscription(backend as any)
+      const fileCb = vi.fn()
+      const bodyCb = vi.fn()
+      const unsubFile = onFileChange(fileCb)
+      const unsubBody = onBodyChange(bodyCb)
+
+      expect(eventHandler).toBeTruthy()
+
+      const tempEvents = [
+        { type: 'FileCreated', path: 'note.md.tmp' },
+        { type: 'FileDeleted', path: 'note.md.bak' },
+        { type: 'MetadataChanged', path: 'note.md.swap', frontmatter: {} },
+        { type: 'ContentsChanged', path: 'note.md.tmp', body: 'temp' },
+        { type: 'FileRenamed', old_path: 'note.md.tmp', new_path: 'note.md' },
+        { type: 'FileMoved', path: 'note.md.tmp', old_parent: 'temp.swap' },
+      ]
+
+      for (const event of tempEvents) {
+        eventHandler!(event)
+      }
+
+      expect(fileCb).not.toHaveBeenCalled()
+      expect(bodyCb).not.toHaveBeenCalled()
+
+      // Non-temp event should still flow through.
+      eventHandler!({
+        type: 'MetadataChanged',
+        path: 'note.md',
+        frontmatter: { title: 'Note' },
+      })
+      expect(fileCb).toHaveBeenCalled()
+
+      unsubFile()
+      unsubBody()
+      cleanup()
+    })
+
+    it('should discard queued local sync updates captured before transport connect', async () => {
+      await initWorkspace({
+        rustApi: mockRustApi as any,
+      })
+      await setWorkspaceId('queued-test-workspace')
+
+      let eventHandler: ((event: any) => void) | null = null
+      const backend = {
+        onFileSystemEvent: vi.fn((cb: (event: any) => void) => {
+          eventHandler = cb
+          return 7
+        }),
+        offFileSystemEvent: vi.fn(),
+      }
+
+      const cleanup = initEventSubscription(backend as any)
+      expect(eventHandler).toBeTruthy()
+
+      // No transport is connected in this test, so sync messages are queued.
+      eventHandler!({
+        type: 'SendSyncMessage',
+        doc_name: 'README.md',
+        is_body: true,
+        message: new Uint8Array([1, 2, 3]),
+      })
+      eventHandler!({
+        type: 'SendSyncMessage',
+        doc_name: 'workspace',
+        is_body: false,
+        message: new Uint8Array([4, 5]),
+      })
+
+      expect(discardQueuedLocalSyncUpdates('test')).toBe(2)
+      expect(discardQueuedLocalSyncUpdates('test-empty')).toBe(0)
+
+      cleanup()
     })
   })
 

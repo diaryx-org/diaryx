@@ -42,6 +42,7 @@ use crate::crdt::{BodyDocManager, FileMetadata, WorkspaceCrdt};
 use crate::frontmatter;
 use crate::fs::{AsyncFileSystem, BoxFuture};
 use crate::link_parser;
+use crate::path_utils::normalize_sync_path;
 
 /// A filesystem decorator that automatically updates the CRDT on file operations.
 ///
@@ -109,11 +110,11 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
     /// across the CRDT. This matches how `InitializeWorkspaceCrdt` derives
     /// canonical paths from the workspace tree.
     fn normalize_crdt_path(path: &Path) -> String {
-        let path_str = path.to_string_lossy();
-        path_str
-            .trim_start_matches("./")
-            .trim_start_matches('/')
-            .to_string()
+        normalize_sync_path(&path.to_string_lossy())
+    }
+
+    fn is_temp_path(path: &Path) -> bool {
+        super::is_temp_file(&path.to_string_lossy())
     }
 
     /// Check if CRDT updates are enabled.
@@ -613,6 +614,11 @@ impl<FS: AsyncFileSystem + Send + Sync> AsyncFileSystem for CrdtFs<FS> {
 
             // Mark as deleted in CRDT if deletion succeeded and enabled
             if result.is_ok() && self.is_enabled() {
+                if self.is_sync_write_in_progress(path) || Self::is_temp_path(path) {
+                    self.mark_local_write_end(path);
+                    return result;
+                }
+
                 let path_str = Self::normalize_crdt_path(path);
 
                 // Update parent's contents to remove the deleted file
@@ -661,6 +667,16 @@ impl<FS: AsyncFileSystem + Send + Sync> AsyncFileSystem for CrdtFs<FS> {
 
             // Update CRDT if move succeeded
             if result.is_ok() && self.is_enabled() {
+                if self.is_sync_write_in_progress(from)
+                    || self.is_sync_write_in_progress(to)
+                    || Self::is_temp_path(from)
+                    || Self::is_temp_path(to)
+                {
+                    self.mark_local_write_end(from);
+                    self.mark_local_write_end(to);
+                    return result;
+                }
+
                 let from_str = Self::normalize_crdt_path(from);
                 let to_str = Self::normalize_crdt_path(to);
 
@@ -849,6 +865,11 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for CrdtFs<FS> {
 
             // Mark as deleted in CRDT if deletion succeeded and enabled
             if result.is_ok() && self.is_enabled() {
+                if self.is_sync_write_in_progress(path) || Self::is_temp_path(path) {
+                    self.mark_local_write_end(path);
+                    return result;
+                }
+
                 let path_str = Self::normalize_crdt_path(path);
 
                 // Update parent's contents to remove the deleted file
@@ -897,6 +918,16 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for CrdtFs<FS> {
 
             // Update CRDT if move succeeded
             if result.is_ok() && self.is_enabled() {
+                if self.is_sync_write_in_progress(from)
+                    || self.is_sync_write_in_progress(to)
+                    || Self::is_temp_path(from)
+                    || Self::is_temp_path(to)
+                {
+                    self.mark_local_write_end(from);
+                    self.mark_local_write_end(to);
+                    return result;
+                }
+
                 let from_str = Self::normalize_crdt_path(from);
                 let to_str = Self::normalize_crdt_path(to);
 
@@ -1144,6 +1175,54 @@ mod tests {
             fs.workspace_crdt.get_file("test2.md").is_none(),
             "CRDT should not have been updated for sync write"
         );
+    }
+
+    #[test]
+    fn test_sync_safe_move_swap_does_not_mutate_crdt_path_state() {
+        let fs = create_test_crdt_fs();
+        let content = "---\ntitle: Swap Test\n---\nBody content";
+
+        futures_lite::future::block_on(async {
+            fs.write_file(Path::new("test.md"), content).await.unwrap();
+            fs.write_file(Path::new("test.md.tmp"), content)
+                .await
+                .unwrap();
+
+            // Simulate metadata_writer swap during remote sync:
+            // test.md -> test.md.bak -> test.md, while sync marker is active.
+            fs.mark_sync_write_start(Path::new("test.md"));
+            fs.move_file(Path::new("test.md"), Path::new("test.md.bak"))
+                .await
+                .unwrap();
+            fs.move_file(Path::new("test.md.tmp"), Path::new("test.md"))
+                .await
+                .unwrap();
+            fs.delete_file(Path::new("test.md.bak")).await.unwrap();
+            fs.mark_sync_write_end(Path::new("test.md"));
+        });
+
+        let metadata = fs.workspace_crdt.get_file("test.md").unwrap();
+        assert_eq!(metadata.filename, "test.md");
+        assert!(!metadata.deleted);
+        assert!(fs.workspace_crdt.get_file("test.md.bak").is_none());
+    }
+
+    #[test]
+    fn test_sync_marked_delete_does_not_tombstone_crdt() {
+        let fs = create_test_crdt_fs();
+        let content = "---\ntitle: Delete Test\n---\nBody content";
+
+        futures_lite::future::block_on(async {
+            fs.write_file(Path::new("test-delete.md"), content)
+                .await
+                .unwrap();
+            fs.mark_sync_write_start(Path::new("test-delete.md"));
+            fs.delete_file(Path::new("test-delete.md")).await.unwrap();
+            fs.mark_sync_write_end(Path::new("test-delete.md"));
+        });
+
+        let metadata = fs.workspace_crdt.get_file("test-delete.md").unwrap();
+        assert!(!metadata.deleted);
     }
 
     // =========================================================================

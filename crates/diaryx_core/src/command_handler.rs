@@ -14,6 +14,7 @@ use crate::error::{DiaryxError, Result};
 use crate::frontmatter;
 use crate::fs::AsyncFileSystem;
 use crate::link_parser;
+use crate::path_utils::normalize_sync_path;
 
 #[cfg(feature = "crdt")]
 use crate::crdt::FileMetadata;
@@ -84,10 +85,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     /// Simply normalizes the path by stripping leading slashes and "./" prefixes.
     #[cfg(not(feature = "crdt"))]
     fn get_canonical_path(&self, storage_path: &str) -> String {
-        storage_path
-            .trim_start_matches("./")
-            .trim_start_matches('/')
-            .to_string()
+        normalize_sync_path(storage_path)
     }
 
     /// Get the storage path from a canonical path.
@@ -2177,21 +2175,17 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     // This ensures paths are portable across machines
                     let canonical_path = if base_path.as_os_str() == "." {
                         // When base_path is ".", paths are already relative
-                        // Strip leading "./" prefix to match CrdtFs::normalize_crdt_path()
-                        let p = node.path.to_string_lossy().replace('\\', "/");
-                        p.trim_start_matches("./")
-                            .trim_start_matches('/')
-                            .to_string()
+                        normalize_sync_path(&node.path.to_string_lossy())
                     } else {
                         node.path
                             .strip_prefix(&base_path)
-                            .map(|p| p.to_string_lossy().replace('\\', "/"))
+                            .map(|p| normalize_sync_path(&p.to_string_lossy()))
                             .unwrap_or_else(|_| {
                                 log::warn!(
                                     "[InitializeWorkspaceCrdt] Failed to strip prefix {:?} from {:?}, using absolute path",
                                     base_path, node.path
                                 );
-                                absolute_path.clone().replace('\\', "/")
+                                normalize_sync_path(&absolute_path)
                             })
                     };
 

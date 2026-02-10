@@ -46,6 +46,30 @@ pub fn normalize_path(path: &Path) -> PathBuf {
     normalized.iter().collect()
 }
 
+/// Normalize a workspace-relative sync path to canonical form.
+///
+/// Rules:
+/// - Convert backslashes to forward slashes
+/// - Strip leading `./` prefixes
+/// - Strip leading `/` prefixes
+///
+/// This is used for CRDT/sync key normalization so path aliases like
+/// `README.md`, `./README.md`, and `/README.md` are treated as the same file.
+///
+/// # Example
+/// ```
+/// use diaryx_core::path_utils::normalize_sync_path;
+///
+/// assert_eq!(normalize_sync_path("./notes\\hello.md"), "notes/hello.md");
+/// assert_eq!(normalize_sync_path("/notes/hello.md"), "notes/hello.md");
+/// ```
+pub fn normalize_sync_path(path: &str) -> String {
+    path.replace('\\', "/")
+        .trim_start_matches("./")
+        .trim_start_matches('/')
+        .to_string()
+}
+
 /// Compute a relative path from a base directory to a target file.
 ///
 /// # Example
@@ -173,5 +197,13 @@ mod tests {
             relative_path_from_file_to_target(from, to),
             "../../index.md"
         );
+    }
+
+    #[test]
+    fn test_normalize_sync_path() {
+        assert_eq!(normalize_sync_path("README.md"), "README.md");
+        assert_eq!(normalize_sync_path("./README.md"), "README.md");
+        assert_eq!(normalize_sync_path("/README.md"), "README.md");
+        assert_eq!(normalize_sync_path(".//nested\\file.md"), "nested/file.md");
     }
 }

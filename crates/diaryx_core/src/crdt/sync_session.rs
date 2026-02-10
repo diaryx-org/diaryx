@@ -42,6 +42,7 @@
 //! }
 //! ```
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use base64::Engine;
@@ -54,6 +55,7 @@ use super::sync::{
 use super::sync_manager::RustSyncManager;
 use super::sync_types::{SyncEvent, SyncSessionConfig, SyncStatus};
 use crate::fs::AsyncFileSystem;
+use crate::path_utils::normalize_sync_path;
 
 /// Internal state machine for the handshake protocol.
 #[derive(Debug, Clone, PartialEq)]
@@ -113,6 +115,9 @@ pub struct SyncSession<FS: AsyncFileSystem> {
     sync_manager: Arc<RustSyncManager<FS>>,
     config: SyncSessionConfig,
     state: Mutex<SessionState>,
+    metadata_ready: Mutex<bool>,
+    pending_body_docs: Mutex<HashSet<String>>,
+    synced_emitted: Mutex<bool>,
 }
 
 impl<FS: AsyncFileSystem> SyncSession<FS> {
@@ -122,7 +127,161 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
             sync_manager,
             config,
             state: Mutex::new(SessionState::AwaitingConnect),
+            metadata_ready: Mutex::new(false),
+            pending_body_docs: Mutex::new(HashSet::new()),
+            synced_emitted: Mutex::new(false),
         }
+    }
+
+    fn set_metadata_ready(&self) {
+        let mut ready = self.metadata_ready.lock().unwrap();
+        *ready = true;
+    }
+
+    fn mark_body_ready(&self, path: &str) {
+        let normalized = normalize_sync_path(path);
+        let mut pending = self.pending_body_docs.lock().unwrap();
+        pending.remove(&normalized);
+    }
+
+    fn maybe_emit_synced(&self) -> Option<SessionAction> {
+        let metadata_ready = *self.metadata_ready.lock().unwrap();
+        let pending_empty = self.pending_body_docs.lock().unwrap().is_empty();
+        let mut emitted = self.synced_emitted.lock().unwrap();
+        if metadata_ready && pending_empty && !*emitted {
+            *emitted = true;
+            return Some(SessionAction::Emit(SyncEvent::StatusChanged {
+                status: SyncStatus::Synced,
+            }));
+        }
+        None
+    }
+
+    fn queue_body_sync_step1_for_paths(
+        &self,
+        file_paths: &[String],
+        reset_pending: bool,
+        emit_initial_progress: bool,
+    ) -> Vec<SessionAction> {
+        let mut actions = Vec::new();
+        let mut docs_to_send: Vec<String> = Vec::new();
+
+        {
+            let mut pending = self.pending_body_docs.lock().unwrap();
+            if reset_pending {
+                pending.clear();
+            }
+
+            for path in file_paths {
+                let normalized = normalize_sync_path(path);
+                if normalized.is_empty() {
+                    continue;
+                }
+                if pending.contains(&normalized) || self.sync_manager.is_body_synced(&normalized) {
+                    continue;
+                }
+                pending.insert(normalized.clone());
+                docs_to_send.push(normalized);
+            }
+        }
+
+        if docs_to_send.is_empty() {
+            return actions;
+        }
+
+        if emit_initial_progress {
+            actions.push(SessionAction::Emit(SyncEvent::Progress {
+                completed: 0,
+                total: docs_to_send.len(),
+            }));
+        }
+
+        for (i, file_path) in docs_to_send.iter().enumerate() {
+            let body_doc_id = format_body_doc_id(&self.config.workspace_id, file_path);
+            let body_step1 = self.sync_manager.create_body_sync_step1(file_path);
+            let body_framed = frame_message_v2(&body_doc_id, &body_step1);
+            actions.push(SessionAction::SendBinary(body_framed));
+
+            if emit_initial_progress && (i + 1) % 50 == 0 {
+                actions.push(SessionAction::Emit(SyncEvent::Progress {
+                    completed: i + 1,
+                    total: docs_to_send.len(),
+                }));
+            }
+        }
+
+        log::info!(
+            "[SyncSession] Sent body SyncStep1 for {} files",
+            docs_to_send.len()
+        );
+        actions
+    }
+
+    /// Audit sync integrity and requeue missing body syncs when needed.
+    ///
+    /// This is a lightweight self-heal pass that checks:
+    /// - Active workspace files vs pending/synced body docs
+    /// - Active workspace files vs on-disk presence (when write_to_disk=true)
+    ///
+    /// If drift is detected, it requeues body SyncStep1 for the affected files.
+    async fn audit_and_reconcile_integrity(&self) -> Vec<SessionAction> {
+        let mut actions = Vec::new();
+        let active_paths = self.sync_manager.get_all_file_paths();
+        if active_paths.is_empty() {
+            self.pending_body_docs.lock().unwrap().clear();
+            return actions;
+        }
+
+        let active_set: HashSet<String> = active_paths.iter().cloned().collect();
+        {
+            // Drop pending entries for files that are no longer active.
+            let mut pending = self.pending_body_docs.lock().unwrap();
+            pending.retain(|path| active_set.contains(path));
+        }
+
+        let mut unsynced_paths = Vec::new();
+        let mut unloaded_paths = Vec::new();
+        let mut missing_disk_paths = Vec::new();
+
+        for path in &active_paths {
+            if !self.sync_manager.is_body_synced(path) {
+                unsynced_paths.push(path.clone());
+            }
+            if !self.sync_manager.is_body_loaded(path) {
+                unloaded_paths.push(path.clone());
+            }
+            if self.config.write_to_disk && !self.sync_manager.file_exists_for_sync(path).await {
+                missing_disk_paths.push(path.clone());
+            }
+        }
+
+        if !missing_disk_paths.is_empty() || !unloaded_paths.is_empty() {
+            log::warn!(
+                "[SyncSession] Integrity audit: active={}, unsynced={}, unloaded={}, missing_disk={}",
+                active_paths.len(),
+                unsynced_paths.len(),
+                unloaded_paths.len(),
+                missing_disk_paths.len()
+            );
+        }
+
+        if !missing_disk_paths.is_empty() {
+            // Force rebootstrap for missing files by clearing prior synced status.
+            for path in &missing_disk_paths {
+                self.sync_manager.close_body_sync(path);
+            }
+            let mut heal_actions =
+                self.queue_body_sync_step1_for_paths(&missing_disk_paths, false, false);
+            actions.append(&mut heal_actions);
+        }
+
+        if !unsynced_paths.is_empty() {
+            let mut sync_actions =
+                self.queue_body_sync_step1_for_paths(&unsynced_paths, false, false);
+            actions.append(&mut sync_actions);
+        }
+
+        actions
     }
 
     /// Process an incoming event and return actions for the platform layer.
@@ -145,6 +304,9 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
     pub fn reset(&self) {
         let mut state = self.state.lock().unwrap();
         *state = SessionState::AwaitingConnect;
+        *self.metadata_ready.lock().unwrap() = false;
+        self.pending_body_docs.lock().unwrap().clear();
+        *self.synced_emitted.lock().unwrap() = false;
     }
 
     // =========================================================================
@@ -159,6 +321,9 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
             let mut state = self.state.lock().unwrap();
             *state = SessionState::WaitingForHandshake;
         }
+        *self.metadata_ready.lock().unwrap() = false;
+        self.pending_body_docs.lock().unwrap().clear();
+        *self.synced_emitted.lock().unwrap() = false;
 
         // Send workspace SyncStep1 (framed v2)
         let ws_doc_id = format_workspace_doc_id(&self.config.workspace_id);
@@ -186,6 +351,11 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
                 let mut actions = self.transition_to_active().await;
                 let mut routed = self.route_binary_message(data).await;
                 actions.append(&mut routed);
+                let mut heal_actions = self.audit_and_reconcile_integrity().await;
+                actions.append(&mut heal_actions);
+                if let Some(synced) = self.maybe_emit_synced() {
+                    actions.push(synced);
+                }
                 actions
             }
             SessionState::Active => self.route_binary_message(data).await,
@@ -204,7 +374,7 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
 
         match current_state {
             SessionState::WaitingForHandshake => self.handle_handshake_message(text).await,
-            SessionState::Active => self.handle_control_message(text),
+            SessionState::Active => self.handle_control_message(text).await,
             SessionState::AwaitingConnect => {
                 log::warn!("[SyncSession] Text message received before connect");
                 Vec::new()
@@ -230,6 +400,9 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
             let mut state = self.state.lock().unwrap();
             *state = SessionState::AwaitingConnect;
         }
+        *self.metadata_ready.lock().unwrap() = false;
+        self.pending_body_docs.lock().unwrap().clear();
+        *self.synced_emitted.lock().unwrap() = false;
 
         // Reset sync manager state
         self.sync_manager.reset();
@@ -298,6 +471,7 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
                                 actions.push(SessionAction::Emit(SyncEvent::FilesChanged {
                                     files: vec![],
                                 }));
+                                self.set_metadata_ready();
                             }
                             Err(e) => {
                                 log::error!("[SyncSession] Failed to apply CRDT state: {}", e);
@@ -318,9 +492,17 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
                 // Handshake complete — transition to active
                 let mut active_actions = self.transition_to_active().await;
                 actions.append(&mut active_actions);
+                let mut heal_actions = self.audit_and_reconcile_integrity().await;
+                actions.append(&mut heal_actions);
+                if let Some(synced) = self.maybe_emit_synced() {
+                    actions.push(synced);
+                }
             }
             ControlMessage::SessionJoined { .. } => {
                 log::info!("[SyncSession] Session joined during handshake");
+            }
+            ControlMessage::SyncComplete { .. } => {
+                self.set_metadata_ready();
             }
             _ => {
                 log::debug!("[SyncSession] Ignoring {:?} during handshake", ctrl);
@@ -357,6 +539,9 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
                             let framed = frame_message_v2(&doc_id, &response);
                             actions.push(SessionAction::SendBinary(framed));
                         }
+                        if result.sync_complete {
+                            self.set_metadata_ready();
+                        }
                         if !result.changed_files.is_empty() {
                             log::debug!(
                                 "[SyncSession] Workspace files changed: {:?}",
@@ -365,6 +550,20 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
                             actions.push(SessionAction::Emit(SyncEvent::FilesChanged {
                                 files: result.changed_files,
                             }));
+                        }
+
+                        // Ensure body sync is started for newly discovered files after
+                        // workspace metadata is applied.
+                        let file_paths = self.sync_manager.get_all_file_paths();
+                        let mut body_actions =
+                            self.queue_body_sync_step1_for_paths(&file_paths, false, false);
+                        actions.append(&mut body_actions);
+
+                        let mut heal_actions = self.audit_and_reconcile_integrity().await;
+                        actions.append(&mut heal_actions);
+
+                        if let Some(synced) = self.maybe_emit_synced() {
+                            actions.push(synced);
                         }
                     }
                     Err(e) => {
@@ -376,27 +575,34 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
                 }
             }
             Some(DocIdKind::Body { file_path, .. }) => {
+                let normalized_file_path = normalize_sync_path(&file_path);
                 match self
                     .sync_manager
-                    .handle_body_message(&file_path, &payload, self.config.write_to_disk)
+                    .handle_body_message(&normalized_file_path, &payload, self.config.write_to_disk)
                     .await
                 {
                     Ok(result) => {
+                        self.mark_body_ready(&normalized_file_path);
                         if let Some(response) = result.response {
                             let framed = frame_message_v2(&doc_id, &response);
                             actions.push(SessionAction::SendBinary(framed));
                         }
                         if result.content.is_some() && !result.is_echo {
-                            log::debug!("[SyncSession] Body changed: {}", file_path);
+                            log::debug!("[SyncSession] Body changed: {}", normalized_file_path);
                             actions.push(SessionAction::Emit(SyncEvent::BodyChanged {
-                                file_path: file_path.clone(),
+                                file_path: normalized_file_path.clone(),
                             }));
+                        }
+                        let mut heal_actions = self.audit_and_reconcile_integrity().await;
+                        actions.append(&mut heal_actions);
+                        if let Some(synced) = self.maybe_emit_synced() {
+                            actions.push(synced);
                         }
                     }
                     Err(e) => {
                         log::error!(
                             "[SyncSession] Error handling body message for {}: {}",
-                            file_path,
+                            normalized_file_path,
                             e
                         );
                     }
@@ -410,7 +616,7 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
         actions
     }
 
-    fn handle_control_message(&self, text: &str) -> Vec<SessionAction> {
+    async fn handle_control_message(&self, text: &str) -> Vec<SessionAction> {
         let mut actions = Vec::new();
 
         let ctrl = match serde_json::from_str::<ControlMessage>(text) {
@@ -428,9 +634,12 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
             }
             ControlMessage::SyncComplete { files_synced } => {
                 log::info!("[SyncSession] Sync complete ({} files)", files_synced);
-                actions.push(SessionAction::Emit(SyncEvent::StatusChanged {
-                    status: SyncStatus::Synced,
-                }));
+                self.set_metadata_ready();
+                let mut heal_actions = self.audit_and_reconcile_integrity().await;
+                actions.append(&mut heal_actions);
+                if let Some(synced) = self.maybe_emit_synced() {
+                    actions.push(synced);
+                }
             }
             ControlMessage::PeerJoined { peer_count } => {
                 log::info!("[SyncSession] Peer joined ({} connected)", peer_count);
@@ -466,36 +675,13 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
             status: SyncStatus::Syncing,
         }));
 
+        // Compatibility fallback for servers that don't emit explicit sync_complete.
+        self.set_metadata_ready();
+
         // Send body SyncStep1 for all known files
         let file_paths = self.sync_manager.get_all_file_paths();
-        let file_count = file_paths.len();
-
-        if file_count > 0 {
-            // Emit initial progress before sending any SyncStep1s
-            actions.push(SessionAction::Emit(SyncEvent::Progress {
-                completed: 0,
-                total: file_count,
-            }));
-        }
-
-        for (i, file_path) in file_paths.iter().enumerate() {
-            let body_doc_id = format_body_doc_id(&self.config.workspace_id, file_path);
-            let body_step1 = self.sync_manager.create_body_sync_step1(file_path);
-            let body_framed = frame_message_v2(&body_doc_id, &body_step1);
-            actions.push(SessionAction::SendBinary(body_framed));
-
-            // Emit progress periodically for large workspaces
-            if (i + 1) % 50 == 0 {
-                actions.push(SessionAction::Emit(SyncEvent::Progress {
-                    completed: i + 1,
-                    total: file_count,
-                }));
-            }
-        }
-
-        if file_count > 0 {
-            log::info!("[SyncSession] Sent body SyncStep1 for {} files", file_count);
-        }
+        let mut body_actions = self.queue_body_sync_step1_for_paths(&file_paths, true, true);
+        actions.append(&mut body_actions);
 
         actions
     }
@@ -508,5 +694,194 @@ impl<FS: AsyncFileSystem> std::fmt::Debug for SyncSession<FS> {
             .field("workspace_id", &self.config.workspace_id)
             .field("state", &*state)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crdt::storage::CrdtStorage;
+    use crate::crdt::{
+        BodyDocManager, DocIdKind, MemoryStorage, SyncHandler, SyncMessage, WorkspaceCrdt,
+    };
+    use crate::fs::SyncToAsyncFs;
+    use crate::test_utils::MockFileSystem;
+    use futures_lite::future::block_on;
+
+    type TestFs = SyncToAsyncFs<MockFileSystem>;
+
+    fn test_file_metadata(filename: &str, title: &str) -> crate::crdt::FileMetadata {
+        crate::crdt::FileMetadata::with_filename(filename.to_string(), Some(title.to_string()))
+    }
+
+    fn create_test_session(
+        workspace_id: &str,
+        write_to_disk: bool,
+    ) -> (
+        SyncSession<TestFs>,
+        Arc<RustSyncManager<TestFs>>,
+        Arc<WorkspaceCrdt>,
+    ) {
+        let storage: Arc<dyn CrdtStorage> = Arc::new(MemoryStorage::new());
+        let workspace_crdt = Arc::new(WorkspaceCrdt::new(Arc::clone(&storage)));
+        let body_manager = Arc::new(BodyDocManager::new(Arc::clone(&storage)));
+        let fs = SyncToAsyncFs::new(MockFileSystem::new());
+        let sync_handler = Arc::new(SyncHandler::new(fs));
+        let sync_manager = Arc::new(RustSyncManager::new(
+            Arc::clone(&workspace_crdt),
+            body_manager,
+            sync_handler,
+        ));
+        let session = SyncSession::new(
+            SyncSessionConfig {
+                workspace_id: workspace_id.to_string(),
+                write_to_disk,
+            },
+            Arc::clone(&sync_manager),
+        );
+
+        (session, sync_manager, workspace_crdt)
+    }
+
+    fn framed_workspace_message(workspace_id: &str, message: SyncMessage) -> Vec<u8> {
+        let doc_id = format_workspace_doc_id(workspace_id);
+        let payload = message.encode();
+        frame_message_v2(&doc_id, &payload)
+    }
+
+    fn body_sync_step1_targets(actions: &[SessionAction]) -> Vec<String> {
+        let mut targets = Vec::new();
+
+        for action in actions {
+            let SessionAction::SendBinary(data) = action else {
+                continue;
+            };
+            let Some((doc_id, payload)) = unframe_message_v2(data) else {
+                continue;
+            };
+            let Some(DocIdKind::Body { file_path, .. }) = parse_doc_id(&doc_id) else {
+                continue;
+            };
+            let Ok(messages) = SyncMessage::decode_all(&payload) else {
+                continue;
+            };
+            if messages
+                .iter()
+                .any(|msg| matches!(msg, SyncMessage::SyncStep1(_)))
+            {
+                targets.push(crate::path_utils::normalize_sync_path(&file_path));
+            }
+        }
+
+        targets
+    }
+
+    #[test]
+    fn test_join_bootstrap_dedupes_aliases_and_skips_temp_files() {
+        let (session, _manager, workspace) = create_test_session("ws-join", false);
+
+        workspace
+            .set_file("./README.md", test_file_metadata("README.md", "Readme"))
+            .unwrap();
+        workspace
+            .set_file("/README.md", test_file_metadata("README.md", "Readme"))
+            .unwrap();
+        workspace
+            .set_file(
+                "notes/new-entry.md",
+                test_file_metadata("new-entry.md", "New Entry"),
+            )
+            .unwrap();
+        workspace
+            .set_file(
+                "notes/new-entry.md.tmp",
+                test_file_metadata("new-entry.md.tmp", "Temp"),
+            )
+            .unwrap();
+
+        block_on(session.process(IncomingEvent::Connected));
+        let actions = block_on(session.process(IncomingEvent::BinaryMessage(
+            framed_workspace_message("ws-join", SyncMessage::SyncStep1(vec![])),
+        )));
+
+        let mut targets = body_sync_step1_targets(&actions);
+        targets.sort();
+
+        assert_eq!(targets, vec!["README.md", "notes/new-entry.md"]);
+    }
+
+    #[test]
+    fn test_workspace_update_during_join_queues_new_body_sync() {
+        let (session, _manager, _workspace) = create_test_session("ws-rename", false);
+
+        // Enter active sync state.
+        block_on(session.process(IncomingEvent::Connected));
+        block_on(
+            session.process(IncomingEvent::BinaryMessage(framed_workspace_message(
+                "ws-rename",
+                SyncMessage::SyncStep1(vec![]),
+            ))),
+        );
+
+        // Simulate metadata update arriving after initial transition to active.
+        let source_storage: Arc<dyn CrdtStorage> = Arc::new(MemoryStorage::new());
+        let source_workspace = WorkspaceCrdt::new(Arc::clone(&source_storage));
+        source_workspace
+            .set_file("renamed.md", test_file_metadata("renamed.md", "Renamed"))
+            .unwrap();
+        let update = source_workspace.encode_state_as_update();
+
+        let actions = block_on(session.process(IncomingEvent::BinaryMessage(
+            framed_workspace_message("ws-rename", SyncMessage::Update(update)),
+        )));
+        let targets = body_sync_step1_targets(&actions);
+
+        assert!(targets.contains(&"renamed.md".to_string()));
+    }
+
+    #[test]
+    fn test_reconnect_requeues_body_bootstrap_without_duplicates() {
+        let (session, _manager, workspace) = create_test_session("ws-reconnect", false);
+        workspace
+            .set_file(
+                "reconnect.md",
+                test_file_metadata("reconnect.md", "Reconnect"),
+            )
+            .unwrap();
+
+        block_on(session.process(IncomingEvent::Connected));
+        let first_actions = block_on(session.process(IncomingEvent::BinaryMessage(
+            framed_workspace_message("ws-reconnect", SyncMessage::SyncStep1(vec![])),
+        )));
+        let first_targets = body_sync_step1_targets(&first_actions);
+        assert_eq!(first_targets, vec!["reconnect.md"]);
+
+        block_on(session.process(IncomingEvent::Disconnected));
+        block_on(session.process(IncomingEvent::Connected));
+        let second_actions = block_on(session.process(IncomingEvent::BinaryMessage(
+            framed_workspace_message("ws-reconnect", SyncMessage::SyncStep1(vec![])),
+        )));
+        let second_targets = body_sync_step1_targets(&second_actions);
+        assert_eq!(second_targets, vec!["reconnect.md"]);
+    }
+
+    #[test]
+    fn test_integrity_audit_requeues_when_disk_missing() {
+        let (session, manager, workspace) = create_test_session("ws-heal", true);
+        workspace
+            .set_file("heal.md", test_file_metadata("heal.md", "Heal"))
+            .unwrap();
+
+        // Mark body as synced without writing to disk.
+        let msg = SyncMessage::SyncStep1(vec![]).encode();
+        block_on(manager.handle_body_message("heal.md", &msg, false)).unwrap();
+        assert!(manager.is_body_synced("heal.md"));
+        assert!(!block_on(manager.file_exists_for_sync("heal.md")));
+
+        let actions = block_on(session.audit_and_reconcile_integrity());
+        let targets = body_sync_step1_targets(&actions);
+
+        assert!(targets.contains(&"heal.md".to_string()));
+        assert!(!manager.is_body_synced("heal.md"));
     }
 }

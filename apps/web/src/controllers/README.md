@@ -26,3 +26,15 @@ Controller logic for UI actions, mediating between views and models.
 | `entryController.ts` | Entry creation, editing, deletion |
 | `linkController.ts` | Link handling and navigation |
 | `workspaceController.ts` | Workspace operations |
+
+## Sync-time tree refresh behavior
+
+`workspaceController.refreshTree` retries transient "workspace/file not found"
+errors during sync-safe writes and avoids replacing a valid tree with a
+temporary empty `.` filesystem tree. This prevents UI collapse during
+snapshot import and initial body bootstrap.
+
+`entryController.saveEntry` and `saveEntryWithSync` also retry transient write
+errors (`NotFoundError`, `NoModificationAllowedError`) with escalating backoff
+(100ms -> 3.2s) so autosave/manual save remain reliable during OPFS safe-write
+windows.

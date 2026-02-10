@@ -321,6 +321,14 @@ impl<FS: AsyncFileSystem + Send + Sync> AsyncFileSystem for EventEmittingFs<FS> 
     fn get_modified_time<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Option<i64>> {
         self.inner.get_modified_time(path)
     }
+
+    fn mark_sync_write_start(&self, path: &Path) {
+        self.inner.mark_sync_write_start(path);
+    }
+
+    fn mark_sync_write_end(&self, path: &Path) {
+        self.inner.mark_sync_write_end(path);
+    }
 }
 
 // WASM implementation (without Send + Sync bounds)
@@ -489,6 +497,14 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for EventEmittingFs<FS> {
     fn get_modified_time<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Option<i64>> {
         self.inner.get_modified_time(path)
     }
+
+    fn mark_sync_write_start(&self, path: &Path) {
+        self.inner.mark_sync_write_start(path);
+    }
+
+    fn mark_sync_write_end(&self, path: &Path) {
+        self.inner.mark_sync_write_end(path);
+    }
 }
 
 impl<FS: AsyncFileSystem> std::fmt::Debug for EventEmittingFs<FS> {
@@ -504,11 +520,72 @@ impl<FS: AsyncFileSystem> std::fmt::Debug for EventEmittingFs<FS> {
 mod tests {
     use super::*;
     use crate::fs::{InMemoryFileSystem, SyncToAsyncFs};
+    use std::io::ErrorKind;
     use std::sync::atomic::AtomicUsize;
 
     fn create_test_event_fs() -> EventEmittingFs<SyncToAsyncFs<InMemoryFileSystem>> {
         let inner = SyncToAsyncFs::new(InMemoryFileSystem::new());
         EventEmittingFs::new(inner)
+    }
+
+    #[derive(Clone, Default)]
+    struct MarkerRecordingFs {
+        starts: Arc<AtomicUsize>,
+        ends: Arc<AtomicUsize>,
+    }
+
+    impl AsyncFileSystem for MarkerRecordingFs {
+        fn read_to_string<'a>(&'a self, _path: &'a Path) -> BoxFuture<'a, Result<String>> {
+            Box::pin(async move { Ok(String::new()) })
+        }
+
+        fn write_file<'a>(
+            &'a self,
+            _path: &'a Path,
+            _content: &'a str,
+        ) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async move { Ok(()) })
+        }
+
+        fn create_new<'a>(
+            &'a self,
+            _path: &'a Path,
+            _content: &'a str,
+        ) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async move { Ok(()) })
+        }
+
+        fn delete_file<'a>(&'a self, _path: &'a Path) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async move { Ok(()) })
+        }
+
+        fn list_md_files<'a>(&'a self, _dir: &'a Path) -> BoxFuture<'a, Result<Vec<PathBuf>>> {
+            Box::pin(async move { Ok(vec![]) })
+        }
+
+        fn exists<'a>(&'a self, _path: &'a Path) -> BoxFuture<'a, bool> {
+            Box::pin(async move { false })
+        }
+
+        fn create_dir_all<'a>(&'a self, _path: &'a Path) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async move { Ok(()) })
+        }
+
+        fn is_dir<'a>(&'a self, _path: &'a Path) -> BoxFuture<'a, bool> {
+            Box::pin(async move { false })
+        }
+
+        fn move_file<'a>(&'a self, _from: &'a Path, _to: &'a Path) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async move { Err(std::io::Error::from(ErrorKind::NotFound)) })
+        }
+
+        fn mark_sync_write_start(&self, _path: &Path) {
+            self.starts.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn mark_sync_write_end(&self, _path: &Path) {
+            self.ends.fetch_add(1, Ordering::SeqCst);
+        }
     }
 
     #[test]
@@ -723,5 +800,19 @@ mod tests {
         });
 
         assert_eq!(moved_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_sync_write_markers_forwarded_to_inner_fs() {
+        let inner = MarkerRecordingFs::default();
+        let starts = Arc::clone(&inner.starts);
+        let ends = Arc::clone(&inner.ends);
+        let fs = EventEmittingFs::new(inner);
+
+        fs.mark_sync_write_start(Path::new("a.md"));
+        fs.mark_sync_write_end(Path::new("a.md"));
+
+        assert_eq!(starts.load(Ordering::SeqCst), 1);
+        assert_eq!(ends.load(Ordering::SeqCst), 1);
     }
 }

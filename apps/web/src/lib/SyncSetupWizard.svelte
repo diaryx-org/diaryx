@@ -53,6 +53,7 @@
     proactivelySyncBodies,
     markAllCrdtFilesAsDeleted,
     setFreshFromServerLoad,
+    discardQueuedLocalSyncUpdates,
   } from "$lib/crdt/workspaceCrdtBridge";
   import { getDefaultWorkspace, getServerUrl } from "$lib/auth";
 
@@ -417,7 +418,7 @@
         syncCompleted = completed;
         syncTotal = total;
         if (total > 0) {
-          importProgress = Math.round((completed / total) * 100);
+          importProgress = Math.max(importProgress, Math.round((completed / total) * 100));
         }
         progressDetail = total > 0 ? `${completed} of ${total}` : null;
         progressMode = total > 0 ? 'files' : null;
@@ -517,7 +518,7 @@
         case 'sync_local':
           // Initialize with local files, upload to server
           console.log("[SyncWizard] Syncing local content to server");
-          syncStatusText = "Uploading snapshot...";
+          setStageProgress(10, "Uploading snapshot...", "Step 1 of 4");
           suppressSyncProgress = true;
           progressDetail = null;
           progressMode = 'bytes';
@@ -544,8 +545,7 @@
                 console.log(
                   `[SyncWizard] Snapshot upload complete (${result.files_imported} files)`
                 );
-                progressDetail = `${result.files_imported} files`;
-                progressMode = 'files';
+                setStageProgress(35, "Snapshot uploaded", `${result.files_imported} files`);
               }
             } catch (e) {
               console.warn("[SyncWizard] Snapshot upload failed:", e);
@@ -553,10 +553,9 @@
           }
 
           suppressSyncProgress = false;
-          progressDetail = null;
-          progressMode = null;
-          syncStatusText = "Uploading files...";
+          setStageProgress(50, "Preparing local workspace...", "Step 2 of 4");
           await api.initializeWorkspaceCrdt(workspacePath);
+          setStageProgress(65, "Connecting to sync server...", "Step 3 of 4");
           break;
 
         case 'import':
@@ -606,6 +605,13 @@
           setFreshFromServerLoad(true);
         }
 
+        // Snapshot-based flows already established workspace state (upload/download).
+        // Drop pre-connect local updates captured during bootstrap to avoid replaying
+        // stale create/delete/body changes immediately after connect.
+        if (initMode === 'load_server' || (initMode === 'sync_local' && snapshotUploaded)) {
+          discardQueuedLocalSyncUpdates(`sync wizard bootstrap (${initMode})`);
+        }
+
         // Set server URL to create UnifiedSyncTransport and connect
         // This triggers the WebSocket connection that syncs CRDT data to server
         // Use getServerUrl() (auth store) as the canonical source — the wizard's
@@ -619,6 +625,7 @@
 
       // Wait for metadata sync to complete (30 second timeout)
       // This ensures the wizard shows real progress and doesn't close prematurely
+      setStageProgress(80, "Waiting for metadata sync...", "Step 4 of 4");
       console.log("[SyncWizard] Waiting for metadata sync to complete...");
       const syncResult = await waitForInitialSync(30000);
 
@@ -681,6 +688,9 @@
       }
 
       if (syncResult) {
+        if (initMode === 'sync_local' && snapshotUploaded) {
+          setStageProgress(100, "Sync initialized", "Ready");
+        }
         toast.success("Sync setup complete", {
           description: "Your workspace is now syncing.",
         });
@@ -764,6 +774,13 @@
     const index = Math.floor(Math.log(bytes) / Math.log(1024));
     const value = bytes / Math.pow(1024, index);
     return `${value.toFixed(value < 10 && index > 0 ? 1 : 0)} ${units[index]}`;
+  }
+
+  function setStageProgress(percent: number, status: string, detail?: string) {
+    importProgress = Math.max(importProgress, percent);
+    syncStatusText = status;
+    progressDetail = detail ?? null;
+    progressMode = null;
   }
 
   function collectFilePaths(node: TreeNode, paths: string[]) {

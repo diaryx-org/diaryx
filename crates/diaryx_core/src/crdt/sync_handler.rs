@@ -29,6 +29,7 @@ use super::types::FileMetadata;
 use crate::error::Result;
 use crate::fs::{AsyncFileSystem, FileSystemEvent};
 use crate::metadata_writer;
+use crate::path_utils::normalize_sync_path;
 
 /// Configuration for guest mode sync.
 ///
@@ -120,6 +121,7 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
     /// - For guests using OPFS: prefixes with `guest/{join_code}/`
     /// - Otherwise: returns the path as-is (relative to cwd)
     pub fn get_storage_path(&self, canonical_path: &str) -> PathBuf {
+        let canonical_path = normalize_sync_path(canonical_path);
         let gc = self.guest_config.read().unwrap();
         let base_path = match &*gc {
             Some(config) if config.uses_opfs => {
@@ -159,16 +161,20 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
 
         // Strip guest prefix if in guest mode
         let gc = self.guest_config.read().unwrap();
-        if let Some(config) = &*gc
+        let stripped = if let Some(config) = &*gc
             && config.uses_opfs
         {
             let prefix = format!("guest/{}/", config.join_code);
             if stripped.starts_with(&prefix) {
-                return stripped[prefix.len()..].to_string();
+                stripped[prefix.len()..].to_string()
+            } else {
+                stripped
             }
-        }
+        } else {
+            stripped
+        };
 
-        stripped
+        normalize_sync_path(&stripped)
     }
 
     /// Emit a filesystem event to the registered callback.

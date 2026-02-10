@@ -5,7 +5,7 @@
 //! for time-travel features.
 
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 use rusqlite::{Connection, params};
 use yrs::{Doc, ReadTxn, Transact, Update, updates::decoder::Decode, updates::encoder::Encode};
@@ -62,7 +62,7 @@ impl SqliteStorage {
 
     /// Initialize the database schema.
     fn init_schema(&self) -> StorageResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.execute_batch(
             r#"
             -- Document snapshots (compacted state)
@@ -104,12 +104,26 @@ impl SqliteStorage {
         Ok(())
     }
 
+    /// Acquire the SQLite connection lock.
+    ///
+    /// If a previous holder panicked while the lock was held, recover the
+    /// underlying connection instead of cascading the panic to all callers.
+    fn lock_conn(&self) -> MutexGuard<'_, Connection> {
+        match self.conn.lock() {
+            Ok(conn) => conn,
+            Err(poisoned) => {
+                log::warn!("[SqliteStorage] Recovering from poisoned SQLite connection mutex");
+                poisoned.into_inner()
+            }
+        }
+    }
+
     /// Reconstruct CRDT state by applying updates up to a given ID.
     ///
     /// This creates a fresh Y.Doc and applies all updates from the base
     /// snapshot plus incremental updates up to the specified ID.
     fn reconstruct_state(&self, name: &str, up_to_id: i64) -> StorageResult<Option<Vec<u8>>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
 
         // Load base snapshot
         let base_state: Option<Vec<u8>> = conn
@@ -169,7 +183,7 @@ impl SqliteStorage {
         deleted: bool,
         modified_at: i64,
     ) -> StorageResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.execute(
             "INSERT OR REPLACE INTO file_index (path, title, part_of, deleted, modified_at)
              VALUES (?, ?, ?, ?, ?)",
@@ -180,7 +194,7 @@ impl SqliteStorage {
 
     /// Query active (non-deleted) files from the index.
     pub fn query_active_files(&self) -> StorageResult<Vec<FileIndexRow>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare(
             "SELECT path, title, part_of FROM file_index WHERE deleted = 0 ORDER BY path",
         )?;
@@ -199,7 +213,7 @@ impl SqliteStorage {
 
     /// Remove a file from the index entirely.
     pub fn remove_from_file_index(&self, path: &str) -> StorageResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.execute("DELETE FROM file_index WHERE path = ?", params![path])?;
         Ok(())
     }
@@ -208,7 +222,7 @@ impl SqliteStorage {
     ///
     /// Used during Replace mode snapshot imports to remove stale entries.
     pub fn clear_file_index(&self) -> StorageResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.execute("DELETE FROM file_index", [])?;
         Ok(())
     }
@@ -222,7 +236,7 @@ impl std::fmt::Debug for SqliteStorage {
 
 impl CrdtStorage for SqliteStorage {
     fn load_doc(&self, name: &str) -> StorageResult<Option<Vec<u8>>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let result = conn.query_row(
             "SELECT state FROM documents WHERE name = ?",
             params![name],
@@ -237,7 +251,7 @@ impl CrdtStorage for SqliteStorage {
     }
 
     fn save_doc(&self, name: &str, state: &[u8]) -> StorageResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let now = chrono::Utc::now().timestamp_millis();
 
         // Extract state vector from the state
@@ -262,7 +276,7 @@ impl CrdtStorage for SqliteStorage {
     }
 
     fn delete_doc(&self, name: &str) -> StorageResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         // Delete updates first (foreign key)
         conn.execute("DELETE FROM updates WHERE doc_name = ?", params![name])?;
         conn.execute("DELETE FROM documents WHERE name = ?", params![name])?;
@@ -270,7 +284,7 @@ impl CrdtStorage for SqliteStorage {
     }
 
     fn list_docs(&self) -> StorageResult<Vec<String>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare("SELECT name FROM documents ORDER BY name")?;
         let names = stmt
             .query_map([], |row| row.get(0))?
@@ -287,7 +301,7 @@ impl CrdtStorage for SqliteStorage {
         device_id: Option<&str>,
         device_name: Option<&str>,
     ) -> StorageResult<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let now = chrono::Utc::now().timestamp_millis();
         let origin_str = origin.to_string();
 
@@ -300,7 +314,7 @@ impl CrdtStorage for SqliteStorage {
     }
 
     fn get_updates_since(&self, name: &str, since_id: i64) -> StorageResult<Vec<CrdtUpdate>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare(
             "SELECT id, data, origin, timestamp, device_id, device_name FROM updates
              WHERE doc_name = ? AND id > ?
@@ -335,7 +349,7 @@ impl CrdtStorage for SqliteStorage {
     }
 
     fn compact(&self, name: &str, keep_updates: usize) -> StorageResult<()> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.lock_conn();
 
         // Get the current full state by reconstructing from base + all updates
         // This is done outside the transaction since it's read-only
@@ -392,14 +406,20 @@ impl CrdtStorage for SqliteStorage {
             return Ok(());
         }
 
-        // Find the cutoff ID - keep the last `keep_updates` updates
-        let cutoff_id: i64 = conn
-            .query_row(
-                "SELECT id FROM updates WHERE doc_name = ? ORDER BY id DESC LIMIT 1 OFFSET ?",
-                params![name, keep_updates - 1],
-                |row| row.get(0),
+        // Find the cutoff ID - keep the last `keep_updates` updates.
+        // `keep_updates == 0` means keep no incremental updates.
+        let cutoff_id: Option<i64> = if keep_updates == 0 {
+            None
+        } else {
+            Some(
+                conn.query_row(
+                    "SELECT id FROM updates WHERE doc_name = ? ORDER BY id DESC LIMIT 1 OFFSET ?",
+                    params![name, (keep_updates - 1) as i64],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0),
             )
-            .unwrap_or(0);
+        };
 
         // Compute the state vector before starting transaction
         let now = chrono::Utc::now().timestamp_millis();
@@ -427,11 +447,15 @@ impl CrdtStorage for SqliteStorage {
             params![name, full_state, state_vector, now],
         )?;
 
-        // Now safe to delete old updates since snapshot is saved
-        tx.execute(
-            "DELETE FROM updates WHERE doc_name = ? AND id < ?",
-            params![name, cutoff_id],
-        )?;
+        // Now safe to delete old updates since snapshot is saved.
+        if let Some(cutoff_id) = cutoff_id {
+            tx.execute(
+                "DELETE FROM updates WHERE doc_name = ? AND id < ?",
+                params![name, cutoff_id],
+            )?;
+        } else {
+            tx.execute("DELETE FROM updates WHERE doc_name = ?", params![name])?;
+        }
 
         // Commit the transaction - either both operations succeed or neither
         tx.commit()?;
@@ -447,7 +471,7 @@ impl CrdtStorage for SqliteStorage {
             return Ok(vec![]);
         }
 
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.lock_conn();
         let now = chrono::Utc::now().timestamp_millis();
 
         // Use a SQL transaction for atomicity
@@ -471,7 +495,7 @@ impl CrdtStorage for SqliteStorage {
     }
 
     fn get_latest_update_id(&self, name: &str) -> StorageResult<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let result = conn.query_row(
             "SELECT id FROM updates WHERE doc_name = ? ORDER BY id DESC LIMIT 1",
             params![name],
@@ -486,7 +510,7 @@ impl CrdtStorage for SqliteStorage {
     }
 
     fn rename_doc(&self, old_name: &str, new_name: &str) -> StorageResult<()> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.lock_conn();
         let tx = conn.transaction()?;
 
         // Rename document snapshot
@@ -506,7 +530,7 @@ impl CrdtStorage for SqliteStorage {
     }
 
     fn clear_updates(&self, name: &str) -> StorageResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.execute("DELETE FROM updates WHERE doc_name = ?", params![name])?;
         Ok(())
     }
@@ -515,6 +539,7 @@ impl CrdtStorage for SqliteStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use yrs::Map;
 
     #[test]
@@ -691,6 +716,34 @@ mod tests {
     }
 
     #[test]
+    fn test_sqlite_compact_with_keep_zero() {
+        let storage = SqliteStorage::in_memory().unwrap();
+
+        let doc = Doc::new();
+        let map = doc.get_or_insert_map("files");
+
+        for i in 0..3 {
+            {
+                let mut txn = doc.transact_mut();
+                map.insert(&mut txn, format!("file{}", i), format!("value{}", i));
+            }
+            let txn = doc.transact();
+            let update = txn.encode_state_as_update_v1(&Default::default());
+            storage
+                .append_update("test_keep_zero", &update, UpdateOrigin::Local)
+                .unwrap();
+        }
+
+        // Regression: keep_updates=0 should not underflow and panic.
+        storage.compact("test_keep_zero", 0).unwrap();
+
+        // All incremental updates are dropped; snapshot still exists.
+        let remaining = storage.get_all_updates("test_keep_zero").unwrap();
+        assert!(remaining.is_empty());
+        assert!(storage.load_doc("test_keep_zero").unwrap().is_some());
+    }
+
+    #[test]
     fn test_sqlite_state_reconstruction() {
         let storage = SqliteStorage::in_memory().unwrap();
 
@@ -819,5 +872,25 @@ mod tests {
         // Clearing updates for nonexistent doc should not error
         let result = storage.clear_updates("nonexistent");
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_sqlite_recovers_from_poisoned_mutex() {
+        let storage = SqliteStorage::in_memory().unwrap();
+
+        // Intentionally poison the lock by panicking while holding it.
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = storage.conn.lock().unwrap();
+            panic!("intentional panic to poison mutex");
+        }));
+
+        // Storage operations should recover instead of panicking.
+        storage
+            .update_file_index("/poison-test.md", Some("Poison Test"), None, false, 1234)
+            .unwrap();
+
+        let active = storage.query_active_files().unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].0, "/poison-test.md");
     }
 }

@@ -18,6 +18,42 @@ import { toast } from 'svelte-sonner';
 
 // Depth limit for initial tree loading (lazy loading)
 const TREE_INITIAL_DEPTH = 2;
+const TREE_REFRESH_RETRY_DELAYS_MS = [100, 200, 400, 800];
+
+function isTransientWorkspaceRefreshError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes('Workspace not found') ||
+    message.includes('NotFoundError') ||
+    message.includes('Failed to read file') ||
+    message.includes('The object can not be found here') ||
+    message.includes('A requested file or directory could not be found')
+  );
+}
+
+async function wait(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function retryTransient<T>(
+  op: () => Promise<T>,
+  label: string
+): Promise<T> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt <= TREE_REFRESH_RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      return await op();
+    } catch (error) {
+      lastError = error;
+      const shouldRetry = isTransientWorkspaceRefreshError(error) && attempt < TREE_REFRESH_RETRY_DELAYS_MS.length;
+      if (!shouldRetry) break;
+      const delayMs = TREE_REFRESH_RETRY_DELAYS_MS[attempt];
+      console.log(`[WorkspaceController] ${label} transient failure, retrying in ${delayMs}ms`);
+      await wait(delayMs);
+    }
+  }
+  throw lastError;
+}
 
 /**
  * Refresh the workspace tree.
@@ -44,16 +80,31 @@ export async function refreshTree(
     } else {
       // Normal mode - find the actual root index and use hierarchy tree with depth limit
       try {
-        const rootIndexPath = await api.findRootIndex(workspaceDir);
-        workspaceStore.setTree(
-          await api.getWorkspaceTree(rootIndexPath, TREE_INITIAL_DEPTH)
+        const rootIndexPath = (
+          await retryTransient(() => api.findRootIndex(workspaceDir), 'findRootIndex')
+        ).replace(/^\.\/+/, '');
+        const nextTree = await retryTransient(
+          () => api.getWorkspaceTree(rootIndexPath, TREE_INITIAL_DEPTH),
+          'getWorkspaceTree'
         );
+        workspaceStore.setTree(nextTree);
       } catch (e) {
         console.warn('[WorkspaceController] Could not find root index for tree:', e);
         // Fall back to filesystem tree if no root index found
-        workspaceStore.setTree(
-          await api.getFilesystemTree(workspaceDir, showHiddenFiles, TREE_INITIAL_DEPTH)
-        );
+        const fallbackTree = await api.getFilesystemTree(workspaceDir, showHiddenFiles, TREE_INITIAL_DEPTH);
+
+        // During sync-safe writes/imports, there can be brief windows where the
+        // directory appears empty. Avoid replacing a valid tree with ".".
+        const hasOnlyWorkspaceRoot =
+          fallbackTree.path === '.' &&
+          (!fallbackTree.children || fallbackTree.children.length === 0);
+        const currentTree = workspaceStore.tree;
+        if (hasOnlyWorkspaceRoot && currentTree && currentTree.path !== '.') {
+          console.log('[WorkspaceController] Skipping transient empty filesystem tree during sync');
+          return;
+        }
+
+        workspaceStore.setTree(fallbackTree);
       }
     }
   } catch (e) {

@@ -54,3 +54,10 @@ Shared libraries, components, and utilities for the web application.
 | `storage/` | Storage abstraction |
 | `stores/` | Svelte stores |
 | `wasm/` | Built WASM module |
+
+## Sync Setup Progress
+
+`SyncSetupWizard.svelte` uses staged progress updates during initialization
+(`upload snapshot` -> `prepare local CRDT` -> `connect` -> `metadata sync`) so
+users see visible forward motion even when backend operations don't emit
+granular file progress for small workspaces.

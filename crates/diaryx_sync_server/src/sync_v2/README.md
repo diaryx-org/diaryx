@@ -24,9 +24,10 @@ Experimental sync implementation using the [siphonophore](https://github.com/glu
 | Workspace metadata sync | ✅ | ✅ |
 | Body document sync | ✅ | ✅ |
 | Native multiplexing | Custom | Native |
-| Files-Ready handshake | ✅ | ❌ |
+| Files-Ready handshake | ✅ | ✅ (hook-based) |
+| `sync_complete` control signal | ✅ | ✅ |
 | Focus tracking | ✅ | ❌ |
-| Peer events | ✅ | ❌ |
+| Peer events | ✅ | ✅ (hook-based) |
 | Session/guest support | ✅ | Partial |
 
 ## Architecture
@@ -131,16 +132,12 @@ sendToDoc('body:abc123/journal/2024.md', syncStep1Message);
 
 ## Limitations
 
-Siphonophore doesn't currently support:
-
-1. **Custom pre-sync handshakes** - The Files-Ready protocol requires intercepting messages before y-sync begins. Siphonophore starts y-sync immediately on connection.
-
-2. **Custom control messages** - Only `Leave` and `Save` control messages are supported. Focus tracking and peer events require v1.
-
-3. **Session context** - Guest read-only enforcement happens at the hook level but isn't as robust as v1.
+1. **Handshake is hook-emulated** - Files-Ready and `sync_complete` are implemented via hook control messages, not a strict transport-level pre-sync gate.
+2. **Focus tracking broadcast** - Focus/unfocus messages are accepted but not fully relayed to peers.
+3. **Session context** - Guest read-only enforcement happens at the hook level and remains less mature than v1.
 
 ## Future Work
 
-- Investigate extending siphonophore for pre-sync handshakes
-- Consider yrs-tokio as alternative for more control
-- Potentially fork siphonophore to add custom message support
+- Improve focus list relay parity with v1
+- Tighten guest/session behavior parity with v1
+- Continue evaluating transport-level handshake controls

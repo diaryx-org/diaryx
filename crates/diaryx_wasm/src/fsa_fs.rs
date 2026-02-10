@@ -259,7 +259,8 @@ impl AsyncFileSystem for FsaFileSystem {
 
     fn list_md_files<'a>(&'a self, dir_path: &'a Path) -> BoxFuture<'a, Result<Vec<PathBuf>>> {
         Box::pin(async move {
-            let dir = if dir_path.as_os_str().is_empty() || dir_path == Path::new(".") {
+            let is_root = dir_path.as_os_str().is_empty() || dir_path == Path::new(".");
+            let dir = if is_root {
                 self.root.clone()
             } else {
                 get_directory(&self.root, dir_path)
@@ -273,7 +274,11 @@ impl AsyncFileSystem for FsaFileSystem {
             while let Some(entry_result) = entries_stream.next().await {
                 if let Ok((name, entry)) = entry_result {
                     if matches!(entry, DirectoryEntry::File(_)) && name.ends_with(".md") {
-                        md_files.push(dir_path.join(&name));
+                        if is_root {
+                            md_files.push(PathBuf::from(&name));
+                        } else {
+                            md_files.push(dir_path.join(&name));
+                        }
                     }
                 }
             }
@@ -393,7 +398,8 @@ impl AsyncFileSystem for FsaFileSystem {
 
     fn list_files<'a>(&'a self, dir_path: &'a Path) -> BoxFuture<'a, Result<Vec<PathBuf>>> {
         Box::pin(async move {
-            let dir = if dir_path.as_os_str().is_empty() || dir_path == Path::new(".") {
+            let is_root = dir_path.as_os_str().is_empty() || dir_path == Path::new(".");
+            let dir = if is_root {
                 self.root.clone()
             } else {
                 get_directory(&self.root, dir_path)
@@ -406,7 +412,11 @@ impl AsyncFileSystem for FsaFileSystem {
             let mut files = Vec::new();
             while let Some(entry_result) = entries_stream.next().await {
                 if let Ok((name, _)) = entry_result {
-                    files.push(dir_path.join(&name));
+                    if is_root {
+                        files.push(PathBuf::from(&name));
+                    } else {
+                        files.push(dir_path.join(&name));
+                    }
                 }
             }
 

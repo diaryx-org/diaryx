@@ -34,6 +34,7 @@ use super::types::{FileMetadata, UpdateOrigin};
 use super::workspace_doc::WorkspaceCrdt;
 use crate::error::Result;
 use crate::fs::{AsyncFileSystem, FileSystemEvent};
+use crate::path_utils::normalize_sync_path;
 
 /// Result of handling a sync message.
 #[derive(Debug)]
@@ -225,6 +226,8 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
     /// This method uses delta encoding: it tracks the last-sent state vector
     /// and only sends changes since then, not the full document state.
     pub fn emit_body_update(&self, doc_name: &str, content: &str) -> Result<()> {
+        let doc_name = normalize_sync_path(doc_name);
+
         log::debug!(
             "[SyncManager] emit_body_update: doc_name='{}', content_preview='{}'",
             doc_name,
@@ -234,17 +237,17 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         // Track for echo detection (don't update CRDT - it's already updated)
         {
             let mut last_known = self.last_known_content.write().unwrap();
-            last_known.insert(doc_name.to_string(), content.to_string());
+            last_known.insert(doc_name.clone(), content.to_string());
         }
 
         // Get the body doc (should already exist and have content set)
-        let body_doc = self.body_manager.get_or_create(doc_name);
+        let body_doc = self.body_manager.get_or_create(&doc_name);
 
         // Use delta encoding: only send changes since last sent state vector.
         // This is more efficient than sending the full state every time.
         let update = {
             let sv_map = self.last_sent_body_sv.read().unwrap();
-            if let Some(last_sv) = sv_map.get(doc_name) {
+            if let Some(last_sv) = sv_map.get(&doc_name) {
                 // We have a previous state vector, send only the diff
                 body_doc
                     .encode_diff(last_sv)
@@ -267,7 +270,7 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         {
             let new_sv = body_doc.encode_state_vector();
             let mut sv_map = self.last_sent_body_sv.write().unwrap();
-            sv_map.insert(doc_name.to_string(), new_sv);
+            sv_map.insert(doc_name.clone(), new_sv);
         }
 
         log::debug!(
@@ -276,7 +279,7 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
             doc_name
         );
         let message = SyncMessage::Update(update).encode();
-        self.emit_event(FileSystemEvent::send_sync_message(doc_name, message, true));
+        self.emit_event(FileSystemEvent::send_sync_message(&doc_name, message, true));
         Ok(())
     }
 
@@ -323,8 +326,13 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
             let (msg_response, changed_files, renames) =
                 self.handle_single_workspace_message(sync_msg).await?;
 
-            all_changed_files.extend(changed_files);
-            all_renames.extend(renames);
+            all_changed_files.extend(changed_files.into_iter().map(|p| normalize_sync_path(&p)));
+            all_renames.extend(renames.into_iter().map(|(old_path, new_path)| {
+                (
+                    normalize_sync_path(&old_path),
+                    normalize_sync_path(&new_path),
+                )
+            }));
 
             // Combine responses
             if let Some(resp) = msg_response {
@@ -508,19 +516,23 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
     ///
     /// Ensures the body document exists and is ready for sync.
     pub fn init_body_sync(&self, doc_name: &str) {
+        let doc_name = normalize_sync_path(doc_name);
+
         // Ensure the body doc exists (loads from storage if available)
-        let _ = self.body_manager.get_or_create(doc_name);
+        let _ = self.body_manager.get_or_create(&doc_name);
         log::debug!("[SyncManager] Initialized body sync for: {}", doc_name);
     }
 
     /// Close body sync for a document.
     pub fn close_body_sync(&self, doc_name: &str) {
+        let doc_name = normalize_sync_path(doc_name);
+
         let mut synced = self.body_synced.write().unwrap();
-        synced.remove(doc_name);
+        synced.remove(&doc_name);
 
         // Also clear the last-sent state vector
         let mut sv_map = self.last_sent_body_sv.write().unwrap();
-        sv_map.remove(doc_name);
+        sv_map.remove(&doc_name);
 
         log::debug!("[SyncManager] Closed body sync for: {}", doc_name);
     }
@@ -537,6 +549,8 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         message: &[u8],
         write_to_disk: bool,
     ) -> Result<BodySyncResult> {
+        let doc_name = normalize_sync_path(doc_name);
+
         log::trace!(
             "[SyncManager] handle_body_message START: doc='{}', message_len={}, write_to_disk={}",
             doc_name,
@@ -545,10 +559,10 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         );
 
         // Ensure body doc exists
-        self.init_body_sync(doc_name);
+        self.init_body_sync(&doc_name);
 
         // Get the body doc - this is the SINGLE source of truth
-        let body_doc = self.body_manager.get_or_create(doc_name);
+        let body_doc = self.body_manager.get_or_create(&doc_name);
         let content_before = body_doc.get_body();
         log::trace!(
             "[SyncManager] handle_body_message: doc='{}', content_before_len={}",
@@ -632,7 +646,7 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         // Check if this is an echo of our own update
         let is_echo = if content_changed {
             let last_known = self.last_known_content.read().unwrap();
-            let tracked_content = last_known.get(doc_name);
+            let tracked_content = last_known.get(&doc_name);
             let echo_check = tracked_content == Some(&content_after);
             log::trace!(
                 "[SyncManager] handle_body_message echo check: doc='{}', has_tracked_content={}, tracked_len={}, echo_check={}",
@@ -657,23 +671,23 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         // Write to disk if content changed and not an echo
         if write_to_disk && content_changed && !is_echo {
             // Get metadata from workspace CRDT if available
-            let metadata = self.workspace_crdt.get_file(doc_name);
+            let metadata = self.workspace_crdt.get_file(&doc_name);
             self.sync_handler
-                .handle_remote_body_update(doc_name, &content_after, metadata.as_ref())
+                .handle_remote_body_update(&doc_name, &content_after, metadata.as_ref())
                 .await?;
         }
 
         // Notify UI of remote body change (even if write_to_disk is false, e.g., guest mode)
         if content_changed && !is_echo {
             let event =
-                FileSystemEvent::contents_changed(PathBuf::from(doc_name), content_after.clone());
+                FileSystemEvent::contents_changed(PathBuf::from(&doc_name), content_after.clone());
             self.emit_event(event);
         }
 
         // Mark as synced
         {
             let mut synced = self.body_synced.write().unwrap();
-            synced.insert(doc_name.to_string());
+            synced.insert(doc_name.clone());
         }
 
         // Update last sent state vector after receiving remote updates.
@@ -682,7 +696,7 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         {
             let new_sv = body_doc.encode_state_vector();
             let mut sv_map = self.last_sent_body_sv.write().unwrap();
-            sv_map.insert(doc_name.to_string(), new_sv);
+            sv_map.insert(doc_name.clone(), new_sv);
         }
 
         Ok(BodySyncResult {
@@ -698,10 +712,11 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
 
     /// Create a SyncStep1 message for body sync.
     pub fn create_body_sync_step1(&self, doc_name: &str) -> Vec<u8> {
-        self.init_body_sync(doc_name);
+        let doc_name = normalize_sync_path(doc_name);
+        self.init_body_sync(&doc_name);
 
         // Use body_doc directly - it's the single source of truth
-        let body_doc = self.body_manager.get_or_create(doc_name);
+        let body_doc = self.body_manager.get_or_create(&doc_name);
         let sv = body_doc.encode_state_vector();
         SyncMessage::SyncStep1(sv).encode()
     }
@@ -715,8 +730,10 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
     /// Returns true if content was loaded, false if the body doc already had content
     /// or the file doesn't exist.
     pub async fn ensure_body_content_loaded(&self, doc_name: &str) -> Result<bool> {
+        let doc_name = normalize_sync_path(doc_name);
+
         // Check if body doc already has content
-        let body_doc = self.body_manager.get_or_create(doc_name);
+        let body_doc = self.body_manager.get_or_create(&doc_name);
         let existing_content = body_doc.get_body();
 
         if !existing_content.is_empty() {
@@ -729,7 +746,7 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         }
 
         // Check if file exists on disk
-        if !self.sync_handler.file_exists(doc_name).await {
+        if !self.sync_handler.file_exists(&doc_name).await {
             log::debug!(
                 "[SyncManager] File does not exist for body {}, skipping load",
                 doc_name
@@ -738,7 +755,7 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         }
 
         // Read content from disk
-        match self.sync_handler.read_body_content(doc_name).await {
+        match self.sync_handler.read_body_content(&doc_name).await {
             Ok(content) => {
                 if content.is_empty() {
                     log::debug!(
@@ -760,7 +777,7 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
                 // Track for echo detection
                 {
                     let mut last_known = self.last_known_content.write().unwrap();
-                    last_known.insert(doc_name.to_string(), content);
+                    last_known.insert(doc_name.clone(), content);
                 }
 
                 Ok(true)
@@ -778,14 +795,16 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
 
     /// Create an update message for local body changes.
     pub fn create_body_update(&self, doc_name: &str, content: &str) -> Result<Vec<u8>> {
+        let doc_name = normalize_sync_path(doc_name);
+
         // Update content in body doc
-        let body_doc = self.body_manager.get_or_create(doc_name);
+        let body_doc = self.body_manager.get_or_create(&doc_name);
         body_doc.set_body(content)?;
 
         // Track for echo detection
         {
             let mut last_known = self.last_known_content.write().unwrap();
-            last_known.insert(doc_name.to_string(), content.to_string());
+            last_known.insert(doc_name, content.to_string());
         }
 
         // Get full state as update
@@ -799,8 +818,21 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
 
     /// Check if body sync is complete for a document.
     pub fn is_body_synced(&self, doc_name: &str) -> bool {
+        let doc_name = normalize_sync_path(doc_name);
         let synced = self.body_synced.read().unwrap();
-        synced.contains(doc_name)
+        synced.contains(&doc_name)
+    }
+
+    /// Check if a body document is currently loaded in memory.
+    pub fn is_body_loaded(&self, doc_name: &str) -> bool {
+        let doc_name = normalize_sync_path(doc_name);
+        self.body_manager.is_loaded(&doc_name)
+    }
+
+    /// Check whether a canonical path currently exists in the backing filesystem.
+    pub async fn file_exists_for_sync(&self, canonical_path: &str) -> bool {
+        let canonical_path = normalize_sync_path(canonical_path);
+        self.sync_handler.file_exists(&canonical_path).await
     }
 
     // =========================================================================
@@ -832,13 +864,14 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
     ///
     /// Used to skip sending SyncStep1 on reconnect when state hasn't changed.
     pub fn body_state_changed(&self, doc_name: &str) -> bool {
-        let body_doc = match self.body_manager.get(doc_name) {
+        let doc_name = normalize_sync_path(doc_name);
+        let body_doc = match self.body_manager.get(&doc_name) {
             Some(doc) => doc,
             None => return true, // Doc not loaded, need to sync
         };
         let current_sv = body_doc.encode_state_vector();
         let last_synced = self.last_synced_body_svs.read().unwrap();
-        match last_synced.get(doc_name) {
+        match last_synced.get(&doc_name) {
             Some(sv) => current_sv != *sv,
             None => true, // First sync for this doc
         }
@@ -850,26 +883,30 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
 
     /// Check if content change is an echo of our own edit.
     pub fn is_echo(&self, path: &str, content: &str) -> bool {
+        let path = normalize_sync_path(path);
         let last_known = self.last_known_content.read().unwrap();
-        last_known.get(path) == Some(&content.to_string())
+        last_known.get(&path) == Some(&content.to_string())
     }
 
     /// Track content for echo detection.
     pub fn track_content(&self, path: &str, content: &str) {
+        let path = normalize_sync_path(path);
         let mut last_known = self.last_known_content.write().unwrap();
-        last_known.insert(path.to_string(), content.to_string());
+        last_known.insert(path, content.to_string());
     }
 
     /// Clear tracked content (e.g., when closing a file).
     pub fn clear_tracked_content(&self, path: &str) {
+        let path = normalize_sync_path(path);
         let mut last_known = self.last_known_content.write().unwrap();
-        last_known.remove(path);
+        last_known.remove(&path);
     }
 
     /// Check if metadata change is an echo of our own edit (ignoring modified_at).
     pub fn is_metadata_echo(&self, path: &str, metadata: &FileMetadata) -> bool {
+        let path = normalize_sync_path(path);
         let last_known = self.last_known_metadata.read().unwrap();
-        if let Some(known) = last_known.get(path) {
+        if let Some(known) = last_known.get(&path) {
             // Use is_content_equal which compares all fields except modified_at
             known.is_content_equal(metadata)
         } else {
@@ -879,14 +916,16 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
 
     /// Track metadata for echo detection.
     pub fn track_metadata(&self, path: &str, metadata: &FileMetadata) {
+        let path = normalize_sync_path(path);
         let mut last_known = self.last_known_metadata.write().unwrap();
-        last_known.insert(path.to_string(), metadata.clone());
+        last_known.insert(path, metadata.clone());
     }
 
     /// Clear tracked metadata (e.g., when closing a file).
     pub fn clear_tracked_metadata(&self, path: &str) {
+        let path = normalize_sync_path(path);
         let mut last_known = self.last_known_metadata.write().unwrap();
-        last_known.remove(path);
+        last_known.remove(&path);
     }
 
     // =========================================================================
@@ -898,10 +937,12 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
     /// Used by SyncClient to initiate body sync for all files after the body
     /// connection is established.
     pub fn get_all_file_paths(&self) -> Vec<String> {
+        let mut seen = HashSet::new();
         self.workspace_crdt
             .list_active_files()
             .into_iter()
-            .map(|(path, _)| path)
+            .map(|(path, _)| normalize_sync_path(&path))
+            .filter(|path| seen.insert(path.clone()))
             .collect()
     }
 
@@ -939,7 +980,7 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         let mut focused = self.focused_files.write().unwrap();
         focused.clear();
         for file in files {
-            focused.insert(file.clone());
+            focused.insert(normalize_sync_path(file));
         }
         log::debug!("[SyncManager] Set focused files: {:?}", files);
     }
@@ -956,7 +997,7 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
     pub fn add_focused_files(&self, files: &[String]) {
         let mut focused = self.focused_files.write().unwrap();
         for file in files {
-            focused.insert(file.clone());
+            focused.insert(normalize_sync_path(file));
         }
     }
 
@@ -964,14 +1005,15 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
     pub fn remove_focused_files(&self, files: &[String]) {
         let mut focused = self.focused_files.write().unwrap();
         for file in files {
-            focused.remove(file);
+            focused.remove(&normalize_sync_path(file));
         }
     }
 
     /// Check if a file is in the focus list.
     pub fn is_file_focused(&self, file: &str) -> bool {
+        let file = normalize_sync_path(file);
         let focused = self.focused_files.read().unwrap();
-        focused.contains(file)
+        focused.contains(&file)
     }
 
     // =========================================================================
@@ -1210,6 +1252,18 @@ mod tests {
     }
 
     #[test]
+    fn test_echo_detection_normalizes_path_aliases() {
+        let manager = create_test_manager();
+
+        manager.track_content("./test.md", "Hello world");
+        assert!(manager.is_echo("test.md", "Hello world"));
+        assert!(manager.is_echo("/test.md", "Hello world"));
+
+        manager.clear_tracked_content("/test.md");
+        assert!(!manager.is_echo("test.md", "Hello world"));
+    }
+
+    #[test]
     fn test_metadata_echo_detection() {
         use crate::crdt::FileMetadata;
 
@@ -1234,6 +1288,21 @@ mod tests {
 
         // Clear and check
         manager.clear_tracked_metadata("test.md");
+        assert!(!manager.is_metadata_echo("test.md", &meta));
+    }
+
+    #[test]
+    fn test_metadata_echo_normalizes_path_aliases() {
+        use crate::crdt::FileMetadata;
+
+        let manager = create_test_manager();
+        let meta = FileMetadata::new(Some("Test".to_string()));
+
+        manager.track_metadata("./test.md", &meta);
+        assert!(manager.is_metadata_echo("test.md", &meta));
+        assert!(manager.is_metadata_echo("/test.md", &meta));
+
+        manager.clear_tracked_metadata("/test.md");
         assert!(!manager.is_metadata_echo("test.md", &meta));
     }
 

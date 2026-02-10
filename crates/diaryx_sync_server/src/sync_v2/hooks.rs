@@ -606,6 +606,10 @@ impl Hook for DiaryxHook {
                 if let Some(doc_id) = payload.doc_id {
                     if let Some(DocType::Workspace(workspace_id)) = DocType::parse(doc_id) {
                         if let Ok(storage) = self.storage_cache.get_storage(&workspace_id) {
+                            let files_synced = storage
+                                .query_active_files()
+                                .map(|files| files.len())
+                                .unwrap_or(0);
                             let storage_key = format!("workspace:{}", workspace_id);
                             if let Ok(Some(state)) = storage.load_doc(&storage_key) {
                                 let state_b64 = base64::Engine::encode(
@@ -616,20 +620,42 @@ impl Hook for DiaryxHook {
                                     "type": "crdt_state",
                                     "state": state_b64
                                 });
+                                let sync_complete = serde_json::json!({
+                                    "type": "sync_complete",
+                                    "files_synced": files_synced
+                                });
                                 info!(
                                     "Completing handshake with CRDT state ({} bytes)",
                                     state.len()
                                 );
                                 return ControlMessageResponse::CompleteHandshake {
-                                    responses: vec![crdt_state.to_string()],
+                                    responses: vec![
+                                        crdt_state.to_string(),
+                                        sync_complete.to_string(),
+                                    ],
                                 };
                             }
+
+                            // State missing but handshake can still complete with sync_complete.
+                            let sync_complete = serde_json::json!({
+                                "type": "sync_complete",
+                                "files_synced": files_synced
+                            });
+                            return ControlMessageResponse::CompleteHandshake {
+                                responses: vec![sync_complete.to_string()],
+                            };
                         }
                     }
                 }
 
                 // No state to send, just complete handshake
-                ControlMessageResponse::CompleteHandshake { responses: vec![] }
+                let sync_complete = serde_json::json!({
+                    "type": "sync_complete",
+                    "files_synced": 0
+                });
+                ControlMessageResponse::CompleteHandshake {
+                    responses: vec![sync_complete.to_string()],
+                }
             }
             Some("focus") => {
                 // Handle focus message (for now just log it)

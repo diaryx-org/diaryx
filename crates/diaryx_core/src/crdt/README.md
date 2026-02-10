@@ -182,6 +182,41 @@ BodyDoc sync observers are registered once per document. Repeated calls to
 `set_sync_callback` for the same doc are ignored to avoid duplicate observers
 and unnecessary overhead during bulk downloads.
 
+## Initial Sync Readiness
+
+`SyncSession` marks initial sync as ready only after:
+
+1. Workspace metadata handshake is complete, and
+2. The active body-doc bootstrap set has completed.
+
+This avoids reporting `synced` before file bodies are actually available.
+For compatibility with older servers, the session still includes a bounded
+fallback path when explicit `sync_complete` signaling is absent.
+
+During active sync, the session now re-scans workspace file paths after
+workspace metadata updates and queues missing body `SyncStep1` messages for any
+newly discovered files. This prevents cases where metadata arrives first but
+body bootstrap for those files is never initiated.
+
+All path keys used by sync tracking (`body_synced`, echo maps, focus sets) are
+canonicalized (`./` and leading `/` stripped, slash-normalized). This ensures
+`README.md`, `./README.md`, and `/README.md` are treated as one logical file.
+
+## Integrity Audit and Self-heal
+
+Before reporting fully synced, `SyncSession` runs an integrity audit over active
+workspace files:
+
+- Drops stale pending-body entries for files no longer in the workspace set.
+- Requeues missing `SyncStep1` body bootstrap for active files that are not yet
+  synced or not loaded in memory.
+- When `write_to_disk` is enabled, checks whether each active file exists on
+  disk; missing files are marked unsynced and requeued for bootstrap.
+
+This bounded reconciliation pass prevents false `synced` states and repairs
+cases where transient filesystem failures or timing races leave metadata and
+body sync out of alignment.
+
 ## BodyDocManager
 
 Manages multiple BodyDocs with lazy loading:
@@ -282,6 +317,15 @@ use std::sync::Arc;
 
 let storage = Arc::new(SqliteStorage::open("crdt.db").unwrap());
 ```
+
+`SqliteStorage` recovers from poisoned connection mutexes (for example, after a
+panic in another runtime task while holding the lock) and logs a warning
+instead of panicking future CRDT operations. This prevents reconnect loops in
+long-running sync servers from crashing due to lock poison propagation.
+
+Compaction now handles `keep_updates = 0` explicitly (keep no incremental
+updates, retain only the reconstructed snapshot) without integer underflow.
+This avoids panic-on-compact in sync server maintenance paths.
 
 ## Integration with Command API
 

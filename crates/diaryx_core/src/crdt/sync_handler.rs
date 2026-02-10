@@ -390,13 +390,25 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
                     synced_count += 1;
                 }
                 (false, false) => {
-                    // Neither exists - skip the rename, let the file be created normally
+                    // Both paths are transiently missing on disk.
+                    //
+                    // Still treat this as a logical rename so downstream consumers
+                    // (UI path remapping, active-entry tracking) receive FileRenamed.
+                    // The files loop below will materialize the new path from metadata/body.
                     log::debug!(
-                        "SyncHandler: Neither old {:?} nor new {:?} exist, will create new",
+                        "SyncHandler: Logical rename with transiently missing paths {:?} -> {:?}",
                         old_storage,
                         new_storage
                     );
-                    // Don't track as successful - let the file be created in the files loop
+
+                    successful_old_paths.insert(old_canonical.clone());
+                    successful_new_paths.insert(new_canonical.clone());
+
+                    self.emit_event(FileSystemEvent::file_renamed(
+                        old_storage,
+                        new_storage.clone(),
+                    ));
+                    synced_count += 1;
                 }
             }
         }
@@ -817,7 +829,8 @@ impl<FS: AsyncFileSystem> std::fmt::Debug for SyncHandler<FS> {
 mod tests {
     use super::*;
     use crate::crdt::types::BinaryRef;
-    use crate::fs::SyncToAsyncFs;
+    use crate::fs::{FileSystemEvent, InMemoryFileSystem, SyncToAsyncFs};
+    use std::sync::{Arc, Mutex};
 
     // Use SyncToAsyncFs wrapper which provides AsyncFileSystem for any SyncFileSystem
     type TestFs = SyncToAsyncFs<crate::fs::RealFileSystem>;
@@ -980,5 +993,68 @@ mod tests {
         assert_eq!(merged.contents, Some(vec![]));
         // Empty Vec attachments still falls back to disk (no explicit clearing mechanism)
         assert_eq!(merged.attachments.len(), 1);
+    }
+
+    #[test]
+    fn test_logical_rename_event_emitted_when_both_paths_missing() {
+        let fs = SyncToAsyncFs::new(InMemoryFileSystem::new());
+        let mut handler = SyncHandler::new(fs);
+
+        let events: Arc<Mutex<Vec<FileSystemEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let events_for_callback = Arc::clone(&events);
+        handler.set_event_callback(Box::new(move |event| {
+            events_for_callback.lock().unwrap().push(event.clone());
+        }));
+
+        let old_path = "new-entry.md".to_string();
+        let new_path = "wow.md".to_string();
+
+        // Simulate metadata that still carries both paths during a rename transition.
+        // The old path must be skipped once rename semantics are known.
+        let files = vec![
+            (
+                old_path.clone(),
+                FileMetadata::with_filename("new-entry.md".to_string(), Some("New Entry".into())),
+            ),
+            (
+                new_path.clone(),
+                FileMetadata::with_filename("wow.md".to_string(), Some("wow".into())),
+            ),
+        ];
+        let renames = vec![(old_path.clone(), new_path.clone())];
+
+        let synced_count = futures_lite::future::block_on(
+            handler.handle_remote_metadata_update(files, renames, None, true),
+        )
+        .unwrap();
+
+        assert_eq!(synced_count, 2, "rename + new path should be counted");
+        assert!(
+            !futures_lite::future::block_on(handler.file_exists(&old_path)),
+            "old path must not be recreated"
+        );
+        assert!(
+            futures_lite::future::block_on(handler.file_exists(&new_path)),
+            "new path should be materialized from metadata"
+        );
+
+        let events = events.lock().unwrap();
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                FileSystemEvent::FileRenamed { old_path, new_path }
+                    if old_path == &PathBuf::from("new-entry.md")
+                        && new_path == &PathBuf::from("wow.md")
+            )),
+            "expected FileRenamed event for logical rename"
+        );
+        assert!(
+            !events.iter().any(|event| matches!(
+                event,
+                FileSystemEvent::FileCreated { path, .. }
+                    if path == &PathBuf::from("new-entry.md")
+            )),
+            "old path should not emit FileCreated after rename detection"
+        );
     }
 }

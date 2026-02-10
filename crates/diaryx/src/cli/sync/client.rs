@@ -16,6 +16,9 @@ use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
 
 use super::CrdtContext;
 use super::progress;
+use crate::cli::util::{
+    canonicalize_frontmatter_reference, detect_workspace_link_format, parse_link_format,
+};
 
 const DEFAULT_SYNC_SERVER: &str = "https://sync.diaryx.org";
 
@@ -89,10 +92,11 @@ fn import_existing_files(
     workspace_crdt: &WorkspaceCrdt,
     body_manager: &BodyDocManager,
 ) -> usize {
-    use diaryx_core::crdt::FileMetadata;
+    use diaryx_core::crdt::{BinaryRef, FileMetadata};
     use std::fs;
 
     let mut imported = 0;
+    let workspace_link_format_hint = detect_workspace_link_format(workspace_root);
 
     // Walk the workspace directory
     fn walk_dir(
@@ -100,6 +104,7 @@ fn import_existing_files(
         workspace_root: &Path,
         workspace_crdt: &WorkspaceCrdt,
         body_manager: &BodyDocManager,
+        workspace_link_format_hint: Option<diaryx_core::link_parser::LinkFormat>,
         imported: &mut usize,
     ) {
         let entries = match fs::read_dir(dir) {
@@ -123,6 +128,7 @@ fn import_existing_files(
                     workspace_root,
                     workspace_crdt,
                     body_manager,
+                    workspace_link_format_hint,
                     imported,
                 );
             } else if path.extension().map(|e| e == "md").unwrap_or(false) {
@@ -159,19 +165,59 @@ fn import_existing_files(
                     .and_then(|n| n.to_str())
                     .unwrap_or("")
                     .to_string();
+                let file_path_for_links = Path::new(&rel_path);
+                let file_link_format_hint = fm
+                    .get("link_format")
+                    .and_then(|v| v.as_str())
+                    .and_then(parse_link_format)
+                    .or(workspace_link_format_hint);
 
                 let metadata = FileMetadata {
                     filename,
                     title: fm.get("title").and_then(|v| v.as_str()).map(String::from),
-                    part_of: fm.get("part_of").and_then(|v| v.as_str()).map(String::from),
+                    part_of: fm.get("part_of").and_then(|v| v.as_str()).map(|raw| {
+                        canonicalize_frontmatter_reference(
+                            raw,
+                            file_path_for_links,
+                            file_link_format_hint,
+                        )
+                    }),
                     contents: fm.get("contents").and_then(|v| {
                         v.as_sequence().map(|seq| {
                             seq.iter()
-                                .filter_map(|v| v.as_str().map(String::from))
+                                .filter_map(|v| v.as_str())
+                                .map(|raw| {
+                                    canonicalize_frontmatter_reference(
+                                        raw,
+                                        file_path_for_links,
+                                        file_link_format_hint,
+                                    )
+                                })
                                 .collect()
                         })
                     }),
-                    attachments: vec![],
+                    attachments: fm
+                        .get("attachments")
+                        .and_then(|v| v.as_sequence())
+                        .map(|seq| {
+                            seq.iter()
+                                .filter_map(|v| v.as_str())
+                                .map(|raw| BinaryRef {
+                                    path: canonicalize_frontmatter_reference(
+                                        raw,
+                                        file_path_for_links,
+                                        file_link_format_hint,
+                                    ),
+                                    source: "local".to_string(),
+                                    hash: String::new(),
+                                    mime_type: String::new(),
+                                    size: 0,
+                                    uploaded_at: None,
+                                    deleted: false,
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
                     deleted: false,
                     audience: fm.get("audience").and_then(|v| {
                         v.as_sequence().map(|seq| {
@@ -210,6 +256,7 @@ fn import_existing_files(
         workspace_root,
         workspace_crdt,
         body_manager,
+        workspace_link_format_hint,
         &mut imported,
     );
 

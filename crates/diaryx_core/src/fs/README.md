@@ -49,6 +49,38 @@ file`) used by metadata updates during remote sync. Temp-file paths (`.tmp`,
 `.bak`, `.swap`) are skipped for CRDT mutations, preventing transient swap
 operations from corrupting workspace path state.
 
+## Frontmatter Path Canonicalization
+
+`CrdtFs` canonicalizes frontmatter references before writing metadata to CRDT:
+
+- `part_of`
+- `contents[]`
+- `attachments[]`
+
+It resolves links through `link_parser` (supports markdown links, workspace-root
+links, and relative paths) and stores workspace-relative canonical paths in CRDT
+metadata.
+
+For ambiguous plain paths (`Folder/file.md`), resolution is hint-aware:
+
+- if workspace/frontmatter link format is `plain_canonical`, ambiguous links are
+  treated as workspace-root canonical paths;
+- otherwise they default to relative semantics, with a filesystem existence check
+  to disambiguate legacy data safely.
+
+## Legacy Rename Handling
+
+`CrdtFs::move_file` now detects legacy path-key CRDT entries (non-UUID keys such
+as `notes/file.md`) and uses delete+create semantics for the CRDT mutation:
+
+- Old key is tombstoned.
+- New key is created from destination file content.
+- Destination body doc is treated as a fresh doc state.
+
+This keeps workspace metadata paths aligned with body-sync doc paths during
+renames, which prevents "old path/new path split-brain" sync behavior and
+reduces duplicate body merges after rename-heavy sessions.
+
 ## Safe-write Recovery
 
 Metadata/frontmatter writes use a temp + backup swap strategy. On OPFS/FSA,

@@ -19,14 +19,14 @@ use crate::path_utils::normalize_sync_path;
 #[cfg(feature = "crdt")]
 use crate::crdt::FileMetadata;
 
-#[cfg(feature = "crdt")]
+#[cfg(all(test, feature = "crdt"))]
 use std::path::Component;
 
 /// Normalize a path by resolving a relative path against a base directory.
 /// Handles `.` and `..` components without filesystem access.
 /// Returns a forward-slash-separated path string suitable for CRDT keys.
 /// Also handles corrupted absolute paths by stripping the workspace base path if found.
-#[cfg(feature = "crdt")]
+#[cfg(all(test, feature = "crdt"))]
 fn normalize_contents_path(base_dir: &Path, relative: &str, workspace_base: &Path) -> String {
     // First, check if this looks like a corrupted absolute path
     // (e.g., "Users/adamharris/Documents/journal/Archive/file.md" - absolute path with leading / stripped)
@@ -196,6 +196,19 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         link_parser::format_link_with_format(canonical_path, &title, format, from_canonical_path)
     }
 
+    /// Resolve a frontmatter reference (`part_of`, `contents`) to canonical workspace path.
+    ///
+    /// Uses the configured workspace link format as a hint so PlainCanonical
+    /// workspaces treat ambiguous plain paths as workspace-root references.
+    fn resolve_frontmatter_link_target(&self, raw_link: &str, from_canonical_path: &str) -> String {
+        let parsed = link_parser::parse_link(raw_link);
+        link_parser::to_canonical_with_link_format(
+            &parsed,
+            Path::new(from_canonical_path),
+            Some(self.link_format()),
+        )
+    }
+
     /// Format a canonical path as a link (non-CRDT version, simple).
     #[cfg(not(feature = "crdt"))]
     #[allow(dead_code)]
@@ -304,26 +317,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     if key == "part_of" {
                         // Parse the value, convert to canonical, format as markdown link
                         if let serde_json::Value::String(ref s) = value {
-                            let parsed = link_parser::parse_link(s);
-                            let file_path = Path::new(&canonical_path);
-                            // Only resolve relative paths. If the path is already
-                            // canonical (WorkspaceRoot) or looks like a canonical path
-                            // (contains '/' but doesn't start with '.'), use it as-is.
                             let canonical_target =
-                                if parsed.path_type == link_parser::PathType::WorkspaceRoot {
-                                    // Already a workspace-root path, use as-is
-                                    parsed.path.clone()
-                                } else if parsed.path_type == link_parser::PathType::Ambiguous
-                                    && parsed.path.contains('/')
-                                    && !parsed.path.starts_with('.')
-                                {
-                                    // Looks like an already-canonical path (e.g., "Folder/file.md")
-                                    // Don't resolve it relative to the current file
-                                    parsed.path.clone()
-                                } else {
-                                    // Relative path - resolve against current file
-                                    link_parser::to_canonical(&parsed, file_path)
-                                };
+                                self.resolve_frontmatter_link_target(s, &canonical_path);
 
                             // Format as markdown link for file
                             let formatted =
@@ -349,31 +344,12 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     } else if key == "contents" {
                         // Handle contents array - format each item as markdown link
                         if let serde_json::Value::Array(ref arr) = value {
-                            let file_path = Path::new(&canonical_path);
                             let mut formatted_links: Vec<Value> = Vec::new();
 
                             for item in arr {
                                 if let serde_json::Value::String(s) = item {
-                                    let parsed = link_parser::parse_link(s);
-                                    // Only resolve relative paths. If the path is already
-                                    // canonical (WorkspaceRoot) or looks like a canonical path
-                                    // (contains '/' but doesn't start with '.'), use it as-is.
-                                    let canonical_target = if parsed.path_type
-                                        == link_parser::PathType::WorkspaceRoot
-                                    {
-                                        // Already a workspace-root path, use as-is
-                                        parsed.path.clone()
-                                    } else if parsed.path_type == link_parser::PathType::Ambiguous
-                                        && parsed.path.contains('/')
-                                        && !parsed.path.starts_with('.')
-                                    {
-                                        // Looks like an already-canonical path (e.g., "Folder/file.md")
-                                        // Don't resolve it relative to the current file
-                                        parsed.path.clone()
-                                    } else {
-                                        // Relative path - resolve against current file
-                                        link_parser::to_canonical(&parsed, file_path)
-                                    };
+                                    let canonical_target =
+                                        self.resolve_frontmatter_link_target(s, &canonical_path);
                                     let formatted = self
                                         .format_link_for_file(&canonical_target, &canonical_path);
                                     formatted_links.push(Value::String(formatted));
@@ -2123,6 +2099,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         .ok_or_else(|| DiaryxError::WorkspaceNotFound(root_path.clone()))?
                 };
 
+                // Use the workspace's configured link format as a read-time hint.
+                // This is required to disambiguate PlainCanonical paths correctly.
+                let link_format_hint = ws
+                    .get_workspace_config(&root_index)
+                    .await
+                    .map(|cfg| cfg.link_format)
+                    .ok();
+
                 // If audience is specified, use plan_export to get filtered file list
                 let allowed_paths: Option<HashSet<PathBuf>> = if let Some(ref aud) = audience {
                     let plan = self
@@ -2289,10 +2273,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
 
-                    // Get the directory of the current file for resolving relative paths
-                    // Use canonical_path so contents paths are also workspace-relative
-                    let file_dir = Path::new(&canonical_path).parent().unwrap_or(Path::new(""));
-
                     let contents: Option<Vec<String>> = parsed
                         .frontmatter
                         .get("contents")
@@ -2301,33 +2281,15 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                             seq.iter()
                                 .filter_map(|v| v.as_str())
                                 .map(|raw_value| {
-                                    // Parse the value - it could be a plain path or a markdown link
-                                    // e.g., "./file.md" or "[Title](</path/file.md>)"
-                                    // This extracts the canonical path from either format
                                     let parsed_link = link_parser::parse_link(raw_value);
-                                    let path_to_normalize = &parsed_link.path;
-
-                                    // If the path is already a workspace-root path (canonical),
-                                    // use it directly. Only resolve relative paths.
-                                    // This prevents doubling like Archive/Archive/file.md
-                                    let resolved = if parsed_link.path_type
-                                        == link_parser::PathType::WorkspaceRoot
-                                    {
-                                        // Already canonical - use as-is
-                                        path_to_normalize.to_string()
-                                    } else {
-                                        // Relative path - resolve against parent directory
-                                        // Also fixes corrupted absolute paths from previous sync issues
-                                        normalize_contents_path(
-                                            file_dir,
-                                            path_to_normalize,
-                                            &base_path,
-                                        )
-                                    };
+                                    let resolved = link_parser::to_canonical_with_link_format(
+                                        &parsed_link,
+                                        Path::new(&canonical_path),
+                                        link_format_hint,
+                                    );
                                     log::debug!(
-                                        "[InitializeWorkspaceCrdt] contents: {} + {} (from '{}', type={:?}) -> {}",
-                                        file_dir.display(),
-                                        path_to_normalize,
+                                        "[InitializeWorkspaceCrdt] contents: file={} (from '{}', type={:?}) -> {}",
+                                        canonical_path,
                                         raw_value,
                                         parsed_link.path_type,
                                         resolved
@@ -3278,6 +3240,72 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 Ok(Response::ConvertLinksResult(result))
             }
+
+            Command::LinkParser { operation } => {
+                let result = match operation {
+                    crate::command::LinkParserOperation::Parse { link } => {
+                        let parsed = link_parser::parse_link(&link);
+                        let path_type = match parsed.path_type {
+                            link_parser::PathType::WorkspaceRoot => {
+                                crate::command::LinkPathType::WorkspaceRoot
+                            }
+                            link_parser::PathType::Relative => {
+                                crate::command::LinkPathType::Relative
+                            }
+                            link_parser::PathType::Ambiguous => {
+                                crate::command::LinkPathType::Ambiguous
+                            }
+                        };
+                        crate::command::LinkParserResult::Parsed(crate::command::ParsedLinkResult {
+                            title: parsed.title,
+                            path: parsed.path,
+                            path_type,
+                        })
+                    }
+                    crate::command::LinkParserOperation::ToCanonical {
+                        link,
+                        current_file_path,
+                        link_format_hint,
+                    } => {
+                        let parsed = link_parser::parse_link(&link);
+                        let canonical = link_parser::to_canonical_with_link_format(
+                            &parsed,
+                            Path::new(&current_file_path),
+                            link_format_hint,
+                        );
+                        crate::command::LinkParserResult::String(canonical)
+                    }
+                    crate::command::LinkParserOperation::Format {
+                        canonical_path,
+                        title,
+                        format,
+                        from_canonical_path,
+                    } => crate::command::LinkParserResult::String(
+                        link_parser::format_link_with_format(
+                            &canonical_path,
+                            &title,
+                            format,
+                            &from_canonical_path,
+                        ),
+                    ),
+                    crate::command::LinkParserOperation::Convert {
+                        link,
+                        target_format,
+                        current_file_path,
+                        source_format_hint,
+                    } => crate::command::LinkParserResult::String(
+                        link_parser::convert_link_with_hint(
+                            &link,
+                            target_format,
+                            &current_file_path,
+                            None,
+                            source_format_hint,
+                        ),
+                    ),
+                };
+
+                Ok(Response::LinkParserResult(result))
+            }
         }
     }
 
@@ -3298,6 +3326,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         let mut files_modified = 0;
         let mut links_converted = 0;
         let mut modified_files = Vec::new();
+        let source_format_hint = ws
+            .get_workspace_config(root_index_path)
+            .await
+            .map(|cfg| cfg.link_format)
+            .ok();
 
         // Get workspace root directory (parent of root index file)
         let workspace_root = root_index_path.parent().unwrap_or_else(|| Path::new(""));
@@ -3313,7 +3346,13 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 .to_string();
 
             let (file_links_converted, was_modified) = self
-                .convert_file_links(path, &relative_path, target_format, dry_run)
+                .convert_file_links(
+                    path,
+                    &relative_path,
+                    target_format,
+                    source_format_hint,
+                    dry_run,
+                )
                 .await?;
 
             if was_modified {
@@ -3340,7 +3379,13 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .to_string();
 
                 let (file_links_converted, was_modified) = self
-                    .convert_file_links(&file_path, &relative_path, target_format, dry_run)
+                    .convert_file_links(
+                        &file_path,
+                        &relative_path,
+                        target_format,
+                        source_format_hint,
+                        dry_run,
+                    )
                     .await?;
 
                 if was_modified {
@@ -3386,6 +3431,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         file_path: &Path,
         relative_path: &str,
         target_format: link_parser::LinkFormat,
+        source_format_hint: Option<link_parser::LinkFormat>,
         dry_run: bool,
     ) -> Result<(usize, bool)> {
         let file_path_str = file_path.to_string_lossy().to_string();
@@ -3400,8 +3446,13 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         if let Some(part_of_value) = fm.get("part_of") {
             if let Some(part_of_str) = part_of_value.as_str() {
                 // Single string value
-                let converted =
-                    link_parser::convert_link(part_of_str, target_format, relative_path, None);
+                let converted = link_parser::convert_link_with_hint(
+                    part_of_str,
+                    target_format,
+                    relative_path,
+                    None,
+                    source_format_hint,
+                );
                 if converted != part_of_str {
                     fm.insert("part_of".to_string(), Value::String(converted));
                     links_converted += 1;
@@ -3414,8 +3465,13 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 for item in part_of_seq {
                     if let Some(item_str) = item.as_str() {
-                        let converted =
-                            link_parser::convert_link(item_str, target_format, relative_path, None);
+                        let converted = link_parser::convert_link_with_hint(
+                            item_str,
+                            target_format,
+                            relative_path,
+                            None,
+                            source_format_hint,
+                        );
                         if converted != item_str {
                             part_of_changed = true;
                             links_converted += 1;
@@ -3442,8 +3498,13 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
             for item in contents_seq {
                 if let Some(item_str) = item.as_str() {
-                    let converted =
-                        link_parser::convert_link(item_str, target_format, relative_path, None);
+                    let converted = link_parser::convert_link_with_hint(
+                        item_str,
+                        target_format,
+                        relative_path,
+                        None,
+                        source_format_hint,
+                    );
                     if converted != item_str {
                         contents_changed = true;
                         links_converted += 1;
@@ -3685,9 +3746,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             Some(p) => {
                 // Get canonical path of the file being created for resolving relative paths
                 let canonical_path = self.get_canonical_path(&path.to_string_lossy());
-                let parsed = link_parser::parse_link(p);
-                let canonical_parent =
-                    link_parser::to_canonical(&parsed, Path::new(&canonical_path));
+                let canonical_parent = self.resolve_frontmatter_link_target(p, &canonical_path);
                 let formatted_link = self.format_link_for_file(&canonical_parent, &canonical_path);
                 // Quote if it contains special characters (markdown links do)
                 if formatted_link.contains('[') || formatted_link.contains(':') {
@@ -3733,8 +3792,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
         // Convert part_of to link using configured format
         let canonical_path = self.get_canonical_path(&path.to_string_lossy());
-        let parsed = link_parser::parse_link(part_of);
-        let canonical_parent = link_parser::to_canonical(&parsed, Path::new(&canonical_path));
+        let canonical_parent = self.resolve_frontmatter_link_target(part_of, &canonical_path);
         let formatted_link = self.format_link_for_file(&canonical_parent, &canonical_path);
 
         // Quote if it contains special characters (markdown links do)
@@ -3841,8 +3899,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
         // Convert relative entry path to canonical and format as link
         let index_canonical = self.get_canonical_path(&index_path.to_string_lossy());
-        let parsed = link_parser::parse_link(entry);
-        let entry_canonical = link_parser::to_canonical(&parsed, Path::new(&index_canonical));
+        let entry_canonical = self.resolve_frontmatter_link_target(entry, &index_canonical);
         let formatted_entry = self.format_link_for_file(&entry_canonical, &index_canonical);
 
         // Get or create contents array
@@ -3855,9 +3912,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             // Check if any existing entry refers to the same canonical path
             let entry_exists = items.iter().any(|item| {
                 if let Some(s) = item.as_str() {
-                    let parsed_existing = link_parser::parse_link(s);
                     let canonical_existing =
-                        link_parser::to_canonical(&parsed_existing, Path::new(&index_canonical));
+                        self.resolve_frontmatter_link_target(s, &index_canonical);
                     canonical_existing == entry_canonical
                 } else {
                     false
@@ -3870,17 +3926,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 items.sort_by(|a, b| {
                     let a_canonical = a
                         .as_str()
-                        .map(|s| {
-                            let parsed = link_parser::parse_link(s);
-                            link_parser::to_canonical(&parsed, Path::new(&index_canonical))
-                        })
+                        .map(|s| self.resolve_frontmatter_link_target(s, &index_canonical))
                         .unwrap_or_default();
                     let b_canonical = b
                         .as_str()
-                        .map(|s| {
-                            let parsed = link_parser::parse_link(s);
-                            link_parser::to_canonical(&parsed, Path::new(&index_canonical))
-                        })
+                        .map(|s| self.resolve_frontmatter_link_target(s, &index_canonical))
                         .unwrap_or_default();
                     a_canonical.cmp(&b_canonical)
                 });

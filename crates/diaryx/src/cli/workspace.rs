@@ -3090,7 +3090,13 @@ fn handle_convert_links(
             .to_string_lossy()
             .to_string();
 
-        let result = convert_file_links(file_path, &relative_path, target_format, dry_run);
+        let result = convert_file_links(
+            file_path,
+            &relative_path,
+            target_format,
+            Some(configured_format),
+            dry_run,
+        );
         if result.was_modified {
             files_modified += 1;
             links_converted += result.links_converted;
@@ -3185,6 +3191,7 @@ fn convert_file_links(
     file_path: &Path,
     relative_path: &str,
     target_format: diaryx_core::link_parser::LinkFormat,
+    source_format_hint: Option<diaryx_core::link_parser::LinkFormat>,
     dry_run: bool,
 ) -> ConvertResult {
     use diaryx_core::frontmatter;
@@ -3227,8 +3234,13 @@ fn convert_file_links(
     if let Some(part_of_value) = fm.get("part_of") {
         if let Some(part_of_str) = part_of_value.as_str() {
             // Single string value
-            let converted =
-                link_parser::convert_link(part_of_str, target_format, relative_path, None);
+            let converted = link_parser::convert_link_with_hint(
+                part_of_str,
+                target_format,
+                relative_path,
+                None,
+                source_format_hint,
+            );
             if converted != part_of_str {
                 track_source_format(&mut result.source_formats, part_of_str);
                 fm.insert("part_of".to_string(), Value::String(converted));
@@ -3242,8 +3254,13 @@ fn convert_file_links(
 
             for item in part_of_seq {
                 if let Some(item_str) = item.as_str() {
-                    let converted =
-                        link_parser::convert_link(item_str, target_format, relative_path, None);
+                    let converted = link_parser::convert_link_with_hint(
+                        item_str,
+                        target_format,
+                        relative_path,
+                        None,
+                        source_format_hint,
+                    );
                     if converted != item_str {
                         track_source_format(&mut result.source_formats, item_str);
                         part_of_changed = true;
@@ -3270,8 +3287,13 @@ fn convert_file_links(
 
             for item in contents_seq {
                 if let Some(item_str) = item.as_str() {
-                    let converted =
-                        link_parser::convert_link(item_str, target_format, relative_path, None);
+                    let converted = link_parser::convert_link_with_hint(
+                        item_str,
+                        target_format,
+                        relative_path,
+                        None,
+                        source_format_hint,
+                    );
                     if converted != item_str {
                         track_source_format(&mut result.source_formats, item_str);
                         contents_changed = true;

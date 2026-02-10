@@ -994,6 +994,16 @@ pub enum Command {
         #[serde(default)]
         dry_run: bool,
     },
+
+    // ==================== Link Parser Commands ====================
+    /// Run link parser operations from frontend/backend callers.
+    ///
+    /// This exposes canonical link parsing/conversion logic so web clients
+    /// don't need to duplicate path parsing semantics.
+    LinkParser {
+        /// The link parser operation to execute.
+        operation: LinkParserOperation,
+    },
 }
 
 // ============================================================================
@@ -1096,6 +1106,9 @@ pub enum Response {
 
     /// Create child entry result (includes parent conversion info).
     CreateChildResult(CreateChildResult),
+
+    /// Link parser operation result.
+    LinkParserResult(LinkParserResult),
 
     /// Binary data response (for CRDT state vectors, updates).
     #[cfg(feature = "crdt")]
@@ -1296,6 +1309,87 @@ pub struct ConvertLinksResult {
     pub modified_files: Vec<String>,
     /// Whether this was a dry run (no actual changes made).
     pub dry_run: bool,
+}
+
+/// Link parser operation selector.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+#[serde(tag = "type", content = "params", rename_all = "snake_case")]
+pub enum LinkParserOperation {
+    /// Parse a link string into title/path/path type.
+    Parse {
+        /// Link string to parse.
+        link: String,
+    },
+    /// Resolve a link string to canonical (workspace-relative) path.
+    ToCanonical {
+        /// Link string to resolve.
+        link: String,
+        /// Canonical path of the file containing the link.
+        current_file_path: String,
+        /// Optional hint for resolving ambiguous links.
+        #[serde(default)]
+        link_format_hint: Option<LinkFormat>,
+    },
+    /// Format a canonical path as a link string.
+    Format {
+        /// Canonical target path.
+        canonical_path: String,
+        /// Display title.
+        title: String,
+        /// Output format.
+        format: LinkFormat,
+        /// Canonical path of the file containing the link.
+        from_canonical_path: String,
+    },
+    /// Convert an input link string to another format.
+    Convert {
+        /// Original link string.
+        link: String,
+        /// Desired output format.
+        target_format: LinkFormat,
+        /// Canonical path of the file containing the link.
+        current_file_path: String,
+        /// Optional hint for interpreting ambiguous source links.
+        #[serde(default)]
+        source_format_hint: Option<LinkFormat>,
+    },
+}
+
+/// Path classification from the link parser.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+#[serde(rename_all = "snake_case")]
+pub enum LinkPathType {
+    /// Link path starts at workspace root (`/path/file.md`).
+    WorkspaceRoot,
+    /// Link path is explicitly relative (`./` or `../`).
+    Relative,
+    /// Link path is plain/ambiguous (`path/file.md`).
+    Ambiguous,
+}
+
+/// Parsed link payload.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub struct ParsedLinkResult {
+    /// Markdown link title (if present).
+    pub title: Option<String>,
+    /// Extracted path component.
+    pub path: String,
+    /// Path classification.
+    pub path_type: LinkPathType,
+}
+
+/// Result of running a link parser operation.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+pub enum LinkParserResult {
+    /// Structured parse output.
+    Parsed(ParsedLinkResult),
+    /// String output from canonicalize/format/convert operations.
+    String(String),
 }
 
 /// CRDT history entry for version tracking.

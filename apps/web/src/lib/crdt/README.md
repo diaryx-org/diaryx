@@ -72,6 +72,11 @@ backend `GetCanonicalPath` (`syncHelpers.getCanonicalPath`) when available, and
 falls back to local normalization only if backend canonicalization is
 unavailable.
 
+For hierarchy metadata (`part_of` / `contents`), `workspaceCrdtBridge.ts` now
+uses backend `LinkParser` commands when available, so tree resolution follows
+the same Rust link semantics (including plain-canonical handling). A local
+resolver remains as fallback.
+
 `App.svelte` uses the async bridge method when matching metadata/body events to
 the currently open entry. This avoids alias mismatches such as `./README.md`
 vs `README.md` and prevents duplicate or missed UI updates.

@@ -510,8 +510,33 @@ impl CrdtStorage for SqliteStorage {
     }
 
     fn rename_doc(&self, old_name: &str, new_name: &str) -> StorageResult<()> {
+        if old_name == new_name {
+            return Ok(());
+        }
+
         let mut conn = self.lock_conn();
         let tx = conn.transaction()?;
+
+        // No-op if source doesn't exist in either snapshot or update log.
+        let old_doc_count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM documents WHERE name = ?",
+            params![old_name],
+            |row| row.get(0),
+        )?;
+        let old_update_count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM updates WHERE doc_name = ?",
+            params![old_name],
+            |row| row.get(0),
+        )?;
+        if old_doc_count == 0 && old_update_count == 0 {
+            tx.commit()?;
+            return Ok(());
+        }
+
+        // Destination may already exist (e.g., stale empty body doc). Old-name
+        // state should win for rename migration semantics.
+        tx.execute("DELETE FROM updates WHERE doc_name = ?", params![new_name])?;
+        tx.execute("DELETE FROM documents WHERE name = ?", params![new_name])?;
 
         // Rename document snapshot
         tx.execute(
@@ -872,6 +897,33 @@ mod tests {
         // Clearing updates for nonexistent doc should not error
         let result = storage.clear_updates("nonexistent");
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_sqlite_rename_doc_overwrites_existing_destination() {
+        let storage = SqliteStorage::in_memory().unwrap();
+
+        storage.save_doc("old.md", b"old-state").unwrap();
+        storage
+            .append_update("old.md", b"old-update", UpdateOrigin::Local)
+            .unwrap();
+
+        storage.save_doc("new.md", b"new-state").unwrap();
+        storage
+            .append_update("new.md", b"new-update", UpdateOrigin::Local)
+            .unwrap();
+
+        storage.rename_doc("old.md", "new.md").unwrap();
+
+        assert!(storage.load_doc("old.md").unwrap().is_none());
+        assert_eq!(
+            storage.load_doc("new.md").unwrap().as_deref(),
+            Some(&b"old-state"[..])
+        );
+
+        let new_updates = storage.get_all_updates("new.md").unwrap();
+        assert_eq!(new_updates.len(), 1);
+        assert_eq!(new_updates[0].data, b"old-update");
     }
 
     #[test]

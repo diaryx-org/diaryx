@@ -96,6 +96,11 @@ as either a numeric timestamp (milliseconds) or an RFC3339/ISO8601 string, and
 mapped to `modified_at`. When writing frontmatter back to disk, `updated` is
 emitted as an RFC3339 string for readability.
 
+CRDT metadata paths are canonicalized to workspace-relative form during ingest
+(`part_of`, `contents`, `attachments`). Plain-canonical workspaces are handled
+with a link-format hint so ambiguous plain links (`Folder/file.md`) resolve as
+workspace-root references when appropriate.
+
 ## WorkspaceCrdt
 
 Manages the workspace file hierarchy as a CRDT. Files are keyed by stable
@@ -205,6 +210,28 @@ body bootstrap for those files is never initiated.
 All path keys used by sync tracking (`body_synced`, echo maps, focus sets) are
 canonicalized (`./` and leading `/` stripped, slash-normalized). This ensures
 `README.md`, `./README.md`, and `/README.md` are treated as one logical file.
+
+Rename reconciliation is now resilient to transient filesystem gaps: if a
+rename is detected from CRDT metadata but both old/new paths are momentarily
+missing on disk, the sync handler still emits a logical `FileRenamed` event and
+suppresses re-materializing the old path. This keeps active-entry remapping and
+sidebar state consistent during OPFS timing races.
+
+Remote workspace renames now also migrate in-memory body-doc keys and all
+related sync-tracking maps (`body_synced`, echo caches, state-vector caches,
+focus set). This keeps post-rename body sync on a single canonical path instead
+of splitting into "old path vs new path" streams.
+
+`SqliteStorage::rename_doc` now treats rename as an overwrite migration:
+destination doc/update rows are replaced by source rows in one transaction, and
+missing-source renames are a no-op. This prevents stale destination state from
+surviving a rename and causing duplicate body streams on reconnect.
+
+For legacy path-key workspaces (where CRDT keys are file paths, not UUID doc
+IDs), `CrdtFs::move_file` now forces delete+create key migration on rename
+instead of filename-only metadata mutation. This ensures workspace metadata
+path keys track the renamed canonical path, so remote clients can reconcile
+rename events and body-doc routing on the same path.
 
 ## Integrity Audit and Self-heal
 
@@ -356,6 +383,10 @@ let result = diaryx.execute(Command::GetHistory {
     doc_name: None,
 });
 ```
+
+Link parser operations are also available through the command API via
+`Command::LinkParser`, enabling frontend callers to parse/canonicalize/format/
+convert links using the same Rust logic as core filesystem and workspace code.
 
 ## Sync Client
 

@@ -369,6 +369,12 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
             }
         }
 
+        // Keep body-doc state aligned with workspace renames so follow-up body
+        // updates continue under the new canonical path.
+        if !all_renames.is_empty() {
+            self.migrate_body_docs_for_renames(&all_renames);
+        }
+
         // Write changed files to disk if requested
         if write_to_disk && (!filtered_changed_files.is_empty() || !all_renames.is_empty()) {
             let files_to_sync: Vec<_> = filtered_changed_files
@@ -404,6 +410,68 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
             changed_files: filtered_changed_files,
             sync_complete,
         })
+    }
+
+    /// Migrate body document keys and sync-tracking maps for workspace renames.
+    ///
+    /// Remote metadata updates can rename a file path while keeping the same logical
+    /// document. If body docs stay under the old key, clients can end up with old/new
+    /// body streams diverging and duplicated content.
+    fn migrate_body_docs_for_renames(&self, renames: &[(String, String)]) {
+        for (old_path, new_path) in renames {
+            let old_path = normalize_sync_path(old_path);
+            let new_path = normalize_sync_path(new_path);
+            if old_path.is_empty() || new_path.is_empty() || old_path == new_path {
+                continue;
+            }
+
+            if let Err(e) = self.body_manager.rename(&old_path, &new_path) {
+                log::warn!(
+                    "[SyncManager] Failed to migrate body doc on remote rename {} -> {}: {}",
+                    old_path,
+                    new_path,
+                    e
+                );
+                continue;
+            }
+
+            {
+                let mut synced = self.body_synced.write().unwrap();
+                if synced.remove(&old_path) {
+                    synced.insert(new_path.clone());
+                }
+            }
+            {
+                let mut content = self.last_known_content.write().unwrap();
+                if let Some(value) = content.remove(&old_path) {
+                    content.insert(new_path.clone(), value);
+                }
+            }
+            {
+                let mut metadata = self.last_known_metadata.write().unwrap();
+                if let Some(value) = metadata.remove(&old_path) {
+                    metadata.insert(new_path.clone(), value);
+                }
+            }
+            {
+                let mut sv_map = self.last_sent_body_sv.write().unwrap();
+                if let Some(value) = sv_map.remove(&old_path) {
+                    sv_map.insert(new_path.clone(), value);
+                }
+            }
+            {
+                let mut synced_svs = self.last_synced_body_svs.write().unwrap();
+                if let Some(value) = synced_svs.remove(&old_path) {
+                    synced_svs.insert(new_path.clone(), value);
+                }
+            }
+            {
+                let mut focused = self.focused_files.write().unwrap();
+                if focused.remove(&old_path) {
+                    focused.insert(new_path.clone());
+                }
+            }
+        }
     }
 
     /// Handle a single workspace sync message.
@@ -1186,7 +1254,6 @@ mod tests {
     use crate::crdt::storage::CrdtStorage;
     use crate::fs::SyncToAsyncFs;
     use crate::test_utils::MockFileSystem;
-
     fn create_test_manager() -> RustSyncManager<SyncToAsyncFs<MockFileSystem>> {
         let storage: Arc<dyn CrdtStorage> = Arc::new(MemoryStorage::new());
         let workspace_crdt = Arc::new(WorkspaceCrdt::new(Arc::clone(&storage)));
@@ -1378,5 +1445,29 @@ mod tests {
 
         // No longer empty
         assert!(!workspace.list_active_files().is_empty());
+    }
+
+    #[test]
+    fn test_remote_workspace_rename_migrates_body_doc_key() {
+        let manager = create_test_manager();
+
+        manager
+            .body_manager
+            .get_or_create("new-entry.md")
+            .set_body("# Note\n\nhello")
+            .unwrap();
+
+        manager
+            .migrate_body_docs_for_renames(&[("new-entry.md".to_string(), "wow.md".to_string())]);
+
+        let renamed_doc = manager
+            .body_manager
+            .get("wow.md")
+            .expect("renamed body doc should exist");
+        assert_eq!(renamed_doc.get_body(), "# Note\n\nhello");
+        assert!(
+            manager.body_manager.get("new-entry.md").is_none(),
+            "old body doc key should be removed after rename"
+        );
     }
 }

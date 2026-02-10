@@ -24,8 +24,50 @@ import type {
   SearchOptions,
   AncestorAttachmentsResult,
   CreateChildResult,
+  LinkFormat,
 } from './generated';
 import type { JsonValue } from './generated/serde_json/JsonValue';
+
+export type LinkPathType = 'workspace_root' | 'relative' | 'ambiguous';
+
+export interface ParsedLinkResult {
+  title: string | null;
+  path: string;
+  path_type: LinkPathType;
+}
+
+export type LinkParserOperation =
+  | { type: 'parse'; params: { link: string } }
+  | {
+      type: 'to_canonical';
+      params: {
+        link: string;
+        current_file_path: string;
+        link_format_hint?: LinkFormat | null;
+      };
+    }
+  | {
+      type: 'format';
+      params: {
+        canonical_path: string;
+        title: string;
+        format: LinkFormat;
+        from_canonical_path: string;
+      };
+    }
+  | {
+      type: 'convert';
+      params: {
+        link: string;
+        target_format: LinkFormat;
+        current_file_path: string;
+        source_format_hint?: LinkFormat | null;
+      };
+    };
+
+export type LinkParserResult =
+  | { type: 'parsed'; data: ParsedLinkResult }
+  | { type: 'string'; data: string };
 
 // Helper to extract response data with type checking
 function expectResponse<T extends Response['type']>(
@@ -242,6 +284,97 @@ export function createApi(backend: Backend) {
         type: 'RemoveFrontmatterProperty',
         params: { path, key },
       });
+    },
+
+    // =========================================================================
+    // Link Parser
+    // =========================================================================
+
+    /** Run a link parser operation in the Rust backend. */
+    async runLinkParser(operation: LinkParserOperation): Promise<LinkParserResult> {
+      const response = await backend.execute({
+        type: 'LinkParser' as any,
+        params: { operation } as any,
+      } as any);
+
+      if ((response as any).type !== 'LinkParserResult') {
+        throw new Error(`Expected response type 'LinkParserResult', got '${response.type}'`);
+      }
+
+      return (response as any).data as LinkParserResult;
+    },
+
+    /** Parse a link string into title/path/path_type. */
+    async parseLink(link: string): Promise<ParsedLinkResult> {
+      const result = await this.runLinkParser({ type: 'parse', params: { link } });
+      if (result.type !== 'parsed') {
+        throw new Error(`Expected link parser result type 'parsed', got '${result.type}'`);
+      }
+      return result.data;
+    },
+
+    /** Resolve a link string to canonical workspace-relative path. */
+    async canonicalizeLink(
+      link: string,
+      currentFilePath: string,
+      linkFormatHint?: LinkFormat | null
+    ): Promise<string> {
+      const result = await this.runLinkParser({
+        type: 'to_canonical',
+        params: {
+          link,
+          current_file_path: currentFilePath,
+          link_format_hint: linkFormatHint ?? null,
+        },
+      });
+      if (result.type !== 'string') {
+        throw new Error(`Expected link parser result type 'string', got '${result.type}'`);
+      }
+      return result.data;
+    },
+
+    /** Format a canonical path as a link string in the requested format. */
+    async formatLink(
+      canonicalPath: string,
+      title: string,
+      format: LinkFormat,
+      fromCanonicalPath: string
+    ): Promise<string> {
+      const result = await this.runLinkParser({
+        type: 'format',
+        params: {
+          canonical_path: canonicalPath,
+          title,
+          format,
+          from_canonical_path: fromCanonicalPath,
+        },
+      });
+      if (result.type !== 'string') {
+        throw new Error(`Expected link parser result type 'string', got '${result.type}'`);
+      }
+      return result.data;
+    },
+
+    /** Convert an existing link string to a different format. */
+    async convertLink(
+      link: string,
+      targetFormat: LinkFormat,
+      currentFilePath: string,
+      sourceFormatHint?: LinkFormat | null
+    ): Promise<string> {
+      const result = await this.runLinkParser({
+        type: 'convert',
+        params: {
+          link,
+          target_format: targetFormat,
+          current_file_path: currentFilePath,
+          source_format_hint: sourceFormatHint ?? null,
+        },
+      });
+      if (result.type !== 'string') {
+        throw new Error(`Expected link parser result type 'string', got '${result.type}'`);
+      }
+      return result.data;
     },
 
     // =========================================================================

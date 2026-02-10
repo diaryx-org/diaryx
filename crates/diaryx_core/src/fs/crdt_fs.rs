@@ -14,8 +14,8 @@
 //! ```
 //!
 //! - For writes: Look up doc_id by path, or create new file with UUID if not found
-//! - For renames: Just update the `filename` property (doc_id is stable!)
-//! - For moves: Just update the `part_of` property (doc_id is stable!)
+//! - For renames/moves in doc-ID mode: update `filename`/`part_of` (doc_id is stable)
+//! - For renames/moves in legacy path-key mode: use delete+create key migration
 //! - For deletes: Mark the file as deleted (tombstone)
 //!
 //! # Architecture
@@ -192,20 +192,131 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
         );
     }
 
+    /// Parse a link format string from frontmatter.
+    fn parse_link_format(raw: &str) -> Option<link_parser::LinkFormat> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "markdown_root" => Some(link_parser::LinkFormat::MarkdownRoot),
+            "markdown_relative" => Some(link_parser::LinkFormat::MarkdownRelative),
+            "plain_relative" => Some(link_parser::LinkFormat::PlainRelative),
+            "plain_canonical" => Some(link_parser::LinkFormat::PlainCanonical),
+            _ => None,
+        }
+    }
+
+    /// Try to detect link format by checking the current file and ancestor indexes.
+    async fn detect_link_format_hint(
+        &self,
+        path: &Path,
+        current_frontmatter: Option<&indexmap::IndexMap<String, serde_yaml::Value>>,
+    ) -> Option<link_parser::LinkFormat> {
+        if let Some(frontmatter) = current_frontmatter
+            && let Some(raw) = frontmatter.get("link_format").and_then(|v| v.as_str())
+            && let Some(parsed) = Self::parse_link_format(raw)
+        {
+            return Some(parsed);
+        }
+
+        let mut dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+
+        loop {
+            for index_name in ["README.md", "index.md"] {
+                let candidate = if dir.as_os_str().is_empty() {
+                    PathBuf::from(index_name)
+                } else {
+                    dir.join(index_name)
+                };
+
+                if !self.inner.exists(&candidate).await {
+                    continue;
+                }
+
+                if let Ok(content) = self.inner.read_to_string(&candidate).await
+                    && let Ok(parsed) = frontmatter::parse_or_empty(&content)
+                {
+                    if let Some(raw) = parsed
+                        .frontmatter
+                        .get("link_format")
+                        .and_then(|v| v.as_str())
+                        && let Some(format) = Self::parse_link_format(raw)
+                    {
+                        return Some(format);
+                    }
+
+                    if parsed.frontmatter.get("part_of").is_none()
+                        && parsed.frontmatter.get("contents").is_some()
+                    {
+                        return Some(link_parser::LinkFormat::default());
+                    }
+                }
+            }
+
+            if dir.as_os_str().is_empty() {
+                break;
+            }
+
+            let Some(parent) = dir.parent() else {
+                break;
+            };
+
+            if parent == dir {
+                break;
+            }
+            dir = parent.to_path_buf();
+        }
+
+        None
+    }
+
+    /// Resolve frontmatter path references to canonical workspace paths.
+    async fn resolve_frontmatter_path(
+        &self,
+        current_file_path: &Path,
+        raw_value: &str,
+        link_format_hint: Option<link_parser::LinkFormat>,
+    ) -> String {
+        let parsed = link_parser::parse_link(raw_value);
+        let resolved = link_parser::to_canonical_with_link_format(
+            &parsed,
+            current_file_path,
+            link_format_hint,
+        );
+
+        // For ambiguous paths without a PlainCanonical hint, disambiguate
+        // by checking which interpretation exists on disk.
+        if parsed.path_type == link_parser::PathType::Ambiguous
+            && link_format_hint != Some(link_parser::LinkFormat::PlainCanonical)
+        {
+            let relative =
+                link_parser::to_canonical_with_link_format(&parsed, current_file_path, None);
+            let workspace_root = link_parser::normalize_workspace_path(&parsed.path);
+
+            if relative != workspace_root {
+                let relative_exists = self.inner.exists(Path::new(&relative)).await;
+                let root_exists = self.inner.exists(Path::new(&workspace_root)).await;
+
+                if root_exists && !relative_exists {
+                    return workspace_root;
+                }
+                if relative_exists && !root_exists {
+                    return relative;
+                }
+            }
+        }
+
+        resolved
+    }
+
     /// Extract FileMetadata from file content, including the filename.
     ///
     /// Parses frontmatter and converts known fields to FileMetadata.
-    /// Paths in `part_of` and `contents` are converted to canonical
+    /// Paths in `part_of`, `contents`, and `attachments` are converted to canonical
     /// (workspace-relative) paths for consistent CRDT storage.
-    ///
-    /// Supports multiple link formats:
-    /// - Markdown links: `[Title](/path/file.md)` or `[Title](../file.md)`
-    /// - Plain paths: `/path/file.md`, `../file.md`, `file.md`
-    fn extract_metadata(&self, path: &Path, content: &str) -> FileMetadata {
-        let mut metadata = match frontmatter::parse_or_empty(content) {
-            Ok(parsed) => self.frontmatter_to_metadata(&parsed.frontmatter),
-            Err(_) => FileMetadata::default(),
-        };
+    async fn extract_metadata(&self, path: &Path, content: &str) -> FileMetadata {
+        let parsed = frontmatter::parse_or_empty(content).ok();
+        let mut metadata = parsed
+            .as_ref()
+            .map(|p| self.frontmatter_to_metadata(&p.frontmatter))
+            .unwrap_or_default();
 
         // Set the filename from the path
         metadata.filename = path
@@ -214,39 +325,34 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
             .unwrap_or("")
             .to_string();
 
-        // Convert part_of to canonical path using link_parser
-        // This handles markdown links, root paths, and relative paths
-        if let Some(ref part_of) = metadata.part_of {
-            let parsed = link_parser::parse_link(part_of);
-            // Only resolve relative paths. If the path is already canonical
-            // (WorkspaceRoot) or looks like a canonical path (contains '/' but
-            // doesn't start with '.'), use it as-is to avoid path doubling.
-            let canonical = if parsed.path_type == link_parser::PathType::WorkspaceRoot {
-                parsed.path.clone()
-            } else {
-                link_parser::to_canonical(&parsed, path)
-            };
-            metadata.part_of = Some(canonical);
+        let link_format_hint = self
+            .detect_link_format_hint(path, parsed.as_ref().map(|p| &p.frontmatter))
+            .await;
+
+        if let Some(part_of) = metadata.part_of.clone() {
+            metadata.part_of = Some(
+                self.resolve_frontmatter_path(path, &part_of, link_format_hint)
+                    .await,
+            );
         }
 
-        // Convert contents to canonical paths using link_parser
-        if let Some(ref contents) = metadata.contents {
-            metadata.contents = Some(
-                contents
-                    .iter()
-                    .map(|link_str| {
-                        let parsed = link_parser::parse_link(link_str);
-                        // Only resolve relative paths. If the path is already canonical
-                        // (WorkspaceRoot) or looks like a canonical path (contains '/' but
-                        // doesn't start with '.'), use it as-is to avoid path doubling.
-                        if parsed.path_type == link_parser::PathType::WorkspaceRoot {
-                            parsed.path.clone()
-                        } else {
-                            link_parser::to_canonical(&parsed, path)
-                        }
-                    })
-                    .collect(),
-            );
+        if let Some(contents) = metadata.contents.take() {
+            let mut canonical_contents = Vec::with_capacity(contents.len());
+            for link_str in contents {
+                canonical_contents.push(
+                    self.resolve_frontmatter_path(path, &link_str, link_format_hint)
+                        .await,
+                );
+            }
+            metadata.contents = Some(canonical_contents);
+        }
+
+        for attachment in &mut metadata.attachments {
+            if !attachment.path.is_empty() {
+                attachment.path = self
+                    .resolve_frontmatter_path(path, &attachment.path, link_format_hint)
+                    .await;
+            }
         }
 
         metadata
@@ -390,23 +496,25 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
     /// This is skipped if:
     /// - CRDT updates are disabled globally
     /// - The path is marked as a sync write (to prevent feedback loops)
-    fn update_crdt_for_file(&self, path: &Path, content: &str) {
-        self.update_crdt_for_file_internal(path, content, false);
+    async fn update_crdt_for_file(&self, path: &Path, content: &str) {
+        self.update_crdt_for_file_internal(path, content, false)
+            .await;
     }
 
     /// Update CRDT for a newly created file.
     ///
     /// This clears any stale state from storage before creating the body doc,
     /// preventing concatenation with old content from deleted files.
-    fn update_crdt_for_new_file(&self, path: &Path, content: &str) {
-        self.update_crdt_for_file_internal(path, content, true);
+    async fn update_crdt_for_new_file(&self, path: &Path, content: &str) {
+        self.update_crdt_for_file_internal(path, content, true)
+            .await;
     }
 
     /// Internal implementation for CRDT updates.
     ///
     /// If `is_new_file` is true, any existing body doc storage is deleted first
     /// to prevent stale state from being merged with new content.
-    fn update_crdt_for_file_internal(&self, path: &Path, content: &str, is_new_file: bool) {
+    async fn update_crdt_for_file_internal(&self, path: &Path, content: &str, is_new_file: bool) {
         if !self.is_enabled() {
             return;
         }
@@ -428,14 +536,16 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
             );
             return;
         }
-        let body = frontmatter::extract_body(content);
         log::trace!(
             "[CrdtFs] update_crdt_for_file_internal: path_str='{}', is_new_file={}, body_preview='{}'",
             path_str,
             is_new_file,
-            body.chars().take(50).collect::<String>()
+            frontmatter::extract_body(content)
+                .chars()
+                .take(50)
+                .collect::<String>()
         );
-        let metadata = self.extract_metadata(path, content);
+        let metadata = self.extract_metadata(path, content).await;
 
         // Get or create doc_id for this path
         // In doc-ID mode, this finds existing doc_id or creates new UUID
@@ -555,7 +665,7 @@ impl<FS: AsyncFileSystem + Send + Sync> AsyncFileSystem for CrdtFs<FS> {
 
             // Update CRDT if write succeeded and enabled
             if result.is_ok() {
-                self.update_crdt_for_file(path, content);
+                self.update_crdt_for_file(path, content).await;
             }
 
             // Clear local write marker
@@ -594,7 +704,7 @@ impl<FS: AsyncFileSystem + Send + Sync> AsyncFileSystem for CrdtFs<FS> {
                     "[CrdtFs] create_new calling update_crdt_for_new_file: path='{}'",
                     path.display()
                 );
-                self.update_crdt_for_new_file(path, content);
+                self.update_crdt_for_new_file(path, content).await;
             }
 
             // Clear local write marker
@@ -682,6 +792,38 @@ impl<FS: AsyncFileSystem + Send + Sync> AsyncFileSystem for CrdtFs<FS> {
 
                 // Find the doc_id for the file being moved
                 if let Some(doc_id) = self.workspace_crdt.find_by_path(from) {
+                    // Legacy path-key mode stores files under path keys (e.g. "notes/file.md")
+                    // rather than stable doc IDs. In that mode, rename_file() only updates
+                    // metadata.filename and keeps the old key, so body/doc routing diverges.
+                    // Detect legacy keys and force delete+create semantics.
+                    let legacy_path_key = doc_id.contains('/') || doc_id.ends_with(".md");
+                    if legacy_path_key {
+                        log::debug!(
+                            "CrdtFs: Legacy path key '{}' detected, using delete+create move semantics",
+                            doc_id
+                        );
+
+                        self.update_parent_contents(&from_str, Some(&to_str));
+
+                        if let Err(e) = self.workspace_crdt.delete_file(&doc_id) {
+                            log::warn!(
+                                "Failed to mark legacy source as deleted in CRDT ({}): {}",
+                                doc_id,
+                                e
+                            );
+                        }
+
+                        if let Ok(content) = self.inner.read_to_string(to).await {
+                            // Destination key is logically new in legacy mode; clear stale body
+                            // state so old updates don't merge into unrelated prior history.
+                            self.update_crdt_for_new_file(to, &content).await;
+                        }
+
+                        self.mark_local_write_end(from);
+                        self.mark_local_write_end(to);
+                        return result;
+                    }
+
                     let new_filename = to
                         .file_name()
                         .and_then(|n| n.to_str())
@@ -749,7 +891,8 @@ impl<FS: AsyncFileSystem + Send + Sync> AsyncFileSystem for CrdtFs<FS> {
                     }
 
                     if let Ok(content) = self.inner.read_to_string(to).await {
-                        self.update_crdt_for_file(to, &content);
+                        // Treat destination as new to avoid stale body-doc history reuse.
+                        self.update_crdt_for_new_file(to, &content).await;
                     }
                 }
             }
@@ -806,7 +949,7 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for CrdtFs<FS> {
 
             // Update CRDT if write succeeded and enabled
             if result.is_ok() {
-                self.update_crdt_for_file(path, content);
+                self.update_crdt_for_file(path, content).await;
             }
 
             // Clear local write marker
@@ -845,7 +988,7 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for CrdtFs<FS> {
                     "[CrdtFs] create_new calling update_crdt_for_new_file: path='{}'",
                     path.display()
                 );
-                self.update_crdt_for_new_file(path, content);
+                self.update_crdt_for_new_file(path, content).await;
             }
 
             // Clear local write marker
@@ -933,6 +1076,38 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for CrdtFs<FS> {
 
                 // Find the doc_id for the file being moved
                 if let Some(doc_id) = self.workspace_crdt.find_by_path(from) {
+                    // Legacy path-key mode stores files under path keys (e.g. "notes/file.md")
+                    // rather than stable doc IDs. In that mode, rename_file() only updates
+                    // metadata.filename and keeps the old key, so body/doc routing diverges.
+                    // Detect legacy keys and force delete+create semantics.
+                    let legacy_path_key = doc_id.contains('/') || doc_id.ends_with(".md");
+                    if legacy_path_key {
+                        log::debug!(
+                            "CrdtFs: Legacy path key '{}' detected, using delete+create move semantics",
+                            doc_id
+                        );
+
+                        self.update_parent_contents(&from_str, Some(&to_str));
+
+                        if let Err(e) = self.workspace_crdt.delete_file(&doc_id) {
+                            log::warn!(
+                                "Failed to mark legacy source as deleted in CRDT ({}): {}",
+                                doc_id,
+                                e
+                            );
+                        }
+
+                        if let Ok(content) = self.inner.read_to_string(to).await {
+                            // Destination key is logically new in legacy mode; clear stale body
+                            // state so old updates don't merge into unrelated prior history.
+                            self.update_crdt_for_new_file(to, &content).await;
+                        }
+
+                        self.mark_local_write_end(from);
+                        self.mark_local_write_end(to);
+                        return result;
+                    }
+
                     let new_filename = to
                         .file_name()
                         .and_then(|n| n.to_str())
@@ -1003,7 +1178,8 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for CrdtFs<FS> {
                     }
 
                     if let Ok(content) = self.inner.read_to_string(to).await {
-                        self.update_crdt_for_file(to, &content);
+                        // Treat destination as new to avoid stale body-doc history reuse.
+                        self.update_crdt_for_new_file(to, &content).await;
                     }
                 }
             }
@@ -1223,6 +1399,43 @@ mod tests {
 
         let metadata = fs.workspace_crdt.get_file("test-delete.md").unwrap();
         assert!(!metadata.deleted);
+    }
+
+    #[test]
+    fn test_move_file_legacy_paths_emit_delete_create_keys() {
+        let fs = create_test_crdt_fs();
+        let content = "---\ntitle: New Entry\n---\nBody content";
+
+        futures_lite::future::block_on(async {
+            fs.write_file(Path::new("new-entry.md"), content)
+                .await
+                .unwrap();
+            fs.move_file(Path::new("new-entry.md"), Path::new("wow.md"))
+                .await
+                .unwrap();
+        });
+
+        let old_meta = fs
+            .workspace_crdt
+            .get_file("new-entry.md")
+            .expect("old path should remain as tombstone");
+        assert!(old_meta.deleted, "old path should be tombstoned after move");
+
+        let new_meta = fs
+            .workspace_crdt
+            .get_file("wow.md")
+            .expect("new path should exist after move");
+        assert!(!new_meta.deleted);
+        assert_eq!(new_meta.filename, "wow.md");
+
+        let active_paths: Vec<String> = fs
+            .workspace_crdt
+            .list_active_files()
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect();
+        assert!(active_paths.contains(&"wow.md".to_string()));
+        assert!(!active_paths.contains(&"new-entry.md".to_string()));
     }
 
     // =========================================================================

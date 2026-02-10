@@ -31,6 +31,20 @@ vi.mock('./simpleSyncBridge', () => ({
   }),
 }))
 
+const transportMocks = vi.hoisted(() => ({
+  connect: vi.fn().mockResolvedValue(undefined),
+  destroy: vi.fn(),
+  queueLocalUpdate: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock('./unifiedSyncTransport', () => ({
+  createUnifiedSyncTransport: vi.fn(() => ({
+    connect: transportMocks.connect,
+    destroy: transportMocks.destroy,
+    queueLocalUpdate: transportMocks.queueLocalUpdate,
+  })),
+}))
+
 vi.mock('@/models/stores/shareSessionStore.svelte', () => ({
   shareSessionStore: {
     isGuest: false,
@@ -57,6 +71,8 @@ import {
   initEventSubscription,
   getWorkspaceStats,
   setBackendApi,
+  setBackend,
+  setFreshFromServerLoad,
   startSessionSync,
   stopSessionSync,
   getSessionCode,
@@ -69,6 +85,8 @@ describe('workspaceCrdtBridge', () => {
     getFile: vi.fn().mockResolvedValue(null),
     setFile: vi.fn().mockResolvedValue(undefined),
     listFiles: vi.fn().mockResolvedValue([]),
+    listLoadedBodyDocs: vi.fn().mockResolvedValue([]),
+    resetBodyDoc: vi.fn().mockResolvedValue(undefined),
     applyRemoteUpdate: vi.fn().mockResolvedValue(undefined),
     saveCrdtState: vi.fn().mockResolvedValue(undefined),
     getMissingUpdates: vi.fn().mockResolvedValue(new Uint8Array()),
@@ -343,6 +361,48 @@ describe('workspaceCrdtBridge', () => {
       expect(discardQueuedLocalSyncUpdates('test')).toBe(2)
       expect(discardQueuedLocalSyncUpdates('test-empty')).toBe(0)
 
+      cleanup()
+    })
+
+    it('should drop queued local updates during fresh server-load bootstrap', async () => {
+      await initWorkspace({
+        rustApi: mockRustApi as any,
+      })
+      await setWorkspaceId('fresh-load-workspace')
+
+      let eventHandler: ((event: any) => void) | null = null
+      const backend = {
+        hasNativeSync: vi.fn(() => false),
+        onFileSystemEvent: vi.fn((cb: (event: any) => void) => {
+          eventHandler = cb
+          return 9
+        }),
+        offFileSystemEvent: vi.fn(),
+      }
+      setBackend(backend as any)
+
+      const cleanup = initEventSubscription(backend as any)
+      expect(eventHandler).toBeTruthy()
+
+      // Queue a local body update before the transport exists.
+      eventHandler!({
+        type: 'SendSyncMessage',
+        doc_name: 'README.md',
+        is_body: true,
+        message: new Uint8Array([1, 2, 3]),
+      })
+
+      mockRustApi.listLoadedBodyDocs.mockResolvedValue(['README.md'])
+      mockRustApi.listFiles.mockResolvedValue([['README.md', { deleted: false }]])
+
+      setFreshFromServerLoad(true)
+      await setWorkspaceServer('http://localhost:3030')
+
+      expect(mockRustApi.resetBodyDoc).toHaveBeenCalledWith('README.md')
+      expect(transportMocks.queueLocalUpdate).not.toHaveBeenCalled()
+      expect(discardQueuedLocalSyncUpdates('post-connect-check')).toBe(0)
+
+      setFreshFromServerLoad(false)
       cleanup()
     })
   })

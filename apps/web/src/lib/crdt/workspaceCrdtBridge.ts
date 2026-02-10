@@ -47,6 +47,129 @@ function isTempFile(path: string): boolean {
   return path.endsWith('.tmp') || path.endsWith('.bak') || path.endsWith('.swap');
 }
 
+function extractLinkPath(raw: string): string | null {
+  const value = raw.trim();
+  if (!value) return null;
+
+  if (!value.startsWith('[')) {
+    return value;
+  }
+
+  const closeBracket = value.indexOf(']');
+  if (closeBracket <= 0 || value.slice(closeBracket, closeBracket + 2) !== '](') {
+    return value;
+  }
+
+  const rest = value.slice(closeBracket + 2);
+  if (!rest) return null;
+
+  // Angle-bracket form: [Title](<path with spaces>)
+  if (rest.startsWith('<')) {
+    const closeAngle = rest.indexOf('>');
+    if (closeAngle <= 1 || rest.slice(closeAngle + 1, closeAngle + 2) !== ')') {
+      return null;
+    }
+    return rest.slice(1, closeAngle).trim() || null;
+  }
+
+  // Standard markdown URL form with balanced parentheses support.
+  let depth = 0;
+  for (let i = 0; i < rest.length; i++) {
+    const ch = rest[i];
+    if (ch === '(') {
+      depth++;
+    } else if (ch === ')') {
+      if (depth === 0) {
+        return rest.slice(0, i).trim() || null;
+      }
+      depth--;
+    }
+  }
+
+  return null;
+}
+
+function normalizeWorkspacePath(path: string): string {
+  const normalized: string[] = [];
+  for (const segment of path.split('/')) {
+    if (!segment || segment === '.') continue;
+    if (segment === '..') {
+      if (normalized.length > 0) normalized.pop();
+      continue;
+    }
+    normalized.push(segment);
+  }
+  return normalized.join('/');
+}
+
+/**
+ * Resolve a CRDT metadata reference to canonical workspace-relative path.
+ *
+ * - Supports markdown links (`[Title](path)` and `[Title](<path>)`)
+ * - Supports workspace-root paths (`/path/file.md`)
+ * - Supports explicit relative paths (`./`, `../`)
+ * - For ambiguous plain paths, defaults to workspace-root and can disambiguate
+ *   against known paths when provided.
+ */
+export function resolveCrdtReferencePath(
+  currentFilePath: string,
+  rawReference: string | null | undefined,
+  knownPaths?: Set<string>
+): string | null {
+  if (!rawReference) return null;
+  const extracted = extractLinkPath(rawReference);
+  if (!extracted) return null;
+
+  let reference = extracted.trim();
+  if (!reference) return null;
+
+  if (reference.startsWith('<') && reference.endsWith('>')) {
+    reference = reference.slice(1, -1).trim();
+  }
+
+  if (!reference) return null;
+
+  if (reference.startsWith('/')) {
+    return normalizeWorkspacePath(reference.slice(1)) || null;
+  }
+
+  const baseDir = (() => {
+    const idx = currentFilePath.lastIndexOf('/');
+    return idx >= 0 ? currentFilePath.slice(0, idx) : '';
+  })();
+
+  const isExplicitRelative =
+    reference.startsWith('./') ||
+    reference.startsWith('../') ||
+    reference === '.' ||
+    reference === '..';
+
+  if (isExplicitRelative) {
+    const combined = baseDir ? `${baseDir}/${reference}` : reference;
+    return normalizeWorkspacePath(combined) || null;
+  }
+
+  // Ambiguous path: treat as workspace-root canonical by default.
+  const workspaceRootCandidate = normalizeWorkspacePath(reference);
+  if (!knownPaths) {
+    return workspaceRootCandidate || null;
+  }
+
+  const relativeCandidate = normalizeWorkspacePath(
+    baseDir ? `${baseDir}/${reference}` : reference
+  );
+
+  if (relativeCandidate && relativeCandidate !== workspaceRootCandidate) {
+    const rootExists = knownPaths.has(workspaceRootCandidate);
+    const relativeExists = knownPaths.has(relativeCandidate);
+
+    if (rootExists && !relativeExists) return workspaceRootCandidate;
+    if (relativeExists && !rootExists) return relativeCandidate;
+  }
+
+  return workspaceRootCandidate || null;
+}
+
 function eventTouchesTempFile(event: FileSystemEvent): boolean {
   switch (event.type) {
     case 'FileCreated':
@@ -127,6 +250,40 @@ export function isFreshFromServerLoad(): boolean {
   return _freshFromServerLoad;
 }
 
+/**
+ * Reset local body CRDT docs before a "load from server" sync connection.
+ *
+ * Without this, previously loaded local body docs (for example, default README.md
+ * content) can contribute independent Yjs operations that merge with server
+ * operations, causing duplicated body content on initial join.
+ */
+async function resetBodyDocsForFreshServerLoad(): Promise<void> {
+  if (!_freshFromServerLoad || !rustApi) return;
+
+  try {
+    const loadedDocs = await rustApi.listLoadedBodyDocs();
+    const activeFiles = await rustApi.listFiles(false);
+    const docNames = new Set<string>(loadedDocs);
+    for (const [path] of activeFiles) {
+      docNames.add(path);
+    }
+
+    if (docNames.size === 0) return;
+
+    console.log(`[WorkspaceCrdtBridge] Fresh server load: resetting ${docNames.size} body doc(s)`);
+    for (const docName of docNames) {
+      if (!docName || isTempFile(docName)) continue;
+      try {
+        await rustApi.resetBodyDoc(docName);
+      } catch (error) {
+        console.warn(`[WorkspaceCrdtBridge] Failed to reset body doc '${docName}' before sync:`, error);
+      }
+    }
+  } catch (error) {
+    console.warn('[WorkspaceCrdtBridge] Failed to prepare fresh server body state:', error);
+  }
+}
+
 // Per-file mutex to prevent race conditions on concurrent updates
 // Map of path -> Promise that resolves when the lock is released
 const fileLocks = new Map<string, Promise<void>>();
@@ -136,7 +293,23 @@ const pendingIntervals: Set<ReturnType<typeof setInterval>> = new Set();
 const pendingTimeouts: Set<ReturnType<typeof setTimeout>> = new Set();
 
 async function flushPendingLocalSyncUpdates(): Promise<void> {
-  if (!unifiedSyncTransport || pendingLocalSyncUpdates.length === 0) {
+  if (pendingLocalSyncUpdates.length === 0) {
+    return;
+  }
+
+  // In "load from server" mode we intentionally discard any queued local sync
+  // updates captured during bootstrap. Replaying them would merge stale local
+  // operations (for example, default README content) into server state.
+  if (_freshFromServerLoad) {
+    const dropped = pendingLocalSyncUpdates.length;
+    pendingLocalSyncUpdates = [];
+    console.log(
+      `[WorkspaceCrdtBridge] Fresh server load: dropped ${dropped} queued local sync update(s)`
+    );
+    return;
+  }
+
+  if (!unifiedSyncTransport) {
     return;
   }
 
@@ -259,6 +432,12 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
 
   // Create new sync if URL is set
   if (url && _backend) {
+    // "Load from server" should start from empty body docs to avoid
+    // merging local bootstrap operations into server content.
+    if (_freshFromServerLoad) {
+      await resetBodyDocsForFreshServerLoad();
+    }
+
     // Reset initial sync tracking since we're starting a new sync connection
     _initialSyncComplete = false;
     _initialSyncResolvers = [];
@@ -927,6 +1106,10 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
     // Connect sync if we have a workspaceId (authenticated mode, not local-only)
     if (_workspaceId) {
       if (serverUrl && rustApi && _backend) {
+        if (_freshFromServerLoad) {
+          await resetBodyDocsForFreshServerLoad();
+        }
+
         const workspaceDocName = _workspaceId ? `${_workspaceId}:workspace` : 'workspace';
 
         // Check if backend supports native sync (Tauri)
@@ -1221,40 +1404,98 @@ export async function getTreeFromCrdt(): Promise<TreeNode | null> {
   if (files.length === 0) return null;
 
   const fileMap = new Map(files);
+  const knownPaths = new Set(fileMap.keys());
   console.log('[WorkspaceCrdtBridge] Building tree from CRDT, files:', files.map(([p]) => p));
 
-  // Helper to resolve relative path against a base file's directory
-  function resolveRelativePath(basePath: string, relativePath: string): string {
-    // Get the directory of the base path
-    const lastSlash = basePath.lastIndexOf('/');
-    const baseDir = lastSlash >= 0 ? basePath.substring(0, lastSlash) : '';
-
-    // Join and normalize the path
-    const parts = baseDir ? baseDir.split('/') : [];
-    for (const segment of relativePath.split('/')) {
-      if (segment === '..') {
-        parts.pop();
-      } else if (segment !== '.' && segment !== '') {
-        parts.push(segment);
-      }
+  async function runLinkParser(
+    operation: unknown
+  ): Promise<{ type: 'parsed' | 'string'; data: unknown } | null> {
+    if (!_backend) return null;
+    try {
+      const response = await _backend.execute({
+        type: 'LinkParser' as any,
+        params: { operation } as any,
+      } as any);
+      if ((response as any).type !== 'LinkParserResult') return null;
+      return (response as any).data;
+    } catch {
+      return null;
     }
-    return parts.join('/');
   }
 
-  // Helper to check if a part_of reference is valid (resolving relative paths)
-  function hasValidPartOf(path: string, partOf: string | null): boolean {
-    if (!partOf) return false;
-    // Try as-is first (absolute path)
-    if (fileMap.has(partOf)) return true;
-    // Try resolving as relative path
-    const resolved = resolveRelativePath(path, partOf);
-    return fileMap.has(resolved);
+  async function resolveReferencePath(path: string, reference: string | null): Promise<string | null> {
+    if (!reference) return null;
+
+    const parsed = await runLinkParser({
+      type: 'parse',
+      params: { link: reference },
+    });
+
+    // If backend parser is unavailable, use local resolver.
+    if (!parsed || parsed.type !== 'parsed') {
+      return resolveCrdtReferencePath(path, reference, knownPaths);
+    }
+
+    const parsedData = parsed.data as { path_type?: string };
+
+    // Ambiguous links: compute both interpretations and disambiguate against known paths.
+    if (parsedData.path_type === 'ambiguous') {
+      const relativeResolved = await runLinkParser({
+        type: 'to_canonical',
+        params: {
+          link: reference,
+          current_file_path: path,
+          link_format_hint: null,
+        },
+      });
+      const rootResolved = await runLinkParser({
+        type: 'to_canonical',
+        params: {
+          link: reference,
+          current_file_path: path,
+          link_format_hint: 'plain_canonical',
+        },
+      });
+
+      const relativePath =
+        relativeResolved?.type === 'string' ? normalizeWorkspacePath(String(relativeResolved.data)) : null;
+      const rootPath =
+        rootResolved?.type === 'string' ? normalizeWorkspacePath(String(rootResolved.data)) : null;
+
+      if (relativePath && rootPath && relativePath !== rootPath) {
+        const relativeExists = knownPaths.has(relativePath);
+        const rootExists = knownPaths.has(rootPath);
+        if (rootExists && !relativeExists) return rootPath;
+        if (relativeExists && !rootExists) return relativePath;
+      }
+      return rootPath ?? relativePath ?? resolveCrdtReferencePath(path, reference, knownPaths);
+    }
+
+    const canonical = await runLinkParser({
+      type: 'to_canonical',
+      params: {
+        link: reference,
+        current_file_path: path,
+        link_format_hint: null,
+      },
+    });
+    if (canonical?.type === 'string') {
+      return normalizeWorkspacePath(String(canonical.data));
+    }
+
+    return resolveCrdtReferencePath(path, reference, knownPaths);
+  }
+
+  // Helper to check if a part_of reference is valid.
+  async function hasValidPartOf(path: string, partOf: string | null): Promise<boolean> {
+    const resolved = await resolveReferencePath(path, partOf);
+    return !!resolved && fileMap.has(resolved);
   }
 
   // Find root files (files with no part_of, or part_of pointing to non-existent file)
   const rootFiles: string[] = [];
   for (const [path, metadata] of fileMap) {
-    if (!hasValidPartOf(path, metadata.part_of)) {
+    if (!(await hasValidPartOf(path, metadata.part_of))) {
       rootFiles.push(path);
     }
   }
@@ -1268,7 +1509,7 @@ export async function getTreeFromCrdt(): Promise<TreeNode | null> {
 
   // Build tree recursively
   // For guests, paths are prefixed with guest/{joinCode}/ to point to isolated storage
-  function buildNode(originalPath: string): TreeNode {
+  async function buildNode(originalPath: string): Promise<TreeNode> {
     const metadata = fileMap.get(originalPath);
     const name = originalPath.split('/').pop()?.replace(/\.md$/, '') || originalPath;
 
@@ -1278,13 +1519,12 @@ export async function getTreeFromCrdt(): Promise<TreeNode | null> {
     const children: TreeNode[] = [];
     if (metadata?.contents) {
       for (const childPath of metadata.contents) {
-        // Contents may be relative paths - resolve against parent's directory
-        const absoluteChildPath = resolveRelativePath(originalPath, childPath);
-        if (fileMap.has(absoluteChildPath)) {
-          children.push(buildNode(absoluteChildPath));
+        const resolvedChildPath = await resolveReferencePath(originalPath, childPath);
+        if (resolvedChildPath && fileMap.has(resolvedChildPath)) {
+          children.push(await buildNode(resolvedChildPath));
         } else if (fileMap.has(childPath)) {
-          // Fallback: try as-is (in case it's already absolute)
-          children.push(buildNode(childPath));
+          // Legacy fallback: treat existing value as canonical path.
+          children.push(await buildNode(childPath));
         }
       }
     }
@@ -1299,7 +1539,7 @@ export async function getTreeFromCrdt(): Promise<TreeNode | null> {
 
   // If single root, return it; otherwise create a virtual root
   if (rootFiles.length === 1) {
-    return buildNode(rootFiles[0]);
+    return await buildNode(rootFiles[0]);
   } else {
     // Multiple roots - create a virtual workspace root
     const virtualRootPath = getGuestStoragePath('workspace');
@@ -1307,7 +1547,7 @@ export async function getTreeFromCrdt(): Promise<TreeNode | null> {
       name: 'Shared Workspace',
       description: 'Files shared in this session',
       path: virtualRootPath,
-      children: rootFiles.map(buildNode),
+      children: await Promise.all(rootFiles.map((root) => buildNode(root))),
     };
   }
 }

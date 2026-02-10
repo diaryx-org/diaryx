@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::frontmatter;
 use crate::fs::{AsyncFileSystem, BoxFuture};
+use crate::link_parser;
 
 use super::callback_registry::{CallbackRegistry, EventCallback, SubscriptionId};
 use super::events::FileSystemEvent;
@@ -131,7 +132,7 @@ impl<FS: AsyncFileSystem> EventEmittingFs<FS> {
     }
 
     /// Get parent path from frontmatter part_of field.
-    fn get_parent_from_content(&self, content: &str) -> Option<PathBuf> {
+    fn get_parent_from_content(&self, file_path: &Path, content: &str) -> Option<PathBuf> {
         frontmatter::parse_or_empty(content)
             .ok()
             .and_then(|parsed| {
@@ -139,7 +140,10 @@ impl<FS: AsyncFileSystem> EventEmittingFs<FS> {
                     .frontmatter
                     .get("part_of")
                     .and_then(|v| v.as_str())
-                    .map(PathBuf::from)
+                    .map(|raw| {
+                        let parsed = link_parser::parse_link(raw);
+                        PathBuf::from(link_parser::to_canonical(&parsed, file_path))
+                    })
             })
     }
 }
@@ -183,7 +187,7 @@ impl<FS: AsyncFileSystem + Send + Sync> AsyncFileSystem for EventEmittingFs<FS> 
             // Emit event if write succeeded
             if result.is_ok() {
                 let new_frontmatter = self.extract_frontmatter(content);
-                let parent_path = self.get_parent_from_content(content);
+                let parent_path = self.get_parent_from_content(path, content);
 
                 if existed {
                     // File existed - only emit MetadataChanged if frontmatter actually changed
@@ -221,7 +225,7 @@ impl<FS: AsyncFileSystem + Send + Sync> AsyncFileSystem for EventEmittingFs<FS> 
 
             if result.is_ok() {
                 let frontmatter = self.extract_frontmatter(content);
-                let parent_path = self.get_parent_from_content(content);
+                let parent_path = self.get_parent_from_content(path, content);
 
                 self.emit(FileSystemEvent::file_created_with_metadata(
                     path.to_path_buf(),
@@ -242,7 +246,7 @@ impl<FS: AsyncFileSystem + Send + Sync> AsyncFileSystem for EventEmittingFs<FS> 
                     .read_to_string(path)
                     .await
                     .ok()
-                    .and_then(|content| self.get_parent_from_content(&content))
+                    .and_then(|content| self.get_parent_from_content(path, &content))
             } else {
                 None
             };
@@ -359,7 +363,7 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for EventEmittingFs<FS> {
             // Emit event if write succeeded
             if result.is_ok() {
                 let new_frontmatter = self.extract_frontmatter(content);
-                let parent_path = self.get_parent_from_content(content);
+                let parent_path = self.get_parent_from_content(path, content);
 
                 if existed {
                     // File existed - only emit MetadataChanged if frontmatter actually changed
@@ -397,7 +401,7 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for EventEmittingFs<FS> {
 
             if result.is_ok() {
                 let frontmatter = self.extract_frontmatter(content);
-                let parent_path = self.get_parent_from_content(content);
+                let parent_path = self.get_parent_from_content(path, content);
 
                 self.emit(FileSystemEvent::file_created_with_metadata(
                     path.to_path_buf(),
@@ -418,7 +422,7 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for EventEmittingFs<FS> {
                     .read_to_string(path)
                     .await
                     .ok()
-                    .and_then(|content| self.get_parent_from_content(&content))
+                    .and_then(|content| self.get_parent_from_content(path, &content))
             } else {
                 None
             };

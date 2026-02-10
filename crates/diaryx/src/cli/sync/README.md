@@ -25,3 +25,10 @@ CLI commands for workspace synchronization with the Diaryx sync server.
 - `sync start` - Start continuous sync
 - `sync push` - One-shot push local changes
 - `sync pull` - One-shot pull remote changes
+
+## Metadata Canonicalization
+
+When the CLI imports or updates local files in CRDT state, frontmatter
+references are canonicalized with `link_parser` (`part_of`, `contents`,
+`attachments`). This keeps CRDT metadata path storage consistent and avoids
+relative-path drift in nested workspaces.

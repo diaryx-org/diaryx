@@ -296,16 +296,41 @@ fn determine_path_type(path: &str) -> PathType {
 /// assert_eq!(canonical, "Folder/child.md");
 /// ```
 pub fn to_canonical(parsed: &ParsedLink, current_file_path: &Path) -> String {
+    to_canonical_with_link_format(parsed, current_file_path, None)
+}
+
+/// Convert a parsed link to a canonical (workspace-relative) path with format hint.
+///
+/// This behaves like [`to_canonical`], but can resolve ambiguous paths as
+/// workspace-root when `link_format_hint` is `Some(LinkFormat::PlainCanonical)`.
+///
+/// This makes plain-canonical workspaces unambiguous at read time in contexts
+/// that know the workspace link format.
+pub fn to_canonical_with_link_format(
+    parsed: &ParsedLink,
+    current_file_path: &Path,
+    link_format_hint: Option<LinkFormat>,
+) -> String {
     match parsed.path_type {
         PathType::WorkspaceRoot => {
             // Already canonical (we stripped the `/` during parsing)
-            parsed.path.clone()
+            normalize_workspace_path(&parsed.path)
         }
-        PathType::Relative | PathType::Ambiguous => {
+        PathType::Relative => {
             // Resolve relative to current file's directory
             let file_dir = current_file_path.parent().unwrap_or(Path::new(""));
             let resolved = file_dir.join(&parsed.path);
             normalize_path(&resolved)
+        }
+        PathType::Ambiguous => {
+            if link_format_hint == Some(LinkFormat::PlainCanonical) {
+                normalize_workspace_path(&parsed.path)
+            } else {
+                // Legacy behavior: treat ambiguous as file-relative.
+                let file_dir = current_file_path.parent().unwrap_or(Path::new(""));
+                let resolved = file_dir.join(&parsed.path);
+                normalize_path(&resolved)
+            }
         }
     }
 }
@@ -345,6 +370,11 @@ fn normalize_path(path: &Path) -> String {
     } else {
         normalized.join("/")
     }
+}
+
+/// Normalize a workspace-relative path by resolving `.` and `..` components.
+pub fn normalize_workspace_path(path: &str) -> String {
+    normalize_path(Path::new(path))
 }
 
 /// Check if a path needs angle brackets in markdown link syntax.
@@ -570,11 +600,25 @@ pub fn convert_link(
     current_file_path: &str,
     title_resolver: Option<&dyn Fn(&str) -> String>,
 ) -> String {
+    convert_link_with_hint(link, target_format, current_file_path, title_resolver, None)
+}
+
+/// Convert a link from its current format to a target format, with source format hint.
+///
+/// When `source_format_hint` is `Some(LinkFormat::PlainCanonical)`, ambiguous
+/// plain paths are interpreted as workspace-root canonical links.
+pub fn convert_link_with_hint(
+    link: &str,
+    target_format: LinkFormat,
+    current_file_path: &str,
+    title_resolver: Option<&dyn Fn(&str) -> String>,
+    source_format_hint: Option<LinkFormat>,
+) -> String {
     let parsed = parse_link(link);
     let file_path = Path::new(current_file_path);
 
     // Get canonical path of the target
-    let canonical = to_canonical(&parsed, file_path);
+    let canonical = to_canonical_with_link_format(&parsed, file_path, source_format_hint);
 
     // Resolve title: use existing title, or resolve via callback, or generate from path
     let title = parsed.title.unwrap_or_else(|| {
@@ -604,9 +648,34 @@ pub fn convert_links(
     current_file_path: &str,
     title_resolver: Option<&dyn Fn(&str) -> String>,
 ) -> Vec<String> {
+    convert_links_with_hint(
+        contents,
+        target_format,
+        current_file_path,
+        title_resolver,
+        None,
+    )
+}
+
+/// Convert all links in a contents array to a target format, with source format hint.
+pub fn convert_links_with_hint(
+    contents: &[String],
+    target_format: LinkFormat,
+    current_file_path: &str,
+    title_resolver: Option<&dyn Fn(&str) -> String>,
+    source_format_hint: Option<LinkFormat>,
+) -> Vec<String> {
     contents
         .iter()
-        .map(|link| convert_link(link, target_format, current_file_path, title_resolver))
+        .map(|link| {
+            convert_link_with_hint(
+                link,
+                target_format,
+                current_file_path,
+                title_resolver,
+                source_format_hint,
+            )
+        })
         .collect()
 }
 
@@ -837,6 +906,28 @@ mod tests {
         let link = parse_link("../../root.md");
         let canonical = to_canonical(&link, Path::new("A/B/C/file.md"));
         assert_eq!(canonical, "A/root.md");
+    }
+
+    #[test]
+    fn test_to_canonical_ambiguous_with_plain_canonical_hint() {
+        let link = parse_link("Folder/child.md");
+        let canonical = to_canonical_with_link_format(
+            &link,
+            Path::new("A/B/index.md"),
+            Some(LinkFormat::PlainCanonical),
+        );
+        assert_eq!(canonical, "Folder/child.md");
+    }
+
+    #[test]
+    fn test_to_canonical_ambiguous_with_non_plain_hint_stays_relative() {
+        let link = parse_link("Folder/child.md");
+        let canonical = to_canonical_with_link_format(
+            &link,
+            Path::new("A/B/index.md"),
+            Some(LinkFormat::MarkdownRoot),
+        );
+        assert_eq!(canonical, "A/B/Folder/child.md");
     }
 
     #[test]
@@ -1338,6 +1429,18 @@ mod tests {
             None,
         );
         assert_eq!(result, "Projects/ideas.md");
+    }
+
+    #[test]
+    fn test_convert_plain_canonical_with_hint_from_nested_file() {
+        let result = convert_link_with_hint(
+            "Projects/ideas.md",
+            LinkFormat::MarkdownRoot,
+            "Projects/Work/notes.md",
+            None,
+            Some(LinkFormat::PlainCanonical),
+        );
+        assert_eq!(result, "[Ideas](/Projects/ideas.md)");
     }
 
     // --- Round-trip conversion tests ---

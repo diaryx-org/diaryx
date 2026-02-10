@@ -868,7 +868,9 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
 
         // Traverse up via part_of
         if let Some(ref parent_rel) = frontmatter.part_of {
-            let parent_path = entry_dir.join(parent_rel);
+            let parsed_parent = link_parser::parse_link(parent_rel);
+            let canonical_parent = link_parser::to_canonical(&parsed_parent, entry_path);
+            let parent_path = PathBuf::from(canonical_parent);
             if self.fs.exists(&parent_path) {
                 return self.resolve_attachment(&parent_path.to_string_lossy(), attachment_name);
             }

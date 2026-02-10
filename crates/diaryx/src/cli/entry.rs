@@ -2,13 +2,16 @@
 
 use std::path::Path;
 
-use diaryx_core::crdt::FileMetadata;
+use diaryx_core::crdt::{BinaryRef, FileMetadata};
 use diaryx_core::date::parse_date;
 use diaryx_core::frontmatter;
 
 use crate::cli::CliDiaryxAppSync;
 use crate::cli::sync::CrdtContext;
-use crate::cli::util::{load_config, resolve_paths};
+use crate::cli::util::{
+    canonicalize_frontmatter_reference, detect_workspace_link_format, load_config,
+    parse_link_format, resolve_paths,
+};
 use crate::editor::launch_editor;
 
 /// Sync file changes to the local CRDT after editing.
@@ -49,6 +52,13 @@ fn sync_to_crdt(workspace_root: &Path, file_path: &Path, original_content: &str)
         Ok(parsed) => (parsed.frontmatter, parsed.body),
         Err(_) => return false,
     };
+    let workspace_link_format_hint = detect_workspace_link_format(workspace_root);
+    let file_link_format_hint = fm
+        .get("link_format")
+        .and_then(|v| v.as_str())
+        .and_then(parse_link_format)
+        .or(workspace_link_format_hint);
+    let file_path_for_links = Path::new(&rel_path);
 
     // Extract filename from path
     let filename = file_path
@@ -61,15 +71,45 @@ fn sync_to_crdt(workspace_root: &Path, file_path: &Path, original_content: &str)
     let metadata = FileMetadata {
         filename,
         title: fm.get("title").and_then(|v| v.as_str()).map(String::from),
-        part_of: fm.get("part_of").and_then(|v| v.as_str()).map(String::from),
+        part_of: fm.get("part_of").and_then(|v| v.as_str()).map(|raw| {
+            canonicalize_frontmatter_reference(raw, file_path_for_links, file_link_format_hint)
+        }),
         contents: fm.get("contents").and_then(|v| {
             v.as_sequence().map(|seq| {
                 seq.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
+                    .filter_map(|v| v.as_str())
+                    .map(|raw| {
+                        canonicalize_frontmatter_reference(
+                            raw,
+                            file_path_for_links,
+                            file_link_format_hint,
+                        )
+                    })
                     .collect()
             })
         }),
-        attachments: vec![],
+        attachments: fm
+            .get("attachments")
+            .and_then(|v| v.as_sequence())
+            .map(|seq| {
+                seq.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|raw| BinaryRef {
+                        path: canonicalize_frontmatter_reference(
+                            raw,
+                            file_path_for_links,
+                            file_link_format_hint,
+                        ),
+                        source: "local".to_string(),
+                        hash: String::new(),
+                        mime_type: String::new(),
+                        size: 0,
+                        uploaded_at: None,
+                        deleted: false,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
         deleted: false,
         audience: fm.get("audience").and_then(|v| {
             v.as_sequence().map(|seq| {

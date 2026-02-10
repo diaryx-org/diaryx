@@ -189,6 +189,9 @@
   let cleanupFileRenamed: (() => void) | null = null;
   let cleanupSyncProgress: (() => void) | null = null;
   let cleanupSyncStatus: (() => void) | null = null;
+  let pendingCurrentRenameHint:
+    | { oldCanonical: string; oldPartOf: string | null; expiresAt: number }
+    | null = null;
 
   // Set VITE_DISABLE_WORKSPACE_CRDT=true to disable workspace CRDT for debugging
   // This keeps per-file collaboration working but disables the workspace-level sync
@@ -204,6 +207,128 @@
       return Object.fromEntries(frontmatter.entries());
     }
     return frontmatter;
+  }
+
+  function toCollaborationPath(path: string): string {
+    let workspaceDir = tree?.path || "";
+    if (workspaceDir.endsWith("/")) {
+      workspaceDir = workspaceDir.slice(0, -1);
+    }
+    if (
+      workspaceDir.endsWith("README.md") ||
+      workspaceDir.endsWith("index.md")
+    ) {
+      workspaceDir = workspaceDir.substring(0, workspaceDir.lastIndexOf("/"));
+    }
+
+    if (workspaceDir && path.startsWith(workspaceDir)) {
+      return path.substring(workspaceDir.length + 1);
+    }
+    return path;
+  }
+
+  function extractMarkdownLinkPath(value: string): string | null {
+    // Mirror the key behavior from diaryx_core/link_parser.rs::parse_link:
+    // parse [Title](path) and [Title](<path>) forms.
+    if (!value.startsWith("[")) return null;
+
+    const closeBracket = value.indexOf("]");
+    if (closeBracket <= 0) return null;
+    if (value.slice(closeBracket, closeBracket + 2) !== "](") return null;
+
+    const rest = value.slice(closeBracket + 2);
+    if (!rest) return null;
+
+    // Angle-bracket URL form: [Title](<path with spaces>)
+    if (rest.startsWith("<")) {
+      const closeAngle = rest.indexOf(">");
+      if (closeAngle <= 1) return null;
+      if (rest.slice(closeAngle + 1, closeAngle + 2) !== ")") return null;
+      return rest.slice(1, closeAngle).trim() || null;
+    }
+
+    // Standard URL form with support for balanced parentheses in the path.
+    let depth = 0;
+    for (let i = 0; i < rest.length; i++) {
+      const ch = rest[i];
+      if (ch === "(") {
+        depth++;
+      } else if (ch === ")") {
+        if (depth === 0) {
+          return rest.slice(0, i).trim() || null;
+        }
+        depth--;
+      }
+    }
+
+    return null;
+  }
+
+  function normalizeRelativePath(path: string): string {
+    const segments = path.split("/");
+    const normalized: string[] = [];
+
+    for (const segment of segments) {
+      if (!segment || segment === ".") continue;
+      if (segment === "..") {
+        if (normalized.length > 0) normalized.pop();
+        continue;
+      }
+      normalized.push(segment);
+    }
+
+    return normalized.join("/");
+  }
+
+  function normalizePartOfValue(
+    value: unknown,
+    currentCanonicalPath: string | null = null,
+  ): string | null {
+    if (typeof value !== "string") return null;
+
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+
+    let partOf = extractMarkdownLinkPath(trimmed) ?? trimmed;
+
+    // Strip optional angle-bracket wrapped paths for plain-path input.
+    if (partOf.startsWith("<") && partOf.endsWith(">")) {
+      partOf = partOf.slice(1, -1).trim();
+    }
+
+    // Workspace-root links become canonical by removing leading slash.
+    if (partOf.startsWith("/")) {
+      return normalizeRelativePath(partOf.slice(1)) || null;
+    }
+
+    const isRelative =
+      partOf.startsWith("./") ||
+      partOf.startsWith("../") ||
+      partOf === "." ||
+      partOf === "..";
+
+    if (!isRelative) {
+      // Ambiguous/legacy paths are treated as canonical by default.
+      return normalizeRelativePath(partOf) || null;
+    }
+
+    if (!currentCanonicalPath) {
+      return normalizeRelativePath(partOf) || null;
+    }
+
+    const currentSegments = currentCanonicalPath.split("/");
+    currentSegments.pop(); // remove filename
+    const baseDir = currentSegments.join("/");
+    const combined = baseDir ? `${baseDir}/${partOf}` : partOf;
+    return normalizeRelativePath(combined) || null;
+  }
+
+  function getPartOf(
+    frontmatter: Record<string, unknown> | undefined,
+    currentCanonicalPath: string | null = null,
+  ): string | null {
+    const partOf = normalizeFrontmatter(frontmatter)?.part_of;
+    return normalizePartOfValue(partOf, currentCanonicalPath);
   }
 
   function isTransientEntryReadError(error: unknown): boolean {
@@ -396,6 +521,66 @@
       cleanupFileChange = onFileChange(async (path, metadata) => {
         // path is canonical, but currentEntry.path may be storage path. Normalize for comparison.
         const currentCanonical = currentEntry ? await getCanonicalPathForSync(currentEntry.path) : null;
+        const now = Date.now();
+        if (pendingCurrentRenameHint && pendingCurrentRenameHint.expiresAt <= now) {
+          pendingCurrentRenameHint = null;
+        }
+
+        // Fallback for remote renames that arrive as delete+create instead of FileRenamed.
+        if (currentEntry && path && !metadata && path === currentCanonical) {
+          pendingCurrentRenameHint = {
+            oldCanonical: path,
+            oldPartOf: getPartOf(currentEntry.frontmatter, currentCanonical),
+            expiresAt: now + 5000,
+          };
+        }
+
+        // Remap current entry when a likely rename target appears.
+        if (currentEntry && api && path && metadata && path !== currentCanonical) {
+          const incomingPartOf = normalizePartOfValue(metadata.part_of, path);
+          const currentPartOf = getPartOf(currentEntry.frontmatter, currentCanonical);
+          const partOfMatches =
+            incomingPartOf !== null &&
+            currentPartOf !== null &&
+            incomingPartOf === currentPartOf;
+
+          const matchedDeleteCreateRename =
+            !!pendingCurrentRenameHint &&
+            pendingCurrentRenameHint.oldCanonical === currentCanonical &&
+            pendingCurrentRenameHint.oldPartOf === incomingPartOf;
+
+          let currentMissingOnDisk = false;
+          if (!matchedDeleteCreateRename && partOfMatches) {
+            try {
+              currentMissingOnDisk = !(await api.fileExists(currentEntry.path));
+            } catch {
+              // Ignore transient backend errors for fallback detection.
+            }
+          }
+
+          if (
+            matchedDeleteCreateRename ||
+            (currentMissingOnDisk && partOfMatches)
+          ) {
+            console.log('[App] Current entry remapped via metadata fallback:', currentCanonical, '->', path);
+            pendingCurrentRenameHint = null;
+
+            entryStore.setCurrentEntry({
+              ...currentEntry,
+              path,
+            });
+
+            if (collaborationEnabled) {
+              collaborationStore.setCollaborationPath(toCollaborationPath(path));
+            }
+
+            if (!isDirty) {
+              await openEntryController(api, path, tree, collaborationEnabled);
+            }
+            return;
+          }
+        }
+
         // Only update if this is the currently open file and we have valid metadata
         if (currentEntry && api && metadata && path === currentCanonical) {
           console.log('[App] Metadata change received for current entry:', path);
@@ -458,6 +643,13 @@
           ...currentEntry,
           path: newPath,
         });
+
+        // Keep collaboration tracking aligned even when we avoid a full reopen
+        // (e.g. while preserving local unsaved edits).
+        if (collaborationEnabled) {
+          collaborationStore.setCollaborationPath(toCollaborationPath(newPath));
+        }
+        pendingCurrentRenameHint = null;
 
         // If there are no unsaved local edits, reopen the entry at its new path to
         // refresh frontmatter and keep body sync subscriptions aligned.
@@ -947,6 +1139,9 @@
   // Rename an entry - delegates to controller with sync support
   async function handleRenameEntry(path: string, newFilename: string): Promise<string> {
     if (!api) throw new Error("API not initialized");
+    if (currentEntry?.path === path && isDirty && editorRef) {
+      await saveEntryWithSync(api, currentEntry, editorRef);
+    }
     const parentPath = workspaceStore.getParentNodePath(path);
     const newPath = await renameEntryController(api, path, newFilename, async () => {
       await refreshTree();
@@ -955,6 +1150,15 @@
       }
       await runValidation();
     });
+    if (currentEntry?.path === path) {
+      entryStore.setCurrentEntry({
+        ...currentEntry,
+        path: newPath,
+      });
+      if (collaborationEnabled) {
+        collaborationStore.setCollaborationPath(toCollaborationPath(newPath));
+      }
+    }
     return newPath;
   }
 
@@ -1001,11 +1205,13 @@
   async function handleRemoveBrokenPartOf(filePath: string) {
     if (!api) return;
     try {
-       await api.removeFrontmatterProperty(filePath, "part_of");
+      await api.removeFrontmatterProperty(filePath, "part_of");
       await runValidation();
       // Refresh current entry if it's the fixed file
       if (currentEntry?.path === filePath) {
-        currentEntry = await api.getEntry(filePath);
+        const refreshed = await api.getEntry(filePath);
+        refreshed.frontmatter = normalizeFrontmatter(refreshed.frontmatter);
+        entryStore.setCurrentEntry(refreshed);
       }
     } catch (e) {
       uiStore.setError(e instanceof Error ? e.message : String(e));
@@ -1027,7 +1233,9 @@
         await runValidation();
         // Refresh current entry if it's the fixed file
         if (currentEntry?.path === indexPath) {
-          currentEntry = await api.getEntry(indexPath);
+          const refreshed = await api.getEntry(indexPath);
+          refreshed.frontmatter = normalizeFrontmatter(refreshed.frontmatter);
+          entryStore.setCurrentEntry(refreshed);
         }
       }
     } catch (e) {
@@ -1218,6 +1426,12 @@
         if (currentDir !== newDir) {
           // Try rename FIRST, before updating frontmatter
           try {
+            // If body edits are pending, flush them before path changes so
+            // post-rename saves continue from a clean baseline.
+            if (isDirty && editorRef) {
+              await saveEntryWithSync(api, currentEntry, editorRef);
+            }
+
             const oldPath = currentEntry.path;
             const newPath = await api.renameEntry(oldPath, newFilename);
             // Rename succeeded, now update title in frontmatter (at new path)
@@ -1234,11 +1448,15 @@
             // Body doc migration is now handled by the Rust backend in command_handler.rs
 
             // Update current entry path and refresh tree
-            currentEntry = {
+            const updatedEntry = {
               ...currentEntry,
               path: newPath,
               frontmatter: { ...currentEntry.frontmatter, [key]: value },
             };
+            entryStore.setCurrentEntry(updatedEntry);
+            if (collaborationEnabled) {
+              collaborationStore.setCollaborationPath(toCollaborationPath(newPath));
+            }
             await refreshTree();
             titleError = null; // Clear any previous error
           } catch (renameError) {
@@ -1261,13 +1479,14 @@
         } else {
           // No rename needed, just update title
           await api.setFrontmatterProperty(currentEntry.path, key, value);
-          currentEntry = {
+          const updatedEntry = {
             ...currentEntry,
             frontmatter: { ...currentEntry.frontmatter, [key]: value },
           };
+          entryStore.setCurrentEntry(updatedEntry);
 
           // Update CRDT
-          updateCrdtFileMetadata(path, currentEntry.frontmatter);
+          updateCrdtFileMetadata(path, updatedEntry.frontmatter);
           titleError = null;
 
           // Refresh tree to update title display
@@ -1276,13 +1495,14 @@
       } else {
         // Non-title properties: update normally
         await api.setFrontmatterProperty(currentEntry.path, key, value as JsonValue);
-        currentEntry = {
+        const updatedEntry = {
           ...currentEntry,
           frontmatter: { ...currentEntry.frontmatter, [key]: value },
         };
+        entryStore.setCurrentEntry(updatedEntry);
 
         // Update CRDT
-        updateCrdtFileMetadata(path, currentEntry.frontmatter);
+        updateCrdtFileMetadata(path, updatedEntry.frontmatter);
 
         // Refresh tree if contents or part_of changed (affects hierarchy)
         if (key === 'contents' || key === 'part_of') {
@@ -1312,7 +1532,7 @@
       // Update local state
       const newFrontmatter = { ...currentEntry.frontmatter };
       delete newFrontmatter[key];
-      currentEntry = { ...currentEntry, frontmatter: newFrontmatter };
+      entryStore.setCurrentEntry({ ...currentEntry, frontmatter: newFrontmatter });
 
       // Update CRDT
       updateCrdtFileMetadata(path, newFrontmatter);
@@ -1327,13 +1547,14 @@
       const path = currentEntry.path;
       await api.setFrontmatterProperty(currentEntry.path, key, value as JsonValue);
       // Update local state
-      currentEntry = {
+      const updatedEntry = {
         ...currentEntry,
         frontmatter: { ...currentEntry.frontmatter, [key]: value },
       };
+      entryStore.setCurrentEntry(updatedEntry);
 
       // Update CRDT
-      updateCrdtFileMetadata(path, currentEntry.frontmatter);
+      updateCrdtFileMetadata(path, updatedEntry.frontmatter);
     } catch (e) {
       uiStore.setError(e instanceof Error ? e.message : String(e));
     }
@@ -1471,7 +1692,7 @@
       if (currentEntry && api) {
         const entry = await api.getEntry(currentEntry.path);
         entry.frontmatter = normalizeFrontmatter(entry.frontmatter);
-        currentEntry = entry;
+        entryStore.setCurrentEntry(entry);
       }
     }}
     onLoadChildren={loadNodeChildren}

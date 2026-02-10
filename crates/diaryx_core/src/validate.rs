@@ -2255,8 +2255,8 @@ mod tests {
     #[test]
     fn test_validate_workspace_with_plain_canonical_links() {
         // Create a workspace using PlainCanonical link format
-        // Note: When READING, ambiguous paths resolve as file-relative for backwards compatibility.
-        // PlainCanonical only affects how NEW links are WRITTEN by the CLI.
+        // PlainCanonical reads ambiguous plain paths as workspace-root.
+        // Explicit relative paths (`./`, `../`) remain relative.
         let fs = make_test_fs();
 
         // Root index with link_format: plain_canonical
@@ -2272,14 +2272,14 @@ mod tests {
         // Child index in Folder - uses file-relative paths
         fs.write_file(
             Path::new("Folder/index.md"),
-            "---\ntitle: Folder Index\npart_of: ../README.md\ncontents:\n  - child.md\n---\n",
+            "---\ntitle: Folder Index\npart_of: ../README.md\ncontents:\n  - Folder/child.md\n---\n",
         )
         .unwrap();
 
-        // Child file - uses file-relative path for part_of
+        // Child file - canonical part_of path
         fs.write_file(
             Path::new("Folder/child.md"),
-            "---\ntitle: Child\npart_of: index.md\n---\n",
+            "---\ntitle: Child\npart_of: Folder/index.md\n---\n",
         )
         .unwrap();
 
@@ -2299,8 +2299,7 @@ mod tests {
 
     #[test]
     fn test_validate_workspace_plain_canonical_deeply_nested() {
-        // Test deeply nested workspace with file-relative paths
-        // Note: Ambiguous paths always resolve as file-relative for backwards compatibility.
+        // Test deeply nested workspace with PlainCanonical references.
         let fs = make_test_fs();
 
         // Root with PlainCanonical format setting
@@ -2312,24 +2311,24 @@ mod tests {
 
         fs.create_dir_all(Path::new("A/B")).unwrap();
 
-        // A/index.md uses file-relative paths
+        // A/index.md uses canonical contents path
         fs.write_file(
             Path::new("A/index.md"),
-            "---\ntitle: A\npart_of: ../README.md\ncontents:\n  - B/index.md\n---\n",
+            "---\ntitle: A\npart_of: ../README.md\ncontents:\n  - A/B/index.md\n---\n",
         )
         .unwrap();
 
-        // A/B/index.md uses file-relative paths
+        // A/B/index.md uses canonical contents path
         fs.write_file(
             Path::new("A/B/index.md"),
-            "---\ntitle: B\npart_of: ../index.md\ncontents:\n  - note.md\n---\n",
+            "---\ntitle: B\npart_of: ../index.md\ncontents:\n  - A/B/note.md\n---\n",
         )
         .unwrap();
 
-        // Leaf file uses file-relative path
+        // Leaf file uses canonical part_of path
         fs.write_file(
             Path::new("A/B/note.md"),
-            "---\ntitle: Note\npart_of: index.md\n---\n",
+            "---\ntitle: Note\npart_of: A/B/index.md\n---\n",
         )
         .unwrap();
 

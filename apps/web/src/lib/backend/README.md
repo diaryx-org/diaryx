@@ -60,3 +60,11 @@ if (backend.hasNativeSync?.()) {
 ```
 
 Event types: `status-changed`, `files-changed`, `body-changed`, `progress`, `error`
+
+## Link Parser Command
+
+The backend command API now exposes Rust `link_parser` operations through
+`Command::LinkParser` (parse, canonicalize, format, convert). Frontend callers
+can use `api.ts` helpers (`runLinkParser`, `parseLink`, `canonicalizeLink`,
+`formatLink`, `convertLink`) to avoid duplicating link parsing logic in
+TypeScript.

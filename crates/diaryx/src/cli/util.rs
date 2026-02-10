@@ -156,6 +156,78 @@ pub fn format_workspace_link(
     calculate_relative_path(from_path, to_path)
 }
 
+/// Parse a `link_format` string from frontmatter.
+pub fn parse_link_format(raw: &str) -> Option<LinkFormat> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "markdown_root" => Some(LinkFormat::MarkdownRoot),
+        "markdown_relative" => Some(LinkFormat::MarkdownRelative),
+        "plain_relative" => Some(LinkFormat::PlainRelative),
+        "plain_canonical" => Some(LinkFormat::PlainCanonical),
+        _ => None,
+    }
+}
+
+/// Detect workspace link format from the root index file if available.
+pub fn detect_workspace_link_format(workspace_root: &Path) -> Option<LinkFormat> {
+    for index_name in ["README.md", "index.md"] {
+        let path = workspace_root.join(index_name);
+        if !path.exists() {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(parsed) = diaryx_core::frontmatter::parse_or_empty(&content) else {
+            continue;
+        };
+        if let Some(raw) = parsed
+            .frontmatter
+            .get("link_format")
+            .and_then(|v| v.as_str())
+            && let Some(format) = parse_link_format(raw)
+        {
+            return Some(format);
+        }
+    }
+    None
+}
+
+/// Resolve a frontmatter reference to canonical workspace-relative path.
+pub fn canonicalize_frontmatter_reference(
+    raw_value: &str,
+    current_file_path: &Path,
+    link_format_hint: Option<LinkFormat>,
+) -> String {
+    let parsed = link_parser::parse_link(raw_value);
+    link_parser::to_canonical_with_link_format(&parsed, current_file_path, link_format_hint)
+}
+
+fn workspace_relative_path(workspace_root: &Path, path: &Path) -> Option<String> {
+    let root_canonical = workspace_root.canonicalize().ok()?;
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().ok()?.join(path)
+    };
+    let normalized_absolute = if absolute.exists() {
+        absolute.canonicalize().ok()?
+    } else {
+        let parent = absolute.parent()?.canonicalize().ok()?;
+        parent.join(absolute.file_name()?)
+    };
+    let relative = pathdiff::diff_paths(normalized_absolute, root_canonical)?;
+    if relative.starts_with("..") {
+        return None;
+    }
+    Some(
+        relative
+            .iter()
+            .map(|segment| segment.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/"),
+    )
+}
+
 /// Result of a workspace-aware file rename operation
 pub struct RenameResult {
     /// Whether the file was successfully moved/renamed
@@ -190,10 +262,36 @@ pub fn rename_file_with_refs(
     };
 
     let source_str = source_path.to_string_lossy();
+    let formatter = ws.and_then(|workspace| LinkFormatter::from_path(workspace, source_path));
+    let link_format_hint = formatter.as_ref().map(|f| f.link_format());
+    let source_workspace_relative = formatter
+        .as_ref()
+        .and_then(|f| workspace_relative_path(f.workspace_root(), source_path));
 
     // Read source file's frontmatter to find its part_of (parent)
     let parent_path = match app.get_frontmatter_property(&source_str, "part_of") {
-        Ok(Some(Value::String(part_of))) => source_path.parent().map(|dir| dir.join(&part_of)),
+        Ok(Some(Value::String(part_of))) => {
+            if let (Some(formatter), Some(source_rel)) =
+                (formatter.as_ref(), source_workspace_relative.as_ref())
+            {
+                let parent_canonical = canonicalize_frontmatter_reference(
+                    &part_of,
+                    Path::new(source_rel),
+                    link_format_hint,
+                );
+                Some(formatter.workspace_root().join(parent_canonical))
+            } else {
+                let parsed = link_parser::parse_link(&part_of);
+                match parsed.path_type {
+                    link_parser::PathType::WorkspaceRoot => {
+                        Some(PathBuf::from(format!("/{}", parsed.path)))
+                    }
+                    link_parser::PathType::Relative | link_parser::PathType::Ambiguous => {
+                        source_path.parent().map(|dir| dir.join(parsed.path))
+                    }
+                }
+            }
+        }
         _ => None,
     };
 
@@ -259,7 +357,26 @@ pub fn rename_file_with_refs(
             .iter()
             .filter_map(|v| {
                 if let Value::String(s) = v {
-                    source_path.parent().map(|dir| dir.join(s))
+                    if let (Some(formatter), Some(source_rel)) =
+                        (formatter.as_ref(), source_workspace_relative.as_ref())
+                    {
+                        let child_canonical = canonicalize_frontmatter_reference(
+                            s,
+                            Path::new(source_rel),
+                            link_format_hint,
+                        );
+                        Some(formatter.workspace_root().join(child_canonical))
+                    } else {
+                        let parsed = link_parser::parse_link(s);
+                        match parsed.path_type {
+                            link_parser::PathType::WorkspaceRoot => {
+                                Some(PathBuf::from(format!("/{}", parsed.path)))
+                            }
+                            link_parser::PathType::Relative | link_parser::PathType::Ambiguous => {
+                                source_path.parent().map(|dir| dir.join(parsed.path))
+                            }
+                        }
+                    }
                 } else {
                     None
                 }
@@ -300,13 +417,56 @@ pub fn rename_file_with_refs(
         if let Ok(Some(Value::Sequence(mut items))) =
             app.get_frontmatter_property(&parent_str, "contents")
         {
+            let parent_workspace_relative = formatter
+                .as_ref()
+                .and_then(|f| workspace_relative_path(f.workspace_root(), parent));
+            let source_canonical = formatter
+                .as_ref()
+                .and_then(|f| workspace_relative_path(f.workspace_root(), source_path));
+            let dest_canonical = formatter
+                .as_ref()
+                .and_then(|f| workspace_relative_path(f.workspace_root(), dest_path));
+
             let mut updated = false;
             for item in &mut items {
-                if let Value::String(s) = item
-                    && *s == old_relative
-                {
-                    *s = new_relative.clone();
-                    updated = true;
+                if let Value::String(s) = item {
+                    let mut matches_old = *s == old_relative;
+                    let mut replacement = new_relative.clone();
+
+                    if let (Some(source_canonical), Some(parent_relative)) = (
+                        source_canonical.as_ref(),
+                        parent_workspace_relative.as_ref(),
+                    ) {
+                        let existing_canonical = canonicalize_frontmatter_reference(
+                            s,
+                            Path::new(parent_relative),
+                            link_format_hint,
+                        );
+                        matches_old = existing_canonical == *source_canonical;
+
+                        if matches_old
+                            && let (Some(formatter), Some(dest_canonical)) =
+                                (formatter.as_ref(), dest_canonical.as_ref())
+                        {
+                            let parsed = link_parser::parse_link(s);
+                            let title = parsed
+                                .title
+                                .as_deref()
+                                .map(str::to_string)
+                                .unwrap_or_else(|| link_parser::path_to_title(dest_canonical));
+                            replacement = link_parser::format_link_with_format(
+                                dest_canonical,
+                                &title,
+                                formatter.link_format(),
+                                parent_relative,
+                            );
+                        }
+                    }
+
+                    if matches_old {
+                        *s = replacement;
+                        updated = true;
+                    }
                 }
             }
             if updated {

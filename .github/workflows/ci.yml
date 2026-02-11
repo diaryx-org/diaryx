@@ -88,11 +88,48 @@ jobs:
       - name: Run Clippy
         run: cargo clippy -p diaryx_core -- -D warnings
 
-  # Web app build and checks (WASM is built as part of bun run build via nix flake)
+  # Build WASM once with caching, shared by all web jobs
+  build-wasm:
+    name: Build WASM
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.web == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache WASM build
+        id: wasm-cache
+        uses: actions/cache@v4
+        with:
+          path: apps/web/src/lib/wasm/
+          key: wasm-${{ hashFiles('crates/diaryx_core/src/**', 'crates/diaryx_core/Cargo.toml', 'crates/diaryx_wasm/src/**', 'crates/diaryx_wasm/Cargo.toml', 'Cargo.lock') }}
+
+      - name: Install Nix
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Setup Nix cache
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Build WASM
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        run: |
+          cd apps/web
+          nix develop --command bash -c "bun install && ../../scripts/build-wasm.sh"
+
+      - name: Upload WASM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-package
+          path: apps/web/src/lib/wasm/
+
+  # Web app build and checks
   web:
     name: Build Web App
     runs-on: ubuntu-latest
-    needs: [changes]
+    needs: [changes, build-wasm]
     if: needs.changes.outputs.web == 'true'
     steps:
       - name: Checkout
@@ -104,10 +141,16 @@ jobs:
       - name: Setup Nix cache
         uses: DeterminateSystems/magic-nix-cache-action@main
 
-      - name: Install dependencies and build WASM
+      - name: Download WASM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wasm-package
+          path: apps/web/src/lib/wasm/
+
+      - name: Install dependencies
         run: |
           cd apps/web
-          nix develop --command bash -c "bun install && ../../scripts/build-wasm.sh"
+          nix develop --command bun install
 
       - name: Type check
         run: |
@@ -125,17 +168,11 @@ jobs:
           name: web-dist
           path: apps/web/dist/
 
-      - name: Upload WASM artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: wasm-package
-          path: apps/web/src/lib/wasm/
-
   # Upload WASM to CDN on push (not PRs), only when WASM-related files changed
   upload-wasm-cdn:
     name: Upload WASM to CDN
     runs-on: ubuntu-latest
-    needs: [web, changes]
+    needs: [build-wasm, changes]
     if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || needs.changes.outputs.wasm == 'true')
     steps:
       - name: Checkout
@@ -171,7 +208,7 @@ jobs:
   publish-wasm-npm:
     name: Publish WASM to npm
     runs-on: ubuntu-latest
-    needs: [web, changes]
+    needs: [build-wasm, changes]
     if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || needs.changes.outputs.wasm == 'true')
     permissions:
       id-token: write
@@ -278,7 +315,7 @@ jobs:
   # Web app unit tests
   test-web:
     name: Test Web App
-    needs: [changes]
+    needs: [changes, build-wasm]
     if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -291,10 +328,16 @@ jobs:
       - name: Setup Nix cache
         uses: DeterminateSystems/magic-nix-cache-action@main
 
-      - name: Install dependencies and build WASM
+      - name: Download WASM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wasm-package
+          path: apps/web/src/lib/wasm/
+
+      - name: Install dependencies
         run: |
           cd apps/web
-          nix develop --command bash -c "bun install && ../../scripts/build-wasm.sh"
+          nix develop --command bun install
 
       - name: Run unit tests
         run: |
@@ -316,7 +359,7 @@ jobs:
   test-web-e2e:
     name: E2E Tests
     runs-on: ubuntu-latest
-    needs: [web, changes]
+    needs: [web, build-wasm, changes]
     if: needs.changes.outputs.web == 'true'
     steps:
       - name: Checkout
@@ -328,10 +371,16 @@ jobs:
       - name: Setup Nix cache
         uses: DeterminateSystems/magic-nix-cache-action@main
 
-      - name: Install dependencies and build WASM
+      - name: Download WASM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wasm-package
+          path: apps/web/src/lib/wasm/
+
+      - name: Install dependencies
         run: |
           cd apps/web
-          nix develop --command bash -c "bun install && ../../scripts/build-wasm.sh"
+          nix develop --command bun install
 
       - name: Install Playwright browsers
         run: |

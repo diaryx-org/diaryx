@@ -33,7 +33,9 @@
     Pencil,
     Copy,
     FolderInput,
+    CircleUser,
   } from "@lucide/svelte";
+  import { getAuthState } from "./auth";
 
   interface Props {
     tree: TreeNode | null;
@@ -106,6 +108,9 @@
 
   // Mobile state for showing explicit menu button
   const mobileState = getMobileState();
+
+  // Auth state for profile icon
+  const authState = $derived(getAuthState());
 
   // Track which nodes are currently loading children
   let loadingNodes = $state(new Set<string>());
@@ -1153,6 +1158,28 @@
       {/if}
     </div>
   {/if}
+
+  <!-- Profile Footer -->
+  <div class="border-t border-sidebar-border shrink-0">
+    <button
+      type="button"
+      class="w-full flex items-center gap-2.5 px-4 py-3 hover:bg-sidebar-accent active:bg-sidebar-accent transition-colors text-left"
+      onclick={onOpenSettings}
+      aria-label={authState.isAuthenticated ? "Account settings" : "Sign in"}
+    >
+      <span class="relative shrink-0">
+        <CircleUser class="size-5 text-muted-foreground" />
+        {#if authState.isAuthenticated}
+          <span class="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full bg-emerald-500 ring-2 ring-sidebar"></span>
+        {/if}
+      </span>
+      {#if authState.isAuthenticated && authState.user}
+        <span class="text-sm truncate text-sidebar-foreground">{authState.user.email}</span>
+      {:else}
+        <span class="text-sm text-muted-foreground">Sign in</span>
+      {/if}
+    </button>
+  </div>
 </aside>
 
 <!-- Mobile Action Sheet for context menu -->

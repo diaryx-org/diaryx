@@ -1888,13 +1888,31 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         source: e,
                     })?;
 
-                // Add to frontmatter attachments
+                // Build canonical path for the attachment (entry_dir + _attachments/filename)
                 let attachment_rel_path = format!("_attachments/{}", filename);
+                let entry_parent = Path::new(&entry_path)
+                    .parent()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let canonical_attachment = if entry_parent.is_empty() {
+                    attachment_rel_path.clone()
+                } else {
+                    format!("{}/{}", entry_parent, attachment_rel_path)
+                };
+
+                // Format as markdown root-relative link: [filename](/canonical/path)
+                let link = link_parser::format_link_with_format(
+                    &canonical_attachment,
+                    &filename,
+                    link_parser::LinkFormat::MarkdownRoot,
+                    &entry_path,
+                );
+
                 self.entry()
-                    .add_attachment(&entry_path, &attachment_rel_path)
+                    .add_attachment(&entry_path, &link)
                     .await?;
 
-                Ok(Response::String(attachment_rel_path))
+                Ok(Response::String(link))
             }
 
             Command::DeleteAttachment {

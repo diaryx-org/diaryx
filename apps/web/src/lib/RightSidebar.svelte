@@ -61,6 +61,7 @@
     titleError?: string | null;
     onTitleErrorClear?: () => void;
     onDeleteAttachment?: (attachmentPath: string) => void;
+    onPreviewAttachment?: (attachmentPath: string) => void;
     attachmentError?: string | null;
     onAttachmentErrorClear?: () => void;
     // History props
@@ -88,6 +89,7 @@
     titleError = null,
     onTitleErrorClear,
     onDeleteAttachment,
+    onPreviewAttachment,
     attachmentError = null,
     onAttachmentErrorClear,
     rustApi = null,
@@ -275,10 +277,31 @@
     return path.split("/").pop() ?? path;
   }
 
+  // Extract display name from an attachment value (may be a markdown link or plain path)
+  function getAttachmentDisplayName(attachment: string): string {
+    const parsed = parseLinkDisplay(attachment);
+    if (parsed) return parsed.title || getFilename(parsed.path);
+    return getFilename(attachment);
+  }
+
+  // Extract the actual file path from an attachment value (may be a markdown link or plain path)
+  function getAttachmentPath(attachment: string): string {
+    const parsed = parseLinkDisplay(attachment);
+    if (parsed) return parsed.path;
+    return attachment;
+  }
+
+  const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico'];
+
+  function isImageAttachment(filename: string): boolean {
+    const ext = filename.split('.').pop()?.toLowerCase() || '';
+    return IMAGE_EXTS.includes(ext);
+  }
+
   // Get file type icon based on extension
   function getFileIcon(filename: string): Component {
     const ext = filename.split('.').pop()?.toLowerCase() || '';
-    const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico'];
+    const imageExts = IMAGE_EXTS;
     const docExts = ['pdf', 'doc', 'docx', 'txt', 'md', 'rtf'];
     const spreadsheetExts = ['xls', 'xlsx', 'csv'];
     const archiveExts = ['zip', 'tar', 'gz', '7z', 'rar'];
@@ -357,6 +380,9 @@
     return dateKeys.includes(lowerKey) || /^\d{4}-\d{2}-\d{2}/.test(value);
   }
 
+  // Keys that have dedicated UI sections and should not appear in generic metadata
+  const DEDICATED_SECTION_KEYS = ["attachments"];
+
   // Get frontmatter entries sorted with common fields first
   function getSortedFrontmatter(
     frontmatter: Record<string, unknown>,
@@ -370,7 +396,9 @@
       "part_of",
       "contents",
     ];
-    const entries = Object.entries(frontmatter);
+    const entries = Object.entries(frontmatter).filter(
+      ([key]) => !DEDICATED_SECTION_KEYS.includes(key.toLowerCase()),
+    );
 
     return entries.sort(([a], [b]) => {
       const aIndex = priorityKeys.indexOf(a.toLowerCase());
@@ -872,11 +900,14 @@
         {#if getAttachments().length > 0}
           <div class="space-y-1 mb-2">
             {#each getAttachments() as attachment}
-              {@const Icon = getFileIcon(getFilename(attachment))}
+              {@const displayName = getAttachmentDisplayName(attachment)}
+              {@const attachPath = getAttachmentPath(attachment)}
+              {@const Icon = getFileIcon(displayName)}
+              {@const isImage = isImageAttachment(displayName)}
               <div
                 class="flex items-center justify-between gap-2 px-2 py-1.5 rounded-md bg-secondary/50 group cursor-grab active:cursor-grabbing"
                 role="listitem"
-                aria-label="Attachment: {getFilename(attachment)}, drag to move"
+                aria-label="Attachment: {displayName}, drag to move"
                 draggable="true"
                 ondragstart={(e) => {
                   if (e.dataTransfer && entry) {
@@ -886,15 +917,20 @@
                   }
                 }}
               >
-                <div class="flex items-center gap-2 min-w-0">
+                <button
+                  type="button"
+                  class="flex items-center gap-2 min-w-0 {isImage ? 'hover:text-primary cursor-pointer' : 'cursor-default'}"
+                  onclick={() => isImage && onPreviewAttachment?.(attachment)}
+                  disabled={!isImage}
+                >
                   <Icon class="size-3.5 shrink-0 text-muted-foreground" />
                   <span
-                    class="text-xs text-foreground truncate"
-                    title={attachment}
+                    class="text-xs text-foreground truncate {isImage ? 'hover:underline' : ''}"
+                    title={isImage ? `Preview ${displayName}` : attachPath}
                   >
-                    {getFilename(attachment)}
+                    {displayName}
                   </span>
-                </div>
+                </button>
                 <Button
                   variant="ghost"
                   size="icon"
@@ -912,11 +948,12 @@
         {/if}
 
         <FilePickerPopover
-          excludePaths={getAttachments()}
+          excludePaths={getAttachments().map(getAttachmentPath)}
           placeholder="Add attachment..."
-          onSelect={(file) => {
+          onSelect={async (file) => {
+            const link = await formatAsLink(file.path, file.name);
             const currentAttachments = getAttachments();
-            onPropertyChange?.("attachments", [...currentAttachments, file.path]);
+            onPropertyChange?.("attachments", [...currentAttachments, link]);
           }}
         >
           <Button

@@ -31,6 +31,9 @@ both upload and download bootstrap flows.
 - `completeAttachmentUpload(...)`
 - `downloadAttachment(...)`
 
+Quota rejections (`413` + `storage_limit_exceeded`) are parsed into
+`AuthError` messages with usage/limit context for UI and queue handling.
+
 `authStore.svelte.ts` also exposes storage usage helpers:
 
 - `getStorageUsage()`

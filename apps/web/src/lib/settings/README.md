@@ -17,6 +17,7 @@ attachments:
   - '[S3BackupSettings.svelte](/apps/web/src/lib/settings/S3BackupSettings.svelte)'
   - '[StorageSettings.svelte](/apps/web/src/lib/settings/StorageSettings.svelte)'
   - '[SyncSettings.svelte](/apps/web/src/lib/settings/SyncSettings.svelte)'
+  - '[syncSettingsLogic.ts](/apps/web/src/lib/settings/syncSettingsLogic.ts)'
   - '[TemplateSettings.svelte](/apps/web/src/lib/settings/TemplateSettings.svelte)'
   - '[WorkspaceSettings.svelte](/apps/web/src/lib/settings/WorkspaceSettings.svelte)'
 exclude:
@@ -44,6 +45,7 @@ Settings panel components for the settings dialog.
 | `S3BackupSettings.svelte` | S3 backup configuration |
 | `StorageSettings.svelte` | Storage backend settings |
 | `SyncSettings.svelte` | Sync server settings + synced attachment storage usage |
+| `syncSettingsLogic.ts` | Storage usage status/summary helpers for sync settings |
 | `TemplateSettings.svelte` | Template management |
 | `WorkspaceSettings.svelte` | Workspace configuration |
 
@@ -51,4 +53,5 @@ Settings panel components for the settings dialog.
 
 - sync connection/authentication state
 - configured sync server URL
-- a "Synced Storage" section with used bytes and blob count from `/api/user/storage`
+- a "Synced Storage" section with used bytes, blob count, and used/limit summary from `/api/user/storage`
+- warning/over-limit states when nearing or exceeding per-user attachment quota

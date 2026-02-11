@@ -196,12 +196,15 @@ Response:
 {
   "used_bytes": 123456,
   "blob_count": 42,
-  "limit_bytes": null,
+  "limit_bytes": 1073741824,
   "warning_threshold": 0.8,
   "over_limit": false,
   "scope": "attachments"
 }
 ```
+
+`limit_bytes` is per-user. New/existing users default to 1 GiB unless the
+`users.attachment_limit_bytes` value is changed in the database.
 
 #### Incremental Attachment Upload (Resumable)
 
@@ -228,6 +231,19 @@ Content-Type: application/json
 ```
 
 Completes upload and registers blob metadata for dedupe/usage accounting.
+
+If the user's attachment usage would exceed their limit, upload initialization
+or completion returns:
+
+```json
+{
+  "error": "storage_limit_exceeded",
+  "message": "Attachment storage limit exceeded",
+  "used_bytes": 123,
+  "limit_bytes": 1073741824,
+  "requested_bytes": 456
+}
+```
 
 #### Attachment Download by Hash
 

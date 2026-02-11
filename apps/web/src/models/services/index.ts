@@ -67,5 +67,6 @@ export {
   retryFailedAttachmentJobs,
   indexAttachmentRefs,
   sha256Hex,
+  isTerminalAttachmentSyncError,
   getAttachmentSyncQueueSnapshot,
 } from './attachmentSyncService';

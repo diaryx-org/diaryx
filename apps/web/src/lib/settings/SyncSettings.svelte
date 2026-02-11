@@ -15,6 +15,7 @@
     initAuth,
     refreshUserStorageUsage,
   } from "$lib/auth";
+  import { getStorageUsageState, getUsageSummary } from "./syncSettingsLogic";
   import { collaborationStore } from "@/models/stores/collaborationStore.svelte";
   import { onMount } from "svelte";
 
@@ -32,6 +33,8 @@
   let syncStatus = $derived(collaborationStore.syncStatus);
   let isEnabled = $derived(collaborationStore.collaborationEnabled);
   let storageUsage = $derived(getStorageUsage());
+  let storageUsageState = $derived(getStorageUsageState(storageUsage));
+  let usageSummary = $derived(getUsageSummary(storageUsage, formatBytes));
   let isRefreshingUsage = $state(false);
 
   // Get server URL for display
@@ -172,11 +175,16 @@
             <div class="font-medium">{storageUsage.blob_count}</div>
           </div>
         </div>
-        {#if storageUsage.over_limit}
+        {#if usageSummary}
+          <div class="text-xs text-muted-foreground">
+            {usageSummary}
+          </div>
+        {/if}
+        {#if storageUsageState === "over_limit"}
           <p class="text-xs text-destructive">
-            Storage limit exceeded.
+            Storage limit exceeded. New attachment uploads are blocked.
           </p>
-        {:else if storageUsage.limit_bytes !== null && storageUsage.used_bytes / storageUsage.limit_bytes >= storageUsage.warning_threshold}
+        {:else if storageUsageState === "warning"}
           <p class="text-xs text-amber-600 dark:text-amber-400">
             Approaching storage limit.
           </p>

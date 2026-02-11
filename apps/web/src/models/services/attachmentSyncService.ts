@@ -1,7 +1,7 @@
 import { createApi, type Api } from "$lib/backend/api";
 import type { Backend } from "$lib/backend/interface";
 import type { BinaryRef } from "$lib/backend/generated";
-import { createAuthService } from "$lib/auth/authService";
+import { AuthError, createAuthService } from "$lib/auth/authService";
 
 const QUEUE_STORAGE_KEY = "diaryx_attachment_sync_queue_v1";
 const PART_SIZE_BYTES = 8 * 1024 * 1024;
@@ -297,17 +297,35 @@ async function processDownload(item: DownloadQueueItem): Promise<void> {
 }
 
 function applyFailure(item: QueueItem, error: unknown): void {
+  const isQuotaFailure = isTerminalAttachmentSyncError(error);
   const nextAttempts = item.attempts + 1;
-  const exhausted = nextAttempts >= MAX_PART_ATTEMPTS;
+  const exhausted = isQuotaFailure || nextAttempts >= MAX_PART_ATTEMPTS;
   const updated: QueueItem = {
     ...item,
     attempts: nextAttempts,
     state: exhausted ? "failed" : "pending",
     nextAttemptAt: exhausted ? nowMs() : nowMs() + backoffDelayMs(nextAttempts),
     updatedAt: nowMs(),
-    lastError: error instanceof Error ? error.message : String(error),
+    lastError: isQuotaFailure
+      ? `Quota exceeded: ${
+          error instanceof Error ? error.message : "Storage limit exceeded"
+        }`
+      : error instanceof Error
+        ? error.message
+        : String(error),
   };
   updateItem(item.id, () => updated);
+}
+
+export function isTerminalAttachmentSyncError(error: unknown): boolean {
+  if (error instanceof AuthError) {
+    return error.statusCode === 413;
+  }
+  if (error && typeof error === "object") {
+    const statusCode = (error as { statusCode?: unknown }).statusCode;
+    return typeof statusCode === "number" && statusCode === 413;
+  }
+  return false;
 }
 
 async function runQueueItem(item: QueueItem): Promise<void> {

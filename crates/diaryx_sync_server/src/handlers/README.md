@@ -41,6 +41,10 @@ max payload size (`SNAPSHOT_UPLOAD_MAX_BYTES`, default 1 GiB).
 - `POST /api/workspaces/{workspace_id}/attachments/uploads/{upload_id}/complete` — finalize multipart upload.
 - `GET /api/workspaces/{workspace_id}/attachments/{hash}` — download attachment bytes (supports `Range`).
 
+Attachment uploads and attachment-enabled snapshot imports enforce per-user
+attachment limits. Over-limit requests return `413` with
+`error: "storage_limit_exceeded"` JSON.
+
 ### Git Version History Endpoints
 
 - `GET /api/workspaces/{id}/history?count=N` — Commit log from bare repo

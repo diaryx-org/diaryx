@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     email TEXT UNIQUE NOT NULL,
     created_at INTEGER NOT NULL,
-    last_login_at INTEGER
+    last_login_at INTEGER,
+    attachment_limit_bytes INTEGER
 );
 
 -- Devices table (tracks client devices)
@@ -139,6 +140,23 @@ CREATE INDEX IF NOT EXISTS idx_attachment_upload_parts_upload ON attachment_uplo
 /// Initialize the database with the auth schema
 pub fn init_database(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute_batch(SCHEMA)?;
+    // Forward migration for older databases.
+    let has_limit_col: bool = conn
+        .prepare("PRAGMA table_info(users)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|name| name == "attachment_limit_bytes");
+    if !has_limit_col {
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN attachment_limit_bytes INTEGER",
+            [],
+        )?;
+    }
+    // Backfill/normalize existing users to 1 GiB default.
+    conn.execute(
+        "UPDATE users SET attachment_limit_bytes = 1073741824 WHERE attachment_limit_bytes IS NULL",
+        [],
+    )?;
     Ok(())
 }
 
@@ -170,5 +188,42 @@ mod tests {
         assert!(tables.contains(&"workspace_attachment_refs".to_string()));
         assert!(tables.contains(&"attachment_uploads".to_string()));
         assert!(tables.contains(&"attachment_upload_parts".to_string()));
+
+        let user_cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(users)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(user_cols.contains(&"attachment_limit_bytes".to_string()));
+    }
+
+    #[test]
+    fn test_migrates_and_backfills_attachment_limit() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE users (
+                id TEXT PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                created_at INTEGER NOT NULL,
+                last_login_at INTEGER
+            );
+            INSERT INTO users (id, email, created_at) VALUES ('u1', 'u1@example.com', 1);
+            "#,
+        )
+        .unwrap();
+
+        init_database(&conn).unwrap();
+
+        let limit: i64 = conn
+            .query_row(
+                "SELECT attachment_limit_bytes FROM users WHERE id = 'u1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(limit, 1_073_741_824);
     }
 }

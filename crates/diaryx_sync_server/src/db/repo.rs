@@ -2,6 +2,8 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::sync::{Arc, Mutex};
 
+pub const DEFAULT_ATTACHMENT_LIMIT_BYTES: u64 = 1_073_741_824;
+
 /// User information
 #[derive(Debug, Clone)]
 pub struct UserInfo {
@@ -9,6 +11,7 @@ pub struct UserInfo {
     pub email: String,
     pub created_at: DateTime<Utc>,
     pub last_login_at: Option<DateTime<Utc>>,
+    pub attachment_limit_bytes: Option<u64>,
 }
 
 /// Device information
@@ -125,7 +128,7 @@ impl AuthRepo {
     pub fn get_user(&self, user_id: &str) -> Result<Option<UserInfo>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, email, created_at, last_login_at FROM users WHERE id = ?",
+            "SELECT id, email, created_at, last_login_at, attachment_limit_bytes FROM users WHERE id = ?",
             [user_id],
             |row| {
                 Ok(UserInfo {
@@ -133,6 +136,7 @@ impl AuthRepo {
                     email: row.get(1)?,
                     created_at: timestamp_to_datetime(row.get(2)?),
                     last_login_at: row.get::<_, Option<i64>>(3)?.map(timestamp_to_datetime),
+                    attachment_limit_bytes: row.get::<_, Option<i64>>(4)?.map(|v| v as u64),
                 })
             },
         )
@@ -143,7 +147,7 @@ impl AuthRepo {
     pub fn get_user_by_email(&self, email: &str) -> Result<Option<UserInfo>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, email, created_at, last_login_at FROM users WHERE email = ?",
+            "SELECT id, email, created_at, last_login_at, attachment_limit_bytes FROM users WHERE email = ?",
             [email],
             |row| {
                 Ok(UserInfo {
@@ -151,6 +155,7 @@ impl AuthRepo {
                     email: row.get(1)?,
                     created_at: timestamp_to_datetime(row.get(2)?),
                     last_login_at: row.get::<_, Option<i64>>(3)?.map(timestamp_to_datetime),
+                    attachment_limit_bytes: row.get::<_, Option<i64>>(4)?.map(|v| v as u64),
                 })
             },
         )
@@ -176,8 +181,8 @@ impl AuthRepo {
         let now = Utc::now().timestamp();
 
         conn.execute(
-            "INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)",
-            params![user_id, email, now],
+            "INSERT INTO users (id, email, created_at, attachment_limit_bytes) VALUES (?, ?, ?, ?)",
+            params![user_id, email, now, DEFAULT_ATTACHMENT_LIMIT_BYTES as i64],
         )?;
 
         Ok(user_id)
@@ -210,6 +215,66 @@ impl AuthRepo {
         conn.execute("DELETE FROM users WHERE id = ?", [user_id])?;
 
         Ok(workspace_ids)
+    }
+
+    /// Get explicit per-user attachment limit (nullable).
+    pub fn get_user_attachment_limit(&self, user_id: &str) -> Result<Option<u64>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT attachment_limit_bytes FROM users WHERE id = ?",
+            [user_id],
+            |row| row.get::<_, Option<i64>>(0).map(|v| v.map(|n| n as u64)),
+        )
+        .optional()
+        .map(|value| value.flatten())
+    }
+
+    /// Get effective attachment limit for a user (1 GiB fallback).
+    pub fn get_effective_user_attachment_limit(
+        &self,
+        user_id: &str,
+    ) -> Result<u64, rusqlite::Error> {
+        Ok(self
+            .get_user_attachment_limit(user_id)?
+            .unwrap_or(DEFAULT_ATTACHMENT_LIMIT_BYTES))
+    }
+
+    /// Set explicit per-user attachment limit bytes (None resets to default fallback behavior).
+    pub fn set_user_attachment_limit(
+        &self,
+        user_id: &str,
+        limit_bytes: Option<u64>,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE users SET attachment_limit_bytes = ? WHERE id = ?",
+            params![limit_bytes.map(|v| v as i64), user_id],
+        )?;
+        Ok(())
+    }
+
+    /// Compute projected usage if this blob/hash were referenced by the user.
+    /// Returns `(used_bytes, projected_bytes, is_new_blob)`.
+    pub fn compute_projected_usage_after_blob(
+        &self,
+        user_id: &str,
+        blob_hash: &str,
+        incoming_size: u64,
+    ) -> Result<(u64, u64, bool), rusqlite::Error> {
+        let usage = self.get_user_storage_usage(user_id)?;
+        let conn = self.conn.lock().unwrap();
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM user_attachment_blobs WHERE user_id = ? AND blob_hash = ?)",
+            params![user_id, blob_hash],
+            |row| row.get::<_, i64>(0),
+        )? != 0;
+
+        let projected = if exists {
+            usage.used_bytes
+        } else {
+            usage.used_bytes.saturating_add(incoming_size)
+        };
+        Ok((usage.used_bytes, projected, !exists))
     }
 
     // ===== Device operations =====
@@ -1341,5 +1406,81 @@ mod tests {
 
         let due = repo.list_soft_deleted_blobs_due(i64::MAX).unwrap();
         assert!(!due.is_empty());
+    }
+
+    #[test]
+    fn test_default_user_attachment_limit_is_one_gib() {
+        let repo = setup_test_db();
+        let user_id = repo.get_or_create_user("limit-test@example.com").unwrap();
+        let user = repo.get_user(&user_id).unwrap().unwrap();
+        assert_eq!(
+            user.attachment_limit_bytes,
+            Some(DEFAULT_ATTACHMENT_LIMIT_BYTES)
+        );
+
+        let effective = repo.get_effective_user_attachment_limit(&user_id).unwrap();
+        assert_eq!(effective, DEFAULT_ATTACHMENT_LIMIT_BYTES);
+    }
+
+    #[test]
+    fn test_projected_usage_dedupe_for_existing_hash() {
+        let repo = setup_test_db();
+        let user_id = repo
+            .get_or_create_user("projection-test@example.com")
+            .unwrap();
+        let workspace_id = repo.get_or_create_workspace(&user_id, "default").unwrap();
+
+        repo.upsert_blob(&user_id, "hash-a", "key-a", 100, "image/png")
+            .unwrap();
+        repo.replace_workspace_attachment_refs(
+            &workspace_id,
+            &[WorkspaceAttachmentRefRecord {
+                file_path: "README.md".to_string(),
+                attachment_path: "_attachments/a.png".to_string(),
+                blob_hash: "hash-a".to_string(),
+                size_bytes: 100,
+                mime_type: "image/png".to_string(),
+            }],
+        )
+        .unwrap();
+
+        let (used, projected, is_new) = repo
+            .compute_projected_usage_after_blob(&user_id, "hash-a", 100)
+            .unwrap();
+        assert_eq!(used, 100);
+        assert_eq!(projected, 100);
+        assert!(!is_new);
+
+        let (used, projected, is_new) = repo
+            .compute_projected_usage_after_blob(&user_id, "hash-b", 50)
+            .unwrap();
+        assert_eq!(used, 100);
+        assert_eq!(projected, 150);
+        assert!(is_new);
+    }
+
+    #[test]
+    fn test_projected_usage_limit_boundaries() {
+        let repo = setup_test_db();
+        let user_id = repo
+            .get_or_create_user("boundary-test@example.com")
+            .unwrap();
+
+        let (used, projected, is_new) = repo
+            .compute_projected_usage_after_blob(&user_id, "hash-a", DEFAULT_ATTACHMENT_LIMIT_BYTES)
+            .unwrap();
+        assert_eq!(used, 0);
+        assert_eq!(projected, DEFAULT_ATTACHMENT_LIMIT_BYTES);
+        assert!(is_new);
+        assert!(projected <= DEFAULT_ATTACHMENT_LIMIT_BYTES);
+
+        let (_, projected, _) = repo
+            .compute_projected_usage_after_blob(
+                &user_id,
+                "hash-b",
+                DEFAULT_ATTACHMENT_LIMIT_BYTES + 1,
+            )
+            .unwrap();
+        assert!(projected > DEFAULT_ATTACHMENT_LIMIT_BYTES);
     }
 }

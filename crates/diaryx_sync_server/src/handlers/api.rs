@@ -63,6 +63,33 @@ pub struct UserStorageResponse {
     pub scope: String,
 }
 
+#[derive(Debug, Serialize)]
+struct StorageLimitErrorResponse {
+    error: String,
+    message: String,
+    used_bytes: u64,
+    limit_bytes: u64,
+    requested_bytes: u64,
+}
+
+fn storage_limit_exceeded_response(
+    used_bytes: u64,
+    limit_bytes: u64,
+    requested_bytes: u64,
+) -> axum::response::Response {
+    (
+        StatusCode::PAYLOAD_TOO_LARGE,
+        Json(StorageLimitErrorResponse {
+            error: "storage_limit_exceeded".to_string(),
+            message: "Attachment storage limit exceeded".to_string(),
+            used_bytes,
+            limit_bytes,
+            requested_bytes,
+        }),
+    )
+        .into_response()
+}
+
 /// Git commit log entry
 #[derive(Debug, Serialize)]
 pub struct CommitLogEntry {
@@ -335,6 +362,14 @@ async fn upload_workspace_snapshot(
         .await
     {
         Ok(result) => result,
+        Err(crate::sync_v2::SnapshotError::QuotaExceeded {
+            used_bytes,
+            limit_bytes,
+            requested_bytes,
+        }) => {
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return storage_limit_exceeded_response(used_bytes, limit_bytes, requested_bytes);
+        }
         Err(err) => {
             error!("Snapshot import failed for {}: {:?}", workspace_id, err);
             let _ = tokio::fs::remove_file(&temp_path).await;
@@ -455,6 +490,30 @@ async fn init_attachment_upload(
             uploaded_parts: vec![],
         })
         .into_response();
+    }
+    let limit_bytes = match state
+        .repo
+        .get_effective_user_attachment_limit(&auth.user.id)
+    {
+        Ok(v) => v,
+        Err(err) => {
+            error!("Failed to get user attachment limit: {}", err);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let (used_bytes, projected, is_new_blob) = match state.repo.compute_projected_usage_after_blob(
+        &auth.user.id,
+        &body.hash,
+        body.size_bytes,
+    ) {
+        Ok(v) => v,
+        Err(err) => {
+            error!("Failed to compute projected storage usage: {}", err);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    if is_new_blob && projected > limit_bytes {
+        return storage_limit_exceeded_response(used_bytes, limit_bytes, body.size_bytes);
     }
 
     let upload_id = uuid::Uuid::new_v4().to_string();
@@ -648,6 +707,47 @@ async fn complete_attachment_upload(
             .into_response();
     }
 
+    let limit_bytes = match state
+        .repo
+        .get_effective_user_attachment_limit(&auth.user.id)
+    {
+        Ok(v) => v,
+        Err(err) => {
+            error!("Failed to get user attachment limit: {}", err);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let (used_bytes, projected, is_new_blob) = match state.repo.compute_projected_usage_after_blob(
+        &auth.user.id,
+        &session.blob_hash,
+        session.size_bytes,
+    ) {
+        Ok(v) => v,
+        Err(err) => {
+            error!("Failed to compute projected storage usage: {}", err);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    if is_new_blob && projected > limit_bytes {
+        if let Err(err) = state
+            .blob_store
+            .abort_multipart(&session.r2_key, &session.r2_multipart_upload_id)
+            .await
+        {
+            error!("Failed to abort over-limit multipart upload: {}", err);
+        }
+        if let Err(err) = state
+            .repo
+            .set_attachment_upload_status(&upload_id, "aborted")
+        {
+            error!(
+                "Failed to set aborted status for over-limit upload {}: {}",
+                upload_id, err
+            );
+        }
+        return storage_limit_exceeded_response(used_bytes, limit_bytes, session.size_bytes);
+    }
+
     let completed_parts = uploaded_parts
         .iter()
         .map(|part| MultipartCompletedPart {
@@ -819,13 +919,23 @@ async fn get_user_storage(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
+    let limit_bytes = match state
+        .repo
+        .get_effective_user_attachment_limit(&auth.user.id)
+    {
+        Ok(value) => value,
+        Err(err) => {
+            error!("Failed to query user attachment limit: {}", err);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
 
     Json(UserStorageResponse {
         used_bytes: usage.used_bytes,
         blob_count: usage.blob_count,
-        limit_bytes: None,
+        limit_bytes: Some(limit_bytes),
         warning_threshold: 0.8,
-        over_limit: false,
+        over_limit: usage.used_bytes > limit_bytes,
         scope: "attachments".to_string(),
     })
     .into_response()

@@ -31,6 +31,11 @@ pub enum SnapshotError {
     ZipFormat(zip::result::ZipError),
     Db(rusqlite::Error),
     Blob(String),
+    QuotaExceeded {
+        used_bytes: u64,
+        limit_bytes: u64,
+        requested_bytes: u64,
+    },
 }
 
 impl std::fmt::Display for SnapshotError {
@@ -43,6 +48,15 @@ impl std::fmt::Display for SnapshotError {
             SnapshotError::ZipFormat(e) => write!(f, "Zip format error: {}", e),
             SnapshotError::Db(e) => write!(f, "Database error: {}", e),
             SnapshotError::Blob(e) => write!(f, "Blob store error: {}", e),
+            SnapshotError::QuotaExceeded {
+                used_bytes,
+                limit_bytes,
+                requested_bytes,
+            } => write!(
+                f,
+                "Attachment quota exceeded (used={}, limit={}, requested={})",
+                used_bytes, limit_bytes, requested_bytes
+            ),
         }
     }
 }
@@ -93,6 +107,14 @@ struct UploadedBlob {
     hash: String,
     size_bytes: u64,
     mime_type: String,
+}
+
+#[derive(Debug, Clone)]
+struct SnapshotBinaryEntry {
+    bytes: Vec<u8>,
+    hash: String,
+    mime_type: String,
+    key: String,
 }
 
 fn normalize_workspace_path(path: &str) -> Option<String> {
@@ -338,8 +360,10 @@ impl WorkspaceStore {
         }
 
         let mut blobs_by_path: HashMap<String, UploadedBlob> = HashMap::new();
+        let mut binary_entries: Vec<SnapshotBinaryEntry> = Vec::new();
 
         if include_attachments {
+            let mut unique_hash_sizes: HashMap<String, u64> = HashMap::new();
             for i in 0..archive.len() {
                 let Some((name, bytes, hash, mime_type, key)) = ({
                     let mut entry = archive.by_index(i)?;
@@ -365,24 +389,62 @@ impl WorkspaceStore {
                     continue;
                 };
 
-                // Avoid HEAD/exists checks against R2 here. Some bucket policies
-                // allow PutObject but reject HeadObject, which would fail imports.
-                // Since keys are content-addressed by SHA-256, put is idempotent.
-                blob_store
-                    .put(&key, &bytes, &mime_type)
-                    .await
-                    .map_err(SnapshotError::Blob)?;
-
-                repo.upsert_blob(user_id, &hash, &key, bytes.len() as u64, &mime_type)?;
+                let bytes_len = bytes.len() as u64;
+                unique_hash_sizes.entry(hash.clone()).or_insert(bytes_len);
+                binary_entries.push(SnapshotBinaryEntry {
+                    bytes,
+                    hash: hash.clone(),
+                    mime_type: mime_type.clone(),
+                    key: key.clone(),
+                });
 
                 blobs_by_path.insert(
                     name,
                     UploadedBlob {
                         hash,
-                        size_bytes: bytes.len() as u64,
+                        size_bytes: bytes_len,
                         mime_type,
                     },
                 );
+            }
+
+            let used_bytes = repo.get_user_storage_usage(user_id)?.used_bytes;
+            let limit_bytes = repo.get_effective_user_attachment_limit(user_id)?;
+            let mut net_new_bytes = 0u64;
+            for (hash, size) in unique_hash_sizes {
+                if repo.get_user_blob(user_id, &hash)?.is_none() {
+                    net_new_bytes = net_new_bytes.saturating_add(size);
+                }
+            }
+            let projected = used_bytes.saturating_add(net_new_bytes);
+            if projected > limit_bytes {
+                return Err(SnapshotError::QuotaExceeded {
+                    used_bytes,
+                    limit_bytes,
+                    requested_bytes: net_new_bytes,
+                });
+            }
+
+            let mut uploaded_hashes = HashSet::new();
+            for entry in &binary_entries {
+                if !uploaded_hashes.insert(entry.hash.clone()) {
+                    continue;
+                }
+                // Avoid HEAD/exists checks against R2 here. Some bucket policies
+                // allow PutObject but reject HeadObject, which would fail imports.
+                // Since keys are content-addressed by SHA-256, put is idempotent.
+                blob_store
+                    .put(&entry.key, &entry.bytes, &entry.mime_type)
+                    .await
+                    .map_err(SnapshotError::Blob)?;
+
+                repo.upsert_blob(
+                    user_id,
+                    &entry.hash,
+                    &entry.key,
+                    entry.bytes.len() as u64,
+                    &entry.mime_type,
+                )?;
             }
         }
 

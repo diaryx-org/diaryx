@@ -86,10 +86,19 @@ export interface DownloadAttachmentResponse {
   contentRange: string | null;
 }
 
+export interface StorageLimitExceededErrorResponse {
+  error: "storage_limit_exceeded";
+  message: string;
+  used_bytes: number;
+  limit_bytes: number;
+  requested_bytes: number;
+}
+
 export class AuthError extends Error {
   constructor(
     message: string,
     public statusCode: number,
+    public details?: unknown,
   ) {
     super(message);
     this.name = "AuthError";
@@ -104,6 +113,24 @@ export class AuthService {
 
   constructor(serverUrl: string) {
     this.serverUrl = serverUrl.replace(/\/$/, ""); // Remove trailing slash
+  }
+
+  private async parseErrorBody(response: Response): Promise<unknown | null> {
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.includes("application/json")) return null;
+    try {
+      return await response.json();
+    } catch {
+      return null;
+    }
+  }
+
+  private formatQuotaMessage(
+    payload: StorageLimitExceededErrorResponse,
+  ): string {
+    const usedMb = (payload.used_bytes / 1024 / 1024).toFixed(1);
+    const limitMb = (payload.limit_bytes / 1024 / 1024).toFixed(1);
+    return `${payload.message} (${usedMb} MB / ${limitMb} MB)`;
   }
 
   /**
@@ -324,7 +351,20 @@ export class AuthService {
     );
 
     if (!response.ok) {
-      throw new AuthError("Failed to upload snapshot", response.status);
+      const data = await this.parseErrorBody(response);
+      if (
+        response.status === 413 &&
+        data &&
+        typeof data === "object" &&
+        (data as any).error === "storage_limit_exceeded"
+      ) {
+        throw new AuthError(
+          this.formatQuotaMessage(data as StorageLimitExceededErrorResponse),
+          response.status,
+          data,
+        );
+      }
+      throw new AuthError("Failed to upload snapshot", response.status, data);
     }
 
     return response.json();
@@ -370,7 +410,24 @@ export class AuthService {
     );
 
     if (!response.ok) {
-      throw new AuthError("Failed to initialize attachment upload", response.status);
+      const data = await this.parseErrorBody(response);
+      if (
+        response.status === 413 &&
+        data &&
+        typeof data === "object" &&
+        (data as any).error === "storage_limit_exceeded"
+      ) {
+        throw new AuthError(
+          this.formatQuotaMessage(data as StorageLimitExceededErrorResponse),
+          response.status,
+          data,
+        );
+      }
+      throw new AuthError(
+        "Failed to initialize attachment upload",
+        response.status,
+        data,
+      );
     }
 
     return response.json();
@@ -432,7 +489,24 @@ export class AuthService {
     }
 
     if (!response.ok) {
-      throw new AuthError("Failed to complete attachment upload", response.status);
+      const data = await this.parseErrorBody(response);
+      if (
+        response.status === 413 &&
+        data &&
+        typeof data === "object" &&
+        (data as any).error === "storage_limit_exceeded"
+      ) {
+        throw new AuthError(
+          this.formatQuotaMessage(data as StorageLimitExceededErrorResponse),
+          response.status,
+          data,
+        );
+      }
+      throw new AuthError(
+        "Failed to complete attachment upload",
+        response.status,
+        data,
+      );
     }
 
     return response.json();

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BinaryRef } from "$lib/backend/generated";
+import { AuthError } from "$lib/auth/authService";
 
 describe("attachmentSyncService", () => {
   beforeEach(() => {
@@ -61,5 +62,15 @@ describe("attachmentSyncService", () => {
     expect(queue).toHaveLength(1);
     expect(queue[0].kind).toBe("download");
     expect(queue[0].hash).toBe("b".repeat(64));
+  });
+
+  it("treats quota errors as terminal", async () => {
+    const service = await import("./attachmentSyncService");
+    expect(
+      service.isTerminalAttachmentSyncError(new AuthError("quota", 413)),
+    ).toBe(true);
+    expect(
+      service.isTerminalAttachmentSyncError(new AuthError("other", 500)),
+    ).toBe(false);
   });
 });

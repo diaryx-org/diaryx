@@ -34,14 +34,18 @@
     event?.stopPropagation();
     event?.preventDefault();
     isExpanded = true;
-    // Focus first item after expansion
-    setTimeout(() => {
-      updateFocusableItems();
-      if (focusableItems.length > 0) {
-        focusedIndex = 0;
-        focusableItems[0]?.focus();
-      }
-    }, 0);
+    // Only auto-focus first item for keyboard activation.
+    // On mouse/touch, focusing a <select> opens the native picker on mobile.
+    const isKeyboard = event instanceof KeyboardEvent;
+    if (isKeyboard) {
+      setTimeout(() => {
+        updateFocusableItems();
+        if (focusableItems.length > 0) {
+          focusedIndex = 0;
+          focusableItems[0]?.focus();
+        }
+      }, 0);
+    }
   }
 
   // Expose expand function for external triggering (e.g., keyboard shortcut from editor)

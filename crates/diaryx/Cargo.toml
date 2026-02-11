@@ -44,7 +44,7 @@ tower-http = { version = "0.6", features = ["fs"] }
 open = "5"
 
 [build-dependencies]
-diaryx_core = { path = "../diaryx_core" }
+diaryx_core = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

@@ -15,9 +15,10 @@ env:
   BINARY_NAME: diaryx
 
 jobs:
-  # Publish to crates.io
+  # Publish to crates.io (only after all builds succeed)
   publish:
     name: Publish to crates.io
+    needs: [build]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

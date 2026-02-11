@@ -42,19 +42,22 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download binary artifact
         uses: actions/download-artifact@v4
         with:
           name: sync-server-binary
           path: artifact/
 
-      - name: Copy binary to VPS
+      - name: Copy binary and deploy script to VPS
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.DEPLOY_SSH_HOST }}
           username: ${{ secrets.DEPLOY_SSH_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          source: artifact/diaryx_sync_server
+          source: artifact/diaryx_sync_server,scripts/deploy-sync-server.sh
           target: /tmp/diaryx-deploy
           strip_components: 1
 
@@ -65,31 +68,4 @@ jobs:
           username: ${{ secrets.DEPLOY_SSH_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script_stop: true
-          shell: bash
-          script: |
-            BINARY="/home/adammharris/diaryx/target/release/diaryx_sync_server"
-            NEW_BINARY="/tmp/diaryx-deploy/diaryx_sync_server"
-
-            # Backup current binary
-            if [ -f "${BINARY}" ]; then
-              cp "${BINARY}" "${BINARY}.bak"
-            fi
-
-            # Move new binary into place
-            mv "${NEW_BINARY}" "${BINARY}"
-            chmod +x "${BINARY}"
-            rm -rf /tmp/diaryx-deploy
-
-            # Restart service (requires passwordless sudo for systemctl)
-            sudo systemctl restart diaryx-sync
-
-            # Health check
-            sleep 2
-            if curl -sf http://localhost:3030/health > /dev/null; then
-              echo "Deploy successful — health check passed"
-            else
-              echo "Health check failed! Rolling back..."
-              cp "${BINARY}.bak" "${BINARY}"
-              sudo systemctl restart diaryx-sync
-              exit 1
-            fi
+          script: bash /tmp/diaryx-deploy/deploy-sync-server.sh

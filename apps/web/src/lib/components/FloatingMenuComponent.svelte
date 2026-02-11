@@ -209,7 +209,7 @@
           class="list-select"
         >
           <NativeSelect.Option value="" disabled selected>
-            <List class="size-4 inline mr-1" />Lists
+            <List class="size-4 inline" />
           </NativeSelect.Option>
           <NativeSelect.Option value="bullet">Bullet List</NativeSelect.Option>
           <NativeSelect.Option value="ordered">Numbered List</NativeSelect.Option>
@@ -387,7 +387,7 @@
 
   .list-section :global([data-slot="native-select"]) {
     height: 32px;
-    min-width: 70px;
+    min-width: 56px;
     padding: 0 24px 0 8px;
     font-size: 13px;
     font-weight: 500;
@@ -490,7 +490,7 @@
 
     .list-section :global([data-slot="native-select"]) {
       height: 36px;
-      min-width: 70px;
+      min-width: 56px;
       font-size: 13px;
     }
 

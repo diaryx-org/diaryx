@@ -64,6 +64,8 @@ jobs:
           host: ${{ secrets.DEPLOY_SSH_HOST }}
           username: ${{ secrets.DEPLOY_SSH_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script_stop: true
+          shell: bash
           script: |
             BINARY="/home/adammharris/diaryx/target/release/diaryx_sync_server"
             NEW_BINARY="/tmp/diaryx-deploy/diaryx_sync_server"

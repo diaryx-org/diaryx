@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "cd ../web && bun run dev --port 5174",
     "devUrl": "http://localhost:5174",
-    "beforeBuildCommand": "cd ../web && bun run build",
+    "beforeBuildCommand": "cd ../web && bunx vite build",
     "frontendDist": "../../web/dist"
   },
   "app": {

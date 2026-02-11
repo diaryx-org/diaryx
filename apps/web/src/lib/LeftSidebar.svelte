@@ -1461,7 +1461,7 @@
           {/if}
           <button
             type="button"
-            class="flex-1 flex items-center gap-2 py-1.5 pr-2 text-sm text-left rounded-md transition-colors hover:bg-sidebar-accent active:bg-sidebar-accent {currentEntry?.path ===
+            class="flex-1 min-w-0 flex items-center gap-2 py-1.5 pr-2 text-sm text-left rounded-md transition-colors hover:bg-sidebar-accent active:bg-sidebar-accent {currentEntry?.path ===
             node.path
               ? 'text-sidebar-primary font-medium bg-sidebar-accent'
               : 'text-sidebar-foreground'}"

@@ -19,6 +19,8 @@ jobs:
   # Rust library tests
   test:
     name: Test Rust
+    needs: [changes]
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -50,6 +52,8 @@ jobs:
   # Rust formatting check
   fmt:
     name: Formatting
+    needs: [changes]
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -66,6 +70,8 @@ jobs:
   # Rust linting
   clippy:
     name: Clippy
+    needs: [changes]
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -272,6 +278,8 @@ jobs:
   # Web app unit tests
   test-web:
     name: Test Web App
+    needs: [changes]
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -348,6 +356,7 @@ jobs:
     name: Detect Changes
     runs-on: ubuntu-latest
     outputs:
+      rust: ${{ steps.filter.outputs.rust }}
       tauri: ${{ steps.filter.outputs.tauri }}
       web: ${{ steps.filter.outputs.web }}
       wasm: ${{ steps.filter.outputs.wasm }}
@@ -360,6 +369,10 @@ jobs:
         id: filter
         with:
           filters: |
+            rust:
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
             tauri:
               - 'apps/tauri/**'
               - 'apps/web/**'
@@ -409,6 +422,8 @@ jobs:
   # Minimum Supported Rust Version
   msrv:
     name: MSRV Check
+    needs: [changes]
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

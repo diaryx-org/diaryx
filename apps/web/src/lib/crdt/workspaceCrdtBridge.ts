@@ -1294,7 +1294,26 @@ export async function getFileMetadata(path: string): Promise<FileMetadata | null
 
 async function _getFileMetadataImpl(path: string): Promise<FileMetadata | null> {
   if (!rustApi) return null;
-  return rustApi.getFile(path);
+  const direct = await rustApi.getFile(path);
+  if (direct) return direct;
+
+  const resolvedKey = await resolveMetadataStorageKey(path);
+  if (resolvedKey !== path) {
+    return rustApi.getFile(resolvedKey);
+  }
+  return null;
+}
+
+async function resolveMetadataStorageKey(path: string): Promise<string> {
+  if (!rustApi) return path;
+  const api = rustApi as unknown as { findDocIdByPath?: (p: string) => Promise<string | null> };
+  if (typeof api.findDocIdByPath !== 'function') return path;
+  try {
+    const docId = await api.findDocIdByPath(path);
+    return docId ?? path;
+  } catch {
+    return path;
+  }
 }
 
 /**
@@ -1591,10 +1610,11 @@ export async function setFileMetadata(path: string, metadata: FileMetadata): Pro
     return;
   }
 
-  await rustApi.setFile(path, metadata);
+  const storageKey = await resolveMetadataStorageKey(path);
+  await rustApi.setFile(storageKey, metadata);
   // Sync happens automatically via SendSyncMessage events from Rust
 
-  console.log('[WorkspaceCrdtBridge] setFileMetadata complete:', path);
+  console.log('[WorkspaceCrdtBridge] setFileMetadata complete:', path, 'storageKey:', storageKey);
   notifyFileChange(path, metadata);
 }
 
@@ -1724,7 +1744,8 @@ export async function updateFileMetadata(
   const releaseLock = await acquireFileLock(path);
 
   try {
-    const existing = await rustApi.getFile(path);
+    const storageKey = await resolveMetadataStorageKey(path);
+    const existing = await rustApi.getFile(storageKey);
 
     // Build updated metadata (without modified_at initially)
     const newTitle = updates.title ?? existing?.title ?? null;
@@ -1765,9 +1786,9 @@ export async function updateFileMetadata(
       modified_at: BigInt(Date.now()),
     };
 
-    console.log('[WorkspaceCrdtBridge] Updating file metadata:', path, updated);
-    await rustApi.setFile(path, updated);
-    console.log('[WorkspaceCrdtBridge] File metadata updated successfully:', path);
+    console.log('[WorkspaceCrdtBridge] Updating file metadata:', path, 'storageKey:', storageKey, updated);
+    await rustApi.setFile(storageKey, updated);
+    console.log('[WorkspaceCrdtBridge] File metadata updated successfully:', path, 'storageKey:', storageKey);
     // Sync happens automatically via SendSyncMessage events from Rust
 
     notifyFileChange(path, updated);
@@ -2336,16 +2357,61 @@ function notifyFileChange(path: string | null, metadata: FileMetadata | null): v
   if (path && isTempFile(path)) {
     return;
   }
-  if (path && metadata && _workspaceId && metadata.attachments.length > 0) {
-    enqueueMissingDownloadsFromMetadata(path, _workspaceId, metadata.attachments);
+  const normalizedMetadata = normalizeFileMetadata(path, metadata);
+  if (
+    path &&
+    normalizedMetadata &&
+    _workspaceId &&
+    normalizedMetadata.attachments.length > 0
+  ) {
+    enqueueMissingDownloadsFromMetadata(path, _workspaceId, normalizedMetadata.attachments);
   }
   for (const callback of fileChangeCallbacks) {
     try {
-      callback(path, metadata);
+      callback(path, normalizedMetadata);
     } catch (error) {
       console.error('[WorkspaceCrdtBridge] File change callback error:', error);
     }
   }
+}
+
+function normalizeFileMetadata(path: string | null, metadata: FileMetadata | null): FileMetadata | null {
+  if (!metadata || typeof metadata !== 'object') {
+    return null;
+  }
+
+  const raw = metadata as Partial<FileMetadata> & Record<string, unknown>;
+  const fallbackFilename = path?.split('/').pop() ?? '';
+  const modifiedAtRaw = raw.modified_at;
+
+  return {
+    filename: typeof raw.filename === 'string' && raw.filename.length > 0
+      ? raw.filename
+      : fallbackFilename,
+    title: typeof raw.title === 'string' ? raw.title : null,
+    part_of: typeof raw.part_of === 'string' ? raw.part_of : null,
+    contents: Array.isArray(raw.contents)
+      ? raw.contents.filter((value): value is string => typeof value === 'string')
+      : null,
+    attachments: Array.isArray(raw.attachments)
+      ? (raw.attachments as BinaryRef[])
+      : [],
+    deleted: typeof raw.deleted === 'boolean' ? raw.deleted : false,
+    audience: Array.isArray(raw.audience)
+      ? raw.audience.filter((value): value is string => typeof value === 'string')
+      : null,
+    description: typeof raw.description === 'string' ? raw.description : null,
+    extra:
+      raw.extra && typeof raw.extra === 'object' && !Array.isArray(raw.extra)
+        ? (raw.extra as FileMetadata['extra'])
+        : {},
+    modified_at:
+      typeof modifiedAtRaw === 'bigint'
+        ? modifiedAtRaw
+        : typeof modifiedAtRaw === 'number' && Number.isFinite(modifiedAtRaw)
+          ? BigInt(Math.trunc(modifiedAtRaw))
+          : BigInt(Date.now()),
+  };
 }
 
 function notifyFileRenamed(oldPath: string, newPath: string): void {

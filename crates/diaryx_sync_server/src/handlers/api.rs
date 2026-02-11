@@ -481,6 +481,9 @@ async fn init_attachment_upload(
     if total_parts == 0 || total_parts != derived_parts {
         return StatusCode::BAD_REQUEST.into_response();
     }
+    // Small uploads that fit in one part use direct object put to avoid
+    // unnecessary multipart lifecycle overhead.
+    let use_direct_put = total_parts == 1;
 
     if let Ok(Some((_key, _size, _mime))) = state.repo.get_user_blob(&auth.user.id, &body.hash) {
         return Json(InitAttachmentUploadResponse {
@@ -518,15 +521,19 @@ async fn init_attachment_upload(
 
     let upload_id = uuid::Uuid::new_v4().to_string();
     let r2_key = state.blob_store.blob_key(&auth.user.id, &body.hash);
-    let multipart_id = match state
-        .blob_store
-        .init_multipart(&r2_key, &body.mime_type)
-        .await
-    {
-        Ok(id) => id,
-        Err(err) => {
-            error!("Attachment upload init failed: {}", err);
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    let multipart_id = if use_direct_put {
+        String::new()
+    } else {
+        match state
+            .blob_store
+            .init_multipart(&r2_key, &body.mime_type)
+            .await
+        {
+            Ok(id) => id,
+            Err(err) => {
+                error!("Attachment upload init failed: {}", err);
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
         }
     };
 
@@ -610,20 +617,35 @@ async fn upload_attachment_part(
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     }
 
-    let etag = match state
-        .blob_store
-        .upload_part(
-            &session.r2_key,
-            &session.r2_multipart_upload_id,
-            part_no,
-            &body,
-        )
-        .await
-    {
-        Ok(etag) => etag,
-        Err(err) => {
-            error!("Attachment multipart part upload failed: {}", err);
+    let etag = if session.r2_multipart_upload_id.is_empty() {
+        if session.total_parts != 1 || part_no != 1 || body.len() as u64 != session.size_bytes {
+            return StatusCode::BAD_REQUEST.into_response();
+        }
+        if let Err(err) = state
+            .blob_store
+            .put(&session.r2_key, &body, &session.mime_type)
+            .await
+        {
+            error!("Attachment single-part direct upload failed: {}", err);
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+        "direct-put".to_string()
+    } else {
+        match state
+            .blob_store
+            .upload_part(
+                &session.r2_key,
+                &session.r2_multipart_upload_id,
+                part_no,
+                &body,
+            )
+            .await
+        {
+            Ok(etag) => etag,
+            Err(err) => {
+                error!("Attachment multipart part upload failed: {}", err);
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
         }
     };
     if let Err(err) =
@@ -729,12 +751,14 @@ async fn complete_attachment_upload(
         }
     };
     if is_new_blob && projected > limit_bytes {
-        if let Err(err) = state
-            .blob_store
-            .abort_multipart(&session.r2_key, &session.r2_multipart_upload_id)
-            .await
-        {
-            error!("Failed to abort over-limit multipart upload: {}", err);
+        if !session.r2_multipart_upload_id.is_empty() {
+            if let Err(err) = state
+                .blob_store
+                .abort_multipart(&session.r2_key, &session.r2_multipart_upload_id)
+                .await
+            {
+                error!("Failed to abort over-limit multipart upload: {}", err);
+            }
         }
         if let Err(err) = state
             .repo
@@ -748,24 +772,51 @@ async fn complete_attachment_upload(
         return storage_limit_exceeded_response(used_bytes, limit_bytes, session.size_bytes);
     }
 
-    let completed_parts = uploaded_parts
-        .iter()
-        .map(|part| MultipartCompletedPart {
-            part_no: part.part_no,
-            etag: part.etag.clone(),
-        })
-        .collect::<Vec<_>>();
-    if let Err(err) = state
-        .blob_store
-        .complete_multipart(
-            &session.r2_key,
-            &session.r2_multipart_upload_id,
-            &completed_parts,
-        )
-        .await
-    {
-        error!("Attachment multipart completion failed: {}", err);
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    if !session.r2_multipart_upload_id.is_empty() {
+        let completed_parts = uploaded_parts
+            .iter()
+            .map(|part| MultipartCompletedPart {
+                part_no: part.part_no,
+                etag: part.etag.clone(),
+            })
+            .collect::<Vec<_>>();
+        if let Err(err) = state
+            .blob_store
+            .complete_multipart(
+                &session.r2_key,
+                &session.r2_multipart_upload_id,
+                &completed_parts,
+            )
+            .await
+        {
+            error!(
+                "Attachment multipart completion failed for upload_id={} key={} parts={}: {}",
+                upload_id,
+                session.r2_key,
+                completed_parts.len(),
+                err
+            );
+            if let Err(abort_err) = state
+                .blob_store
+                .abort_multipart(&session.r2_key, &session.r2_multipart_upload_id)
+                .await
+            {
+                error!(
+                    "Attachment multipart abort after completion failure failed for upload_id={}: {}",
+                    upload_id, abort_err
+                );
+            }
+            if let Err(status_err) = state
+                .repo
+                .set_attachment_upload_status(&upload_id, "failed")
+            {
+                error!(
+                    "Attachment upload status update to failed failed for {}: {}",
+                    upload_id, status_err
+                );
+            }
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
     }
 
     if let Err(err) = state.repo.upsert_blob(

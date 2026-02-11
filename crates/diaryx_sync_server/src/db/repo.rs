@@ -108,6 +108,14 @@ pub struct AttachmentUploadPart {
     pub size_bytes: u64,
 }
 
+/// Completed upload metadata lookup row used by attachment reconciliation fallback.
+#[derive(Debug, Clone)]
+pub struct CompletedAttachmentUploadInfo {
+    pub blob_hash: String,
+    pub size_bytes: u64,
+    pub mime_type: String,
+}
+
 /// Authentication repository for database operations
 #[derive(Clone)]
 pub struct AuthRepo {
@@ -1059,6 +1067,31 @@ impl AuthRepo {
         Ok(())
     }
 
+    /// Get latest completed upload metadata for a workspace attachment path.
+    pub fn get_latest_completed_attachment_upload(
+        &self,
+        workspace_id: &str,
+        attachment_path: &str,
+    ) -> Result<Option<CompletedAttachmentUploadInfo>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT blob_hash, size_bytes, mime_type
+             FROM attachment_uploads
+             WHERE workspace_id = ? AND attachment_path = ? AND status = 'completed'
+             ORDER BY updated_at DESC
+             LIMIT 1",
+            params![workspace_id, attachment_path],
+            |row| {
+                Ok(CompletedAttachmentUploadInfo {
+                    blob_hash: row.get(0)?,
+                    size_bytes: row.get::<_, i64>(1)? as u64,
+                    mime_type: row.get(2)?,
+                })
+            },
+        )
+        .optional()
+    }
+
     // ===== Share session operations =====
 
     /// Create a new share session
@@ -1482,5 +1515,59 @@ mod tests {
             )
             .unwrap();
         assert!(projected > DEFAULT_ATTACHMENT_LIMIT_BYTES);
+    }
+
+    #[test]
+    fn test_get_latest_completed_attachment_upload() {
+        let repo = setup_test_db();
+        let user_id = repo.get_or_create_user("upload-test@example.com").unwrap();
+        let workspace_id = repo.get_or_create_workspace(&user_id, "default").unwrap();
+        let now = Utc::now().timestamp();
+
+        let old = AttachmentUploadSession {
+            upload_id: "u1".to_string(),
+            workspace_id: workspace_id.clone(),
+            user_id: user_id.clone(),
+            blob_hash: "a".repeat(64),
+            attachment_path: "_attachments/a.png".to_string(),
+            mime_type: "image/png".to_string(),
+            size_bytes: 111,
+            part_size: 8 * 1024 * 1024,
+            total_parts: 1,
+            r2_key: "k1".to_string(),
+            r2_multipart_upload_id: "".to_string(),
+            status: "completed".to_string(),
+            created_at: now - 10,
+            updated_at: now - 10,
+            expires_at: now + 1000,
+        };
+        repo.create_attachment_upload_session(&old).unwrap();
+
+        let latest = AttachmentUploadSession {
+            upload_id: "u2".to_string(),
+            workspace_id: workspace_id.clone(),
+            user_id,
+            blob_hash: "b".repeat(64),
+            attachment_path: "_attachments/a.png".to_string(),
+            mime_type: "image/webp".to_string(),
+            size_bytes: 222,
+            part_size: 8 * 1024 * 1024,
+            total_parts: 1,
+            r2_key: "k2".to_string(),
+            r2_multipart_upload_id: "".to_string(),
+            status: "completed".to_string(),
+            created_at: now,
+            updated_at: now,
+            expires_at: now + 1000,
+        };
+        repo.create_attachment_upload_session(&latest).unwrap();
+
+        let found = repo
+            .get_latest_completed_attachment_upload(&workspace_id, "_attachments/a.png")
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.blob_hash, "b".repeat(64));
+        assert_eq!(found.size_bytes, 222);
+        assert_eq!(found.mime_type, "image/webp");
     }
 }

@@ -23,7 +23,7 @@ Business logic services that coordinate between stores and backend.
 | File | Purpose |
 |------|---------|
 | `attachmentService.ts` | Attachment upload and download |
-| `attachmentSyncService.ts` | Incremental/resumable attachment sync queue (multipart upload + missing-blob download) |
+| `attachmentSyncService.ts` | Incremental/resumable attachment sync queue (multipart upload + missing-blob download), including sync-storage usage refresh after successful upload completion |
 | `shareService.ts` | Share session management |
 | `toastService.ts` | Toast notification service |
 | `workspaceCrdtService.ts` | CRDT workspace synchronization |

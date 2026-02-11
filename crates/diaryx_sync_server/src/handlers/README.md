@@ -39,6 +39,9 @@ max payload size (`SNAPSHOT_UPLOAD_MAX_BYTES`, default 1 GiB).
 - `POST /api/workspaces/{workspace_id}/attachments/uploads` — initialize/resume multipart attachment upload.
 - `PUT /api/workspaces/{workspace_id}/attachments/uploads/{upload_id}/parts/{part_no}` — upload one part.
 - `POST /api/workspaces/{workspace_id}/attachments/uploads/{upload_id}/complete` — finalize multipart upload.
+
+For one-part uploads, the handler uses a direct blob `put` path internally and
+skips remote multipart completion/abort calls.
 - `GET /api/workspaces/{workspace_id}/attachments/{hash}` — download attachment bytes (supports `Range`).
 
 Attachment uploads and attachment-enabled snapshot imports enforce per-user

@@ -5,7 +5,7 @@
 //! - `WorkspaceStore`: snapshot export/import and file queries for HTTP API handlers
 
 use crate::blob_store::BlobStore;
-use crate::db::{AuthRepo, WorkspaceAttachmentRefRecord};
+use crate::db::{AuthRepo, CompletedAttachmentUploadInfo, WorkspaceAttachmentRefRecord};
 use chrono::Utc;
 use diaryx_core::crdt::{
     BodyDocManager, SqliteStorage, WorkspaceCrdt, materialize_workspace, parse_snapshot_markdown,
@@ -559,21 +559,41 @@ impl WorkspaceStore {
                 continue;
             };
             for attachment in file.metadata.attachments {
-                if attachment.deleted || attachment.hash.is_empty() {
+                if attachment.deleted {
                     continue;
                 }
                 let Some(attachment_path) = normalize_workspace_path(&attachment.path) else {
                     continue;
                 };
+                let fallback = if attachment.hash.is_empty() {
+                    repo.get_latest_completed_attachment_upload(workspace_id, &attachment_path)?
+                } else {
+                    None
+                };
+                let CompletedAttachmentUploadInfo {
+                    blob_hash,
+                    size_bytes,
+                    mime_type,
+                } = match fallback {
+                    Some(upload) => upload,
+                    None => CompletedAttachmentUploadInfo {
+                        blob_hash: attachment.hash,
+                        size_bytes: attachment.size,
+                        mime_type: attachment.mime_type,
+                    },
+                };
+                if blob_hash.is_empty() {
+                    continue;
+                }
                 refs.push(WorkspaceAttachmentRefRecord {
                     file_path: file_path.clone(),
                     attachment_path,
-                    blob_hash: attachment.hash,
-                    size_bytes: attachment.size,
-                    mime_type: if attachment.mime_type.is_empty() {
+                    blob_hash,
+                    size_bytes,
+                    mime_type: if mime_type.is_empty() {
                         "application/octet-stream".to_string()
                     } else {
-                        attachment.mime_type
+                        mime_type
                     },
                 });
             }

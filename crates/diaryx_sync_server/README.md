@@ -215,6 +215,8 @@ Content-Type: application/json
 ```
 
 Initializes or resumes a multipart attachment upload session.
+If an upload fits in a single part, the server uses a direct object upload path
+internally (no remote multipart session is created).
 
 ```
 PUT /api/workspaces/{workspace_id}/attachments/uploads/{upload_id}/parts/{part_no}

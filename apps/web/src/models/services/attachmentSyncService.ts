@@ -8,6 +8,7 @@ const PART_SIZE_BYTES = 8 * 1024 * 1024;
 const MAX_PART_ATTEMPTS = 5;
 const UPLOAD_CONCURRENCY = 2;
 const DOWNLOAD_CONCURRENCY = 2;
+const STORAGE_USAGE_REFRESH_DEBOUNCE_MS = 1500;
 
 type QueueItemState = "pending" | "uploading" | "downloading" | "complete" | "failed";
 type QueueKind = "upload" | "download";
@@ -83,6 +84,8 @@ let backendApi: Api | null = null;
 let queuePumpScheduled = false;
 let uploadInFlight = 0;
 let downloadInFlight = 0;
+let storageUsageRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+let storageUsageRefreshInFlight = false;
 
 function loadQueue(): QueueItem[] {
   if (typeof localStorage === "undefined") return [];
@@ -144,6 +147,28 @@ function scheduleQueuePump(): void {
     queuePumpScheduled = false;
     await pumpQueue();
   });
+}
+
+function scheduleStorageUsageRefresh(): void {
+  if (typeof window === "undefined") return;
+  if (storageUsageRefreshTimer !== null) return;
+  storageUsageRefreshTimer = setTimeout(() => {
+    storageUsageRefreshTimer = null;
+    void refreshStorageUsage();
+  }, STORAGE_USAGE_REFRESH_DEBOUNCE_MS);
+}
+
+async function refreshStorageUsage(): Promise<void> {
+  if (storageUsageRefreshInFlight) return;
+  storageUsageRefreshInFlight = true;
+  try {
+    const authStore = await import("$lib/auth/authStore.svelte");
+    await authStore.refreshUserStorageUsage();
+  } catch (error) {
+    console.warn("[AttachmentSyncService] Failed to refresh synced storage usage:", error);
+  } finally {
+    storageUsageRefreshInFlight = false;
+  }
 }
 
 function backoffDelayMs(attempt: number): number {
@@ -315,6 +340,9 @@ function applyFailure(item: QueueItem, error: unknown): void {
         : String(error),
   };
   updateItem(item.id, () => updated);
+  if (isQuotaFailure) {
+    scheduleStorageUsageRefresh();
+  }
 }
 
 export function isTerminalAttachmentSyncError(error: unknown): boolean {
@@ -349,6 +377,9 @@ async function runQueueItem(item: QueueItem): Promise<void> {
       updatedAt: nowMs(),
       lastError: undefined,
     }));
+    if (item.kind === "upload") {
+      scheduleStorageUsageRefresh();
+    }
   } catch (error) {
     applyFailure(item, error);
   } finally {

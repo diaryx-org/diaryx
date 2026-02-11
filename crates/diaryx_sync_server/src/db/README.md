@@ -27,3 +27,7 @@ The schema includes attachment usage tracking tables:
 - `workspace_attachment_refs` (workspace path refs to blob hashes)
 - `attachment_uploads` (resumable multipart upload sessions)
 - `attachment_upload_parts` (uploaded part ETags/state per upload session)
+
+`attachment_uploads` is also queried during sync-v2 reconciliation as a fallback
+source of hash/size/mime metadata when a workspace attachment ref is present but
+its synced `BinaryRef.hash` is empty.

@@ -136,6 +136,13 @@ sendToDoc('body:abc123/journal/2024.md', syncStep1Message);
 2. **Focus tracking broadcast** - Focus/unfocus messages are accepted but not fully relayed to peers.
 3. **Session context** - Guest read-only enforcement happens at the hook level and remains less mature than v1.
 
+Attachment reconciliation notes:
+
+- Reconciliation primarily uses `BinaryRef.hash` values from workspace metadata.
+- If a synced attachment ref has an empty hash, the server falls back to the
+  latest `attachment_uploads` row with `status='completed'` for the same
+  `workspace_id + attachment_path`, so usage/ref counts can still converge.
+
 ## Future Work
 
 - Improve focus list relay parity with v1

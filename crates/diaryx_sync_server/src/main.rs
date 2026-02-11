@@ -241,14 +241,16 @@ async fn main() {
                 };
 
                 for session in expired {
-                    if let Err(err) = uploads_blob_store
-                        .abort_multipart(&session.r2_key, &session.r2_multipart_upload_id)
-                        .await
-                    {
-                        error!(
-                            "Attachment upload abort failed for {}:{}: {}",
-                            session.upload_id, session.r2_key, err
-                        );
+                    if !session.r2_multipart_upload_id.is_empty() {
+                        if let Err(err) = uploads_blob_store
+                            .abort_multipart(&session.r2_key, &session.r2_multipart_upload_id)
+                            .await
+                        {
+                            error!(
+                                "Attachment upload abort failed for {}:{}: {}",
+                                session.upload_id, session.r2_key, err
+                            );
+                        }
                     }
                     if let Err(err) =
                         uploads_repo.set_attachment_upload_status(&session.upload_id, "expired")

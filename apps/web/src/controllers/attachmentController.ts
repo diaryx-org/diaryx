@@ -74,10 +74,15 @@ async function updateAttachmentRefMetadata(
   sizeBytes: number,
 ): Promise<void> {
   const metadata = await getFileMetadata(entryPath);
-  if (!metadata) return;
+  if (!metadata) {
+    console.warn('[AttachmentController] Missing CRDT metadata while updating attachment hash:', entryPath);
+    return;
+  }
 
+  let matchedAttachmentRef = false;
   const updatedAttachments = metadata.attachments.map((attachment) => {
     if (attachment.path !== attachmentPath) return attachment;
+    matchedAttachmentRef = true;
     return {
       ...attachment,
       hash,
@@ -87,6 +92,18 @@ async function updateAttachmentRefMetadata(
       deleted: false,
     };
   });
+  if (!matchedAttachmentRef) {
+    // Ensure a BinaryRef exists for newly uploaded attachments before syncing hash metadata.
+    updatedAttachments.push({
+      path: attachmentPath,
+      source: 'local',
+      hash,
+      mime_type: mimeType || getMimeType(attachmentPath),
+      size: BigInt(sizeBytes),
+      uploaded_at: BigInt(Date.now()),
+      deleted: false,
+    });
+  }
 
   const updatedMetadata = {
     ...metadata,

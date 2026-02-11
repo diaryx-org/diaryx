@@ -5,8 +5,7 @@
    * A pure presentational component that displays:
    * - Sidebar toggle buttons (only when sidebar is closed)
    * - Entry title and path (configurable via settings)
-   * - Unsaved indicator badge
-   * - Save button with keyboard shortcut tooltip
+   * - Save state indicator (icon-only: check=saved, dot=unsaved, spinner=saving)
    * - Command palette button with keyboard shortcut tooltip
    */
 
@@ -15,7 +14,8 @@
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
   import SyncStatusIndicator from "$lib/SyncStatusIndicator.svelte";
   import {
-    Save,
+    Check,
+    Circle,
     PanelLeft,
     PanelRight,
     Menu,
@@ -88,8 +88,9 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <header
-  class="flex items-center justify-between px-4 md:px-6 py-3 md:py-4 border-b border-border bg-background shrink-0
+  class="flex items-center justify-between px-4 md:px-6 py-3 md:py-4 border-b border-border bg-background
     transition-opacity duration-300 ease-in-out
+    {shouldFade ? 'absolute inset-x-0 top-0 z-10' : 'shrink-0'}
     {shouldFade && !isHovered ? 'opacity-0' : 'opacity-100'}"
   onmouseenter={() => isHovered = true}
   onmouseleave={() => isHovered = false}
@@ -199,38 +200,36 @@
         View only
       </span>
     {:else}
-      {#if isDirty && !isSaving}
-        <span
-          class="hidden sm:inline-flex px-2 py-1 text-xs font-medium rounded-md bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400"
-        >
-          Unsaved
-        </span>
-      {/if}
-
-      <!-- Save button with tooltip -->
+      <!-- Save indicator (icon-only) -->
       <Tooltip.Root>
         <Tooltip.Trigger>
           <Button
             onclick={onSave}
             disabled={!isDirty || isSaving}
-            variant={!isDirty && !isSaving ? "ghost" : "default"}
-            size="sm"
-            class="gap-1 md:gap-2 min-w-[80px]"
+            variant="ghost"
+            size="icon"
+            class="size-8"
+            aria-label={isSaving ? "Saving" : isDirty ? "Save" : "Saved"}
           >
             {#if isSaving}
-              <Loader2 class="size-4 animate-spin" />
-              <span class="hidden sm:inline">Saving...</span>
-            {:else if !isDirty}
-              <Save class="size-4 opacity-50" />
-              <span class="hidden sm:inline opacity-50">Saved</span>
+              <Loader2 class="size-4 animate-spin text-muted-foreground" />
+            {:else if isDirty}
+              <Circle class="size-3 fill-amber-500 text-amber-500 dark:fill-amber-400 dark:text-amber-400" />
             {:else}
-              <Save class="size-4" />
-              <span class="hidden sm:inline">Save</span>
+              <Check class="size-4 text-muted-foreground/50" />
             {/if}
           </Button>
         </Tooltip.Trigger>
         {#if !mobileState.isMobile}
-          <Tooltip.Content>Save ({modKey}S)</Tooltip.Content>
+          <Tooltip.Content>
+            {#if isSaving}
+              Saving...
+            {:else if isDirty}
+              Save ({modKey}S)
+            {:else}
+              Saved
+            {/if}
+          </Tooltip.Content>
         {/if}
       </Tooltip.Root>
     {/if}

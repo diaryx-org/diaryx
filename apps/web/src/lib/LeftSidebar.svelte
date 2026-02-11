@@ -7,6 +7,7 @@
 
   import * as ContextMenu from "$lib/components/ui/context-menu";
   import * as Popover from "$lib/components/ui/popover";
+  import SignInPopover from "./SignInPopover.svelte";
   import MobileActionSheet from "../views/sidebar/MobileActionSheet.svelte";
   import { createContextMenuState, type TreeNodeMenuData } from "./hooks/useContextMenu.svelte";
   import { getMobileState } from "./hooks/useMobile.svelte";
@@ -50,6 +51,8 @@
     onToggleNode: (path: string) => void;
     onToggleCollapse: () => void;
     onOpenSettings: () => void;
+    onOpenAccountSettings: () => void;
+    onOpenSyncWizard: () => void;
     onMoveEntry: (fromPath: string, toParentPath: string) => void;
     onCreateChildEntry: (parentPath: string) => void;
     onDeleteEntry: (path: string) => void;
@@ -79,6 +82,8 @@
     onToggleNode,
     onToggleCollapse,
     onOpenSettings,
+    onOpenAccountSettings,
+    onOpenSyncWizard,
     onMoveEntry,
     onCreateChildEntry,
     onDeleteEntry,
@@ -349,6 +354,7 @@
   // Problems Panel State
   // =========================================================================
 
+  let profilePopoverOpen = $state(false);
   let problemsPanelOpen = $state(true);
   let isFixingAll = $state(false);
 
@@ -1161,24 +1167,31 @@
 
   <!-- Profile Footer -->
   <div class="border-t border-sidebar-border shrink-0">
-    <button
-      type="button"
-      class="w-full flex items-center gap-2.5 px-4 py-3 hover:bg-sidebar-accent active:bg-sidebar-accent transition-colors text-left"
-      onclick={onOpenSettings}
-      aria-label={authState.isAuthenticated ? "Account settings" : "Sign in"}
-    >
-      <span class="relative shrink-0">
-        <CircleUser class="size-5 text-muted-foreground" />
-        {#if authState.isAuthenticated}
-          <span class="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full bg-emerald-500 ring-2 ring-sidebar"></span>
+    <Popover.Root bind:open={profilePopoverOpen}>
+      <Popover.Trigger
+        class="w-full flex items-center gap-2.5 px-4 py-3 hover:bg-sidebar-accent active:bg-sidebar-accent transition-colors text-left"
+        aria-label={authState.isAuthenticated ? "Account settings" : "Sign in"}
+      >
+        <span class="relative shrink-0">
+          <CircleUser class="size-5 text-muted-foreground" />
+          {#if authState.isAuthenticated}
+            <span class="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full bg-emerald-500 ring-2 ring-sidebar"></span>
+          {/if}
+        </span>
+        {#if authState.isAuthenticated && authState.user}
+          <span class="text-sm truncate text-sidebar-foreground">{authState.user.email}</span>
+        {:else}
+          <span class="text-sm text-muted-foreground">Sign in</span>
         {/if}
-      </span>
-      {#if authState.isAuthenticated && authState.user}
-        <span class="text-sm truncate text-sidebar-foreground">{authState.user.email}</span>
-      {:else}
-        <span class="text-sm text-muted-foreground">Sign in</span>
-      {/if}
-    </button>
+      </Popover.Trigger>
+      <Popover.Content side="top" align="start" class="w-auto p-3">
+        <SignInPopover
+          onOpenAccountSettings={() => { profilePopoverOpen = false; onOpenAccountSettings(); }}
+          onOpenSyncWizard={() => { profilePopoverOpen = false; onOpenSyncWizard(); }}
+          onClose={() => { profilePopoverOpen = false; }}
+        />
+      </Popover.Content>
+    </Popover.Root>
   </div>
 </aside>
 

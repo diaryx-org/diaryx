@@ -137,6 +137,9 @@
   // Sync setup wizard
   let showSyncWizard = $state(false);
 
+  // Settings dialog initial tab (for opening to a specific tab)
+  let settingsInitialTab = $state<string | undefined>(undefined);
+
   // Workspace state - proxied from workspaceStore
   let tree = $derived(workspaceStore.tree);
   let expandedNodes = $derived(workspaceStore.expandedNodes);
@@ -1627,6 +1630,7 @@
   bind:readableLineLength
   bind:focusMode
   workspacePath={tree?.path}
+  initialTab={settingsInitialTab}
   onOpenSyncWizard={() => {
     showSettingsDialog = false;
     showSyncWizard = true;
@@ -1672,7 +1676,9 @@
     onOpenEntry={openEntry}
     onToggleNode={toggleNode}
     onToggleCollapse={toggleLeftSidebar}
-    onOpenSettings={() => (showSettingsDialog = true)}
+    onOpenSettings={() => { settingsInitialTab = undefined; showSettingsDialog = true; }}
+    onOpenAccountSettings={() => { settingsInitialTab = "account"; showSettingsDialog = true; }}
+    onOpenSyncWizard={() => { showSyncWizard = true; }}
     onMoveEntry={handleMoveEntry}
     onCreateChildEntry={handleCreateChildEntry}
     onDeleteEntry={handleDeleteEntry}

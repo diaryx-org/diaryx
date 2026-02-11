@@ -5,11 +5,11 @@
  *
  * Guests need special path handling to isolate their storage from the host.
  */
-export type GuestConfig = {
+export type GuestConfig = { 
 /**
  * The join code for the share session.
  */
-join_code: string,
+join_code: string, 
 /**
  * If true, prefix paths with guest/{join_code}/ for OPFS storage.
  * If false (in-memory storage), paths are used as-is.

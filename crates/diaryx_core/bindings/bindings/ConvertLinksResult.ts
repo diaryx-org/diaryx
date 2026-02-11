@@ -3,19 +3,19 @@
 /**
  * Result of converting links to a new format.
  */
-export type ConvertLinksResult = {
+export type ConvertLinksResult = { 
 /**
  * Number of files that were modified (or would be modified in dry-run).
  */
-files_modified: number,
+files_modified: number, 
 /**
  * Number of links that were converted (or would be converted in dry-run).
  */
-links_converted: number,
+links_converted: number, 
 /**
  * List of file paths that were modified.
  */
-modified_files: Array<string>,
+modified_files: Array<string>, 
 /**
  * Whether this was a dry run (no actual changes made).
  */

@@ -19,49 +19,49 @@ import type { JsonValue } from "../serde_json/JsonValue";
  *
  * Use `WorkspaceCrdt::get_path()` to derive the full path from a doc_id.
  */
-export type FileMetadata = {
+export type FileMetadata = { 
 /**
  * Filename on disk (e.g., "my-note.md"). Required for non-deleted files.
  * For files created before the doc-ID migration, this may be empty and
  * should be derived from the path key during migration.
  */
-filename: string,
+filename: string, 
 /**
  * Display title from frontmatter
  */
-title: string | null,
+title: string | null, 
 /**
  * Document ID of parent file (e.g., "abc123-uuid"), or None for root files.
  * Note: For backward compatibility during migration, this may temporarily
  * contain absolute paths which will be converted to doc_ids.
  */
-part_of: string | null,
+part_of: string | null, 
 /**
  * Document IDs of child files.
  * Note: For backward compatibility during migration, this may temporarily
  * contain relative paths which will be converted to doc_ids.
  */
-contents: Array<string> | null,
+contents: Array<string> | null, 
 /**
  * Binary attachment references
  */
-attachments: Array<BinaryRef>,
+attachments: Array<BinaryRef>, 
 /**
  * Soft deletion tombstone - if true, file is considered deleted
  */
-deleted: boolean,
+deleted: boolean, 
 /**
  * Visibility/access control tags
  */
-audience: Array<string> | null,
+audience: Array<string> | null, 
 /**
  * File description from frontmatter
  */
-description: string | null,
+description: string | null, 
 /**
  * Additional frontmatter properties not covered by other fields
  */
-extra: { [key in string]?: JsonValue },
+extra: { [key in string]?: JsonValue }, 
 /**
  * Unix timestamp of last modification (milliseconds)
  */

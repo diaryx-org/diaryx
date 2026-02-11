@@ -7,12 +7,12 @@ import type { LinkFormat } from "./LinkFormat";
  * This allows workspace settings to live with the data (local-first philosophy)
  * rather than in separate config files.
  */
-export type WorkspaceConfig = {
+export type WorkspaceConfig = { 
 /**
  * Format for `part_of` and `contents` links.
  * Defaults to MarkdownRoot if not specified.
  */
-link_format: LinkFormat,
+link_format: LinkFormat, 
 /**
  * Subfolder for daily entries (e.g., "Daily" or "Journal/Daily").
  * If not specified, daily entries are created at workspace root.

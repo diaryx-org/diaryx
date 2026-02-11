@@ -88,8 +88,9 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <header
-  class="flex items-center justify-between px-4 md:px-6 py-3 md:py-4 border-b border-border bg-background shrink-0
+  class="flex items-center justify-between px-4 md:px-6 py-3 md:py-4 border-b border-border bg-background
     transition-opacity duration-300 ease-in-out
+    {shouldFade ? 'absolute inset-x-0 top-0 z-10' : 'shrink-0'}
     {shouldFade && !isHovered ? 'opacity-0' : 'opacity-100'}"
   onmouseenter={() => isHovered = true}
   onmouseleave={() => isHovered = false}

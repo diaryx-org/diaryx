@@ -1710,7 +1710,7 @@
   />
 
   <!-- Main Content Area -->
-  <main class="flex-1 flex flex-col overflow-hidden min-w-0">
+  <main class="flex-1 flex flex-col overflow-hidden min-w-0 relative">
     {#if currentEntry}
       <EditorHeader
         title={getEntryTitle(currentEntry)}

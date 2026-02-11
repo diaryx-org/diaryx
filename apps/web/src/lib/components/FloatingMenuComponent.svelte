@@ -470,21 +470,32 @@
       height: 36px;
     }
 
+    .menu-expanded {
+      min-width: 0;
+      flex-wrap: wrap;
+      max-width: min(90vw, 280px);
+      justify-content: flex-start;
+    }
+
     .menu-item {
-      width: 40px;
-      height: 40px;
+      width: 36px;
+      height: 36px;
     }
 
     .heading-section :global([data-slot="native-select"]) {
-      height: 40px;
-      min-width: 64px;
-      font-size: 14px;
+      height: 36px;
+      min-width: 56px;
+      font-size: 13px;
     }
 
     .list-section :global([data-slot="native-select"]) {
-      height: 40px;
-      min-width: 80px;
-      font-size: 14px;
+      height: 36px;
+      min-width: 70px;
+      font-size: 13px;
+    }
+
+    .menu-divider {
+      height: 16px;
     }
   }
 </style>

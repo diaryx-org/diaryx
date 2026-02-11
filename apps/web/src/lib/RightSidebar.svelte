@@ -40,13 +40,14 @@
   import GitHistoryPanel from "./history/GitHistoryPanel.svelte";
   import ShareTab from "./share/ShareTab.svelte";
   import * as Tooltip from "$lib/components/ui/tooltip";
+  import * as Kbd from "$lib/components/ui/kbd";
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
 
   // Platform detection for keyboard shortcut display
   const isMac =
     typeof navigator !== "undefined" &&
     navigator.platform.toUpperCase().indexOf("MAC") >= 0;
-  const modKey = isMac ? "⌘" : "Ctrl+";
+  const modKey = isMac ? "⌘" : "Ctrl";
 
   // Mobile state for hiding tooltips
   const mobileState = getMobileState();
@@ -530,8 +531,17 @@
           <PanelRightClose class="size-4" />
         </Button>
       </Tooltip.Trigger>
-      {#if !mobileState.isMobile}
-        <Tooltip.Content>Collapse panel ({modKey}])</Tooltip.Content>
+      {#if !mobileState.isMobile && !collapsed}
+        <Tooltip.Content>
+          <div class="flex items-center gap-2">
+            Collapse panel
+            <Kbd.Group>
+              <Kbd.Root>{modKey}</Kbd.Root>
+              <span>+</span>
+              <Kbd.Root>]</Kbd.Root>
+            </Kbd.Group>
+          </div>
+        </Tooltip.Content>
       {/if}
     </Tooltip.Root>
 

@@ -3,6 +3,7 @@
   import { isTauri, type TreeNode, type EntryData, type ValidationResultWithMeta, type ValidationErrorWithMeta, type ValidationWarningWithMeta, type Api } from "./backend";
   import { Button } from "$lib/components/ui/button";
   import * as Tooltip from "$lib/components/ui/tooltip";
+  import * as Kbd from "$lib/components/ui/kbd";
   import { toast } from "svelte-sonner";
 
   import * as ContextMenu from "$lib/components/ui/context-menu";
@@ -104,9 +105,11 @@
   const isMac =
     typeof navigator !== "undefined" &&
     navigator.platform.toUpperCase().indexOf("MAC") >= 0;
-  const modKey = isMac ? "⌘" : "Ctrl+";
-  // Settings shortcut: Cmd+, on Tauri, Cmd+Shift+, on web
-  const settingsShortcut = isTauri() ? `${modKey},` : `${modKey}Shift+,`;
+  const modKey = isMac ? "⌘" : "Ctrl";
+  // Settings shortcut keys: Cmd+, on Tauri, Cmd+Shift+, on web
+  const settingsKeys: string[] = isTauri()
+    ? [modKey, ","]
+    : [modKey, "Shift", ","];
 
   // Context menu state for mobile/desktop switching
   const contextMenuState = createContextMenuState<TreeNodeMenuData>();
@@ -973,8 +976,18 @@
             <Settings class="size-4" />
           </Button>
         </Tooltip.Trigger>
-        {#if !mobileState.isMobile}
-          <Tooltip.Content>Settings ({settingsShortcut})</Tooltip.Content>
+        {#if !mobileState.isMobile && !collapsed}
+          <Tooltip.Content>
+            <div class="flex items-center gap-2">
+              Settings
+              <Kbd.Group>
+                {#each settingsKeys as key, i}
+                  {#if i > 0}<span>+</span>{/if}
+                  <Kbd.Root>{key}</Kbd.Root>
+                {/each}
+              </Kbd.Group>
+            </div>
+          </Tooltip.Content>
         {/if}
       </Tooltip.Root>
       <Tooltip.Root>
@@ -989,8 +1002,17 @@
             <PanelLeftClose class="size-4" />
           </Button>
         </Tooltip.Trigger>
-        {#if !mobileState.isMobile}
-          <Tooltip.Content>Collapse sidebar ({modKey}[)</Tooltip.Content>
+        {#if !mobileState.isMobile && !collapsed}
+          <Tooltip.Content>
+            <div class="flex items-center gap-2">
+              Collapse sidebar
+              <Kbd.Group>
+                <Kbd.Root>{modKey}</Kbd.Root>
+                <span>+</span>
+                <Kbd.Root>[</Kbd.Root>
+              </Kbd.Group>
+            </div>
+          </Tooltip.Content>
         {/if}
       </Tooltip.Root>
     </div>

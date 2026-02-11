@@ -11,6 +11,7 @@
 
   import { Button } from "$lib/components/ui/button";
   import * as Tooltip from "$lib/components/ui/tooltip";
+  import * as Kbd from "$lib/components/ui/kbd";
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
   import SyncStatusIndicator from "$lib/SyncStatusIndicator.svelte";
   import {
@@ -83,7 +84,7 @@
   const isMac =
     typeof navigator !== "undefined" &&
     navigator.platform.toUpperCase().indexOf("MAC") >= 0;
-  const modKey = isMac ? "⌘" : "Ctrl+";
+  const modKey = isMac ? "⌘" : "Ctrl";
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -123,7 +124,16 @@
           </Button>
         </Tooltip.Trigger>
         {#if !mobileState.isMobile}
-          <Tooltip.Content>Open sidebar ({modKey}[)</Tooltip.Content>
+          <Tooltip.Content>
+            <div class="flex items-center gap-2">
+              Open sidebar
+              <Kbd.Group>
+                <Kbd.Root>{modKey}</Kbd.Root>
+                <span>+</span>
+                <Kbd.Root>[</Kbd.Root>
+              </Kbd.Group>
+            </div>
+          </Tooltip.Content>
         {/if}
       </Tooltip.Root>
     {/if}
@@ -147,7 +157,16 @@
                 </Button>
               </Tooltip.Trigger>
               {#if !mobileState.isMobile}
-                <Tooltip.Content>Previous day (Alt+Left)</Tooltip.Content>
+                <Tooltip.Content>
+                  <div class="flex items-center gap-2">
+                    Previous day
+                    <Kbd.Group>
+                      <Kbd.Root>Alt</Kbd.Root>
+                      <span>+</span>
+                      <Kbd.Root>←</Kbd.Root>
+                    </Kbd.Group>
+                  </div>
+                </Tooltip.Content>
               {/if}
             </Tooltip.Root>
           {/if}
@@ -171,7 +190,16 @@
                 </Button>
               </Tooltip.Trigger>
               {#if !mobileState.isMobile}
-                <Tooltip.Content>Next day (Alt+Right)</Tooltip.Content>
+                <Tooltip.Content>
+                  <div class="flex items-center gap-2">
+                    Next day
+                    <Kbd.Group>
+                      <Kbd.Root>Alt</Kbd.Root>
+                      <span>+</span>
+                      <Kbd.Root>→</Kbd.Root>
+                    </Kbd.Group>
+                  </div>
+                </Tooltip.Content>
               {/if}
             </Tooltip.Root>
           {/if}
@@ -225,7 +253,14 @@
             {#if isSaving}
               Saving...
             {:else if isDirty}
-              Save ({modKey}S)
+              <div class="flex items-center gap-2">
+                Save
+                <Kbd.Group>
+                  <Kbd.Root>{modKey}</Kbd.Root>
+                  <span>+</span>
+                  <Kbd.Root>S</Kbd.Root>
+                </Kbd.Group>
+              </div>
             {:else}
               Saved
             {/if}
@@ -248,7 +283,16 @@
         </Button>
       </Tooltip.Trigger>
       {#if !mobileState.isMobile}
-        <Tooltip.Content>Search ({modKey}K)</Tooltip.Content>
+        <Tooltip.Content>
+          <div class="flex items-center gap-2">
+            Search
+            <Kbd.Group>
+              <Kbd.Root>{modKey}</Kbd.Root>
+              <span>+</span>
+              <Kbd.Root>K</Kbd.Root>
+            </Kbd.Group>
+          </div>
+        </Tooltip.Content>
       {/if}
     </Tooltip.Root>
 
@@ -267,7 +311,16 @@
           </Button>
         </Tooltip.Trigger>
         {#if !mobileState.isMobile}
-          <Tooltip.Content>Open properties ({modKey}])</Tooltip.Content>
+          <Tooltip.Content>
+            <div class="flex items-center gap-2">
+              Open properties
+              <Kbd.Group>
+                <Kbd.Root>{modKey}</Kbd.Root>
+                <span>+</span>
+                <Kbd.Root>]</Kbd.Root>
+              </Kbd.Group>
+            </div>
+          </Tooltip.Content>
         {/if}
       </Tooltip.Root>
     {/if}

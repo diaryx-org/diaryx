@@ -43,6 +43,12 @@ Settings panel components for the settings dialog.
 | `LinkSettings.svelte` | Link format settings |
 | `S3BackupSettings.svelte` | S3 backup configuration |
 | `StorageSettings.svelte` | Storage backend settings |
-| `SyncSettings.svelte` | Sync server settings |
+| `SyncSettings.svelte` | Sync server settings + synced attachment storage usage |
 | `TemplateSettings.svelte` | Template management |
 | `WorkspaceSettings.svelte` | Workspace configuration |
+
+`SyncSettings.svelte` displays:
+
+- sync connection/authentication state
+- configured sync server URL
+- a "Synced Storage" section with used bytes and blob count from `/api/user/storage`

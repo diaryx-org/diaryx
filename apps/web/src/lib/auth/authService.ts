@@ -41,6 +41,15 @@ export interface UserHasDataResponse {
   file_count: number;
 }
 
+export interface UserStorageUsageResponse {
+  used_bytes: number;
+  blob_count: number;
+  limit_bytes: number | null;
+  warning_threshold: number;
+  over_limit: boolean;
+  scope: "attachments";
+}
+
 export class AuthError extends Error {
   constructor(
     message: string,
@@ -227,9 +236,15 @@ export class AuthService {
   async downloadWorkspaceSnapshot(
     authToken: string,
     workspaceId: string,
+    includeAttachments = true,
   ): Promise<Blob> {
-    const response = await fetch(
+    const url = new URL(
       `${this.serverUrl}/api/workspaces/${encodeURIComponent(workspaceId)}/snapshot`,
+    );
+    url.searchParams.set("include_attachments", String(includeAttachments));
+
+    const response = await fetch(
+      url.toString(),
       {
         headers: {
           Authorization: `Bearer ${authToken}`,
@@ -252,9 +267,16 @@ export class AuthService {
     workspaceId: string,
     snapshot: Blob,
     mode: "replace" | "merge" = "replace",
+    includeAttachments = true,
   ): Promise<{ files_imported: number }> {
+    const url = new URL(
+      `${this.serverUrl}/api/workspaces/${encodeURIComponent(workspaceId)}/snapshot`,
+    );
+    url.searchParams.set("mode", mode);
+    url.searchParams.set("include_attachments", String(includeAttachments));
+
     const response = await fetch(
-      `${this.serverUrl}/api/workspaces/${encodeURIComponent(workspaceId)}/snapshot?mode=${mode}`,
+      url.toString(),
       {
         method: "POST",
         headers: {
@@ -267,6 +289,25 @@ export class AuthService {
 
     if (!response.ok) {
       throw new AuthError("Failed to upload snapshot", response.status);
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Get attachment storage usage for the authenticated user.
+   */
+  async getUserStorageUsage(
+    authToken: string,
+  ): Promise<UserStorageUsageResponse> {
+    const response = await fetch(`${this.serverUrl}/api/user/storage`, {
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      throw new AuthError("Failed to fetch storage usage", response.status);
     }
 
     return response.json();

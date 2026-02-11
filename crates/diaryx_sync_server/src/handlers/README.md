@@ -29,7 +29,13 @@ HTTP route handlers for the sync server API.
 `api.rs` also serves workspace snapshot downloads and uploads at
 `GET /api/workspaces/{workspace_id}/snapshot` and
 `POST /api/workspaces/{workspace_id}/snapshot`.
-Snapshot uploads accept payloads up to 64 MiB.
+Snapshot endpoints support `include_attachments=true|false` query params.
+Snapshot uploads also support `mode=replace|merge` and enforce a configurable
+max payload size (`SNAPSHOT_UPLOAD_MAX_BYTES`, default 1 GiB).
+
+`api.rs` also serves per-user attachment usage at:
+
+- `GET /api/user/storage` — returns used bytes/blob count for synced attachment blobs.
 
 ### Git Version History Endpoints
 

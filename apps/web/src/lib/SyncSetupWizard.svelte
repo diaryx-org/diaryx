@@ -453,7 +453,7 @@
           syncStatusText = "Downloading snapshot...";
           if (workspaceId) {
             try {
-              const snapshot = await downloadWorkspaceSnapshot(workspaceId);
+              const snapshot = await downloadWorkspaceSnapshot(workspaceId, true);
               console.log("[SyncWizard] Snapshot download result:", snapshot ? `${snapshot.size} bytes` : "null");
 
               if (snapshot && snapshot.size > 100) {
@@ -533,11 +533,27 @@
                 zip.file(file.path, file.content);
               }
 
+              const binaries = await api.exportBinaryAttachments(workspacePath, "*");
+              let attachmentReadFailures = 0;
+              for (const info of binaries) {
+                try {
+                  const data = await api.readBinary(info.source_path);
+                  zip.file(info.relative_path, data, { binary: true });
+                } catch (e) {
+                  attachmentReadFailures += 1;
+                  console.warn(
+                    `[SyncWizard] Failed to read binary ${info.source_path}:`,
+                    e,
+                  );
+                }
+              }
+
               const blob = await zip.generateAsync({ type: "blob" });
               const result = await uploadWorkspaceSnapshot(
                 workspaceId,
                 blob,
                 "replace",
+                true,
               );
 
               if (result) {
@@ -545,6 +561,11 @@
                 console.log(
                   `[SyncWizard] Snapshot upload complete (${result.files_imported} files)`
                 );
+                if (attachmentReadFailures > 0) {
+                  toast.warning("Some attachments were skipped", {
+                    description: `${attachmentReadFailures} attachment file(s) could not be included in the snapshot.`,
+                  });
+                }
                 setStageProgress(35, "Snapshot uploaded", `${result.files_imported} files`);
               }
             } catch (e) {

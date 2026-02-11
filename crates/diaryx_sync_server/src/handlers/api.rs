@@ -1,26 +1,27 @@
 use crate::auth::RequireAuth;
+use crate::blob_store::BlobStore;
 use crate::db::AuthRepo;
 use crate::sync_v2::{SnapshotImportMode, SyncV2State};
-use axum::body::Bytes;
-use axum::extract::DefaultBodyLimit;
 use axum::{
     Router,
-    extract::{Query, State},
+    extract::{DefaultBodyLimit, Query, Request, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Json},
     routing::{get, post},
 };
+use futures::StreamExt;
 use serde::Serialize;
 use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
 use tracing::{error, info};
-
-const SNAPSHOT_UPLOAD_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 /// Shared state for API handlers
 #[derive(Clone)]
 pub struct ApiState {
     pub repo: Arc<AuthRepo>,
     pub sync_v2: Arc<SyncV2State>,
+    pub blob_store: Arc<dyn BlobStore>,
+    pub snapshot_upload_max_bytes: usize,
 }
 
 /// Server status response
@@ -44,6 +45,17 @@ pub struct WorkspaceResponse {
 pub struct UserHasDataResponse {
     pub has_data: bool,
     pub file_count: usize,
+}
+
+/// User storage usage response.
+#[derive(Debug, Serialize)]
+pub struct UserStorageResponse {
+    pub used_bytes: u64,
+    pub blob_count: usize,
+    pub limit_bytes: Option<u64>,
+    pub warning_threshold: f64,
+    pub over_limit: bool,
+    pub scope: String,
 }
 
 /// Git commit log entry
@@ -81,11 +93,7 @@ pub fn api_routes(state: ApiState) -> Router {
             "/workspaces/{workspace_id}/snapshot",
             get(get_workspace_snapshot)
                 .post(upload_workspace_snapshot)
-                .layer(
-                    // Snapshot ZIP payloads can exceed axum's 2MiB default body limit.
-                    // Keep an explicit cap to prevent unbounded uploads.
-                    DefaultBodyLimit::max(SNAPSHOT_UPLOAD_MAX_BYTES),
-                ),
+                .layer(DefaultBodyLimit::disable()),
         )
         .route(
             "/workspaces/{workspace_id}/history",
@@ -100,6 +108,7 @@ pub fn api_routes(state: ApiState) -> Router {
             post(restore_workspace),
         )
         .route("/user/has-data", get(check_user_has_data))
+        .route("/user/storage", get(get_user_storage))
         .with_state(state)
 }
 
@@ -162,6 +171,7 @@ async fn get_workspace_snapshot(
     State(state): State<ApiState>,
     RequireAuth(auth): RequireAuth,
     axum::extract::Path(workspace_id): axum::extract::Path<String>,
+    Query(query): Query<SnapshotQuery>,
 ) -> impl IntoResponse {
     let workspace = match state.repo.get_workspace(&workspace_id) {
         Ok(Some(w)) => w,
@@ -174,7 +184,18 @@ async fn get_workspace_snapshot(
         return StatusCode::NOT_FOUND.into_response();
     }
 
-    let snapshot = match state.sync_v2.store.export_snapshot_zip(&workspace_id) {
+    let include_attachments = query.include_attachments.unwrap_or(true);
+    let snapshot = match state
+        .sync_v2
+        .store
+        .export_snapshot_zip(
+            &workspace_id,
+            &auth.user.id,
+            include_attachments,
+            state.blob_store.as_ref(),
+        )
+        .await
+    {
         Ok(bytes) => bytes,
         Err(err) => {
             error!("Snapshot export failed for {}: {:?}", workspace_id, err);
@@ -198,8 +219,14 @@ async fn get_workspace_snapshot(
 }
 
 #[derive(Debug, serde::Deserialize)]
+struct SnapshotQuery {
+    include_attachments: Option<bool>,
+}
+
+#[derive(Debug, serde::Deserialize)]
 struct SnapshotUploadQuery {
     mode: Option<String>,
+    include_attachments: Option<bool>,
 }
 
 /// POST /api/workspaces/:workspace_id/snapshot - Upload workspace snapshot zip
@@ -208,7 +235,7 @@ async fn upload_workspace_snapshot(
     RequireAuth(auth): RequireAuth,
     axum::extract::Path(workspace_id): axum::extract::Path<String>,
     Query(query): Query<SnapshotUploadQuery>,
-    bytes: Bytes,
+    request: Request,
 ) -> impl IntoResponse {
     let workspace = match state.repo.get_workspace(&workspace_id) {
         Ok(Some(w)) => w,
@@ -224,18 +251,77 @@ async fn upload_workspace_snapshot(
         Some("merge") => SnapshotImportMode::Merge,
         _ => SnapshotImportMode::Replace,
     };
+    let include_attachments = query.include_attachments.unwrap_or(true);
+
+    let temp_path = std::env::temp_dir().join(format!(
+        "diaryx-snapshot-{}-{}.zip",
+        workspace_id,
+        uuid::Uuid::new_v4()
+    ));
+
+    let mut file = match tokio::fs::File::create(&temp_path).await {
+        Ok(f) => f,
+        Err(err) => {
+            error!("Failed to create temp snapshot file: {}", err);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let mut size = 0usize;
+    let mut stream = request.into_body().into_data_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = match chunk {
+            Ok(c) => c,
+            Err(err) => {
+                error!("Snapshot upload stream read failed: {}", err);
+                let _ = tokio::fs::remove_file(&temp_path).await;
+                return StatusCode::BAD_REQUEST.into_response();
+            }
+        };
+
+        size += chunk.len();
+        if size > state.snapshot_upload_max_bytes {
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+        }
+
+        if let Err(err) = file.write_all(&chunk).await {
+            error!("Failed writing snapshot upload chunk: {}", err);
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+
+    if let Err(err) = file.flush().await {
+        error!("Failed flushing snapshot temp file: {}", err);
+        let _ = tokio::fs::remove_file(&temp_path).await;
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    drop(file);
 
     let result = match state
         .sync_v2
         .store
-        .import_snapshot_zip(&workspace_id, &bytes, mode)
+        .import_snapshot_zip_from_path(
+            &workspace_id,
+            &auth.user.id,
+            &temp_path,
+            mode,
+            include_attachments,
+            state.repo.as_ref(),
+            state.blob_store.as_ref(),
+        )
+        .await
     {
         Ok(result) => result,
         Err(err) => {
             error!("Snapshot import failed for {}: {:?}", workspace_id, err);
+            let _ = tokio::fs::remove_file(&temp_path).await;
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
+
+    let _ = tokio::fs::remove_file(&temp_path).await;
 
     Json(result).into_response()
 }
@@ -267,6 +353,30 @@ async fn check_user_has_data(
         has_data: false,
         file_count: 0,
     })
+}
+
+/// GET /api/user/storage - Get current user's attachment storage usage.
+async fn get_user_storage(
+    State(state): State<ApiState>,
+    RequireAuth(auth): RequireAuth,
+) -> impl IntoResponse {
+    let usage = match state.repo.get_user_storage_usage(&auth.user.id) {
+        Ok(value) => value,
+        Err(err) => {
+            error!("Failed to query user storage usage: {}", err);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    Json(UserStorageResponse {
+        used_bytes: usage.used_bytes,
+        blob_count: usage.blob_count,
+        limit_bytes: None,
+        warning_threshold: 0.8,
+        over_limit: false,
+        scope: "attachments".to_string(),
+    })
+    .into_response()
 }
 
 /// GET /api/workspaces/:workspace_id/history - Get git commit history

@@ -19,3 +19,8 @@ SQLite database layer for the sync server.
 - `mod.rs` - Module exports and database initialization
 - `repo.rs` - Repository pattern for database operations
 - `schema.rs` - SQLite table schemas and migrations
+
+The schema includes attachment usage tracking tables:
+
+- `user_attachment_blobs` (per-user deduplicated blob metadata + ref counts)
+- `workspace_attachment_refs` (workspace path refs to blob hashes)

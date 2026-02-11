@@ -16,6 +16,7 @@ import {
   type Device,
   AuthError,
   type UserHasDataResponse,
+  type UserStorageUsageResponse,
 } from "./authService";
 import {
   setAuthToken,
@@ -62,6 +63,7 @@ let state = $state<AuthState>({
 });
 
 let authService: AuthService | null = null;
+let storageUsage = $state<UserStorageUsageResponse | null>(null);
 
 // ============================================================================
 // Getters
@@ -94,6 +96,10 @@ export function getDefaultWorkspace(): Workspace | null {
     state.workspaces[0] ??
     null
   );
+}
+
+export function getStorageUsage(): UserStorageUsageResponse | null {
+  return storageUsage;
 }
 
 // ============================================================================
@@ -157,6 +163,7 @@ export async function initAuth(): Promise<void> {
 
       // Save user for faster restore next time
       localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(me.user));
+      await refreshUserStorageUsage();
     } catch (err) {
       if (err instanceof AuthError && err.statusCode === 401) {
         // Token expired, clear auth state
@@ -198,6 +205,7 @@ export function setServerUrl(url: string | null): void {
   } else {
     localStorage.removeItem(STORAGE_KEYS.SERVER_URL);
     authService = null;
+    storageUsage = null;
   }
 }
 
@@ -258,6 +266,7 @@ export async function verifyMagicLink(token: string): Promise<void> {
 
     // Fetch full user info (workspaces, devices)
     await refreshUserInfo();
+    await refreshUserStorageUsage();
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Failed to verify magic link";
@@ -293,6 +302,24 @@ export async function refreshUserInfo(): Promise<void> {
 }
 
 /**
+ * Refresh attachment storage usage from server.
+ */
+export async function refreshUserStorageUsage(): Promise<void> {
+  const token = getToken();
+  const url = state.serverUrl;
+  if (!token || !url || !authService || !state.isAuthenticated) {
+    storageUsage = null;
+    return;
+  }
+
+  try {
+    storageUsage = await authService.getUserStorageUsage(token);
+  } catch (err) {
+    console.error("[AuthStore] Failed to refresh storage usage:", err);
+  }
+}
+
+/**
  * Explicitly enable sync. Called by SyncSetupWizard after workspace initialization.
  * This is the only way sync gets enabled — signing in alone does not enable it.
  */
@@ -320,6 +347,7 @@ export async function logout(): Promise<void> {
   state.workspaces = [];
   state.devices = [];
   state.error = null;
+  storageUsage = null;
 
   localStorage.removeItem(STORAGE_KEYS.TOKEN);
   localStorage.removeItem(STORAGE_KEYS.USER);
@@ -366,6 +394,7 @@ export async function deleteAccount(): Promise<void> {
   state.workspaces = [];
   state.devices = [];
   state.error = null;
+  storageUsage = null;
 
   localStorage.removeItem(STORAGE_KEYS.TOKEN);
   localStorage.removeItem(STORAGE_KEYS.USER);
@@ -440,13 +469,18 @@ export async function checkUserHasData(): Promise<UserHasDataResponse | null> {
  */
 export async function downloadWorkspaceSnapshot(
   workspaceId: string,
+  includeAttachments = true,
 ): Promise<Blob | null> {
   const token = getToken();
   const url = state.serverUrl;
   if (!token || !url || !authService) return null;
 
   try {
-    return await authService.downloadWorkspaceSnapshot(token, workspaceId);
+    return await authService.downloadWorkspaceSnapshot(
+      token,
+      workspaceId,
+      includeAttachments,
+    );
   } catch (err) {
     console.error("[AuthStore] Failed to download snapshot:", err);
     return null;
@@ -460,18 +494,22 @@ export async function uploadWorkspaceSnapshot(
   workspaceId: string,
   snapshot: Blob,
   mode: "replace" | "merge" = "replace",
+  includeAttachments = true,
 ): Promise<{ files_imported: number } | null> {
   const token = getToken();
   const url = state.serverUrl;
   if (!token || !url || !authService) return null;
 
   try {
-    return await authService.uploadWorkspaceSnapshot(
+    const result = await authService.uploadWorkspaceSnapshot(
       token,
       workspaceId,
       snapshot,
       mode,
+      includeAttachments,
     );
+    await refreshUserStorageUsage();
+    return result;
   } catch (err) {
     console.error("[AuthStore] Failed to upload snapshot:", err);
     return null;

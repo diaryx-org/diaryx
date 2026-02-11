@@ -4,13 +4,17 @@
 //! - `StorageCache`: shared cache of per-workspace `SqliteStorage` connections
 //! - `WorkspaceStore`: snapshot export/import and file queries for HTTP API handlers
 
+use crate::blob_store::BlobStore;
+use crate::db::{AuthRepo, WorkspaceAttachmentRefRecord};
+use chrono::Utc;
 use diaryx_core::crdt::{
     BodyDocManager, SqliteStorage, WorkspaceCrdt, materialize_workspace, parse_snapshot_markdown,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read, Write};
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use tracing::{info, warn};
 use zip::write::FileOptions;
@@ -25,6 +29,8 @@ pub enum SnapshotError {
     Storage(String),
     Parse(String),
     ZipFormat(zip::result::ZipError),
+    Db(rusqlite::Error),
+    Blob(String),
 }
 
 impl std::fmt::Display for SnapshotError {
@@ -35,6 +41,8 @@ impl std::fmt::Display for SnapshotError {
             SnapshotError::Storage(e) => write!(f, "Storage error: {}", e),
             SnapshotError::Parse(e) => write!(f, "Parse error: {}", e),
             SnapshotError::ZipFormat(e) => write!(f, "Zip format error: {}", e),
+            SnapshotError::Db(e) => write!(f, "Database error: {}", e),
+            SnapshotError::Blob(e) => write!(f, "Blob store error: {}", e),
         }
     }
 }
@@ -63,6 +71,12 @@ impl From<zip::result::ZipError> for SnapshotError {
     }
 }
 
+impl From<rusqlite::Error> for SnapshotError {
+    fn from(error: rusqlite::Error) -> Self {
+        SnapshotError::Db(error)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub enum SnapshotImportMode {
     Replace,
@@ -72,6 +86,44 @@ pub enum SnapshotImportMode {
 #[derive(Debug, Serialize)]
 pub struct SnapshotImportResult {
     pub files_imported: usize,
+}
+
+#[derive(Debug, Clone)]
+struct UploadedBlob {
+    hash: String,
+    size_bytes: u64,
+    mime_type: String,
+}
+
+fn normalize_workspace_path(path: &str) -> Option<String> {
+    let mut normalized = PathBuf::new();
+
+    for component in Path::new(path).components() {
+        match component {
+            Component::Normal(part) => normalized.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+
+    if normalized.as_os_str().is_empty() {
+        None
+    } else {
+        Some(normalized.to_string_lossy().replace('\\', "/"))
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
+fn mime_for_path(path: &str) -> String {
+    mime_guess::from_path(path)
+        .first_or_octet_stream()
+        .essence_str()
+        .to_string()
 }
 
 // ==================== StorageCache ====================
@@ -156,8 +208,17 @@ impl WorkspaceStore {
         workspace.file_count()
     }
 
-    /// Export a workspace snapshot as a zip archive (markdown only).
-    pub fn export_snapshot_zip(&self, workspace_id: &str) -> Result<Vec<u8>, SnapshotError> {
+    /// Export a workspace snapshot as a zip archive.
+    ///
+    /// Markdown files are always included. Attachments are included when
+    /// `include_attachments` is true and `BinaryRef.hash` is available.
+    pub async fn export_snapshot_zip(
+        &self,
+        workspace_id: &str,
+        user_id: &str,
+        include_attachments: bool,
+        blob_store: &dyn BlobStore,
+    ) -> Result<Vec<u8>, SnapshotError> {
         let storage = self
             .storage_cache
             .get_storage(workspace_id)
@@ -181,13 +242,55 @@ impl WorkspaceStore {
 
         let cursor = Cursor::new(Vec::new());
         let mut zip = ZipWriter::new(cursor);
-        let options = FileOptions::<()>::default()
+        let markdown_options = FileOptions::<()>::default()
             .compression_method(CompressionMethod::Deflated)
             .unix_permissions(0o644);
+        let binary_options = FileOptions::<()>::default()
+            .compression_method(CompressionMethod::Stored)
+            .unix_permissions(0o644);
+
+        let mut unique_attachments: HashSet<String> = HashSet::new();
+        let mut attachment_requests: Vec<(String, String)> = Vec::new();
 
         for file in result.files {
-            zip.start_file(file.path.replace('\\', "/"), options)?;
+            let normalized = normalize_workspace_path(&file.path).ok_or_else(|| {
+                SnapshotError::Parse(format!("Invalid file path while exporting: {}", file.path))
+            })?;
+            zip.start_file(normalized.clone(), markdown_options)?;
             zip.write_all(file.content.as_bytes())?;
+
+            if include_attachments {
+                for attachment in file.metadata.attachments {
+                    if attachment.deleted || attachment.hash.is_empty() {
+                        continue;
+                    }
+                    if let Some(path) = normalize_workspace_path(&attachment.path)
+                        && unique_attachments.insert(path.clone())
+                    {
+                        attachment_requests.push((path, attachment.hash));
+                    }
+                }
+            }
+        }
+
+        if include_attachments {
+            for (attachment_path, hash) in attachment_requests {
+                let key = blob_store.blob_key(user_id, &hash);
+                let bytes = blob_store.get(&key).await.map_err(SnapshotError::Blob)?;
+
+                match bytes {
+                    Some(payload) => {
+                        zip.start_file(attachment_path, binary_options)?;
+                        zip.write_all(&payload)?;
+                    }
+                    None => {
+                        warn!(
+                            "Snapshot export: missing blob for hash {} (workspace {})",
+                            hash, workspace_id
+                        );
+                    }
+                }
+            }
         }
 
         let cursor = zip.finish()?;
@@ -195,11 +298,18 @@ impl WorkspaceStore {
     }
 
     /// Import a workspace snapshot zip into the CRDT store.
-    pub fn import_snapshot_zip(
+    ///
+    /// If `include_attachments` is true, binary entries are uploaded to blob
+    /// storage and attachment metadata is patched with hash/size/mime.
+    pub async fn import_snapshot_zip_from_path(
         &self,
         workspace_id: &str,
-        bytes: &[u8],
+        user_id: &str,
+        zip_path: &Path,
         mode: SnapshotImportMode,
+        include_attachments: bool,
+        repo: &AuthRepo,
+        blob_store: &dyn BlobStore,
     ) -> Result<SnapshotImportResult, SnapshotError> {
         let storage = self
             .storage_cache
@@ -211,10 +321,10 @@ impl WorkspaceStore {
             .map_err(|e| SnapshotError::Storage(e.to_string()))?;
         let body_docs = BodyDocManager::new(storage.clone());
 
-        let mut archive = zip::ZipArchive::new(Cursor::new(bytes))?;
+        let file = std::fs::File::open(zip_path)?;
+        let mut archive = zip::ZipArchive::new(file)?;
 
         if mode == SnapshotImportMode::Replace {
-            // Clear file_index for v2 file manifest
             storage.clear_file_index()?;
 
             let existing: Vec<String> = workspace
@@ -227,7 +337,57 @@ impl WorkspaceStore {
             }
         }
 
+        let mut blobs_by_path: HashMap<String, UploadedBlob> = HashMap::new();
+
+        if include_attachments {
+            for i in 0..archive.len() {
+                let Some((name, bytes, hash, mime_type, key)) = ({
+                    let mut entry = archive.by_index(i)?;
+                    if entry.is_dir() {
+                        None
+                    } else {
+                        let Some(name) = normalize_workspace_path(entry.name()) else {
+                            continue;
+                        };
+
+                        if name.ends_with(".md") {
+                            None
+                        } else {
+                            let mut bytes = Vec::new();
+                            entry.read_to_end(&mut bytes)?;
+                            let hash = sha256_hex(&bytes);
+                            let mime_type = mime_for_path(&name);
+                            let key = blob_store.blob_key(user_id, &hash);
+                            Some((name, bytes, hash, mime_type, key))
+                        }
+                    }
+                }) else {
+                    continue;
+                };
+
+                // Avoid HEAD/exists checks against R2 here. Some bucket policies
+                // allow PutObject but reject HeadObject, which would fail imports.
+                // Since keys are content-addressed by SHA-256, put is idempotent.
+                blob_store
+                    .put(&key, &bytes, &mime_type)
+                    .await
+                    .map_err(SnapshotError::Blob)?;
+
+                repo.upsert_blob(user_id, &hash, &key, bytes.len() as u64, &mime_type)?;
+
+                blobs_by_path.insert(
+                    name,
+                    UploadedBlob {
+                        hash,
+                        size_bytes: bytes.len() as u64,
+                        mime_type,
+                    },
+                );
+            }
+        }
+
         let mut files_imported = 0usize;
+        let mut workspace_refs: Vec<WorkspaceAttachmentRefRecord> = Vec::new();
 
         for i in 0..archive.len() {
             let mut entry = archive.by_index(i)?;
@@ -235,7 +395,11 @@ impl WorkspaceStore {
                 continue;
             }
 
-            let name = entry.name().to_string();
+            let name = match normalize_workspace_path(entry.name()) {
+                Some(v) => v,
+                None => continue,
+            };
+
             if !name.ends_with(".md") {
                 continue;
             }
@@ -245,8 +409,40 @@ impl WorkspaceStore {
                 .read_to_string(&mut content)
                 .map_err(|e| SnapshotError::Parse(format!("Failed reading {}: {}", name, e)))?;
 
-            let (metadata, body) =
+            let (mut metadata, body) =
                 parse_snapshot_markdown(&name, &content).map_err(SnapshotError::Parse)?;
+
+            let now = Utc::now().timestamp_millis();
+            for attachment in &mut metadata.attachments {
+                let Some(normalized_attachment_path) = normalize_workspace_path(&attachment.path)
+                else {
+                    continue;
+                };
+                attachment.path = normalized_attachment_path.clone();
+
+                if include_attachments
+                    && let Some(blob) = blobs_by_path.get(&normalized_attachment_path)
+                {
+                    attachment.hash = blob.hash.clone();
+                    attachment.size = blob.size_bytes;
+                    attachment.mime_type = blob.mime_type.clone();
+                    attachment.uploaded_at = Some(now);
+                }
+
+                if !attachment.hash.is_empty() {
+                    workspace_refs.push(WorkspaceAttachmentRefRecord {
+                        file_path: name.clone(),
+                        attachment_path: normalized_attachment_path,
+                        blob_hash: attachment.hash.clone(),
+                        size_bytes: attachment.size,
+                        mime_type: if attachment.mime_type.is_empty() {
+                            "application/octet-stream".to_string()
+                        } else {
+                            attachment.mime_type.clone()
+                        },
+                    });
+                }
+            }
 
             workspace.set_file(&name, metadata.clone())?;
             let body_key = format!("body:{}/{}", workspace_id, name);
@@ -264,9 +460,13 @@ impl WorkspaceStore {
             files_imported += 1;
         }
 
+        if include_attachments {
+            repo.replace_workspace_attachment_refs(workspace_id, &workspace_refs)?;
+        }
+
         info!(
-            "Imported {} files into workspace {} (mode: {:?})",
-            files_imported, workspace_id, mode
+            "Imported {} files into workspace {} (mode: {:?}, include_attachments: {})",
+            files_imported, workspace_id, mode, include_attachments
         );
 
         Ok(SnapshotImportResult { files_imported })

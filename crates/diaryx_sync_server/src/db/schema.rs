@@ -69,6 +69,37 @@ CREATE TABLE IF NOT EXISTS share_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_share_sessions_owner ON share_sessions(owner_user_id);
 CREATE INDEX IF NOT EXISTS idx_share_sessions_workspace ON share_sessions(workspace_id);
+
+-- Per-user deduplicated attachment blobs stored in R2.
+CREATE TABLE IF NOT EXISTS user_attachment_blobs (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    blob_hash TEXT NOT NULL,
+    r2_key TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    mime_type TEXT NOT NULL,
+    ref_count INTEGER NOT NULL DEFAULT 0,
+    soft_deleted_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, blob_hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_attachment_blobs_user ON user_attachment_blobs(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_attachment_blobs_soft_delete ON user_attachment_blobs(soft_deleted_at);
+
+-- Workspace attachment references (path -> blob hash mapping).
+CREATE TABLE IF NOT EXISTS workspace_attachment_refs (
+    workspace_id TEXT NOT NULL REFERENCES user_workspaces(id) ON DELETE CASCADE,
+    file_path TEXT NOT NULL,
+    attachment_path TEXT NOT NULL,
+    blob_hash TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    mime_type TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (workspace_id, file_path, attachment_path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_attachment_refs_workspace ON workspace_attachment_refs(workspace_id);
 "#;
 
 /// Initialize the database with the auth schema
@@ -101,5 +132,7 @@ mod tests {
         assert!(tables.contains(&"auth_sessions".to_string()));
         assert!(tables.contains(&"user_workspaces".to_string()));
         assert!(tables.contains(&"share_sessions".to_string()));
+        assert!(tables.contains(&"user_attachment_blobs".to_string()));
+        assert!(tables.contains(&"workspace_attachment_refs".to_string()));
     }
 }

@@ -52,6 +52,31 @@ pub struct ShareSessionInfo {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
+/// Attachment reference entry for workspace reconciliation.
+#[derive(Debug, Clone)]
+pub struct WorkspaceAttachmentRefRecord {
+    pub file_path: String,
+    pub attachment_path: String,
+    pub blob_hash: String,
+    pub size_bytes: u64,
+    pub mime_type: String,
+}
+
+/// Per-user storage usage summary.
+#[derive(Debug, Clone, Default)]
+pub struct UserStorageUsage {
+    pub used_bytes: u64,
+    pub blob_count: usize,
+}
+
+/// Blob row due for physical deletion.
+#[derive(Debug, Clone)]
+pub struct DueBlobDelete {
+    pub user_id: String,
+    pub blob_hash: String,
+    pub r2_key: String,
+}
+
 /// Authentication repository for database operations
 #[derive(Clone)]
 pub struct AuthRepo {
@@ -434,6 +459,285 @@ impl AuthRepo {
         .optional()
     }
 
+    // ===== Attachment blob accounting =====
+
+    /// Insert or update a blob metadata row for a user.
+    pub fn upsert_blob(
+        &self,
+        user_id: &str,
+        blob_hash: &str,
+        r2_key: &str,
+        size_bytes: u64,
+        mime_type: &str,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO user_attachment_blobs
+             (user_id, blob_hash, r2_key, size_bytes, mime_type, ref_count, soft_deleted_at, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, 0, NULL, ?, ?)
+             ON CONFLICT(user_id, blob_hash) DO UPDATE SET
+               r2_key = excluded.r2_key,
+               size_bytes = excluded.size_bytes,
+               mime_type = excluded.mime_type,
+               updated_at = excluded.updated_at",
+            params![
+                user_id,
+                blob_hash,
+                r2_key,
+                size_bytes as i64,
+                mime_type,
+                now,
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Increment reference count for a user blob.
+    pub fn inc_blob_ref(&self, user_id: &str, blob_hash: &str) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+        conn.execute(
+            "UPDATE user_attachment_blobs
+             SET ref_count = ref_count + 1, soft_deleted_at = NULL, updated_at = ?
+             WHERE user_id = ? AND blob_hash = ?",
+            params![now, user_id, blob_hash],
+        )?;
+        Ok(())
+    }
+
+    /// Decrement reference count for a user blob and mark soft delete when it reaches zero.
+    pub fn dec_blob_ref(&self, user_id: &str, blob_hash: &str) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+        conn.execute(
+            "UPDATE user_attachment_blobs
+             SET ref_count = CASE WHEN ref_count > 0 THEN ref_count - 1 ELSE 0 END,
+                 soft_deleted_at = CASE WHEN ref_count <= 1 THEN ? ELSE NULL END,
+                 updated_at = ?
+             WHERE user_id = ? AND blob_hash = ?",
+            params![now, now, user_id, blob_hash],
+        )?;
+        Ok(())
+    }
+
+    fn get_workspace_user_id(
+        conn: &Connection,
+        workspace_id: &str,
+    ) -> Result<Option<String>, rusqlite::Error> {
+        conn.query_row(
+            "SELECT user_id FROM user_workspaces WHERE id = ?",
+            [workspace_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+    }
+
+    /// Replace all attachment refs for a workspace and reconcile blob ref counts.
+    pub fn replace_workspace_attachment_refs(
+        &self,
+        workspace_id: &str,
+        refs: &[WorkspaceAttachmentRefRecord],
+    ) -> Result<(), rusqlite::Error> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let now = Utc::now().timestamp();
+
+        let user_id = match Self::get_workspace_user_id(&tx, workspace_id)? {
+            Some(u) => u,
+            None => return Ok(()),
+        };
+
+        let mut old_stmt = tx.prepare(
+            "SELECT file_path, attachment_path, blob_hash
+             FROM workspace_attachment_refs
+             WHERE workspace_id = ?",
+        )?;
+        let old_rows: Vec<(String, String, String)> = old_stmt
+            .query_map([workspace_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(old_stmt);
+
+        let mut old_map = std::collections::HashMap::new();
+        for (file_path, attachment_path, blob_hash) in old_rows {
+            old_map.insert((file_path, attachment_path), blob_hash);
+        }
+
+        let mut new_keys: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+
+        for entry in refs {
+            let key = (entry.file_path.clone(), entry.attachment_path.clone());
+            new_keys.insert(key.clone());
+
+            tx.execute(
+                "INSERT INTO user_attachment_blobs
+                 (user_id, blob_hash, r2_key, size_bytes, mime_type, ref_count, soft_deleted_at, created_at, updated_at)
+                 VALUES (?, ?, '', ?, ?, 0, NULL, ?, ?)
+                 ON CONFLICT(user_id, blob_hash) DO UPDATE SET
+                   size_bytes = excluded.size_bytes,
+                   mime_type = excluded.mime_type,
+                   updated_at = excluded.updated_at",
+                params![
+                    user_id,
+                    entry.blob_hash,
+                    entry.size_bytes as i64,
+                    entry.mime_type,
+                    now,
+                    now
+                ],
+            )?;
+
+            match old_map.get(&key) {
+                Some(existing_hash) if existing_hash == &entry.blob_hash => {}
+                Some(existing_hash) => {
+                    tx.execute(
+                        "UPDATE user_attachment_blobs
+                         SET ref_count = CASE WHEN ref_count > 0 THEN ref_count - 1 ELSE 0 END,
+                             soft_deleted_at = CASE WHEN ref_count <= 1 THEN ? ELSE soft_deleted_at END,
+                             updated_at = ?
+                         WHERE user_id = ? AND blob_hash = ?",
+                        params![now, now, user_id, existing_hash],
+                    )?;
+                    tx.execute(
+                        "UPDATE user_attachment_blobs
+                         SET ref_count = ref_count + 1, soft_deleted_at = NULL, updated_at = ?
+                         WHERE user_id = ? AND blob_hash = ?",
+                        params![now, user_id, entry.blob_hash],
+                    )?;
+                }
+                None => {
+                    tx.execute(
+                        "UPDATE user_attachment_blobs
+                         SET ref_count = ref_count + 1, soft_deleted_at = NULL, updated_at = ?
+                         WHERE user_id = ? AND blob_hash = ?",
+                        params![now, user_id, entry.blob_hash],
+                    )?;
+                }
+            }
+
+            tx.execute(
+                "INSERT INTO workspace_attachment_refs
+                 (workspace_id, file_path, attachment_path, blob_hash, size_bytes, mime_type, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(workspace_id, file_path, attachment_path) DO UPDATE SET
+                   blob_hash = excluded.blob_hash,
+                   size_bytes = excluded.size_bytes,
+                   mime_type = excluded.mime_type,
+                   updated_at = excluded.updated_at",
+                params![
+                    workspace_id,
+                    entry.file_path,
+                    entry.attachment_path,
+                    entry.blob_hash,
+                    entry.size_bytes as i64,
+                    entry.mime_type,
+                    now
+                ],
+            )?;
+        }
+
+        for ((file_path, attachment_path), blob_hash) in old_map {
+            if new_keys.contains(&(file_path.clone(), attachment_path.clone())) {
+                continue;
+            }
+
+            tx.execute(
+                "DELETE FROM workspace_attachment_refs
+                 WHERE workspace_id = ? AND file_path = ? AND attachment_path = ?",
+                params![workspace_id, file_path, attachment_path],
+            )?;
+
+            tx.execute(
+                "UPDATE user_attachment_blobs
+                 SET ref_count = CASE WHEN ref_count > 0 THEN ref_count - 1 ELSE 0 END,
+                     soft_deleted_at = CASE WHEN ref_count <= 1 THEN ? ELSE soft_deleted_at END,
+                     updated_at = ?
+                 WHERE user_id = ? AND blob_hash = ?",
+                params![now, now, user_id, blob_hash],
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Get per-user attachment usage (active references only).
+    pub fn get_user_storage_usage(
+        &self,
+        user_id: &str,
+    ) -> Result<UserStorageUsage, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT COALESCE(SUM(size_bytes), 0), COALESCE(COUNT(*), 0)
+             FROM user_attachment_blobs
+             WHERE user_id = ? AND ref_count > 0",
+        )?;
+        let usage = stmt.query_row([user_id], |row| {
+            Ok(UserStorageUsage {
+                used_bytes: row.get::<_, i64>(0)? as u64,
+                blob_count: row.get::<_, i64>(1)? as usize,
+            })
+        })?;
+        Ok(usage)
+    }
+
+    /// List blobs that are soft deleted and due for physical deletion.
+    pub fn list_soft_deleted_blobs_due(
+        &self,
+        due_before_ts: i64,
+    ) -> Result<Vec<DueBlobDelete>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT user_id, blob_hash, r2_key
+             FROM user_attachment_blobs
+             WHERE ref_count = 0
+               AND soft_deleted_at IS NOT NULL
+               AND soft_deleted_at <= ?",
+        )?;
+        let rows = stmt
+            .query_map([due_before_ts], |row| {
+                Ok(DueBlobDelete {
+                    user_id: row.get(0)?,
+                    blob_hash: row.get(1)?,
+                    r2_key: row.get(2)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// Delete a blob row by primary key.
+    pub fn delete_blob_row(&self, user_id: &str, blob_hash: &str) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM user_attachment_blobs WHERE user_id = ? AND blob_hash = ?",
+            params![user_id, blob_hash],
+        )?;
+        Ok(())
+    }
+
+    /// List all blob keys for a user (for account deletion cleanup).
+    pub fn list_user_blob_keys(&self, user_id: &str) -> Result<Vec<String>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT r2_key FROM user_attachment_blobs WHERE user_id = ?")?;
+        let keys = stmt
+            .query_map([user_id], |row| row.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(keys)
+    }
+
     // ===== Share session operations =====
 
     /// Create a new share session
@@ -688,5 +992,98 @@ mod tests {
         assert!(repo.get_user_devices(&user_id).unwrap().is_empty());
         assert!(repo.validate_session(&session_token).unwrap().is_none());
         assert!(repo.get_user_workspaces(&user_id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_attachment_blob_accounting() {
+        let repo = setup_test_db();
+        let user_id = repo.get_or_create_user("blob-test@example.com").unwrap();
+        let workspace_id = repo.get_or_create_workspace(&user_id, "default").unwrap();
+
+        repo.upsert_blob(
+            &user_id,
+            "hash-a",
+            "diaryx-sync/u/blob-test/blobs/hash-a",
+            1024,
+            "image/png",
+        )
+        .unwrap();
+        repo.upsert_blob(
+            &user_id,
+            "hash-b",
+            "diaryx-sync/u/blob-test/blobs/hash-b",
+            2048,
+            "application/pdf",
+        )
+        .unwrap();
+
+        repo.replace_workspace_attachment_refs(
+            &workspace_id,
+            &[WorkspaceAttachmentRefRecord {
+                file_path: "README.md".to_string(),
+                attachment_path: "_attachments/a.png".to_string(),
+                blob_hash: "hash-a".to_string(),
+                size_bytes: 1024,
+                mime_type: "image/png".to_string(),
+            }],
+        )
+        .unwrap();
+
+        let usage = repo.get_user_storage_usage(&user_id).unwrap();
+        assert_eq!(usage.used_bytes, 1024);
+        assert_eq!(usage.blob_count, 1);
+
+        // Two refs to same blob still count once in storage usage.
+        repo.replace_workspace_attachment_refs(
+            &workspace_id,
+            &[
+                WorkspaceAttachmentRefRecord {
+                    file_path: "README.md".to_string(),
+                    attachment_path: "_attachments/a.png".to_string(),
+                    blob_hash: "hash-a".to_string(),
+                    size_bytes: 1024,
+                    mime_type: "image/png".to_string(),
+                },
+                WorkspaceAttachmentRefRecord {
+                    file_path: "notes.md".to_string(),
+                    attachment_path: "_attachments/a-copy.png".to_string(),
+                    blob_hash: "hash-a".to_string(),
+                    size_bytes: 1024,
+                    mime_type: "image/png".to_string(),
+                },
+            ],
+        )
+        .unwrap();
+
+        let usage = repo.get_user_storage_usage(&user_id).unwrap();
+        assert_eq!(usage.used_bytes, 1024);
+        assert_eq!(usage.blob_count, 1);
+
+        // Replacing with a different blob updates usage.
+        repo.replace_workspace_attachment_refs(
+            &workspace_id,
+            &[WorkspaceAttachmentRefRecord {
+                file_path: "README.md".to_string(),
+                attachment_path: "_attachments/b.pdf".to_string(),
+                blob_hash: "hash-b".to_string(),
+                size_bytes: 2048,
+                mime_type: "application/pdf".to_string(),
+            }],
+        )
+        .unwrap();
+
+        let usage = repo.get_user_storage_usage(&user_id).unwrap();
+        assert_eq!(usage.used_bytes, 2048);
+        assert_eq!(usage.blob_count, 1);
+
+        // Clearing refs soft-deletes blobs.
+        repo.replace_workspace_attachment_refs(&workspace_id, &[])
+            .unwrap();
+        let usage = repo.get_user_storage_usage(&user_id).unwrap();
+        assert_eq!(usage.used_bytes, 0);
+        assert_eq!(usage.blob_count, 0);
+
+        let due = repo.list_soft_deleted_blobs_due(i64::MAX).unwrap();
+        assert!(!due.is_empty());
     }
 }

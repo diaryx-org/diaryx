@@ -8,8 +8,13 @@
    * 3. Authenticated, sync enabled → sync status display
    */
   import { Button } from "$lib/components/ui/button";
-  import { Server, Wifi, WifiOff, Loader2 } from "@lucide/svelte";
-  import { getAuthState, initAuth } from "$lib/auth";
+  import { Server, Wifi, WifiOff, Loader2, RefreshCw, Database } from "@lucide/svelte";
+  import {
+    getAuthState,
+    getStorageUsage,
+    initAuth,
+    refreshUserStorageUsage,
+  } from "$lib/auth";
   import { collaborationStore } from "@/models/stores/collaborationStore.svelte";
   import { onMount } from "svelte";
 
@@ -26,6 +31,8 @@
   // Get collaboration state
   let syncStatus = $derived(collaborationStore.syncStatus);
   let isEnabled = $derived(collaborationStore.collaborationEnabled);
+  let storageUsage = $derived(getStorageUsage());
+  let isRefreshingUsage = $state(false);
 
   // Get server URL for display
   let serverUrl = $derived(
@@ -37,7 +44,25 @@
   // Initialize auth on mount
   onMount(() => {
     initAuth();
+    refreshUserStorageUsage();
   });
+
+  async function handleRefreshStorageUsage() {
+    isRefreshingUsage = true;
+    try {
+      await refreshUserStorageUsage();
+    } finally {
+      isRefreshingUsage = false;
+    }
+  }
+
+  function formatBytes(bytes: number): string {
+    if (bytes === 0) return "0 B";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    const index = Math.floor(Math.log(bytes) / Math.log(1024));
+    const value = bytes / Math.pow(1024, index);
+    return `${value.toFixed(value < 10 && index > 0 ? 1 : 0)} ${units[index]}`;
+  }
 </script>
 
 <div class="space-y-4">
@@ -114,6 +139,57 @@
       <p class="text-xs text-muted-foreground px-1">
         Sign in from the Account tab to enable sync across devices.
       </p>
+    </div>
+  {/if}
+
+  {#if authState.isAuthenticated}
+    <div class="rounded-md border p-3 space-y-3">
+      <div class="flex items-center justify-between gap-2">
+        <h4 class="text-sm font-medium flex items-center gap-2">
+          <Database class="size-4" />
+          Synced Storage
+        </h4>
+        <Button
+          variant="ghost"
+          size="icon"
+          class="size-7"
+          onclick={handleRefreshStorageUsage}
+          disabled={isRefreshingUsage}
+          aria-label="Refresh storage usage"
+        >
+          <RefreshCw class="size-3.5 {isRefreshingUsage ? 'animate-spin' : ''}" />
+        </Button>
+      </div>
+
+      {#if storageUsage}
+        <div class="grid grid-cols-2 gap-2 text-xs">
+          <div class="rounded-md bg-muted/50 p-2">
+            <div class="text-muted-foreground">Used</div>
+            <div class="font-medium">{formatBytes(storageUsage.used_bytes)}</div>
+          </div>
+          <div class="rounded-md bg-muted/50 p-2">
+            <div class="text-muted-foreground">Blobs</div>
+            <div class="font-medium">{storageUsage.blob_count}</div>
+          </div>
+        </div>
+        {#if storageUsage.over_limit}
+          <p class="text-xs text-destructive">
+            Storage limit exceeded.
+          </p>
+        {:else if storageUsage.limit_bytes !== null && storageUsage.used_bytes / storageUsage.limit_bytes >= storageUsage.warning_threshold}
+          <p class="text-xs text-amber-600 dark:text-amber-400">
+            Approaching storage limit.
+          </p>
+        {:else}
+          <p class="text-xs text-muted-foreground">
+            Includes synced attachment blobs.
+          </p>
+        {/if}
+      {:else}
+        <p class="text-xs text-muted-foreground">
+          Storage usage unavailable.
+        </p>
+      {/if}
     </div>
   {/if}
 </div>

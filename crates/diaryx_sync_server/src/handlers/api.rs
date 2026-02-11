@@ -2,6 +2,7 @@ use crate::auth::RequireAuth;
 use crate::db::AuthRepo;
 use crate::sync_v2::{SnapshotImportMode, SyncV2State};
 use axum::body::Bytes;
+use axum::extract::DefaultBodyLimit;
 use axum::{
     Router,
     extract::{Query, State},
@@ -12,6 +13,8 @@ use axum::{
 use serde::Serialize;
 use std::sync::Arc;
 use tracing::{error, info};
+
+const SNAPSHOT_UPLOAD_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 /// Shared state for API handlers
 #[derive(Clone)]
@@ -76,7 +79,13 @@ pub fn api_routes(state: ApiState) -> Router {
         .route("/workspaces/{workspace_id}", get(get_workspace))
         .route(
             "/workspaces/{workspace_id}/snapshot",
-            get(get_workspace_snapshot).post(upload_workspace_snapshot),
+            get(get_workspace_snapshot)
+                .post(upload_workspace_snapshot)
+                .layer(
+                    // Snapshot ZIP payloads can exceed axum's 2MiB default body limit.
+                    // Keep an explicit cap to prevent unbounded uploads.
+                    DefaultBodyLimit::max(SNAPSHOT_UPLOAD_MAX_BYTES),
+                ),
         )
         .route(
             "/workspaces/{workspace_id}/history",

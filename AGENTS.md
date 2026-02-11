@@ -91,6 +91,8 @@ Read the root README.md first. For specific projects, use these entry points:
 
 ## Commands
 
+Note: You may also access these commands from the Nix flake via `nix develop -c <COMMAND>`, or `nix develop` and afterward run the command normally.
+
 ```bash
 # Build all crates
 cargo build

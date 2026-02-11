@@ -93,7 +93,6 @@
 
 <div class="git-history-panel">
   <div class="header">
-    <h2>Snapshots</h2>
     <div class="header-actions">
       <button
         class="commit-btn"
@@ -162,13 +161,6 @@
     margin-bottom: 1rem;
     padding-bottom: 0.5rem;
     border-bottom: 1px solid var(--border);
-  }
-
-  .header h2 {
-    margin: 0;
-    font-size: 1.1rem;
-    font-weight: 600;
-    color: var(--foreground);
   }
 
   .header-actions {

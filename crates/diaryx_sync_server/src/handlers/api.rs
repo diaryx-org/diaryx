@@ -14,7 +14,7 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 const ATTACHMENT_PART_SIZE_DEFAULT: u64 = 8 * 1024 * 1024;
 const ATTACHMENT_UPLOAD_SESSION_TTL_SECS: i64 = 24 * 60 * 60;
@@ -835,6 +835,24 @@ async fn complete_attachment_upload(
     {
         error!("Attachment upload status update failed: {}", err);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    match state
+        .sync_v2
+        .store
+        .reconcile_workspace_attachment_refs(&workspace_id, &state.repo)
+    {
+        Ok(ref_count) => {
+            info!(
+                "Attachment reconciliation complete for {} after upload {} ({} refs)",
+                workspace_id, upload_id, ref_count
+            );
+        }
+        Err(err) => {
+            warn!(
+                "Attachment reconciliation after upload completion failed for {} (upload {}): {}",
+                workspace_id, upload_id, err
+            );
+        }
     }
 
     Json(CompleteAttachmentUploadResponse {

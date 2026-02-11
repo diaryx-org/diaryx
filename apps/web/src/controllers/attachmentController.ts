@@ -25,7 +25,7 @@ import {
   sha256Hex,
 } from '../models/services/attachmentSyncService';
 import { getDefaultWorkspace } from '../lib/auth/authStore.svelte';
-import { getFileMetadata, setFileMetadata } from '../lib/crdt';
+import { getFileMetadata, getWorkspaceId, setFileMetadata } from '../lib/crdt';
 import { toast } from 'svelte-sonner';
 
 // ============================================================================
@@ -112,7 +112,7 @@ async function updateAttachmentRefMetadata(
   };
   await setFileMetadata(entryPath, updatedMetadata);
 
-  const workspaceId = getDefaultWorkspace()?.id;
+  const workspaceId = getWorkspaceId() ?? getDefaultWorkspace()?.id;
   if (workspaceId) {
     indexAttachmentRefs(entryPath, updatedAttachments, workspaceId);
   }
@@ -123,8 +123,6 @@ export async function enqueueIncrementalAttachmentUpload(
   attachmentPath: string,
   file: File,
 ): Promise<void> {
-  const workspaceId = getDefaultWorkspace()?.id;
-  if (!workspaceId) return;
   const bytes = new Uint8Array(await file.arrayBuffer());
   const hash = await sha256Hex(bytes);
   await updateAttachmentRefMetadata(
@@ -134,6 +132,8 @@ export async function enqueueIncrementalAttachmentUpload(
     file.type || getMimeType(file.name),
     file.size,
   );
+  const workspaceId = getWorkspaceId() ?? getDefaultWorkspace()?.id;
+  if (!workspaceId) return;
   enqueueAttachmentUpload({
     workspaceId,
     entryPath,
@@ -234,7 +234,15 @@ export async function handleAttachmentFileSelect(
       file.name,
       dataBase64
     );
-    await enqueueIncrementalAttachmentUpload(pendingAttachmentPath, attachmentPath, file);
+    const canonicalAttachmentPath = await api.canonicalizeLink(
+      attachmentPath,
+      pendingAttachmentPath
+    );
+    await enqueueIncrementalAttachmentUpload(
+      pendingAttachmentPath,
+      canonicalAttachmentPath,
+      file
+    );
 
     // Refresh the entry if it's currently open
     if (currentEntry?.path === pendingAttachmentPath) {
@@ -296,7 +304,15 @@ export async function handleEditorFileDrop(
       file.name,
       dataBase64
     );
-    await enqueueIncrementalAttachmentUpload(currentEntry.path, attachmentPath, file);
+    const canonicalAttachmentPath = await api.canonicalizeLink(
+      attachmentPath,
+      currentEntry.path
+    );
+    await enqueueIncrementalAttachmentUpload(
+      currentEntry.path,
+      canonicalAttachmentPath,
+      file
+    );
 
     // Refresh the entry to update attachments list
     const entry = await api.getEntry(currentEntry.path);

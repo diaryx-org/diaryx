@@ -142,6 +142,9 @@ Attachment reconciliation notes:
 - If a synced attachment ref has an empty hash, the server falls back to the
   latest `attachment_uploads` row with `status='completed'` for the same
   `workspace_id + attachment_path`, so usage/ref counts can still converge.
+- Reconciliation is triggered both on workspace metadata updates and after
+  incremental upload completion, reducing timing gaps where uploads finish
+  slightly after a workspace update.
 
 ## Future Work
 

@@ -38,7 +38,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
-use crate::crdt::{BodyDocManager, FileMetadata, WorkspaceCrdt};
+use crate::crdt::{BinaryRef, BodyDocManager, FileMetadata, WorkspaceCrdt};
 use crate::frontmatter;
 use crate::fs::{AsyncFileSystem, BoxFuture};
 use crate::link_parser;
@@ -461,6 +461,54 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
         }
         if let Some(description) = fm.get("description") {
             metadata.description = description.as_str().map(String::from);
+        }
+        if let Some(attachments) = fm.get("attachments")
+            && let Some(seq) = attachments.as_sequence()
+        {
+            metadata.attachments = seq
+                .iter()
+                .filter_map(|value| match value {
+                    serde_yaml::Value::String(path) => Some(BinaryRef {
+                        path: path.clone(),
+                        source: "local".to_string(),
+                        hash: String::new(),
+                        mime_type: String::new(),
+                        size: 0,
+                        uploaded_at: None,
+                        deleted: false,
+                    }),
+                    serde_yaml::Value::Mapping(map) => {
+                        let key = |name: &str| serde_yaml::Value::String(name.to_string());
+                        let path = map.get(&key("path")).and_then(|v| v.as_str())?;
+                        let source = map
+                            .get(&key("source"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("local");
+                        let hash = map.get(&key("hash")).and_then(|v| v.as_str()).unwrap_or("");
+                        let mime_type = map
+                            .get(&key("mime_type"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let size = map.get(&key("size")).and_then(|v| v.as_u64()).unwrap_or(0);
+                        let uploaded_at = map.get(&key("uploaded_at")).and_then(|v| v.as_i64());
+                        let deleted = map
+                            .get(&key("deleted"))
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+
+                        Some(BinaryRef {
+                            path: path.to_string(),
+                            source: source.to_string(),
+                            hash: hash.to_string(),
+                            mime_type: mime_type.to_string(),
+                            size,
+                            uploaded_at,
+                            deleted,
+                        })
+                    }
+                    _ => None,
+                })
+                .collect();
         }
 
         // Store remaining fields in extra
@@ -1256,6 +1304,20 @@ mod tests {
         let metadata = fs.workspace_crdt.get_file("test.md").unwrap();
         assert_eq!(metadata.title, Some("Test".to_string()));
         assert_eq!(metadata.part_of, Some("index.md".to_string()));
+    }
+
+    #[test]
+    fn test_write_parses_string_attachments_in_fallback_path() {
+        let fs = create_test_crdt_fs();
+        let content = "---\ntitle: Test\nattachments:\n  - \"[Image](/_attachments/a.png)\"\n---\nBody content";
+
+        futures_lite::future::block_on(async {
+            fs.write_file(Path::new("test.md"), content).await.unwrap();
+        });
+
+        let metadata = fs.workspace_crdt.get_file("test.md").unwrap();
+        assert_eq!(metadata.attachments.len(), 1);
+        assert_eq!(metadata.attachments[0].path, "_attachments/a.png");
     }
 
     #[test]

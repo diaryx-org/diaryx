@@ -1908,9 +1908,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     &entry_path,
                 );
 
-                self.entry()
-                    .add_attachment(&entry_path, &link)
-                    .await?;
+                self.entry().add_attachment(&entry_path, &link).await?;
 
                 Ok(Response::String(link))
             }

@@ -1,6 +1,7 @@
 //! Attachment command handlers
 
 use diaryx_core::config::Config;
+use diaryx_core::link_parser;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -219,6 +220,9 @@ fn handle_remove(
     }
     let entry_path = &entry_paths[0];
 
+    // Parse through link_parser to handle markdown links and different path formats
+    let parsed_attachment = link_parser::parse_link(attachment_arg);
+
     if dry_run {
         println!(
             "[dry-run] Would remove '{}' from attachments in {}",
@@ -227,7 +231,7 @@ fn handle_remove(
         );
         if delete {
             let entry_dir = entry_path.parent().unwrap_or(current_dir);
-            let full_path = entry_dir.join(attachment_arg);
+            let full_path = entry_dir.join(&parsed_attachment.path);
             println!("[dry-run] Would delete file: {}", full_path.display());
         }
         return;
@@ -252,7 +256,7 @@ fn handle_remove(
     // Optionally delete the file
     if delete {
         let entry_dir = entry_path.parent().unwrap_or(current_dir);
-        let full_path = entry_dir.join(attachment_arg);
+        let full_path = entry_dir.join(&parsed_attachment.path);
         if full_path.exists() {
             if let Err(e) = fs::remove_file(&full_path) {
                 eprintln!("Warning: Failed to delete file: {}", e);

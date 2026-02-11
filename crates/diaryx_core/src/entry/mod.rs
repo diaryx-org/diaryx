@@ -851,15 +851,19 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
 
         // First, check attachments directly on this entry
         for att_path in frontmatter.attachments_list() {
-            let resolved = entry_dir.join(att_path);
+            // Parse through link_parser to handle markdown links and different path formats
+            let parsed = link_parser::parse_link(att_path);
+            let resolved = entry_dir.join(&parsed.path);
             if resolved.file_name().map(|n| n.to_string_lossy()) == Some(attachment_name.into())
                 && self.fs.exists(&resolved)
             {
                 return Ok(Some(resolved));
             }
             // Also check if the path itself matches
-            if att_path == attachment_name || att_path.ends_with(&format!("/{}", attachment_name)) {
-                let resolved = entry_dir.join(att_path);
+            if parsed.path == attachment_name
+                || parsed.path.ends_with(&format!("/{}", attachment_name))
+            {
+                let resolved = entry_dir.join(&parsed.path);
                 if self.fs.exists(&resolved) {
                     return Ok(Some(resolved));
                 }

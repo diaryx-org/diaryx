@@ -18,10 +18,10 @@
   import { getAuthState } from "$lib/auth";
   import {
     Cloud,
+    CloudCheck,
     CloudOff,
     RefreshCw,
     AlertCircle,
-    CheckCircle,
   } from "@lucide/svelte";
 
   interface Props {
@@ -84,7 +84,7 @@
       animate: true,
     },
     'synced': {
-      icon: CheckCircle,
+      icon: CloudCheck,
       color: 'text-green-500',
       dotColor: 'bg-green-500',
       label: 'Synced',

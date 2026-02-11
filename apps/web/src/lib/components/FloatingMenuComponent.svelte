@@ -34,14 +34,18 @@
     event?.stopPropagation();
     event?.preventDefault();
     isExpanded = true;
-    // Focus first item after expansion
-    setTimeout(() => {
-      updateFocusableItems();
-      if (focusableItems.length > 0) {
-        focusedIndex = 0;
-        focusableItems[0]?.focus();
-      }
-    }, 0);
+    // Only auto-focus first item for keyboard activation.
+    // On mouse/touch, focusing a <select> opens the native picker on mobile.
+    const isKeyboard = event instanceof KeyboardEvent;
+    if (isKeyboard) {
+      setTimeout(() => {
+        updateFocusableItems();
+        if (focusableItems.length > 0) {
+          focusedIndex = 0;
+          focusableItems[0]?.focus();
+        }
+      }, 0);
+    }
   }
 
   // Expose expand function for external triggering (e.g., keyboard shortcut from editor)
@@ -209,7 +213,7 @@
           class="list-select"
         >
           <NativeSelect.Option value="" disabled selected>
-            <List class="size-4 inline mr-1" />Lists
+            <List class="size-4 inline" />
           </NativeSelect.Option>
           <NativeSelect.Option value="bullet">Bullet List</NativeSelect.Option>
           <NativeSelect.Option value="ordered">Numbered List</NativeSelect.Option>
@@ -387,7 +391,7 @@
 
   .list-section :global([data-slot="native-select"]) {
     height: 32px;
-    min-width: 70px;
+    min-width: 56px;
     padding: 0 24px 0 8px;
     font-size: 13px;
     font-weight: 500;
@@ -470,21 +474,32 @@
       height: 36px;
     }
 
+    .menu-expanded {
+      min-width: 0;
+      flex-wrap: wrap;
+      max-width: min(90vw, 280px);
+      justify-content: flex-start;
+    }
+
     .menu-item {
-      width: 40px;
-      height: 40px;
+      width: 36px;
+      height: 36px;
     }
 
     .heading-section :global([data-slot="native-select"]) {
-      height: 40px;
-      min-width: 64px;
-      font-size: 14px;
+      height: 36px;
+      min-width: 56px;
+      font-size: 13px;
     }
 
     .list-section :global([data-slot="native-select"]) {
-      height: 40px;
-      min-width: 80px;
-      font-size: 14px;
+      height: 36px;
+      min-width: 56px;
+      font-size: 13px;
+    }
+
+    .menu-divider {
+      height: 16px;
     }
   }
 </style>

@@ -111,6 +111,7 @@ async fn main() {
         sync_v2: sync_v2_state.clone(),
         blob_store: blob_store.clone(),
         snapshot_upload_max_bytes: config.snapshot_upload_max_bytes,
+        attachment_incremental_sync_enabled: config.attachment_incremental_sync_enabled,
     };
 
     let sessions_state = diaryx_sync_server::handlers::sessions::SessionsState {
@@ -214,6 +215,54 @@ async fn main() {
                         error!(
                             "Blob GC DB delete failed for {}:{}: {}",
                             row.user_id, row.blob_hash, err
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    // Start expired attachment upload cleanup task
+    {
+        let uploads_repo = repo.clone();
+        let uploads_blob_store = blob_store.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(600));
+            loop {
+                interval.tick().await;
+                let now = chrono::Utc::now().timestamp();
+                let expired = match uploads_repo.list_expired_attachment_uploads(now) {
+                    Ok(rows) => rows,
+                    Err(err) => {
+                        error!("Attachment upload cleanup query failed: {}", err);
+                        continue;
+                    }
+                };
+
+                for session in expired {
+                    if let Err(err) = uploads_blob_store
+                        .abort_multipart(&session.r2_key, &session.r2_multipart_upload_id)
+                        .await
+                    {
+                        error!(
+                            "Attachment upload abort failed for {}:{}: {}",
+                            session.upload_id, session.r2_key, err
+                        );
+                    }
+                    if let Err(err) =
+                        uploads_repo.set_attachment_upload_status(&session.upload_id, "expired")
+                    {
+                        error!(
+                            "Attachment upload status update failed for {}: {}",
+                            session.upload_id, err
+                        );
+                    }
+                    if let Err(err) =
+                        uploads_repo.delete_attachment_upload_session(&session.upload_id)
+                    {
+                        error!(
+                            "Attachment upload delete failed for {}: {}",
+                            session.upload_id, err
                         );
                     }
                 }

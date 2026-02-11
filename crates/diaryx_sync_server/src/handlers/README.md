@@ -36,6 +36,10 @@ max payload size (`SNAPSHOT_UPLOAD_MAX_BYTES`, default 1 GiB).
 `api.rs` also serves per-user attachment usage at:
 
 - `GET /api/user/storage` — returns used bytes/blob count for synced attachment blobs.
+- `POST /api/workspaces/{workspace_id}/attachments/uploads` — initialize/resume multipart attachment upload.
+- `PUT /api/workspaces/{workspace_id}/attachments/uploads/{upload_id}/parts/{part_no}` — upload one part.
+- `POST /api/workspaces/{workspace_id}/attachments/uploads/{upload_id}/complete` — finalize multipart upload.
+- `GET /api/workspaces/{workspace_id}/attachments/{hash}` — download attachment bytes (supports `Range`).
 
 ### Git Version History Endpoints
 

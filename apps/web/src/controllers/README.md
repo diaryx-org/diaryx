@@ -21,7 +21,7 @@ Controller logic for UI actions, mediating between views and models.
 
 | File | Purpose |
 |------|---------|
-| `attachmentController.ts` | Attachment upload and management |
+| `attachmentController.ts` | Attachment upload/management + incremental sync enqueue + BinaryRef hash metadata updates |
 | `commandPaletteController.ts` | Command palette actions |
 | `entryController.ts` | Entry creation, editing, deletion |
 | `linkController.ts` | Link handling and navigation |

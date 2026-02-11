@@ -471,4 +471,53 @@ impl WorkspaceStore {
 
         Ok(SnapshotImportResult { files_imported })
     }
+
+    /// Reconcile workspace attachment references from current workspace metadata.
+    ///
+    /// This is used for ongoing incremental sync so usage/ref counts stay accurate
+    /// without requiring snapshot imports.
+    pub fn reconcile_workspace_attachment_refs(
+        &self,
+        workspace_id: &str,
+        repo: &AuthRepo,
+    ) -> Result<usize, SnapshotError> {
+        let storage = self
+            .storage_cache
+            .get_storage(workspace_id)
+            .map_err(SnapshotError::Storage)?;
+        let workspace_doc_name = format!("workspace:{}", workspace_id);
+        let workspace = WorkspaceCrdt::load_with_name(storage.clone(), workspace_doc_name)
+            .map_err(|e| SnapshotError::Storage(e.to_string()))?;
+        let body_docs = BodyDocManager::new(storage);
+        let result = materialize_workspace(&workspace, &body_docs, workspace_id);
+
+        let mut refs: Vec<WorkspaceAttachmentRefRecord> = Vec::new();
+        for file in result.files {
+            let Some(file_path) = normalize_workspace_path(&file.path) else {
+                continue;
+            };
+            for attachment in file.metadata.attachments {
+                if attachment.deleted || attachment.hash.is_empty() {
+                    continue;
+                }
+                let Some(attachment_path) = normalize_workspace_path(&attachment.path) else {
+                    continue;
+                };
+                refs.push(WorkspaceAttachmentRefRecord {
+                    file_path: file_path.clone(),
+                    attachment_path,
+                    blob_hash: attachment.hash,
+                    size_bytes: attachment.size,
+                    mime_type: if attachment.mime_type.is_empty() {
+                        "application/octet-stream".to_string()
+                    } else {
+                        attachment.mime_type
+                    },
+                });
+            }
+        }
+
+        repo.replace_workspace_attachment_refs(workspace_id, &refs)?;
+        Ok(refs.len())
+    }
 }

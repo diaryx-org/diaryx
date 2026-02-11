@@ -62,6 +62,7 @@ cargo run -p diaryx_sync_server
 | `R2_ENDPOINT`               | -                                             | Optional custom S3 endpoint override                  |
 | `R2_PREFIX`                 | `diaryx-sync`                                 | Object key prefix inside the bucket                   |
 | `R2_GC_RETENTION_DAYS`      | `7`                                           | Soft-delete retention before blob garbage collection  |
+| `ATTACHMENT_INCREMENTAL_SYNC_ENABLED` | `true`                              | Enable incremental multipart attachment APIs          |
 
 ## API Endpoints
 
@@ -201,6 +202,42 @@ Response:
   "scope": "attachments"
 }
 ```
+
+#### Incremental Attachment Upload (Resumable)
+
+```
+POST /api/workspaces/{workspace_id}/attachments/uploads
+Authorization: Bearer <session_token>
+Content-Type: application/json
+```
+
+Initializes or resumes a multipart attachment upload session.
+
+```
+PUT /api/workspaces/{workspace_id}/attachments/uploads/{upload_id}/parts/{part_no}
+Authorization: Bearer <session_token>
+Content-Type: application/octet-stream
+```
+
+Uploads one part for a multipart session.
+
+```
+POST /api/workspaces/{workspace_id}/attachments/uploads/{upload_id}/complete
+Authorization: Bearer <session_token>
+Content-Type: application/json
+```
+
+Completes upload and registers blob metadata for dedupe/usage accounting.
+
+#### Attachment Download by Hash
+
+```
+GET /api/workspaces/{workspace_id}/attachments/{hash}
+Authorization: Bearer <session_token>
+Range: bytes=start-end (optional)
+```
+
+Returns attachment bytes for hashes referenced by the workspace.
 
 ### Share Sessions (Live Collaboration)
 

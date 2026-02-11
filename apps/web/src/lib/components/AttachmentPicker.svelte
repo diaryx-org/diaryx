@@ -10,6 +10,7 @@
   } from "@lucide/svelte";
   import type { Api } from "$lib/backend/api";
   import { isHeicFile, convertHeicToJpeg, isImageFile, getFilename, getMimeType, bytesToBase64 } from "$lib/../models/services/attachmentService";
+  import { enqueueIncrementalAttachmentUpload } from "@/controllers/attachmentController";
 
   interface Props {
     open: boolean;
@@ -222,6 +223,7 @@
         file.name,
         base64
       );
+      await enqueueIncrementalAttachmentUpload(entryPath, attachmentPath, file);
 
       // Create blob URL for immediate use
       const blobUrl = URL.createObjectURL(file);

@@ -7,6 +7,7 @@
 
 import type { Api } from '$lib/backend/api';
 import heic2any from 'heic2any';
+import { requestMissingBlobDownload } from './attachmentSyncService';
 
 // ============================================================================
 // State
@@ -190,6 +191,30 @@ export async function transformAttachmentPaths(
         replacement: `![${alt}](${blobUrl})`,
       });
     } catch (e) {
+      // Attachment not found locally. If metadata has a hash, enqueue a background
+      // fetch and retry once after a short wait.
+      const queued = requestMissingBlobDownload(entryPath, imagePath);
+      if (queued) {
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          const retried = await api.getAttachmentData(entryPath, imagePath);
+          const mimeType = getMimeType(imagePath);
+          let blob = new Blob([new Uint8Array(retried)], { type: mimeType });
+          if (isHeicFile(imagePath)) {
+            blob = await convertHeicToJpeg(blob);
+          }
+          const blobUrl = URL.createObjectURL(blob);
+          blobUrlMap.set(imagePath, blobUrl);
+          replacements.push({
+            original: fullMatch,
+            replacement: `![${alt}](${blobUrl})`,
+          });
+          continue;
+        } catch {
+          // Leave original path if retry is still unavailable.
+        }
+      }
+
       // Attachment not found or error - leave original path
       console.warn(`[AttachmentService] Could not load attachment: ${imagePath}`, e);
     }

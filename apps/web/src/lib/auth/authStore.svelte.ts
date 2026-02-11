@@ -17,6 +17,11 @@ import {
   AuthError,
   type UserHasDataResponse,
   type UserStorageUsageResponse,
+  type InitAttachmentUploadRequest,
+  type InitAttachmentUploadResponse,
+  type CompleteAttachmentUploadRequest,
+  type CompleteAttachmentUploadResponse,
+  type DownloadAttachmentResponse,
 } from "./authService";
 import {
   setAuthToken,
@@ -514,4 +519,70 @@ export async function uploadWorkspaceSnapshot(
     console.error("[AuthStore] Failed to upload snapshot:", err);
     return null;
   }
+}
+
+/**
+ * Initialize resumable attachment upload.
+ */
+export async function initAttachmentUpload(
+  workspaceId: string,
+  request: InitAttachmentUploadRequest,
+): Promise<InitAttachmentUploadResponse> {
+  const token = getToken();
+  const url = state.serverUrl;
+  if (!token || !url || !authService) {
+    throw new Error("Not authenticated");
+  }
+  return authService.initAttachmentUpload(token, workspaceId, request);
+}
+
+/**
+ * Upload one attachment part.
+ */
+export async function uploadAttachmentPart(
+  workspaceId: string,
+  uploadId: string,
+  partNo: number,
+  bytes: ArrayBuffer,
+): Promise<{ ok: boolean; part_no: number }> {
+  const token = getToken();
+  const url = state.serverUrl;
+  if (!token || !url || !authService) {
+    throw new Error("Not authenticated");
+  }
+  return authService.uploadAttachmentPart(token, workspaceId, uploadId, partNo, bytes);
+}
+
+/**
+ * Complete resumable attachment upload.
+ */
+export async function completeAttachmentUpload(
+  workspaceId: string,
+  uploadId: string,
+  request: CompleteAttachmentUploadRequest,
+): Promise<CompleteAttachmentUploadResponse> {
+  const token = getToken();
+  const url = state.serverUrl;
+  if (!token || !url || !authService) {
+    throw new Error("Not authenticated");
+  }
+  const result = await authService.completeAttachmentUpload(token, workspaceId, uploadId, request);
+  await refreshUserStorageUsage();
+  return result;
+}
+
+/**
+ * Download workspace attachment by hash.
+ */
+export async function downloadAttachment(
+  workspaceId: string,
+  hash: string,
+  range?: { start: number; end?: number },
+): Promise<DownloadAttachmentResponse> {
+  const token = getToken();
+  const url = state.serverUrl;
+  if (!token || !url || !authService) {
+    throw new Error("Not authenticated");
+  }
+  return authService.downloadAttachment(token, workspaceId, hash, range);
 }

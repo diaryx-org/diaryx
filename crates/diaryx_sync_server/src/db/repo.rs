@@ -77,6 +77,34 @@ pub struct DueBlobDelete {
     pub r2_key: String,
 }
 
+/// Attachment upload session state.
+#[derive(Debug, Clone)]
+pub struct AttachmentUploadSession {
+    pub upload_id: String,
+    pub workspace_id: String,
+    pub user_id: String,
+    pub blob_hash: String,
+    pub attachment_path: String,
+    pub mime_type: String,
+    pub size_bytes: u64,
+    pub part_size: u64,
+    pub total_parts: u32,
+    pub r2_key: String,
+    pub r2_multipart_upload_id: String,
+    pub status: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub expires_at: i64,
+}
+
+/// Uploaded part metadata for multipart completion.
+#[derive(Debug, Clone)]
+pub struct AttachmentUploadPart {
+    pub part_no: u32,
+    pub etag: String,
+    pub size_bytes: u64,
+}
+
 /// Authentication repository for database operations
 #[derive(Clone)]
 pub struct AuthRepo {
@@ -736,6 +764,234 @@ impl AuthRepo {
             .filter_map(|r| r.ok())
             .collect();
         Ok(keys)
+    }
+
+    /// Get blob metadata for a user/hash.
+    pub fn get_user_blob(
+        &self,
+        user_id: &str,
+        blob_hash: &str,
+    ) -> Result<Option<(String, u64, String)>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT r2_key, size_bytes, mime_type
+             FROM user_attachment_blobs
+             WHERE user_id = ? AND blob_hash = ?",
+            params![user_id, blob_hash],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)? as u64,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+    }
+
+    /// Check whether a workspace currently references a blob hash.
+    pub fn workspace_references_blob(
+        &self,
+        workspace_id: &str,
+        blob_hash: &str,
+    ) -> Result<bool, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM workspace_attachment_refs WHERE workspace_id = ? AND blob_hash = ?",
+            params![workspace_id, blob_hash],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    /// Create or replace a multipart upload session.
+    pub fn create_attachment_upload_session(
+        &self,
+        session: &AttachmentUploadSession,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO attachment_uploads
+             (upload_id, workspace_id, user_id, blob_hash, attachment_path, mime_type, size_bytes, part_size, total_parts, r2_key, r2_multipart_upload_id, status, created_at, updated_at, expires_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(upload_id) DO UPDATE SET
+               workspace_id = excluded.workspace_id,
+               user_id = excluded.user_id,
+               blob_hash = excluded.blob_hash,
+               attachment_path = excluded.attachment_path,
+               mime_type = excluded.mime_type,
+               size_bytes = excluded.size_bytes,
+               part_size = excluded.part_size,
+               total_parts = excluded.total_parts,
+               r2_key = excluded.r2_key,
+               r2_multipart_upload_id = excluded.r2_multipart_upload_id,
+               status = excluded.status,
+               updated_at = excluded.updated_at,
+               expires_at = excluded.expires_at",
+            params![
+                session.upload_id,
+                session.workspace_id,
+                session.user_id,
+                session.blob_hash,
+                session.attachment_path,
+                session.mime_type,
+                session.size_bytes as i64,
+                session.part_size as i64,
+                session.total_parts as i64,
+                session.r2_key,
+                session.r2_multipart_upload_id,
+                session.status,
+                session.created_at,
+                session.updated_at,
+                session.expires_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Get multipart upload session by upload ID.
+    pub fn get_attachment_upload_session(
+        &self,
+        upload_id: &str,
+    ) -> Result<Option<AttachmentUploadSession>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT upload_id, workspace_id, user_id, blob_hash, attachment_path, mime_type, size_bytes, part_size, total_parts, r2_key, r2_multipart_upload_id, status, created_at, updated_at, expires_at
+             FROM attachment_uploads
+             WHERE upload_id = ?",
+            [upload_id],
+            |row| {
+                Ok(AttachmentUploadSession {
+                    upload_id: row.get(0)?,
+                    workspace_id: row.get(1)?,
+                    user_id: row.get(2)?,
+                    blob_hash: row.get(3)?,
+                    attachment_path: row.get(4)?,
+                    mime_type: row.get(5)?,
+                    size_bytes: row.get::<_, i64>(6)? as u64,
+                    part_size: row.get::<_, i64>(7)? as u64,
+                    total_parts: row.get::<_, i64>(8)? as u32,
+                    r2_key: row.get(9)?,
+                    r2_multipart_upload_id: row.get(10)?,
+                    status: row.get(11)?,
+                    created_at: row.get(12)?,
+                    updated_at: row.get(13)?,
+                    expires_at: row.get(14)?,
+                })
+            },
+        )
+        .optional()
+    }
+
+    /// Upsert uploaded part metadata for a multipart session.
+    pub fn upsert_attachment_upload_part(
+        &self,
+        upload_id: &str,
+        part_no: u32,
+        etag: &str,
+        size_bytes: u64,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO attachment_upload_parts (upload_id, part_no, etag, size_bytes, created_at)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(upload_id, part_no) DO UPDATE SET
+               etag = excluded.etag,
+               size_bytes = excluded.size_bytes",
+            params![upload_id, part_no as i64, etag, size_bytes as i64, now],
+        )?;
+        conn.execute(
+            "UPDATE attachment_uploads SET updated_at = ? WHERE upload_id = ?",
+            params![now, upload_id],
+        )?;
+        Ok(())
+    }
+
+    /// List uploaded parts for a multipart session in ascending part order.
+    pub fn list_attachment_upload_parts(
+        &self,
+        upload_id: &str,
+    ) -> Result<Vec<AttachmentUploadPart>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT part_no, etag, size_bytes
+             FROM attachment_upload_parts
+             WHERE upload_id = ?
+             ORDER BY part_no ASC",
+        )?;
+        let parts = stmt
+            .query_map([upload_id], |row| {
+                Ok(AttachmentUploadPart {
+                    part_no: row.get::<_, i64>(0)? as u32,
+                    etag: row.get(1)?,
+                    size_bytes: row.get::<_, i64>(2)? as u64,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(parts)
+    }
+
+    /// Set status for a multipart upload session.
+    pub fn set_attachment_upload_status(
+        &self,
+        upload_id: &str,
+        status: &str,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+        conn.execute(
+            "UPDATE attachment_uploads SET status = ?, updated_at = ? WHERE upload_id = ?",
+            params![status, now, upload_id],
+        )?;
+        Ok(())
+    }
+
+    /// List sessions that have expired while still uploading.
+    pub fn list_expired_attachment_uploads(
+        &self,
+        now_ts: i64,
+    ) -> Result<Vec<AttachmentUploadSession>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT upload_id, workspace_id, user_id, blob_hash, attachment_path, mime_type, size_bytes, part_size, total_parts, r2_key, r2_multipart_upload_id, status, created_at, updated_at, expires_at
+             FROM attachment_uploads
+             WHERE status = 'uploading' AND expires_at <= ?",
+        )?;
+        let rows = stmt
+            .query_map([now_ts], |row| {
+                Ok(AttachmentUploadSession {
+                    upload_id: row.get(0)?,
+                    workspace_id: row.get(1)?,
+                    user_id: row.get(2)?,
+                    blob_hash: row.get(3)?,
+                    attachment_path: row.get(4)?,
+                    mime_type: row.get(5)?,
+                    size_bytes: row.get::<_, i64>(6)? as u64,
+                    part_size: row.get::<_, i64>(7)? as u64,
+                    total_parts: row.get::<_, i64>(8)? as u32,
+                    r2_key: row.get(9)?,
+                    r2_multipart_upload_id: row.get(10)?,
+                    status: row.get(11)?,
+                    created_at: row.get(12)?,
+                    updated_at: row.get(13)?,
+                    expires_at: row.get(14)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// Delete multipart session and all associated part rows.
+    pub fn delete_attachment_upload_session(&self, upload_id: &str) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM attachment_uploads WHERE upload_id = ?",
+            params![upload_id],
+        )?;
+        Ok(())
     }
 
     // ===== Share session operations =====

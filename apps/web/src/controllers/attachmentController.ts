@@ -17,7 +17,15 @@ import {
   trackBlobUrl,
   computeRelativeAttachmentPath,
   getMimeType,
+  bytesToBase64,
 } from '../models/services/attachmentService';
+import {
+  enqueueAttachmentUpload,
+  indexAttachmentRefs,
+  sha256Hex,
+} from '../models/services/attachmentSyncService';
+import { getDefaultWorkspace } from '../lib/auth/authStore.svelte';
+import { getFileMetadata, setFileMetadata } from '../lib/crdt';
 import { toast } from 'svelte-sonner';
 
 // ============================================================================
@@ -55,6 +63,67 @@ export function fileToBase64(file: File): Promise<string> {
     };
     reader.onerror = reject;
     reader.readAsDataURL(file);
+  });
+}
+
+async function updateAttachmentRefMetadata(
+  entryPath: string,
+  attachmentPath: string,
+  hash: string,
+  mimeType: string,
+  sizeBytes: number,
+): Promise<void> {
+  const metadata = await getFileMetadata(entryPath);
+  if (!metadata) return;
+
+  const updatedAttachments = metadata.attachments.map((attachment) => {
+    if (attachment.path !== attachmentPath) return attachment;
+    return {
+      ...attachment,
+      hash,
+      mime_type: mimeType || attachment.mime_type,
+      size: BigInt(sizeBytes),
+      uploaded_at: BigInt(Date.now()),
+      deleted: false,
+    };
+  });
+
+  const updatedMetadata = {
+    ...metadata,
+    attachments: updatedAttachments,
+    modified_at: BigInt(Date.now()),
+  };
+  await setFileMetadata(entryPath, updatedMetadata);
+
+  const workspaceId = getDefaultWorkspace()?.id;
+  if (workspaceId) {
+    indexAttachmentRefs(entryPath, updatedAttachments, workspaceId);
+  }
+}
+
+export async function enqueueIncrementalAttachmentUpload(
+  entryPath: string,
+  attachmentPath: string,
+  file: File,
+): Promise<void> {
+  const workspaceId = getDefaultWorkspace()?.id;
+  if (!workspaceId) return;
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const hash = await sha256Hex(bytes);
+  await updateAttachmentRefMetadata(
+    entryPath,
+    attachmentPath,
+    hash,
+    file.type || getMimeType(file.name),
+    file.size,
+  );
+  enqueueAttachmentUpload({
+    workspaceId,
+    entryPath,
+    attachmentPath,
+    hash,
+    mimeType: file.type || getMimeType(file.name),
+    sizeBytes: file.size,
   });
 }
 
@@ -139,7 +208,8 @@ export async function handleAttachmentFileSelect(
 
   try {
     // Convert file to base64
-    const dataBase64 = await fileToBase64(file);
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const dataBase64 = bytesToBase64(bytes);
 
     // Upload attachment
     const attachmentPath = await api.uploadAttachment(
@@ -147,6 +217,7 @@ export async function handleAttachmentFileSelect(
       file.name,
       dataBase64
     );
+    await enqueueIncrementalAttachmentUpload(pendingAttachmentPath, attachmentPath, file);
 
     // Refresh the entry if it's currently open
     if (currentEntry?.path === pendingAttachmentPath) {
@@ -201,12 +272,14 @@ export async function handleEditorFileDrop(
   }
 
   try {
-    const dataBase64 = await fileToBase64(file);
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const dataBase64 = bytesToBase64(bytes);
     const attachmentPath = await api.uploadAttachment(
       currentEntry.path,
       file.name,
       dataBase64
     );
+    await enqueueIncrementalAttachmentUpload(currentEntry.path, attachmentPath, file);
 
     // Refresh the entry to update attachments list
     const entry = await api.getEntry(currentEntry.path);
@@ -261,6 +334,10 @@ export async function handleDeleteAttachment(
     entryStore.setCurrentEntry(entry);
     if (onEntryUpdate) {
       onEntryUpdate(entry);
+    }
+    const workspaceId = getDefaultWorkspace()?.id;
+    if (workspaceId) {
+      indexAttachmentRefs(currentEntry.path, (entry.frontmatter.attachments as any[]) ?? [], workspaceId);
     }
     attachmentError = null;
   } catch (e) {
@@ -319,7 +396,7 @@ export async function handleMoveAttachment(
   if (sourceEntryPath === targetEntryPath) return;
 
   try {
-    await api.moveAttachment(sourceEntryPath, targetEntryPath, attachmentPath);
+    const movedPath = await api.moveAttachment(sourceEntryPath, targetEntryPath, attachmentPath);
 
     // Refresh current entry if it was affected
     if (
@@ -331,6 +408,31 @@ export async function handleMoveAttachment(
       entryStore.setCurrentEntry(entry);
       if (onEntryUpdate) {
         onEntryUpdate(entry);
+      }
+    }
+
+    const workspaceId = getDefaultWorkspace()?.id;
+    if (workspaceId) {
+      const sourceMetadata = await getFileMetadata(sourceEntryPath);
+      if (sourceMetadata) {
+        indexAttachmentRefs(sourceEntryPath, sourceMetadata.attachments, workspaceId);
+      }
+      const targetMetadata = await getFileMetadata(targetEntryPath);
+      if (targetMetadata) {
+        indexAttachmentRefs(targetEntryPath, targetMetadata.attachments, workspaceId);
+      }
+      if (movedPath && targetMetadata) {
+        const movedRef = targetMetadata.attachments.find((attachment) => attachment.path === movedPath);
+        if (movedRef?.hash) {
+          enqueueAttachmentUpload({
+            workspaceId,
+            entryPath: targetEntryPath,
+            attachmentPath: movedPath,
+            hash: movedRef.hash,
+            mimeType: movedRef.mime_type || getMimeType(movedPath),
+            sizeBytes: Number(movedRef.size ?? 0n),
+          });
+        }
       }
     }
 

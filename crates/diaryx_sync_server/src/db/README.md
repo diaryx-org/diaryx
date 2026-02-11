@@ -24,3 +24,5 @@ The schema includes attachment usage tracking tables:
 
 - `user_attachment_blobs` (per-user deduplicated blob metadata + ref counts)
 - `workspace_attachment_refs` (workspace path refs to blob hashes)
+- `attachment_uploads` (resumable multipart upload sessions)
+- `attachment_upload_parts` (uploaded part ETags/state per upload session)

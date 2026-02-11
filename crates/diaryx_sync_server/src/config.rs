@@ -28,6 +28,8 @@ pub struct Config {
     pub r2: R2Config,
     /// Snapshot upload max size in bytes (default: 1 GiB)
     pub snapshot_upload_max_bytes: usize,
+    /// Enable incremental attachment sync endpoints (default: true)
+    pub attachment_incremental_sync_enabled: bool,
 }
 
 /// Email configuration (Resend HTTP API)
@@ -131,6 +133,9 @@ impl Config {
             .unwrap_or_else(|_| "1073741824".to_string())
             .parse()
             .unwrap_or(1073741824);
+        let attachment_incremental_sync_enabled = env::var("ATTACHMENT_INCREMENTAL_SYNC_ENABLED")
+            .unwrap_or_else(|_| "true".to_string())
+            .eq_ignore_ascii_case("true");
 
         Ok(Config {
             host,
@@ -145,6 +150,7 @@ impl Config {
             git_max_staleness_hours,
             r2,
             snapshot_upload_max_bytes,
+            attachment_incremental_sync_enabled,
         })
     }
 

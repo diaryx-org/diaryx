@@ -96,6 +96,12 @@ snapshot upload), `SyncSetupWizard` explicitly discards queued pre-connect local
 updates before opening the WebSocket. This prevents replaying stale bootstrap
 create/delete/body events on top of already-imported snapshot state.
 
+`workspaceCrdtBridge.ts` also wires the incremental attachment sync queue:
+
+- configures queue auth/server/workspace context as sync state changes
+- provides backend access for local attachment reads/writes
+- indexes `BinaryRef` attachment metadata and queues missing-blob downloads on metadata updates
+
 ### Per-file tracking
 
 `MultiplexedBodySync` tracks per-file sync completion via:

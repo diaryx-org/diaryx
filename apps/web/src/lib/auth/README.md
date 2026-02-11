@@ -18,11 +18,18 @@ Authentication services and stores for sync server login.
 
 | File                  | Purpose                                                    |
 | --------------------- | ---------------------------------------------------------- |
-| `authService.ts`      | Magic link auth API, snapshot upload/download, storage usage API |
+| `authService.ts`      | Magic link auth API, snapshot upload/download, storage usage API, attachment multipart transfer API |
 | `authStore.svelte.ts` | Authentication state store + synced attachment usage state |
 
 Snapshot helpers support `include_attachments=true|false` (default `true`) for
 both upload and download bootstrap flows.
+
+`authService.ts` also provides incremental attachment transfer calls:
+
+- `initAttachmentUpload(...)`
+- `uploadAttachmentPart(...)`
+- `completeAttachmentUpload(...)`
+- `downloadAttachment(...)`
 
 `authStore.svelte.ts` also exposes storage usage helpers:
 

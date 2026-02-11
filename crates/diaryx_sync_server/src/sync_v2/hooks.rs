@@ -16,7 +16,8 @@ use siphonophore::{
 };
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
+use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
 use crate::auth::validate_token;
@@ -100,6 +101,8 @@ pub struct DiaryxHook {
     session_to_workspace: Arc<RwLock<HashMap<String, String>>>,
     /// Tracks last-change timestamp per workspace for git auto-commit.
     dirty_workspaces: DirtyWorkspaces,
+    /// Debounced workspace attachment reconciliation timers.
+    attachment_reconcile_tasks: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
 }
 
 impl DiaryxHook {
@@ -120,6 +123,7 @@ impl DiaryxHook {
             handle: handle.clone(),
             session_to_workspace,
             dirty_workspaces,
+            attachment_reconcile_tasks: Arc::new(Mutex::new(HashMap::new())),
         };
         (hook, handle)
     }
@@ -189,6 +193,39 @@ impl DiaryxHook {
             is_guest: true,
             read_only: session.read_only,
         })
+    }
+
+    async fn schedule_workspace_attachment_reconcile(&self, workspace_id: String) {
+        let mut tasks = self.attachment_reconcile_tasks.lock().await;
+        if let Some(existing) = tasks.remove(&workspace_id) {
+            existing.abort();
+        }
+
+        let repo = self.repo.clone();
+        let storage_cache = self.storage_cache.clone();
+        let tasks_map = self.attachment_reconcile_tasks.clone();
+        let task_workspace_id = workspace_id.clone();
+        let handle = tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            let store = crate::sync_v2::WorkspaceStore::new(storage_cache);
+            match store.reconcile_workspace_attachment_refs(&task_workspace_id, &repo) {
+                Ok(ref_count) => {
+                    debug!(
+                        "Attachment reconciliation complete for {} ({} refs)",
+                        task_workspace_id, ref_count
+                    );
+                }
+                Err(err) => {
+                    warn!(
+                        "Attachment reconciliation failed for {}: {}",
+                        task_workspace_id, err
+                    );
+                }
+            }
+            let mut tasks = tasks_map.lock().await;
+            tasks.remove(&task_workspace_id);
+        });
+        tasks.insert(workspace_id, handle);
     }
 }
 
@@ -373,6 +410,11 @@ impl Hook for DiaryxHook {
                 .write()
                 .await
                 .insert(workspace_id, tokio::time::Instant::now());
+
+            if matches!(doc_type, DocType::Workspace(_)) {
+                self.schedule_workspace_attachment_reconcile(doc_type.workspace_id().to_string())
+                    .await;
+            }
         }
 
         Ok(())

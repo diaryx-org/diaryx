@@ -1,19 +1,23 @@
 use crate::auth::RequireAuth;
-use crate::blob_store::BlobStore;
-use crate::db::AuthRepo;
+use crate::blob_store::{BlobStore, MultipartCompletedPart};
+use crate::db::{AttachmentUploadSession, AuthRepo};
 use crate::sync_v2::{SnapshotImportMode, SyncV2State};
 use axum::{
     Router,
+    body::Bytes,
     extract::{DefaultBodyLimit, Query, Request, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Json},
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use futures::StreamExt;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tracing::{error, info};
+
+const ATTACHMENT_PART_SIZE_DEFAULT: u64 = 8 * 1024 * 1024;
+const ATTACHMENT_UPLOAD_SESSION_TTL_SECS: i64 = 24 * 60 * 60;
 
 /// Shared state for API handlers
 #[derive(Clone)]
@@ -22,6 +26,7 @@ pub struct ApiState {
     pub sync_v2: Arc<SyncV2State>,
     pub blob_store: Arc<dyn BlobStore>,
     pub snapshot_upload_max_bytes: usize,
+    pub attachment_incremental_sync_enabled: bool,
 }
 
 /// Server status response
@@ -94,6 +99,22 @@ pub fn api_routes(state: ApiState) -> Router {
             get(get_workspace_snapshot)
                 .post(upload_workspace_snapshot)
                 .layer(DefaultBodyLimit::disable()),
+        )
+        .route(
+            "/workspaces/{workspace_id}/attachments/uploads",
+            post(init_attachment_upload),
+        )
+        .route(
+            "/workspaces/{workspace_id}/attachments/uploads/{upload_id}/parts/{part_no}",
+            put(upload_attachment_part).layer(DefaultBodyLimit::disable()),
+        )
+        .route(
+            "/workspaces/{workspace_id}/attachments/uploads/{upload_id}/complete",
+            post(complete_attachment_upload),
+        )
+        .route(
+            "/workspaces/{workspace_id}/attachments/{blob_hash}",
+            get(download_attachment_blob),
         )
         .route(
             "/workspaces/{workspace_id}/history",
@@ -324,6 +345,437 @@ async fn upload_workspace_snapshot(
     let _ = tokio::fs::remove_file(&temp_path).await;
 
     Json(result).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct InitAttachmentUploadRequest {
+    attachment_path: String,
+    hash: String,
+    size_bytes: u64,
+    mime_type: String,
+    part_size: Option<u64>,
+    total_parts: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct InitAttachmentUploadResponse {
+    upload_id: Option<String>,
+    status: String,
+    part_size: u64,
+    uploaded_parts: Vec<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct AttachmentPartUploadResponse {
+    ok: bool,
+    part_no: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompleteAttachmentUploadRequest {
+    attachment_path: String,
+    hash: String,
+    size_bytes: u64,
+    mime_type: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CompleteAttachmentUploadResponse {
+    ok: bool,
+    blob_hash: String,
+    r2_key: String,
+    missing_parts: Option<Vec<u32>>,
+}
+
+fn parse_range_header(headers: &HeaderMap, total_size: u64) -> Option<(u64, u64)> {
+    let raw = headers.get(header::RANGE)?.to_str().ok()?;
+    if !raw.starts_with("bytes=") {
+        return None;
+    }
+    let range = &raw[6..];
+    let (start_s, end_s) = range.split_once('-')?;
+    let start = start_s.parse::<u64>().ok()?;
+    let end = if end_s.is_empty() {
+        total_size.saturating_sub(1)
+    } else {
+        end_s.parse::<u64>().ok()?
+    };
+    if total_size == 0 || start > end || end >= total_size {
+        return None;
+    }
+    Some((start, end))
+}
+
+fn hash_looks_like_sha256(hash: &str) -> bool {
+    hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// POST /api/workspaces/:workspace_id/attachments/uploads - init resumable upload.
+async fn init_attachment_upload(
+    State(state): State<ApiState>,
+    RequireAuth(auth): RequireAuth,
+    axum::extract::Path(workspace_id): axum::extract::Path<String>,
+    Json(body): Json<InitAttachmentUploadRequest>,
+) -> impl IntoResponse {
+    if !state.attachment_incremental_sync_enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    let workspace = match state.repo.get_workspace(&workspace_id) {
+        Ok(Some(w)) => w,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    if workspace.user_id != auth.user.id {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    if !hash_looks_like_sha256(&body.hash)
+        || body.size_bytes == 0
+        || body.mime_type.trim().is_empty()
+    {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+
+    let part_size = body.part_size.unwrap_or(ATTACHMENT_PART_SIZE_DEFAULT);
+    if part_size == 0 || part_size > 32 * 1024 * 1024 {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let derived_parts = body.size_bytes.div_ceil(part_size) as u32;
+    let total_parts = body.total_parts.unwrap_or(derived_parts);
+    if total_parts == 0 || total_parts != derived_parts {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+
+    if let Ok(Some((_key, _size, _mime))) = state.repo.get_user_blob(&auth.user.id, &body.hash) {
+        return Json(InitAttachmentUploadResponse {
+            upload_id: None,
+            status: "already_exists".to_string(),
+            part_size,
+            uploaded_parts: vec![],
+        })
+        .into_response();
+    }
+
+    let upload_id = uuid::Uuid::new_v4().to_string();
+    let r2_key = state.blob_store.blob_key(&auth.user.id, &body.hash);
+    let multipart_id = match state
+        .blob_store
+        .init_multipart(&r2_key, &body.mime_type)
+        .await
+    {
+        Ok(id) => id,
+        Err(err) => {
+            error!("Attachment upload init failed: {}", err);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let now = chrono::Utc::now().timestamp();
+    let session = AttachmentUploadSession {
+        upload_id: upload_id.clone(),
+        workspace_id: workspace_id.clone(),
+        user_id: auth.user.id.clone(),
+        blob_hash: body.hash,
+        attachment_path: body.attachment_path,
+        mime_type: body.mime_type,
+        size_bytes: body.size_bytes,
+        part_size,
+        total_parts,
+        r2_key,
+        r2_multipart_upload_id: multipart_id,
+        status: "uploading".to_string(),
+        created_at: now,
+        updated_at: now,
+        expires_at: now + ATTACHMENT_UPLOAD_SESSION_TTL_SECS,
+    };
+    if let Err(err) = state.repo.create_attachment_upload_session(&session) {
+        error!("Attachment upload session DB insert failed: {}", err);
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    Json(InitAttachmentUploadResponse {
+        upload_id: Some(upload_id),
+        status: "uploading".to_string(),
+        part_size,
+        uploaded_parts: vec![],
+    })
+    .into_response()
+}
+
+/// PUT /api/workspaces/:workspace_id/attachments/uploads/:upload_id/parts/:part_no
+async fn upload_attachment_part(
+    State(state): State<ApiState>,
+    RequireAuth(auth): RequireAuth,
+    axum::extract::Path((workspace_id, upload_id, part_no)): axum::extract::Path<(
+        String,
+        String,
+        u32,
+    )>,
+    body: Bytes,
+) -> impl IntoResponse {
+    if !state.attachment_incremental_sync_enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    let workspace = match state.repo.get_workspace(&workspace_id) {
+        Ok(Some(w)) => w,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    if workspace.user_id != auth.user.id {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    let session = match state.repo.get_attachment_upload_session(&upload_id) {
+        Ok(Some(s)) => s,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(err) => {
+            error!("Attachment upload session lookup failed: {}", err);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    if session.workspace_id != workspace_id || session.user_id != auth.user.id {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if session.status != "uploading" {
+        return StatusCode::CONFLICT.into_response();
+    }
+    if chrono::Utc::now().timestamp() > session.expires_at {
+        return StatusCode::GONE.into_response();
+    }
+    if part_no == 0 || part_no > session.total_parts {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    if body.len() as u64 > session.part_size {
+        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    }
+
+    let etag = match state
+        .blob_store
+        .upload_part(
+            &session.r2_key,
+            &session.r2_multipart_upload_id,
+            part_no,
+            &body,
+        )
+        .await
+    {
+        Ok(etag) => etag,
+        Err(err) => {
+            error!("Attachment multipart part upload failed: {}", err);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    if let Err(err) =
+        state
+            .repo
+            .upsert_attachment_upload_part(&upload_id, part_no, &etag, body.len() as u64)
+    {
+        error!("Attachment upload part DB write failed: {}", err);
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    Json(AttachmentPartUploadResponse { ok: true, part_no }).into_response()
+}
+
+/// POST /api/workspaces/:workspace_id/attachments/uploads/:upload_id/complete
+async fn complete_attachment_upload(
+    State(state): State<ApiState>,
+    RequireAuth(auth): RequireAuth,
+    axum::extract::Path((workspace_id, upload_id)): axum::extract::Path<(String, String)>,
+    Json(body): Json<CompleteAttachmentUploadRequest>,
+) -> impl IntoResponse {
+    if !state.attachment_incremental_sync_enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    let workspace = match state.repo.get_workspace(&workspace_id) {
+        Ok(Some(w)) => w,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    if workspace.user_id != auth.user.id {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    let session = match state.repo.get_attachment_upload_session(&upload_id) {
+        Ok(Some(s)) => s,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(err) => {
+            error!("Attachment upload session lookup failed: {}", err);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    if session.workspace_id != workspace_id || session.user_id != auth.user.id {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if session.status != "uploading" {
+        return StatusCode::CONFLICT.into_response();
+    }
+    if body.hash != session.blob_hash
+        || body.size_bytes != session.size_bytes
+        || body.mime_type != session.mime_type
+        || body.attachment_path != session.attachment_path
+    {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+
+    let uploaded_parts = match state.repo.list_attachment_upload_parts(&upload_id) {
+        Ok(parts) => parts,
+        Err(err) => {
+            error!("Attachment upload part list failed: {}", err);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let uploaded_set = uploaded_parts
+        .iter()
+        .map(|p| p.part_no)
+        .collect::<std::collections::HashSet<_>>();
+    let missing_parts = (1..=session.total_parts)
+        .filter(|part| !uploaded_set.contains(part))
+        .collect::<Vec<_>>();
+    if !missing_parts.is_empty() {
+        return (
+            StatusCode::CONFLICT,
+            Json(CompleteAttachmentUploadResponse {
+                ok: false,
+                blob_hash: session.blob_hash,
+                r2_key: session.r2_key,
+                missing_parts: Some(missing_parts),
+            }),
+        )
+            .into_response();
+    }
+
+    let completed_parts = uploaded_parts
+        .iter()
+        .map(|part| MultipartCompletedPart {
+            part_no: part.part_no,
+            etag: part.etag.clone(),
+        })
+        .collect::<Vec<_>>();
+    if let Err(err) = state
+        .blob_store
+        .complete_multipart(
+            &session.r2_key,
+            &session.r2_multipart_upload_id,
+            &completed_parts,
+        )
+        .await
+    {
+        error!("Attachment multipart completion failed: {}", err);
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    if let Err(err) = state.repo.upsert_blob(
+        &auth.user.id,
+        &session.blob_hash,
+        &session.r2_key,
+        session.size_bytes,
+        &session.mime_type,
+    ) {
+        error!("Attachment blob upsert failed: {}", err);
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    if let Err(err) = state
+        .repo
+        .set_attachment_upload_status(&upload_id, "completed")
+    {
+        error!("Attachment upload status update failed: {}", err);
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    Json(CompleteAttachmentUploadResponse {
+        ok: true,
+        blob_hash: session.blob_hash,
+        r2_key: session.r2_key,
+        missing_parts: None,
+    })
+    .into_response()
+}
+
+/// GET /api/workspaces/:workspace_id/attachments/:blob_hash
+async fn download_attachment_blob(
+    State(state): State<ApiState>,
+    RequireAuth(auth): RequireAuth,
+    axum::extract::Path((workspace_id, blob_hash)): axum::extract::Path<(String, String)>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if !state.attachment_incremental_sync_enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    let workspace = match state.repo.get_workspace(&workspace_id) {
+        Ok(Some(w)) => w,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    if workspace.user_id != auth.user.id {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let is_referenced = match state
+        .repo
+        .workspace_references_blob(&workspace_id, &blob_hash)
+    {
+        Ok(value) => value,
+        Err(err) => {
+            error!("Attachment ref lookup failed: {}", err);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    if !is_referenced {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    let (r2_key, size_bytes, mime_type) = match state.repo.get_user_blob(&auth.user.id, &blob_hash)
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(err) => {
+            error!("Attachment blob metadata lookup failed: {}", err);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
+    response_headers.insert(header::CONTENT_TYPE, mime_type.parse().unwrap());
+
+    if let Some((start, end)) = parse_range_header(&headers, size_bytes) {
+        let bytes = match state.blob_store.get_range(&r2_key, start, end).await {
+            Ok(Some(payload)) => payload,
+            Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+            Err(err) => {
+                error!("Attachment ranged read failed: {}", err);
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        };
+        response_headers.insert(
+            header::CONTENT_RANGE,
+            format!("bytes {}-{}/{}", start, end, size_bytes)
+                .parse()
+                .unwrap(),
+        );
+        response_headers.insert(
+            header::CONTENT_LENGTH,
+            bytes.len().to_string().parse().unwrap(),
+        );
+        return (StatusCode::PARTIAL_CONTENT, response_headers, bytes).into_response();
+    }
+
+    let bytes = match state.blob_store.get(&r2_key).await {
+        Ok(Some(payload)) => payload,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(err) => {
+            error!("Attachment read failed: {}", err);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    response_headers.insert(
+        header::CONTENT_LENGTH,
+        bytes.len().to_string().parse().unwrap(),
+    );
+    (response_headers, bytes).into_response()
 }
 
 /// GET /api/user/has-data - Check if user has synced data on the server

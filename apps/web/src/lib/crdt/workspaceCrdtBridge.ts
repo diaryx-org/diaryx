@@ -28,6 +28,11 @@ import { shareSessionStore } from '@/models/stores/shareSessionStore.svelte';
 import { collaborationStore } from '@/models/stores/collaborationStore.svelte';
 import { getToken } from '$lib/auth/authStore.svelte';
 import * as syncHelpers from './syncHelpers';
+import {
+  setAttachmentSyncBackend,
+  setAttachmentSyncContext,
+  enqueueMissingDownloadsFromMetadata,
+} from '@/models/services/attachmentSyncService';
 
 /**
  * Convert an HTTP URL to a WebSocket URL for sync v2 (/sync2).
@@ -250,6 +255,15 @@ export function isFreshFromServerLoad(): boolean {
   return _freshFromServerLoad;
 }
 
+function refreshAttachmentSyncContext(): void {
+  setAttachmentSyncContext({
+    enabled: Boolean(serverUrl && _workspaceId && getToken()),
+    serverUrl,
+    authToken: getToken(),
+    workspaceId: _workspaceId,
+  });
+}
+
 /**
  * Reset local body CRDT docs before a "load from server" sync connection.
  *
@@ -410,6 +424,7 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
   const previousUrl = serverUrl;
   serverUrl = url;
   _serverUrl = url ? toWebSocketUrl(url) : null;  // v2 WebSocket URL for readiness checks
+  refreshAttachmentSyncContext();
 
   console.log('[WorkspaceCrdtBridge] setWorkspaceServer:', url ? 'connecting' : 'disconnecting');
 
@@ -674,6 +689,7 @@ export async function setWorkspaceId(id: string | null): Promise<void> {
   console.log('[WorkspaceCrdtBridge] setWorkspaceId:', { id, previousId: _workspaceId });
   const previousId = _workspaceId;
   _workspaceId = id;
+  refreshAttachmentSyncContext();
 
   if (id !== previousId) {
     discardQueuedLocalSyncUpdates('workspace id changed');
@@ -707,6 +723,8 @@ export function setBackendApi(_api: Api): void {
  */
 export function setBackend(backend: Backend): void {
   _backend = backend;
+  setAttachmentSyncBackend(backend);
+  refreshAttachmentSyncContext();
 }
 
 /**
@@ -2317,6 +2335,9 @@ async function _fireSessionSyncCallbacks(): Promise<void> {
 function notifyFileChange(path: string | null, metadata: FileMetadata | null): void {
   if (path && isTempFile(path)) {
     return;
+  }
+  if (path && metadata && _workspaceId && metadata.attachments.length > 0) {
+    enqueueMissingDownloadsFromMetadata(path, _workspaceId, metadata.attachments);
   }
   for (const callback of fileChangeCallbacks) {
     try {

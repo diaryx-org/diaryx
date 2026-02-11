@@ -253,6 +253,9 @@
             // Don't show in code blocks
             if (ed.isActive("codeBlock")) return false;
 
+            // Don't show in blockquotes
+            if (ed.isActive("blockquote")) return false;
+
             // Don't show in lists
             if (
               ed.isActive("bulletList") ||

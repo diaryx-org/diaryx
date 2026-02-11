@@ -4,12 +4,14 @@
     Plus,
     Heading,
     List,
+    ListOrdered,
+    ListTodo,
+    ChevronDown,
     Quote,
     Braces,
     Minus,
     Paperclip,
   } from "@lucide/svelte";
-  import * as NativeSelect from "$lib/components/ui/native-select";
 
   interface Props {
     editor: Editor | null;
@@ -20,12 +22,14 @@
   let { editor, onInsertAttachment, element = $bindable() }: Props = $props();
 
   let isExpanded = $state(false);
-  let headingValue = $state("");
-  let listValue = $state("");
   let focusedIndex = $state(-1);
   let focusableItems: HTMLElement[] = $state([]);
 
+  // Sub-menu state: which dropdown is open ("heading" | "list" | null)
+  let openSubmenu = $state<"heading" | "list" | null>(null);
+
   function collapseMenu() {
+    openSubmenu = null;
     isExpanded = false;
   }
 
@@ -35,7 +39,6 @@
     event?.preventDefault();
     isExpanded = true;
     // Only auto-focus first item for keyboard activation.
-    // On mouse/touch, focusing a <select> opens the native picker on mobile.
     const isKeyboard = event instanceof KeyboardEvent;
     if (isKeyboard) {
       setTimeout(() => {
@@ -57,7 +60,7 @@
 
   function updateFocusableItems() {
     focusableItems = Array.from(
-      element?.querySelectorAll('[data-slot="native-select"], .menu-item') || []
+      element?.querySelectorAll('.menu-item, .submenu-item') || []
     ) as HTMLElement[];
   }
 
@@ -67,9 +70,13 @@
     switch (event.key) {
       case "Escape":
         event.preventDefault();
-        collapseMenu();
-        // Refocus editor so user can continue typing
-        editor?.commands.focus();
+        if (openSubmenu) {
+          openSubmenu = null;
+        } else {
+          collapseMenu();
+          // Refocus editor so user can continue typing
+          editor?.commands.focus();
+        }
         break;
       case "ArrowRight":
         event.preventDefault();
@@ -92,35 +99,30 @@
     }
   }
 
-  function handleHeadingChange(event: Event) {
-    const value = (event.target as HTMLSelectElement).value;
-    if (value && editor) {
-      const level = parseInt(value) as 1 | 2 | 3;
-      editor.chain().focus().toggleHeading({ level }).run();
-      collapseMenu();
-    }
-    // Reset the select value so it can be selected again
-    headingValue = "";
+  function toggleSubmenu(menu: "heading" | "list", event: MouseEvent | TouchEvent) {
+    event.stopPropagation();
+    openSubmenu = openSubmenu === menu ? null : menu;
   }
 
-  function handleListChange(event: Event) {
-    const value = (event.target as HTMLSelectElement).value;
-    if (value && editor) {
-      switch (value) {
-        case "bullet":
-          editor.chain().focus().toggleBulletList().run();
-          break;
-        case "ordered":
-          editor.chain().focus().toggleOrderedList().run();
-          break;
-        case "task":
-          editor.chain().focus().toggleTaskList().run();
-          break;
-      }
-      collapseMenu();
+  function handleHeading(level: 1 | 2 | 3) {
+    editor?.chain().focus().toggleHeading({ level }).run();
+    collapseMenu();
+  }
+
+  function handleList(type: "bullet" | "ordered" | "task") {
+    if (!editor) return;
+    switch (type) {
+      case "bullet":
+        editor.chain().focus().toggleBulletList().run();
+        break;
+      case "ordered":
+        editor.chain().focus().toggleOrderedList().run();
+        break;
+      case "task":
+        editor.chain().focus().toggleTaskList().run();
+        break;
     }
-    // Reset the select value so it can be selected again
-    listValue = "";
+    collapseMenu();
   }
 
   function handleBlockquote() {
@@ -158,9 +160,10 @@
     if (!element) return;
 
     const target = event.target as Node;
-    if (!element.contains(target)) {
-      isExpanded = false;
-    }
+    if (element.contains(target)) return;
+
+    isExpanded = false;
+    openSubmenu = null;
   }
 </script>
 
@@ -173,13 +176,10 @@
   role="toolbar"
   aria-label="Block formatting"
   tabindex="-1"
-  onmousedown={(e) => {
-    // Prevent focus loss when clicking on the menu
-    // This keeps the editor focused so the FloatingMenu extension doesn't hide it
-    e.preventDefault();
-  }}
-  ontouchstart={(e) => {
-    // Same for touch events
+  onpointerdown={(e) => {
+    // Prevent focus loss when clicking on the menu.
+    // pointerdown fires before mousedown/focus, so preventDefault here
+    // keeps the editor focused and prevents TipTap's FloatingMenu from hiding.
     e.preventDefault();
   }}
 >
@@ -187,38 +187,56 @@
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="menu-expanded" onclick={(e) => e.stopPropagation()} onkeydown={handleMenuKeydown}>
-      <div class="menu-section heading-section">
-        <NativeSelect.Root
-          bind:value={headingValue}
-          onchange={handleHeadingChange}
-          onmousedown={(e) => e.stopPropagation()}
-          class="heading-select"
-        >
-          <NativeSelect.Option value="" disabled selected>
-            <Heading class="size-4 inline mr-1" />H
-          </NativeSelect.Option>
-          <NativeSelect.Option value="1">H1</NativeSelect.Option>
-          <NativeSelect.Option value="2">H2</NativeSelect.Option>
-          <NativeSelect.Option value="3">H3</NativeSelect.Option>
-        </NativeSelect.Root>
+      <div class="menu-section">
+        <div class="submenu-wrapper">
+          <button
+            type="button"
+            class="menu-item"
+            title="Heading"
+            onclick={(e) => toggleSubmenu("heading", e)}
+            aria-expanded={openSubmenu === "heading"}
+          >
+            <Heading class="size-4" />
+            <ChevronDown class="size-3 chevron" />
+          </button>
+          {#if openSubmenu === "heading"}
+            <div class="submenu-dropdown">
+              <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleHeading(1); }}>H1</button>
+              <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleHeading(2); }}>H2</button>
+              <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleHeading(3); }}>H3</button>
+            </div>
+          {/if}
+        </div>
       </div>
 
       <div class="menu-divider"></div>
 
-      <div class="menu-section list-section">
-        <NativeSelect.Root
-          bind:value={listValue}
-          onchange={handleListChange}
-          onmousedown={(e) => e.stopPropagation()}
-          class="list-select"
-        >
-          <NativeSelect.Option value="" disabled selected>
-            <List class="size-4 inline" />
-          </NativeSelect.Option>
-          <NativeSelect.Option value="bullet">Bullet List</NativeSelect.Option>
-          <NativeSelect.Option value="ordered">Numbered List</NativeSelect.Option>
-          <NativeSelect.Option value="task">Task List</NativeSelect.Option>
-        </NativeSelect.Root>
+      <div class="menu-section">
+        <div class="submenu-wrapper">
+          <button
+            type="button"
+            class="menu-item"
+            title="List"
+            onclick={(e) => toggleSubmenu("list", e)}
+            aria-expanded={openSubmenu === "list"}
+          >
+            <List class="size-4" />
+            <ChevronDown class="size-3 chevron" />
+          </button>
+          {#if openSubmenu === "list"}
+            <div class="submenu-dropdown">
+              <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleList("bullet"); }}>
+                <List class="size-3.5" /> Bullet
+              </button>
+              <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleList("ordered"); }}>
+                <ListOrdered class="size-3.5" /> Numbered
+              </button>
+              <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleList("task"); }}>
+                <ListTodo class="size-3.5" /> Task
+              </button>
+            </div>
+          {/if}
+        </div>
       </div>
 
       <div class="menu-divider"></div>
@@ -339,12 +357,7 @@
       0 4px 6px -2px rgba(0, 0, 0, 0.05);
     min-width: max-content;
     max-width: 90vw;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  .menu-expanded::-webkit-scrollbar {
-    display: none;
+    overflow: visible;
   }
 
   .menu-section {
@@ -354,66 +367,50 @@
     gap: 2px;
   }
 
-  .heading-section :global([data-slot="native-select-wrapper"]) {
-    width: auto;
+  .submenu-wrapper {
+    position: relative;
   }
 
-  .heading-section :global([data-slot="native-select"]) {
-    height: 32px;
-    min-width: 56px;
-    padding: 0 24px 0 8px;
-    font-size: 13px;
-    font-weight: 500;
-    border: none;
-    background: transparent;
-    box-shadow: none;
-  }
-
-  .heading-section :global([data-slot="native-select"]:hover),
-  .heading-section :global([data-slot="native-select"]:focus) {
-    background: var(--accent);
-    outline: none;
-  }
-
-  .heading-section :global([data-slot="native-select"]:focus-visible) {
-    outline: 2px solid var(--ring);
-    outline-offset: -2px;
+  .submenu-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-top: 4px;
+    display: flex;
+    flex-direction: column;
+    background: var(--popover);
+    border: 1px solid var(--border);
     border-radius: 6px;
+    box-shadow:
+      0 10px 15px -3px rgba(0, 0, 0, 0.1),
+      0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    padding: 4px;
+    min-width: max-content;
+    z-index: 30;
   }
 
-  .heading-section :global([data-slot="native-select-icon"]) {
-    right: 6px;
-  }
-
-  .list-section :global([data-slot="native-select-wrapper"]) {
-    width: auto;
-  }
-
-  .list-section :global([data-slot="native-select"]) {
-    height: 32px;
-    min-width: 56px;
-    padding: 0 24px 0 8px;
-    font-size: 13px;
-    font-weight: 500;
-    border: none;
+  .submenu-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 4px;
     background: transparent;
-    box-shadow: none;
+    border: none;
+    color: var(--foreground);
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.1s ease;
+    -webkit-user-select: none;
+    user-select: none;
+    touch-action: manipulation;
   }
 
-  .list-section :global([data-slot="native-select"]:hover),
-  .list-section :global([data-slot="native-select"]:focus) {
+  .submenu-item:hover {
     background: var(--accent);
-    outline: none;
-  }
-
-  .list-section :global([data-slot="native-select"]:focus-visible) {
-    outline: 2px solid var(--ring);
-    outline-offset: -2px;
-    border-radius: 6px;
-  }
-
-  .list-section :global([data-slot="native-select-icon"]) {
-    right: 6px;
+    color: var(--accent-foreground);
   }
 
   .menu-item {
@@ -435,6 +432,16 @@
     user-select: none;
     /* Improve touch responsiveness */
     touch-action: manipulation;
+  }
+
+  /* Widen menu items that have a chevron to fit both icons */
+  .submenu-wrapper .menu-item {
+    width: 40px;
+    gap: 1px;
+  }
+
+  :global(.chevron) {
+    opacity: 0.5;
   }
 
   .menu-item span {
@@ -486,16 +493,8 @@
       height: 36px;
     }
 
-    .heading-section :global([data-slot="native-select"]) {
-      height: 36px;
-      min-width: 56px;
-      font-size: 13px;
-    }
-
-    .list-section :global([data-slot="native-select"]) {
-      height: 36px;
-      min-width: 56px;
-      font-size: 13px;
+    .submenu-wrapper .menu-item {
+      width: 44px;
     }
 
     .menu-divider {

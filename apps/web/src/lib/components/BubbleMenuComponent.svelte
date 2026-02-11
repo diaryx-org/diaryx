@@ -278,22 +278,25 @@
     flex-shrink: 0;
   }
 
-  /* Mobile-specific adjustments for larger touch targets */
+  /* Mobile-specific adjustments for touch targets */
   @media (max-width: 767px) {
     .bubble-menu {
-      gap: 4px;
-      padding: 6px;
+      gap: 2px;
+      padding: 4px;
+      flex-wrap: wrap;
+      max-width: min(90vw, 300px);
+      justify-content: center;
     }
 
     .toolbar-button {
-      padding: 10px;
-      min-width: 44px;
-      min-height: 44px;
+      padding: 8px;
+      min-width: 36px;
+      min-height: 36px;
     }
 
     .toolbar-divider {
-      height: 20px;
-      margin: 0 4px;
+      height: 18px;
+      margin: 0 2px;
     }
   }
 </style>

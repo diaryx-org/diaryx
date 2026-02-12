@@ -29,7 +29,7 @@ yrs = { version = "0.25", optional = true, features = ["sync"] }
 uuid = { version = "1", features = ["v4", "js"], optional = true }
 
 # TypeScript bindings generation
-ts-rs = { version = "10", features = ["serde-json-impl", "indexmap-impl"] }
+ts-rs = { version = "10", features = ["serde-json-impl", "indexmap-impl", "no-serde-warnings"] }
 
 # Used by non-WASM sync wrappers (block_on) during the async-first refactor.
 # On WASM, the sync wrappers are cfg-gated off.

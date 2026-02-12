@@ -38,7 +38,9 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::error::{DiaryxError, Result};
-use crate::fs::{AsyncFileSystem, FileSystem, SyncToAsyncFs};
+use crate::fs::AsyncFileSystem;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::fs::{FileSystem, SyncToAsyncFs};
 use crate::link_parser::LinkFormat;
 
 /// `Config` is a data structure that represents the parts of Diaryx that the user can configure.

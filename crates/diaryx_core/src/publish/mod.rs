@@ -25,10 +25,12 @@ use crate::link_parser;
 use crate::workspace::Workspace;
 
 /// Publisher for converting workspace to HTML (async-first)
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub struct Publisher<FS: AsyncFileSystem> {
     fs: FS,
 }
 
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
     /// Create a new publisher
     pub fn new(fs: FS) -> Self {
@@ -1357,6 +1359,7 @@ footer a:hover {
 }
 
 /// Escape HTML special characters
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")

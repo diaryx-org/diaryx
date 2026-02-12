@@ -60,3 +60,11 @@ This directory contains the source code for the core Diaryx library.
   when incoming metadata omits attachments or includes refs with empty hashes.
   This avoids dropping cloud attachment references during frontmatter-driven
   metadata refreshes.
+
+## TypeScript Binding Notes
+
+- `ts-rs` is configured with `no-serde-warnings` in `Cargo.toml`.
+- For fields that are conditionally omitted by serde (for example via
+  `skip_serializing_if`), prefer explicit `#[ts(...)]` annotations (such as
+  `#[ts(optional)]` or `#[ts(type = "...")]`) to keep TS output aligned with
+  runtime JSON shape.

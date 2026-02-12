@@ -39,3 +39,7 @@ tag-message = "Release v{{version}}"
 pre-release-commit-message = "chore: release v{{version}}"
 publish = true
 push = true
+
+[profile.release.package.diaryx_wasm]
+# Keep wasm artifact size small without using per-crate profile stanzas.
+opt-level = "s"

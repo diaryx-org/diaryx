@@ -1025,6 +1025,7 @@ pub struct CreateChildResult {
     /// True if the parent was converted from a leaf to an index.
     pub parent_converted: bool,
     /// Original parent path before conversion (only set if parent_converted is true).
+    #[ts(optional)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub original_parent_path: Option<String>,
 }

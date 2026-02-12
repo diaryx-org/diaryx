@@ -111,7 +111,7 @@ impl WasmSyncClient {
     /// Create a new WasmSyncClient.
     ///
     /// Called internally by `DiaryxBackend::createSyncClient()`.
-    pub fn new(
+    pub(crate) fn new(
         server_url: String,
         workspace_id: String,
         auth_token: Option<String>,

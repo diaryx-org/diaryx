@@ -268,6 +268,7 @@ pub struct TreeNode {
     /// `contents` property list
     pub children: Vec<TreeNode>,
     /// Additional frontmatter properties for display (populated by --properties flag)
+    #[ts(type = "Record<string, string> | undefined")]
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub properties: HashMap<String, String>,
 }

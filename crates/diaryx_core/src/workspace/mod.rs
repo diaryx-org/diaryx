@@ -47,6 +47,7 @@ pub struct WorkspaceConfig {
 
     /// Subfolder for daily entries (e.g., "Daily" or "Journal/Daily").
     /// If not specified, daily entries are created at workspace root.
+    #[ts(optional)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daily_entry_folder: Option<String>,
 }

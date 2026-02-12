@@ -16,6 +16,12 @@ import {
   type Device,
   AuthError,
   type UserHasDataResponse,
+  type UserStorageUsageResponse,
+  type InitAttachmentUploadRequest,
+  type InitAttachmentUploadResponse,
+  type CompleteAttachmentUploadRequest,
+  type CompleteAttachmentUploadResponse,
+  type DownloadAttachmentResponse,
 } from "./authService";
 import {
   setAuthToken,
@@ -33,6 +39,7 @@ export interface AuthState {
   user: User | null;
   workspaces: Workspace[];
   devices: Device[];
+  storageUsage: UserStorageUsageResponse | null;
   error: string | null;
   serverUrl: string | null;
 }
@@ -57,6 +64,7 @@ let state = $state<AuthState>({
   user: null,
   workspaces: [],
   devices: [],
+  storageUsage: null,
   error: null,
   serverUrl: null,
 });
@@ -94,6 +102,10 @@ export function getDefaultWorkspace(): Workspace | null {
     state.workspaces[0] ??
     null
   );
+}
+
+export function getStorageUsage(): UserStorageUsageResponse | null {
+  return state.storageUsage;
 }
 
 // ============================================================================
@@ -157,6 +169,7 @@ export async function initAuth(): Promise<void> {
 
       // Save user for faster restore next time
       localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(me.user));
+      await refreshUserStorageUsage();
     } catch (err) {
       if (err instanceof AuthError && err.statusCode === 401) {
         // Token expired, clear auth state
@@ -198,6 +211,7 @@ export function setServerUrl(url: string | null): void {
   } else {
     localStorage.removeItem(STORAGE_KEYS.SERVER_URL);
     authService = null;
+    state.storageUsage = null;
   }
 }
 
@@ -258,6 +272,7 @@ export async function verifyMagicLink(token: string): Promise<void> {
 
     // Fetch full user info (workspaces, devices)
     await refreshUserInfo();
+    await refreshUserStorageUsage();
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Failed to verify magic link";
@@ -293,6 +308,24 @@ export async function refreshUserInfo(): Promise<void> {
 }
 
 /**
+ * Refresh attachment storage usage from server.
+ */
+export async function refreshUserStorageUsage(): Promise<void> {
+  const token = getToken();
+  const url = state.serverUrl;
+  if (!token || !url || !authService || !state.isAuthenticated) {
+    state.storageUsage = null;
+    return;
+  }
+
+  try {
+    state.storageUsage = await authService.getUserStorageUsage(token);
+  } catch (err) {
+    console.error("[AuthStore] Failed to refresh storage usage:", err);
+  }
+}
+
+/**
  * Explicitly enable sync. Called by SyncSetupWizard after workspace initialization.
  * This is the only way sync gets enabled — signing in alone does not enable it.
  */
@@ -320,6 +353,7 @@ export async function logout(): Promise<void> {
   state.workspaces = [];
   state.devices = [];
   state.error = null;
+  state.storageUsage = null;
 
   localStorage.removeItem(STORAGE_KEYS.TOKEN);
   localStorage.removeItem(STORAGE_KEYS.USER);
@@ -366,6 +400,7 @@ export async function deleteAccount(): Promise<void> {
   state.workspaces = [];
   state.devices = [];
   state.error = null;
+  state.storageUsage = null;
 
   localStorage.removeItem(STORAGE_KEYS.TOKEN);
   localStorage.removeItem(STORAGE_KEYS.USER);
@@ -440,13 +475,18 @@ export async function checkUserHasData(): Promise<UserHasDataResponse | null> {
  */
 export async function downloadWorkspaceSnapshot(
   workspaceId: string,
+  includeAttachments = true,
 ): Promise<Blob | null> {
   const token = getToken();
   const url = state.serverUrl;
   if (!token || !url || !authService) return null;
 
   try {
-    return await authService.downloadWorkspaceSnapshot(token, workspaceId);
+    return await authService.downloadWorkspaceSnapshot(
+      token,
+      workspaceId,
+      includeAttachments,
+    );
   } catch (err) {
     console.error("[AuthStore] Failed to download snapshot:", err);
     return null;
@@ -460,20 +500,90 @@ export async function uploadWorkspaceSnapshot(
   workspaceId: string,
   snapshot: Blob,
   mode: "replace" | "merge" = "replace",
+  includeAttachments = true,
 ): Promise<{ files_imported: number } | null> {
   const token = getToken();
   const url = state.serverUrl;
   if (!token || !url || !authService) return null;
 
   try {
-    return await authService.uploadWorkspaceSnapshot(
+    const result = await authService.uploadWorkspaceSnapshot(
       token,
       workspaceId,
       snapshot,
       mode,
+      includeAttachments,
     );
+    await refreshUserStorageUsage();
+    return result;
   } catch (err) {
     console.error("[AuthStore] Failed to upload snapshot:", err);
     return null;
   }
+}
+
+/**
+ * Initialize resumable attachment upload.
+ */
+export async function initAttachmentUpload(
+  workspaceId: string,
+  request: InitAttachmentUploadRequest,
+): Promise<InitAttachmentUploadResponse> {
+  const token = getToken();
+  const url = state.serverUrl;
+  if (!token || !url || !authService) {
+    throw new Error("Not authenticated");
+  }
+  return authService.initAttachmentUpload(token, workspaceId, request);
+}
+
+/**
+ * Upload one attachment part.
+ */
+export async function uploadAttachmentPart(
+  workspaceId: string,
+  uploadId: string,
+  partNo: number,
+  bytes: ArrayBuffer,
+): Promise<{ ok: boolean; part_no: number }> {
+  const token = getToken();
+  const url = state.serverUrl;
+  if (!token || !url || !authService) {
+    throw new Error("Not authenticated");
+  }
+  return authService.uploadAttachmentPart(token, workspaceId, uploadId, partNo, bytes);
+}
+
+/**
+ * Complete resumable attachment upload.
+ */
+export async function completeAttachmentUpload(
+  workspaceId: string,
+  uploadId: string,
+  request: CompleteAttachmentUploadRequest,
+): Promise<CompleteAttachmentUploadResponse> {
+  const token = getToken();
+  const url = state.serverUrl;
+  if (!token || !url || !authService) {
+    throw new Error("Not authenticated");
+  }
+  const result = await authService.completeAttachmentUpload(token, workspaceId, uploadId, request);
+  await refreshUserStorageUsage();
+  return result;
+}
+
+/**
+ * Download workspace attachment by hash.
+ */
+export async function downloadAttachment(
+  workspaceId: string,
+  hash: string,
+  range?: { start: number; end?: number },
+): Promise<DownloadAttachmentResponse> {
+  const token = getToken();
+  const url = state.serverUrl;
+  if (!token || !url || !authService) {
+    throw new Error("Not authenticated");
+  }
+  return authService.downloadAttachment(token, workspaceId, hash, range);
 }

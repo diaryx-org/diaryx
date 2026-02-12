@@ -39,6 +39,11 @@ base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
 chrono = { workspace = true }
 zip = { version = "2", default-features = false, features = ["deflate"] }
+sha2 = "0.10"
+mime_guess = "2"
+aws-sdk-s3 = "1"
+aws-config = "1"
+aws-smithy-types = "1"
 
 # Logging
 tracing = "0.1"
@@ -52,6 +57,7 @@ tokio-tungstenite = "0.26"
 siphonophore = { git = "https://github.com/diaryx-org/siphonophore.git", branch = "main" }
 kameo = "0.19"
 async-trait = "0.1"
+yrs = "0.24"
 
 # Environment
 dotenvy = "0.15"
@@ -62,3 +68,4 @@ diaryx_core = { path = "../diaryx_core" }
 [dev-dependencies]
 tempfile = "3"
 tokio-tungstenite = "0.26"
+tower = { version = "0.5", features = ["util"] }

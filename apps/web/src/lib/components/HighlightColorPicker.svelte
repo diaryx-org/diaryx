@@ -294,14 +294,14 @@
   /* Mobile adjustments */
   @media (max-width: 767px) {
     .toolbar-button {
-      padding: 10px;
-      min-width: 44px;
-      min-height: 44px;
+      padding: 8px;
+      min-width: 36px;
+      min-height: 36px;
     }
 
     .color-swatch {
-      width: 32px;
-      height: 32px;
+      width: 28px;
+      height: 28px;
     }
 
     .color-indicator {

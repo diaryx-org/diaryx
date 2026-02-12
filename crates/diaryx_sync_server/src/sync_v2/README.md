@@ -136,6 +136,26 @@ sendToDoc('body:abc123/journal/2024.md', syncStep1Message);
 2. **Focus tracking broadcast** - Focus/unfocus messages are accepted but not fully relayed to peers.
 3. **Session context** - Guest read-only enforcement happens at the hook level and remains less mature than v1.
 
+Attachment reconciliation notes:
+
+- Reconciliation primarily uses `BinaryRef.hash` values from workspace metadata.
+- Attachment paths are canonicalized with `diaryx_core::link_parser` during
+  reconciliation/export/import so markdown-link refs (for example
+  `[name](/_attachments/file.png)`) are not dropped as invalid paths.
+- If workspace metadata has no attachment refs for a file, reconciliation also
+  derives `_attachments/...` candidates from markdown links in file content and
+  resolves hashes via latest completed upload records.
+- If a synced attachment ref has an empty hash, the server falls back to the
+  latest `attachment_uploads` row with `status='completed'` for the same
+  `workspace_id + attachment_path`, so usage/ref counts can still converge.
+- Reconciliation is triggered both on workspace metadata updates and after
+  incremental upload completion, reducing timing gaps where uploads finish
+  slightly after a workspace update.
+- `on_change` persistence is decode-first: if incoming bytes already decode as
+  a Y update they are stored unchanged; Y-sync frame stripping is only attempted
+  as fallback when raw decode fails. This avoids false-positive stripping of
+  valid raw updates.
+
 ## Future Work
 
 - Improve focus list relay parity with v1

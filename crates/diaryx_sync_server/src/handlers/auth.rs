@@ -1,4 +1,5 @@
 use crate::auth::{MagicLinkService, RequireAuth};
+use crate::blob_store::BlobStore;
 use crate::db::AuthRepo;
 use crate::email::EmailService;
 use axum::{
@@ -21,6 +22,8 @@ pub struct AuthState {
     pub repo: Arc<AuthRepo>,
     /// Path to workspace database files (for cleanup on account deletion)
     pub workspaces_dir: Option<PathBuf>,
+    /// Attachment blob store (R2/in-memory)
+    pub blob_store: Arc<dyn BlobStore>,
 }
 
 /// Request body for magic link request
@@ -348,6 +351,21 @@ async fn delete_account(
 
     info!("Deleting account for user: {}", user_id);
 
+    // Capture blob keys before deleting the user row (which cascades metadata rows).
+    let blob_keys = match state.repo.list_user_blob_keys(user_id) {
+        Ok(keys) => keys,
+        Err(e) => {
+            error!("Failed to query blob keys for {}: {}", user_id, e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "Failed to delete account".to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
     // Delete user from database (returns workspace IDs for file cleanup)
     let workspace_ids = match state.repo.delete_user(user_id) {
         Ok(ids) => ids,
@@ -374,6 +392,16 @@ async fn delete_account(
                     info!("Deleted workspace file: {:?}", db_path);
                 }
             }
+        }
+    }
+
+    // Delete blob payloads from object storage (best effort).
+    for key in blob_keys {
+        if key.is_empty() {
+            continue;
+        }
+        if let Err(e) = state.blob_store.delete(&key).await {
+            warn!("Failed to delete blob {} for user {}: {}", key, user_id, e);
         }
     }
 

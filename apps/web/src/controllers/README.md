@@ -21,7 +21,7 @@ Controller logic for UI actions, mediating between views and models.
 
 | File | Purpose |
 |------|---------|
-| `attachmentController.ts` | Attachment upload and management |
+| `attachmentController.ts` | Attachment upload/management + incremental sync enqueue + BinaryRef hash metadata updates (creates missing `BinaryRef` entries when needed, writes canonical attachment refs to CRDT metadata, and uses link-parser formatting to enqueue/read source-relative paths). Shows a grouped loading toast when cloud sync is active to track upload progress. |
 | `commandPaletteController.ts` | Command palette actions |
 | `entryController.ts` | Entry creation, editing, deletion |
 | `linkController.ts` | Link handling and navigation |

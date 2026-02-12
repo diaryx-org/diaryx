@@ -28,6 +28,7 @@
 //! - `CORS_ORIGINS`: Comma-separated list of allowed origins
 
 pub mod auth;
+pub mod blob_store;
 pub mod config;
 pub mod db;
 pub mod email;

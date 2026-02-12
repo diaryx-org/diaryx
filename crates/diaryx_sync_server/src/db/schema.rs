@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     email TEXT UNIQUE NOT NULL,
     created_at INTEGER NOT NULL,
-    last_login_at INTEGER
+    last_login_at INTEGER,
+    attachment_limit_bytes INTEGER
 );
 
 -- Devices table (tracks client devices)
@@ -69,11 +70,93 @@ CREATE TABLE IF NOT EXISTS share_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_share_sessions_owner ON share_sessions(owner_user_id);
 CREATE INDEX IF NOT EXISTS idx_share_sessions_workspace ON share_sessions(workspace_id);
+
+-- Per-user deduplicated attachment blobs stored in R2.
+CREATE TABLE IF NOT EXISTS user_attachment_blobs (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    blob_hash TEXT NOT NULL,
+    r2_key TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    mime_type TEXT NOT NULL,
+    ref_count INTEGER NOT NULL DEFAULT 0,
+    soft_deleted_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, blob_hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_attachment_blobs_user ON user_attachment_blobs(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_attachment_blobs_soft_delete ON user_attachment_blobs(soft_deleted_at);
+
+-- Workspace attachment references (path -> blob hash mapping).
+CREATE TABLE IF NOT EXISTS workspace_attachment_refs (
+    workspace_id TEXT NOT NULL REFERENCES user_workspaces(id) ON DELETE CASCADE,
+    file_path TEXT NOT NULL,
+    attachment_path TEXT NOT NULL,
+    blob_hash TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    mime_type TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (workspace_id, file_path, attachment_path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_attachment_refs_workspace ON workspace_attachment_refs(workspace_id);
+
+-- Attachment multipart upload sessions (resumable server-proxy uploads).
+CREATE TABLE IF NOT EXISTS attachment_uploads (
+    upload_id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES user_workspaces(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    blob_hash TEXT NOT NULL,
+    attachment_path TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    part_size INTEGER NOT NULL,
+    total_parts INTEGER NOT NULL,
+    r2_key TEXT NOT NULL,
+    r2_multipart_upload_id TEXT NOT NULL,
+    status TEXT NOT NULL, -- uploading|completed|aborted|expired
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_attachment_uploads_workspace ON attachment_uploads(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_attachment_uploads_user ON attachment_uploads(user_id);
+CREATE INDEX IF NOT EXISTS idx_attachment_uploads_expires ON attachment_uploads(expires_at);
+
+CREATE TABLE IF NOT EXISTS attachment_upload_parts (
+    upload_id TEXT NOT NULL REFERENCES attachment_uploads(upload_id) ON DELETE CASCADE,
+    part_no INTEGER NOT NULL,
+    etag TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (upload_id, part_no)
+);
+
+CREATE INDEX IF NOT EXISTS idx_attachment_upload_parts_upload ON attachment_upload_parts(upload_id);
 "#;
 
 /// Initialize the database with the auth schema
 pub fn init_database(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute_batch(SCHEMA)?;
+    // Forward migration for older databases.
+    let has_limit_col: bool = conn
+        .prepare("PRAGMA table_info(users)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|name| name == "attachment_limit_bytes");
+    if !has_limit_col {
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN attachment_limit_bytes INTEGER",
+            [],
+        )?;
+    }
+    // Backfill/normalize existing users to 1 GiB default.
+    conn.execute(
+        "UPDATE users SET attachment_limit_bytes = 1073741824 WHERE attachment_limit_bytes IS NULL",
+        [],
+    )?;
     Ok(())
 }
 
@@ -101,5 +184,46 @@ mod tests {
         assert!(tables.contains(&"auth_sessions".to_string()));
         assert!(tables.contains(&"user_workspaces".to_string()));
         assert!(tables.contains(&"share_sessions".to_string()));
+        assert!(tables.contains(&"user_attachment_blobs".to_string()));
+        assert!(tables.contains(&"workspace_attachment_refs".to_string()));
+        assert!(tables.contains(&"attachment_uploads".to_string()));
+        assert!(tables.contains(&"attachment_upload_parts".to_string()));
+
+        let user_cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(users)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(user_cols.contains(&"attachment_limit_bytes".to_string()));
+    }
+
+    #[test]
+    fn test_migrates_and_backfills_attachment_limit() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE users (
+                id TEXT PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                created_at INTEGER NOT NULL,
+                last_login_at INTEGER
+            );
+            INSERT INTO users (id, email, created_at) VALUES ('u1', 'u1@example.com', 1);
+            "#,
+        )
+        .unwrap();
+
+        init_database(&conn).unwrap();
+
+        let limit: i64 = conn
+            .query_row(
+                "SELECT attachment_limit_bytes FROM users WHERE id = 'u1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(limit, 1_073_741_824);
     }
 }

@@ -2,13 +2,14 @@
   /**
    * SyncStatusIndicator - Shows current sync status with visual feedback
    *
+   * Only visible when the user has set up sync (is authenticated).
    * Displays a small indicator showing:
    * - Connected & synced (green dot)
    * - Syncing (yellow dot with animation)
    * - Disconnected/Error (red dot)
-   * - Not configured (gray dot)
    *
-   * Click opens Settings dialog on the Sync tab.
+   * Click opens a popover with details; "Manage sync" opens the SyncSetupWizard.
+   * The popover closes automatically when the wizard is opened.
    */
   import { Button } from "$lib/components/ui/button";
   import * as Popover from "$lib/components/ui/popover";
@@ -17,10 +18,10 @@
   import { getAuthState } from "$lib/auth";
   import {
     Cloud,
+    CloudCheck,
     CloudOff,
     RefreshCw,
     AlertCircle,
-    CheckCircle,
   } from "@lucide/svelte";
 
   interface Props {
@@ -83,7 +84,7 @@
       animate: true,
     },
     'synced': {
-      icon: CheckCircle,
+      icon: CloudCheck,
       color: 'text-green-500',
       dotColor: 'bg-green-500',
       label: 'Synced',
@@ -96,45 +97,32 @@
     },
   };
 
+  // Only show when sync has been set up (user is authenticated)
+  let showIndicator = $derived(authState.isAuthenticated);
+
   let config = $derived(statusConfig[syncStatus]);
   let StatusIcon = $derived(config.icon);
+
+  let popoverOpen = $state(false);
+
+  function handleOpenWizard() {
+    popoverOpen = false;
+    onOpenWizard?.();
+  }
 </script>
 
-<Popover.Root>
+{#if showIndicator}
+<Popover.Root bind:open={popoverOpen}>
   <Popover.Trigger>
     <Button
       variant="ghost"
-      size="sm"
-      class="h-8 gap-1.5 px-2 {config.color}"
-      aria-label="Sync status"
+      size="icon"
+      class="size-8 {config.color}"
+      aria-label="Sync status: {config.label}"
     >
-      <!-- Status dot -->
-      <span
-        class="relative flex h-2 w-2"
-      >
-        {#if config.animate}
-          <span class="animate-ping absolute inline-flex h-full w-full rounded-full {config.dotColor} opacity-75"></span>
-        {/if}
-        <span class="relative inline-flex rounded-full h-2 w-2 {config.dotColor}"></span>
-      </span>
-
-      <!-- Icon -->
       <StatusIcon
         class="size-4 {config.animate ? 'animate-spin' : ''}"
       />
-
-      <!-- Label (hidden on mobile) -->
-      <span class="hidden sm:inline text-xs">
-        {#if syncStatus === 'syncing' && displayProgress && displayProgress.total > 0}
-          {displayProgress.completed}/{displayProgress.total}
-        {:else if authState.isAuthenticated && syncStatus === 'synced'}
-          Synced
-        {:else if authState.isAuthenticated}
-          Sync
-        {:else}
-          Sync
-        {/if}
-      </span>
     </Button>
   </Popover.Trigger>
 
@@ -170,16 +158,12 @@
         </p>
       {/if}
 
-      <!-- Account info when authenticated -->
-      {#if authState.isAuthenticated && authState.user}
+      <!-- Account info -->
+      {#if authState.user}
         <div class="text-xs text-muted-foreground border-t pt-2">
           <p>Signed in as <strong>{authState.user.email}</strong></p>
           <p class="mt-1">{authState.devices.length} device(s) connected</p>
         </div>
-      {:else if syncStatus === 'not_configured'}
-        <p class="text-xs text-muted-foreground">
-          Set up sync to access your notes from any device.
-        </p>
       {/if}
 
       <!-- Action button -->
@@ -187,14 +171,11 @@
         variant="outline"
         size="sm"
         class="w-full text-xs"
-        onclick={onOpenWizard}
+        onclick={handleOpenWizard}
       >
-        {#if authState.isAuthenticated}
-          Manage sync
-        {:else}
-          Set up sync
-        {/if}
+        Manage sync
       </Button>
     </div>
   </Popover.Content>
 </Popover.Root>
+{/if}

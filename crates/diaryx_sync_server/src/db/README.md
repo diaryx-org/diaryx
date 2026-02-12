@@ -19,3 +19,15 @@ SQLite database layer for the sync server.
 - `mod.rs` - Module exports and database initialization
 - `repo.rs` - Repository pattern for database operations
 - `schema.rs` - SQLite table schemas and migrations
+
+The schema includes attachment usage tracking tables:
+
+- `users.attachment_limit_bytes` (per-user attachment quota; defaults to 1 GiB)
+- `user_attachment_blobs` (per-user deduplicated blob metadata + ref counts)
+- `workspace_attachment_refs` (workspace path refs to blob hashes)
+- `attachment_uploads` (resumable multipart upload sessions)
+- `attachment_upload_parts` (uploaded part ETags/state per upload session)
+
+`attachment_uploads` is also queried during sync-v2 reconciliation as a fallback
+source of hash/size/mime metadata when a workspace attachment ref is present but
+its synced `BinaryRef.hash` is empty.

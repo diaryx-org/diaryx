@@ -28,10 +28,12 @@ This directory contains the source code for the Diaryx sync server.
 | `lib.rs` | Library entry point |
 | `main.rs` | Server entry point |
 | `config.rs` | Configuration from environment variables |
+| `blob_store.rs` | Attachment blob storage abstraction (R2/in-memory) |
 
 ## Modules
 
 - `auth/` - Authentication middleware and magic link handling
+- `blob_store.rs` - R2-backed attachment blob storage abstraction
 - `db/` - SQLite database schema and repository
 - `email/` - SMTP email sending
 - `git_ops.rs` - Git operations (commit, restore) for server-side workspaces

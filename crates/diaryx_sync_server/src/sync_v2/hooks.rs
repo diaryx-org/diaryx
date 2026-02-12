@@ -14,13 +14,75 @@ use siphonophore::{
     OnControlMessagePayload, OnDisconnectPayload, OnLoadDocumentPayload, OnPeerJoinedPayload,
     OnPeerLeftPayload, OnSavePayload,
 };
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
+use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
+use yrs::{Update, updates::decoder::Decode};
 
 use crate::auth::validate_token;
 use crate::db::AuthRepo;
+
+/// Strip Y-sync protocol framing from a message, returning just the Y-CRDT update bytes.
+///
+/// Y-sync messages have the wire format: `[MSG_SYNC varint][subtype varint][lib0 buf]`
+/// where MSG_SYNC=0, subtype is SyncStep2=1 or SyncUpdate=2, and the lib0 buf is
+/// `[varint length][update bytes]`. Since the varint values 0, 1, 2 each encode as a
+/// single byte, we can check the first two bytes and then decode the length varint.
+///
+/// Returns `None` if the data does not look like a framed Y-sync message, in which
+/// case the caller should treat the data as a raw Y-CRDT update.
+fn strip_ysync_framing(data: &[u8]) -> Option<Vec<u8>> {
+    // Must start with MSG_SYNC=0 followed by SyncStep2=1 or SyncUpdate=2
+    if data.len() < 3 || data[0] != 0 || !matches!(data[1], 1 | 2) {
+        return None;
+    }
+    // Decode varint length prefix (lib0 buf format) starting at byte 2
+    let mut pos = 2usize;
+    let mut len: usize = 0;
+    let mut shift = 0u32;
+    loop {
+        if pos >= data.len() {
+            return None;
+        }
+        let byte = data[pos];
+        pos += 1;
+        len |= ((byte & 0x7F) as usize) << shift;
+        if byte & 0x80 == 0 {
+            break;
+        }
+        shift += 7;
+        if shift >= 35 {
+            return None; // varint too long
+        }
+    }
+    if pos + len > data.len() {
+        return None;
+    }
+    Some(data[pos..pos + len].to_vec())
+}
+
+/// Choose the safest payload to persist as a Y update.
+///
+/// Priority:
+/// 1) Persist raw bytes when they already decode as a Y update.
+/// 2) If raw bytes do not decode, try stripping Y-sync framing and decode again.
+/// 3) If neither decodes, persist raw bytes (for observability/forensics).
+fn select_persistable_update(data: &[u8]) -> (Cow<'_, [u8]>, &'static str) {
+    if Update::decode_v1(data).is_ok() {
+        return (Cow::Borrowed(data), "raw");
+    }
+
+    if let Some(stripped) = strip_ysync_framing(data)
+        && Update::decode_v1(&stripped).is_ok()
+    {
+        return (Cow::Owned(stripped), "stripped");
+    }
+
+    (Cow::Borrowed(data), "raw_undecodable")
+}
 
 use super::store::StorageCache;
 
@@ -100,6 +162,8 @@ pub struct DiaryxHook {
     session_to_workspace: Arc<RwLock<HashMap<String, String>>>,
     /// Tracks last-change timestamp per workspace for git auto-commit.
     dirty_workspaces: DirtyWorkspaces,
+    /// Debounced workspace attachment reconciliation timers.
+    attachment_reconcile_tasks: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
 }
 
 impl DiaryxHook {
@@ -120,6 +184,7 @@ impl DiaryxHook {
             handle: handle.clone(),
             session_to_workspace,
             dirty_workspaces,
+            attachment_reconcile_tasks: Arc::new(Mutex::new(HashMap::new())),
         };
         (hook, handle)
     }
@@ -189,6 +254,39 @@ impl DiaryxHook {
             is_guest: true,
             read_only: session.read_only,
         })
+    }
+
+    async fn schedule_workspace_attachment_reconcile(&self, workspace_id: String) {
+        let mut tasks = self.attachment_reconcile_tasks.lock().await;
+        if let Some(existing) = tasks.remove(&workspace_id) {
+            existing.abort();
+        }
+
+        let repo = self.repo.clone();
+        let storage_cache = self.storage_cache.clone();
+        let tasks_map = self.attachment_reconcile_tasks.clone();
+        let task_workspace_id = workspace_id.clone();
+        let handle = tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            let store = crate::sync_v2::WorkspaceStore::new(storage_cache);
+            match store.reconcile_workspace_attachment_refs(&task_workspace_id, &repo) {
+                Ok(ref_count) => {
+                    debug!(
+                        "Attachment reconciliation complete for {} ({} refs)",
+                        task_workspace_id, ref_count
+                    );
+                }
+                Err(err) => {
+                    warn!(
+                        "Attachment reconciliation failed for {}: {}",
+                        task_workspace_id, err
+                    );
+                }
+            }
+            let mut tasks = tasks_map.lock().await;
+            tasks.remove(&task_workspace_id);
+        });
+        tasks.insert(workspace_id, handle);
     }
 }
 
@@ -354,18 +452,29 @@ impl Hook for DiaryxHook {
             }
         };
 
+        // Persist bytes that decode as a valid Y update. This handles both
+        // raw updates and protocol-framed payloads while avoiding false-positive
+        // stripping of valid raw updates.
+        let (update_data, update_mode) = select_persistable_update(update);
+        let update_data_ref = update_data.as_ref();
+
         // Append update
         let storage_key = doc_type.storage_key();
         if let Err(e) = storage.append_update_with_device(
             &storage_key,
-            update,
+            update_data_ref,
             UpdateOrigin::Remote,
             device_id,
             device_name,
         ) {
             error!("Failed to persist update for {}: {}", doc_id, e);
         } else {
-            debug!("Persisted {} byte update for {}", update.len(), doc_id);
+            debug!(
+                "Persisted {} byte update for {} (mode={})",
+                update_data_ref.len(),
+                doc_id,
+                update_mode
+            );
 
             // Mark workspace as dirty for git auto-commit
             let workspace_id = doc_type.workspace_id().to_string();
@@ -373,6 +482,11 @@ impl Hook for DiaryxHook {
                 .write()
                 .await
                 .insert(workspace_id, tokio::time::Instant::now());
+
+            if matches!(doc_type, DocType::Workspace(_)) {
+                self.schedule_workspace_attachment_reconcile(doc_type.workspace_id().to_string())
+                    .await;
+            }
         }
 
         Ok(())

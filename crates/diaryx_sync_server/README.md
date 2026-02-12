@@ -32,10 +32,8 @@ A Rust-based multi-device sync server for Diaryx with magic link authentication.
 
 ```bash
 # Set required environment variables
-export SMTP_HOST=smtp.resend.com
-export SMTP_USERNAME=resend
-export SMTP_PASSWORD=re_xxxx
-export SMTP_FROM_EMAIL=noreply@yourapp.com
+export RESEND_API_KEY=re_xxxx
+export EMAIL_FROM=noreply@yourapp.com
 export APP_BASE_URL=https://yourapp.com
 
 # Run the server
@@ -44,21 +42,27 @@ cargo run -p diaryx_sync_server
 
 ## Environment Variables
 
-| Variable                    | Default                                       | Description                          |
-| --------------------------- | --------------------------------------------- | ------------------------------------ |
-| `HOST`                      | `0.0.0.0`                                     | Server host                          |
-| `PORT`                      | `3030`                                        | Server port                          |
-| `DATABASE_PATH`             | `./diaryx_sync.db`                            | Path to SQLite database              |
-| `APP_BASE_URL`              | `http://localhost:5173`                       | Base URL for magic link verification |
-| `SMTP_HOST`                 | `smtp.resend.com`                             | SMTP server host                     |
-| `SMTP_PORT`                 | `465`                                         | SMTP server port                     |
-| `SMTP_USERNAME`             | -                                             | SMTP username                        |
-| `SMTP_PASSWORD`             | -                                             | SMTP password/API key                |
-| `SMTP_FROM_EMAIL`           | `noreply@diaryx.org`                          | From email address                   |
-| `SMTP_FROM_NAME`            | `Diaryx`                                      | From name                            |
-| `SESSION_EXPIRY_DAYS`       | `30`                                          | Session token expiration in days     |
-| `MAGIC_LINK_EXPIRY_MINUTES` | `15`                                          | Magic link expiration in minutes     |
-| `CORS_ORIGINS`              | `http://localhost:5173,http://localhost:1420` | Comma-separated CORS origins         |
+| Variable                    | Default                                       | Description                                           |
+| --------------------------- | --------------------------------------------- | ----------------------------------------------------- |
+| `HOST`                      | `0.0.0.0`                                     | Server host                                           |
+| `PORT`                      | `3030`                                        | Server port                                           |
+| `DATABASE_PATH`             | `./diaryx_sync.db`                            | Path to SQLite database                               |
+| `APP_BASE_URL`              | `http://localhost:5174`                       | Base URL for magic link verification                  |
+| `RESEND_API_KEY`            | -                                             | Resend API key                                        |
+| `EMAIL_FROM`                | `noreply@diaryx.org`                          | From email address                                    |
+| `EMAIL_FROM_NAME`           | `Diaryx`                                      | From name                                             |
+| `SESSION_EXPIRY_DAYS`       | `30`                                          | Session token expiration in days                      |
+| `MAGIC_LINK_EXPIRY_MINUTES` | `15`                                          | Magic link expiration in minutes                      |
+| `CORS_ORIGINS`              | `http://localhost:5174,http://localhost:5175` | Comma-separated CORS origins (methods: GET, POST, PUT, PATCH, DELETE, OPTIONS; headers: Authorization, Content-Type, Cache-Control, Pragma) |
+| `SNAPSHOT_UPLOAD_MAX_BYTES` | `1073741824`                                  | Max snapshot upload size accepted by the API          |
+| `R2_BUCKET`                 | `diaryx-user-data`                            | Cloudflare R2 bucket for attachment blobs             |
+| `R2_ACCOUNT_ID`             | -                                             | Cloudflare account ID                                 |
+| `R2_ACCESS_KEY_ID`          | -                                             | R2 access key ID                                      |
+| `R2_SECRET_ACCESS_KEY`      | -                                             | R2 secret access key                                  |
+| `R2_ENDPOINT`               | -                                             | Optional custom S3 endpoint override                  |
+| `R2_PREFIX`                 | `diaryx-sync`                                 | Object key prefix inside the bucket                   |
+| `R2_GC_RETENTION_DAYS`      | `7`                                           | Soft-delete retention before blob garbage collection  |
+| `ATTACHMENT_INCREMENTAL_SYNC_ENABLED` | `true`                              | Enable incremental multipart attachment APIs          |
 
 ## API Endpoints
 
@@ -158,16 +162,17 @@ Authorization: Bearer <session_token>
 #### Download Workspace Snapshot
 
 ```
-GET /api/workspaces/{workspace_id}/snapshot
+GET /api/workspaces/{workspace_id}/snapshot?include_attachments=true|false
 Authorization: Bearer <session_token>
 ```
 
-Response: zip archive containing markdown files with frontmatter.
+Response: zip archive containing markdown files with frontmatter and (optionally)
+attachment binaries resolved from blob storage.
 
 #### Upload Workspace Snapshot
 
 ```
-POST /api/workspaces/{workspace_id}/snapshot?mode=replace|merge
+POST /api/workspaces/{workspace_id}/snapshot?mode=replace|merge&include_attachments=true|false
 Authorization: Bearer <session_token>
 Content-Type: application/zip
 ```
@@ -177,6 +182,80 @@ Response:
 ```json
 { "files_imported": 123 }
 ```
+
+#### User Attachment Storage Usage
+
+```
+GET /api/user/storage
+Authorization: Bearer <session_token>
+```
+
+Response:
+
+```json
+{
+  "used_bytes": 123456,
+  "blob_count": 42,
+  "limit_bytes": 1073741824,
+  "warning_threshold": 0.8,
+  "over_limit": false,
+  "scope": "attachments"
+}
+```
+
+`limit_bytes` is per-user. New/existing users default to 1 GiB unless the
+`users.attachment_limit_bytes` value is changed in the database.
+
+#### Incremental Attachment Upload (Resumable)
+
+```
+POST /api/workspaces/{workspace_id}/attachments/uploads
+Authorization: Bearer <session_token>
+Content-Type: application/json
+```
+
+Initializes or resumes a multipart attachment upload session.
+If an upload fits in a single part, the server uses a direct object upload path
+internally (no remote multipart session is created).
+
+```
+PUT /api/workspaces/{workspace_id}/attachments/uploads/{upload_id}/parts/{part_no}
+Authorization: Bearer <session_token>
+Content-Type: application/octet-stream
+```
+
+Uploads one part for a multipart session.
+
+```
+POST /api/workspaces/{workspace_id}/attachments/uploads/{upload_id}/complete
+Authorization: Bearer <session_token>
+Content-Type: application/json
+```
+
+Completes upload and registers blob metadata for dedupe/usage accounting.
+
+If the user's attachment usage would exceed their limit, upload initialization
+or completion returns:
+
+```json
+{
+  "error": "storage_limit_exceeded",
+  "message": "Attachment storage limit exceeded",
+  "used_bytes": 123,
+  "limit_bytes": 1073741824,
+  "requested_bytes": 456
+}
+```
+
+#### Attachment Download by Hash
+
+```
+GET /api/workspaces/{workspace_id}/attachments/{hash}
+Authorization: Bearer <session_token>
+Range: bytes=start-end (optional)
+```
+
+Returns attachment bytes for hashes referenced by the workspace.
 
 ### Share Sessions (Live Collaboration)
 

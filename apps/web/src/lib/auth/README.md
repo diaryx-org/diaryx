@@ -18,5 +18,27 @@ Authentication services and stores for sync server login.
 
 | File                  | Purpose                                                    |
 | --------------------- | ---------------------------------------------------------- |
-| `authService.ts`      | Magic link authentication API and snapshot upload/download |
-| `authStore.svelte.ts` | Authentication state store                                 |
+| `authService.ts`      | Magic link auth API, snapshot upload/download, storage usage API, attachment multipart transfer API |
+| `authStore.svelte.ts` | Authentication state store + synced attachment usage state |
+
+Snapshot helpers support `include_attachments=true|false` (default `true`) for
+both upload and download bootstrap flows.
+
+`authService.ts` also provides incremental attachment transfer calls:
+
+- `initAttachmentUpload(...)`
+- `uploadAttachmentPart(...)`
+- `completeAttachmentUpload(...)`
+- `downloadAttachment(...)`
+
+Quota rejections (`413` + `storage_limit_exceeded`) are parsed into
+`AuthError` messages with usage/limit context for UI and queue handling.
+
+`authStore.svelte.ts` keeps synced storage usage in the main auth state and also exposes helpers:
+
+- `getStorageUsage()`
+- `refreshUserStorageUsage()`
+
+`getUserStorageUsage()` sends `cache: "no-store"` plus `Cache-Control: no-cache`
+and `Pragma: no-cache` headers so `/api/user/storage` refreshes always request
+fresh usage data.

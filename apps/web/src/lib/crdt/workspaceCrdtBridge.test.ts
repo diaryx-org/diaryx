@@ -76,6 +76,7 @@ import {
   startSessionSync,
   stopSessionSync,
   getSessionCode,
+  setFileMetadata,
 } from './workspaceCrdtBridge'
 
 describe('workspaceCrdtBridge', () => {
@@ -83,6 +84,7 @@ describe('workspaceCrdtBridge', () => {
     getFullState: vi.fn().mockResolvedValue(new Uint8Array()),
     getSyncState: vi.fn().mockResolvedValue(new Uint8Array()),
     getFile: vi.fn().mockResolvedValue(null),
+    findDocIdByPath: vi.fn().mockResolvedValue(null),
     setFile: vi.fn().mockResolvedValue(undefined),
     listFiles: vi.fn().mockResolvedValue([]),
     listLoadedBodyDocs: vi.fn().mockResolvedValue([]),
@@ -326,6 +328,42 @@ describe('workspaceCrdtBridge', () => {
       cleanup()
     })
 
+    it('should tolerate metadata events without attachments array', async () => {
+      await initWorkspace({
+        rustApi: mockRustApi as any,
+      })
+
+      let eventHandler: ((event: any) => void) | null = null
+      const backend = {
+        onFileSystemEvent: vi.fn((cb: (event: any) => void) => {
+          eventHandler = cb
+          return 52
+        }),
+        offFileSystemEvent: vi.fn(),
+      }
+
+      const cleanup = initEventSubscription(backend as any)
+      const fileCb = vi.fn()
+      const unsubFile = onFileChange(fileCb)
+
+      eventHandler!({
+        type: 'MetadataChanged',
+        path: 'note.md',
+        frontmatter: { title: 'Note without attachments' },
+      })
+
+      expect(fileCb).toHaveBeenCalledWith(
+        'note.md',
+        expect.objectContaining({
+          title: 'Note without attachments',
+          attachments: [],
+        })
+      )
+
+      unsubFile()
+      cleanup()
+    })
+
     it('should discard queued local sync updates captured before transport connect', async () => {
       await initWorkspace({
         rustApi: mockRustApi as any,
@@ -404,6 +442,34 @@ describe('workspaceCrdtBridge', () => {
 
       setFreshFromServerLoad(false)
       cleanup()
+    })
+  })
+
+  describe('metadata key resolution', () => {
+    it('should resolve path to doc_id when setting metadata', async () => {
+      await initWorkspace({
+        rustApi: mockRustApi as any,
+      })
+
+      mockRustApi.findDocIdByPath.mockResolvedValueOnce('doc-123')
+
+      await setFileMetadata('workspace/README.md', {
+        filename: 'README.md',
+        title: 'README',
+        part_of: null,
+        contents: null,
+        attachments: [],
+        deleted: false,
+        audience: null,
+        description: null,
+        extra: {},
+        modified_at: 1n,
+      } as any)
+
+      expect(mockRustApi.setFile).toHaveBeenCalledWith(
+        'doc-123',
+        expect.objectContaining({ filename: 'README.md' })
+      )
     })
   })
 

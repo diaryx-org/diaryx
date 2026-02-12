@@ -6,6 +6,7 @@ use axum::{
 };
 use diaryx_sync_server::{
     auth::{AuthExtractor, MagicLinkService},
+    blob_store::{BlobStore, build_blob_store},
     config::Config,
     db::{AuthRepo, init_database},
     email::EmailService,
@@ -65,6 +66,20 @@ async fn main() {
     let magic_link_service = Arc::new(MagicLinkService::new(repo.clone(), config.clone()));
     let email_service = Arc::new(EmailService::new(config.clone()));
     let auth_extractor = AuthExtractor::new(repo.clone());
+    let blob_store: Arc<dyn BlobStore> = match build_blob_store(config.as_ref()).await {
+        Ok(store) => {
+            if config.is_r2_configured() {
+                info!("Attachment blob store: R2 ({})", config.r2.bucket);
+            } else {
+                info!("Attachment blob store: in-memory (R2 not configured)");
+            }
+            store
+        }
+        Err(err) => {
+            error!("Failed to initialize blob store: {}", err);
+            std::process::exit(1);
+        }
+    };
 
     // Create data directory for workspace databases
     let data_dir = config
@@ -88,11 +103,15 @@ async fn main() {
         email_service,
         repo: repo.clone(),
         workspaces_dir: Some(workspaces_dir.clone()),
+        blob_store: blob_store.clone(),
     };
 
     let api_state = diaryx_sync_server::handlers::api::ApiState {
         repo: repo.clone(),
         sync_v2: sync_v2_state.clone(),
+        blob_store: blob_store.clone(),
+        snapshot_upload_max_bytes: config.snapshot_upload_max_bytes,
+        attachment_incremental_sync_enabled: config.attachment_incremental_sync_enabled,
     };
 
     let sessions_state = diaryx_sync_server::handlers::sessions::SessionsState {
@@ -110,11 +129,17 @@ async fn main() {
         .allow_methods([
             Method::GET,
             Method::POST,
+            Method::PUT,
             Method::PATCH,
             Method::DELETE,
             Method::OPTIONS,
         ])
-        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            header::CACHE_CONTROL,
+            header::PRAGMA,
+        ])
         .allow_credentials(true)
         .allow_origin(AllowOrigin::list(origins));
 
@@ -160,6 +185,98 @@ async fn main() {
             info!("Cleaned up expired tokens, sessions, and share sessions");
         }
     });
+
+    // Start attachment blob GC task
+    {
+        let gc_repo = repo.clone();
+        let gc_blob_store = blob_store.clone();
+        let retention_days = config.r2.gc_retention_days.max(1);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3600));
+            loop {
+                interval.tick().await;
+                let cutoff = chrono::Utc::now()
+                    .checked_sub_signed(chrono::Duration::days(retention_days))
+                    .unwrap_or_else(chrono::Utc::now)
+                    .timestamp();
+                let due = match gc_repo.list_soft_deleted_blobs_due(cutoff) {
+                    Ok(rows) => rows,
+                    Err(err) => {
+                        error!("Blob GC query failed: {}", err);
+                        continue;
+                    }
+                };
+
+                for row in due {
+                    if !row.r2_key.is_empty() {
+                        if let Err(err) = gc_blob_store.delete(&row.r2_key).await {
+                            error!(
+                                "Blob GC delete failed for {} (user {}): {}",
+                                row.r2_key, row.user_id, err
+                            );
+                            continue;
+                        }
+                    }
+                    if let Err(err) = gc_repo.delete_blob_row(&row.user_id, &row.blob_hash) {
+                        error!(
+                            "Blob GC DB delete failed for {}:{}: {}",
+                            row.user_id, row.blob_hash, err
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    // Start expired attachment upload cleanup task
+    {
+        let uploads_repo = repo.clone();
+        let uploads_blob_store = blob_store.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(600));
+            loop {
+                interval.tick().await;
+                let now = chrono::Utc::now().timestamp();
+                let expired = match uploads_repo.list_expired_attachment_uploads(now) {
+                    Ok(rows) => rows,
+                    Err(err) => {
+                        error!("Attachment upload cleanup query failed: {}", err);
+                        continue;
+                    }
+                };
+
+                for session in expired {
+                    if !session.r2_multipart_upload_id.is_empty() {
+                        if let Err(err) = uploads_blob_store
+                            .abort_multipart(&session.r2_key, &session.r2_multipart_upload_id)
+                            .await
+                        {
+                            error!(
+                                "Attachment upload abort failed for {}:{}: {}",
+                                session.upload_id, session.r2_key, err
+                            );
+                        }
+                    }
+                    if let Err(err) =
+                        uploads_repo.set_attachment_upload_status(&session.upload_id, "expired")
+                    {
+                        error!(
+                            "Attachment upload status update failed for {}: {}",
+                            session.upload_id, err
+                        );
+                    }
+                    if let Err(err) =
+                        uploads_repo.delete_attachment_upload_session(&session.upload_id)
+                    {
+                        error!(
+                            "Attachment upload delete failed for {}: {}",
+                            session.upload_id, err
+                        );
+                    }
+                }
+            }
+        });
+    }
 
     // Start git auto-commit background task
     {

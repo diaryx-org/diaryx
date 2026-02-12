@@ -24,8 +24,8 @@ Reusable Svelte components for the editor and UI.
 
 | File | Purpose |
 |------|---------|
-| `AttachmentPicker.svelte` | Attachment selection dialog |
-| `AttachmentPickerNodeView.svelte` | Inline attachment node |
+| `AttachmentPicker.svelte` | Attachment selection dialog (normalizes ancestor/upload refs via backend link parser before thumbnail reads and insertion) |
+| `AttachmentPickerNodeView.svelte` | Inline attachment node (same link-parser normalization path as dialog picker) |
 | `BubbleMenuComponent.svelte` | TipTap bubble menu |
 | `FloatingMenuComponent.svelte` | TipTap floating menu |
 | `HighlightColorPicker.svelte` | Text highlight color picker |

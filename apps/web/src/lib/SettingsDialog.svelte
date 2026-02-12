@@ -36,6 +36,8 @@
     readableLineLength?: boolean;
     focusMode?: boolean;
     workspacePath?: string | null;
+    /** Tab to show when the dialog opens */
+    initialTab?: string;
     /** Callback to open the sync setup wizard */
     onOpenSyncWizard?: () => void;
   }
@@ -49,6 +51,7 @@
     readableLineLength = $bindable(true),
     focusMode = $bindable(true),
     workspacePath = null,
+    initialTab,
     onOpenSyncWizard,
   }: Props = $props();
 
@@ -56,6 +59,13 @@
 
   // Track active tab
   let activeTab = $state("general");
+
+  // Switch to initialTab when the dialog opens
+  $effect(() => {
+    if (open && initialTab) {
+      activeTab = initialTab;
+    }
+  });
 </script>
 
 {#snippet settingsContent()}

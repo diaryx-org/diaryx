@@ -72,6 +72,11 @@ backend `GetCanonicalPath` (`syncHelpers.getCanonicalPath`) when available, and
 falls back to local normalization only if backend canonicalization is
 unavailable.
 
+For metadata mutations addressed by filesystem path, the bridge resolves the
+underlying CRDT storage key (`doc_id` in doc-ID mode) before calling `Get/SetCrdtFile`,
+so updates (including `BinaryRef.hash` attachment metadata) land on the canonical
+record instead of a legacy path key.
+
 For hierarchy metadata (`part_of` / `contents`), `workspaceCrdtBridge.ts` now
 uses backend `LinkParser` commands when available, so tree resolution follows
 the same Rust link semantics (including plain-canonical handling). A local
@@ -95,6 +100,18 @@ For snapshot bootstrap flows (`load_server`, and `sync_local` after successful
 snapshot upload), `SyncSetupWizard` explicitly discards queued pre-connect local
 updates before opening the WebSocket. This prevents replaying stale bootstrap
 create/delete/body events on top of already-imported snapshot state.
+
+`workspaceCrdtBridge.ts` also wires the incremental attachment sync queue:
+
+- configures queue auth/server/workspace context as sync state changes
+- provides backend access for local attachment reads/writes
+- indexes `BinaryRef` attachment metadata and queues missing-blob downloads on metadata updates
+- normalizes filesystem-event frontmatter before callbacks/queueing so missing
+  `attachments` fields are treated as `[]` instead of crashing event handlers
+
+To keep queue state consistent, bridge code and controllers import the same
+`attachmentSyncService` module path (single singleton instance), and queue
+context is refreshed during `initWorkspace` after `workspaceId/serverUrl` are set.
 
 ### Per-file tracking
 

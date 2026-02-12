@@ -2,6 +2,8 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::sync::{Arc, Mutex};
 
+pub const DEFAULT_ATTACHMENT_LIMIT_BYTES: u64 = 1_073_741_824;
+
 /// User information
 #[derive(Debug, Clone)]
 pub struct UserInfo {
@@ -9,6 +11,7 @@ pub struct UserInfo {
     pub email: String,
     pub created_at: DateTime<Utc>,
     pub last_login_at: Option<DateTime<Utc>>,
+    pub attachment_limit_bytes: Option<u64>,
 }
 
 /// Device information
@@ -52,6 +55,67 @@ pub struct ShareSessionInfo {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
+/// Attachment reference entry for workspace reconciliation.
+#[derive(Debug, Clone)]
+pub struct WorkspaceAttachmentRefRecord {
+    pub file_path: String,
+    pub attachment_path: String,
+    pub blob_hash: String,
+    pub size_bytes: u64,
+    pub mime_type: String,
+}
+
+/// Per-user storage usage summary.
+#[derive(Debug, Clone, Default)]
+pub struct UserStorageUsage {
+    pub used_bytes: u64,
+    pub blob_count: usize,
+}
+
+/// Blob row due for physical deletion.
+#[derive(Debug, Clone)]
+pub struct DueBlobDelete {
+    pub user_id: String,
+    pub blob_hash: String,
+    pub r2_key: String,
+}
+
+/// Attachment upload session state.
+#[derive(Debug, Clone)]
+pub struct AttachmentUploadSession {
+    pub upload_id: String,
+    pub workspace_id: String,
+    pub user_id: String,
+    pub blob_hash: String,
+    pub attachment_path: String,
+    pub mime_type: String,
+    pub size_bytes: u64,
+    pub part_size: u64,
+    pub total_parts: u32,
+    pub r2_key: String,
+    pub r2_multipart_upload_id: String,
+    pub status: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub expires_at: i64,
+}
+
+/// Uploaded part metadata for multipart completion.
+#[derive(Debug, Clone)]
+pub struct AttachmentUploadPart {
+    pub part_no: u32,
+    pub etag: String,
+    pub size_bytes: u64,
+}
+
+/// Completed upload metadata lookup row used by attachment reconciliation fallback.
+#[derive(Debug, Clone)]
+pub struct CompletedAttachmentUploadInfo {
+    pub blob_hash: String,
+    pub size_bytes: u64,
+    pub mime_type: String,
+}
+
 /// Authentication repository for database operations
 #[derive(Clone)]
 pub struct AuthRepo {
@@ -72,7 +136,7 @@ impl AuthRepo {
     pub fn get_user(&self, user_id: &str) -> Result<Option<UserInfo>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, email, created_at, last_login_at FROM users WHERE id = ?",
+            "SELECT id, email, created_at, last_login_at, attachment_limit_bytes FROM users WHERE id = ?",
             [user_id],
             |row| {
                 Ok(UserInfo {
@@ -80,6 +144,7 @@ impl AuthRepo {
                     email: row.get(1)?,
                     created_at: timestamp_to_datetime(row.get(2)?),
                     last_login_at: row.get::<_, Option<i64>>(3)?.map(timestamp_to_datetime),
+                    attachment_limit_bytes: row.get::<_, Option<i64>>(4)?.map(|v| v as u64),
                 })
             },
         )
@@ -90,7 +155,7 @@ impl AuthRepo {
     pub fn get_user_by_email(&self, email: &str) -> Result<Option<UserInfo>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, email, created_at, last_login_at FROM users WHERE email = ?",
+            "SELECT id, email, created_at, last_login_at, attachment_limit_bytes FROM users WHERE email = ?",
             [email],
             |row| {
                 Ok(UserInfo {
@@ -98,6 +163,7 @@ impl AuthRepo {
                     email: row.get(1)?,
                     created_at: timestamp_to_datetime(row.get(2)?),
                     last_login_at: row.get::<_, Option<i64>>(3)?.map(timestamp_to_datetime),
+                    attachment_limit_bytes: row.get::<_, Option<i64>>(4)?.map(|v| v as u64),
                 })
             },
         )
@@ -123,8 +189,8 @@ impl AuthRepo {
         let now = Utc::now().timestamp();
 
         conn.execute(
-            "INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)",
-            params![user_id, email, now],
+            "INSERT INTO users (id, email, created_at, attachment_limit_bytes) VALUES (?, ?, ?, ?)",
+            params![user_id, email, now, DEFAULT_ATTACHMENT_LIMIT_BYTES as i64],
         )?;
 
         Ok(user_id)
@@ -157,6 +223,66 @@ impl AuthRepo {
         conn.execute("DELETE FROM users WHERE id = ?", [user_id])?;
 
         Ok(workspace_ids)
+    }
+
+    /// Get explicit per-user attachment limit (nullable).
+    pub fn get_user_attachment_limit(&self, user_id: &str) -> Result<Option<u64>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT attachment_limit_bytes FROM users WHERE id = ?",
+            [user_id],
+            |row| row.get::<_, Option<i64>>(0).map(|v| v.map(|n| n as u64)),
+        )
+        .optional()
+        .map(|value| value.flatten())
+    }
+
+    /// Get effective attachment limit for a user (1 GiB fallback).
+    pub fn get_effective_user_attachment_limit(
+        &self,
+        user_id: &str,
+    ) -> Result<u64, rusqlite::Error> {
+        Ok(self
+            .get_user_attachment_limit(user_id)?
+            .unwrap_or(DEFAULT_ATTACHMENT_LIMIT_BYTES))
+    }
+
+    /// Set explicit per-user attachment limit bytes (None resets to default fallback behavior).
+    pub fn set_user_attachment_limit(
+        &self,
+        user_id: &str,
+        limit_bytes: Option<u64>,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE users SET attachment_limit_bytes = ? WHERE id = ?",
+            params![limit_bytes.map(|v| v as i64), user_id],
+        )?;
+        Ok(())
+    }
+
+    /// Compute projected usage if this blob/hash were referenced by the user.
+    /// Returns `(used_bytes, projected_bytes, is_new_blob)`.
+    pub fn compute_projected_usage_after_blob(
+        &self,
+        user_id: &str,
+        blob_hash: &str,
+        incoming_size: u64,
+    ) -> Result<(u64, u64, bool), rusqlite::Error> {
+        let usage = self.get_user_storage_usage(user_id)?;
+        let conn = self.conn.lock().unwrap();
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM user_attachment_blobs WHERE user_id = ? AND blob_hash = ?)",
+            params![user_id, blob_hash],
+            |row| row.get::<_, i64>(0),
+        )? != 0;
+
+        let projected = if exists {
+            usage.used_bytes
+        } else {
+            usage.used_bytes.saturating_add(incoming_size)
+        };
+        Ok((usage.used_bytes, projected, !exists))
     }
 
     // ===== Device operations =====
@@ -434,6 +560,538 @@ impl AuthRepo {
         .optional()
     }
 
+    // ===== Attachment blob accounting =====
+
+    /// Insert or update a blob metadata row for a user.
+    pub fn upsert_blob(
+        &self,
+        user_id: &str,
+        blob_hash: &str,
+        r2_key: &str,
+        size_bytes: u64,
+        mime_type: &str,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO user_attachment_blobs
+             (user_id, blob_hash, r2_key, size_bytes, mime_type, ref_count, soft_deleted_at, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, 0, NULL, ?, ?)
+             ON CONFLICT(user_id, blob_hash) DO UPDATE SET
+               r2_key = excluded.r2_key,
+               size_bytes = excluded.size_bytes,
+               mime_type = excluded.mime_type,
+               updated_at = excluded.updated_at",
+            params![
+                user_id,
+                blob_hash,
+                r2_key,
+                size_bytes as i64,
+                mime_type,
+                now,
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Increment reference count for a user blob.
+    pub fn inc_blob_ref(&self, user_id: &str, blob_hash: &str) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+        conn.execute(
+            "UPDATE user_attachment_blobs
+             SET ref_count = ref_count + 1, soft_deleted_at = NULL, updated_at = ?
+             WHERE user_id = ? AND blob_hash = ?",
+            params![now, user_id, blob_hash],
+        )?;
+        Ok(())
+    }
+
+    /// Decrement reference count for a user blob and mark soft delete when it reaches zero.
+    pub fn dec_blob_ref(&self, user_id: &str, blob_hash: &str) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+        conn.execute(
+            "UPDATE user_attachment_blobs
+             SET ref_count = CASE WHEN ref_count > 0 THEN ref_count - 1 ELSE 0 END,
+                 soft_deleted_at = CASE WHEN ref_count <= 1 THEN ? ELSE NULL END,
+                 updated_at = ?
+             WHERE user_id = ? AND blob_hash = ?",
+            params![now, now, user_id, blob_hash],
+        )?;
+        Ok(())
+    }
+
+    fn get_workspace_user_id(
+        conn: &Connection,
+        workspace_id: &str,
+    ) -> Result<Option<String>, rusqlite::Error> {
+        conn.query_row(
+            "SELECT user_id FROM user_workspaces WHERE id = ?",
+            [workspace_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+    }
+
+    /// Replace all attachment refs for a workspace and reconcile blob ref counts.
+    pub fn replace_workspace_attachment_refs(
+        &self,
+        workspace_id: &str,
+        refs: &[WorkspaceAttachmentRefRecord],
+    ) -> Result<(), rusqlite::Error> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let now = Utc::now().timestamp();
+
+        let user_id = match Self::get_workspace_user_id(&tx, workspace_id)? {
+            Some(u) => u,
+            None => return Ok(()),
+        };
+
+        let mut old_stmt = tx.prepare(
+            "SELECT file_path, attachment_path, blob_hash
+             FROM workspace_attachment_refs
+             WHERE workspace_id = ?",
+        )?;
+        let old_rows: Vec<(String, String, String)> = old_stmt
+            .query_map([workspace_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(old_stmt);
+
+        let mut old_map = std::collections::HashMap::new();
+        for (file_path, attachment_path, blob_hash) in old_rows {
+            old_map.insert((file_path, attachment_path), blob_hash);
+        }
+
+        let mut new_keys: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+
+        for entry in refs {
+            let key = (entry.file_path.clone(), entry.attachment_path.clone());
+            new_keys.insert(key.clone());
+
+            tx.execute(
+                "INSERT INTO user_attachment_blobs
+                 (user_id, blob_hash, r2_key, size_bytes, mime_type, ref_count, soft_deleted_at, created_at, updated_at)
+                 VALUES (?, ?, '', ?, ?, 0, NULL, ?, ?)
+                 ON CONFLICT(user_id, blob_hash) DO UPDATE SET
+                   size_bytes = excluded.size_bytes,
+                   mime_type = excluded.mime_type,
+                   updated_at = excluded.updated_at",
+                params![
+                    user_id,
+                    entry.blob_hash,
+                    entry.size_bytes as i64,
+                    entry.mime_type,
+                    now,
+                    now
+                ],
+            )?;
+
+            match old_map.get(&key) {
+                Some(existing_hash) if existing_hash == &entry.blob_hash => {}
+                Some(existing_hash) => {
+                    tx.execute(
+                        "UPDATE user_attachment_blobs
+                         SET ref_count = CASE WHEN ref_count > 0 THEN ref_count - 1 ELSE 0 END,
+                             soft_deleted_at = CASE WHEN ref_count <= 1 THEN ? ELSE soft_deleted_at END,
+                             updated_at = ?
+                         WHERE user_id = ? AND blob_hash = ?",
+                        params![now, now, user_id, existing_hash],
+                    )?;
+                    tx.execute(
+                        "UPDATE user_attachment_blobs
+                         SET ref_count = ref_count + 1, soft_deleted_at = NULL, updated_at = ?
+                         WHERE user_id = ? AND blob_hash = ?",
+                        params![now, user_id, entry.blob_hash],
+                    )?;
+                }
+                None => {
+                    tx.execute(
+                        "UPDATE user_attachment_blobs
+                         SET ref_count = ref_count + 1, soft_deleted_at = NULL, updated_at = ?
+                         WHERE user_id = ? AND blob_hash = ?",
+                        params![now, user_id, entry.blob_hash],
+                    )?;
+                }
+            }
+
+            tx.execute(
+                "INSERT INTO workspace_attachment_refs
+                 (workspace_id, file_path, attachment_path, blob_hash, size_bytes, mime_type, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(workspace_id, file_path, attachment_path) DO UPDATE SET
+                   blob_hash = excluded.blob_hash,
+                   size_bytes = excluded.size_bytes,
+                   mime_type = excluded.mime_type,
+                   updated_at = excluded.updated_at",
+                params![
+                    workspace_id,
+                    entry.file_path,
+                    entry.attachment_path,
+                    entry.blob_hash,
+                    entry.size_bytes as i64,
+                    entry.mime_type,
+                    now
+                ],
+            )?;
+        }
+
+        for ((file_path, attachment_path), blob_hash) in old_map {
+            if new_keys.contains(&(file_path.clone(), attachment_path.clone())) {
+                continue;
+            }
+
+            tx.execute(
+                "DELETE FROM workspace_attachment_refs
+                 WHERE workspace_id = ? AND file_path = ? AND attachment_path = ?",
+                params![workspace_id, file_path, attachment_path],
+            )?;
+
+            tx.execute(
+                "UPDATE user_attachment_blobs
+                 SET ref_count = CASE WHEN ref_count > 0 THEN ref_count - 1 ELSE 0 END,
+                     soft_deleted_at = CASE WHEN ref_count <= 1 THEN ? ELSE soft_deleted_at END,
+                     updated_at = ?
+                 WHERE user_id = ? AND blob_hash = ?",
+                params![now, now, user_id, blob_hash],
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Get per-user attachment usage (active references only).
+    pub fn get_user_storage_usage(
+        &self,
+        user_id: &str,
+    ) -> Result<UserStorageUsage, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT COALESCE(SUM(size_bytes), 0), COALESCE(COUNT(*), 0)
+             FROM user_attachment_blobs
+             WHERE user_id = ? AND ref_count > 0",
+        )?;
+        let usage = stmt.query_row([user_id], |row| {
+            Ok(UserStorageUsage {
+                used_bytes: row.get::<_, i64>(0)? as u64,
+                blob_count: row.get::<_, i64>(1)? as usize,
+            })
+        })?;
+        Ok(usage)
+    }
+
+    /// List blobs that are soft deleted and due for physical deletion.
+    pub fn list_soft_deleted_blobs_due(
+        &self,
+        due_before_ts: i64,
+    ) -> Result<Vec<DueBlobDelete>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT user_id, blob_hash, r2_key
+             FROM user_attachment_blobs
+             WHERE ref_count = 0
+               AND soft_deleted_at IS NOT NULL
+               AND soft_deleted_at <= ?",
+        )?;
+        let rows = stmt
+            .query_map([due_before_ts], |row| {
+                Ok(DueBlobDelete {
+                    user_id: row.get(0)?,
+                    blob_hash: row.get(1)?,
+                    r2_key: row.get(2)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// Delete a blob row by primary key.
+    pub fn delete_blob_row(&self, user_id: &str, blob_hash: &str) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM user_attachment_blobs WHERE user_id = ? AND blob_hash = ?",
+            params![user_id, blob_hash],
+        )?;
+        Ok(())
+    }
+
+    /// List all blob keys for a user (for account deletion cleanup).
+    pub fn list_user_blob_keys(&self, user_id: &str) -> Result<Vec<String>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT r2_key FROM user_attachment_blobs WHERE user_id = ?")?;
+        let keys = stmt
+            .query_map([user_id], |row| row.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(keys)
+    }
+
+    /// Get blob metadata for a user/hash.
+    pub fn get_user_blob(
+        &self,
+        user_id: &str,
+        blob_hash: &str,
+    ) -> Result<Option<(String, u64, String)>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT r2_key, size_bytes, mime_type
+             FROM user_attachment_blobs
+             WHERE user_id = ? AND blob_hash = ?",
+            params![user_id, blob_hash],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)? as u64,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+    }
+
+    /// Check whether a workspace currently references a blob hash.
+    pub fn workspace_references_blob(
+        &self,
+        workspace_id: &str,
+        blob_hash: &str,
+    ) -> Result<bool, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM workspace_attachment_refs WHERE workspace_id = ? AND blob_hash = ?",
+            params![workspace_id, blob_hash],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    /// Create or replace a multipart upload session.
+    pub fn create_attachment_upload_session(
+        &self,
+        session: &AttachmentUploadSession,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO attachment_uploads
+             (upload_id, workspace_id, user_id, blob_hash, attachment_path, mime_type, size_bytes, part_size, total_parts, r2_key, r2_multipart_upload_id, status, created_at, updated_at, expires_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(upload_id) DO UPDATE SET
+               workspace_id = excluded.workspace_id,
+               user_id = excluded.user_id,
+               blob_hash = excluded.blob_hash,
+               attachment_path = excluded.attachment_path,
+               mime_type = excluded.mime_type,
+               size_bytes = excluded.size_bytes,
+               part_size = excluded.part_size,
+               total_parts = excluded.total_parts,
+               r2_key = excluded.r2_key,
+               r2_multipart_upload_id = excluded.r2_multipart_upload_id,
+               status = excluded.status,
+               updated_at = excluded.updated_at,
+               expires_at = excluded.expires_at",
+            params![
+                session.upload_id,
+                session.workspace_id,
+                session.user_id,
+                session.blob_hash,
+                session.attachment_path,
+                session.mime_type,
+                session.size_bytes as i64,
+                session.part_size as i64,
+                session.total_parts as i64,
+                session.r2_key,
+                session.r2_multipart_upload_id,
+                session.status,
+                session.created_at,
+                session.updated_at,
+                session.expires_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Get multipart upload session by upload ID.
+    pub fn get_attachment_upload_session(
+        &self,
+        upload_id: &str,
+    ) -> Result<Option<AttachmentUploadSession>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT upload_id, workspace_id, user_id, blob_hash, attachment_path, mime_type, size_bytes, part_size, total_parts, r2_key, r2_multipart_upload_id, status, created_at, updated_at, expires_at
+             FROM attachment_uploads
+             WHERE upload_id = ?",
+            [upload_id],
+            |row| {
+                Ok(AttachmentUploadSession {
+                    upload_id: row.get(0)?,
+                    workspace_id: row.get(1)?,
+                    user_id: row.get(2)?,
+                    blob_hash: row.get(3)?,
+                    attachment_path: row.get(4)?,
+                    mime_type: row.get(5)?,
+                    size_bytes: row.get::<_, i64>(6)? as u64,
+                    part_size: row.get::<_, i64>(7)? as u64,
+                    total_parts: row.get::<_, i64>(8)? as u32,
+                    r2_key: row.get(9)?,
+                    r2_multipart_upload_id: row.get(10)?,
+                    status: row.get(11)?,
+                    created_at: row.get(12)?,
+                    updated_at: row.get(13)?,
+                    expires_at: row.get(14)?,
+                })
+            },
+        )
+        .optional()
+    }
+
+    /// Upsert uploaded part metadata for a multipart session.
+    pub fn upsert_attachment_upload_part(
+        &self,
+        upload_id: &str,
+        part_no: u32,
+        etag: &str,
+        size_bytes: u64,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO attachment_upload_parts (upload_id, part_no, etag, size_bytes, created_at)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(upload_id, part_no) DO UPDATE SET
+               etag = excluded.etag,
+               size_bytes = excluded.size_bytes",
+            params![upload_id, part_no as i64, etag, size_bytes as i64, now],
+        )?;
+        conn.execute(
+            "UPDATE attachment_uploads SET updated_at = ? WHERE upload_id = ?",
+            params![now, upload_id],
+        )?;
+        Ok(())
+    }
+
+    /// List uploaded parts for a multipart session in ascending part order.
+    pub fn list_attachment_upload_parts(
+        &self,
+        upload_id: &str,
+    ) -> Result<Vec<AttachmentUploadPart>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT part_no, etag, size_bytes
+             FROM attachment_upload_parts
+             WHERE upload_id = ?
+             ORDER BY part_no ASC",
+        )?;
+        let parts = stmt
+            .query_map([upload_id], |row| {
+                Ok(AttachmentUploadPart {
+                    part_no: row.get::<_, i64>(0)? as u32,
+                    etag: row.get(1)?,
+                    size_bytes: row.get::<_, i64>(2)? as u64,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(parts)
+    }
+
+    /// Set status for a multipart upload session.
+    pub fn set_attachment_upload_status(
+        &self,
+        upload_id: &str,
+        status: &str,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+        conn.execute(
+            "UPDATE attachment_uploads SET status = ?, updated_at = ? WHERE upload_id = ?",
+            params![status, now, upload_id],
+        )?;
+        Ok(())
+    }
+
+    /// List sessions that have expired while still uploading.
+    pub fn list_expired_attachment_uploads(
+        &self,
+        now_ts: i64,
+    ) -> Result<Vec<AttachmentUploadSession>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT upload_id, workspace_id, user_id, blob_hash, attachment_path, mime_type, size_bytes, part_size, total_parts, r2_key, r2_multipart_upload_id, status, created_at, updated_at, expires_at
+             FROM attachment_uploads
+             WHERE status = 'uploading' AND expires_at <= ?",
+        )?;
+        let rows = stmt
+            .query_map([now_ts], |row| {
+                Ok(AttachmentUploadSession {
+                    upload_id: row.get(0)?,
+                    workspace_id: row.get(1)?,
+                    user_id: row.get(2)?,
+                    blob_hash: row.get(3)?,
+                    attachment_path: row.get(4)?,
+                    mime_type: row.get(5)?,
+                    size_bytes: row.get::<_, i64>(6)? as u64,
+                    part_size: row.get::<_, i64>(7)? as u64,
+                    total_parts: row.get::<_, i64>(8)? as u32,
+                    r2_key: row.get(9)?,
+                    r2_multipart_upload_id: row.get(10)?,
+                    status: row.get(11)?,
+                    created_at: row.get(12)?,
+                    updated_at: row.get(13)?,
+                    expires_at: row.get(14)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// Delete multipart session and all associated part rows.
+    pub fn delete_attachment_upload_session(&self, upload_id: &str) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM attachment_uploads WHERE upload_id = ?",
+            params![upload_id],
+        )?;
+        Ok(())
+    }
+
+    /// Get latest completed upload metadata for a workspace attachment path.
+    pub fn get_latest_completed_attachment_upload(
+        &self,
+        workspace_id: &str,
+        attachment_path: &str,
+    ) -> Result<Option<CompletedAttachmentUploadInfo>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT blob_hash, size_bytes, mime_type
+             FROM attachment_uploads
+             WHERE workspace_id = ? AND attachment_path = ? AND status = 'completed'
+             ORDER BY updated_at DESC
+             LIMIT 1",
+            params![workspace_id, attachment_path],
+            |row| {
+                Ok(CompletedAttachmentUploadInfo {
+                    blob_hash: row.get(0)?,
+                    size_bytes: row.get::<_, i64>(1)? as u64,
+                    mime_type: row.get(2)?,
+                })
+            },
+        )
+        .optional()
+    }
+
     // ===== Share session operations =====
 
     /// Create a new share session
@@ -688,5 +1346,228 @@ mod tests {
         assert!(repo.get_user_devices(&user_id).unwrap().is_empty());
         assert!(repo.validate_session(&session_token).unwrap().is_none());
         assert!(repo.get_user_workspaces(&user_id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_attachment_blob_accounting() {
+        let repo = setup_test_db();
+        let user_id = repo.get_or_create_user("blob-test@example.com").unwrap();
+        let workspace_id = repo.get_or_create_workspace(&user_id, "default").unwrap();
+
+        repo.upsert_blob(
+            &user_id,
+            "hash-a",
+            "diaryx-sync/u/blob-test/blobs/hash-a",
+            1024,
+            "image/png",
+        )
+        .unwrap();
+        repo.upsert_blob(
+            &user_id,
+            "hash-b",
+            "diaryx-sync/u/blob-test/blobs/hash-b",
+            2048,
+            "application/pdf",
+        )
+        .unwrap();
+
+        repo.replace_workspace_attachment_refs(
+            &workspace_id,
+            &[WorkspaceAttachmentRefRecord {
+                file_path: "README.md".to_string(),
+                attachment_path: "_attachments/a.png".to_string(),
+                blob_hash: "hash-a".to_string(),
+                size_bytes: 1024,
+                mime_type: "image/png".to_string(),
+            }],
+        )
+        .unwrap();
+
+        let usage = repo.get_user_storage_usage(&user_id).unwrap();
+        assert_eq!(usage.used_bytes, 1024);
+        assert_eq!(usage.blob_count, 1);
+
+        // Two refs to same blob still count once in storage usage.
+        repo.replace_workspace_attachment_refs(
+            &workspace_id,
+            &[
+                WorkspaceAttachmentRefRecord {
+                    file_path: "README.md".to_string(),
+                    attachment_path: "_attachments/a.png".to_string(),
+                    blob_hash: "hash-a".to_string(),
+                    size_bytes: 1024,
+                    mime_type: "image/png".to_string(),
+                },
+                WorkspaceAttachmentRefRecord {
+                    file_path: "notes.md".to_string(),
+                    attachment_path: "_attachments/a-copy.png".to_string(),
+                    blob_hash: "hash-a".to_string(),
+                    size_bytes: 1024,
+                    mime_type: "image/png".to_string(),
+                },
+            ],
+        )
+        .unwrap();
+
+        let usage = repo.get_user_storage_usage(&user_id).unwrap();
+        assert_eq!(usage.used_bytes, 1024);
+        assert_eq!(usage.blob_count, 1);
+
+        // Replacing with a different blob updates usage.
+        repo.replace_workspace_attachment_refs(
+            &workspace_id,
+            &[WorkspaceAttachmentRefRecord {
+                file_path: "README.md".to_string(),
+                attachment_path: "_attachments/b.pdf".to_string(),
+                blob_hash: "hash-b".to_string(),
+                size_bytes: 2048,
+                mime_type: "application/pdf".to_string(),
+            }],
+        )
+        .unwrap();
+
+        let usage = repo.get_user_storage_usage(&user_id).unwrap();
+        assert_eq!(usage.used_bytes, 2048);
+        assert_eq!(usage.blob_count, 1);
+
+        // Clearing refs soft-deletes blobs.
+        repo.replace_workspace_attachment_refs(&workspace_id, &[])
+            .unwrap();
+        let usage = repo.get_user_storage_usage(&user_id).unwrap();
+        assert_eq!(usage.used_bytes, 0);
+        assert_eq!(usage.blob_count, 0);
+
+        let due = repo.list_soft_deleted_blobs_due(i64::MAX).unwrap();
+        assert!(!due.is_empty());
+    }
+
+    #[test]
+    fn test_default_user_attachment_limit_is_one_gib() {
+        let repo = setup_test_db();
+        let user_id = repo.get_or_create_user("limit-test@example.com").unwrap();
+        let user = repo.get_user(&user_id).unwrap().unwrap();
+        assert_eq!(
+            user.attachment_limit_bytes,
+            Some(DEFAULT_ATTACHMENT_LIMIT_BYTES)
+        );
+
+        let effective = repo.get_effective_user_attachment_limit(&user_id).unwrap();
+        assert_eq!(effective, DEFAULT_ATTACHMENT_LIMIT_BYTES);
+    }
+
+    #[test]
+    fn test_projected_usage_dedupe_for_existing_hash() {
+        let repo = setup_test_db();
+        let user_id = repo
+            .get_or_create_user("projection-test@example.com")
+            .unwrap();
+        let workspace_id = repo.get_or_create_workspace(&user_id, "default").unwrap();
+
+        repo.upsert_blob(&user_id, "hash-a", "key-a", 100, "image/png")
+            .unwrap();
+        repo.replace_workspace_attachment_refs(
+            &workspace_id,
+            &[WorkspaceAttachmentRefRecord {
+                file_path: "README.md".to_string(),
+                attachment_path: "_attachments/a.png".to_string(),
+                blob_hash: "hash-a".to_string(),
+                size_bytes: 100,
+                mime_type: "image/png".to_string(),
+            }],
+        )
+        .unwrap();
+
+        let (used, projected, is_new) = repo
+            .compute_projected_usage_after_blob(&user_id, "hash-a", 100)
+            .unwrap();
+        assert_eq!(used, 100);
+        assert_eq!(projected, 100);
+        assert!(!is_new);
+
+        let (used, projected, is_new) = repo
+            .compute_projected_usage_after_blob(&user_id, "hash-b", 50)
+            .unwrap();
+        assert_eq!(used, 100);
+        assert_eq!(projected, 150);
+        assert!(is_new);
+    }
+
+    #[test]
+    fn test_projected_usage_limit_boundaries() {
+        let repo = setup_test_db();
+        let user_id = repo
+            .get_or_create_user("boundary-test@example.com")
+            .unwrap();
+
+        let (used, projected, is_new) = repo
+            .compute_projected_usage_after_blob(&user_id, "hash-a", DEFAULT_ATTACHMENT_LIMIT_BYTES)
+            .unwrap();
+        assert_eq!(used, 0);
+        assert_eq!(projected, DEFAULT_ATTACHMENT_LIMIT_BYTES);
+        assert!(is_new);
+        assert!(projected <= DEFAULT_ATTACHMENT_LIMIT_BYTES);
+
+        let (_, projected, _) = repo
+            .compute_projected_usage_after_blob(
+                &user_id,
+                "hash-b",
+                DEFAULT_ATTACHMENT_LIMIT_BYTES + 1,
+            )
+            .unwrap();
+        assert!(projected > DEFAULT_ATTACHMENT_LIMIT_BYTES);
+    }
+
+    #[test]
+    fn test_get_latest_completed_attachment_upload() {
+        let repo = setup_test_db();
+        let user_id = repo.get_or_create_user("upload-test@example.com").unwrap();
+        let workspace_id = repo.get_or_create_workspace(&user_id, "default").unwrap();
+        let now = Utc::now().timestamp();
+
+        let old = AttachmentUploadSession {
+            upload_id: "u1".to_string(),
+            workspace_id: workspace_id.clone(),
+            user_id: user_id.clone(),
+            blob_hash: "a".repeat(64),
+            attachment_path: "_attachments/a.png".to_string(),
+            mime_type: "image/png".to_string(),
+            size_bytes: 111,
+            part_size: 8 * 1024 * 1024,
+            total_parts: 1,
+            r2_key: "k1".to_string(),
+            r2_multipart_upload_id: "".to_string(),
+            status: "completed".to_string(),
+            created_at: now - 10,
+            updated_at: now - 10,
+            expires_at: now + 1000,
+        };
+        repo.create_attachment_upload_session(&old).unwrap();
+
+        let latest = AttachmentUploadSession {
+            upload_id: "u2".to_string(),
+            workspace_id: workspace_id.clone(),
+            user_id,
+            blob_hash: "b".repeat(64),
+            attachment_path: "_attachments/a.png".to_string(),
+            mime_type: "image/webp".to_string(),
+            size_bytes: 222,
+            part_size: 8 * 1024 * 1024,
+            total_parts: 1,
+            r2_key: "k2".to_string(),
+            r2_multipart_upload_id: "".to_string(),
+            status: "completed".to_string(),
+            created_at: now,
+            updated_at: now,
+            expires_at: now + 1000,
+        };
+        repo.create_attachment_upload_session(&latest).unwrap();
+
+        let found = repo
+            .get_latest_completed_attachment_upload(&workspace_id, "_attachments/a.png")
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.blob_hash, "b".repeat(64));
+        assert_eq!(found.size_bytes, 222);
+        assert_eq!(found.mime_type, "image/webp");
     }
 }

@@ -30,6 +30,7 @@
   import SettingsDialog from "./lib/SettingsDialog.svelte";
   import ExportDialog from "./lib/ExportDialog.svelte";
   import SyncSetupWizard from "./lib/SyncSetupWizard.svelte";
+  import ImagePreviewDialog from "./lib/ImagePreviewDialog.svelte";
     import EditorHeader from "./views/editor/EditorHeader.svelte";
   import EditorEmptyState from "./views/editor/EditorEmptyState.svelte";
   import EditorContent from "./views/editor/EditorContent.svelte";
@@ -65,6 +66,7 @@
     initializeWorkspaceCrdt,
     updateCrdtFileMetadata,
   } from "./models/services";
+  import { getMimeType, isHeicFile, convertHeicToJpeg } from "./models/services/attachmentService";
 
   // Import controllers
   import {
@@ -136,6 +138,9 @@
 
   // Sync setup wizard
   let showSyncWizard = $state(false);
+
+  // Settings dialog initial tab (for opening to a specific tab)
+  let settingsInitialTab = $state<string | undefined>(undefined);
 
   // Workspace state - proxied from workspaceStore
   let tree = $derived(workspaceStore.tree);
@@ -344,6 +349,11 @@
   // Attachment state
   let attachmentError: string | null = $state(null);
   let attachmentFileInput: HTMLInputElement | null = $state(null);
+
+  // Image preview state
+  let imagePreviewOpen = $state(false);
+  let previewImageUrl: string | null = $state(null);
+  let previewImageName = $state("");
 
   // Note: Blob URL management is now in attachmentService.ts
 
@@ -1367,6 +1377,38 @@
     await deleteAttachmentHandler(attachmentPath, api, currentEntry);
   }
 
+  async function handlePreviewAttachment(attachmentValue: string) {
+    if (!api || !currentEntry) return;
+    // Parse markdown link if present: [name](/path) -> extract path
+    const linkMatch = /^\[([^\]]*)\]\(([^)]+)\)$/.exec(attachmentValue);
+    const attachmentPath = linkMatch ? linkMatch[2] : attachmentValue;
+    const displayName = linkMatch ? (linkMatch[1] || attachmentPath.split("/").pop() || attachmentPath) : attachmentPath.split("/").pop() || attachmentValue;
+
+    try {
+      const data = await api.getAttachmentData(currentEntry.path, attachmentPath);
+      const mimeType = getMimeType(attachmentPath);
+      let blob = new Blob([new Uint8Array(data)], { type: mimeType });
+      if (isHeicFile(attachmentPath)) {
+        blob = await convertHeicToJpeg(blob);
+      }
+      // Revoke previous preview URL if any
+      if (previewImageUrl) URL.revokeObjectURL(previewImageUrl);
+      previewImageUrl = URL.createObjectURL(blob);
+      previewImageName = displayName;
+      imagePreviewOpen = true;
+    } catch (e) {
+      console.error("[App] Failed to load image preview:", e);
+    }
+  }
+
+  function handleImagePreviewClose(open: boolean) {
+    imagePreviewOpen = open;
+    if (!open && previewImageUrl) {
+      URL.revokeObjectURL(previewImageUrl);
+      previewImageUrl = null;
+    }
+  }
+
   function handleAttachmentInsert(selection: {
     path: string;
     isImage: boolean;
@@ -1627,6 +1669,7 @@
   bind:readableLineLength
   bind:focusMode
   workspacePath={tree?.path}
+  initialTab={settingsInitialTab}
   onOpenSyncWizard={() => {
     showSettingsDialog = false;
     showSyncWizard = true;
@@ -1672,7 +1715,9 @@
     onOpenEntry={openEntry}
     onToggleNode={toggleNode}
     onToggleCollapse={toggleLeftSidebar}
-    onOpenSettings={() => (showSettingsDialog = true)}
+    onOpenSettings={() => { settingsInitialTab = undefined; showSettingsDialog = true; }}
+    onOpenAccountSettings={() => { settingsInitialTab = "account"; showSettingsDialog = true; }}
+    onOpenSyncWizard={() => { showSyncWizard = true; }}
     onMoveEntry={handleMoveEntry}
     onCreateChildEntry={handleCreateChildEntry}
     onDeleteEntry={handleDeleteEntry}
@@ -1769,6 +1814,7 @@
     {titleError}
     onTitleErrorClear={() => (titleError = null)}
     onDeleteAttachment={handleDeleteAttachment}
+    onPreviewAttachment={handlePreviewAttachment}
     {attachmentError}
     onAttachmentErrorClear={() => (attachmentError = null)}
     {rustApi}
@@ -1789,3 +1835,11 @@
 </div>
 
 </Tooltip.Provider>
+
+<!-- Image Preview Dialog -->
+<ImagePreviewDialog
+  open={imagePreviewOpen}
+  imageUrl={previewImageUrl}
+  imageName={previewImageName}
+  onOpenChange={handleImagePreviewClose}
+/>

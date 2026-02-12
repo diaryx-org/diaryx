@@ -61,6 +61,14 @@ It resolves links through `link_parser` (supports markdown links, workspace-root
 links, and relative paths) and stores workspace-relative canonical paths in CRDT
 metadata.
 
+When frontmatter parsing falls back from direct serde mapping, `attachments`
+entries are still preserved (string links and object/BinaryRef-style entries),
+so attachment refs are not dropped during CRDT metadata updates.
+
+If a file write contains no `attachments` frontmatter at all, `CrdtFs` now
+preserves existing CRDT `BinaryRef` entries for that file instead of replacing
+them with an empty list.
+
 For ambiguous plain paths (`Folder/file.md`), resolution is hint-aware:
 
 - if workspace/frontmatter link format is `plain_canonical`, ambiguous links are

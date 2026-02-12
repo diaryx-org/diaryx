@@ -56,3 +56,17 @@ export {
   type CommitResponse,
   type RestoreResponse,
 } from './historyService';
+
+export {
+  setAttachmentSyncBackend,
+  setAttachmentSyncContext,
+  enqueueAttachmentUpload,
+  enqueueAttachmentDownload,
+  enqueueMissingDownloadsFromMetadata,
+  requestMissingBlobDownload,
+  retryFailedAttachmentJobs,
+  indexAttachmentRefs,
+  sha256Hex,
+  isTerminalAttachmentSyncError,
+  getAttachmentSyncQueueSnapshot,
+} from './attachmentSyncService';

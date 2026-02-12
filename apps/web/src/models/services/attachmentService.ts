@@ -7,6 +7,7 @@
 
 import type { Api } from '$lib/backend/api';
 import heic2any from 'heic2any';
+import { requestMissingBlobDownload } from './attachmentSyncService';
 
 // ============================================================================
 // State
@@ -116,6 +117,45 @@ export async function convertHeicToJpeg(blob: Blob): Promise<Blob> {
   }
 }
 
+/**
+ * Normalize an attachment reference through the Rust link parser.
+ *
+ * Returns both:
+ * - `canonical`: workspace-relative canonical path
+ * - `sourceRelative`: path relative to `sourceEntryPath` for filesystem reads
+ */
+async function normalizeAttachmentReference(
+  api: Api,
+  sourceEntryPath: string,
+  rawPath: string,
+): Promise<{ canonical: string; sourceRelative: string }> {
+  const trimmed = rawPath.trim();
+  const candidates = [trimmed];
+  if (trimmed.startsWith('[') && trimmed.includes('](') && !trimmed.endsWith(')')) {
+    candidates.push(`${trimmed})`);
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const canonical = await api.canonicalizeLink(candidate, sourceEntryPath);
+      const sourceRelative = await api.formatLink(
+        canonical,
+        getFilename(canonical) || 'attachment',
+        'plain_relative',
+        sourceEntryPath,
+      );
+      return { canonical, sourceRelative };
+    } catch {
+      // Try next candidate.
+    }
+  }
+
+  return {
+    canonical: trimmed,
+    sourceRelative: trimmed,
+  };
+}
+
 // ============================================================================
 // Public API
 // ============================================================================
@@ -154,35 +194,38 @@ export async function transformAttachmentPaths(
   while ((match = imageRegex.exec(content)) !== null) {
     const [fullMatch, alt] = match;
     // Angle bracket path is in group 2, regular path is in group 3
-    const imagePath = match[2] || match[3];
+    const rawImagePath = (match[2] || match[3]).trim();
 
     // Skip external URLs
-    if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
+    if (rawImagePath.startsWith('http://') || rawImagePath.startsWith('https://')) {
       continue;
     }
 
     // Skip already-transformed blob URLs
-    if (imagePath.startsWith('blob:')) {
+    if (rawImagePath.startsWith('blob:')) {
       continue;
     }
 
+    const { canonical: canonicalPath, sourceRelative: sourceRelativePath } =
+      await normalizeAttachmentReference(api, entryPath, rawImagePath);
+
     try {
       // Try to read the attachment data
-      const data = await api.getAttachmentData(entryPath, imagePath);
+      const data = await api.getAttachmentData(entryPath, sourceRelativePath);
 
       // Create blob and URL
-      const mimeType = getMimeType(imagePath);
+      const mimeType = getMimeType(canonicalPath);
       let blob = new Blob([new Uint8Array(data)], { type: mimeType });
 
       // Convert HEIC to JPEG for browser display
-      if (isHeicFile(imagePath)) {
+      if (isHeicFile(canonicalPath)) {
         blob = await convertHeicToJpeg(blob);
       }
 
       const blobUrl = URL.createObjectURL(blob);
 
       // Track for cleanup
-      blobUrlMap.set(imagePath, blobUrl);
+      blobUrlMap.set(sourceRelativePath, blobUrl);
 
       // Queue replacement
       replacements.push({
@@ -190,8 +233,35 @@ export async function transformAttachmentPaths(
         replacement: `![${alt}](${blobUrl})`,
       });
     } catch (e) {
+      // Attachment not found locally. If metadata has a hash, enqueue a background
+      // fetch and retry once after a short wait.
+      const queued =
+        requestMissingBlobDownload(entryPath, sourceRelativePath) ||
+        (canonicalPath !== sourceRelativePath &&
+          requestMissingBlobDownload(entryPath, canonicalPath));
+      if (queued) {
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          const retried = await api.getAttachmentData(entryPath, sourceRelativePath);
+          const mimeType = getMimeType(canonicalPath);
+          let blob = new Blob([new Uint8Array(retried)], { type: mimeType });
+          if (isHeicFile(canonicalPath)) {
+            blob = await convertHeicToJpeg(blob);
+          }
+          const blobUrl = URL.createObjectURL(blob);
+          blobUrlMap.set(sourceRelativePath, blobUrl);
+          replacements.push({
+            original: fullMatch,
+            replacement: `![${alt}](${blobUrl})`,
+          });
+          continue;
+        } catch {
+          // Leave original path if retry is still unavailable.
+        }
+      }
+
       // Attachment not found or error - leave original path
-      console.warn(`[AttachmentService] Could not load attachment: ${imagePath}`, e);
+      console.warn(`[AttachmentService] Could not load attachment: ${sourceRelativePath}`, e);
     }
   }
 

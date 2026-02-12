@@ -41,10 +41,64 @@ export interface UserHasDataResponse {
   file_count: number;
 }
 
+export interface UserStorageUsageResponse {
+  used_bytes: number;
+  blob_count: number;
+  limit_bytes: number | null;
+  warning_threshold: number;
+  over_limit: boolean;
+  scope: "attachments";
+}
+
+export interface InitAttachmentUploadRequest {
+  attachment_path: string;
+  hash: string;
+  size_bytes: number;
+  mime_type: string;
+  part_size?: number;
+  total_parts?: number;
+}
+
+export interface InitAttachmentUploadResponse {
+  upload_id: string | null;
+  status: "uploading" | "already_exists";
+  part_size: number;
+  uploaded_parts: number[];
+}
+
+export interface CompleteAttachmentUploadRequest {
+  attachment_path: string;
+  hash: string;
+  size_bytes: number;
+  mime_type: string;
+}
+
+export interface CompleteAttachmentUploadResponse {
+  ok: boolean;
+  blob_hash: string;
+  r2_key: string;
+  missing_parts: number[] | null;
+}
+
+export interface DownloadAttachmentResponse {
+  bytes: Uint8Array;
+  status: number;
+  contentRange: string | null;
+}
+
+export interface StorageLimitExceededErrorResponse {
+  error: "storage_limit_exceeded";
+  message: string;
+  used_bytes: number;
+  limit_bytes: number;
+  requested_bytes: number;
+}
+
 export class AuthError extends Error {
   constructor(
     message: string,
     public statusCode: number,
+    public details?: unknown,
   ) {
     super(message);
     this.name = "AuthError";
@@ -59,6 +113,24 @@ export class AuthService {
 
   constructor(serverUrl: string) {
     this.serverUrl = serverUrl.replace(/\/$/, ""); // Remove trailing slash
+  }
+
+  private async parseErrorBody(response: Response): Promise<unknown | null> {
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.includes("application/json")) return null;
+    try {
+      return await response.json();
+    } catch {
+      return null;
+    }
+  }
+
+  private formatQuotaMessage(
+    payload: StorageLimitExceededErrorResponse,
+  ): string {
+    const usedMb = (payload.used_bytes / 1024 / 1024).toFixed(1);
+    const limitMb = (payload.limit_bytes / 1024 / 1024).toFixed(1);
+    return `${payload.message} (${usedMb} MB / ${limitMb} MB)`;
   }
 
   /**
@@ -227,9 +299,15 @@ export class AuthService {
   async downloadWorkspaceSnapshot(
     authToken: string,
     workspaceId: string,
+    includeAttachments = true,
   ): Promise<Blob> {
-    const response = await fetch(
+    const url = new URL(
       `${this.serverUrl}/api/workspaces/${encodeURIComponent(workspaceId)}/snapshot`,
+    );
+    url.searchParams.set("include_attachments", String(includeAttachments));
+
+    const response = await fetch(
+      url.toString(),
       {
         headers: {
           Authorization: `Bearer ${authToken}`,
@@ -252,9 +330,16 @@ export class AuthService {
     workspaceId: string,
     snapshot: Blob,
     mode: "replace" | "merge" = "replace",
+    includeAttachments = true,
   ): Promise<{ files_imported: number }> {
+    const url = new URL(
+      `${this.serverUrl}/api/workspaces/${encodeURIComponent(workspaceId)}/snapshot`,
+    );
+    url.searchParams.set("mode", mode);
+    url.searchParams.set("include_attachments", String(includeAttachments));
+
     const response = await fetch(
-      `${this.serverUrl}/api/workspaces/${encodeURIComponent(workspaceId)}/snapshot?mode=${mode}`,
+      url.toString(),
       {
         method: "POST",
         headers: {
@@ -266,10 +351,203 @@ export class AuthService {
     );
 
     if (!response.ok) {
-      throw new AuthError("Failed to upload snapshot", response.status);
+      const data = await this.parseErrorBody(response);
+      if (
+        response.status === 413 &&
+        data &&
+        typeof data === "object" &&
+        (data as any).error === "storage_limit_exceeded"
+      ) {
+        throw new AuthError(
+          this.formatQuotaMessage(data as StorageLimitExceededErrorResponse),
+          response.status,
+          data,
+        );
+      }
+      throw new AuthError("Failed to upload snapshot", response.status, data);
     }
 
     return response.json();
+  }
+
+  /**
+   * Get attachment storage usage for the authenticated user.
+   */
+  async getUserStorageUsage(
+    authToken: string,
+  ): Promise<UserStorageUsageResponse> {
+    const response = await fetch(`${this.serverUrl}/api/user/storage`, {
+      cache: "no-store",
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+        "Cache-Control": "no-cache",
+        Pragma: "no-cache",
+      },
+    });
+
+    if (!response.ok) {
+      throw new AuthError("Failed to fetch storage usage", response.status);
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Initialize a resumable attachment upload session.
+   */
+  async initAttachmentUpload(
+    authToken: string,
+    workspaceId: string,
+    request: InitAttachmentUploadRequest,
+  ): Promise<InitAttachmentUploadResponse> {
+    const response = await fetch(
+      `${this.serverUrl}/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/uploads`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(request),
+      },
+    );
+
+    if (!response.ok) {
+      const data = await this.parseErrorBody(response);
+      if (
+        response.status === 413 &&
+        data &&
+        typeof data === "object" &&
+        (data as any).error === "storage_limit_exceeded"
+      ) {
+        throw new AuthError(
+          this.formatQuotaMessage(data as StorageLimitExceededErrorResponse),
+          response.status,
+          data,
+        );
+      }
+      throw new AuthError(
+        "Failed to initialize attachment upload",
+        response.status,
+        data,
+      );
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Upload one attachment multipart chunk.
+   */
+  async uploadAttachmentPart(
+    authToken: string,
+    workspaceId: string,
+    uploadId: string,
+    partNo: number,
+    bytes: ArrayBuffer,
+  ): Promise<{ ok: boolean; part_no: number }> {
+    const response = await fetch(
+      `${this.serverUrl}/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/uploads/${encodeURIComponent(uploadId)}/parts/${partNo}`,
+      {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          "Content-Type": "application/octet-stream",
+        },
+        body: bytes,
+      },
+    );
+
+    if (!response.ok) {
+      throw new AuthError("Failed to upload attachment part", response.status);
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Complete a resumable attachment upload session.
+   * Returns a conflict payload when missing parts are detected.
+   */
+  async completeAttachmentUpload(
+    authToken: string,
+    workspaceId: string,
+    uploadId: string,
+    request: CompleteAttachmentUploadRequest,
+  ): Promise<CompleteAttachmentUploadResponse> {
+    const response = await fetch(
+      `${this.serverUrl}/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/uploads/${encodeURIComponent(uploadId)}/complete`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(request),
+      },
+    );
+
+    if (response.status === 409) {
+      return response.json();
+    }
+
+    if (!response.ok) {
+      const data = await this.parseErrorBody(response);
+      if (
+        response.status === 413 &&
+        data &&
+        typeof data === "object" &&
+        (data as any).error === "storage_limit_exceeded"
+      ) {
+        throw new AuthError(
+          this.formatQuotaMessage(data as StorageLimitExceededErrorResponse),
+          response.status,
+          data,
+        );
+      }
+      throw new AuthError(
+        "Failed to complete attachment upload",
+        response.status,
+        data,
+      );
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Download attachment bytes by hash for a workspace.
+   */
+  async downloadAttachment(
+    authToken: string,
+    workspaceId: string,
+    hash: string,
+    range?: { start: number; end?: number },
+  ): Promise<DownloadAttachmentResponse> {
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${authToken}`,
+    };
+    if (range) {
+      headers.Range = `bytes=${range.start}-${range.end ?? ""}`;
+    }
+
+    const response = await fetch(
+      `${this.serverUrl}/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/${encodeURIComponent(hash)}`,
+      {
+        headers,
+      },
+    );
+
+    if (!response.ok) {
+      throw new AuthError("Failed to download attachment", response.status);
+    }
+
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    return {
+      bytes,
+      status: response.status,
+      contentRange: response.headers.get("Content-Range"),
+    };
   }
 }
 

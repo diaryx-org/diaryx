@@ -27,6 +27,25 @@ To build the WebAssembly module:
 wasm-pack build --target web --out-dir ../../apps/web/src/lib/wasm
 ```
 
+## Testing
+
+Run browser filesystem integration tests (wasm + browser):
+
+```bash
+nix develop -c wasm-pack test --headless --chrome crates/diaryx_wasm
+```
+
+Current filesystem test suites live in:
+
+- `crates/diaryx_wasm/tests/opfs_fs.rs`
+- `crates/diaryx_wasm/tests/fs_trait_parity.rs`
+
+`fs_trait_parity.rs` runs the same contract checks across:
+
+- `OpfsFileSystem`
+- `IndexedDbFileSystem`
+- `FsaFileSystem`
+
 ## Architecture
 
 The crate provides typed class-based APIs that wrap `diaryx_core` functionality:

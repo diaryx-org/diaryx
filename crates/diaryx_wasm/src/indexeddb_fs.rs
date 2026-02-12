@@ -24,9 +24,43 @@ use wasm_bindgen::prelude::*;
 // ============================================================================
 
 const DB_NAME: &str = "diaryx";
-const DB_VERSION: u32 = 1;
+const DB_VERSION: u32 = 2;
 const STORE_FILES: &str = "files";
 const STORE_BINARY_FILES: &str = "binary_files";
+const STORE_DIRECTORIES: &str = "directories";
+
+fn normalize_dir_input(path: &Path) -> String {
+    let mut value = path.to_string_lossy().replace('\\', "/");
+    if value == "." {
+        return String::new();
+    }
+    while value.ends_with('/') {
+        value.pop();
+    }
+    value
+}
+
+fn all_directory_prefixes(path: &str) -> Vec<String> {
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let mut dirs = Vec::new();
+    let mut current = String::new();
+
+    for segment in segments {
+        if !current.is_empty() {
+            current.push('/');
+        }
+        current.push_str(segment);
+        dirs.push(current.clone());
+    }
+
+    dirs
+}
+
+fn parent_directories(path: &str) -> Vec<String> {
+    let mut dirs = all_directory_prefixes(path);
+    let _ = dirs.pop();
+    dirs
+}
 
 // ============================================================================
 // IndexedDbFileSystem Implementation
@@ -83,6 +117,14 @@ impl IndexedDbFileSystem {
                     db.build_object_store(STORE_BINARY_FILES).create()?;
                 }
 
+                // Create directories store if it doesn't exist
+                if !db
+                    .object_store_names()
+                    .contains(&STORE_DIRECTORIES.to_string())
+                {
+                    db.build_object_store(STORE_DIRECTORIES).create()?;
+                }
+
                 Ok(())
             })
             .await
@@ -132,15 +174,23 @@ impl AsyncFileSystem for IndexedDbFileSystem {
         let path_str = path.to_string_lossy().to_string();
         let content = content.to_string();
         let db = self.db.clone();
+        let parent_dirs = parent_directories(&path_str);
 
         Box::pin(async move {
-            db.transaction(&[STORE_FILES])
+            db.transaction(&[STORE_FILES, STORE_DIRECTORIES])
                 .rw()
                 .run(move |t| async move {
                     let store = t.object_store(STORE_FILES)?;
                     let key = JsString::from(path_str.as_str());
                     let value = JsString::from(content.as_str());
                     store.put_kv(&key, &value).await?;
+
+                    let dir_store = t.object_store(STORE_DIRECTORIES)?;
+                    for dir in &parent_dirs {
+                        let dir_key = JsString::from(dir.as_str());
+                        dir_store.put_kv(&dir_key, &JsValue::TRUE).await?;
+                    }
+
                     Ok(())
                 })
                 .await
@@ -152,9 +202,10 @@ impl AsyncFileSystem for IndexedDbFileSystem {
         let path_str = path.to_string_lossy().to_string();
         let content = content.to_string();
         let db = self.db.clone();
+        let parent_dirs = parent_directories(&path_str);
 
         Box::pin(async move {
-            db.transaction(&[STORE_FILES])
+            db.transaction(&[STORE_FILES, STORE_DIRECTORIES])
                 .rw()
                 .run(move |t| async move {
                     let store = t.object_store(STORE_FILES)?;
@@ -170,6 +221,13 @@ impl AsyncFileSystem for IndexedDbFileSystem {
 
                     let value = JsString::from(content.as_str());
                     store.put_kv(&key, &value).await?;
+
+                    let dir_store = t.object_store(STORE_DIRECTORIES)?;
+                    for dir in &parent_dirs {
+                        let dir_key = JsString::from(dir.as_str());
+                        dir_store.put_kv(&dir_key, &JsValue::TRUE).await?;
+                    }
+
                     Ok(())
                 })
                 .await
@@ -182,12 +240,30 @@ impl AsyncFileSystem for IndexedDbFileSystem {
         let db = self.db.clone();
 
         Box::pin(async move {
-            db.transaction(&[STORE_FILES])
+            db.transaction(&[STORE_FILES, STORE_BINARY_FILES])
                 .rw()
                 .run(move |t| async move {
-                    let store = t.object_store(STORE_FILES)?;
                     let key = JsString::from(path_str.as_str());
-                    store.delete(&key).await?;
+
+                    let files = t.object_store(STORE_FILES)?;
+                    let binaries = t.object_store(STORE_BINARY_FILES)?;
+                    let text_exists = files.get(&key).await?.is_some();
+                    let binary_exists = binaries.get(&key).await?.is_some();
+
+                    if !text_exists && !binary_exists {
+                        return Err(indexed_db::Error::User(Error::new(
+                            ErrorKind::NotFound,
+                            format!("File not found: {}", path_str),
+                        )));
+                    }
+
+                    if text_exists {
+                        files.delete(&key).await?;
+                    }
+                    if binary_exists {
+                        binaries.delete(&key).await?;
+                    }
+
                     Ok(())
                 })
                 .await
@@ -253,12 +329,16 @@ impl AsyncFileSystem for IndexedDbFileSystem {
     }
 
     fn exists<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, bool> {
-        let path_str = path.to_string_lossy().to_string();
+        let path_str = normalize_dir_input(path);
         let db = self.db.clone();
 
         Box::pin(async move {
+            if path_str.is_empty() {
+                return true;
+            }
+
             let result = db
-                .transaction(&[STORE_FILES, STORE_BINARY_FILES])
+                .transaction(&[STORE_FILES, STORE_BINARY_FILES, STORE_DIRECTORIES])
                 .run(move |t| async move {
                     // Check text files
                     let store = t.object_store(STORE_FILES)?;
@@ -273,6 +353,37 @@ impl AsyncFileSystem for IndexedDbFileSystem {
                         return Ok(true);
                     }
 
+                    // Check explicit directories
+                    let store = t.object_store(STORE_DIRECTORIES)?;
+                    if store.get(&key).await?.is_some() {
+                        return Ok(true);
+                    }
+
+                    // Fallback for legacy data: infer directories from file prefixes.
+                    let prefix = format!("{}/", path_str);
+
+                    let store = t.object_store(STORE_FILES)?;
+                    let mut cursor = store.cursor().open().await?;
+                    while let Some(file_key) = cursor.key() {
+                        if let Some(s) = file_key.dyn_ref::<JsString>()
+                            && String::from(s).starts_with(&prefix)
+                        {
+                            return Ok(true);
+                        }
+                        cursor.advance(1).await?;
+                    }
+
+                    let store = t.object_store(STORE_BINARY_FILES)?;
+                    let mut cursor = store.cursor().open().await?;
+                    while let Some(file_key) = cursor.key() {
+                        if let Some(s) = file_key.dyn_ref::<JsString>()
+                            && String::from(s).starts_with(&prefix)
+                        {
+                            return Ok(true);
+                        }
+                        cursor.advance(1).await?;
+                    }
+
                     Ok(false)
                 })
                 .await;
@@ -281,22 +392,67 @@ impl AsyncFileSystem for IndexedDbFileSystem {
         })
     }
 
-    fn create_dir_all<'a>(&'a self, _path: &'a Path) -> BoxFuture<'a, Result<()>> {
-        // IndexedDB is flat key-value store, directories are implicit
-        Box::pin(async move { Ok(()) })
+    fn create_dir_all<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<()>> {
+        let dir_path = normalize_dir_input(path);
+        let db = self.db.clone();
+        let dirs = all_directory_prefixes(&dir_path);
+
+        Box::pin(async move {
+            if dirs.is_empty() {
+                return Ok(());
+            }
+
+            db.transaction(&[STORE_DIRECTORIES])
+                .rw()
+                .run(move |t| async move {
+                    let store = t.object_store(STORE_DIRECTORIES)?;
+                    for dir in &dirs {
+                        let key = JsString::from(dir.as_str());
+                        store.put_kv(&key, &JsValue::TRUE).await?;
+                    }
+                    Ok(())
+                })
+                .await
+                .map_err(idb_to_io_error)
+        })
     }
 
     fn is_dir<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, bool> {
         // Check if any files exist with this path as a prefix
-        let dir_str = path.to_string_lossy().to_string();
+        let dir_str = normalize_dir_input(path);
         let db = self.db.clone();
 
         Box::pin(async move {
+            if dir_str.is_empty() {
+                return true;
+            }
+
             let result = db
-                .transaction(&[STORE_FILES])
+                .transaction(&[STORE_FILES, STORE_BINARY_FILES, STORE_DIRECTORIES])
                 .run(move |t| async move {
+                    // Check explicit directories first.
+                    let store = t.object_store(STORE_DIRECTORIES)?;
+                    let key = JsString::from(dir_str.as_str());
+                    if store.get(&key).await?.is_some() {
+                        return Ok(true);
+                    }
+
+                    // Fallback for legacy data without explicit directory keys.
                     let prefix = format!("{}/", dir_str);
+
                     let store = t.object_store(STORE_FILES)?;
+                    let mut cursor = store.cursor().open().await?;
+
+                    while let Some(key) = cursor.key() {
+                        if let Some(s) = key.dyn_ref::<JsString>() {
+                            if String::from(s).starts_with(&prefix) {
+                                return Ok(true);
+                            }
+                        }
+                        cursor.advance(1).await?;
+                    }
+
+                    let store = t.object_store(STORE_BINARY_FILES)?;
                     let mut cursor = store.cursor().open().await?;
 
                     while let Some(key) = cursor.key() {
@@ -318,6 +474,20 @@ impl AsyncFileSystem for IndexedDbFileSystem {
 
     fn move_file<'a>(&'a self, from: &'a Path, to: &'a Path) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
+            if !self.exists(from).await {
+                return Err(Error::new(
+                    ErrorKind::NotFound,
+                    format!("Source file not found: {}", from.display()),
+                ));
+            }
+
+            if self.exists(to).await {
+                return Err(Error::new(
+                    ErrorKind::AlreadyExists,
+                    format!("Destination already exists: {}", to.display()),
+                ));
+            }
+
             let content = self.read_to_string(from).await?;
             self.write_file(to, &content).await?;
             self.delete_file(from).await?;
@@ -348,10 +518,7 @@ impl AsyncFileSystem for IndexedDbFileSystem {
                     })?;
                     Ok(array.to_vec())
                 }
-                None => Err(Error::new(
-                    ErrorKind::NotFound,
-                    format!("File not found: {}", path.display()),
-                )),
+                None => self.read_to_string(path).await.map(|s| s.into_bytes()),
             }
         })
     }
@@ -360,15 +527,23 @@ impl AsyncFileSystem for IndexedDbFileSystem {
         let path_str = path.to_string_lossy().to_string();
         let content = content.to_vec();
         let db = self.db.clone();
+        let parent_dirs = parent_directories(&path_str);
 
         Box::pin(async move {
-            db.transaction(&[STORE_BINARY_FILES])
+            db.transaction(&[STORE_BINARY_FILES, STORE_DIRECTORIES])
                 .rw()
                 .run(move |t| async move {
                     let store = t.object_store(STORE_BINARY_FILES)?;
                     let key = JsString::from(path_str.as_str());
                     let array = Uint8Array::from(content.as_slice());
                     store.put_kv(&key, &array).await?;
+
+                    let dir_store = t.object_store(STORE_DIRECTORIES)?;
+                    for dir in &parent_dirs {
+                        let dir_key = JsString::from(dir.as_str());
+                        dir_store.put_kv(&dir_key, &JsValue::TRUE).await?;
+                    }
+
                     Ok(())
                 })
                 .await
@@ -377,89 +552,90 @@ impl AsyncFileSystem for IndexedDbFileSystem {
     }
 
     fn list_files<'a>(&'a self, dir_path: &'a Path) -> BoxFuture<'a, Result<Vec<PathBuf>>> {
-        let dir_str = dir_path.to_string_lossy().to_string();
+        let dir_str = normalize_dir_input(dir_path);
         let db = self.db.clone();
 
-        // Clone dir_str for use after the closure moves it
-        let dir_str_for_prefix = dir_str.clone();
-
         Box::pin(async move {
-            // Collect ALL file paths that are under this directory (not just direct children)
-            let all_keys = db
-                .transaction(&[STORE_FILES, STORE_BINARY_FILES])
-                .run(move |t| async move {
-                    let mut keys = Vec::new();
-                    let prefix = if dir_str.is_empty() || dir_str == "." {
-                        String::new()
-                    } else {
-                        format!("{}/", dir_str)
-                    };
+            let prefix = if dir_str.is_empty() {
+                String::new()
+            } else {
+                format!("{}/", dir_str)
+            };
 
-                    // Get text file keys - include all files under this directory
+            // Collect all relevant keys from files, binaries, and explicit directories.
+            let (file_keys, binary_keys, directory_keys) = db
+                .transaction(&[STORE_FILES, STORE_BINARY_FILES, STORE_DIRECTORIES])
+                .run(move |t| async move {
+                    let mut files = Vec::new();
+                    let mut binaries = Vec::new();
+                    let mut dirs = Vec::new();
+
                     let store = t.object_store(STORE_FILES)?;
                     let mut cursor = store.cursor().open().await?;
                     while let Some(key) = cursor.key() {
                         if let Some(js_str) = key.dyn_ref::<JsString>() {
-                            let s = String::from(js_str);
-                            if prefix.is_empty() || s.starts_with(&prefix) {
-                                keys.push(s);
-                            }
+                            files.push(String::from(js_str));
                         }
                         cursor.advance(1).await?;
                     }
 
-                    // Get binary file keys - include all files under this directory
                     let store = t.object_store(STORE_BINARY_FILES)?;
                     let mut cursor = store.cursor().open().await?;
                     while let Some(key) = cursor.key() {
                         if let Some(js_str) = key.dyn_ref::<JsString>() {
-                            let s = String::from(js_str);
-                            if prefix.is_empty() || s.starts_with(&prefix) {
-                                keys.push(s);
-                            }
+                            binaries.push(String::from(js_str));
                         }
                         cursor.advance(1).await?;
                     }
 
-                    Ok(keys)
+                    let store = t.object_store(STORE_DIRECTORIES)?;
+                    let mut cursor = store.cursor().open().await?;
+                    while let Some(key) = cursor.key() {
+                        if let Some(js_str) = key.dyn_ref::<JsString>() {
+                            dirs.push(String::from(js_str));
+                        }
+                        cursor.advance(1).await?;
+                    }
+
+                    Ok((files, binaries, dirs))
                 })
                 .await
                 .map_err(idb_to_io_error)?;
 
-            let prefix = if dir_str_for_prefix.is_empty() || dir_str_for_prefix == "." {
-                String::new()
-            } else {
-                format!("{}/", dir_str_for_prefix)
+            // Extract direct children (files and directories) to match native behavior.
+            let mut result = std::collections::HashSet::new();
+
+            let mut collect_direct_children = |keys: Vec<String>, include_leaf: bool| {
+                for key in keys {
+                    let rest = if prefix.is_empty() {
+                        key.as_str()
+                    } else if let Some(r) = key.strip_prefix(&prefix) {
+                        r
+                    } else {
+                        continue;
+                    };
+
+                    if rest.is_empty() {
+                        continue;
+                    }
+
+                    if let Some(slash_pos) = rest.find('/') {
+                        let dir_name = &rest[..slash_pos];
+                        let full_path = if prefix.is_empty() {
+                            dir_name.to_string()
+                        } else {
+                            format!("{}{}", prefix, dir_name)
+                        };
+                        result.insert(full_path);
+                    } else if include_leaf {
+                        result.insert(key);
+                    }
+                }
             };
 
-            // Extract direct children (both files and synthesized directories)
-            // This matches native filesystem behavior where list_files returns
-            // all entries (files AND directories) for recursive operations
-            let mut result = std::collections::HashSet::new();
-            for key in all_keys {
-                let rest = if prefix.is_empty() {
-                    key.as_str()
-                } else if let Some(r) = key.strip_prefix(&prefix) {
-                    r
-                } else {
-                    continue;
-                };
-
-                // Get the first path component (could be file or directory)
-                if let Some(slash_pos) = rest.find('/') {
-                    // This file is in a subdirectory - synthesize the directory entry
-                    let dir_name = &rest[..slash_pos];
-                    let full_path = if prefix.is_empty() {
-                        dir_name.to_string()
-                    } else {
-                        format!("{}{}", prefix, dir_name)
-                    };
-                    result.insert(full_path);
-                } else if !rest.is_empty() {
-                    // This is a direct file in this directory
-                    result.insert(key);
-                }
-            }
+            collect_direct_children(file_keys, true);
+            collect_direct_children(binary_keys, true);
+            collect_direct_children(directory_keys, true);
 
             Ok(result.into_iter().map(PathBuf::from).collect())
         })

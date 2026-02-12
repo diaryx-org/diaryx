@@ -24,6 +24,11 @@ impl FileSystem for RealFileSystem {
     }
 
     fn write_file(&self, path: &Path, content: &str) -> Result<()> {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent)?;
+        }
         fs::write(path, content)
     }
 
@@ -32,6 +37,11 @@ impl FileSystem for RealFileSystem {
     }
 
     fn create_new(&self, path: &Path, content: &str) -> Result<()> {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent)?;
+        }
         // This atomic check prevents race conditions
         let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
         file.write_all(content.as_bytes())
@@ -73,7 +83,9 @@ impl FileSystem for RealFileSystem {
             ));
         }
 
-        if let Some(parent) = to.parent() {
+        if let Some(parent) = to.parent()
+            && !parent.as_os_str().is_empty()
+        {
             fs::create_dir_all(parent)?;
         }
 

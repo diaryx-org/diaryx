@@ -293,6 +293,11 @@
 
   /* Mobile adjustments */
   @media (max-width: 767px) {
+    .highlight-picker-wrapper {
+      /* Remove positioning context so dropdown centers relative to .bubble-menu instead of this button */
+      position: static;
+    }
+
     .toolbar-button {
       padding: 8px;
       min-width: 36px;

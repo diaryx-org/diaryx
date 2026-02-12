@@ -289,6 +289,10 @@
             element: bubbleMenuElement,
             options: {
               offset: 10,
+              // Keep BubbleMenu within viewport bounds (especially important on mobile)
+              shift: {
+                padding: 8,
+              },
               // Manually control visibility to prevent flash on initial load
               onShow: () => {
                 if (bubbleMenuElement) {

@@ -135,6 +135,79 @@ CREATE TABLE IF NOT EXISTS attachment_upload_parts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_attachment_upload_parts_upload ON attachment_upload_parts(upload_id);
+
+-- Published static sites.
+CREATE TABLE IF NOT EXISTS published_sites (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES user_workspaces(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    slug TEXT NOT NULL UNIQUE,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    auto_publish INTEGER NOT NULL DEFAULT 1,
+    last_published_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_published_sites_workspace ON published_sites(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_published_sites_user ON published_sites(user_id);
+
+CREATE TABLE IF NOT EXISTS site_audience_builds (
+    site_id TEXT NOT NULL REFERENCES published_sites(id) ON DELETE CASCADE,
+    audience TEXT NOT NULL,
+    file_count INTEGER NOT NULL DEFAULT 0,
+    built_at INTEGER NOT NULL,
+    PRIMARY KEY (site_id, audience)
+);
+
+CREATE TABLE IF NOT EXISTS site_access_tokens (
+    id TEXT PRIMARY KEY,
+    site_id TEXT NOT NULL REFERENCES published_sites(id) ON DELETE CASCADE,
+    audience TEXT NOT NULL,
+    label TEXT,
+    expires_at INTEGER,
+    revoked INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_site_access_tokens_site ON site_access_tokens(site_id);
+"#;
+
+const PUBLISHED_SITE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS published_sites (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES user_workspaces(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    slug TEXT NOT NULL UNIQUE,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    auto_publish INTEGER NOT NULL DEFAULT 1,
+    last_published_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_published_sites_workspace ON published_sites(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_published_sites_user ON published_sites(user_id);
+
+CREATE TABLE IF NOT EXISTS site_audience_builds (
+    site_id TEXT NOT NULL REFERENCES published_sites(id) ON DELETE CASCADE,
+    audience TEXT NOT NULL,
+    file_count INTEGER NOT NULL DEFAULT 0,
+    built_at INTEGER NOT NULL,
+    PRIMARY KEY (site_id, audience)
+);
+
+CREATE TABLE IF NOT EXISTS site_access_tokens (
+    id TEXT PRIMARY KEY,
+    site_id TEXT NOT NULL REFERENCES published_sites(id) ON DELETE CASCADE,
+    audience TEXT NOT NULL,
+    label TEXT,
+    expires_at INTEGER,
+    revoked INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_site_access_tokens_site ON site_access_tokens(site_id);
 "#;
 
 /// Initialize the database with the auth schema
@@ -157,6 +230,17 @@ pub fn init_database(conn: &Connection) -> Result<(), rusqlite::Error> {
         "UPDATE users SET attachment_limit_bytes = 1073741824 WHERE attachment_limit_bytes IS NULL",
         [],
     )?;
+
+    let has_published_sites = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='published_sites' LIMIT 1",
+            [],
+            |_| Ok(()),
+        )
+        .is_ok();
+    if !has_published_sites {
+        conn.execute_batch(PUBLISHED_SITE_SCHEMA)?;
+    }
     Ok(())
 }
 
@@ -188,6 +272,9 @@ mod tests {
         assert!(tables.contains(&"workspace_attachment_refs".to_string()));
         assert!(tables.contains(&"attachment_uploads".to_string()));
         assert!(tables.contains(&"attachment_upload_parts".to_string()));
+        assert!(tables.contains(&"published_sites".to_string()));
+        assert!(tables.contains(&"site_audience_builds".to_string()));
+        assert!(tables.contains(&"site_access_tokens".to_string()));
 
         let user_cols: Vec<String> = conn
             .prepare("PRAGMA table_info(users)")

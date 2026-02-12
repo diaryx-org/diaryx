@@ -34,6 +34,7 @@ pub mod db;
 pub mod email;
 pub mod git_ops;
 pub mod handlers;
+pub mod publish;
 pub mod sync_v2;
 
 pub use config::Config;

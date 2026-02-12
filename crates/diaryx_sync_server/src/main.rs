@@ -6,11 +6,14 @@ use axum::{
 };
 use diaryx_sync_server::{
     auth::{AuthExtractor, MagicLinkService},
-    blob_store::{BlobStore, build_blob_store},
+    blob_store::{BlobStore, build_blob_store, build_sites_store},
     config::Config,
     db::{AuthRepo, init_database},
     email::EmailService,
-    handlers::{api_routes, auth_routes, session_routes},
+    handlers::{api_routes, auth_routes, session_routes, site_routes},
+    publish::{
+        new_publish_lock, publish_workspace_to_r2, release_publish_lock, try_acquire_publish_lock,
+    },
     sync_v2::SyncV2Server,
 };
 use rusqlite::Connection;
@@ -80,6 +83,21 @@ async fn main() {
             std::process::exit(1);
         }
     };
+    let sites_store: Arc<dyn BlobStore> = match build_sites_store(config.as_ref()).await {
+        Ok(store) => {
+            if config.is_r2_configured() {
+                info!("Sites blob store: R2 ({})", config.sites_r2_bucket);
+            } else {
+                info!("Sites blob store: in-memory (R2 not configured)");
+            }
+            store
+        }
+        Err(err) => {
+            error!("Failed to initialize sites blob store: {}", err);
+            std::process::exit(1);
+        }
+    };
+    let publish_lock = new_publish_lock();
 
     // Create data directory for workspace databases
     let data_dir = config
@@ -118,6 +136,16 @@ async fn main() {
         repo: repo.clone(),
         sync_v2: sync_v2_state.clone(),
     };
+    let sites_state = diaryx_sync_server::handlers::sites::SitesState {
+        repo: repo.clone(),
+        sync_v2: sync_v2_state.clone(),
+        sites_store: sites_store.clone(),
+        attachments_store: blob_store.clone(),
+        token_signing_key: config.token_signing_key.clone(),
+        site_limit: config.published_site_limit,
+        sites_base_url: config.sites_base_url.clone(),
+        publish_lock: publish_lock.clone(),
+    };
 
     // Build CORS layer
     let origins: Vec<_> = config
@@ -152,6 +180,7 @@ async fn main() {
         .nest("/auth", auth_routes(auth_state))
         // API routes
         .nest("/api", api_routes(api_state))
+        .nest("/api", site_routes(sites_state))
         // Session routes (for live share)
         .nest("/api/sessions", session_routes(sessions_state))
         // Sync v2 endpoint (siphonophore-based)
@@ -283,6 +312,10 @@ async fn main() {
         let sync_v2_state = sync_v2_state.clone();
         let quiescence_mins = config.git_quiescence_minutes;
         let max_staleness_hours = config.git_max_staleness_hours;
+        let auto_repo = repo.clone();
+        let auto_sites_store = sites_store.clone();
+        let auto_attachments_store = blob_store.clone();
+        let auto_publish_lock = publish_lock.clone();
         info!(
             "Git auto-commit: quiescence={}min, max_staleness={}h",
             quiescence_mins, max_staleness_hours
@@ -345,6 +378,72 @@ async fn main() {
                                 "Auto-committed workspace {}: {} files [{}]",
                                 workspace_id, result.file_count, result.commit_id
                             );
+
+                            let site = match auto_repo.get_site_for_workspace(&workspace_id) {
+                                Ok(site) => site,
+                                Err(err) => {
+                                    error!(
+                                        "Failed to query site config for {}: {}",
+                                        workspace_id, err
+                                    );
+                                    None
+                                }
+                            };
+
+                            if let Some(site) = site {
+                                if !site.enabled || !site.auto_publish {
+                                    continue;
+                                }
+
+                                let now = chrono::Utc::now().timestamp();
+                                if site
+                                    .last_published_at
+                                    .is_some_and(|last| last >= now.saturating_sub(300))
+                                {
+                                    continue;
+                                }
+
+                                if !try_acquire_publish_lock(&auto_publish_lock, &workspace_id)
+                                    .await
+                                {
+                                    continue;
+                                }
+
+                                let publish_workspace_id = workspace_id.clone();
+                                let publish_site = site.clone();
+                                let publish_repo = auto_repo.clone();
+                                let publish_sites_store = auto_sites_store.clone();
+                                let publish_attachments_store = auto_attachments_store.clone();
+                                let publish_storage_cache = sync_v2_state.storage_cache.clone();
+                                let publish_lock = auto_publish_lock.clone();
+
+                                tokio::spawn(async move {
+                                    let publish_result = publish_workspace_to_r2(
+                                        publish_repo.as_ref(),
+                                        publish_storage_cache.as_ref(),
+                                        publish_sites_store.as_ref(),
+                                        publish_attachments_store.as_ref(),
+                                        &publish_workspace_id,
+                                        &publish_site,
+                                    )
+                                    .await;
+
+                                    if let Err(err) = publish_result {
+                                        error!(
+                                            "Auto-publish failed for workspace {} (slug={}): {}",
+                                            publish_workspace_id, publish_site.slug, err
+                                        );
+                                    } else {
+                                        info!(
+                                            "Auto-publish complete for workspace {} (slug={})",
+                                            publish_workspace_id, publish_site.slug
+                                        );
+                                    }
+
+                                    release_publish_lock(&publish_lock, &publish_workspace_id)
+                                        .await;
+                                });
+                            }
                         }
                         Err(e) => {
                             // Don't remove from dirty — will retry next cycle

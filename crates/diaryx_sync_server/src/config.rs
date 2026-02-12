@@ -30,6 +30,14 @@ pub struct Config {
     pub snapshot_upload_max_bytes: usize,
     /// Enable incremental attachment sync endpoints (default: true)
     pub attachment_incremental_sync_enabled: bool,
+    /// Per-user max number of published sites (default: 1)
+    pub published_site_limit: usize,
+    /// R2 bucket for published static site artifacts
+    pub sites_r2_bucket: String,
+    /// Base URL for published sites (defaults to APP_BASE_URL)
+    pub sites_base_url: String,
+    /// Global HMAC key for audience access tokens (32 bytes)
+    pub token_signing_key: Vec<u8>,
 }
 
 /// Email configuration (Resend HTTP API)
@@ -79,6 +87,7 @@ impl Config {
 
         let app_base_url =
             env::var("APP_BASE_URL").unwrap_or_else(|_| "http://localhost:5174".to_string());
+        let sites_base_url = env::var("SITES_BASE_URL").unwrap_or_else(|_| app_base_url.clone());
 
         let email = EmailConfig {
             api_key: env::var("RESEND_API_KEY").unwrap_or_default(),
@@ -136,12 +145,37 @@ impl Config {
         let attachment_incremental_sync_enabled = env::var("ATTACHMENT_INCREMENTAL_SYNC_ENABLED")
             .unwrap_or_else(|_| "true".to_string())
             .eq_ignore_ascii_case("true");
+        let published_site_limit = env::var("PUBLISHED_SITE_LIMIT")
+            .unwrap_or_else(|_| "1".to_string())
+            .parse::<usize>()
+            .unwrap_or(1)
+            .max(1);
+        let sites_r2_bucket =
+            env::var("SITES_R2_BUCKET").unwrap_or_else(|_| "diaryx-sites".to_string());
+
+        let token_signing_key_raw = env::var("TOKEN_SIGNING_KEY")
+            .unwrap_or_else(|_| "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string());
+        let token_signing_key = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            token_signing_key_raw.as_bytes(),
+        )
+        .or_else(|_| {
+            base64::Engine::decode(
+                &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                token_signing_key_raw.as_bytes(),
+            )
+        })
+        .map_err(|_| ConfigError::InvalidTokenSigningKey)?;
+        if token_signing_key.len() != 32 {
+            return Err(ConfigError::InvalidTokenSigningKey);
+        }
 
         Ok(Config {
             host,
             port,
             database_path,
             app_base_url,
+            sites_base_url,
             email,
             session_expiry_days,
             magic_link_expiry_minutes,
@@ -151,6 +185,9 @@ impl Config {
             r2,
             snapshot_upload_max_bytes,
             attachment_incremental_sync_enabled,
+            published_site_limit,
+            sites_r2_bucket,
+            token_signing_key,
         })
     }
 
@@ -175,12 +212,17 @@ impl Config {
 #[derive(Debug)]
 pub enum ConfigError {
     InvalidPort,
+    InvalidTokenSigningKey,
 }
 
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ConfigError::InvalidPort => write!(f, "Invalid PORT environment variable"),
+            ConfigError::InvalidTokenSigningKey => write!(
+                f,
+                "Invalid TOKEN_SIGNING_KEY (expected base64-encoded 32-byte key)"
+            ),
         }
     }
 }

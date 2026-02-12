@@ -4,7 +4,7 @@ use aws_config::BehaviorVersion;
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::{RequestChecksumCalculation, ResponseChecksumValidation};
 use aws_sdk_s3::error::ProvideErrorMetadata;
-use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
+use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart, Delete, ObjectIdentifier};
 use aws_smithy_types::byte_stream::ByteStream;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -18,6 +18,7 @@ pub struct MultipartCompletedPart {
 #[async_trait]
 pub trait BlobStore: Send + Sync {
     fn blob_key(&self, user_id: &str, hash: &str) -> String;
+    fn prefix(&self) -> &str;
 
     async fn put(&self, key: &str, bytes: &[u8], mime_type: &str) -> Result<(), String>;
 
@@ -52,6 +53,10 @@ pub trait BlobStore: Send + Sync {
         range_start: u64,
         range_end: u64,
     ) -> Result<Option<Vec<u8>>, String>;
+
+    async fn list_by_prefix(&self, prefix: &str) -> Result<Vec<String>, String>;
+
+    async fn delete_by_prefix(&self, prefix: &str) -> Result<usize, String>;
 }
 
 #[derive(Clone)]
@@ -104,6 +109,10 @@ impl BlobStore for R2BlobStore {
         } else {
             format!("{}/u/{}/blobs/{}", self.prefix, user_id, hash)
         }
+    }
+
+    fn prefix(&self) -> &str {
+        &self.prefix
     }
 
     async fn put(&self, key: &str, bytes: &[u8], mime_type: &str) -> Result<(), String> {
@@ -357,6 +366,90 @@ impl BlobStore for R2BlobStore {
             }
         }
     }
+
+    async fn list_by_prefix(&self, prefix: &str) -> Result<Vec<String>, String> {
+        let mut keys = Vec::new();
+        let mut continuation: Option<String> = None;
+
+        loop {
+            let mut req = self
+                .client
+                .list_objects_v2()
+                .bucket(&self.bucket)
+                .prefix(prefix);
+            if let Some(token) = &continuation {
+                req = req.continuation_token(token);
+            }
+
+            let response = req.send().await.map_err(|e| {
+                let code = e.code().unwrap_or("unknown");
+                let message = e.message().unwrap_or("unknown");
+                format!(
+                    "R2 list failed for bucket={} prefix={}: code={} message={} raw={:?}",
+                    self.bucket, prefix, code, message, e
+                )
+            })?;
+
+            for object in response.contents() {
+                if let Some(key) = object.key() {
+                    keys.push(key.to_string());
+                }
+            }
+
+            if response.is_truncated().unwrap_or(false) {
+                continuation = response.next_continuation_token().map(str::to_string);
+                if continuation.is_none() {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        Ok(keys)
+    }
+
+    async fn delete_by_prefix(&self, prefix: &str) -> Result<usize, String> {
+        let keys = self.list_by_prefix(prefix).await?;
+        if keys.is_empty() {
+            return Ok(0);
+        }
+
+        let mut deleted = 0usize;
+        for chunk in keys.chunks(1000) {
+            let mut objects = Vec::with_capacity(chunk.len());
+            for key in chunk {
+                let object = ObjectIdentifier::builder()
+                    .key(key)
+                    .build()
+                    .map_err(|e| format!("R2 delete object identifier build failed: {}", e))?;
+                objects.push(object);
+            }
+
+            let delete = Delete::builder()
+                .set_objects(Some(objects))
+                .build()
+                .map_err(|e| format!("R2 delete request build failed: {}", e))?;
+
+            self.client
+                .delete_objects()
+                .bucket(&self.bucket)
+                .delete(delete)
+                .send()
+                .await
+                .map_err(|e| {
+                    let code = e.code().unwrap_or("unknown");
+                    let message = e.message().unwrap_or("unknown");
+                    format!(
+                        "R2 delete-by-prefix failed for bucket={} prefix={}: code={} message={} raw={:?}",
+                        self.bucket, prefix, code, message, e
+                    )
+                })?;
+            deleted += chunk.len();
+        }
+
+        Ok(deleted)
+    }
 }
 
 #[derive(Default)]
@@ -385,6 +478,10 @@ impl BlobStore for InMemoryBlobStore {
         } else {
             format!("{}/u/{}/blobs/{}", prefix, user_id, hash)
         }
+    }
+
+    fn prefix(&self) -> &str {
+        &self.prefix
     }
 
     async fn put(&self, key: &str, bytes: &[u8], _mime_type: &str) -> Result<(), String> {
@@ -512,6 +609,35 @@ impl BlobStore for InMemoryBlobStore {
         }
         Ok(Some(bytes[start..=end].to_vec()))
     }
+
+    async fn list_by_prefix(&self, prefix: &str) -> Result<Vec<String>, String> {
+        let blobs = self
+            .blobs
+            .lock()
+            .map_err(|_| "Failed to lock in-memory blob store".to_string())?;
+        Ok(blobs
+            .keys()
+            .filter(|k| k.starts_with(prefix))
+            .cloned()
+            .collect())
+    }
+
+    async fn delete_by_prefix(&self, prefix: &str) -> Result<usize, String> {
+        let mut blobs = self
+            .blobs
+            .lock()
+            .map_err(|_| "Failed to lock in-memory blob store".to_string())?;
+        let keys: Vec<String> = blobs
+            .keys()
+            .filter(|k| k.starts_with(prefix))
+            .cloned()
+            .collect();
+        let deleted = keys.len();
+        for key in keys {
+            blobs.remove(&key);
+        }
+        Ok(deleted)
+    }
 }
 
 pub async fn build_blob_store(
@@ -522,5 +648,46 @@ pub async fn build_blob_store(
         Ok(Arc::new(store))
     } else {
         Ok(Arc::new(InMemoryBlobStore::new(config.r2.prefix.clone())))
+    }
+}
+
+pub async fn build_sites_store(
+    config: &crate::config::Config,
+) -> Result<Arc<dyn BlobStore>, String> {
+    if config.is_r2_configured() {
+        let mut r2 = config.r2.clone();
+        r2.bucket = config.sites_r2_bucket.clone();
+        let store = R2BlobStore::new(&r2).await?;
+        Ok(Arc::new(store))
+    } else {
+        Ok(Arc::new(InMemoryBlobStore::new(config.r2.prefix.clone())))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn in_memory_delete_by_prefix_only_removes_matching_keys() {
+        let store = InMemoryBlobStore::new("diaryx-sync");
+        store
+            .put("site/a/index.html", b"a", "text/html")
+            .await
+            .unwrap();
+        store
+            .put("site/a/page.html", b"b", "text/html")
+            .await
+            .unwrap();
+        store
+            .put("site/b/index.html", b"c", "text/html")
+            .await
+            .unwrap();
+
+        let deleted = store.delete_by_prefix("site/a/").await.unwrap();
+        assert_eq!(deleted, 2);
+        assert!(store.get("site/a/index.html").await.unwrap().is_none());
+        assert!(store.get("site/a/page.html").await.unwrap().is_none());
+        assert!(store.get("site/b/index.html").await.unwrap().is_some());
     }
 }

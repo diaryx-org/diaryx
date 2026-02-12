@@ -45,6 +45,7 @@ All of this logic is defined in the `diaryx_core` Rust crate, and is used by the
 [`crates/diaryx_sync_server`](crates/diaryx_sync_server/README.md): Sync server to allow sync/live editing functionality in Web/Tauri clients.
 - [`apps/web`](apps/web/README.md): Svelte + TipTap frontend for Diaryx.
 - [`apps/tauri`](apps/tauri/README.md): Tauri frontend for Diaryx. Uses `apps/web` as its frontend, but calls the functions through the Tauri backend instead of through WebAssembly, allowing for native filesystem access.
+- [`workers/site-proxy`](workers/site-proxy/README.md): Cloudflare Worker for serving published static sites with audience-gated access.
 
 ## Installation
 

@@ -6,6 +6,7 @@ attachments:
   - "[mod.rs](/crates/diaryx_sync_server/src/handlers/mod.rs)"
   - "[api.rs](/crates/diaryx_sync_server/src/handlers/api.rs)"
   - "[auth.rs](/crates/diaryx_sync_server/src/handlers/auth.rs)"
+  - "[sites.rs](/crates/diaryx_sync_server/src/handlers/sites.rs)"
   - "[sessions.rs](/crates/diaryx_sync_server/src/handlers/sessions.rs)"
   - "[ws.rs](/crates/diaryx_sync_server/src/handlers/ws.rs)"
 exclude:
@@ -23,6 +24,7 @@ HTTP route handlers for the sync server API.
 | `mod.rs`      | Router setup and middleware                           |
 | `api.rs`      | General API endpoints (status, workspaces)            |
 | `auth.rs`     | Authentication endpoints (magic-link, verify, logout) |
+| `sites.rs`    | Published site and access-token management endpoints   |
 | `sessions.rs` | Share session management endpoints                    |
 | `ws.rs`       | WebSocket upgrade and sync handling                   |
 
@@ -56,3 +58,13 @@ attachment limits. Over-limit requests return `413` with
 - `GET /api/workspaces/{id}/history?count=N` — Commit log from bare repo
 - `POST /api/workspaces/{id}/commit` — Trigger immediate git commit (body: `{"message": "..."}`)
 - `POST /api/workspaces/{id}/restore` — Rebuild CRDT from target commit (body: `{"commit_id": "..."}`, requires peer_count <= 1)
+
+### Published Site Endpoints
+
+- `POST /api/workspaces/{id}/site` — create published site config (`slug`, optional `enabled`, optional `auto_publish`).
+- `GET /api/workspaces/{id}/site` — fetch site config + per-audience build status.
+- `DELETE /api/workspaces/{id}/site` — unpublish site and delete static artifacts from the sites bucket.
+- `POST /api/workspaces/{id}/site/publish` — trigger immediate publish to the sites bucket.
+- `POST /api/workspaces/{id}/site/tokens` — create signed access token (`audience`, optional `label`, optional `expires_in`).
+- `GET /api/workspaces/{id}/site/tokens` — list token metadata for the workspace site.
+- `DELETE /api/workspaces/{id}/site/tokens/{token_id}` — revoke a token and refresh `_meta.json` revocation list.

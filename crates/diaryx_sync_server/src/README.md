@@ -13,6 +13,7 @@ attachments:
   - '[main.rs](/crates/diaryx_sync_server/src/main.rs)'
   - '[config.rs](/crates/diaryx_sync_server/src/config.rs)'
   - '[git_ops.rs](/crates/diaryx_sync_server/src/git_ops.rs)'
+  - '[publish.rs](/crates/diaryx_sync_server/src/publish.rs)'
 exclude:
   - '*.lock'
 ---
@@ -29,6 +30,7 @@ This directory contains the source code for the Diaryx sync server.
 | `main.rs` | Server entry point |
 | `config.rs` | Configuration from environment variables |
 | `blob_store.rs` | Attachment blob storage abstraction (R2/in-memory) |
+| `publish.rs` | Static site publishing pipeline + token signing helpers |
 
 ## Modules
 
@@ -38,4 +40,5 @@ This directory contains the source code for the Diaryx sync server.
 - `email/` - SMTP email sending
 - `git_ops.rs` - Git operations (commit, restore) for server-side workspaces
 - `handlers/` - HTTP route handlers
+- `publish.rs` - CRDT materialization -> static HTML upload pipeline for published sites
 - `sync_v2/` - Siphonophore-based sync implementation

@@ -1,0 +1,14 @@
+{
+  "name": "diaryx-site-proxy",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2",
+    "wrangler": "^4.39.0"
+  }
+}

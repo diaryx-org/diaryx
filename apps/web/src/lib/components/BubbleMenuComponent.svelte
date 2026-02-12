@@ -3,13 +3,12 @@
   import {
     Bold,
     Italic,
-    Strikethrough,
-    Code,
     Link as LinkIcon,
     Unlink,
-    EyeOff,
   } from "@lucide/svelte";
   import HighlightColorPicker from "./HighlightColorPicker.svelte";
+  import BlockStylePicker from "./BlockStylePicker.svelte";
+  import MoreStylesPicker from "./MoreStylesPicker.svelte";
   import type { HighlightColor } from "$lib/extensions/ColoredHighlightMark";
 
   interface Props {
@@ -24,19 +23,15 @@
   // Track active states reactively
   let isBoldActive = $state(false);
   let isItalicActive = $state(false);
-  let isStrikeActive = $state(false);
-  let isCodeActive = $state(false);
   let isHighlightActive = $state(false);
   let currentHighlightColor = $state<HighlightColor | null>(null);
   let isLinkActive = $state(false);
-  let isSpoilerActive = $state(false);
+  let isInCodeBlock = $state(false);
 
   function updateActiveStates() {
     if (!editor) return;
     isBoldActive = editor.isActive("bold");
     isItalicActive = editor.isActive("italic");
-    isStrikeActive = editor.isActive("strike");
-    isCodeActive = editor.isActive("code");
     isHighlightActive = editor.isActive("coloredHighlight");
     // Get the current highlight color from the editor state
     if (isHighlightActive) {
@@ -46,7 +41,7 @@
       currentHighlightColor = null;
     }
     isLinkActive = editor.isActive("link");
-    isSpoilerActive = editor.isActive("spoiler");
+    isInCodeBlock = editor.isActive("codeBlock");
   }
 
   function handleBold() {
@@ -56,21 +51,6 @@
 
   function handleItalic() {
     editor?.chain().focus().toggleItalic().run();
-    updateActiveStates();
-  }
-
-  function handleStrike() {
-    editor?.chain().focus().toggleStrike().run();
-    updateActiveStates();
-  }
-
-  function handleCode() {
-    editor?.chain().focus().toggleCode().run();
-    updateActiveStates();
-  }
-
-  function handleSpoiler() {
-    editor?.chain().focus().toggleSpoiler().run();
     updateActiveStates();
   }
 
@@ -121,105 +101,66 @@
     e.preventDefault();
   }}
 >
-  <button
-    type="button"
-    class="toolbar-button"
-    class:active={isBoldActive}
-    onmousedown={(e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      handleBold();
-    }}
-    title="Bold"
-    aria-pressed={isBoldActive}
-  >
-    <Bold class="size-4" />
-  </button>
+  <BlockStylePicker {editor} />
 
-  <button
-    type="button"
-    class="toolbar-button"
-    class:active={isItalicActive}
-    onmousedown={(e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      handleItalic();
-    }}
-    title="Italic"
-    aria-pressed={isItalicActive}
-  >
-    <Italic class="size-4" />
-  </button>
+  {#if !isInCodeBlock}
+    <div class="toolbar-divider"></div>
 
-  <button
-    type="button"
-    class="toolbar-button"
-    class:active={isStrikeActive}
-    onmousedown={(e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      handleStrike();
-    }}
-    title="Strikethrough"
-    aria-pressed={isStrikeActive}
-  >
-    <Strikethrough class="size-4" />
-  </button>
-
-  <div class="toolbar-divider"></div>
-
-  <button
-    type="button"
-    class="toolbar-button"
-    class:active={isCodeActive}
-    onmousedown={(e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      handleCode();
-    }}
-    title="Inline Code"
-    aria-pressed={isCodeActive}
-  >
-    <Code class="size-4" />
-  </button>
-
-  <HighlightColorPicker {editor} isActive={isHighlightActive} currentColor={currentHighlightColor} />
-
-  {#if enableSpoilers}
     <button
       type="button"
       class="toolbar-button"
-      class:active={isSpoilerActive}
+      class:active={isBoldActive}
       onmousedown={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        handleSpoiler();
+        handleBold();
       }}
-      title="Spoiler"
-      aria-pressed={isSpoilerActive}
+      title="Bold"
+      aria-pressed={isBoldActive}
     >
-      <EyeOff class="size-4" />
+      <Bold class="size-4" />
     </button>
-  {/if}
 
-  <button
-    type="button"
-    class="toolbar-button"
-    class:active={isLinkActive}
-    onmousedown={(e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      handleLink();
-    }}
-    title={isLinkActive ? "Remove Link" : "Add Link"}
-    aria-pressed={isLinkActive}
-  >
-    {#if isLinkActive}
-      <Unlink class="size-4" />
-    {:else}
-      <LinkIcon class="size-4" />
-    {/if}
-  </button>
+    <button
+      type="button"
+      class="toolbar-button"
+      class:active={isItalicActive}
+      onmousedown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        handleItalic();
+      }}
+      title="Italic"
+      aria-pressed={isItalicActive}
+    >
+      <Italic class="size-4" />
+    </button>
+
+    <HighlightColorPicker {editor} isActive={isHighlightActive} currentColor={currentHighlightColor} />
+
+    <button
+      type="button"
+      class="toolbar-button"
+      class:active={isLinkActive}
+      onmousedown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        handleLink();
+      }}
+      title={isLinkActive ? "Remove Link" : "Add Link"}
+      aria-pressed={isLinkActive}
+    >
+      {#if isLinkActive}
+        <Unlink class="size-4" />
+      {:else}
+        <LinkIcon class="size-4" />
+      {/if}
+    </button>
+
+    <div class="toolbar-divider"></div>
+
+    <MoreStylesPicker {editor} {enableSpoilers} />
+  {/if}
 </div>
 
 <style>

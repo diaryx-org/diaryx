@@ -312,9 +312,6 @@
               const { empty } = state.selection;
               if (empty) return false;
 
-              // Don't show in code blocks
-              if (ed.isActive("codeBlock")) return false;
-
               // Check if the selection contains actual text content
               const text = state.doc.textBetween(from, to, " ");
               if (!text.trim()) return false;

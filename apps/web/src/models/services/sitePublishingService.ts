@@ -141,6 +141,16 @@ function mapErrorMessage(status: number, code: string | undefined, details: unkn
     return backendMessage ?? 'Conflict while processing publishing request.';
   }
 
+  if (status >= 500 && backendMessage) {
+    const normalized = backendMessage.toLowerCase();
+    if (
+      normalized.includes('workspace has no materialized markdown files')
+      || normalized.includes('failed to open workspace storage')
+    ) {
+      return 'Sync must be enabled and completed at least once before publishing this workspace.';
+    }
+  }
+
   if (backendMessage) {
     return backendMessage;
   }

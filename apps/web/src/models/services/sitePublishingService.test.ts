@@ -114,6 +114,19 @@ describe('sitePublishingService', () => {
     });
   });
 
+  it('maps empty-server-state publish failures to sync-required message', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse(500, {
+        message: 'workspace has no materialized markdown files',
+      }),
+    );
+
+    await expect(publishSite('workspace-1')).rejects.toMatchObject({
+      status: 500,
+      message: 'Sync must be enabled and completed at least once before publishing this workspace.',
+    });
+  });
+
   it('creates token and returns one-time access URL', async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
       jsonResponse(201, {

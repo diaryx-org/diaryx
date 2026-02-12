@@ -15,9 +15,16 @@
     Trash2,
     Upload,
   } from '@lucide/svelte';
+  import { collaborationStore } from '@/models/stores/collaborationStore.svelte';
   import { sitePublishingStore } from '@/models/stores/sitePublishingStore.svelte';
   import { showError, showInfo, showSuccess } from '@/models/services/toastService';
   import { getServerUrl } from '$lib/auth';
+
+  interface Props {
+    onOpenSyncWizard?: () => void;
+  }
+
+  let { onOpenSyncWizard }: Props = $props();
 
   const slugRegex = /^[a-z0-9-]{3,64}$/;
 
@@ -30,6 +37,7 @@
   let defaultWorkspaceId = $derived(sitePublishingStore.defaultWorkspaceId);
   let isConfigured = $derived(sitePublishingStore.isConfigured);
   let canPublish = $derived(sitePublishingStore.canPublish);
+  let syncEnabled = $derived(collaborationStore.collaborationEnabled);
 
   let isLoading = $derived(sitePublishingStore.isLoading);
   let isCreatingSite = $derived(sitePublishingStore.isCreatingSite);
@@ -53,6 +61,17 @@
   let copiedAccessUrl = $state(false);
   let copiedTokenId = $state<string | null>(null);
   let initializedWorkspaceId = $state<string | null>(null);
+
+  let syncRequiredError = $derived.by(() => {
+    const message = error?.toLowerCase() ?? '';
+    return (
+      message.includes('sync must be enabled')
+      || message.includes('materialized markdown files')
+    );
+  });
+  let publishBlockedBySync = $derived(!syncEnabled);
+  let canPublishNow = $derived(canPublish && !publishBlockedBySync);
+  let showSyncRequiredNotice = $derived(publishBlockedBySync || syncRequiredError);
 
   let inferredSiteUrl = $derived.by(() => {
     if (!site) return null;
@@ -110,6 +129,10 @@
   }
 
   async function handlePublishNow() {
+    if (publishBlockedBySync) {
+      showError('Enable sync setup before publishing this workspace.', 'Publishing');
+      return;
+    }
     const ok = await sitePublishingStore.publishNow();
     if (ok) {
       showSuccess('Site published', `Published at ${formatUnixTimestamp(sitePublishingStore.lastPublishedAt)}`);
@@ -169,6 +192,14 @@
 
   async function handleRefreshTokens() {
     await sitePublishingStore.refreshTokens();
+  }
+
+  function handleOpenSyncSetup() {
+    if (onOpenSyncWizard) {
+      onOpenSyncWizard();
+      return;
+    }
+    showInfo('Open Sync settings to complete setup before publishing.');
   }
 
   async function copyText(value: string, mode: 'access-url' | 'token-id', tokenId?: string) {
@@ -316,12 +347,32 @@
         </div>
       </div>
 
+      {#if showSyncRequiredNotice}
+        <Alert.Root class="py-2 border border-primary/30 bg-primary/5">
+          <AlertCircle class="size-4 text-primary" />
+          <Alert.Description class="text-xs space-y-2">
+            <p class="font-medium text-foreground">Sync setup required for publishing</p>
+            <p class="text-muted-foreground">
+              Publishing runs from server CRDT state. Enable sync and complete setup at least once for this workspace.
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              class="h-7 text-xs"
+              onclick={handleOpenSyncSetup}
+            >
+              Open Sync Setup
+            </Button>
+          </Alert.Description>
+        </Alert.Root>
+      {/if}
+
       <div class="flex gap-2">
         <Button
           class="flex-1"
           variant="default"
           onclick={handlePublishNow}
-          disabled={!canPublish}
+          disabled={!canPublishNow}
         >
           {#if isPublishing}
             <Loader2 class="size-4 mr-2 animate-spin" />

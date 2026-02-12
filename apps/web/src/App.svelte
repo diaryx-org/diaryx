@@ -1827,6 +1827,7 @@
       }
     }}
     onBeforeHost={async (audience) => await handlePopulateCrdtBeforeHost(audience)}
+    onOpenSyncWizard={() => { showSyncWizard = true; }}
     onOpenEntry={async (path) => await openEntry(path)}
     {api}
     requestedTab={requestedSidebarTab}

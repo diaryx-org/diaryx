@@ -7,6 +7,7 @@
     onSessionStart?: () => void;
     onSessionEnd?: () => void;
     onBeforeHost?: (audience: string | null) => Promise<void>;
+    onOpenSyncWizard?: () => void;
     onOpenEntry?: (path: string) => Promise<void>;
     api: Api | null;
     triggerStart?: boolean;
@@ -17,6 +18,7 @@
     onSessionStart,
     onSessionEnd,
     onBeforeHost,
+    onOpenSyncWizard,
     onOpenEntry,
     api,
     triggerStart = false,
@@ -57,5 +59,5 @@
     {onTriggerStartConsumed}
   />
 {:else}
-  <PublishingPanel />
+  <PublishingPanel {onOpenSyncWizard} />
 {/if}

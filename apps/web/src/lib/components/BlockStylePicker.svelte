@@ -218,58 +218,19 @@
       tabindex="-1"
       onmousedown={(e) => e.preventDefault()}
     >
-      <div class="grid-section">
-        <span class="section-label">Headings</span>
-        <div class="icon-row">
-          {#each headingOptions as option}
-            <button
-              type="button"
-              class="icon-button"
-              class:active={activeBlock === option.type}
-              onclick={() => handleSelect(option)}
-              title={option.label}
-              role="menuitem"
-            >
-              <option.icon class="size-4" />
-            </button>
-          {/each}
-        </div>
-      </div>
-
-      <div class="grid-section">
-        <span class="section-label">Lists</span>
-        <div class="icon-row">
-          {#each listOptions as option}
-            <button
-              type="button"
-              class="icon-button"
-              class:active={activeBlock === option.type}
-              onclick={() => handleSelect(option)}
-              title={option.label}
-              role="menuitem"
-            >
-              <option.icon class="size-4" />
-            </button>
-          {/each}
-        </div>
-      </div>
-
-      <div class="grid-section">
-        <span class="section-label">Other</span>
-        <div class="icon-row">
-          {#each otherOptions as option}
-            <button
-              type="button"
-              class="icon-button"
-              class:active={activeBlock === option.type}
-              onclick={() => handleSelect(option)}
-              title={option.label}
-              role="menuitem"
-            >
-              <option.icon class="size-4" />
-            </button>
-          {/each}
-        </div>
+      <div class="icon-grid">
+        {#each allOptions as option}
+          <button
+            type="button"
+            class="icon-button"
+            class:active={activeBlock === option.type}
+            onclick={() => handleSelect(option)}
+            title={option.label}
+            role="menuitem"
+          >
+            <option.icon class="size-4" />
+          </button>
+        {/each}
       </div>
     </div>
   {/if}
@@ -296,10 +257,7 @@
     top: calc(100% + 8px);
     left: 50%;
     transform: translateX(-50%);
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    padding: 8px;
+    padding: 6px;
     background: var(--popover);
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -321,22 +279,7 @@
     }
   }
 
-  .grid-section {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .section-label {
-    font-size: 10px;
-    font-weight: 500;
-    color: var(--muted-foreground);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    padding: 0 2px;
-  }
-
-  .icon-row {
+  .icon-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 2px;

@@ -109,6 +109,10 @@ create/delete/body events on top of already-imported snapshot state.
 - normalizes filesystem-event frontmatter before callbacks/queueing so missing
   `attachments` fields are treated as `[]` instead of crashing event handlers
 
+To keep queue state consistent, bridge code and controllers import the same
+`attachmentSyncService` module path (single singleton instance), and queue
+context is refreshed during `initWorkspace` after `workspaceId/serverUrl` are set.
+
 ### Per-file tracking
 
 `MultiplexedBodySync` tracks per-file sync completion via:

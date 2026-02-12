@@ -39,6 +39,7 @@ export interface AuthState {
   user: User | null;
   workspaces: Workspace[];
   devices: Device[];
+  storageUsage: UserStorageUsageResponse | null;
   error: string | null;
   serverUrl: string | null;
 }
@@ -63,12 +64,12 @@ let state = $state<AuthState>({
   user: null,
   workspaces: [],
   devices: [],
+  storageUsage: null,
   error: null,
   serverUrl: null,
 });
 
 let authService: AuthService | null = null;
-let storageUsage = $state<UserStorageUsageResponse | null>(null);
 
 // ============================================================================
 // Getters
@@ -104,7 +105,7 @@ export function getDefaultWorkspace(): Workspace | null {
 }
 
 export function getStorageUsage(): UserStorageUsageResponse | null {
-  return storageUsage;
+  return state.storageUsage;
 }
 
 // ============================================================================
@@ -210,7 +211,7 @@ export function setServerUrl(url: string | null): void {
   } else {
     localStorage.removeItem(STORAGE_KEYS.SERVER_URL);
     authService = null;
-    storageUsage = null;
+    state.storageUsage = null;
   }
 }
 
@@ -313,12 +314,12 @@ export async function refreshUserStorageUsage(): Promise<void> {
   const token = getToken();
   const url = state.serverUrl;
   if (!token || !url || !authService || !state.isAuthenticated) {
-    storageUsage = null;
+    state.storageUsage = null;
     return;
   }
 
   try {
-    storageUsage = await authService.getUserStorageUsage(token);
+    state.storageUsage = await authService.getUserStorageUsage(token);
   } catch (err) {
     console.error("[AuthStore] Failed to refresh storage usage:", err);
   }
@@ -352,7 +353,7 @@ export async function logout(): Promise<void> {
   state.workspaces = [];
   state.devices = [];
   state.error = null;
-  storageUsage = null;
+  state.storageUsage = null;
 
   localStorage.removeItem(STORAGE_KEYS.TOKEN);
   localStorage.removeItem(STORAGE_KEYS.USER);
@@ -399,7 +400,7 @@ export async function deleteAccount(): Promise<void> {
   state.workspaces = [];
   state.devices = [];
   state.error = null;
-  storageUsage = null;
+  state.storageUsage = null;
 
   localStorage.removeItem(STORAGE_KEYS.TOKEN);
   localStorage.removeItem(STORAGE_KEYS.USER);

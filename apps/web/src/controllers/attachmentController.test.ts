@@ -6,6 +6,7 @@ const {
   getWorkspaceIdMock,
   getDefaultWorkspaceMock,
   enqueueAttachmentUploadMock,
+  isAttachmentSyncEnabledMock,
   sha256HexMock,
 } = vi.hoisted(() => ({
   getFileMetadataMock: vi.fn(),
@@ -13,6 +14,7 @@ const {
   getWorkspaceIdMock: vi.fn(),
   getDefaultWorkspaceMock: vi.fn(),
   enqueueAttachmentUploadMock: vi.fn(),
+  isAttachmentSyncEnabledMock: vi.fn(() => false),
   sha256HexMock: vi.fn(),
 }));
 
@@ -31,6 +33,8 @@ vi.mock("../models/services/attachmentService", () => ({
 
 vi.mock("../models/services/attachmentSyncService", () => ({
   enqueueAttachmentUpload: enqueueAttachmentUploadMock,
+  isAttachmentSyncEnabled: isAttachmentSyncEnabledMock,
+  onQueueItemStateChange: vi.fn(),
   indexAttachmentRefs: vi.fn(),
   sha256Hex: sha256HexMock,
 }));

@@ -53,7 +53,7 @@ cargo run -p diaryx_sync_server
 | `EMAIL_FROM_NAME`           | `Diaryx`                                      | From name                                             |
 | `SESSION_EXPIRY_DAYS`       | `30`                                          | Session token expiration in days                      |
 | `MAGIC_LINK_EXPIRY_MINUTES` | `15`                                          | Magic link expiration in minutes                      |
-| `CORS_ORIGINS`              | `http://localhost:5174,http://localhost:5175` | Comma-separated CORS origins (methods: GET, POST, PUT, PATCH, DELETE, OPTIONS) |
+| `CORS_ORIGINS`              | `http://localhost:5174,http://localhost:5175` | Comma-separated CORS origins (methods: GET, POST, PUT, PATCH, DELETE, OPTIONS; headers: Authorization, Content-Type, Cache-Control, Pragma) |
 | `SNAPSHOT_UPLOAD_MAX_BYTES` | `1073741824`                                  | Max snapshot upload size accepted by the API          |
 | `R2_BUCKET`                 | `diaryx-user-data`                            | Cloudflare R2 bucket for attachment blobs             |
 | `R2_ACCOUNT_ID`             | -                                             | Cloudflare account ID                                 |

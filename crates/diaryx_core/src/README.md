@@ -53,3 +53,10 @@ This directory contains the source code for the core Diaryx library.
 | `template.rs`        | Template management                                    |
 | `test_utils.rs`      | Feature-gated test utilities                           |
 | `validate.rs`        | Workspace validation and fixing                        |
+
+## CRDT Metadata Notes
+
+- `Command::SetCrdtFile` preserves existing attachment `BinaryRef` metadata
+  when incoming metadata omits attachments or includes refs with empty hashes.
+  This avoids dropping cloud attachment references during frontmatter-driven
+  metadata refreshes.

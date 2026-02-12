@@ -34,7 +34,11 @@ both upload and download bootstrap flows.
 Quota rejections (`413` + `storage_limit_exceeded`) are parsed into
 `AuthError` messages with usage/limit context for UI and queue handling.
 
-`authStore.svelte.ts` also exposes storage usage helpers:
+`authStore.svelte.ts` keeps synced storage usage in the main auth state and also exposes helpers:
 
 - `getStorageUsage()`
 - `refreshUserStorageUsage()`
+
+`getUserStorageUsage()` sends `cache: "no-store"` plus `Cache-Control: no-cache`
+and `Pragma: no-cache` headers so `/api/user/storage` refreshes always request
+fresh usage data.

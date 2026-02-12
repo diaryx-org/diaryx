@@ -132,15 +132,27 @@ impl WorkspaceCrdt {
             // This is critical for WASM where updates are stored but snapshots may not be saved
             let updates = storage.get_all_updates(&doc_name)?;
             for crdt_update in updates {
-                if let Ok(update) = Update::decode_v1(&crdt_update.data)
-                    && let Err(e) = txn.apply_update(update)
-                {
-                    log::warn!(
-                        "Failed to apply stored update {} for {}: {}",
-                        crdt_update.update_id,
-                        doc_name,
-                        e
-                    );
+                match Update::decode_v1(&crdt_update.data) {
+                    Ok(update) => {
+                        if let Err(e) = txn.apply_update(update) {
+                            log::warn!(
+                                "Failed to apply stored update {} for {}: {}",
+                                crdt_update.update_id,
+                                doc_name,
+                                e
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Failed to decode stored update {} for {} ({} bytes, first: {:02x?}): {}",
+                            crdt_update.update_id,
+                            doc_name,
+                            crdt_update.data.len(),
+                            &crdt_update.data[..crdt_update.data.len().min(8)],
+                            e
+                        );
+                    }
                 }
             }
         }
@@ -375,6 +387,11 @@ impl WorkspaceCrdt {
 
             let json = value.to_string(&txn);
             let Some(metadata) = serde_json::from_str::<FileMetadata>(&json).ok() else {
+                log::debug!(
+                    "[WorkspaceCrdt::list_files] Failed to deserialize key={}, json (truncated 200)={}",
+                    path,
+                    &json[..json.len().min(200)]
+                );
                 continue;
             };
 

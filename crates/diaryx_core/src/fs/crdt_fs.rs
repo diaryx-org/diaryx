@@ -593,7 +593,7 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
                 .take(50)
                 .collect::<String>()
         );
-        let metadata = self.extract_metadata(path, content).await;
+        let mut metadata = self.extract_metadata(path, content).await;
 
         // Get or create doc_id for this path
         // In doc-ID mode, this finds existing doc_id or creates new UUID
@@ -601,6 +601,38 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
         let doc_key = self
             .path_to_doc_id(path, &metadata)
             .unwrap_or(path_str.clone());
+
+        // Preserve existing attachment BinaryRef data from the CRDT.
+        // When a file write triggers this update, frontmatter attachments are typically
+        // stored as plain strings (e.g., "[name](path)") which parse into BinaryRef with
+        // empty hash/mime_type/size. But the JS side may have already written a BinaryRef
+        // with the correct hash via setFileMetadata(). Merging prevents overwriting rich
+        // metadata with empty values.
+        if let Some(existing) = self.workspace_crdt.get_file(&doc_key)
+            && !existing.attachments.is_empty()
+        {
+            if metadata.attachments.is_empty() {
+                // If this write didn't carry attachments frontmatter, keep existing
+                // CRDT refs so we don't lose BinaryRef/hash metadata set by JS.
+                metadata.attachments = existing.attachments.clone();
+            } else {
+                for attachment in &mut metadata.attachments {
+                    if attachment.hash.is_empty() {
+                        if let Some(existing_ref) = existing
+                            .attachments
+                            .iter()
+                            .find(|r| r.path == attachment.path && !r.hash.is_empty())
+                        {
+                            attachment.hash = existing_ref.hash.clone();
+                            attachment.mime_type = existing_ref.mime_type.clone();
+                            attachment.size = existing_ref.size;
+                            attachment.uploaded_at = existing_ref.uploaded_at;
+                            attachment.source = existing_ref.source.clone();
+                        }
+                    }
+                }
+            }
+        }
 
         // Update workspace CRDT with the doc_key (doc_id or path)
         log::trace!("[CrdtFs] BEFORE set_file: doc_key={}", doc_key);
@@ -1280,7 +1312,7 @@ impl<FS: AsyncFileSystem> std::fmt::Debug for CrdtFs<FS> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crdt::{CrdtStorage, MemoryStorage};
+    use crate::crdt::{BinaryRef, CrdtStorage, MemoryStorage};
     use crate::fs::{InMemoryFileSystem, SyncToAsyncFs};
 
     fn create_test_crdt_fs() -> CrdtFs<SyncToAsyncFs<InMemoryFileSystem>> {
@@ -1318,6 +1350,38 @@ mod tests {
         let metadata = fs.workspace_crdt.get_file("test.md").unwrap();
         assert_eq!(metadata.attachments.len(), 1);
         assert_eq!(metadata.attachments[0].path, "_attachments/a.png");
+    }
+
+    #[test]
+    fn test_write_preserves_existing_binary_refs_when_frontmatter_has_no_attachments() {
+        let fs = create_test_crdt_fs();
+        let initial = "---\ntitle: Test\n---\nBody";
+        let updated = "---\ntitle: Test\n---\nBody updated";
+
+        futures_lite::future::block_on(async {
+            fs.write_file(Path::new("test.md"), initial).await.unwrap();
+        });
+
+        let mut metadata = fs.workspace_crdt.get_file("test.md").unwrap();
+        metadata.attachments = vec![BinaryRef {
+            path: "_attachments/a.png".to_string(),
+            source: "local".to_string(),
+            hash: "a".repeat(64),
+            mime_type: "image/png".to_string(),
+            size: 123,
+            uploaded_at: Some(1),
+            deleted: false,
+        }];
+        fs.workspace_crdt.set_file("test.md", metadata).unwrap();
+
+        futures_lite::future::block_on(async {
+            fs.write_file(Path::new("test.md"), updated).await.unwrap();
+        });
+
+        let after = fs.workspace_crdt.get_file("test.md").unwrap();
+        assert_eq!(after.attachments.len(), 1);
+        assert_eq!(after.attachments[0].path, "_attachments/a.png");
+        assert_eq!(after.attachments[0].hash, "a".repeat(64));
     }
 
     #[test]

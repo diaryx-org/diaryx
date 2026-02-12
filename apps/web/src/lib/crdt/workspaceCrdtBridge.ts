@@ -32,7 +32,7 @@ import {
   setAttachmentSyncBackend,
   setAttachmentSyncContext,
   enqueueMissingDownloadsFromMetadata,
-} from '@/models/services/attachmentSyncService';
+} from '../../models/services/attachmentSyncService';
 
 /**
  * Convert an HTTP URL to a WebSocket URL for sync v2 (/sync2).
@@ -1109,6 +1109,7 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
       _serverUrl = toWebSocketUrl(options.serverUrl);
     }
     _workspaceId = options.workspaceId ?? null;
+    refreshAttachmentSyncContext();
 
     console.log('[WorkspaceCrdtBridge] initWorkspace:', {
       workspaceId: _workspaceId,

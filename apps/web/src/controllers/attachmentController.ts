@@ -23,7 +23,11 @@ import {
   enqueueAttachmentUpload,
   indexAttachmentRefs,
   sha256Hex,
+  isAttachmentSyncEnabled,
+  onQueueItemStateChange,
 } from '../models/services/attachmentSyncService';
+import type { QueueItemEvent } from '../models/services/attachmentSyncService';
+import { showLoading } from '../models/services/toastService';
 import { getDefaultWorkspace } from '../lib/auth/authStore.svelte';
 import { getFileMetadata, getWorkspaceId, setFileMetadata } from '../lib/crdt';
 import { toast } from 'svelte-sonner';
@@ -33,6 +37,53 @@ import { toast } from 'svelte-sonner';
 // ============================================================================
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+
+// ============================================================================
+// Upload progress toast
+// ============================================================================
+
+const activeUploadIds = new Set<string>();
+let uploadToast: ReturnType<typeof showLoading> | null = null;
+let uploadListenerInstalled = false;
+
+function uploadToastMessage(): string {
+  const count = activeUploadIds.size;
+  if (count === 1) return 'Syncing attachment to cloud...';
+  return `Syncing ${count} attachments to cloud...`;
+}
+
+function handleUploadEvent(event: QueueItemEvent): void {
+  if (event.kind !== 'upload' || !activeUploadIds.has(event.id)) return;
+
+  if (event.state === 'complete' || event.state === 'failed') {
+    const failed = event.state === 'failed';
+    activeUploadIds.delete(event.id);
+    if (activeUploadIds.size === 0 && uploadToast) {
+      if (failed) {
+        const filename = event.attachmentPath.split('/').pop() || 'attachment';
+        uploadToast.error(`Failed to sync ${filename}`);
+      } else {
+        uploadToast.success('Attachment synced to cloud');
+      }
+      uploadToast = null;
+    } else if (uploadToast) {
+      uploadToast.update(uploadToastMessage());
+    }
+  }
+}
+
+function trackUpload(queueItemId: string): void {
+  if (!uploadListenerInstalled) {
+    uploadListenerInstalled = true;
+    onQueueItemStateChange(handleUploadEvent);
+  }
+  activeUploadIds.add(queueItemId);
+  if (!uploadToast) {
+    uploadToast = showLoading(uploadToastMessage());
+  } else {
+    uploadToast.update(uploadToastMessage());
+  }
+}
 
 // ============================================================================
 // Helpers
@@ -120,28 +171,53 @@ async function updateAttachmentRefMetadata(
 
 export async function enqueueIncrementalAttachmentUpload(
   entryPath: string,
-  attachmentPath: string,
+  attachmentMetadataPath: string,
   file: File,
+  uploadAttachmentPath?: string,
 ): Promise<void> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const hash = await sha256Hex(bytes);
   await updateAttachmentRefMetadata(
     entryPath,
-    attachmentPath,
+    attachmentMetadataPath,
     hash,
     file.type || getMimeType(file.name),
     file.size,
   );
   const workspaceId = getWorkspaceId() ?? getDefaultWorkspace()?.id;
   if (!workspaceId) return;
-  enqueueAttachmentUpload({
+  const syncEnabled = isAttachmentSyncEnabled();
+  console.log('[AttachmentController] enqueue: workspaceId=', workspaceId, 'syncEnabled=', syncEnabled);
+  const queueId = enqueueAttachmentUpload({
     workspaceId,
     entryPath,
-    attachmentPath,
+    attachmentPath: uploadAttachmentPath ?? attachmentMetadataPath,
     hash,
     mimeType: file.type || getMimeType(file.name),
     sizeBytes: file.size,
   });
+  console.log('[AttachmentController] enqueued queueId=', queueId);
+  if (syncEnabled) {
+    trackUpload(queueId);
+  }
+}
+
+async function formatSourceRelativeAttachmentPath(
+  api: Api,
+  sourceEntryPath: string,
+  canonicalAttachmentPath: string,
+  fallbackPath?: string,
+): Promise<string> {
+  try {
+    return await api.formatLink(
+      canonicalAttachmentPath,
+      canonicalAttachmentPath.split('/').pop() || 'attachment',
+      'plain_relative',
+      sourceEntryPath,
+    );
+  } catch {
+    return fallbackPath ?? canonicalAttachmentPath;
+  }
 }
 
 // ============================================================================
@@ -238,10 +314,17 @@ export async function handleAttachmentFileSelect(
       attachmentPath,
       pendingAttachmentPath
     );
+    const entryRelativePath = await formatSourceRelativeAttachmentPath(
+      api,
+      pendingAttachmentPath,
+      canonicalAttachmentPath,
+      attachmentPath,
+    );
     await enqueueIncrementalAttachmentUpload(
       pendingAttachmentPath,
       canonicalAttachmentPath,
-      file
+      file,
+      entryRelativePath,
     );
 
     // Refresh the entry if it's currently open
@@ -257,13 +340,13 @@ export async function handleAttachmentFileSelect(
       if (file.type.startsWith('image/') && editorRef) {
         const data = await api.getAttachmentData(
           currentEntry.path,
-          attachmentPath
+          entryRelativePath
         );
         const blob = new Blob([new Uint8Array(data)], { type: file.type });
         const blobUrl = URL.createObjectURL(blob);
 
         // Track for cleanup
-        trackBlobUrl(attachmentPath, blobUrl);
+        trackBlobUrl(entryRelativePath, blobUrl);
 
         // Insert image at cursor
         editorRef.insertImage(blobUrl, file.name);
@@ -308,10 +391,17 @@ export async function handleEditorFileDrop(
       attachmentPath,
       currentEntry.path
     );
+    const entryRelativePath = await formatSourceRelativeAttachmentPath(
+      api,
+      currentEntry.path,
+      canonicalAttachmentPath,
+      attachmentPath,
+    );
     await enqueueIncrementalAttachmentUpload(
       currentEntry.path,
       canonicalAttachmentPath,
-      file
+      file,
+      entryRelativePath,
     );
 
     // Refresh the entry to update attachments list
@@ -326,7 +416,7 @@ export async function handleEditorFileDrop(
     if (file.type.startsWith('image/')) {
       const data = await api.getAttachmentData(
         currentEntry.path,
-        attachmentPath
+        entryRelativePath
       );
       // Use the file's actual MIME type when available, fall back to extension-based lookup
       const mimeType = file.type || getMimeType(file.name);
@@ -334,14 +424,15 @@ export async function handleEditorFileDrop(
       const blobUrl = URL.createObjectURL(blob);
 
       // Track for cleanup
-      trackBlobUrl(attachmentPath, blobUrl);
+      trackBlobUrl(entryRelativePath, blobUrl);
 
-      return { blobUrl, attachmentPath };
+      return { blobUrl, attachmentPath: entryRelativePath };
     }
 
     // For non-image files, just return the path (no blob URL for editor display)
-    return { blobUrl: '', attachmentPath };
+    return { blobUrl: '', attachmentPath: entryRelativePath };
   } catch (e) {
+    console.error('[AttachmentController] handleEditorFileDrop failed:', e);
     attachmentError = e instanceof Error ? e.message : String(e);
     return null;
   }
@@ -457,7 +548,7 @@ export async function handleMoveAttachment(
       if (movedPath && targetMetadata) {
         const movedRef = targetMetadata.attachments.find((attachment) => attachment.path === movedPath);
         if (movedRef?.hash) {
-          enqueueAttachmentUpload({
+          const queueId = enqueueAttachmentUpload({
             workspaceId,
             entryPath: targetEntryPath,
             attachmentPath: movedPath,
@@ -465,6 +556,9 @@ export async function handleMoveAttachment(
             mimeType: movedRef.mime_type || getMimeType(movedPath),
             sizeBytes: Number(movedRef.size ?? 0n),
           });
+          if (isAttachmentSyncEnabled()) {
+            trackUpload(queueId);
+          }
         }
       }
     }

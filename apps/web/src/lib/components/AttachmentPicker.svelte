@@ -9,7 +9,14 @@
     FolderOpen,
   } from "@lucide/svelte";
   import type { Api } from "$lib/backend/api";
-  import { isHeicFile, convertHeicToJpeg, isImageFile, getFilename, getMimeType, bytesToBase64 } from "$lib/../models/services/attachmentService";
+  import {
+    isHeicFile,
+    convertHeicToJpeg,
+    isImageFile,
+    getFilename,
+    getMimeType,
+    bytesToBase64,
+  } from "$lib/../models/services/attachmentService";
   import { enqueueIncrementalAttachmentUpload } from "@/controllers/attachmentController";
 
   interface Props {
@@ -79,6 +86,33 @@
     }
   });
 
+  async function formatSourceRelativePath(
+    sourceEntryPath: string,
+    attachmentPath: string,
+    fallbackPath?: string,
+  ): Promise<string> {
+    if (!api) return attachmentPath;
+    const trimmed = attachmentPath.trim();
+    const candidates = [trimmed];
+    if (trimmed.startsWith("[") && trimmed.includes("](") && !trimmed.endsWith(")")) {
+      candidates.push(`${trimmed})`);
+    }
+    for (const candidate of candidates) {
+      try {
+        const canonical = await api.canonicalizeLink(candidate, sourceEntryPath);
+        return await api.formatLink(
+          canonical,
+          getFilename(canonical) || "attachment",
+          "plain_relative",
+          sourceEntryPath,
+        );
+      } catch {
+        // Try next candidate.
+      }
+    }
+    return fallbackPath ?? attachmentPath;
+  }
+
   async function loadAttachments() {
     if (!api) return;
     loading = true;
@@ -95,7 +129,14 @@
         const entry = ancestorResult.entries[i];
         const isCurrentEntry = i === 0;
 
-        const attachments = entry.attachments.map((path) => ({
+        const normalizedPaths = await Promise.all(
+          entry.attachments.map((rawPath) =>
+            formatSourceRelativePath(entry.entry_path, rawPath),
+          ),
+        );
+        const attachments = Array.from(
+          new Set(normalizedPaths),
+        ).map((path) => ({
           path,
           isImage: isImageFile(path),
           thumbnail: undefined as string | undefined,
@@ -223,7 +264,21 @@
         file.name,
         base64
       );
-      await enqueueIncrementalAttachmentUpload(entryPath, attachmentPath, file);
+      const canonicalAttachmentPath = await api.canonicalizeLink(
+        attachmentPath,
+        entryPath,
+      );
+      const entryRelativePath = await formatSourceRelativePath(
+        entryPath,
+        canonicalAttachmentPath,
+        attachmentPath,
+      );
+      await enqueueIncrementalAttachmentUpload(
+        entryPath,
+        canonicalAttachmentPath,
+        file,
+        entryRelativePath,
+      );
 
       // Create blob URL for immediate use
       const blobUrl = URL.createObjectURL(file);
@@ -231,13 +286,14 @@
 
       // Select the newly uploaded attachment
       onSelect({
-        path: attachmentPath,
+        path: entryRelativePath,
         isImage,
         blobUrl,
         sourceEntryPath: entryPath,
       });
       onClose();
     } catch (e) {
+      console.error('[AttachmentPicker] Upload failed:', e);
       error = e instanceof Error ? e.message : String(e);
     } finally {
       loading = false;

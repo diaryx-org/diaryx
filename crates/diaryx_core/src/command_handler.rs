@@ -129,6 +129,39 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         }
     }
 
+    /// Merge attachment refs from existing metadata into incoming metadata.
+    ///
+    /// `SetCrdtFile` callers often send frontmatter-derived metadata that has
+    /// no `attachments` array (or attachment refs with empty hashes). Preserve
+    /// existing BinaryRef/hash data so incremental attachment reconcile keeps
+    /// working.
+    #[cfg(feature = "crdt")]
+    fn merge_attachment_refs(existing: &FileMetadata, incoming: &mut FileMetadata) {
+        if existing.attachments.is_empty() {
+            return;
+        }
+
+        if incoming.attachments.is_empty() {
+            incoming.attachments = existing.attachments.clone();
+            return;
+        }
+
+        for attachment in &mut incoming.attachments {
+            if attachment.hash.is_empty()
+                && let Some(existing_ref) = existing
+                    .attachments
+                    .iter()
+                    .find(|r| r.path == attachment.path && !r.hash.is_empty())
+            {
+                attachment.hash = existing_ref.hash.clone();
+                attachment.mime_type = existing_ref.mime_type.clone();
+                attachment.size = existing_ref.size;
+                attachment.uploaded_at = existing_ref.uploaded_at;
+                attachment.source = existing_ref.source.clone();
+            }
+        }
+    }
+
     /// Get the path to store in a parent's contents array.
     ///
     /// The CRDT stores canonical (workspace-relative) paths for contents arrays.
@@ -2344,14 +2377,27 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                     let attachments: Vec<crate::crdt::BinaryRef> = attachments_list
                         .into_iter()
-                        .map(|path| crate::crdt::BinaryRef {
-                            path,
-                            source: "local".to_string(),
-                            hash: String::new(),
-                            mime_type: String::new(),
-                            size: 0,
-                            uploaded_at: None,
-                            deleted: false,
+                        .map(|path| {
+                            // Preserve existing hash/metadata from CRDT if available
+                            let existing_ref = existing_crdt_entry.as_ref().and_then(|entry| {
+                                entry
+                                    .attachments
+                                    .iter()
+                                    .find(|r| r.path == path && !r.hash.is_empty())
+                            });
+                            if let Some(existing) = existing_ref {
+                                existing.clone()
+                            } else {
+                                crate::crdt::BinaryRef {
+                                    path,
+                                    source: "local".to_string(),
+                                    hash: String::new(),
+                                    mime_type: String::new(),
+                                    size: 0,
+                                    uploaded_at: None,
+                                    deleted: false,
+                                }
+                            }
                         })
                         .collect();
 
@@ -2594,8 +2640,13 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 let crdt = self.crdt().ok_or_else(|| {
                     DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
                 })?;
-                let file_metadata: crate::crdt::FileMetadata = serde_json::from_value(metadata)
+                let mut file_metadata: crate::crdt::FileMetadata = serde_json::from_value(metadata)
                     .map_err(|e| DiaryxError::Unsupported(format!("Invalid metadata: {}", e)))?;
+
+                if let Some(existing) = crdt.get_file(&path) {
+                    Self::merge_attachment_refs(&existing, &mut file_metadata);
+                }
+
                 crdt.set_file(&path, file_metadata)?;
 
                 // Emit workspace sync (observe_updates should handle this, but emit explicitly for safety)
@@ -3972,6 +4023,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 #[cfg(all(test, feature = "crdt"))]
 mod tests {
     use super::*;
+    use crate::crdt::BinaryRef;
 
     // =========================================================================
     // normalize_contents_path tests
@@ -4152,5 +4204,70 @@ mod tests {
         assert_eq!(correct_result, "Archive/Archived documents.md");
         assert!(!correct_result.contains('['));
         assert!(!correct_result.contains('<'));
+    }
+
+    #[test]
+    fn test_merge_attachment_refs_preserves_existing_when_incoming_empty() {
+        let existing = FileMetadata {
+            attachments: vec![BinaryRef {
+                path: "_attachments/a.png".to_string(),
+                source: "local".to_string(),
+                hash: "a".repeat(64),
+                mime_type: "image/png".to_string(),
+                size: 123,
+                uploaded_at: Some(1),
+                deleted: false,
+            }],
+            ..Default::default()
+        };
+        let mut incoming = FileMetadata::default();
+
+        Diaryx::<crate::fs::SyncToAsyncFs<crate::fs::InMemoryFileSystem>>::merge_attachment_refs(
+            &existing,
+            &mut incoming,
+        );
+
+        assert_eq!(incoming.attachments.len(), 1);
+        assert_eq!(incoming.attachments[0].path, "_attachments/a.png");
+        assert_eq!(incoming.attachments[0].hash, "a".repeat(64));
+    }
+
+    #[test]
+    fn test_merge_attachment_refs_fills_missing_hash_for_matching_path() {
+        let existing = FileMetadata {
+            attachments: vec![BinaryRef {
+                path: "_attachments/a.png".to_string(),
+                source: "local".to_string(),
+                hash: "b".repeat(64),
+                mime_type: "image/png".to_string(),
+                size: 321,
+                uploaded_at: Some(2),
+                deleted: false,
+            }],
+            ..Default::default()
+        };
+        let mut incoming = FileMetadata {
+            attachments: vec![BinaryRef {
+                path: "_attachments/a.png".to_string(),
+                source: "local".to_string(),
+                hash: String::new(),
+                mime_type: String::new(),
+                size: 0,
+                uploaded_at: None,
+                deleted: false,
+            }],
+            ..Default::default()
+        };
+
+        Diaryx::<crate::fs::SyncToAsyncFs<crate::fs::InMemoryFileSystem>>::merge_attachment_refs(
+            &existing,
+            &mut incoming,
+        );
+
+        assert_eq!(incoming.attachments.len(), 1);
+        assert_eq!(incoming.attachments[0].hash, "b".repeat(64));
+        assert_eq!(incoming.attachments[0].mime_type, "image/png");
+        assert_eq!(incoming.attachments[0].size, 321);
+        assert_eq!(incoming.attachments[0].uploaded_at, Some(2));
     }
 }

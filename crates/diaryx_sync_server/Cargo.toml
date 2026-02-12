@@ -57,6 +57,7 @@ tokio-tungstenite = "0.26"
 siphonophore = { git = "https://github.com/diaryx-org/siphonophore.git", branch = "main" }
 kameo = "0.19"
 async-trait = "0.1"
+yrs = "0.24"
 
 # Environment
 dotenvy = "0.15"

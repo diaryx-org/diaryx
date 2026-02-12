@@ -99,4 +99,35 @@ describe("authService quota errors", () => {
       message: expect.stringContaining("Attachment storage limit exceeded"),
     });
   });
+
+  it("fetches user storage usage without cache", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        used_bytes: 100,
+        blob_count: 2,
+        limit_bytes: 1024,
+        warning_threshold: 0.8,
+        over_limit: false,
+        scope: "attachments",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const service = createAuthService("http://localhost:3030");
+    await service.getUserStorageUsage("token");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:3030/api/user/storage",
+      expect.objectContaining({
+        cache: "no-store",
+        headers: expect.objectContaining({
+          Authorization: "Bearer token",
+          "Cache-Control": "no-cache",
+          Pragma: "no-cache",
+        }),
+      }),
+    );
+  });
 });

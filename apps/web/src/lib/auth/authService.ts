@@ -377,8 +377,11 @@ export class AuthService {
     authToken: string,
   ): Promise<UserStorageUsageResponse> {
     const response = await fetch(`${this.serverUrl}/api/user/storage`, {
+      cache: "no-store",
       headers: {
         Authorization: `Bearer ${authToken}`,
+        "Cache-Control": "no-cache",
+        Pragma: "no-cache",
       },
     });
 

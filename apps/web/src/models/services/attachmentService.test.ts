@@ -160,6 +160,8 @@ describe('attachmentService', () => {
     it('should skip external URLs', async () => {
       const mockApi = {
         getAttachmentData: vi.fn(),
+        canonicalizeLink: vi.fn(),
+        formatLink: vi.fn(),
       }
 
       const content = '![alt](https://example.com/image.png)'
@@ -172,6 +174,8 @@ describe('attachmentService', () => {
     it('should skip already-transformed blob URLs', async () => {
       const mockApi = {
         getAttachmentData: vi.fn(),
+        canonicalizeLink: vi.fn(),
+        formatLink: vi.fn(),
       }
 
       const content = '![alt](blob:http://localhost/123)'
@@ -185,6 +189,8 @@ describe('attachmentService', () => {
       const mockData = new Uint8Array([1, 2, 3])
       const mockApi = {
         getAttachmentData: vi.fn().mockResolvedValue(Array.from(mockData)),
+        canonicalizeLink: vi.fn(async (path: string) => path),
+        formatLink: vi.fn(async (path: string) => path),
       }
 
       const content = '![test image](test.png)'
@@ -199,6 +205,8 @@ describe('attachmentService', () => {
       const mockData = new Uint8Array([1, 2, 3])
       const mockApi = {
         getAttachmentData: vi.fn().mockResolvedValue(Array.from(mockData)),
+        canonicalizeLink: vi.fn(async (path: string) => path),
+        formatLink: vi.fn(async (path: string) => path),
       }
 
       const content = '![alt](<path with spaces/image.png>)'
@@ -210,12 +218,44 @@ describe('attachmentService', () => {
     it('should leave original path on attachment not found', async () => {
       const mockApi = {
         getAttachmentData: vi.fn().mockRejectedValue(new Error('Not found')),
+        canonicalizeLink: vi.fn(async (path: string) => path),
+        formatLink: vi.fn(async (path: string) => path),
       }
 
       const content = '![alt](missing.png)'
       const result = await transformAttachmentPaths(content, 'entry.md', mockApi as any)
 
       expect(result).toBe(content)
+    })
+
+    it('should normalize nested markdown-link paths via link_parser helpers', async () => {
+      const mockData = new Uint8Array([1, 2, 3])
+      const mockApi = {
+        getAttachmentData: vi.fn().mockResolvedValue(Array.from(mockData)),
+        canonicalizeLink: vi.fn(async (path: string) => {
+          if (path.endsWith(')')) {
+            return '_attachments/diaryx-icon.jpg'
+          }
+          throw new Error('unbalanced markdown link')
+        }),
+        formatLink: vi.fn(async () => '_attachments/diaryx-icon.jpg'),
+      }
+
+      const content = '![preview]([diaryx-icon.jpg](/_attachments/diaryx-icon.jpg))'
+      const result = await transformAttachmentPaths(content, 'entry.md', mockApi as any)
+
+      expect(mockApi.canonicalizeLink).toHaveBeenNthCalledWith(
+        1,
+        '[diaryx-icon.jpg](/_attachments/diaryx-icon.jpg',
+        'entry.md'
+      )
+      expect(mockApi.canonicalizeLink).toHaveBeenNthCalledWith(
+        2,
+        '[diaryx-icon.jpg](/_attachments/diaryx-icon.jpg)',
+        'entry.md'
+      )
+      expect(mockApi.getAttachmentData).toHaveBeenCalledWith('entry.md', '_attachments/diaryx-icon.jpg')
+      expect(result).toContain('blob:')
     })
   })
 

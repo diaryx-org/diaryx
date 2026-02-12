@@ -134,7 +134,12 @@ async fn main() {
             Method::DELETE,
             Method::OPTIONS,
         ])
-        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            header::CACHE_CONTROL,
+            header::PRAGMA,
+        ])
         .allow_credentials(true)
         .allow_origin(AllowOrigin::list(origins));
 

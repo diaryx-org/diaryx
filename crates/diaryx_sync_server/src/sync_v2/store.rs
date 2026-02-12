@@ -10,13 +10,14 @@ use chrono::Utc;
 use diaryx_core::crdt::{
     BodyDocManager, SqliteStorage, WorkspaceCrdt, materialize_workspace, parse_snapshot_markdown,
 };
+use diaryx_core::link_parser;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, RwLock};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
@@ -133,6 +134,97 @@ fn normalize_workspace_path(path: &str) -> Option<String> {
     } else {
         Some(normalized.to_string_lossy().replace('\\', "/"))
     }
+}
+
+fn normalize_attachment_path(file_path: &str, raw_attachment_path: &str) -> Option<String> {
+    fn normalize_attachment_path_once(
+        file_path: &str,
+        raw_attachment_path: &str,
+    ) -> Option<String> {
+        let parsed = link_parser::parse_link(raw_attachment_path);
+        let current_file = Path::new(file_path);
+
+        let canonical = if parsed.path_type == link_parser::PathType::Ambiguous {
+            let current_dir = current_file
+                .parent()
+                .and_then(|parent| parent.to_str())
+                .unwrap_or("");
+            let plain_path_looks_canonical = !current_dir.is_empty()
+                && parsed.path.starts_with(current_dir)
+                && parsed
+                    .path
+                    .as_bytes()
+                    .get(current_dir.len())
+                    .is_some_and(|ch| *ch == b'/');
+
+            if plain_path_looks_canonical {
+                link_parser::to_canonical_with_link_format(
+                    &parsed,
+                    current_file,
+                    Some(link_parser::LinkFormat::PlainCanonical),
+                )
+            } else {
+                link_parser::to_canonical(&parsed, current_file)
+            }
+        } else {
+            link_parser::to_canonical(&parsed, current_file)
+        };
+
+        normalize_workspace_path(&canonical)
+    }
+
+    let trimmed = raw_attachment_path.trim();
+    if trimmed.starts_with('[') && trimmed.contains("](") && !trimmed.ends_with(')') {
+        if let Some(normalized) =
+            normalize_attachment_path_once(file_path, &format!("{})", trimmed))
+        {
+            return Some(normalized);
+        }
+    }
+
+    normalize_attachment_path_once(file_path, trimmed)
+}
+
+fn extract_attachment_paths_from_markdown(file_path: &str, content: &str) -> Vec<String> {
+    fn find_closing_paren(s: &str) -> Option<usize> {
+        let mut depth = 0;
+        for (i, c) in s.char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    if depth == 0 {
+                        return Some(i);
+                    }
+                    depth -= 1;
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    let mut out = HashSet::new();
+    let mut cursor = 0usize;
+    while let Some(rel) = content[cursor..].find("](") {
+        let start = cursor + rel + 2;
+        let rest = &content[start..];
+        let Some(close) = find_closing_paren(rest) else {
+            break;
+        };
+        let raw = rest[..close].trim();
+        let raw_unwrapped = raw
+            .strip_prefix('<')
+            .and_then(|s| s.strip_suffix('>'))
+            .unwrap_or(raw);
+        if raw_unwrapped.contains("_attachments")
+            && let Some(normalized) = normalize_attachment_path(file_path, raw_unwrapped)
+        {
+            out.insert(normalized);
+        }
+        cursor = start + close + 1;
+    }
+
+    out.into_iter().collect()
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -286,7 +378,7 @@ impl WorkspaceStore {
                     if attachment.deleted || attachment.hash.is_empty() {
                         continue;
                     }
-                    if let Some(path) = normalize_workspace_path(&attachment.path)
+                    if let Some(path) = normalize_attachment_path(&normalized, &attachment.path)
                         && unique_attachments.insert(path.clone())
                     {
                         attachment_requests.push((path, attachment.hash));
@@ -476,7 +568,8 @@ impl WorkspaceStore {
 
             let now = Utc::now().timestamp_millis();
             for attachment in &mut metadata.attachments {
-                let Some(normalized_attachment_path) = normalize_workspace_path(&attachment.path)
+                let Some(normalized_attachment_path) =
+                    normalize_attachment_path(&name, &attachment.path)
                 else {
                     continue;
                 };
@@ -550,19 +643,54 @@ impl WorkspaceStore {
         let workspace_doc_name = format!("workspace:{}", workspace_id);
         let workspace = WorkspaceCrdt::load_with_name(storage.clone(), workspace_doc_name)
             .map_err(|e| SnapshotError::Storage(e.to_string()))?;
+
         let body_docs = BodyDocManager::new(storage);
         let result = materialize_workspace(&workspace, &body_docs, workspace_id);
+
+        debug!(
+            "Reconciling attachments for workspace {}: {} files materialized, {} skipped",
+            workspace_id,
+            result.files.len(),
+            result.skipped.len()
+        );
 
         let mut refs: Vec<WorkspaceAttachmentRefRecord> = Vec::new();
         for file in result.files {
             let Some(file_path) = normalize_workspace_path(&file.path) else {
                 continue;
             };
+            let mut file_has_refs = false;
+            if !file.metadata.attachments.is_empty() {
+                debug!(
+                    "File '{}' has {} attachment refs: {:?}",
+                    file_path,
+                    file.metadata.attachments.len(),
+                    file.metadata
+                        .attachments
+                        .iter()
+                        .map(|a| format!(
+                            "path={}, hash={}, deleted={}",
+                            a.path,
+                            if a.hash.is_empty() {
+                                "<empty>"
+                            } else {
+                                &a.hash
+                            },
+                            a.deleted
+                        ))
+                        .collect::<Vec<_>>()
+                );
+            }
             for attachment in file.metadata.attachments {
                 if attachment.deleted {
                     continue;
                 }
-                let Some(attachment_path) = normalize_workspace_path(&attachment.path) else {
+                let Some(attachment_path) = normalize_attachment_path(&file_path, &attachment.path)
+                else {
+                    debug!(
+                        "Skipping attachment with unnormalizable path: file={}, attachment={}",
+                        file_path, attachment.path
+                    );
                     continue;
                 };
                 let fallback = if attachment.hash.is_empty() {
@@ -583,6 +711,10 @@ impl WorkspaceStore {
                     },
                 };
                 if blob_hash.is_empty() {
+                    debug!(
+                        "Skipping attachment with empty hash (no fallback): file={}, attachment={}",
+                        file_path, attachment_path
+                    );
                     continue;
                 }
                 refs.push(WorkspaceAttachmentRefRecord {
@@ -596,10 +728,84 @@ impl WorkspaceStore {
                         mime_type
                     },
                 });
+                file_has_refs = true;
+            }
+
+            if !file_has_refs {
+                let candidates = extract_attachment_paths_from_markdown(&file_path, &file.content);
+                if !candidates.is_empty() {
+                    debug!(
+                        "File '{}' has {} markdown-derived attachment candidates",
+                        file_path,
+                        candidates.len()
+                    );
+                }
+                for attachment_path in candidates {
+                    let Some(CompletedAttachmentUploadInfo {
+                        blob_hash,
+                        size_bytes,
+                        mime_type,
+                    }) = repo
+                        .get_latest_completed_attachment_upload(workspace_id, &attachment_path)?
+                    else {
+                        continue;
+                    };
+                    if blob_hash.is_empty() {
+                        continue;
+                    }
+                    refs.push(WorkspaceAttachmentRefRecord {
+                        file_path: file_path.clone(),
+                        attachment_path,
+                        blob_hash,
+                        size_bytes,
+                        mime_type: if mime_type.is_empty() {
+                            "application/octet-stream".to_string()
+                        } else {
+                            mime_type
+                        },
+                    });
+                }
             }
         }
 
         repo.replace_workspace_attachment_refs(workspace_id, &refs)?;
         Ok(refs.len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_attachment_paths_from_markdown, normalize_attachment_path};
+
+    #[test]
+    fn normalize_attachment_path_handles_markdown_root_links() {
+        let normalized = normalize_attachment_path(
+            "my-journal.md",
+            "[diaryx-icon.jpg](/_attachments/diaryx-icon.jpg)",
+        );
+        assert_eq!(normalized.as_deref(), Some("_attachments/diaryx-icon.jpg"));
+    }
+
+    #[test]
+    fn normalize_attachment_path_handles_relative_and_canonical_paths() {
+        let relative = normalize_attachment_path("notes/day.md", "_attachments/icon.jpg");
+        assert_eq!(relative.as_deref(), Some("notes/_attachments/icon.jpg"));
+
+        let canonical = normalize_attachment_path("notes/day.md", "notes/_attachments/icon.jpg");
+        assert_eq!(canonical.as_deref(), Some("notes/_attachments/icon.jpg"));
+    }
+
+    #[test]
+    fn extract_attachment_paths_from_markdown_finds_image_links() {
+        let content = "# Title\n\n![one](_attachments/a.png)\ntext [two](<_attachments/b c.jpg>)\n";
+        let mut paths = extract_attachment_paths_from_markdown("README.md", content);
+        paths.sort();
+        assert_eq!(
+            paths,
+            vec![
+                "_attachments/a.png".to_string(),
+                "_attachments/b c.jpg".to_string()
+            ]
+        );
     }
 }

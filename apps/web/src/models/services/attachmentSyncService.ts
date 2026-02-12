@@ -2,6 +2,7 @@ import { createApi, type Api } from "$lib/backend/api";
 import type { Backend } from "$lib/backend/interface";
 import type { BinaryRef } from "$lib/backend/generated";
 import { AuthError, createAuthService } from "$lib/auth/authService";
+import { refreshUserStorageUsage } from "$lib/auth/authStore.svelte";
 
 const QUEUE_STORAGE_KEY = "diaryx_attachment_sync_queue_v1";
 const PART_SIZE_BYTES = 8 * 1024 * 1024;
@@ -9,6 +10,7 @@ const MAX_PART_ATTEMPTS = 5;
 const UPLOAD_CONCURRENCY = 2;
 const DOWNLOAD_CONCURRENCY = 2;
 const STORAGE_USAGE_REFRESH_DEBOUNCE_MS = 1500;
+const STORAGE_USAGE_REFRESH_SETTLE_MS = 8000;
 
 type QueueItemState = "pending" | "uploading" | "downloading" | "complete" | "failed";
 type QueueKind = "upload" | "download";
@@ -72,7 +74,18 @@ interface AttachmentLookup {
   workspaceId: string;
 }
 
+type QueueItemEvent = {
+  id: string;
+  kind: QueueKind;
+  state: QueueItemState;
+  attachmentPath: string;
+  lastError?: string;
+};
+
+type QueueEventListener = (event: QueueItemEvent) => void;
+
 const attachmentIndex = new Map<string, AttachmentLookup>();
+let queueEventListeners: QueueEventListener[] = [];
 let queue: QueueItem[] = loadQueue();
 let syncContext: SyncContext = {
   enabled: false,
@@ -85,6 +98,7 @@ let queuePumpScheduled = false;
 let uploadInFlight = 0;
 let downloadInFlight = 0;
 let storageUsageRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+let storageUsageRefreshSettleTimer: ReturnType<typeof setTimeout> | null = null;
 let storageUsageRefreshInFlight = false;
 
 function loadQueue(): QueueItem[] {
@@ -156,14 +170,18 @@ function scheduleStorageUsageRefresh(): void {
     storageUsageRefreshTimer = null;
     void refreshStorageUsage();
   }, STORAGE_USAGE_REFRESH_DEBOUNCE_MS);
+  if (storageUsageRefreshSettleTimer !== null) return;
+  storageUsageRefreshSettleTimer = setTimeout(() => {
+    storageUsageRefreshSettleTimer = null;
+    void refreshStorageUsage();
+  }, STORAGE_USAGE_REFRESH_SETTLE_MS);
 }
 
 async function refreshStorageUsage(): Promise<void> {
   if (storageUsageRefreshInFlight) return;
   storageUsageRefreshInFlight = true;
   try {
-    const authStore = await import("$lib/auth/authStore.svelte");
-    await authStore.refreshUserStorageUsage();
+    await refreshUserStorageUsage();
   } catch (error) {
     console.warn("[AttachmentSyncService] Failed to refresh synced storage usage:", error);
   } finally {
@@ -180,8 +198,22 @@ function backoffDelayMs(attempt: number): number {
 function updateItem(id: string, mutator: (item: QueueItem) => QueueItem): void {
   const idx = queue.findIndex((item) => item.id === id);
   if (idx < 0) return;
+  const previous = queue[idx];
   queue[idx] = mutator(queue[idx]);
   persistQueue();
+  const updated = queue[idx];
+  if (updated.state !== previous.state) {
+    const event: QueueItemEvent = {
+      id: updated.id,
+      kind: updated.kind,
+      state: updated.state,
+      attachmentPath: updated.attachmentPath,
+      lastError: updated.lastError,
+    };
+    for (const listener of queueEventListeners) {
+      try { listener(event); } catch { /* swallow */ }
+    }
+  }
 }
 
 function removeCompletedItems(): void {
@@ -427,7 +459,7 @@ async function pumpQueue(): Promise<void> {
   }
 }
 
-function upsertQueueItem(nextItem: QueueItem): void {
+function upsertQueueItem(nextItem: QueueItem): string {
   const key = itemKey(nextItem);
   const existingIndex = queue.findIndex((item) => itemKey(item) === key);
   if (existingIndex >= 0) {
@@ -441,11 +473,15 @@ function upsertQueueItem(nextItem: QueueItem): void {
       nextAttemptAt: nowMs(),
       updatedAt: nowMs(),
     };
+    persistQueue();
+    scheduleQueuePump();
+    return existing.id;
   } else {
     queue.push(nextItem);
+    persistQueue();
+    scheduleQueuePump();
+    return nextItem.id;
   }
-  persistQueue();
-  scheduleQueuePump();
 }
 
 function metadataIndexKey(entryPath: string, attachmentPath: string): string {
@@ -499,9 +535,9 @@ export function indexAttachmentRefs(entryPath: string, attachments: BinaryRef[],
   }
 }
 
-export function enqueueAttachmentUpload(job: UploadJobInput): void {
+export function enqueueAttachmentUpload(job: UploadJobInput): string {
   const ts = nowMs();
-  upsertQueueItem({
+  return upsertQueueItem({
     id: crypto.randomUUID(),
     kind: "upload",
     state: "pending",
@@ -593,9 +629,21 @@ export function retryFailedAttachmentJobs(): void {
   scheduleQueuePump();
 }
 
+export function onQueueItemStateChange(listener: QueueEventListener): () => void {
+  queueEventListeners.push(listener);
+  return () => {
+    queueEventListeners = queueEventListeners.filter((l) => l !== listener);
+  };
+}
+
+export function isAttachmentSyncEnabled(): boolean {
+  return syncContext.enabled;
+}
+
 export type {
   SyncContext,
   QueueItem,
+  QueueItemEvent,
   UploadJobInput,
   DownloadJobInput,
 };

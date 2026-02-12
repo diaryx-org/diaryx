@@ -1,15 +1,21 @@
 {
-  "name": "diaryx-sites",
-  "main": "src/index.ts",
-  "compatibility_date": "2026-02-01",
-  "r2_buckets": [
-    {
-      "binding": "SITES_BUCKET",
-      "bucket_name": "diaryx-sites"
-    },
-    {
-      "binding": "ATTACHMENTS_BUCKET",
-      "bucket_name": "diaryx-user-data"
+	"name": "diaryx-sites",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-02-01",
+	"r2_buckets": [
+		{
+			"binding": "SITES_BUCKET",
+			"bucket_name": "diaryx-sites"
+		},
+		{
+			"binding": "ATTACHMENTS_BUCKET",
+			"bucket_name": "diaryx-user-data"
+		}
+	],
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
     }
-  ]
+  }
 }

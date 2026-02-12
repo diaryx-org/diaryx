@@ -45,6 +45,19 @@ export default {
       return serveAttachment(sitePathSegments, auth.audience, siteMeta, env);
     }
 
+    // Canonicalize "/{slug}" to "/{slug}/" so relative links inside index.html
+    // resolve under the site prefix instead of the origin root.
+    if (sitePathSegments.length === 0 && !url.pathname.endsWith('/')) {
+      const canonicalUrl = new URL(url.toString());
+      canonicalUrl.pathname = `${url.pathname}/`;
+      return new Response(null, {
+        status: 302,
+        headers: {
+          Location: canonicalUrl.toString(),
+        },
+      });
+    }
+
     return serveStaticPage(slug, sitePathSegments, auth.audience, env);
   },
 };
@@ -68,8 +81,13 @@ async function authenticateAudience(
 
     const redirectUrl = new URL(url.toString());
     redirectUrl.searchParams.delete('access');
-    const response = Response.redirect(redirectUrl.toString(), 302);
-    response.headers.append('Set-Cookie', buildCookie(slug, access));
+    const headers = new Headers();
+    headers.set('Location', redirectUrl.toString());
+    headers.append('Set-Cookie', buildCookie(slug, access));
+    const response = new Response(null, {
+      status: 302,
+      headers,
+    });
     return {
       audience: claims.a,
       earlyResponse: response,
@@ -153,9 +171,20 @@ async function serveStaticPage(
     return notFound();
   }
 
+  const contentType = object.httpMetadata?.contentType ?? contentTypeForPath(path);
   const headers = new Headers();
-  headers.set('Content-Type', object.httpMetadata?.contentType ?? contentTypeForPath(path));
+  headers.set('Content-Type', contentType);
   headers.set('Cache-Control', 'public, max-age=60');
+
+  // Generated site HTML can contain root-relative links ("/page.html"), which
+  // would drop the slug prefix. Rewrite those links on the fly so routes stay
+  // scoped under "/{slug}/...".
+  if (contentType.toLowerCase().includes('text/html')) {
+    const html = await object.text();
+    const rewritten = rewriteRootRelativeUrls(html, slug);
+    return new Response(rewritten, { headers });
+  }
+
   return new Response(object.body, { headers });
 }
 
@@ -220,6 +249,22 @@ function contentTypeForPath(path: string): string {
   if (lower.endsWith('.gif')) return 'image/gif';
   if (lower.endsWith('.pdf')) return 'application/pdf';
   return 'application/octet-stream';
+}
+
+function rewriteRootRelativeUrls(html: string, slug: string): string {
+  const slugPrefix = `/${slug}`;
+  const attrPattern = /\b(href|src|action)=(["'])\/(?!\/)([^"']*)\2/gi;
+
+  return html.replace(attrPattern, (_match, attr: string, quote: string, rawPath: string) => {
+    const normalized = rawPath.replace(/^\/+/, '');
+    if (normalized === slug || normalized.startsWith(`${slug}/`)) {
+      return `${attr}=${quote}/${normalized}${quote}`;
+    }
+    if (normalized.length === 0) {
+      return `${attr}=${quote}${slugPrefix}/${quote}`;
+    }
+    return `${attr}=${quote}${slugPrefix}/${normalized}${quote}`;
+  });
 }
 
 function notFound(): Response {

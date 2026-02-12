@@ -185,6 +185,10 @@ fn normalize_attachment_path(file_path: &str, raw_attachment_path: &str) -> Opti
     normalize_attachment_path_once(file_path, trimmed)
 }
 
+// It's only because of this function that attachment tracking works server-side
+// (And the `refs.push()` in the `sha256_hex` function)
+// because `file.metadata.attachments` is always empty even when
+// the markdown contains attachments and the upload is completed
 fn extract_attachment_paths_from_markdown(file_path: &str, content: &str) -> Vec<String> {
     fn find_closing_paren(s: &str) -> Option<usize> {
         let mut depth = 0;

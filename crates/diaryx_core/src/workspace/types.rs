@@ -161,7 +161,7 @@ impl IndexFrontmatter {
     pub fn is_private(&self) -> bool {
         self.audience
             .as_ref()
-            .is_some_and(|a| a.iter().any(|s| s.eq_ignore_ascii_case("private")))
+            .is_some_and(|a| a.iter().any(|s| s.trim().eq_ignore_ascii_case("private")))
     }
 
     /// Check if this file is visible to a given audience group
@@ -179,7 +179,7 @@ impl IndexFrontmatter {
         Some(
             audience
                 .iter()
-                .any(|a| a.eq_ignore_ascii_case(audience_group)),
+                .any(|a| a.trim().eq_ignore_ascii_case(audience_group.trim())),
         )
     }
 }
@@ -440,5 +440,27 @@ mod tests {
 
         let resolved = index.resolve_path("../parent.md");
         assert_eq!(resolved, PathBuf::from("A/parent.md"));
+    }
+
+    #[test]
+    fn test_audience_helpers_trim_values() {
+        let fm = IndexFrontmatter {
+            audience: Some(vec![
+                " family ".to_string(),
+                " PRIVATE ".to_string(),
+                " ENGL212 ".to_string(),
+            ]),
+            ..Default::default()
+        };
+
+        assert!(fm.is_private());
+        assert_eq!(fm.is_visible_to("family"), Some(false));
+
+        let visible_fm = IndexFrontmatter {
+            audience: Some(vec![" family ".to_string(), " ENGL212 ".to_string()]),
+            ..Default::default()
+        };
+        assert_eq!(visible_fm.is_visible_to("family"), Some(true));
+        assert_eq!(visible_fm.is_visible_to("engl212"), Some(true));
     }
 }

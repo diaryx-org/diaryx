@@ -2,13 +2,15 @@ use crate::blob_store::BlobStore;
 use crate::db::{AuthRepo, PublishedSiteInfo};
 use crate::sync_v2::StorageCache;
 use base64::Engine;
-use diaryx_core::crdt::{BodyDocManager, WorkspaceCrdt, materialize_workspace};
+use diaryx_core::crdt::{BodyDocManager, MaterializedFile, WorkspaceCrdt, materialize_workspace};
+use diaryx_core::export::{ExcludedFile, ExclusionReason, Exporter};
 use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
 use diaryx_core::publish::{PublishOptions, Publisher};
+use diaryx_core::workspace::Workspace;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -95,38 +97,7 @@ pub async fn publish_workspace_to_r2(
     std::fs::create_dir_all(&workspace_dir)
         .map_err(|e| format!("failed to create workspace temp root: {}", e))?;
 
-    let mut discovered_audiences: HashSet<String> = HashSet::new();
-    let mut root_rel_path: Option<String> = None;
-
     for file in &files {
-        if root_rel_path.is_none() && file.metadata.part_of.is_none() {
-            root_rel_path = Some(file.path.clone());
-        }
-
-        if let Ok(parsed) = diaryx_core::frontmatter::parse_or_empty(&file.content)
-            && let Some(audience) = parsed.frontmatter.get("audience")
-        {
-            match audience {
-                serde_yaml::Value::String(s) => {
-                    let value = s.trim().to_lowercase();
-                    if !value.is_empty() && value != "private" {
-                        discovered_audiences.insert(value);
-                    }
-                }
-                serde_yaml::Value::Sequence(seq) => {
-                    for entry in seq {
-                        if let Some(s) = entry.as_str() {
-                            let value = s.trim().to_lowercase();
-                            if !value.is_empty() && value != "private" {
-                                discovered_audiences.insert(value);
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-
         let target = workspace_dir.join(&file.path);
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent)
@@ -136,7 +107,50 @@ pub async fn publish_workspace_to_r2(
             .map_err(|e| format!("failed to write materialized file {}: {}", file.path, e))?;
     }
 
-    let root_rel_path = root_rel_path.unwrap_or_else(|| files[0].path.clone());
+    let workspace_reader = Workspace::new(SyncToAsyncFs::new(RealFileSystem));
+    let root_rel_path = match workspace_reader
+        .find_root_index_in_dir(&workspace_dir)
+        .await
+    {
+        Ok(Some(path)) => path
+            .strip_prefix(&workspace_dir)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/"),
+        Ok(None) => {
+            warn!(
+                "publish: no root index found in materialized workspace, falling back to README/no-parent"
+            );
+            files
+                .iter()
+                .find(|f| f.path.eq_ignore_ascii_case("README.md"))
+                .map(|f| f.path.clone())
+                .or_else(|| {
+                    files
+                        .iter()
+                        .find(|f| f.metadata.part_of.is_none())
+                        .map(|f| f.path.clone())
+                })
+                .unwrap_or_else(|| files[0].path.clone())
+        }
+        Err(e) => {
+            warn!(
+                "publish: failed to resolve root index with workspace finder: {}",
+                e
+            );
+            files
+                .iter()
+                .find(|f| f.path.eq_ignore_ascii_case("README.md"))
+                .map(|f| f.path.clone())
+                .or_else(|| {
+                    files
+                        .iter()
+                        .find(|f| f.metadata.part_of.is_none())
+                        .map(|f| f.path.clone())
+                })
+                .unwrap_or_else(|| files[0].path.clone())
+        }
+    };
     let workspace_root = workspace_dir.join(root_rel_path);
 
     let attachment_map = repo
@@ -149,14 +163,8 @@ pub async fn publish_workspace_to_r2(
         }
     }
 
-    let mut audiences_to_build: Vec<String> = vec!["public".to_string()];
-    let mut discovered: Vec<String> = discovered_audiences.into_iter().collect();
-    discovered.sort();
-    for audience in discovered {
-        if audience != "public" {
-            audiences_to_build.push(audience);
-        }
-    }
+    let discovered_audiences = discover_audiences(&files);
+    let audiences_to_build = build_audiences_to_build(discovered_audiences);
 
     let mut audience_builds = Vec::new();
 
@@ -169,11 +177,8 @@ pub async fn publish_workspace_to_r2(
         let options = PublishOptions {
             single_file: false,
             title: None,
-            audience: if audience == "public" {
-                None
-            } else {
-                Some(audience.clone())
-            },
+            // Always apply audience filtering, including `public`.
+            audience: publish_audience_filter(audience),
             force: true,
         };
 
@@ -181,6 +186,25 @@ pub async fn publish_workspace_to_r2(
             .publish(&workspace_root, &output_dir, &options)
             .await
             .map_err(|e| format!("publish failed for audience {}: {}", audience, e))?;
+
+        if result.pages.is_empty() {
+            log_zero_build_diagnostics(&workspace_root, &workspace_dir, audience, &output_dir)
+                .await;
+        }
+
+        // Replace each audience prefix atomically-ish by clearing old artifacts
+        // before uploading current build output. This prevents stale files from
+        // older publishes from remaining accessible.
+        let audience_prefix = format!("{}/{}/", site.slug, audience);
+        sites_store
+            .delete_by_prefix(&audience_prefix)
+            .await
+            .map_err(|e| {
+                format!(
+                    "failed to clear existing audience artifacts for {}: {}",
+                    audience, e
+                )
+            })?;
 
         for page in &result.pages {
             let html_path = output_dir.join(&page.dest_filename);
@@ -489,9 +513,205 @@ fn normalize_workspace_path(path: &str) -> Option<String> {
     }
 }
 
+fn publish_audience_filter(audience: &str) -> Option<String> {
+    let trimmed = audience.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn discover_audiences(files: &[MaterializedFile]) -> HashSet<String> {
+    let mut discovered_audiences: HashSet<String> = HashSet::new();
+    for file in files {
+        let Ok(parsed) = diaryx_core::frontmatter::parse_or_empty(&file.content) else {
+            continue;
+        };
+        let Some(audience) = parsed.frontmatter.get("audience") else {
+            continue;
+        };
+        match audience {
+            serde_yaml::Value::String(s) => {
+                let value = s.trim().to_lowercase();
+                if !value.is_empty() && value != "private" {
+                    discovered_audiences.insert(value);
+                }
+            }
+            serde_yaml::Value::Sequence(seq) => {
+                for entry in seq {
+                    if let Some(s) = entry.as_str() {
+                        let value = s.trim().to_lowercase();
+                        if !value.is_empty() && value != "private" {
+                            discovered_audiences.insert(value);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    discovered_audiences
+}
+
+fn build_audiences_to_build(discovered_audiences: HashSet<String>) -> Vec<String> {
+    let mut audiences_to_build: Vec<String> = vec!["public".to_string()];
+    let mut discovered: Vec<String> = discovered_audiences.into_iter().collect();
+    discovered.sort();
+    for audience in discovered {
+        if audience != "public" {
+            audiences_to_build.push(audience);
+        }
+    }
+    audiences_to_build
+}
+
+async fn log_zero_build_diagnostics(
+    workspace_root: &Path,
+    workspace_dir: &Path,
+    audience: &str,
+    destination: &Path,
+) {
+    let exporter = Exporter::new(SyncToAsyncFs::new(RealFileSystem));
+    let plan = match exporter
+        .plan_export(workspace_root, audience, destination)
+        .await
+    {
+        Ok(plan) => plan,
+        Err(err) => {
+            warn!(
+                "publish diagnostics: zero-build audience={} failed to create export plan: {}",
+                audience, err
+            );
+            return;
+        }
+    };
+
+    let exclusion_counts = format_exclusion_counts(&plan.excluded);
+    let excluded_samples = format_excluded_samples(&plan.excluded, workspace_dir);
+    let root_frontmatter = summarize_root_frontmatter(workspace_root);
+
+    warn!(
+        "publish diagnostics: audience={} included={} excluded={} root={} root_frontmatter={} exclusion_counts={} excluded_samples={}",
+        audience,
+        plan.included.len(),
+        plan.excluded.len(),
+        workspace_root.display(),
+        root_frontmatter,
+        exclusion_counts,
+        excluded_samples,
+    );
+}
+
+fn format_exclusion_counts(excluded: &[ExcludedFile]) -> String {
+    if excluded.is_empty() {
+        return "none".to_string();
+    }
+
+    let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
+    for item in excluded {
+        *counts
+            .entry(exclusion_reason_label(&item.reason))
+            .or_insert(0) += 1;
+    }
+
+    counts
+        .into_iter()
+        .map(|(label, count)| format!("{}:{}", label, count))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn format_excluded_samples(excluded: &[ExcludedFile], workspace_dir: &Path) -> String {
+    if excluded.is_empty() {
+        return "none".to_string();
+    }
+
+    excluded
+        .iter()
+        .take(5)
+        .map(|item| {
+            let rel = item.path.strip_prefix(workspace_dir).unwrap_or(&item.path);
+            format!(
+                "{}({})",
+                rel.display(),
+                exclusion_reason_detail(&item.reason)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn exclusion_reason_label(reason: &ExclusionReason) -> &'static str {
+    match reason {
+        ExclusionReason::Private => "private",
+        ExclusionReason::AudienceMismatch { .. } => "audience_mismatch",
+        ExclusionReason::InheritedPrivate { .. } => "inherited_private",
+        ExclusionReason::NoAudienceDefined => "no_audience_defined",
+    }
+}
+
+fn exclusion_reason_detail(reason: &ExclusionReason) -> String {
+    match reason {
+        ExclusionReason::Private => "private".to_string(),
+        ExclusionReason::AudienceMismatch {
+            file_audience,
+            requested,
+        } => format!("aud={:?},req={}", file_audience, requested),
+        ExclusionReason::InheritedPrivate { from } => format!("from={}", from.display()),
+        ExclusionReason::NoAudienceDefined => "no_audience".to_string(),
+    }
+}
+
+fn summarize_root_frontmatter(workspace_root: &Path) -> String {
+    let content = match std::fs::read_to_string(workspace_root) {
+        Ok(content) => content,
+        Err(err) => return format!("read_error={}", err),
+    };
+
+    let parsed = match diaryx_core::frontmatter::parse_or_empty(&content) {
+        Ok(parsed) => parsed,
+        Err(err) => return format!("parse_error={}", err),
+    };
+
+    let has_contents = parsed.frontmatter.contains_key("contents");
+    let part_of = parsed
+        .frontmatter
+        .get("part_of")
+        .and_then(|v| v.as_str())
+        .unwrap_or("<none>");
+    let audience = parsed
+        .frontmatter
+        .get("audience")
+        .map(compact_yaml_value)
+        .unwrap_or_else(|| "<none>".to_string());
+
+    format!(
+        "has_contents={},part_of={},audience={}",
+        has_contents, part_of, audience
+    )
+}
+
+fn compact_yaml_value(value: &serde_yaml::Value) -> String {
+    serde_yaml::to_string(value)
+        .unwrap_or_else(|_| format!("{:?}", value))
+        .replace('\n', " ")
+        .trim()
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use diaryx_core::crdt::FileMetadata;
+
+    fn materialized(path: &str, content: &str) -> MaterializedFile {
+        MaterializedFile {
+            path: path.to_string(),
+            content: content.to_string(),
+            metadata: FileMetadata::with_filename(path.to_string(), None),
+        }
+    }
 
     #[test]
     fn token_round_trip_and_tamper_detection() {
@@ -517,5 +737,89 @@ mod tests {
             rewrite_html_attachment_urls(html, source, workspace_dir, &map, "my-site", "family");
 
         assert!(rewritten.contains("/my-site/_a/family/abc123/a.png"));
+    }
+
+    #[test]
+    fn publish_audience_filter_includes_public() {
+        assert_eq!(
+            publish_audience_filter("public"),
+            Some("public".to_string())
+        );
+        assert_eq!(
+            publish_audience_filter("family"),
+            Some("family".to_string())
+        );
+        assert_eq!(publish_audience_filter(""), None);
+        assert_eq!(publish_audience_filter("   "), None);
+    }
+
+    #[test]
+    fn discover_audiences_normalizes_and_excludes_private() {
+        let files = vec![
+            materialized(
+                "README.md",
+                "---\naudience:\n  - Family\n  - ENGL212\n  - private\n---\n",
+            ),
+            materialized("note.md", "---\naudience: Public\n---\n"),
+        ];
+        let discovered = discover_audiences(&files);
+        assert!(discovered.contains("family"));
+        assert!(discovered.contains("engl212"));
+        assert!(discovered.contains("public"));
+        assert!(!discovered.contains("private"));
+    }
+
+    #[test]
+    fn discover_audiences_ignores_invalid_and_empty_values() {
+        let files = vec![
+            materialized("README.md", "---\naudience: {}\n---\n"),
+            materialized(
+                "a.md",
+                "---\naudience:\n  - \"\"\n  - \"   \"\n  - 3\n---\n",
+            ),
+            materialized("b.md", "---\ntitle: no audience\n---\n"),
+        ];
+        let discovered = discover_audiences(&files);
+        assert!(discovered.is_empty());
+    }
+
+    #[test]
+    fn discover_audiences_dedupes_case_insensitively() {
+        let files = vec![
+            materialized("README.md", "---\naudience: Family\n---\n"),
+            materialized("child.md", "---\naudience:\n  - family\n  - FAMILY\n---\n"),
+        ];
+        let discovered = discover_audiences(&files);
+        assert_eq!(discovered.len(), 1);
+        assert!(discovered.contains("family"));
+    }
+
+    #[test]
+    fn build_audiences_to_build_always_includes_public_once() {
+        let discovered = ["public".to_string(), "family".to_string()]
+            .into_iter()
+            .collect();
+        let audiences = build_audiences_to_build(discovered);
+        assert_eq!(audiences, vec!["public".to_string(), "family".to_string()]);
+    }
+
+    #[test]
+    fn build_audiences_to_build_sorts_non_public_entries() {
+        let discovered = [
+            "zeta".to_string(),
+            "alpha".to_string(),
+            "public".to_string(),
+        ]
+        .into_iter()
+        .collect();
+        let audiences = build_audiences_to_build(discovered);
+        assert_eq!(
+            audiences,
+            vec![
+                "public".to_string(),
+                "alpha".to_string(),
+                "zeta".to_string()
+            ]
+        );
     }
 }

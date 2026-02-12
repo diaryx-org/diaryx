@@ -363,13 +363,14 @@ export async function handlePropertyChange(
   onRefreshTree?: () => Promise<void>
 ): Promise<{ success: boolean; newPath?: string }> {
   try {
+    const normalizedFrontmatter = normalizeFrontmatter(currentEntry.frontmatter);
     // Special handling for title: need to check rename first
     if (key === 'title' && typeof value === 'string' && value.trim()) {
       const newFilename = slugifyTitle(value);
       const currentFilename = currentEntry.path.split('/').pop() || '';
 
       // For index files (have contents property), compare the directory name
-      const isIndex = Array.isArray(currentEntry.frontmatter?.contents);
+      const isIndex = Array.isArray(normalizedFrontmatter.contents);
       const pathParts = currentEntry.path.split('/');
       const currentDir = isIndex
         ? pathParts.slice(-2, -1)[0] || ''
@@ -391,7 +392,7 @@ export async function handlePropertyChange(
           }
 
           // Update current entry
-          const newFrontmatter = { ...currentEntry.frontmatter, [key]: value };
+          const newFrontmatter = { ...normalizedFrontmatter, [key]: value };
           entryStore.setCurrentEntry({
             ...currentEntry,
             path: newPath,
@@ -426,7 +427,7 @@ export async function handlePropertyChange(
         }
       } else {
         // No rename needed, just update title
-        const newFrontmatter = { ...currentEntry.frontmatter, [key]: value };
+        const newFrontmatter = { ...normalizedFrontmatter, [key]: value };
         await api.setFrontmatterProperty(currentEntry.path, key, value);
         entryStore.setCurrentEntry({
           ...currentEntry,
@@ -444,7 +445,7 @@ export async function handlePropertyChange(
       }
     } else {
       // Non-title properties: update normally
-      const newFrontmatter = { ...currentEntry.frontmatter, [key]: value };
+      const newFrontmatter = { ...normalizedFrontmatter, [key]: value };
       await api.setFrontmatterProperty(currentEntry.path, key, value as JsonValue);
       entryStore.setCurrentEntry({
         ...currentEntry,
@@ -479,7 +480,7 @@ export async function removeProperty(
     await api.removeFrontmatterProperty(currentEntry.path, key);
 
     // Update local state
-    const newFrontmatter = { ...currentEntry.frontmatter };
+    const newFrontmatter = normalizeFrontmatter(currentEntry.frontmatter);
     delete newFrontmatter[key];
     entryStore.setCurrentEntry({ ...currentEntry, frontmatter: newFrontmatter });
 
@@ -502,11 +503,12 @@ export async function addProperty(
 ): Promise<boolean> {
   try {
     await api.setFrontmatterProperty(currentEntry.path, key, value as JsonValue);
+    const normalizedFrontmatter = normalizeFrontmatter(currentEntry.frontmatter);
 
     // Update local state
     entryStore.setCurrentEntry({
       ...currentEntry,
-      frontmatter: { ...currentEntry.frontmatter, [key]: value },
+      frontmatter: { ...normalizedFrontmatter, [key]: value },
     });
 
     return true;

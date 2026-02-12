@@ -364,6 +364,41 @@ describe('workspaceCrdtBridge', () => {
       cleanup()
     })
 
+    it('should normalize comma-delimited audience strings from metadata events', async () => {
+      await initWorkspace({
+        rustApi: mockRustApi as any,
+      })
+
+      let eventHandler: ((event: any) => void) | null = null
+      const backend = {
+        onFileSystemEvent: vi.fn((cb: (event: any) => void) => {
+          eventHandler = cb
+          return 53
+        }),
+        offFileSystemEvent: vi.fn(),
+      }
+
+      const cleanup = initEventSubscription(backend as any)
+      const fileCb = vi.fn()
+      const unsubFile = onFileChange(fileCb)
+
+      eventHandler!({
+        type: 'MetadataChanged',
+        path: 'README.md',
+        frontmatter: { title: 'Root', audience: ' family, ENGL212 ' },
+      })
+
+      expect(fileCb).toHaveBeenCalledWith(
+        'README.md',
+        expect.objectContaining({
+          audience: ['family', 'ENGL212'],
+        })
+      )
+
+      unsubFile()
+      cleanup()
+    })
+
     it('should discard queued local sync updates captured before transport connect', async () => {
       await initWorkspace({
         rustApi: mockRustApi as any,

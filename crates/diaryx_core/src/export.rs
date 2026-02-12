@@ -288,6 +288,8 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
         audience: &str,
         inherited: Option<&Vec<String>>,
     ) -> (bool, Option<Vec<String>>) {
+        let audience = audience.trim();
+
         // Check for explicit private - always excluded
         if frontmatter.is_private() {
             return (false, None);
@@ -304,7 +306,7 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
         if let Some(file_audience) = &frontmatter.audience {
             let visible = file_audience
                 .iter()
-                .any(|a| a.eq_ignore_ascii_case(audience));
+                .any(|a| a.trim().eq_ignore_ascii_case(audience));
             return (visible, Some(file_audience.clone()));
         }
 
@@ -312,7 +314,7 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
         if let Some(parent_audience) = inherited {
             let visible = parent_audience
                 .iter()
-                .any(|a| a.eq_ignore_ascii_case(audience));
+                .any(|a| a.trim().eq_ignore_ascii_case(audience));
             return (visible, None); // Don't override inherited audience
         }
 
@@ -648,5 +650,40 @@ mod tests {
 
         // Root should track that private.md was filtered
         assert!(root.filtered_contents.contains(&"private.md".to_string()));
+    }
+
+    #[test]
+    fn test_audience_values_trimmed_for_visibility() {
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("/workspace/README.md"),
+            "---\ntitle: Root\ncontents:\n  - child.md\naudience:\n  - \" family \"\n  - \" ENGL212 \"\n---\n\n# Root\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("/workspace/child.md"),
+            "---\ntitle: Child\npart_of: README.md\n---\n\n# Child\n",
+        )
+        .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let exporter = Exporter::new(async_fs);
+        let plan_family = block_on_test(exporter.plan_export(
+            Path::new("/workspace/README.md"),
+            "family",
+            Path::new("/export"),
+        ))
+        .unwrap();
+        let plan_engl = block_on_test(exporter.plan_export(
+            Path::new("/workspace/README.md"),
+            "engl212",
+            Path::new("/export"),
+        ))
+        .unwrap();
+
+        assert_eq!(plan_family.included.len(), 2);
+        assert_eq!(plan_family.excluded.len(), 0);
+        assert_eq!(plan_engl.included.len(), 2);
+        assert_eq!(plan_engl.excluded.len(), 0);
     }
 }

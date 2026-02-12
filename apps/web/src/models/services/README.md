@@ -28,4 +28,4 @@ Business logic services that coordinate between stores and backend.
 | `sitePublishingService.ts` | Sync-server client for workspace site lifecycle, publish triggers, and audience token CRUD (`/api/workspaces/{id}/site*`) with deterministic status/error mapping |
 | `shareService.ts` | Share session management |
 | `toastService.ts` | Toast notification service |
-| `workspaceCrdtService.ts` | CRDT workspace synchronization |
+| `workspaceCrdtService.ts` | CRDT workspace synchronization, including audience normalization (`string[]` or comma-delimited `string`) before metadata writes |

@@ -277,6 +277,10 @@ Authorization: Bearer <session_token>
 
 These endpoints manage static site configuration, trigger publish jobs, and
 issue/revoke audience-scoped access tokens for the Cloudflare Worker.
+Audience builds (including `public`) use frontmatter audience filtering; files
+without explicit or inherited audience are excluded by default.
+Each publish replaces prior artifacts under `/{slug}/{audience}/` to avoid
+stale files remaining accessible.
 
 ### Share Sessions (Live Collaboration)
 

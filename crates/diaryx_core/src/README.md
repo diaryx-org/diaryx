@@ -45,7 +45,7 @@ This directory contains the source code for the core Diaryx library.
 | `config.rs`          | Configuration management                               |
 | `diaryx.rs`          | Central Diaryx data structure                          |
 | `error.rs`           | Shared error types                                     |
-| `export.rs`          | Export with audience filtering                         |
+| `export.rs`          | Export with audience filtering (case-insensitive, trim-aware) |
 | `frontmatter.rs`     | Frontmatter parsing and manipulation                   |
 | `link_parser.rs`     | Parse markdown links                                   |
 | `metadata_writer.rs` | Write frontmatter metadata (temp + backup safe writes) |

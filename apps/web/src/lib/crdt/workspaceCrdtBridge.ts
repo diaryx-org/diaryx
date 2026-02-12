@@ -2384,6 +2384,18 @@ function normalizeFileMetadata(path: string | null, metadata: FileMetadata | nul
   const raw = metadata as Partial<FileMetadata> & Record<string, unknown>;
   const fallbackFilename = path?.split('/').pop() ?? '';
   const modifiedAtRaw = raw.modified_at;
+  const rawAudience = (raw as Record<string, unknown>).audience;
+  const normalizedAudience = Array.isArray(rawAudience)
+    ? rawAudience
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0)
+    : typeof rawAudience === 'string'
+      ? rawAudience
+        .split(',')
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0)
+      : null;
 
   return {
     filename: typeof raw.filename === 'string' && raw.filename.length > 0
@@ -2398,9 +2410,7 @@ function normalizeFileMetadata(path: string | null, metadata: FileMetadata | nul
       ? (raw.attachments as BinaryRef[])
       : [],
     deleted: typeof raw.deleted === 'boolean' ? raw.deleted : false,
-    audience: Array.isArray(raw.audience)
-      ? raw.audience.filter((value): value is string => typeof value === 'string')
-      : null,
+    audience: normalizedAudience,
     description: typeof raw.description === 'string' ? raw.description : null,
     extra:
       raw.extra && typeof raw.extra === 'object' && !Array.isArray(raw.extra)

@@ -535,3 +535,23 @@ while the [`sync`](../sync/README.md) module handles **file-level cloud sync**
 - CRDT tracks fine-grained changes within documents
 - Cloud sync uploads/downloads whole files to/from storage providers
 - Both use the same `WorkspaceCrdt` metadata for consistency
+
+## End-to-End Parity Tests
+
+The integration suite at `crates/diaryx_core/tests/crdt_sync_parity.rs`
+asserts that markdown files on disk and CRDT state stay in lockstep:
+
+- local write/move/delete operations through the decorated filesystem
+- remote workspace/body updates with disk side effects (including rename/delete)
+
+For each active file, the tests verify:
+
+- path set parity (disk files == active CRDT files)
+- frontmatter metadata parity (parsed file metadata == workspace CRDT metadata)
+- body parity (parsed file body == body-doc CRDT content)
+
+Run this suite with:
+
+```bash
+cargo test -p diaryx_core --features crdt --test crdt_sync_parity
+```

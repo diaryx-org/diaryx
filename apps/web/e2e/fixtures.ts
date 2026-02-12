@@ -103,11 +103,12 @@ export class EditorHelper {
 
   /**
    * Expands the floating menu by clicking the plus button.
+   * This inserts a BlockPickerNode inline in the editor.
    */
   async expandFloatingMenu(): Promise<void> {
     const plusButton = await this.openFloatingMenu()
     await plusButton.click()
-    await expect(this.page.locator('.menu-expanded')).toBeVisible()
+    await expect(this.page.locator('.block-picker-menu')).toBeVisible()
   }
 }
 

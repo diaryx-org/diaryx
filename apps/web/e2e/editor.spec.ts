@@ -62,9 +62,11 @@ test.describe('Editor', () => {
   test('should create a heading via floating menu', async ({ page }) => {
     await editor.expandFloatingMenu()
 
-    // Select H1 from heading dropdown
-    const headingSelect = page.locator('.heading-section select, [data-slot="native-select"]').first()
-    await headingSelect.selectOption('1')
+    // Open heading submenu and select H1
+    const headingButton = page.locator('.block-picker-menu .menu-item[title="Heading"]')
+    await headingButton.click()
+    const h1Button = page.locator('.block-picker-menu .submenu-item').filter({ hasText: 'H1' })
+    await h1Button.click()
 
     await page.keyboard.type('My Heading')
 
@@ -75,8 +77,11 @@ test.describe('Editor', () => {
   test('should create a bulleted list via floating menu', async ({ page }) => {
     await editor.expandFloatingMenu()
 
-    const listSelect = page.locator('.list-section select, [data-slot="native-select"]').last()
-    await listSelect.selectOption('bullet')
+    // Open list submenu and select bullet list
+    const listButton = page.locator('.block-picker-menu .menu-item[title="List"]')
+    await listButton.click()
+    const bulletButton = page.locator('.block-picker-menu .submenu-item').filter({ hasText: 'Bullet' })
+    await bulletButton.click()
 
     await page.keyboard.type('Item 1')
     await page.keyboard.press('Enter')
@@ -91,8 +96,11 @@ test.describe('Editor', () => {
   test('should create a numbered list via floating menu', async ({ page }) => {
     await editor.expandFloatingMenu()
 
-    const listSelect = page.locator('.list-section select, [data-slot="native-select"]').last()
-    await listSelect.selectOption('ordered')
+    // Open list submenu and select numbered list
+    const listButton = page.locator('.block-picker-menu .menu-item[title="List"]')
+    await listButton.click()
+    const numberedButton = page.locator('.block-picker-menu .submenu-item').filter({ hasText: 'Numbered' })
+    await numberedButton.click()
 
     await page.keyboard.type('First')
     await page.keyboard.press('Enter')
@@ -105,8 +113,11 @@ test.describe('Editor', () => {
   test('should create a task list via floating menu', async ({ page }) => {
     await editor.expandFloatingMenu()
 
-    const listSelect = page.locator('.list-section select, [data-slot="native-select"]').last()
-    await listSelect.selectOption('task')
+    // Open list submenu and select task list
+    const listButton = page.locator('.block-picker-menu .menu-item[title="List"]')
+    await listButton.click()
+    const taskButton = page.locator('.block-picker-menu .submenu-item').filter({ hasText: 'Task' })
+    await taskButton.click()
 
     await page.keyboard.type('My task')
 
@@ -117,7 +128,7 @@ test.describe('Editor', () => {
   test('should create a code block via floating menu', async ({ page }) => {
     await editor.expandFloatingMenu()
 
-    const codeBlockButton = page.locator('.menu-item[title="Code Block"]')
+    const codeBlockButton = page.locator('.block-picker-menu .menu-item[title="Code Block"]')
     await codeBlockButton.click()
 
     await page.keyboard.type('const x = 1;')
@@ -130,7 +141,7 @@ test.describe('Editor', () => {
   test('should create a blockquote via floating menu', async ({ page }) => {
     await editor.expandFloatingMenu()
 
-    const quoteButton = page.locator('.menu-item[title="Quote"]')
+    const quoteButton = page.locator('.block-picker-menu .menu-item[title="Quote"]')
     await quoteButton.click()
 
     await page.keyboard.type('A famous quote')
@@ -218,24 +229,22 @@ test.describe('Editor Floating Menu', () => {
     const plusButton = await editorHelper.openFloatingMenu()
     await plusButton.click()
 
-    const expandedMenu = page.locator('.menu-expanded')
-    await expect(expandedMenu).toBeVisible()
+    const blockPicker = page.locator('.block-picker-menu')
+    await expect(blockPicker).toBeVisible()
   })
 
-  test('should close expanded menu with Escape', async ({ page, editorHelper }) => {
+  test('should close block picker with Escape', async ({ page, editorHelper }) => {
     await page.goto('/')
     await waitForAppReady(page)
     await editorHelper.waitForReady()
 
     await editorHelper.expandFloatingMenu()
 
-    const expandedMenu = page.locator('.menu-expanded')
-    await expect(expandedMenu).toBeVisible()
+    const blockPicker = page.locator('.block-picker-menu')
+    await expect(blockPicker).toBeVisible()
 
     await page.keyboard.press('Escape')
 
-    await expect(expandedMenu).not.toBeVisible()
-    const plusButton = page.locator('.floating-menu .trigger-button')
-    await expect(plusButton).toBeVisible()
+    await expect(blockPicker).not.toBeVisible()
   })
 })

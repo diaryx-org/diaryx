@@ -6,21 +6,21 @@ test.describe('Attachment Picker via Floating Menu', () => {
     await waitForAppReady(page)
   })
 
-  test('should open floating menu with plus button', async ({ page, editorHelper }) => {
+  test('should open block picker with plus button', async ({ page, editorHelper }) => {
     await editorHelper.waitForReady()
 
     const plusButton = await editorHelper.openFloatingMenu()
     await plusButton.click()
 
-    const expandedMenu = page.locator('.menu-expanded')
-    await expect(expandedMenu).toBeVisible()
+    const blockPicker = page.locator('.block-picker-menu')
+    await expect(blockPicker).toBeVisible()
   })
 
-  test('should show attachment option in expanded menu', async ({ page, editorHelper }) => {
+  test('should show attachment option in block picker', async ({ page, editorHelper }) => {
     await editorHelper.waitForReady()
     await editorHelper.expandFloatingMenu()
 
-    const attachmentButton = page.locator('.menu-item[title="Insert Attachment"]')
+    const attachmentButton = page.locator('.block-picker-menu .menu-item[title="Insert Attachment"]')
     await expect(attachmentButton).toBeVisible()
   })
 
@@ -28,7 +28,7 @@ test.describe('Attachment Picker via Floating Menu', () => {
     await editorHelper.waitForReady()
     await editorHelper.expandFloatingMenu()
 
-    const attachmentButton = page.locator('.menu-item[title="Insert Attachment"]')
+    const attachmentButton = page.locator('.block-picker-menu .menu-item[title="Insert Attachment"]')
     await attachmentButton.click()
 
     const pickerNode = page.locator('.attachment-picker-node-wrapper, [data-attachment-picker]')

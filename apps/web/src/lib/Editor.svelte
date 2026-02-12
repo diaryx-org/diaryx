@@ -25,6 +25,8 @@
 
   // Custom extension for inline attachment picker node
   import { AttachmentPickerNode } from "./extensions/AttachmentPickerNode";
+  // Custom extension for inline block picker (replaces FloatingMenu expanded state)
+  import { BlockPickerNode } from "./extensions/BlockPickerNode";
   // Custom extension for Discord-style spoiler syntax
   import { SpoilerMark } from "./extensions/SpoilerMark";
   import type { Api } from "$lib/backend/api";
@@ -188,6 +190,12 @@
         onAttachmentSelect: (selection) => {
           onAttachmentInsert?.(selection);
         },
+      }),
+      // Inline block picker node extension (replaces FloatingMenu expanded state)
+      BlockPickerNode.configure({
+        onInsertAttachment: onAttachmentInsert
+          ? () => editor?.commands.insertAttachmentPicker()
+          : undefined,
       }),
     ];
 
@@ -595,7 +603,6 @@
   <FloatingMenuComponent
     bind:this={floatingMenuRef}
     {editor}
-    onInsertAttachment={() => editor?.commands.insertAttachmentPicker()}
     bind:element={floatingMenuElement}
   />
 {/if}

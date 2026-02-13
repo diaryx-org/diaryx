@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { Api } from '$lib/backend/api';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Switch } from '$lib/components/ui/switch';
@@ -16,20 +17,22 @@
     Upload,
   } from '@lucide/svelte';
   import { collaborationStore } from '@/models/stores/collaborationStore.svelte';
+  import { workspaceStore } from '@/models/stores/workspaceStore.svelte';
   import { sitePublishingStore } from '@/models/stores/sitePublishingStore.svelte';
   import { showError, showInfo, showSuccess } from '@/models/services/toastService';
   import { getServerUrl } from '$lib/auth';
 
   interface Props {
     onOpenSyncWizard?: () => void;
+    api: Api | null;
   }
 
-  let { onOpenSyncWizard }: Props = $props();
+  let { onOpenSyncWizard, api }: Props = $props();
 
   const slugRegex = /^[a-z0-9-]{3,64}$/;
 
   let site = $derived(sitePublishingStore.site);
-  let audiences = $derived(sitePublishingStore.audiences);
+  let publishedAudiences = $derived(sitePublishingStore.audiences);
   let tokens = $derived(sitePublishingStore.tokens);
   let error = $derived(sitePublishingStore.error);
 
@@ -54,9 +57,8 @@
   let slugError = $state<string | null>(null);
 
   let tokenAudience = $state('public');
-  let tokenLabel = $state('');
   let tokenExpiresPreset = $state('7d');
-  let tokenExpiresCustom = $state('');
+  let availableAudiences = $state<string[]>([]);
 
   let copiedAccessUrl = $state(false);
   let copiedTokenId = $state<string | null>(null);
@@ -84,6 +86,23 @@
     initializedWorkspaceId = defaultWorkspaceId;
     sitePublishingStore.load(defaultWorkspaceId);
   });
+
+  // Load available audiences when site is configured
+  $effect(() => {
+    if (isConfigured && api && workspaceStore.tree) {
+      loadAudiences();
+    }
+  });
+
+  async function loadAudiences() {
+    if (!api || !workspaceStore.tree) return;
+    try {
+      availableAudiences = await api.getAvailableAudiences(workspaceStore.tree.path);
+    } catch (e) {
+      console.warn('[PublishingPanel] Failed to load audiences:', e);
+      availableAudiences = [];
+    }
+  }
 
   function formatUnixTimestamp(value: number | null | undefined): string {
     if (!value) return 'Never';
@@ -141,15 +160,6 @@
     }
   }
 
-  function getExpiresInValue(): string | null {
-    if (tokenExpiresPreset === 'none') return null;
-    if (tokenExpiresPreset === 'custom') {
-      const custom = tokenExpiresCustom.trim();
-      return custom.length > 0 ? custom : null;
-    }
-    return tokenExpiresPreset;
-  }
-
   async function handleCreateToken() {
     if (!site) return;
 
@@ -159,16 +169,13 @@
       return;
     }
 
-    const expiresIn = getExpiresInValue();
+    const expiresIn = tokenExpiresPreset === 'none' ? null : tokenExpiresPreset;
     const created = await sitePublishingStore.createToken({
       audience,
-      label: tokenLabel.trim() || undefined,
       expires_in: expiresIn,
     });
 
     if (created) {
-      tokenLabel = '';
-      tokenExpiresCustom = '';
       showSuccess('Access token created', `Audience: ${created.audience}`);
       if (sitePublishingStore.lastCreatedAccessUrl) {
         showInfo('Copy the access URL now. It is only shown once in full.');
@@ -302,49 +309,36 @@
       <div class="space-y-4">
       <div class="space-y-2 p-3 rounded-md bg-muted/50 border border-border">
         <div class="flex items-center justify-between gap-2">
-          <div>
-            <h3 class="text-sm font-medium">Published Site</h3>
-            <p class="text-xs text-muted-foreground">Workspace ID: {defaultWorkspaceId}</p>
-          </div>
+          <h3 class="text-sm font-medium">Published Site</h3>
           <span class="text-xs font-mono px-2 py-1 rounded bg-background border border-border">/{site.slug}</span>
         </div>
 
         <div class="text-xs text-muted-foreground space-y-1">
           <div class="flex justify-between gap-2">
-            <span>Enabled</span>
-            <span class="font-medium text-foreground">{site.enabled ? 'Yes' : 'No'}</span>
-          </div>
-          <div class="flex justify-between gap-2">
-            <span>Auto-publish</span>
-            <span class="font-medium text-foreground">{site.auto_publish ? 'Yes' : 'No'}</span>
-          </div>
-          <div class="flex justify-between gap-2">
             <span>Last published</span>
             <span class="font-medium text-foreground">{formatUnixTimestamp(site.last_published_at)}</span>
           </div>
           <div class="flex justify-between gap-2">
-            <span>Inferred URL</span>
+            <span>URL</span>
             <span class="font-mono text-[11px] text-foreground truncate max-w-[180px]" title={inferredSiteUrl ?? ''}>
               {inferredSiteUrl}
             </span>
           </div>
         </div>
 
-        <div class="space-y-1">
-          <p class="text-xs font-medium text-muted-foreground">Audience builds</p>
-          {#if audiences.length === 0}
-            <p class="text-xs text-muted-foreground">No published audiences yet.</p>
-          {:else}
+        {#if publishedAudiences.length > 0}
+          <div class="space-y-1">
+            <p class="text-xs font-medium text-muted-foreground">Audience builds</p>
             <div class="space-y-1">
-              {#each audiences as audience}
+              {#each publishedAudiences as audience}
                 <div class="flex justify-between text-xs border border-border rounded px-2 py-1 bg-background">
                   <span class="font-medium">{audience.name}</span>
                   <span class="text-muted-foreground">{audience.file_count} files</span>
                 </div>
               {/each}
             </div>
-          {/if}
-        </div>
+          </div>
+        {/if}
       </div>
 
       {#if showSyncRequiredNotice}
@@ -413,12 +407,12 @@
         <div class="space-y-2">
           <div class="space-y-1.5">
             <label for="token-audience" class="text-xs font-medium text-muted-foreground">Audience</label>
-            <Input id="token-audience" type="text" bind:value={tokenAudience} class="h-8 text-xs" placeholder="public" />
-          </div>
-
-          <div class="space-y-1.5">
-            <label for="token-label" class="text-xs font-medium text-muted-foreground">Label (optional)</label>
-            <Input id="token-label" type="text" bind:value={tokenLabel} class="h-8 text-xs" placeholder="Family" />
+            <NativeSelect id="token-audience" bind:value={tokenAudience} class="w-full h-8 text-xs">
+              <option value="public">public</option>
+              {#each availableAudiences.filter(a => a !== 'public') as aud}
+                <option value={aud}>{aud}</option>
+              {/each}
+            </NativeSelect>
           </div>
 
           <div class="space-y-1.5">
@@ -429,23 +423,8 @@
               <option value="1d">1 day</option>
               <option value="7d">7 days</option>
               <option value="30d">30 days</option>
-              <option value="custom">Custom (if supported)</option>
             </NativeSelect>
           </div>
-
-          {#if tokenExpiresPreset === 'custom'}
-            <div class="space-y-1.5">
-              <label for="token-expires-custom" class="text-xs font-medium text-muted-foreground">Custom expires_in</label>
-              <Input
-                id="token-expires-custom"
-                type="text"
-                bind:value={tokenExpiresCustom}
-                placeholder="e.g. 7d"
-                class="h-8 text-xs"
-              />
-              <p class="text-[11px] text-muted-foreground">Server currently accepts: 10m, 1d, 7d, 30d.</p>
-            </div>
-          {/if}
 
           <Button
             class="w-full"
@@ -504,12 +483,7 @@
               <div class="rounded-md border border-border bg-background px-2 py-2">
                 <div class="flex items-start justify-between gap-2">
                   <div class="min-w-0">
-                    <p class="text-xs font-medium truncate">
-                      {token.label || token.audience}
-                    </p>
-                    <p class="text-[11px] text-muted-foreground">
-                      Audience: {token.audience}
-                    </p>
+                    <p class="text-xs font-medium truncate">{token.audience}</p>
                     <p class="text-[11px] text-muted-foreground">
                       Expires: {formatUnixTimestamp(token.expires_at)}
                     </p>

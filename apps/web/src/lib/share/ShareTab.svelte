@@ -59,5 +59,5 @@
     {onTriggerStartConsumed}
   />
 {:else}
-  <PublishingPanel {onOpenSyncWizard} />
+  <PublishingPanel {onOpenSyncWizard} {api} />
 {/if}

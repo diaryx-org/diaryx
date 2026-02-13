@@ -924,14 +924,11 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                     || !index.frontmatter.contents_list().is_empty();
 
                 if !is_index {
-                    let suggested_index =
-                        find_index_in_directory(&self.ws, dir, Some(path)).await;
-                    ctx.result
-                        .warnings
-                        .push(ValidationWarning::MissingPartOf {
-                            file: path.to_path_buf(),
-                            suggested_index,
-                        });
+                    let suggested_index = find_index_in_directory(&self.ws, dir, Some(path)).await;
+                    ctx.result.warnings.push(ValidationWarning::MissingPartOf {
+                        file: path.to_path_buf(),
+                        suggested_index,
+                    });
                 }
             }
 

@@ -154,7 +154,9 @@ async function serveStaticPage(
   effectiveAudience: string,
   env: Env,
 ): Promise<Response> {
-  let path = sitePathSegments.join('/');
+  // Decode percent-encoded segments (e.g. %20 → space) so R2 key matches
+  // the actual stored filename (which uses literal spaces, not percent-encoding)
+  let path = sitePathSegments.map((s) => decodeURIComponent(s)).join('/');
   if (!path) {
     path = 'index.html';
   }

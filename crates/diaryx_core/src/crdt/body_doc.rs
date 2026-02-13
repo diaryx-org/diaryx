@@ -295,33 +295,35 @@ impl BodyDoc {
             content.len()
         );
 
-        // Calculate minimal diff using common prefix/suffix approach
-        let current_chars: Vec<char> = current.chars().collect();
-        let new_chars: Vec<char> = content.chars().collect();
+        // Calculate minimal diff using byte offsets.
+        // yrs defaults to OffsetKind::Bytes, so all positions passed to
+        // remove_range/insert must be UTF-8 byte offsets, NOT char indices.
+        let current_bytes = current.as_bytes();
+        let new_bytes = content.as_bytes();
 
-        // Find common prefix length
-        let common_prefix = current_chars
+        // Find common prefix length (in bytes)
+        let common_prefix = current_bytes
             .iter()
-            .zip(new_chars.iter())
+            .zip(new_bytes.iter())
             .take_while(|(a, b)| a == b)
             .count();
 
-        // Find common suffix length (but don't overlap with prefix)
-        let remaining_current = current_chars.len() - common_prefix;
-        let remaining_new = new_chars.len() - common_prefix;
-        let common_suffix = current_chars[common_prefix..]
+        // Find common suffix length (in bytes, but don't overlap with prefix)
+        let remaining_current = current_bytes.len() - common_prefix;
+        let remaining_new = new_bytes.len() - common_prefix;
+        let common_suffix = current_bytes[common_prefix..]
             .iter()
             .rev()
-            .zip(new_chars[common_prefix..].iter().rev())
+            .zip(new_bytes[common_prefix..].iter().rev())
             .take_while(|(a, b)| a == b)
             .take(remaining_current.min(remaining_new))
             .count();
 
-        // Calculate the range to delete and text to insert
+        // Calculate the byte range to delete and text to insert
         let delete_start = common_prefix;
-        let delete_end = current_chars.len() - common_suffix;
+        let delete_end = current_bytes.len() - common_suffix;
         let insert_start = common_prefix;
-        let insert_end = new_chars.len() - common_suffix;
+        let insert_end = new_bytes.len() - common_suffix;
 
         // Apply the minimal changes
         {
@@ -329,8 +331,6 @@ impl BodyDoc {
 
             // Delete the changed portion (if any)
             if delete_end > delete_start {
-                // Y.js uses byte offsets, so convert char positions to Y.js positions
-                // For TextRef, we need the length in Y.js units
                 let delete_len = (delete_end - delete_start) as u32;
                 self.body_text
                     .remove_range(&mut txn, delete_start as u32, delete_len);
@@ -338,9 +338,9 @@ impl BodyDoc {
 
             // Insert the new portion (if any)
             if insert_end > insert_start {
-                let insert_text: String = new_chars[insert_start..insert_end].iter().collect();
+                let insert_text = &content[insert_start..insert_end];
                 self.body_text
-                    .insert(&mut txn, delete_start as u32, &insert_text);
+                    .insert(&mut txn, delete_start as u32, insert_text);
             }
         }
 
@@ -811,6 +811,186 @@ mod tests {
     fn test_doc_name() {
         let doc = create_body_doc("workspace/notes/hello.md");
         assert_eq!(doc.doc_name(), "workspace/notes/hello.md");
+    }
+
+    /// Simulate the exact editing flow that leads to corruption:
+    /// Two clients, one builds content with links, syncs, then re-saves.
+    #[test]
+    fn test_set_body_with_links_after_sync() {
+        let storage1 = Arc::new(MemoryStorage::new());
+        let storage2 = Arc::new(MemoryStorage::new());
+
+        let doc1 = BodyDoc::new(storage1, "family.md".to_string());
+        let doc2 = BodyDoc::new(storage2, "family.md".to_string());
+
+        // Client 1: Build content incrementally (simulating editor auto-save)
+        let v1 =
+            "# Hooray, you made it!\n\nThat's all folks!\n\n[← Go back](/Message for my family.md)";
+        doc1.set_body(v1).unwrap();
+        assert_eq!(doc1.get_body(), v1);
+
+        // Sync to doc2
+        let update = doc1.encode_state_as_update();
+        doc2.apply_update(&update, UpdateOrigin::Remote).unwrap();
+        assert_eq!(doc2.get_body(), v1);
+
+        // Client 2: Re-save the exact same content (simulating editor onUpdate -> saveEntry)
+        doc2.set_body(v1).unwrap();
+        assert_eq!(doc2.get_body(), v1, "After re-saving same content on doc2");
+
+        // Sync back
+        let update2 = doc2.encode_state_as_update();
+        doc1.apply_update(&update2, UpdateOrigin::Remote).unwrap();
+        assert_eq!(doc1.get_body(), v1, "After sync back to doc1");
+
+        // Now simulate editing: client 1 wraps the link in angle brackets
+        // (this is what the renderMarkdown override does for links with spaces)
+        let v2 = "# Hooray, you made it!\n\nThat's all folks!\n\n[← Go back](</Message for my family.md>)";
+        doc1.set_body(v2).unwrap();
+        assert_eq!(doc1.get_body(), v2, "After adding angle brackets to link");
+
+        // Sync to doc2
+        let update3 = doc1.encode_state_as_update();
+        doc2.apply_update(&update3, UpdateOrigin::Remote).unwrap();
+        assert_eq!(
+            doc2.get_body(),
+            v2,
+            "doc2 after sync of angle bracket change"
+        );
+    }
+
+    /// Test that set_body correctly handles the exact corrupted content we observed.
+    /// The corruption was: "That's all folks!" -> "That's l folks!" and trailing "stp;"
+    #[test]
+    fn test_set_body_incremental_edits_near_links() {
+        let doc = create_body_doc("family.md");
+
+        // Start with initial content
+        let v1 = "# Hooray, you made it!\n\nThat's all folks!";
+        doc.set_body(v1).unwrap();
+        assert_eq!(doc.get_body(), v1);
+
+        // Add a link
+        let v2 =
+            "# Hooray, you made it!\n\nThat's all folks!\n\n[← Go back](/Message for my family.md)";
+        doc.set_body(v2).unwrap();
+        assert_eq!(doc.get_body(), v2, "After adding link");
+
+        // Change link to use angle brackets (simulating renderMarkdown)
+        let v3 = "# Hooray, you made it!\n\nThat's all folks!\n\n[← Go back](</Message for my family.md>)";
+        doc.set_body(v3).unwrap();
+        assert_eq!(doc.get_body(), v3, "After adding angle brackets");
+
+        // Simulate re-save without angle brackets (e.g., different serialization path)
+        let v4 =
+            "# Hooray, you made it!\n\nThat's all folks!\n\n[← Go back](/Message for my family.md)";
+        doc.set_body(v4).unwrap();
+        assert_eq!(doc.get_body(), v4, "After removing angle brackets");
+
+        // Back to angle brackets
+        doc.set_body(v3).unwrap();
+        assert_eq!(doc.get_body(), v3, "After re-adding angle brackets");
+    }
+
+    /// Test set_body with concurrent edits from two clients editing near links.
+    #[test]
+    fn test_concurrent_edits_near_links() {
+        let storage1 = Arc::new(MemoryStorage::new());
+        let storage2 = Arc::new(MemoryStorage::new());
+
+        let doc1 = BodyDoc::new(storage1, "msg.md".to_string());
+        let doc2 = BodyDoc::new(storage2, "msg.md".to_string());
+
+        // Both start with same content
+        let initial = "Welcome!\n\n[Click me!](/family.md)";
+        doc1.set_body(initial).unwrap();
+        let update = doc1.encode_state_as_update();
+        doc2.apply_update(&update, UpdateOrigin::Remote).unwrap();
+
+        // Client 1: Add text before the link
+        let v1 = "Welcome!\n\nNow, click this link:\n\n[Click me!](/family.md)";
+        doc1.set_body(v1).unwrap();
+
+        // Client 2: Also edits (before syncing client 1's changes)
+        let v2 =
+            "Welcome! If you are reading this, that means it works.\n\n[Click me!](/family.md)";
+        doc2.set_body(v2).unwrap();
+
+        // Exchange updates
+        let update1 = doc1.encode_state_as_update();
+        let update2 = doc2.encode_state_as_update();
+
+        doc1.apply_update(&update2, UpdateOrigin::Remote).unwrap();
+        doc2.apply_update(&update1, UpdateOrigin::Remote).unwrap();
+
+        // Both should converge
+        let body1 = doc1.get_body();
+        let body2 = doc2.get_body();
+        assert_eq!(body1, body2, "Clients should converge");
+
+        // Now client 1 re-saves what it sees (the merged content)
+        // This is what the editor does: serialize to markdown, then saveEntry
+        doc1.set_body(&body1).unwrap();
+        assert_eq!(
+            doc1.get_body(),
+            body1,
+            "Re-saving merged content should be no-op"
+        );
+
+        // Sync again
+        let update3 = doc1.encode_state_as_update();
+        doc2.apply_update(&update3, UpdateOrigin::Remote).unwrap();
+        assert_eq!(
+            doc2.get_body(),
+            body1,
+            "doc2 should still match after re-save sync"
+        );
+    }
+
+    /// Test the exact scenario from the bug: content that matches the corrupted patterns.
+    /// The observed corruption in "Message for my family.md":
+    ///   "family" group:" -> "family" p:"  and  trailing " me!" after link
+    #[test]
+    fn test_set_body_message_file_corruption_scenario() {
+        let storage1 = Arc::new(MemoryStorage::new());
+        let storage2 = Arc::new(MemoryStorage::new());
+
+        let doc1 = BodyDoc::new(storage1, "Message for my family.md".to_string());
+        let doc2 = BodyDoc::new(storage2, "Message for my family.md".to_string());
+
+        let correct_content = concat!(
+            "Welcome! If you are reading this, that means site generation is officially working. ",
+            "Welcome to the first-ever Diaryx site!\n\n",
+            "Now, click this other link below: it will only work if you have been added to the ",
+            "\"family\" group:\n\n",
+            "[Click me!](/family.md)"
+        );
+
+        // Client 1: Set initial content
+        doc1.set_body(correct_content).unwrap();
+        assert_eq!(doc1.get_body(), correct_content);
+
+        // Sync to client 2
+        let update = doc1.encode_state_as_update();
+        doc2.apply_update(&update, UpdateOrigin::Remote).unwrap();
+        assert_eq!(doc2.get_body(), correct_content);
+
+        // Client 2: Re-saves the same content (auto-save triggered by editor)
+        doc2.set_body(correct_content).unwrap();
+        assert_eq!(
+            doc2.get_body(),
+            correct_content,
+            "Re-save should not corrupt"
+        );
+
+        // Sync back
+        let update2 = doc2.encode_state_as_update();
+        doc1.apply_update(&update2, UpdateOrigin::Remote).unwrap();
+        assert_eq!(
+            doc1.get_body(),
+            correct_content,
+            "After sync back, content should be intact"
+        );
     }
 
     #[test]

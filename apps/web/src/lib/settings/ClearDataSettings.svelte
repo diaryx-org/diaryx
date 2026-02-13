@@ -13,111 +13,12 @@
   import * as Dialog from "$lib/components/ui/dialog";
   import { Trash2, AlertTriangle, Loader2 } from "@lucide/svelte";
   import { isTauri } from "$lib/backend/interface";
+  import { clearAllLocalData } from "./clearData";
 
   // State
   let showConfirmDialog = $state(false);
   let isClearing = $state(false);
   let error = $state<string | null>(null);
-
-  /**
-   * Clear all OPFS data by deleting diaryx directories.
-   */
-  async function clearOpfs(): Promise<void> {
-    if (!navigator.storage?.getDirectory) return;
-
-    const root = await navigator.storage.getDirectory();
-
-    // Directories to delete:
-    // - "diaryx" - workspace files
-    // - ".diaryx" - CRDT database (crdt.db)
-    // - "guest" - guest session storage
-    const dirsToDelete = ["diaryx", ".diaryx", "guest"];
-
-    for (const dir of dirsToDelete) {
-      try {
-        await root.removeEntry(dir, { recursive: true });
-        console.log(`[ClearData] Deleted OPFS directory: ${dir}`);
-      } catch (e) {
-        // Directory might not exist, that's fine
-        if ((e as Error).name !== "NotFoundError") {
-          console.warn(`[ClearData] Failed to delete OPFS ${dir}:`, e);
-        }
-      }
-    }
-  }
-
-  /**
-   * Clear all IndexedDB databases used by the app.
-   */
-  async function clearIndexedDb(): Promise<void> {
-    const dbNames = [
-      "diaryx-fs-handles",
-      // Add any other IndexedDB databases used by the app
-    ];
-
-    for (const name of dbNames) {
-      try {
-        await new Promise<void>((resolve, reject) => {
-          const request = indexedDB.deleteDatabase(name);
-          request.onsuccess = () => resolve();
-          request.onerror = () => reject(request.error);
-          request.onblocked = () => {
-            console.warn(`[ClearData] Database ${name} is blocked`);
-            resolve(); // Continue anyway
-          };
-        });
-      } catch (e) {
-        console.warn(`[ClearData] Failed to delete IndexedDB ${name}:`, e);
-      }
-    }
-  }
-
-  /**
-   * Clear all localStorage keys used by the app.
-   */
-  function clearLocalStorage(): void {
-    const keysToRemove = [
-      // Storage type
-      "diaryx-storage-type",
-      // Auth
-      "diaryx_auth_token",
-      "diaryx_sync_server_url",
-      "diaryx_user",
-      // Sync
-      "diaryx-sync-server",
-      // Display settings
-      "diaryx-show-unlinked-files",
-      "diaryx-show-hidden-files",
-      "diaryx-show-editor-title",
-      "diaryx-show-editor-path",
-      "diaryx-readable-line-length",
-      "diaryx-focus-mode",
-      // Device
-      "diaryx-device-id",
-      "diaryx-device-name",
-      // Theme
-      "diaryx-theme",
-      // Formatting
-      "diaryx-enable-spoilers",
-      // Cloud backup credentials
-      "diaryx_s3_access_key",
-      "diaryx_s3_secret_key",
-      "diaryx_s3_config",
-      "diaryx_gd_refresh_token",
-      "diaryx_gd_folder_id",
-      "diaryx_gd_client_id",
-      "diaryx_gd_client_secret",
-      "diaryx_sync_enabled",
-    ];
-
-    for (const key of keysToRemove) {
-      try {
-        localStorage.removeItem(key);
-      } catch (e) {
-        console.warn(`[ClearData] Failed to remove localStorage key ${key}:`, e);
-      }
-    }
-  }
 
   /**
    * Clear all local data and refresh the page.
@@ -127,19 +28,8 @@
     error = null;
 
     try {
-      // Clear all storage types
-      await clearOpfs();
-      await clearIndexedDb();
-      clearLocalStorage();
-
-      // Close the dialog before refreshing
       showConfirmDialog = false;
-
-      // Small delay to let the dialog close animation complete
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      // Refresh the page
-      window.location.reload();
+      await clearAllLocalData();
     } catch (e) {
       error = e instanceof Error ? e.message : "Failed to clear data";
       isClearing = false;

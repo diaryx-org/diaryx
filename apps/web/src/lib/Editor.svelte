@@ -131,6 +131,14 @@
           class: "editor-link",
         },
       }).extend({
+        // Wrap hrefs containing spaces in angle brackets per markdown spec
+        renderMarkdown: (node: any, h: any) => {
+          const href = node.attrs?.href ?? '';
+          const title = node.attrs?.title ?? '';
+          const text = h.renderChildren(node);
+          const formattedHref = href.includes(' ') ? `<${href}>` : href;
+          return title ? `[${text}](${formattedHref} "${title}")` : `[${text}](${formattedHref})`;
+        },
         // Add click handler for links
         addProseMirrorPlugins() {
           const plugins = this.parent?.() ?? [];
@@ -610,7 +618,7 @@
 
 <!-- BubbleMenu for inline formatting (appears when text is selected) -->
 {#if !readonly}
-  <BubbleMenuComponent {editor} bind:element={bubbleMenuElement} {enableSpoilers} />
+  <BubbleMenuComponent {editor} bind:element={bubbleMenuElement} {enableSpoilers} {entryPath} {api} />
 {/if}
 
 <style global>

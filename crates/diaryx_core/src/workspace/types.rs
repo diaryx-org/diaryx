@@ -97,9 +97,10 @@ pub struct IndexFrontmatter {
     #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub part_of: Option<String>,
 
-    /// Audience groups that can see this file and its contents
-    /// If absent, inherits from parent; if at root with no audience, treated as private
-    /// Special value "private" means never export regardless of other values
+    /// Audience groups that can see this file and its contents.
+    /// If absent, inherits from parent; if at root with no audience, excluded from
+    /// audience-specific exports. Use `public_audience` in workspace config to
+    /// designate which audience tag means "publishable".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audience: Option<Vec<String>>,
 
@@ -157,21 +158,9 @@ impl IndexFrontmatter {
         self.exclude.as_deref().unwrap_or(&[])
     }
 
-    /// Returns true if this file is marked as private (has "private" in audience)
-    pub fn is_private(&self) -> bool {
-        self.audience
-            .as_ref()
-            .is_some_and(|a| a.iter().any(|s| s.eq_ignore_ascii_case("private")))
-    }
-
-    /// Check if this file is visible to a given audience group
-    /// Returns None if audience should be inherited from parent
+    /// Check if this file is visible to a given audience group.
+    /// Returns None if audience should be inherited from parent (no explicit audience set).
     pub fn is_visible_to(&self, audience_group: &str) -> Option<bool> {
-        // If marked private, never visible
-        if self.is_private() {
-            return Some(false);
-        }
-
         // If no audience specified, inherit from parent
         let audience = self.audience.as_ref()?;
 
@@ -179,7 +168,7 @@ impl IndexFrontmatter {
         Some(
             audience
                 .iter()
-                .any(|a| a.eq_ignore_ascii_case(audience_group)),
+                .any(|a| a.trim().eq_ignore_ascii_case(audience_group.trim())),
         )
     }
 }
@@ -268,6 +257,7 @@ pub struct TreeNode {
     /// `contents` property list
     pub children: Vec<TreeNode>,
     /// Additional frontmatter properties for display (populated by --properties flag)
+    #[ts(type = "Record<string, string> | undefined")]
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub properties: HashMap<String, String>,
 }
@@ -440,5 +430,29 @@ mod tests {
 
         let resolved = index.resolve_path("../parent.md");
         assert_eq!(resolved, PathBuf::from("A/parent.md"));
+    }
+
+    #[test]
+    fn test_audience_helpers_trim_values() {
+        let fm = IndexFrontmatter {
+            audience: Some(vec![
+                " family ".to_string(),
+                " private ".to_string(),
+                " ENGL212 ".to_string(),
+            ]),
+            ..Default::default()
+        };
+
+        // "private" is now just a regular audience tag, no special meaning
+        assert_eq!(fm.is_visible_to("family"), Some(true));
+        assert_eq!(fm.is_visible_to("private"), Some(true));
+        assert_eq!(fm.is_visible_to("engl212"), Some(true));
+        assert_eq!(fm.is_visible_to("unknown"), Some(false));
+
+        let no_audience_fm = IndexFrontmatter {
+            ..Default::default()
+        };
+        // No audience = inherit from parent (returns None)
+        assert_eq!(no_audience_fm.is_visible_to("family"), None);
     }
 }

@@ -42,12 +42,13 @@ function isTransientSaveError(error: unknown): boolean {
 async function saveEntryWithRetry(
   api: Api,
   path: string,
-  markdown: string
+  markdown: string,
+  rootIndexPath?: string
 ): Promise<void> {
   let lastError: unknown = null;
   for (let attempt = 0; attempt <= SAVE_RETRY_DELAYS_MS.length; attempt++) {
     try {
-      await api.saveEntry(path, markdown);
+      await api.saveEntry(path, markdown, rootIndexPath);
       return;
     } catch (e) {
       lastError = e;
@@ -71,20 +72,6 @@ function normalizeFrontmatter(frontmatter: any): Record<string, any> {
     return Object.fromEntries(frontmatter.entries());
   }
   return frontmatter;
-}
-
-/**
- * Convert title to kebab-case filename.
- */
-function slugifyTitle(title: string): string {
-  return (
-    title
-      .toLowerCase()
-      .replace(/[^a-z0-9\s-]/g, '')
-      .replace(/\s+/g, '-')
-      .replace(/-+/g, '-')
-      .replace(/^-|-$/g, '') + '.md'
-  );
 }
 
 /**
@@ -183,7 +170,8 @@ export async function openEntry(
 export async function saveEntry(
   api: Api,
   currentEntry: EntryData | null,
-  editorRef: any
+  editorRef: any,
+  rootIndexPath?: string
 ): Promise<void> {
   if (!currentEntry || !editorRef) return;
   if (entryStore.isSaving) return; // Prevent concurrent saves
@@ -196,7 +184,7 @@ export async function saveEntry(
 
     // Note: saveEntry expects only the body content, not frontmatter.
     // Frontmatter is preserved by the backend's save_content() method.
-    await saveEntryWithRetry(api, currentEntry.path, markdown);
+    await saveEntryWithRetry(api, currentEntry.path, markdown, rootIndexPath);
     entryStore.markClean();
   } catch (e) {
     uiStore.setError(e instanceof Error ? e.message : String(e));
@@ -235,11 +223,11 @@ export async function createChildEntry(
 export async function createEntry(
   api: Api,
   path: string,
-  options: { title: string },
+  options: { title: string; rootIndexPath?: string },
   onSuccess?: () => Promise<void>
 ): Promise<string | null> {
   try {
-    const newPath = await api.createEntry(path, options);
+    const newPath = await api.createEntry(path, { ...options, rootIndexPath: options.rootIndexPath });
 
     if (onSuccess) {
       await onSuccess();
@@ -353,6 +341,7 @@ export async function moveEntry(
 
 /**
  * Handle property change on the current entry.
+ * Title changes with auto-rename are handled atomically by the backend.
  */
 export async function handlePropertyChange(
   api: Api,
@@ -360,100 +349,69 @@ export async function handlePropertyChange(
   key: string,
   value: unknown,
   expandedNodes: Set<string>,
-  onRefreshTree?: () => Promise<void>
+  onRefreshTree?: () => Promise<void>,
+  options?: { rootIndexPath?: string }
 ): Promise<{ success: boolean; newPath?: string }> {
   try {
-    // Special handling for title: need to check rename first
+    const normalizedFrontmatter = normalizeFrontmatter(currentEntry.frontmatter);
+
     if (key === 'title' && typeof value === 'string' && value.trim()) {
-      const newFilename = slugifyTitle(value);
-      const currentFilename = currentEntry.path.split('/').pop() || '';
+      try {
+        // Backend handles: workspace config read, filename style, rename, title set, H1 sync
+        // Returns new path string if rename occurred, null otherwise
+        const newPath = await api.setFrontmatterProperty(
+          currentEntry.path, key, value, options?.rootIndexPath
+        );
 
-      // For index files (have contents property), compare the directory name
-      const isIndex = Array.isArray(currentEntry.frontmatter?.contents);
-      const pathParts = currentEntry.path.split('/');
-      const currentDir = isIndex
-        ? pathParts.slice(-2, -1)[0] || ''
-        : currentFilename.replace(/\.md$/, '');
-      const newDir = newFilename.replace(/\.md$/, '');
-
-      if (currentDir !== newDir) {
-        // Try rename FIRST, before updating frontmatter
-        try {
-          const oldPath = currentEntry.path;
-          const newPath = await api.renameEntry(oldPath, newFilename);
-          // Rename succeeded, now update title in frontmatter (at new path)
-          await api.setFrontmatterProperty(newPath, key, value);
-
-          // Transfer expanded state from old path to new path
-          if (expandedNodes.has(oldPath)) {
-            expandedNodes.delete(oldPath);
+        if (newPath) {
+          // Rename happened — update UI state to new path
+          if (expandedNodes.has(currentEntry.path)) {
+            expandedNodes.delete(currentEntry.path);
             expandedNodes.add(newPath);
           }
 
-          // Update current entry
-          const newFrontmatter = { ...currentEntry.frontmatter, [key]: value };
           entryStore.setCurrentEntry({
             ...currentEntry,
             path: newPath,
-            frontmatter: newFrontmatter,
+            frontmatter: { ...normalizedFrontmatter, [key]: value },
           });
-
-          // Note: CRDT sync is handled by Rust RenameEntry command
-
-          if (onRefreshTree) {
-            await onRefreshTree();
-          }
-
-          entryStore.setTitleError(null);
-          return { success: true, newPath };
-        } catch (renameError) {
-          // Rename failed (e.g., target exists), show user-friendly error
-          const errorMsg =
-            renameError instanceof Error
-              ? renameError.message
-              : String(renameError);
-          if (
-            errorMsg.includes('already exists') ||
-            errorMsg.includes('Destination')
-          ) {
-            entryStore.setTitleError(
-              `A file named "${newFilename.replace('.md', '')}" already exists. Choose a different title.`
-            );
-          } else {
-            entryStore.setTitleError(`Could not rename: ${errorMsg}`);
-          }
-          return { success: false };
+        } else {
+          // No rename — just update frontmatter
+          entryStore.setCurrentEntry({
+            ...currentEntry,
+            frontmatter: { ...normalizedFrontmatter, [key]: value },
+          });
         }
-      } else {
-        // No rename needed, just update title
-        const newFrontmatter = { ...currentEntry.frontmatter, [key]: value };
-        await api.setFrontmatterProperty(currentEntry.path, key, value);
-        entryStore.setCurrentEntry({
-          ...currentEntry,
-          frontmatter: newFrontmatter,
-        });
 
-        // Note: CRDT sync for frontmatter is handled by Rust SetFrontmatterProperty
         entryStore.setTitleError(null);
-
-        if (onRefreshTree) {
-          await onRefreshTree();
+        if (onRefreshTree) await onRefreshTree();
+        return { success: true, newPath: newPath ?? undefined };
+      } catch (renameError) {
+        const errorMsg =
+          renameError instanceof Error
+            ? renameError.message
+            : String(renameError);
+        if (
+          errorMsg.includes('already exists') ||
+          errorMsg.includes('Destination')
+        ) {
+          entryStore.setTitleError(
+            `A file with that name already exists. Choose a different title.`
+          );
+        } else {
+          entryStore.setTitleError(`Could not rename: ${errorMsg}`);
         }
-
-        return { success: true };
+        return { success: false };
       }
     } else {
       // Non-title properties: update normally
-      const newFrontmatter = { ...currentEntry.frontmatter, [key]: value };
-      await api.setFrontmatterProperty(currentEntry.path, key, value as JsonValue);
+      const newFrontmatter = { ...normalizedFrontmatter, [key]: value };
+      await api.setFrontmatterProperty(currentEntry.path, key, value as JsonValue, options?.rootIndexPath);
       entryStore.setCurrentEntry({
         ...currentEntry,
         frontmatter: newFrontmatter,
       });
 
-      // Note: CRDT sync for frontmatter is handled by Rust SetFrontmatterProperty
-
-      // Refresh tree if contents or part_of changed (affects hierarchy)
       if ((key === 'contents' || key === 'part_of') && onRefreshTree) {
         await onRefreshTree();
       }
@@ -479,7 +437,7 @@ export async function removeProperty(
     await api.removeFrontmatterProperty(currentEntry.path, key);
 
     // Update local state
-    const newFrontmatter = { ...currentEntry.frontmatter };
+    const newFrontmatter = normalizeFrontmatter(currentEntry.frontmatter);
     delete newFrontmatter[key];
     entryStore.setCurrentEntry({ ...currentEntry, frontmatter: newFrontmatter });
 
@@ -498,15 +456,17 @@ export async function addProperty(
   api: Api,
   currentEntry: EntryData,
   key: string,
-  value: unknown
+  value: unknown,
+  rootIndexPath?: string
 ): Promise<boolean> {
   try {
-    await api.setFrontmatterProperty(currentEntry.path, key, value as JsonValue);
+    await api.setFrontmatterProperty(currentEntry.path, key, value as JsonValue, rootIndexPath);
+    const normalizedFrontmatter = normalizeFrontmatter(currentEntry.frontmatter);
 
     // Update local state
     entryStore.setCurrentEntry({
       ...currentEntry,
-      frontmatter: { ...currentEntry.frontmatter, [key]: value },
+      frontmatter: { ...normalizedFrontmatter, [key]: value },
     });
 
     return true;
@@ -678,12 +638,12 @@ export async function createChildEntryWithSync(
 export async function createEntryWithSync(
   api: Api,
   path: string,
-  options: { title: string; template?: string },
+  options: { title: string; template?: string; rootIndexPath?: string },
   onSuccess?: () => Promise<void>
 ): Promise<string | null> {
   try {
     // Create via Rust - handles CRDT sync automatically
-    const newPath = await api.createEntry(path, options);
+    const newPath = await api.createEntry(path, { ...options, rootIndexPath: options.rootIndexPath });
 
     // Ensure body sync bridge is created for the new file
     await ensureBodySync(newPath);
@@ -712,7 +672,8 @@ export async function createEntryWithSync(
 export async function saveEntryWithSync(
   api: Api,
   currentEntry: EntryData | null,
-  editorRef: any
+  editorRef: any,
+  rootIndexPath?: string
 ): Promise<void> {
   if (!currentEntry || !editorRef) return;
   if (entryStore.isSaving) return; // Prevent concurrent saves
@@ -724,7 +685,7 @@ export async function saveEntryWithSync(
     const markdown = reverseBlobUrlsToAttachmentPaths(markdownWithBlobUrls || '');
 
     // Save to backend - Rust handles CRDT sync automatically
-    await saveEntryWithRetry(api, currentEntry.path, markdown);
+    await saveEntryWithRetry(api, currentEntry.path, markdown, rootIndexPath);
     entryStore.markClean();
   } catch (e) {
     uiStore.setError(e instanceof Error ? e.message : String(e));

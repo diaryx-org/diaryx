@@ -25,10 +25,12 @@ use crate::link_parser;
 use crate::workspace::Workspace;
 
 /// Publisher for converting workspace to HTML (async-first)
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub struct Publisher<FS: AsyncFileSystem> {
     fs: FS,
 }
 
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
     /// Create a new publisher
     pub fn new(fs: FS) -> Self {
@@ -136,8 +138,26 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
         let mut pages = Vec::new();
         let mut path_to_filename: HashMap<PathBuf, String> = HashMap::new();
 
+        // Ensure the workspace root is first (it becomes index.html).
+        // plan_export uses depth-first post-order, so children appear before
+        // their parent. We need to move the root to position 0.
+        let mut included = plan.included.clone();
+        let root_canonical = workspace_root
+            .canonicalize()
+            .unwrap_or_else(|_| workspace_root.to_path_buf());
+        if let Some(pos) = included.iter().position(|f| {
+            f.source_path
+                .canonicalize()
+                .unwrap_or_else(|_| f.source_path.clone())
+                == root_canonical
+        }) && pos != 0
+        {
+            let root_file = included.remove(pos);
+            included.insert(0, root_file);
+        }
+
         // First pass: assign filenames
-        for (idx, export_file) in plan.included.iter().enumerate() {
+        for (idx, export_file) in included.iter().enumerate() {
             let filename = if idx == 0 {
                 "index.html".to_string()
             } else {
@@ -147,7 +167,7 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
         }
 
         // Second pass: process files
-        for (idx, export_file) in plan.included.iter().enumerate() {
+        for (idx, export_file) in included.iter().enumerate() {
             if let Some(page) = self
                 .process_file(
                     &export_file.source_path,
@@ -426,9 +446,12 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
                     && !raw_href.starts_with("https://")
                     && !raw_href.starts_with('#')
                 {
+                    // URL-decode the href first, since comrak percent-encodes
+                    // spaces and special characters (e.g. %20 for spaces)
+                    let decoded_href = percent_decode(raw_href);
                     // Use link_parser to resolve the href to a canonical
                     // (workspace-relative) path, then look up the HTML filename
-                    let parsed = link_parser::parse_link(raw_href);
+                    let parsed = link_parser::parse_link(&decoded_href);
                     let canonical = link_parser::to_canonical(&parsed, current_relative);
                     let target_path = workspace_dir.join(&canonical);
 
@@ -1357,12 +1380,42 @@ footer a:hover {
 }
 
 /// Escape HTML special characters
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
+}
+
+/// Decode percent-encoded characters in a URL string (e.g. `%20` → ` `).
+fn percent_decode(input: &str) -> String {
+    let mut result = Vec::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2]))
+        {
+            result.push(hi << 4 | lo);
+            i += 3;
+            continue;
+        }
+        result.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(result).unwrap_or_else(|_| input.to_string())
+}
+
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -1374,5 +1427,89 @@ mod tests {
         assert_eq!(html_escape("<script>"), "&lt;script&gt;");
         assert_eq!(html_escape("a & b"), "a &amp; b");
         assert_eq!(html_escape(r#"say "hi""#), "say &quot;hi&quot;");
+    }
+
+    #[test]
+    fn test_percent_decode() {
+        assert_eq!(percent_decode("hello"), "hello");
+        assert_eq!(percent_decode("hello%20world"), "hello world");
+        assert_eq!(
+            percent_decode("Message%20for%20my%20family.md"),
+            "Message for my family.md"
+        );
+        assert_eq!(percent_decode("%2Fpath%2Fto%2Ffile"), "/path/to/file");
+        // Incomplete sequences are left as-is
+        assert_eq!(percent_decode("hello%2"), "hello%2");
+        assert_eq!(percent_decode("hello%"), "hello%");
+        // Invalid hex chars left as-is
+        assert_eq!(percent_decode("hello%ZZ"), "hello%ZZ");
+    }
+
+    #[cfg(feature = "markdown")]
+    #[test]
+    fn test_transform_links_no_corruption() {
+        use std::path::PathBuf;
+
+        let fs = crate::fs::SyncToAsyncFs::new(crate::fs::RealFileSystem);
+        let publisher = Publisher::new(fs);
+
+        // Simulate comrak output for: [Click me!](/family.md)
+        let html1 = r#"<p><a href="/family.md">Click me!</a></p>"#;
+        // Simulate comrak output for: [← Go back](</Message for my family.md>)
+        let html2 = r#"<h1>Hooray, you made it!</h1>
+<p>That's all folks!</p>
+<p><a href="/Message%20for%20my%20family.md">← Go back</a></p>"#;
+
+        let workspace_dir = Path::new("/tmp/workspace");
+        let current_path = workspace_dir.join("family.md");
+        let mut path_to_filename = HashMap::new();
+        path_to_filename.insert(
+            workspace_dir.join("Message for my family.md"),
+            "index.html".to_string(),
+        );
+        path_to_filename.insert(workspace_dir.join("family.md"), "family.html".to_string());
+
+        let result1 = publisher.transform_html_links(
+            html1,
+            &workspace_dir.join("Message for my family.md"),
+            &path_to_filename,
+            workspace_dir,
+            "index.html",
+        );
+        eprintln!("Result 1: {}", result1);
+        assert!(
+            result1.contains(">Click me!</a></p>"),
+            "Link text corrupted: {}",
+            result1
+        );
+        assert!(
+            !result1.contains(" me!</p>") || result1.contains("Click me!</a></p>"),
+            "Duplicate text after link: {}",
+            result1
+        );
+
+        let result2 = publisher.transform_html_links(
+            html2,
+            &current_path,
+            &path_to_filename,
+            workspace_dir,
+            "family.html",
+        );
+        eprintln!("Result 2: {}", result2);
+        assert!(
+            result2.contains("all folks!"),
+            "Body text corrupted: {}",
+            result2
+        );
+        assert!(
+            result2.contains(">← Go back</a></p>"),
+            "Link text corrupted: {}",
+            result2
+        );
+        assert!(
+            !result2.contains("stp;"),
+            "Spurious text after link: {}",
+            result2
+        );
     }
 }

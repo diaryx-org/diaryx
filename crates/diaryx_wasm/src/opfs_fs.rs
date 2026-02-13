@@ -338,6 +338,11 @@ impl AsyncFileSystem for OpfsFileSystem {
 
     fn exists<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, bool> {
         Box::pin(async move {
+            // Root always exists.
+            if path.as_os_str().is_empty() || path == Path::new(".") {
+                return true;
+            }
+
             // Try to get the parent directory
             let dir = match get_parent_dir(&self.root, path).await {
                 Ok(d) => d,
@@ -350,8 +355,18 @@ impl AsyncFileSystem for OpfsFileSystem {
             };
 
             // Try to get the file handle
-            let options = GetFileHandleOptions { create: false };
-            dir.get_file_handle_with_options(&filename, &options)
+            let file_options = GetFileHandleOptions { create: false };
+            if dir
+                .get_file_handle_with_options(&filename, &file_options)
+                .await
+                .is_ok()
+            {
+                return true;
+            }
+
+            // Check directory handle too so exists() matches trait contract.
+            let dir_options = GetDirectoryHandleOptions { create: false };
+            dir.get_directory_handle_with_options(&filename, &dir_options)
                 .await
                 .is_ok()
         })
@@ -382,6 +397,20 @@ impl AsyncFileSystem for OpfsFileSystem {
 
     fn move_file<'a>(&'a self, from: &'a Path, to: &'a Path) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
+            if !self.exists(from).await {
+                return Err(Error::new(
+                    ErrorKind::NotFound,
+                    format!("Source file not found: {}", from.display()),
+                ));
+            }
+
+            if self.exists(to).await {
+                return Err(Error::new(
+                    ErrorKind::AlreadyExists,
+                    format!("Destination already exists: {}", to.display()),
+                ));
+            }
+
             // Read the source file
             let content = self.read_to_string(from).await?;
 

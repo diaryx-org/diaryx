@@ -244,6 +244,28 @@ describe('workspaceCrdtService', () => {
         extra: {},
       })
     })
+
+    it('should normalize string audience values', async () => {
+      await initializeWorkspaceCrdt(
+        'workspace-123',
+        '/path',
+        null,
+        false,
+        mockRustApi as any,
+        {}
+      )
+
+      await updateCrdtFileMetadata('test.md', {
+        audience: ' family, ENGL212 ',
+      })
+
+      expect(updateFileMetadata).toHaveBeenCalledWith('test.md', {
+        title: null,
+        audience: ['family', 'ENGL212'],
+        description: null,
+        extra: {},
+      })
+    })
   })
 
   describe('addFileToCrdt', () => {

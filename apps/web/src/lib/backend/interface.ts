@@ -22,8 +22,6 @@ export interface Config {
   default_workspace: string;
   daily_entry_folder?: string;
   editor?: string;
-  default_template?: string;
-  daily_template?: string;
 }
 
 export interface TreeNode {

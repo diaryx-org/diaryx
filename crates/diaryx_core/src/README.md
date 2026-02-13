@@ -45,7 +45,7 @@ This directory contains the source code for the core Diaryx library.
 | `config.rs`          | Configuration management                               |
 | `diaryx.rs`          | Central Diaryx data structure                          |
 | `error.rs`           | Shared error types                                     |
-| `export.rs`          | Export with audience filtering                         |
+| `export.rs`          | Export with audience filtering (case-insensitive, trim-aware, no special "private" value) |
 | `frontmatter.rs`     | Frontmatter parsing and manipulation                   |
 | `link_parser.rs`     | Parse markdown links                                   |
 | `metadata_writer.rs` | Write frontmatter metadata (temp + backup safe writes) |
@@ -54,9 +54,29 @@ This directory contains the source code for the core Diaryx library.
 | `test_utils.rs`      | Feature-gated test utilities                           |
 | `validate.rs`        | Workspace validation and fixing                        |
 
+## SetFrontmatterProperty: Atomic Title Rename
+
+When `SetFrontmatterProperty` is called with `key="title"` and a `root_index_path`,
+the handler reads workspace config and atomically:
+1. Computes the new filename using `apply_filename_style()` (if `auto_rename_to_title` is enabled)
+2. Renames the file via `workspace.rename_entry()` (handles both leaf files and index directories)
+3. Migrates the body CRDT doc to the new path
+4. Sets the title in frontmatter at the (possibly new) path
+5. Syncs the first H1 heading (if `sync_title_to_heading` is enabled)
+
+Returns `Response::String(new_path)` if a rename occurred, `Response::Ok` otherwise.
+
 ## CRDT Metadata Notes
 
 - `Command::SetCrdtFile` preserves existing attachment `BinaryRef` metadata
   when incoming metadata omits attachments or includes refs with empty hashes.
   This avoids dropping cloud attachment references during frontmatter-driven
   metadata refreshes.
+
+## TypeScript Binding Notes
+
+- `ts-rs` is configured with `no-serde-warnings` in `Cargo.toml`.
+- For fields that are conditionally omitted by serde (for example via
+  `skip_serializing_if`), prefer explicit `#[ts(...)]` annotations (such as
+  `#[ts(optional)]` or `#[ts(type = "...")]`) to keep TS output aligned with
+  runtime JSON shape.

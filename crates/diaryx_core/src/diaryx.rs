@@ -482,8 +482,21 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
     ///
     /// This is a convenience method for the common save operation.
     pub async fn save_content(&self, path: &str, body: &str) -> Result<()> {
+        self.save_content_with_options(path, body, true).await
+    }
+
+    /// Save content with explicit control over timestamp updating.
+    pub async fn save_content_with_options(
+        &self,
+        path: &str,
+        body: &str,
+        auto_update_timestamp: bool,
+    ) -> Result<()> {
         self.set_content(path, body).await?;
-        self.touch_updated(path).await
+        if auto_update_timestamp {
+            self.touch_updated(path).await?;
+        }
+        Ok(())
     }
 
     /// Update the 'updated' timestamp to the current time.

@@ -108,6 +108,8 @@ create/delete/body events on top of already-imported snapshot state.
 - indexes `BinaryRef` attachment metadata and queues missing-blob downloads on metadata updates
 - normalizes filesystem-event frontmatter before callbacks/queueing so missing
   `attachments` fields are treated as `[]` instead of crashing event handlers
+- normalizes metadata-event `audience` values so both arrays and comma-delimited
+  strings are exposed as clean `string[]` values to UI callbacks
 
 To keep queue state consistent, bridge code and controllers import the same
 `attachmentSyncService` module path (single singleton instance), and queue

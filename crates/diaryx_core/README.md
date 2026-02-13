@@ -614,9 +614,20 @@ let context = TemplateContext::new()
 let content = template.render(&context);
 ```
 
-### Custom Templates
+### Workspace Config Templates
 
-Create custom templates in `.diaryx/templates/` within your workspace:
+Templates can be regular workspace entries referenced by link in workspace config:
+
+```yaml
+default_template: "[Default](/templates/default.md)"
+daily_template: "[Daily](/templates/daily.md)"
+```
+
+The resolution order is: workspace config link -> `_templates/` directory -> built-in templates.
+
+### Custom Templates (Legacy)
+
+Create custom templates in `_templates/` within your workspace:
 
 ```markdown
 ---
@@ -722,40 +733,51 @@ let serializable = error.to_serializable();
 
 ## Configuration
 
-The `config` module manages user preferences:
+Diaryx uses a two-layer configuration model:
+
+- **User config** (`~/.config/diaryx/config.toml`) - Device/user-level settings (default workspace, editor, sync credentials). Managed by the `config` module.
+- **Workspace config** (root index frontmatter) - Workspace-level settings (link format, filename style, templates, audience). Managed by `WorkspaceConfig` in the `workspace` module.
+
+### User Config
 
 ```rust,ignore
 use diaryx_core::config::Config;
 use std::path::PathBuf;
 
-// Load from default location (~/.config/diaryx/config.toml)
 let config = Config::load()?;
 
-// Or create with specific workspace
-let config = Config::new(PathBuf::from("/home/user/diary"));
-
-// Key fields
 let workspace = &config.default_workspace;    // Main workspace path
 let daily_dir = config.daily_entry_dir();     // Daily entries location
 let editor = &config.editor;                  // Preferred editor
-let link_fmt = &config.link_format;           // Link formatting style
-
-// Sync configuration
-let server = &config.sync_server_url;         // Sync server URL
-let token = &config.sync_session_token;       // Auth token
 ```
-
-Configuration file format (TOML):
 
 ```toml
 default_workspace = "/home/user/diary"
 daily_entry_folder = "Daily"
 editor = "nvim"
-link_format = "MarkdownRoot"
 
 # Sync settings (optional)
 sync_server_url = "https://sync.example.com"
 sync_email = "user@example.com"
+```
+
+### Workspace Config
+
+Workspace-level settings live in the root index file's YAML frontmatter. See [workspace/README.md](src/workspace/README.md) for the full field reference.
+
+```yaml
+---
+title: My Workspace
+link_format: markdown_root
+filename_style: kebab_case
+auto_update_timestamp: true
+auto_rename_to_title: true
+sync_title_to_heading: false
+daily_entry_folder: "Journal/Daily"
+default_template: "[Default](/templates/default.md)"
+daily_template: "[Daily](/templates/daily.md)"
+public_audience: "public"
+---
 ```
 
 ## Filesystem abstraction

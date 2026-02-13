@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.12.0"
+version = "0.13.0"
 edition = "2024"
 rust-version = "1.91"
 repository = "https://github.com/diaryx-org/diaryx"
@@ -28,7 +28,7 @@ chrono = { version = "0.4", features = ["serde"] }
 indexmap = { version = "2.0", features = ["serde"] }
 
 # Internal crates - version must match workspace.package.version for publishing
-diaryx_core = { path = "crates/diaryx_core", version = "0.12.0" }
+diaryx_core = { path = "crates/diaryx_core", version = "0.13.0" }
 
 # cargo-release configuration
 [workspace.metadata.release]
@@ -39,3 +39,7 @@ tag-message = "Release v{{version}}"
 pre-release-commit-message = "chore: release v{{version}}"
 publish = true
 push = true
+
+[profile.release.package.diaryx_wasm]
+# Keep wasm artifact size small without using per-crate profile stanzas.
+opt-level = "s"

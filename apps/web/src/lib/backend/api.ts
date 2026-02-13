@@ -20,11 +20,11 @@ import type {
   BinaryFileInfo,
   TemplateInfo,
   StorageInfo,
-  CreateEntryOptions,
   SearchOptions,
   AncestorAttachmentsResult,
   CreateChildResult,
   LinkFormat,
+  WorkspaceConfig,
 } from './generated';
 import type { JsonValue } from './generated/serde_json/JsonValue';
 
@@ -96,21 +96,22 @@ export function createApi(backend: Backend) {
     },
 
     /** Save an entry's content. */
-    async saveEntry(path: string, content: string): Promise<void> {
-      await backend.execute({ type: 'SaveEntry', params: { path, content } });
+    async saveEntry(path: string, content: string, rootIndexPath?: string): Promise<void> {
+      await backend.execute({ type: 'SaveEntry', params: { path, content, root_index_path: rootIndexPath ?? null } } as any);
     },
 
     /** Create a new entry. Returns the path to the created entry. */
-    async createEntry(path: string, options?: { title?: string | null; template?: string | null; part_of?: string | null }): Promise<string> {
-      const fullOptions: CreateEntryOptions = {
+    async createEntry(path: string, options?: { title?: string | null; template?: string | null; part_of?: string | null; rootIndexPath?: string | null }): Promise<string> {
+      const fullOptions = {
         title: options?.title ?? null,
         part_of: options?.part_of ?? null,
         template: options?.template ?? null,
+        root_index_path: options?.rootIndexPath ?? null,
       };
       const response = await backend.execute({
         type: 'CreateEntry',
         params: { path, options: fullOptions },
-      });
+      } as any);
       return expectResponse(response, 'String').data;
     },
 
@@ -260,6 +261,23 @@ export function createApi(backend: Backend) {
       });
     },
 
+    /** Get workspace configuration from root index frontmatter. */
+    async getWorkspaceConfig(rootIndexPath: string): Promise<WorkspaceConfig> {
+      const response = await backend.execute({
+        type: 'GetWorkspaceConfig',
+        params: { root_index_path: rootIndexPath },
+      });
+      return expectResponse(response, 'WorkspaceConfig').data;
+    },
+
+    /** Set a workspace configuration field in root index frontmatter. */
+    async setWorkspaceConfig(rootIndexPath: string, field: string, value: string): Promise<void> {
+      await backend.execute({
+        type: 'SetWorkspaceConfig',
+        params: { root_index_path: rootIndexPath, field, value },
+      } as any);
+    },
+
     // =========================================================================
     // Frontmatter Operations
     // =========================================================================
@@ -270,12 +288,16 @@ export function createApi(backend: Backend) {
       return expectResponse(response, 'Frontmatter').data;
     },
 
-    /** Set a frontmatter property. */
-    async setFrontmatterProperty(path: string, key: string, value: JsonValue): Promise<void> {
-      await backend.execute({
+    /** Set a frontmatter property. Returns new path if a rename occurred (title + auto-rename), null otherwise. */
+    async setFrontmatterProperty(path: string, key: string, value: JsonValue, rootIndexPath?: string): Promise<string | null> {
+      const response = await backend.execute({
         type: 'SetFrontmatterProperty',
-        params: { path, key, value },
-      });
+        params: { path, key, value, root_index_path: rootIndexPath ?? null },
+      } as any);
+      if (response.type === 'String') {
+        return response.data;
+      }
+      return null;
     },
 
     /** Remove a frontmatter property. */

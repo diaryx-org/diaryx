@@ -428,14 +428,18 @@ pub struct DiaryxBackend {
     /// - StorageBackend: OPFS, IndexedDB, FSA, or InMemory
     fs: Rc<EventEmittingFs<CrdtFs<StorageBackend>>>,
     /// CRDT storage for sync and history features.
+    #[allow(dead_code)]
     crdt_storage: Arc<dyn CrdtStorage>,
     /// Workspace CRDT for file metadata sync.
+    #[allow(dead_code)]
     workspace_crdt: Arc<WorkspaceCrdt>,
     /// Body document manager for file content sync.
+    #[allow(dead_code)]
     body_doc_manager: Arc<BodyDocManager>,
     /// WASM-specific event callback registry for JS subscribers.
     wasm_event_registry: Rc<WasmCallbackRegistry>,
     /// Rust event registry that bridges to WASM registry.
+    #[allow(dead_code)]
     rust_event_registry: Arc<CallbackRegistry>,
     /// Subscription to CRDT updates for automatic sync emission.
     /// Must be stored to prevent the subscription from being dropped.
@@ -549,7 +553,7 @@ impl DiaryxBackend {
 
         // Create shared Diaryx instance with callbacks pre-configured
         let diaryx = {
-            let mut d = Diaryx::with_crdt_instances(
+            let d = Diaryx::with_crdt_instances(
                 (*fs).clone(),
                 Arc::clone(&workspace_crdt),
                 Arc::clone(&body_doc_manager),
@@ -658,7 +662,7 @@ impl DiaryxBackend {
 
         // Create shared Diaryx instance with callbacks pre-configured
         let diaryx = {
-            let mut d = Diaryx::with_crdt_instances(
+            let d = Diaryx::with_crdt_instances(
                 (*fs).clone(),
                 Arc::clone(&workspace_crdt),
                 Arc::clone(&body_doc_manager),
@@ -779,7 +783,7 @@ impl DiaryxBackend {
 
         // Create shared Diaryx instance with callbacks pre-configured
         let diaryx = {
-            let mut d = Diaryx::with_crdt_instances(
+            let d = Diaryx::with_crdt_instances(
                 (*fs).clone(),
                 Arc::clone(&workspace_crdt),
                 Arc::clone(&body_doc_manager),
@@ -901,7 +905,7 @@ impl DiaryxBackend {
 
         // Create shared Diaryx instance with callbacks pre-configured
         let diaryx = {
-            let mut d = Diaryx::with_crdt_instances(
+            let d = Diaryx::with_crdt_instances(
                 (*fs).clone(),
                 Arc::clone(&workspace_crdt),
                 Arc::clone(&body_doc_manager),

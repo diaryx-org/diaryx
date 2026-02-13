@@ -32,6 +32,27 @@ export interface WorkspaceCrdtStats {
 
 let isInitialized = false;
 
+function normalizeAudience(frontmatter: Record<string, unknown>): string[] | null {
+  const rawAudience = frontmatter.audience;
+  if (Array.isArray(rawAudience)) {
+    const values = rawAudience
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+    return values.length > 0 ? values : null;
+  }
+
+  if (typeof rawAudience === 'string') {
+    const values = rawAudience
+      .split(',')
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+    return values.length > 0 ? values : null;
+  }
+
+  return null;
+}
+
 // ============================================================================
 // Public API
 // ============================================================================
@@ -134,7 +155,7 @@ export async function updateCrdtFileMetadata(
       title: (frontmatter.title as string) ?? null,
       // part_of: intentionally omitted - Rust handles via SetFrontmatterProperty
       // contents: intentionally omitted - Rust handles via SetFrontmatterProperty
-      audience: (frontmatter.audience as string[]) ?? null,
+      audience: normalizeAudience(frontmatter),
       description: (frontmatter.description as string) ?? null,
       extra: extraFields,
     });
@@ -176,7 +197,7 @@ export async function addFileToCrdt(
       title: (frontmatter.title as string) ?? null,
       // part_of: intentionally omitted - Rust handles
       // contents: intentionally omitted - Rust handles
-      audience: (frontmatter.audience as string[]) ?? null,
+      audience: normalizeAudience(frontmatter),
       description: (frontmatter.description as string) ?? null,
       extra: extraFields,
     });

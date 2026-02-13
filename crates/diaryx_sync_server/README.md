@@ -27,6 +27,7 @@ A Rust-based multi-device sync server for Diaryx with magic link authentication.
 - **Multi-device support**: Track and manage connected devices
 - **Live share sessions**: Real-time collaboration with guests via shareable codes
 - **Persistent storage**: SQLite-based storage for user data and CRDT state
+- **Static site hosting pipeline**: Publish audience-filtered HTML to a dedicated R2 bucket
 
 ## Quick Start
 
@@ -63,6 +64,10 @@ cargo run -p diaryx_sync_server
 | `R2_PREFIX`                 | `diaryx-sync`                                 | Object key prefix inside the bucket                   |
 | `R2_GC_RETENTION_DAYS`      | `7`                                           | Soft-delete retention before blob garbage collection  |
 | `ATTACHMENT_INCREMENTAL_SYNC_ENABLED` | `true`                              | Enable incremental multipart attachment APIs          |
+| `SITES_R2_BUCKET`           | `diaryx-sites`                                | Cloudflare R2 bucket for published static site files  |
+| `PUBLISHED_SITE_LIMIT`      | `1`                                           | Per-user max published sites                          |
+| `SITES_BASE_URL`            | `APP_BASE_URL`                                | Public base URL used when generating tokenized links  |
+| `TOKEN_SIGNING_KEY`         | `AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=` | Base64 32-byte HMAC key shared with Worker            |
 
 ## API Endpoints
 
@@ -256,6 +261,26 @@ Range: bytes=start-end (optional)
 ```
 
 Returns attachment bytes for hashes referenced by the workspace.
+
+#### Published Site Management
+
+```
+POST   /api/workspaces/{workspace_id}/site
+GET    /api/workspaces/{workspace_id}/site
+DELETE /api/workspaces/{workspace_id}/site
+POST   /api/workspaces/{workspace_id}/site/publish
+POST   /api/workspaces/{workspace_id}/site/tokens
+GET    /api/workspaces/{workspace_id}/site/tokens
+DELETE /api/workspaces/{workspace_id}/site/tokens/{token_id}
+Authorization: Bearer <session_token>
+```
+
+These endpoints manage static site configuration, trigger publish jobs, and
+issue/revoke audience-scoped access tokens for the Cloudflare Worker.
+Audience builds (including `public`) use frontmatter audience filtering; files
+without explicit or inherited audience are excluded by default.
+Each publish replaces prior artifacts under `/{slug}/{audience}/` to avoid
+stale files remaining accessible.
 
 ### Share Sessions (Live Collaboration)
 

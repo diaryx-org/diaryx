@@ -33,6 +33,22 @@ This module provides filesystem abstraction through `FileSystem` (synchronous) a
 | `callback_registry.rs` | Callback management for events |
 | `decorator_stack.rs` | Composable filesystem decorators |
 
+## Backend Parity
+
+`InMemoryFileSystem` and `RealFileSystem` now both auto-create missing parent
+directories for `write_file` and `create_new` operations. This keeps behavior
+consistent across web/native backends for nested path writes.
+
+Cross-backend parity is exercised by:
+
+- `crates/diaryx_core/tests/crdt_fs_trait_parity.rs`
+
+Run with:
+
+```bash
+cargo test -p diaryx_core --features crdt --test crdt_fs_trait_parity
+```
+
 ## Sync Write Markers
 
 `AsyncFileSystem::mark_sync_write_start/end` markers are forwarded through the

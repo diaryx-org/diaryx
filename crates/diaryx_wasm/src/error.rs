@@ -3,6 +3,7 @@
 use wasm_bindgen::JsValue;
 
 /// Extension trait for converting Results to JS-compatible errors.
+#[allow(dead_code)]
 pub trait IntoJsResult<T> {
     /// Convert to a Result with JsValue error.
     fn js_err(self) -> Result<T, JsValue>;
@@ -15,6 +16,7 @@ impl<T, E: std::fmt::Display> IntoJsResult<T> for Result<T, E> {
 }
 
 /// Extension trait for converting Options to JS-compatible errors.
+#[allow(dead_code)]
 pub trait IntoJsOption<T> {
     /// Convert to a Result with JsValue error using the provided message.
     fn js_ok_or(self, msg: &str) -> Result<T, JsValue>;

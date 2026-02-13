@@ -26,7 +26,7 @@
 mod helpers;
 
 // Re-export helper functions
-pub use helpers::{prettify_filename, slugify, slugify_title};
+pub use helpers::{apply_filename_style, prettify_filename, slugify, slugify_title};
 
 use crate::config::Config;
 use crate::date::{date_to_path, parse_date};
@@ -327,11 +327,24 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
             .await
     }
 
-    /// Save content and update the 'updated' timestamp in one operation.
-    /// This is a convenience method that combines set_content and touch_updated.
+    /// Save content and optionally update the 'updated' timestamp.
+    /// When `auto_update_timestamp` is true (the default), this combines set_content and touch_updated.
     pub async fn save_content(&self, path: &str, content: &str) -> Result<()> {
+        self.save_content_with_options(path, content, true).await
+    }
+
+    /// Save content with explicit control over timestamp updating.
+    pub async fn save_content_with_options(
+        &self,
+        path: &str,
+        content: &str,
+        auto_update_timestamp: bool,
+    ) -> Result<()> {
         self.set_content(path, content).await?;
-        self.touch_updated(path).await
+        if auto_update_timestamp {
+            self.touch_updated(path).await?;
+        }
+        Ok(())
     }
 
     /// Append content to the end of a file's body.
@@ -993,10 +1006,8 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
         // Get template
         let manager = self.template_manager(Some(&config.default_workspace));
 
-        // Priority: explicit template_name > config.daily_template > "daily" built-in
-        let effective_template_name = template_name
-            .or(config.daily_template.as_deref())
-            .unwrap_or("daily");
+        // Priority: explicit template_name > "daily" built-in
+        let effective_template_name = template_name.unwrap_or("daily");
 
         let template = manager
             .get(effective_template_name)

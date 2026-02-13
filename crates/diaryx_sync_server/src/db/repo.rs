@@ -44,6 +44,42 @@ pub struct WorkspaceInfo {
     pub created_at: DateTime<Utc>,
 }
 
+/// Published site configuration for a workspace.
+#[derive(Debug, Clone)]
+pub struct PublishedSiteInfo {
+    pub id: String,
+    pub workspace_id: String,
+    pub user_id: String,
+    pub slug: String,
+    pub custom_domain: Option<String>,
+    pub enabled: bool,
+    pub auto_publish: bool,
+    pub last_published_at: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// Per-audience static build metadata.
+#[derive(Debug, Clone)]
+pub struct SiteAudienceBuildInfo {
+    pub site_id: String,
+    pub audience: String,
+    pub file_count: usize,
+    pub built_at: i64,
+}
+
+/// Access token metadata for a published site.
+#[derive(Debug, Clone)]
+pub struct AccessTokenInfo {
+    pub id: String,
+    pub site_id: String,
+    pub audience: String,
+    pub label: Option<String>,
+    pub expires_at: Option<i64>,
+    pub revoked: bool,
+    pub created_at: i64,
+}
+
 /// Share session information
 #[derive(Debug, Clone)]
 pub struct ShareSessionInfo {
@@ -560,6 +596,290 @@ impl AuthRepo {
         .optional()
     }
 
+    // ===== Published site operations =====
+
+    /// Count published sites owned by a user.
+    pub fn count_user_sites(&self, user_id: &str) -> Result<usize, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM published_sites WHERE user_id = ?",
+            [user_id],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
+    /// Create a published site for a workspace.
+    pub fn create_published_site(
+        &self,
+        workspace_id: &str,
+        user_id: &str,
+        slug: &str,
+        enabled: bool,
+        auto_publish: bool,
+    ) -> Result<PublishedSiteInfo, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO published_sites (id, workspace_id, user_id, slug, enabled, auto_publish, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                id,
+                workspace_id,
+                user_id,
+                slug,
+                enabled as i32,
+                auto_publish as i32,
+                now,
+                now
+            ],
+        )?;
+        Ok(PublishedSiteInfo {
+            id,
+            workspace_id: workspace_id.to_string(),
+            user_id: user_id.to_string(),
+            slug: slug.to_string(),
+            custom_domain: None,
+            enabled,
+            auto_publish,
+            last_published_at: None,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Get a published site by workspace ID.
+    pub fn get_site_for_workspace(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Option<PublishedSiteInfo>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, workspace_id, user_id, slug, custom_domain, enabled, auto_publish, last_published_at, created_at, updated_at
+             FROM published_sites
+             WHERE workspace_id = ?",
+            [workspace_id],
+            |row| {
+                Ok(PublishedSiteInfo {
+                    id: row.get(0)?,
+                    workspace_id: row.get(1)?,
+                    user_id: row.get(2)?,
+                    slug: row.get(3)?,
+                    custom_domain: row.get(4)?,
+                    enabled: row.get::<_, i32>(5)? != 0,
+                    auto_publish: row.get::<_, i32>(6)? != 0,
+                    last_published_at: row.get(7)?,
+                    created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
+                })
+            },
+        )
+        .optional()
+    }
+
+    /// Get a published site by globally-unique slug.
+    pub fn get_site_by_slug(
+        &self,
+        slug: &str,
+    ) -> Result<Option<PublishedSiteInfo>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, workspace_id, user_id, slug, custom_domain, enabled, auto_publish, last_published_at, created_at, updated_at
+             FROM published_sites
+             WHERE slug = ?",
+            [slug],
+            |row| {
+                Ok(PublishedSiteInfo {
+                    id: row.get(0)?,
+                    workspace_id: row.get(1)?,
+                    user_id: row.get(2)?,
+                    slug: row.get(3)?,
+                    custom_domain: row.get(4)?,
+                    enabled: row.get::<_, i32>(5)? != 0,
+                    auto_publish: row.get::<_, i32>(6)? != 0,
+                    last_published_at: row.get(7)?,
+                    created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
+                })
+            },
+        )
+        .optional()
+    }
+
+    /// List audience build metadata for a site.
+    pub fn list_site_audience_builds(
+        &self,
+        site_id: &str,
+    ) -> Result<Vec<SiteAudienceBuildInfo>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT site_id, audience, file_count, built_at
+             FROM site_audience_builds
+             WHERE site_id = ?
+             ORDER BY audience ASC",
+        )?;
+        let rows = stmt
+            .query_map([site_id], |row| {
+                Ok(SiteAudienceBuildInfo {
+                    site_id: row.get(0)?,
+                    audience: row.get(1)?,
+                    file_count: row.get::<_, i64>(2)? as usize,
+                    built_at: row.get(3)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// Update publish timestamps and per-audience build counts.
+    pub fn update_site_published(
+        &self,
+        site_id: &str,
+        audiences: &[(String, usize)],
+    ) -> Result<(), rusqlite::Error> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let now = Utc::now().timestamp();
+
+        tx.execute(
+            "UPDATE published_sites SET last_published_at = ?, updated_at = ? WHERE id = ?",
+            params![now, now, site_id],
+        )?;
+        tx.execute(
+            "DELETE FROM site_audience_builds WHERE site_id = ?",
+            params![site_id],
+        )?;
+        for (audience, file_count) in audiences {
+            tx.execute(
+                "INSERT INTO site_audience_builds (site_id, audience, file_count, built_at)
+                 VALUES (?, ?, ?, ?)",
+                params![site_id, audience, *file_count as i64, now],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Delete published site metadata and related rows.
+    pub fn delete_published_site(&self, site_id: &str) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM published_sites WHERE id = ?", [site_id])?;
+        Ok(())
+    }
+
+    /// Get a published site by custom domain hostname.
+    pub fn get_site_by_custom_domain(
+        &self,
+        domain: &str,
+    ) -> Result<Option<PublishedSiteInfo>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, workspace_id, user_id, slug, custom_domain, enabled, auto_publish, last_published_at, created_at, updated_at
+             FROM published_sites
+             WHERE custom_domain = ?",
+            [domain],
+            |row| {
+                Ok(PublishedSiteInfo {
+                    id: row.get(0)?,
+                    workspace_id: row.get(1)?,
+                    user_id: row.get(2)?,
+                    slug: row.get(3)?,
+                    custom_domain: row.get(4)?,
+                    enabled: row.get::<_, i32>(5)? != 0,
+                    auto_publish: row.get::<_, i32>(6)? != 0,
+                    last_published_at: row.get(7)?,
+                    created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
+                })
+            },
+        )
+        .optional()
+    }
+
+    /// Set or clear the custom domain for a published site.
+    pub fn set_custom_domain(
+        &self,
+        site_id: &str,
+        domain: Option<&str>,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+        conn.execute(
+            "UPDATE published_sites SET custom_domain = ?, updated_at = ? WHERE id = ?",
+            params![domain, now, site_id],
+        )?;
+        Ok(())
+    }
+
+    /// Create access token metadata and return token ID.
+    pub fn create_access_token(
+        &self,
+        site_id: &str,
+        audience: &str,
+        label: Option<&str>,
+        expires_at: Option<i64>,
+    ) -> Result<String, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let token_id = uuid::Uuid::new_v4().to_string();
+        let now = Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO site_access_tokens (id, site_id, audience, label, expires_at, revoked, created_at)
+             VALUES (?, ?, ?, ?, ?, 0, ?)",
+            params![token_id, site_id, audience, label, expires_at, now],
+        )?;
+        Ok(token_id)
+    }
+
+    /// List access tokens for a site.
+    pub fn list_site_tokens(&self, site_id: &str) -> Result<Vec<AccessTokenInfo>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, site_id, audience, label, expires_at, revoked, created_at
+             FROM site_access_tokens
+             WHERE site_id = ?
+             ORDER BY created_at DESC",
+        )?;
+        let rows = stmt
+            .query_map([site_id], |row| {
+                Ok(AccessTokenInfo {
+                    id: row.get(0)?,
+                    site_id: row.get(1)?,
+                    audience: row.get(2)?,
+                    label: row.get(3)?,
+                    expires_at: row.get(4)?,
+                    revoked: row.get::<_, i32>(5)? != 0,
+                    created_at: row.get(6)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// Revoke an access token by ID.
+    pub fn revoke_access_token(&self, token_id: &str) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE site_access_tokens SET revoked = 1 WHERE id = ?",
+            [token_id],
+        )?;
+        Ok(())
+    }
+
+    /// Return token IDs that have been revoked for this site.
+    pub fn get_revoked_token_ids(&self, site_id: &str) -> Result<Vec<String>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT id FROM site_access_tokens WHERE site_id = ? AND revoked = 1")?;
+        let rows = stmt
+            .query_map([site_id], |row| row.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
     // ===== Attachment blob accounting =====
 
     /// Insert or update a blob metadata row for a user.
@@ -769,6 +1089,35 @@ impl AuthRepo {
 
         tx.commit()?;
         Ok(())
+    }
+
+    /// Build a workspace attachment lookup map for static publish rewriting.
+    ///
+    /// Returns `attachment_path -> (blob_hash, mime_type)`.
+    pub fn get_workspace_attachment_map(
+        &self,
+        workspace_id: &str,
+    ) -> Result<std::collections::HashMap<String, (String, String)>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT attachment_path, blob_hash, mime_type
+             FROM workspace_attachment_refs
+             WHERE workspace_id = ?",
+        )?;
+        let rows = stmt
+            .query_map([workspace_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>();
+        Ok(rows
+            .into_iter()
+            .map(|(path, hash, mime)| (path, (hash, mime)))
+            .collect())
     }
 
     /// Get per-user attachment usage (active references only).
@@ -1515,6 +1864,83 @@ mod tests {
             )
             .unwrap();
         assert!(projected > DEFAULT_ATTACHMENT_LIMIT_BYTES);
+    }
+
+    #[test]
+    fn test_published_site_crud_and_token_flow() {
+        let repo = setup_test_db();
+        let user_id = repo.get_or_create_user("sites-test@example.com").unwrap();
+        let workspace_id = repo.get_or_create_workspace(&user_id, "default").unwrap();
+
+        let site = repo
+            .create_published_site(&workspace_id, &user_id, "my-site", true, true)
+            .unwrap();
+        assert_eq!(site.slug, "my-site");
+
+        let by_workspace = repo
+            .get_site_for_workspace(&workspace_id)
+            .unwrap()
+            .expect("site exists");
+        assert_eq!(by_workspace.slug, "my-site");
+        assert_eq!(repo.count_user_sites(&user_id).unwrap(), 1);
+
+        repo.update_site_published(
+            &site.id,
+            &[("public".to_string(), 2), ("family".to_string(), 5)],
+        )
+        .unwrap();
+        let builds = repo.list_site_audience_builds(&site.id).unwrap();
+        assert_eq!(builds.len(), 2);
+
+        let token_id = repo
+            .create_access_token(&site.id, "family", Some("Cousins"), None)
+            .unwrap();
+        let tokens = repo.list_site_tokens(&site.id).unwrap();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].id, token_id);
+        assert!(!tokens[0].revoked);
+
+        repo.revoke_access_token(&token_id).unwrap();
+        let revoked = repo.get_revoked_token_ids(&site.id).unwrap();
+        assert_eq!(revoked, vec![token_id]);
+    }
+
+    #[test]
+    fn test_published_slug_is_globally_unique() {
+        let repo = setup_test_db();
+        let user_a = repo.get_or_create_user("site-a@example.com").unwrap();
+        let user_b = repo.get_or_create_user("site-b@example.com").unwrap();
+        let ws_a = repo.get_or_create_workspace(&user_a, "default").unwrap();
+        let ws_b = repo.get_or_create_workspace(&user_b, "default").unwrap();
+
+        repo.create_published_site(&ws_a, &user_a, "same-slug", true, true)
+            .unwrap();
+        let second = repo.create_published_site(&ws_b, &user_b, "same-slug", true, true);
+        assert!(second.is_err());
+    }
+
+    #[test]
+    fn test_get_workspace_attachment_map() {
+        let repo = setup_test_db();
+        let user_id = repo.get_or_create_user("map-test@example.com").unwrap();
+        let workspace_id = repo.get_or_create_workspace(&user_id, "default").unwrap();
+
+        repo.replace_workspace_attachment_refs(
+            &workspace_id,
+            &[WorkspaceAttachmentRefRecord {
+                file_path: "README.md".to_string(),
+                attachment_path: "_attachments/a.png".to_string(),
+                blob_hash: "hash-a".to_string(),
+                size_bytes: 100,
+                mime_type: "image/png".to_string(),
+            }],
+        )
+        .unwrap();
+
+        let map = repo.get_workspace_attachment_map(&workspace_id).unwrap();
+        let entry = map.get("_attachments/a.png").expect("attachment map entry");
+        assert_eq!(entry.0, "hash-a");
+        assert_eq!(entry.1, "image/png");
     }
 
     #[test]

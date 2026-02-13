@@ -118,14 +118,14 @@
 
     <Tabs.Content value="workspace">
       <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
-        <WorkspaceSettings />
+        <WorkspaceSettings workspaceRootIndex={workspacePath} />
         <LinkSettings workspaceRootIndex={workspacePath} />
       </div>
     </Tabs.Content>
 
     <Tabs.Content value="templates">
       <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
-        <TemplateSettings />
+        <TemplateSettings workspaceRootIndex={workspacePath} />
       </div>
     </Tabs.Content>
 

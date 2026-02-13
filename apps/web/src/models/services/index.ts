@@ -58,6 +58,24 @@ export {
 } from './historyService';
 
 export {
+  getSite,
+  createSite,
+  deleteSite,
+  publishSite,
+  createToken,
+  listTokens,
+  revokeToken,
+  isSitePublishingAvailable,
+  type PublishedSite,
+  type AudienceBuildSummary,
+  type PublishResult,
+  type SiteAccessToken,
+  type CreateSiteRequest,
+  type CreateTokenRequest,
+  type ApiError,
+} from './sitePublishingService';
+
+export {
   setAttachmentSyncBackend,
   setAttachmentSyncContext,
   enqueueAttachmentUpload,

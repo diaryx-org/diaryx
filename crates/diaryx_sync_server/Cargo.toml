@@ -11,7 +11,7 @@ license-file.workspace = true
 
 [dependencies]
 # Internal crate
-diaryx_core = { workspace = true, features = ["crdt", "crdt-sqlite", "git"] }
+diaryx_core = { workspace = true, features = ["crdt", "crdt-sqlite", "git", "markdown"] }
 
 # Web framework
 axum = { version = "0.8", features = ["ws"] }
@@ -36,6 +36,7 @@ git2 = { version = "0.19", default-features = false }
 # Utilities
 rand = "0.8"
 base64 = "0.22"
+hmac = "0.12"
 uuid = { version = "1", features = ["v4"] }
 chrono = { workspace = true }
 zip = { version = "2", default-features = false, features = ["deflate"] }
@@ -44,6 +45,8 @@ mime_guess = "2"
 aws-sdk-s3 = "1"
 aws-config = "1"
 aws-smithy-types = "1"
+walkdir = "2"
+tempfile = "3"
 
 # Logging
 tracing = "0.1"
@@ -66,6 +69,5 @@ dotenvy = "0.15"
 diaryx_core = { path = "../diaryx_core" }
 
 [dev-dependencies]
-tempfile = "3"
 tokio-tungstenite = "0.26"
 tower = { version = "0.5", features = ["util"] }

@@ -61,6 +61,7 @@ export type { GuestConfig } from './GuestConfig';
 
 // Link format and workspace config types
 export type { LinkFormat } from './LinkFormat';
+export type { FilenameStyle } from './FilenameStyle';
 export type { WorkspaceConfig } from './WorkspaceConfig';
 export type { ConvertLinksResult } from './ConvertLinksResult';
 export type { CreateChildResult } from './CreateChildResult';

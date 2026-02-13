@@ -23,23 +23,26 @@
   import { createApi } from "../backend/api";
   import type { TemplateInfo } from "../backend/generated/TemplateInfo";
   import TemplateEditorDialog from "../components/TemplateEditorDialog.svelte";
+  import { getWorkspaceConfigStore } from "../stores/workspaceConfigStore.svelte";
 
-  // Settings from localStorage
+  interface Props {
+    workspaceRootIndex?: string | null;
+  }
+
+  let { workspaceRootIndex = null }: Props = $props();
+
+  const configStore = getWorkspaceConfigStore();
+
+  // Template folder stays in localStorage (local preference, not workspace-portable)
   let templateFolder = $state(
     typeof window !== "undefined"
       ? localStorage.getItem("diaryx-template-folder") || "templates"
       : "templates"
   );
-  let defaultTemplate = $state(
-    typeof window !== "undefined"
-      ? localStorage.getItem("diaryx-default-template") || "note"
-      : "note"
-  );
-  let dailyTemplate = $state(
-    typeof window !== "undefined"
-      ? localStorage.getItem("diaryx-daily-template") || "daily"
-      : "daily"
-  );
+
+  // Default templates: read from workspace config, with localStorage migration
+  let defaultTemplate = $state("note");
+  let dailyTemplate = $state("daily");
 
   // UI state
   let templates = $state<TemplateInfo[]>([]);
@@ -53,6 +56,52 @@
   let editorOpen = $state(false);
   let editingTemplate = $state<{ name: string; content: string } | null>(null);
   let isNewTemplate = $state(false);
+
+  // Load workspace config when root index changes
+  $effect(() => {
+    if (workspaceRootIndex) {
+      configStore.load(workspaceRootIndex);
+    }
+  });
+
+  // Sync default templates from workspace config + migrate from localStorage
+  $effect(() => {
+    if (configStore.config) {
+      // Default template migration
+      const configDefault = configStore.config.default_template ?? "";
+      const localDefault = typeof window !== "undefined"
+        ? localStorage.getItem("diaryx-default-template") || ""
+        : "";
+
+      if (configDefault) {
+        defaultTemplate = configDefault;
+        if (localDefault && typeof window !== "undefined") {
+          localStorage.removeItem("diaryx-default-template");
+        }
+      } else if (localDefault) {
+        defaultTemplate = localDefault;
+        configStore.setField("default_template", localDefault);
+        localStorage.removeItem("diaryx-default-template");
+      }
+
+      // Daily template migration
+      const configDaily = configStore.config.daily_template ?? "";
+      const localDaily = typeof window !== "undefined"
+        ? localStorage.getItem("diaryx-daily-template") || ""
+        : "";
+
+      if (configDaily) {
+        dailyTemplate = configDaily;
+        if (localDaily && typeof window !== "undefined") {
+          localStorage.removeItem("diaryx-daily-template");
+        }
+      } else if (localDaily) {
+        dailyTemplate = localDaily;
+        configStore.setField("daily_template", localDaily);
+        localStorage.removeItem("diaryx-daily-template");
+      }
+    }
+  });
 
   // Load templates on mount
   $effect(() => {
@@ -102,9 +151,11 @@
     }, 2000);
   }
 
-  function saveDefaultTemplateSetting() {
+  async function saveDefaultTemplateSetting() {
+    await configStore.setField("default_template", defaultTemplate);
+    // Clear localStorage if it was previously used
     if (typeof window !== "undefined") {
-      localStorage.setItem("diaryx-default-template", defaultTemplate);
+      localStorage.removeItem("diaryx-default-template");
     }
     defaultSaved = true;
     setTimeout(() => {
@@ -112,9 +163,11 @@
     }, 2000);
   }
 
-  function saveDailyTemplateSetting() {
+  async function saveDailyTemplateSetting() {
+    await configStore.setField("daily_template", dailyTemplate);
+    // Clear localStorage if it was previously used
     if (typeof window !== "undefined") {
-      localStorage.setItem("diaryx-daily-template", dailyTemplate);
+      localStorage.removeItem("diaryx-daily-template");
     }
     dailySaved = true;
     setTimeout(() => {

@@ -59,3 +59,11 @@ This directory contains the source code for the Diaryx web application.
   instead of flushed to the server on connect.
 - Snapshot-based wizard flows also discard queued pre-connect updates before
   establishing the WebSocket transport.
+
+## Share Sidebar
+
+`lib/share/ShareTab.svelte` now hosts two share sub-tabs in the right sidebar:
+
+- `Live Collaboration` for session hosting/joining.
+- `Publishing` for site setup, publish-now, and token management against
+  `/api/workspaces/{id}/site*` endpoints using the authenticated default workspace.

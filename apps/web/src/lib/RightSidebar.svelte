@@ -7,6 +7,8 @@
   import { Input } from "$lib/components/ui/input";
   import * as Alert from "$lib/components/ui/alert";
   import FilePickerPopover from "$lib/components/FilePickerPopover.svelte";
+  import AudienceEditor from "$lib/components/AudienceEditor.svelte";
+  import WorkspaceConfigSection from "$lib/components/WorkspaceConfigSection.svelte";
   import {
     Calendar,
     Clock,
@@ -34,6 +36,9 @@
     RotateCcw,
     ArrowUpRight,
     Replace,
+    Eye,
+    Settings2,
+    ChevronRight,
   } from "@lucide/svelte";
   import type { Component } from "svelte";
   import VersionDiff from "./history/VersionDiff.svelte";
@@ -42,6 +47,7 @@
   import * as Tooltip from "$lib/components/ui/tooltip";
   import * as Kbd from "$lib/components/ui/kbd";
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
+  import { workspaceStore } from "@/models/stores/workspaceStore.svelte";
 
   // Platform detection for keyboard shortcut display
   const isMac =
@@ -70,6 +76,7 @@
     onHistoryRestore?: () => void;
     // Share props
     onBeforeHost?: (audience: string | null) => Promise<void>;
+    onOpenSyncWizard?: () => void;
     onOpenEntry?: (path: string) => Promise<void>;
     // API for share tab
     api?: Api | null;
@@ -96,6 +103,7 @@
     rustApi = null,
     onHistoryRestore,
     onBeforeHost,
+    onOpenSyncWizard,
     onOpenEntry,
     api = null,
     requestedTab = null,
@@ -103,6 +111,11 @@
     triggerStartSession = false,
     onTriggerStartSessionConsumed,
   }: Props = $props();
+
+  // Detect if current entry is the workspace root index
+  const isRootIndex = $derived(
+    entry !== null && workspaceStore.tree !== null && entry.path === workspaceStore.tree.path
+  );
 
   // Tab state
   type TabType = "properties" | "history" | "share";
@@ -316,6 +329,11 @@
     return File;
   }
 
+  // Collapsible section state
+  let audienceCollapsed = $state(true);
+  let configCollapsed = $state(true);
+  let attachmentsCollapsed = $state(true);
+
   // State for adding new properties
   let showAddProperty = $state(false);
   let newPropertyKey = $state("");
@@ -382,7 +400,20 @@
   }
 
   // Keys that have dedicated UI sections and should not appear in generic metadata
-  const DEDICATED_SECTION_KEYS = ["attachments"];
+  const DEDICATED_SECTION_KEYS = ["attachments", "audience"];
+
+  // Workspace config keys that are shown in the dedicated config section (root index only)
+  const WORKSPACE_CONFIG_KEYS = [
+    "link_format",
+    "daily_entry_folder",
+    "default_template",
+    "daily_template",
+    "sync_title_to_heading",
+    "auto_update_timestamp",
+    "auto_rename_to_title",
+    "filename_style",
+    "public_audience",
+  ];
 
   // Get frontmatter entries sorted with common fields first
   function getSortedFrontmatter(
@@ -394,11 +425,14 @@
       "updated",
       "date",
       "tags",
+      "audience",
       "part_of",
       "contents",
     ];
     const entries = Object.entries(frontmatter).filter(
-      ([key]) => !DEDICATED_SECTION_KEYS.includes(key.toLowerCase()),
+      ([key]) =>
+        !DEDICATED_SECTION_KEYS.includes(key.toLowerCase()) &&
+        !(isRootIndex && WORKSPACE_CONFIG_KEYS.includes(key.toLowerCase())),
     );
 
     return entries.sort(([a], [b]) => {
@@ -889,15 +923,72 @@
         {/if}
       </div>
 
+      <!-- Audience Section -->
+      <div class="p-3 border-t border-sidebar-border">
+        <button
+          type="button"
+          class="flex items-center justify-between w-full cursor-pointer {audienceCollapsed ? '' : 'mb-2'}"
+          onclick={() => audienceCollapsed = !audienceCollapsed}
+        >
+          <div class="flex items-center gap-2 text-xs text-muted-foreground">
+            <Eye class="size-3.5" />
+            <span class="font-medium">Audience</span>
+          </div>
+          <ChevronRight class="size-3.5 text-muted-foreground transition-transform {audienceCollapsed ? '' : 'rotate-90'}" />
+        </button>
+        {#if !audienceCollapsed}
+        <AudienceEditor
+          audience={entry.frontmatter.audience as string[] | null ?? null}
+          entryPath={entry.path}
+          rootPath={workspaceStore.tree?.path ?? ""}
+          {api}
+          {rustApi}
+          onChange={(value) => {
+            if (value === null) {
+              onPropertyRemove?.("audience");
+            } else {
+              onPropertyChange?.("audience", value);
+            }
+          }}
+        />
+        {/if}
+      </div>
+
+      <!-- Workspace Config Section (root index only) -->
+      {#if isRootIndex}
+        <div class="p-3 border-t border-sidebar-border">
+          <button
+            type="button"
+            class="flex items-center justify-between w-full cursor-pointer {configCollapsed ? '' : 'mb-2'}"
+            onclick={() => configCollapsed = !configCollapsed}
+          >
+            <div class="flex items-center gap-2 text-xs text-muted-foreground">
+              <Settings2 class="size-3.5" />
+              <span class="font-medium">Workspace Config</span>
+            </div>
+            <ChevronRight class="size-3.5 text-muted-foreground transition-transform {configCollapsed ? '' : 'rotate-90'}" />
+          </button>
+          {#if !configCollapsed}
+            <WorkspaceConfigSection rootIndexPath={entry.path} />
+          {/if}
+        </div>
+      {/if}
+
       <!-- Attachments Section -->
       <div class="p-3 border-t border-sidebar-border">
-        <div class="flex items-center justify-between mb-2">
+        <button
+          type="button"
+          class="flex items-center justify-between w-full cursor-pointer {attachmentsCollapsed ? '' : 'mb-2'}"
+          onclick={() => attachmentsCollapsed = !attachmentsCollapsed}
+        >
           <div class="flex items-center gap-2 text-xs text-muted-foreground">
             <Paperclip class="size-3.5" />
             <span class="font-medium">Attachments</span>
           </div>
-        </div>
+          <ChevronRight class="size-3.5 text-muted-foreground transition-transform {attachmentsCollapsed ? '' : 'rotate-90'}" />
+        </button>
 
+        {#if !attachmentsCollapsed}
         {#if attachmentError}
           <Alert.Root variant="destructive" class="mb-2 py-2">
             <AlertCircle class="size-4" />
@@ -975,6 +1066,7 @@
             Add Attachment
           </Button>
         </FilePickerPopover>
+        {/if}
       </div>
       {:else}
         <div
@@ -1128,6 +1220,7 @@
       <!-- Share Tab -->
       <ShareTab
         {onBeforeHost}
+        {onOpenSyncWizard}
         {onOpenEntry}
         {api}
         triggerStart={triggerStartSession}

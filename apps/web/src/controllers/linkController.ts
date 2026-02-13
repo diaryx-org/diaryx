@@ -89,7 +89,7 @@ export async function handleLinkClick(
       try {
         // Create the file with basic frontmatter
         const title = fileName.replace('.md', '').replace(/-/g, ' ');
-        await api.createEntry(targetPath, { title });
+        await api.createEntry(targetPath, { title, rootIndexPath: tree?.path });
         await refreshTreeFn();
         await openEntryFn(targetPath);
       } catch (e) {

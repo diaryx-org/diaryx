@@ -2,7 +2,7 @@
 title: Diaryx Monorepo
 description: README/repo for the Diaryx project
 author: adammharris
-version: v0.12.0
+version: v0.13.0
 updated: 2026-01-10T13:50:20-05:00
 contents:
 - '[README](/crates/README.md)'

@@ -53,6 +53,10 @@ pub enum Command {
         path: String,
         /// New markdown content.
         content: String,
+        /// Optional workspace root index path for reading workspace config.
+        /// When provided, `auto_update_timestamp` from workspace config is respected.
+        #[serde(default)]
+        root_index_path: Option<String>,
     },
 
     /// Create a new entry.
@@ -202,6 +206,10 @@ pub enum Command {
         key: String,
         /// Property value.
         value: JsonValue,
+        /// Optional workspace root index path for reading workspace config.
+        /// When provided, `sync_title_to_heading` is respected for title changes.
+        #[serde(default)]
+        root_index_path: Option<String>,
     },
 
     /// Remove a frontmatter property.
@@ -979,6 +987,16 @@ pub enum Command {
         root_index_path: String,
     },
 
+    /// Set a workspace configuration field in the root index file's frontmatter.
+    SetWorkspaceConfig {
+        /// Path to the workspace root index file.
+        root_index_path: String,
+        /// Field name to set (e.g., "filename_style", "public_audience").
+        field: String,
+        /// Value to set (stored as a string in frontmatter).
+        value: String,
+    },
+
     /// Convert all links in workspace files to a target format.
     ///
     /// This scans files and rewrites `part_of` and `contents` properties.
@@ -1190,6 +1208,10 @@ pub struct CreateEntryOptions {
     pub part_of: Option<String>,
     /// Template to use.
     pub template: Option<String>,
+    /// Optional workspace root index path for reading workspace config.
+    /// When provided, `default_template` from workspace config is used as fallback.
+    #[serde(default)]
+    pub root_index_path: Option<String>,
 }
 
 /// Options for searching entries.

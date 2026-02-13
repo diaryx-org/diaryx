@@ -97,9 +97,10 @@ pub struct IndexFrontmatter {
     #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub part_of: Option<String>,
 
-    /// Audience groups that can see this file and its contents
-    /// If absent, inherits from parent; if at root with no audience, treated as private
-    /// Special value "private" means never export regardless of other values
+    /// Audience groups that can see this file and its contents.
+    /// If absent, inherits from parent; if at root with no audience, excluded from
+    /// audience-specific exports. Use `public_audience` in workspace config to
+    /// designate which audience tag means "publishable".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audience: Option<Vec<String>>,
 
@@ -157,21 +158,9 @@ impl IndexFrontmatter {
         self.exclude.as_deref().unwrap_or(&[])
     }
 
-    /// Returns true if this file is marked as private (has "private" in audience)
-    pub fn is_private(&self) -> bool {
-        self.audience
-            .as_ref()
-            .is_some_and(|a| a.iter().any(|s| s.trim().eq_ignore_ascii_case("private")))
-    }
-
-    /// Check if this file is visible to a given audience group
-    /// Returns None if audience should be inherited from parent
+    /// Check if this file is visible to a given audience group.
+    /// Returns None if audience should be inherited from parent (no explicit audience set).
     pub fn is_visible_to(&self, audience_group: &str) -> Option<bool> {
-        // If marked private, never visible
-        if self.is_private() {
-            return Some(false);
-        }
-
         // If no audience specified, inherit from parent
         let audience = self.audience.as_ref()?;
 
@@ -448,20 +437,22 @@ mod tests {
         let fm = IndexFrontmatter {
             audience: Some(vec![
                 " family ".to_string(),
-                " PRIVATE ".to_string(),
+                " private ".to_string(),
                 " ENGL212 ".to_string(),
             ]),
             ..Default::default()
         };
 
-        assert!(fm.is_private());
-        assert_eq!(fm.is_visible_to("family"), Some(false));
+        // "private" is now just a regular audience tag, no special meaning
+        assert_eq!(fm.is_visible_to("family"), Some(true));
+        assert_eq!(fm.is_visible_to("private"), Some(true));
+        assert_eq!(fm.is_visible_to("engl212"), Some(true));
+        assert_eq!(fm.is_visible_to("unknown"), Some(false));
 
-        let visible_fm = IndexFrontmatter {
-            audience: Some(vec![" family ".to_string(), " ENGL212 ".to_string()]),
+        let no_audience_fm = IndexFrontmatter {
             ..Default::default()
         };
-        assert_eq!(visible_fm.is_visible_to("family"), Some(true));
-        assert_eq!(visible_fm.is_visible_to("engl212"), Some(true));
+        // No audience = inherit from parent (returns None)
+        assert_eq!(no_audience_fm.is_visible_to("family"), None);
     }
 }

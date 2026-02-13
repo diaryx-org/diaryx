@@ -33,6 +33,26 @@ use crate::fs::AsyncFileSystem;
 use crate::link_parser::{self, LinkFormat};
 use crate::path_utils::normalize_sync_path;
 
+/// How to generate filenames from entry titles.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+#[serde(rename_all = "snake_case")]
+pub enum FilenameStyle {
+    /// Keep the title as-is, stripping only filesystem-illegal characters.
+    #[default]
+    Preserve,
+    /// Lowercase, non-alphanumeric chars replaced with dashes.
+    KebabCase,
+    /// Lowercase, non-alphanumeric chars replaced with underscores.
+    SnakeCase,
+    /// Uppercase, non-alphanumeric chars replaced with underscores.
+    ScreamingSnakeCase,
+}
+
+fn default_true() -> bool {
+    true
+}
+
 /// Workspace-level configuration stored in the root index file's frontmatter.
 ///
 /// This allows workspace settings to live with the data (local-first philosophy)
@@ -50,6 +70,42 @@ pub struct WorkspaceConfig {
     #[ts(optional)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daily_entry_folder: Option<String>,
+
+    /// Link to the default template entry for new files (in link_format style).
+    /// If absent, uses the built-in "note" template.
+    #[ts(optional)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_template: Option<String>,
+
+    /// Link to the daily entry template (in link_format style).
+    /// If absent, uses the built-in "daily" template.
+    #[ts(optional)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daily_template: Option<String>,
+
+    /// When true, setting the `title` frontmatter property also updates the first H1 heading.
+    /// Unidirectional: title → heading only.
+    #[serde(default)]
+    pub sync_title_to_heading: bool,
+
+    /// When true, saving content automatically updates the `updated` timestamp.
+    #[serde(default = "default_true")]
+    pub auto_update_timestamp: bool,
+
+    /// When true, changing the title automatically renames the file.
+    #[serde(default = "default_true")]
+    pub auto_rename_to_title: bool,
+
+    /// How to generate filenames from entry titles.
+    #[serde(default)]
+    pub filename_style: FilenameStyle,
+
+    /// Audience tag that designates files for public viewing/publishing.
+    /// Replaces the old hardcoded "private" magic. Files with this audience tag
+    /// are included in public exports; files without it are excluded.
+    #[ts(optional)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_audience: Option<String>,
 }
 
 /// Workspace operations (async-first).
@@ -569,11 +625,9 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
     /// Returns default values if the properties aren't present.
     pub async fn get_workspace_config(&self, root_index_path: &Path) -> Result<WorkspaceConfig> {
         let index = self.parse_index(root_index_path).await?;
+        let extra = &index.frontmatter.extra;
 
-        // Extract link_format from extra fields
-        let link_format = index
-            .frontmatter
-            .extra
+        let link_format = extra
             .get("link_format")
             .and_then(|v| v.as_str())
             .and_then(|s| match s {
@@ -585,17 +639,63 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             })
             .unwrap_or_default();
 
-        // Extract daily_entry_folder from extra fields
-        let daily_entry_folder = index
-            .frontmatter
-            .extra
+        let daily_entry_folder = extra
             .get("daily_entry_folder")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let default_template = extra
+            .get("default_template")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let daily_template = extra
+            .get("daily_template")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let sync_title_to_heading = extra
+            .get("sync_title_to_heading")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let auto_update_timestamp = extra
+            .get("auto_update_timestamp")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
+        let auto_rename_to_title = extra
+            .get("auto_rename_to_title")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
+        let filename_style = extra
+            .get("filename_style")
+            .and_then(|v| v.as_str())
+            .and_then(|s| match s {
+                "preserve" => Some(FilenameStyle::Preserve),
+                "kebab_case" => Some(FilenameStyle::KebabCase),
+                "snake_case" => Some(FilenameStyle::SnakeCase),
+                "screaming_snake_case" => Some(FilenameStyle::ScreamingSnakeCase),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        let public_audience = extra
+            .get("public_audience")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
         Ok(WorkspaceConfig {
             link_format,
             daily_entry_folder,
+            default_template,
+            daily_template,
+            sync_title_to_heading,
+            auto_update_timestamp,
+            auto_rename_to_title,
+            filename_style,
+            public_audience,
         })
     }
 

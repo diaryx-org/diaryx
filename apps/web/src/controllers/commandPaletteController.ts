@@ -318,8 +318,8 @@ export async function handleImportFromClipboard(
       content = `---\ntitle: "${title}"\n---\n\n${clipboardText}`;
     }
 
-    await api.createEntry(newPath, { title: `Imported ${timestamp}` });
-    await api.saveEntry(newPath, content);
+    await api.createEntry(newPath, { title: `Imported ${timestamp}`, rootIndexPath: tree?.path });
+    await api.saveEntry(newPath, content, tree?.path);
     await refreshTreeFn();
     await openEntryFn(newPath);
     toast.success('Imported from clipboard', {

@@ -23,4 +23,4 @@ children: Array<TreeNode>,
 /**
  * Additional frontmatter properties for display (populated by --properties flag)
  */
-properties: { [key in string]?: string }, };
+properties: Record<string, string> | undefined, };

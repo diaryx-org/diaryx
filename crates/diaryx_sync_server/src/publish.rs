@@ -163,8 +163,30 @@ pub async fn publish_workspace_to_r2(
         }
     }
 
+    // Extract public_audience from workspace root index frontmatter
+    let public_audience = {
+        let root_rel = workspace_root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("README.md");
+        files
+            .iter()
+            .find(|f| f.path == root_rel || f.path.ends_with(root_rel))
+            .and_then(|f| {
+                diaryx_core::frontmatter::parse_or_empty(&f.content)
+                    .ok()
+                    .and_then(|parsed| {
+                        parsed
+                            .frontmatter
+                            .get("public_audience")
+                            .and_then(|v| v.as_str().map(|s| s.to_string()))
+                    })
+            })
+    };
+
     let discovered_audiences = discover_audiences(&files);
-    let audiences_to_build = build_audiences_to_build(discovered_audiences);
+    let audiences_to_build =
+        build_audiences_to_build(discovered_audiences, public_audience.as_deref());
 
     let mut audience_builds = Vec::new();
 
@@ -287,9 +309,6 @@ pub async fn write_site_meta(
         .collect();
     audiences.sort();
     audiences.dedup();
-    if !audiences.iter().any(|a| a == "public") {
-        audiences.insert(0, "public".to_string());
-    }
 
     let revoked_tokens = repo
         .get_revoked_token_ids(&site.id)
@@ -534,7 +553,7 @@ fn discover_audiences(files: &[MaterializedFile]) -> HashSet<String> {
         match audience {
             serde_yaml::Value::String(s) => {
                 let value = s.trim().to_lowercase();
-                if !value.is_empty() && value != "private" {
+                if !value.is_empty() {
                     discovered_audiences.insert(value);
                 }
             }
@@ -542,7 +561,7 @@ fn discover_audiences(files: &[MaterializedFile]) -> HashSet<String> {
                 for entry in seq {
                     if let Some(s) = entry.as_str() {
                         let value = s.trim().to_lowercase();
-                        if !value.is_empty() && value != "private" {
+                        if !value.is_empty() {
                             discovered_audiences.insert(value);
                         }
                     }
@@ -554,15 +573,29 @@ fn discover_audiences(files: &[MaterializedFile]) -> HashSet<String> {
     discovered_audiences
 }
 
-fn build_audiences_to_build(discovered_audiences: HashSet<String>) -> Vec<String> {
-    let mut audiences_to_build: Vec<String> = vec!["public".to_string()];
+fn build_audiences_to_build(
+    discovered_audiences: HashSet<String>,
+    public_audience: Option<&str>,
+) -> Vec<String> {
+    let mut audiences_to_build: Vec<String> = Vec::new();
+
+    // Always include the public_audience first if configured
+    if let Some(pa) = public_audience {
+        let pa_lower = pa.trim().to_lowercase();
+        if !pa_lower.is_empty() {
+            audiences_to_build.push(pa_lower);
+        }
+    }
+
+    // Add all discovered audiences (sorted, deduped against public_audience)
     let mut discovered: Vec<String> = discovered_audiences.into_iter().collect();
     discovered.sort();
     for audience in discovered {
-        if audience != "public" {
+        if !audiences_to_build.contains(&audience) {
             audiences_to_build.push(audience);
         }
     }
+
     audiences_to_build
 }
 
@@ -644,21 +677,17 @@ fn format_excluded_samples(excluded: &[ExcludedFile], workspace_dir: &Path) -> S
 
 fn exclusion_reason_label(reason: &ExclusionReason) -> &'static str {
     match reason {
-        ExclusionReason::Private => "private",
         ExclusionReason::AudienceMismatch { .. } => "audience_mismatch",
-        ExclusionReason::InheritedPrivate { .. } => "inherited_private",
         ExclusionReason::NoAudienceDefined => "no_audience_defined",
     }
 }
 
 fn exclusion_reason_detail(reason: &ExclusionReason) -> String {
     match reason {
-        ExclusionReason::Private => "private".to_string(),
         ExclusionReason::AudienceMismatch {
             file_audience,
             requested,
         } => format!("aud={:?},req={}", file_audience, requested),
-        ExclusionReason::InheritedPrivate { from } => format!("from={}", from.display()),
         ExclusionReason::NoAudienceDefined => "no_audience".to_string(),
     }
 }
@@ -754,7 +783,7 @@ mod tests {
     }
 
     #[test]
-    fn discover_audiences_normalizes_and_excludes_private() {
+    fn discover_audiences_normalizes_all_values() {
         let files = vec![
             materialized(
                 "README.md",
@@ -766,7 +795,8 @@ mod tests {
         assert!(discovered.contains("family"));
         assert!(discovered.contains("engl212"));
         assert!(discovered.contains("public"));
-        assert!(!discovered.contains("private"));
+        // "private" is now a regular audience tag, not excluded
+        assert!(discovered.contains("private"));
     }
 
     #[test]
@@ -795,12 +825,21 @@ mod tests {
     }
 
     #[test]
-    fn build_audiences_to_build_always_includes_public_once() {
+    fn build_audiences_to_build_includes_public_audience_first() {
         let discovered = ["public".to_string(), "family".to_string()]
             .into_iter()
             .collect();
-        let audiences = build_audiences_to_build(discovered);
+        let audiences = build_audiences_to_build(discovered, Some("public"));
         assert_eq!(audiences, vec!["public".to_string(), "family".to_string()]);
+    }
+
+    #[test]
+    fn build_audiences_to_build_without_public_audience() {
+        let discovered = ["family".to_string(), "friends".to_string()]
+            .into_iter()
+            .collect();
+        let audiences = build_audiences_to_build(discovered, None);
+        assert_eq!(audiences, vec!["family".to_string(), "friends".to_string()]);
     }
 
     #[test]
@@ -812,7 +851,7 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        let audiences = build_audiences_to_build(discovered);
+        let audiences = build_audiences_to_build(discovered, Some("public"));
         assert_eq!(
             audiences,
             vec![

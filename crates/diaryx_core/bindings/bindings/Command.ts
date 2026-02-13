@@ -22,7 +22,12 @@ path: string,
 /**
  * New markdown content.
  */
-content: string, } } | { "type": "CreateEntry", "params": {
+content: string,
+/**
+ * Optional workspace root index path for reading workspace config.
+ * When provided, `auto_update_timestamp` from workspace config is respected.
+ */
+root_index_path: string | null, } } | { "type": "CreateEntry", "params": {
 /**
  * Path where the entry should be created.
  */
@@ -153,7 +158,12 @@ key: string,
 /**
  * Property value.
  */
-value: JsonValue, } } | { "type": "RemoveFrontmatterProperty", "params": {
+value: JsonValue,
+/**
+ * Optional workspace root index path for reading workspace config.
+ * When provided, `sync_title_to_heading` is respected for title changes.
+ */
+root_index_path: string | null, } } | { "type": "RemoveFrontmatterProperty", "params": {
 /**
  * Path to the entry file.
  */
@@ -437,7 +447,19 @@ format: string, } } | { "type": "GetWorkspaceConfig", "params": {
 /**
  * Path to the workspace root index file.
  */
-root_index_path: string, } } | { "type": "ConvertLinks", "params": {
+root_index_path: string, } } | { "type": "SetWorkspaceConfig", "params": {
+/**
+ * Path to the workspace root index file.
+ */
+root_index_path: string,
+/**
+ * Field name to set (e.g., "filename_style", "public_audience").
+ */
+field: string,
+/**
+ * Value to set (stored as a string in frontmatter).
+ */
+value: string, } } | { "type": "ConvertLinks", "params": {
 /**
  * Path to the workspace root index file.
  */

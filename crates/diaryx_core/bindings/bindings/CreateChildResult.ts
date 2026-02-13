@@ -23,4 +23,4 @@ parent_converted: boolean,
 /**
  * Original parent path before conversion (only set if parent_converted is true).
  */
-original_parent_path: string | null, };
+original_parent_path?: string, };

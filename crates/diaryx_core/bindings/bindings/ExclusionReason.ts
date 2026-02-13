@@ -3,16 +3,12 @@
 /**
  * Why a file was excluded
  */
-export type ExclusionReason = "Private" | { "AudienceMismatch": { 
+export type ExclusionReason = { "AudienceMismatch": {
 /**
  * What audiences are intended to view the document
  */
-file_audience: Array<string>, 
+file_audience: Array<string>,
 /**
  * What audiences were requested for the export
  */
-requested: string, } } | { "InheritedPrivate": { 
-/**
- * Path to the parent that was marked as `private`
- */
-from: string, } } | "NoAudienceDefined";
+requested: string, } } | "NoAudienceDefined";

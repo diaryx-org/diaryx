@@ -61,17 +61,8 @@ pub struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub editor: Option<String>,
 
-    /// Default template to use when creating entries
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_template: Option<String>,
-
-    /// Default template for daily entries (today, yesterday commands)
-    /// Falls back to "daily" built-in template if not set
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub daily_template: Option<String>,
-
-    /// Format for `part_of` and `contents` links in frontmatter
-    /// Defaults to MarkdownRoot for portable, clickable links
+    /// Format for `part_of` and `contents` links in frontmatter.
+    /// Used by CLI; web/tauri reads from WorkspaceConfig instead.
     #[serde(default, skip_serializing_if = "is_default_link_format")]
     pub link_format: LinkFormat,
 
@@ -163,8 +154,6 @@ impl Config {
             default_workspace,
             daily_entry_folder: None,
             editor: None,
-            default_template: None,
-            daily_template: None,
             link_format: LinkFormat::default(),
             sync_server_url: None,
             sync_session_token: None,
@@ -174,20 +163,18 @@ impl Config {
         }
     }
 
-    /// Create a config with all options specified
+    /// Create a config with workspace directory and daily entry folder
     pub fn with_options(
         default_workspace: PathBuf,
         daily_entry_folder: Option<String>,
         editor: Option<String>,
-        default_template: Option<String>,
-        daily_template: Option<String>,
+        _default_template: Option<String>,
+        _daily_template: Option<String>,
     ) -> Self {
         Self {
             default_workspace,
             daily_entry_folder,
             editor,
-            default_template,
-            daily_template,
             link_format: LinkFormat::default(),
             sync_server_url: None,
             sync_session_token: None,
@@ -295,8 +282,6 @@ impl Default for Config {
             default_workspace: default_base,
             daily_entry_folder: None,
             editor: None,
-            default_template: None,
-            daily_template: None,
             link_format: LinkFormat::default(),
             sync_server_url: None,
             sync_session_token: None,
@@ -362,8 +347,6 @@ impl Config {
             default_workspace,
             daily_entry_folder,
             editor: None,
-            default_template: None,
-            daily_template: None,
             link_format: LinkFormat::default(),
             sync_server_url: None,
             sync_session_token: None,
@@ -390,8 +373,6 @@ impl Default for Config {
             default_workspace: PathBuf::from("/workspace"),
             daily_entry_folder: None,
             editor: None,
-            default_template: None,
-            daily_template: None,
             link_format: LinkFormat::default(),
             sync_server_url: None,
             sync_session_token: None,

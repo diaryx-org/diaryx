@@ -918,7 +918,7 @@
   // Save current entry - delegates to controller with sync support
   async function save() {
     if (!api || !currentEntry || !editorRef) return;
-    await saveEntryWithSync(api, currentEntry, editorRef);
+    await saveEntryWithSync(api, currentEntry, editorRef, tree?.path);
   }
 
   // Cancel pending auto-save
@@ -1070,11 +1070,9 @@
   // Create a new entry - delegates to controller with sync support
   async function createNewEntry(path: string, title: string) {
     if (!api) return;
-    // Get default template from settings
-    const defaultTemplate = typeof window !== "undefined"
-      ? localStorage.getItem("diaryx-default-template") || "note"
-      : "note";
-    const newPath = await createEntryWithSync(api, path, { title, template: defaultTemplate }, async () => {
+    // Template is resolved by the backend from workspace config (default_template field).
+    // Falls back to built-in "note" template if not configured.
+    const newPath = await createEntryWithSync(api, path, { title, rootIndexPath: tree?.path }, async () => {
       await refreshTree();
     });
     if (newPath) {
@@ -1086,19 +1084,9 @@
   async function handleDailyEntry() {
     if (!api || !tree) return;
     try {
-      // Get daily_entry_folder from localStorage settings
-      const dailyEntryFolder = typeof window !== "undefined"
-        ? localStorage.getItem("diaryx-daily-entry-folder") || undefined
-        : undefined;
-
-      // Get daily template from settings
-      const dailyTemplate = typeof window !== "undefined"
-        ? localStorage.getItem("diaryx-daily-template") || "daily"
-        : "daily";
-
-      // Pass the workspace path, daily_entry_folder, and template to EnsureDailyEntry
-      // The workspace path is the root index file path (e.g., "workspace/README.md")
-      const path = await api.ensureDailyEntry(tree.path, dailyEntryFolder, dailyTemplate);
+      // daily_entry_folder and daily_template are now read from workspace config
+      // by the command handler. Pass null to use workspace config defaults.
+      const path = await api.ensureDailyEntry(tree.path, undefined, undefined);
       await refreshTree();
       await openEntry(path);
     } catch (e) {
@@ -1150,7 +1138,7 @@
   async function handleRenameEntry(path: string, newFilename: string): Promise<string> {
     if (!api) throw new Error("API not initialized");
     if (currentEntry?.path === path && isDirty && editorRef) {
-      await saveEntryWithSync(api, currentEntry, editorRef);
+      await saveEntryWithSync(api, currentEntry, editorRef, tree?.path);
     }
     const parentPath = workspaceStore.getParentNodePath(path);
     const newPath = await renameEntryController(api, path, newFilename, async () => {
@@ -1238,7 +1226,7 @@
       if (Array.isArray(contents)) {
         // Filter out the broken target
         const newContents = contents.filter((item) => item !== target);
-         await api.setFrontmatterProperty(indexPath, "contents", newContents);
+         await api.setFrontmatterProperty(indexPath, "contents", newContents, tree?.path);
         await refreshTree();
         await runValidation();
         // Refresh current entry if it's the fixed file
@@ -1446,51 +1434,31 @@
   }
 
   // Handle frontmatter property changes
+  // Title changes with auto-rename are handled atomically by the backend
   async function handlePropertyChange(key: string, value: unknown) {
     if (!api || !currentEntry) return;
     try {
       const path = currentEntry.path;
       const normalizedFrontmatter = normalizeFrontmatter(currentEntry.frontmatter);
-      // Special handling for title: need to check rename first
+
       if (key === "title" && typeof value === "string" && value.trim()) {
-        // Use a simple slugify for title -> filename conversion
-        const newFilename = slugifyTitle(value);
-        const currentFilename = currentEntry.path.split("/").pop() || "";
+        // Flush pending editor saves before title change (backend may rename the file)
+        if (isDirty && editorRef) {
+          await saveEntryWithSync(api, currentEntry, editorRef, tree?.path);
+        }
 
-        // Only rename if the filename would actually change
-        // For index files (have contents property), compare the directory name
-        const isIndex = Array.isArray(normalizedFrontmatter.contents);
-        const pathParts = currentEntry.path.split("/");
-        const currentDir = isIndex
-          ? pathParts.slice(-2, -1)[0] || ""
-          : currentFilename.replace(/\.md$/, "");
-        const newDir = newFilename.replace(/\.md$/, "");
+        try {
+          // Backend handles: workspace config read, filename style, rename, title set, H1 sync
+          // Returns new path string if rename occurred, null otherwise
+          const newPath = await api.setFrontmatterProperty(path, key, value, tree?.path);
 
-        if (currentDir !== newDir) {
-          // Try rename FIRST, before updating frontmatter
-          try {
-            // If body edits are pending, flush them before path changes so
-            // post-rename saves continue from a clean baseline.
-            if (isDirty && editorRef) {
-              await saveEntryWithSync(api, currentEntry, editorRef);
-            }
-
-            const oldPath = currentEntry.path;
-            const newPath = await api.renameEntry(oldPath, newFilename);
-            // Rename succeeded, now update title in frontmatter (at new path)
-            await api.setFrontmatterProperty(newPath, key, value);
-
-            // Transfer expanded state from old path to new path
-            if (expandedNodes.has(oldPath)) {
-              workspaceStore.collapseNode(oldPath);
+          if (newPath) {
+            // Rename happened — update UI state to new path
+            if (expandedNodes.has(path)) {
+              workspaceStore.collapseNode(path);
               workspaceStore.expandNode(newPath);
             }
 
-            // CRDT is now automatically updated via backend event subscription
-            // (file:renamed event triggers CRDT updates)
-            // Body doc migration is now handled by the Rust backend in command_handler.rs
-
-            // Update current entry path and refresh tree
             const updatedEntry = {
               ...currentEntry,
               path: newPath,
@@ -1500,54 +1468,43 @@
             if (collaborationEnabled) {
               collaborationStore.setCollaborationPath(toCollaborationPath(newPath));
             }
-            await refreshTree();
-            titleError = null; // Clear any previous error
-          } catch (renameError) {
-            // Rename failed (e.g., target exists), show user-friendly error near title input
-            // DON'T update the title - leave frontmatter unchanged
-            const errorMsg =
-              renameError instanceof Error
-                ? renameError.message
-                : String(renameError);
-            if (
-              errorMsg.includes("already exists") ||
-              errorMsg.includes("Destination")
-            ) {
-              titleError = `A file named "${newFilename.replace(".md", "")}" already exists. Choose a different title.`;
-            } else {
-              titleError = `Could not rename: ${errorMsg}`;
-            }
-            // Don't update anything - input will show original value
+          } else {
+            // No rename — just update frontmatter in store
+            const updatedEntry = {
+              ...currentEntry,
+              frontmatter: { ...normalizedFrontmatter, [key]: value },
+            };
+            entryStore.setCurrentEntry(updatedEntry);
+            updateCrdtFileMetadata(path, updatedEntry.frontmatter);
           }
-        } else {
-          // No rename needed, just update title
-          await api.setFrontmatterProperty(currentEntry.path, key, value);
-          const updatedEntry = {
-            ...currentEntry,
-            frontmatter: { ...normalizedFrontmatter, [key]: value },
-          };
-          entryStore.setCurrentEntry(updatedEntry);
 
-          // Update CRDT
-          updateCrdtFileMetadata(path, updatedEntry.frontmatter);
           titleError = null;
-
-          // Refresh tree to update title display
           await refreshTree();
+        } catch (renameError) {
+          // Rename failed (e.g., target exists), show user-friendly error
+          const errorMsg =
+            renameError instanceof Error
+              ? renameError.message
+              : String(renameError);
+          if (
+            errorMsg.includes("already exists") ||
+            errorMsg.includes("Destination")
+          ) {
+            titleError = `A file with that name already exists. Choose a different title.`;
+          } else {
+            titleError = `Could not rename: ${errorMsg}`;
+          }
         }
       } else {
         // Non-title properties: update normally
-        await api.setFrontmatterProperty(currentEntry.path, key, value as JsonValue);
+        await api.setFrontmatterProperty(currentEntry.path, key, value as JsonValue, tree?.path);
         const updatedEntry = {
           ...currentEntry,
           frontmatter: { ...normalizedFrontmatter, [key]: value },
         };
         entryStore.setCurrentEntry(updatedEntry);
-
-        // Update CRDT
         updateCrdtFileMetadata(path, updatedEntry.frontmatter);
 
-        // Refresh tree if contents or part_of changed (affects hierarchy)
         if (key === 'contents' || key === 'part_of') {
           await refreshTree();
         }
@@ -1555,16 +1512,6 @@
     } catch (e) {
       uiStore.setError(e instanceof Error ? e.message : String(e));
     }
-  }
-
-  // Helper function to convert title to kebab-case filename
-  function slugifyTitle(title: string): string {
-    return title
-      .toLowerCase()
-      .replace(/[^a-z0-9\s-]/g, '')
-      .replace(/\s+/g, '-')
-      .replace(/-+/g, '-')
-      .replace(/^-|-$/g, '') + '.md';
   }
 
   async function handlePropertyRemove(key: string) {
@@ -1588,7 +1535,7 @@
     if (!api || !currentEntry) return;
     try {
       const path = currentEntry.path;
-      await api.setFrontmatterProperty(currentEntry.path, key, value as JsonValue);
+      await api.setFrontmatterProperty(currentEntry.path, key, value as JsonValue, tree?.path);
       const normalizedFrontmatter = normalizeFrontmatter(currentEntry.frontmatter);
       // Update local state
       const updatedEntry = {

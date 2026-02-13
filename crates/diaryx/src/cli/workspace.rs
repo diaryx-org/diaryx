@@ -2669,10 +2669,7 @@ fn handle_create(
 
     // Get template manager and template
     let manager = app.template_manager(Some(&config.default_workspace));
-    let template_name = template
-        .as_deref()
-        .or(config.default_template.as_deref())
-        .unwrap_or("note");
+    let template_name = template.as_deref().unwrap_or("note");
 
     // Try to get the template, fall back to building content manually if not found
     let content = if let Some(tmpl) = manager.get(template_name) {

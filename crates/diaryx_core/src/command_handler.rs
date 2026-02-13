@@ -116,8 +116,65 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         }
     }
 
-    /// Emit a workspace sync update to be sent via WebSocket.
-    ///
+    /// Sync the first H1 heading in the body to the given title.
+    /// If an H1 exists, replace its text. If not, prepend `# {title}\n\n` to the body.
+    async fn sync_heading_to_title(&self, path: &str, title: &str) -> Result<()> {
+        let body = self.entry().get_content(path).await.unwrap_or_default();
+
+        // Find the first line starting with "# " (markdown H1)
+        let mut found = false;
+        let mut new_lines: Vec<String> = Vec::new();
+        for line in body.lines() {
+            if !found && line.starts_with("# ") {
+                new_lines.push(format!("# {}", title));
+                found = true;
+            } else {
+                new_lines.push(line.to_string());
+            }
+        }
+
+        let new_body = if found {
+            let mut result = new_lines.join("\n");
+            // Preserve trailing newline if original had one
+            if body.ends_with('\n') {
+                result.push('\n');
+            }
+            result
+        } else {
+            // No H1 found — prepend one
+            if body.is_empty() {
+                format!("# {}\n\n", title)
+            } else {
+                format!("# {}\n\n{}", title, body)
+            }
+        };
+        self.entry().set_content(path, &new_body).await
+    }
+
+    /// Resolve a template from a workspace config link value.
+    /// The link is in the workspace's configured link_format (e.g., `[Daily](/templates/daily.md)`).
+    /// Returns the file content as a Template, or None if resolution fails.
+    async fn resolve_template_from_link(
+        &self,
+        link: &str,
+        workspace_root_path: &Path,
+    ) -> Option<crate::template::Template> {
+        let parsed = link_parser::parse_link(link);
+        // to_canonical expects the current file path (the root index) to resolve relative links
+        let canonical = link_parser::to_canonical(&parsed, workspace_root_path);
+        let workspace_dir = workspace_root_path
+            .parent()
+            .unwrap_or_else(|| Path::new(""));
+        let file_path = workspace_dir.join(&canonical);
+        let content = self.fs().read_to_string(&file_path).await.ok()?;
+        let name = Path::new(&canonical)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("template")
+            .to_string();
+        Some(crate::template::Template::new(name, content))
+    }
+
     /// This helper simplifies the sync emission pattern used across commands.
     /// It logs a warning if emission fails but doesn't propagate the error.
     #[cfg(feature = "crdt")]
@@ -298,15 +355,32 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 }))
             }
 
-            Command::SaveEntry { path, content } => {
+            Command::SaveEntry {
+                path,
+                content,
+                root_index_path,
+            } => {
                 log::debug!(
                     "[CommandHandler] SaveEntry: input path='{}', content_preview='{}'",
                     path,
                     content.chars().take(50).collect::<String>()
                 );
 
+                // Read auto_update_timestamp from workspace config if root_index_path provided
+                let auto_update = if let Some(ref rip) = root_index_path {
+                    let ws = self.workspace().inner();
+                    ws.get_workspace_config(Path::new(rip))
+                        .await
+                        .map(|c| c.auto_update_timestamp)
+                        .unwrap_or(true)
+                } else {
+                    true
+                };
+
                 // Save to filesystem (CrdtFs automatically updates body CRDT via its write hook)
-                self.entry().save_content(&path, &content).await?;
+                self.entry()
+                    .save_content_with_options(&path, &content, auto_update)
+                    .await?;
 
                 // Track for echo detection and emit sync message if CRDT is enabled
                 #[cfg(feature = "crdt")]
@@ -340,7 +414,12 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 Ok(Response::Frontmatter(json_fm))
             }
 
-            Command::SetFrontmatterProperty { path, key, value } => {
+            Command::SetFrontmatterProperty {
+                path,
+                key,
+                value,
+                root_index_path,
+            } => {
                 // Handle part_of and contents specially - format as markdown links
                 // CrdtFs.write_file extracts metadata from frontmatter automatically
                 #[cfg(feature = "crdt")]
@@ -409,11 +488,107 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     }
                 }
 
-                // Default: just set the property as-is
-                let yaml_value = json_to_yaml(value);
+                // Auto-rename on title change + sync heading
+                if key == "title"
+                    && let Some(ref rip) = root_index_path
+                    && let serde_json::Value::String(ref new_title) = value
+                    && !new_title.trim().is_empty()
+                {
+                    use crate::entry::apply_filename_style;
+
+                    let ws_config = self
+                        .workspace()
+                        .inner()
+                        .get_workspace_config(Path::new(rip))
+                        .await
+                        .unwrap_or_default();
+
+                    let mut effective_path = path.clone();
+
+                    // Auto-rename if enabled
+                    if ws_config.auto_rename_to_title {
+                        let new_stem = apply_filename_style(new_title, &ws_config.filename_style);
+                        let new_filename = format!("{}.md", new_stem);
+
+                        let entry_path = PathBuf::from(&path);
+                        let ws = self.workspace().inner();
+                        let is_index = ws.is_index_file(&entry_path).await;
+
+                        // Compare current name (dir name for index, file stem for leaf)
+                        let current_comparable = if is_index {
+                            entry_path
+                                .parent()
+                                .and_then(|p| p.file_name())
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("")
+                                .to_string()
+                        } else {
+                            entry_path
+                                .file_stem()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("")
+                                .to_string()
+                        };
+
+                        if current_comparable != new_stem {
+                            let new_path = ws.rename_entry(&entry_path, &new_filename).await?;
+                            let new_path_str = new_path.to_string_lossy().to_string();
+
+                            // Migrate body CRDT doc to new path
+                            #[cfg(feature = "crdt")]
+                            {
+                                let canonical_old = self.get_canonical_path(&path);
+                                let canonical_new = self.get_canonical_path(&new_path_str);
+                                if canonical_old != canonical_new {
+                                    if let Some(body_manager) = self.body_doc_manager() {
+                                        if let Err(e) =
+                                            body_manager.rename(&canonical_old, &canonical_new)
+                                        {
+                                            log::warn!(
+                                                "Failed to migrate body doc on title rename {} -> {}: {}",
+                                                canonical_old,
+                                                canonical_new,
+                                                e
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+
+                            effective_path = new_path_str;
+                        }
+                    }
+
+                    // Set the title property at the (possibly new) path
+                    let yaml_value = json_to_yaml(value.clone());
+                    self.entry()
+                        .set_frontmatter_property(&effective_path, &key, yaml_value)
+                        .await?;
+
+                    // sync_title_to_heading
+                    if ws_config.sync_title_to_heading {
+                        self.sync_heading_to_title(&effective_path, new_title)
+                            .await?;
+                    }
+
+                    // Emit workspace sync (covers both rename + frontmatter update)
+                    #[cfg(feature = "crdt")]
+                    self.emit_workspace_sync("SetFrontmatterProperty");
+
+                    // Return new path if rename happened, Ok otherwise
+                    if effective_path != path {
+                        return Ok(Response::String(effective_path));
+                    } else {
+                        return Ok(Response::Ok);
+                    }
+                }
+
+                // Default: just set the property as-is (non-title keys, or title without root_index_path)
+                let yaml_value = json_to_yaml(value.clone());
                 self.entry()
                     .set_frontmatter_property(&path, &key, yaml_value)
                     .await?;
+
                 Ok(Response::Ok)
             }
 
@@ -743,9 +918,39 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         .to_string()
                 });
 
-                // Create the file with basic frontmatter
+                // Resolve template: workspace config link → built-in "note"
+                let content = if let Some(ref rip) = options.root_index_path {
+                    let workspace_root_path = PathBuf::from(rip);
+                    let ws_config = self
+                        .workspace()
+                        .inner()
+                        .get_workspace_config(&workspace_root_path)
+                        .await
+                        .ok();
+                    let tmpl = if let Some(ref cfg) = ws_config
+                        && let Some(ref tmpl_link) = cfg.default_template
+                    {
+                        self.resolve_template_from_link(tmpl_link, &workspace_root_path)
+                            .await
+                    } else {
+                        None
+                    };
+                    let tmpl = tmpl.unwrap_or_else(crate::template::Template::builtin_note);
+                    let ctx = crate::template::TemplateContext::new()
+                        .with_title(&title)
+                        .with_filename(
+                            path_buf
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("untitled"),
+                        );
+                    tmpl.render(&ctx)
+                } else {
+                    // No workspace context — use simple hardcoded template
+                    format!("---\ntitle: {}\n---\n\n# {}\n\n", title, title)
+                };
+
                 // CrdtFs.create_new extracts metadata from frontmatter automatically
-                let content = format!("---\ntitle: {}\n---\n\n# {}\n\n", title, title);
                 self.fs()
                     .create_new(Path::new(&path), &content)
                     .await
@@ -855,18 +1060,12 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
             Command::RenameEntry { path, new_filename } => {
                 let from_path = PathBuf::from(&path);
-                let parent_dir = from_path.parent().unwrap_or_else(|| Path::new("."));
-                let to_path = parent_dir.join(&new_filename);
-                let to_path_str = to_path.to_string_lossy().to_string();
 
-                if from_path == to_path {
-                    return Ok(Response::String(to_path_str));
-                }
-
-                // Use move_entry which goes through CrdtFs.move_file
-                // CrdtFs handles: marking old as deleted, creating new entry, updating parent contents
+                // Use rename_entry which handles both leaf files and index files
+                // (directory rename + children migration + part_of/contents updates)
                 let ws = self.workspace().inner();
-                ws.move_entry(&from_path, &to_path).await?;
+                let new_path = ws.rename_entry(&from_path, &new_filename).await?;
+                let to_path_str = new_path.to_string_lossy().to_string();
 
                 // Migrate body doc and emit sync
                 #[cfg(feature = "crdt")]
@@ -1095,12 +1294,23 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .map(|p| p.to_path_buf())
                     .unwrap_or_else(|| workspace_root_path.clone());
 
+                // Read workspace config — command params override workspace config values
+                let ws_cfg = self
+                    .workspace()
+                    .inner()
+                    .get_workspace_config(&workspace_root_path)
+                    .await
+                    .ok();
+                let effective_daily_folder = daily_entry_folder
+                    .clone()
+                    .or_else(|| ws_cfg.as_ref().and_then(|c| c.daily_entry_folder.clone()));
+
                 let config = Config::with_options(
                     workspace_dir.clone(),
-                    daily_entry_folder.clone(),
-                    None,             // editor
-                    None,             // default_template
-                    template.clone(), // daily_template
+                    effective_daily_folder.clone(),
+                    None, // editor
+                    None, // default_template
+                    None, // daily_template (resolved below from workspace config)
                 );
 
                 // Get today's date
@@ -1113,7 +1323,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         &today,
                         &config,
                         &workspace_root_path,
-                        daily_entry_folder.as_deref(),
+                        effective_daily_folder.as_deref(),
                     )
                     .await?;
 
@@ -1128,15 +1338,29 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 }
                 // No need to create_dir_all - month_dir already exists from ensure_daily_index_hierarchy
 
-                // Get template content
-                let templates_dir = workspace_dir.join("_templates");
-                let template_name = template.as_deref().unwrap_or("daily");
-                let template_path = templates_dir.join(format!("{}.md", template_name));
-
-                let template_content = if self.fs().exists(&template_path).await {
-                    self.fs().read_to_string(&template_path).await.ok()
+                // Resolve template: workspace config link → _templates/ dir → built-in
+                let template_content = if let Some(ref cfg) = ws_cfg
+                    && let Some(ref daily_tmpl_link) = cfg.daily_template
+                {
+                    // Try workspace config link first
+                    self.resolve_template_from_link(daily_tmpl_link, &workspace_root_path)
+                        .await
+                        .map(|t| t.raw_content)
                 } else {
                     None
+                };
+                let template_content = if template_content.is_some() {
+                    template_content
+                } else {
+                    // Fall back to _templates/ directory
+                    let templates_dir = workspace_dir.join("_templates");
+                    let template_name = template.as_deref().unwrap_or("daily");
+                    let template_path = templates_dir.join(format!("{}.md", template_name));
+                    if self.fs().exists(&template_path).await {
+                        self.fs().read_to_string(&template_path).await.ok()
+                    } else {
+                        None
+                    }
                 };
 
                 // Build context for template variables
@@ -1539,7 +1763,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     if let Ok(index) = ws.parse_index_with_hint(path, link_format).await {
                         if let Some(file_audiences) = &index.frontmatter.audience {
                             for a in file_audiences {
-                                if a.to_lowercase() != "private" {
+                                let trimmed = a.trim();
+                                if !trimmed.is_empty() {
                                     audiences.insert(a.clone());
                                 }
                             }
@@ -3272,6 +3497,17 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 let ws = self.workspace().inner();
                 let config = ws.get_workspace_config(Path::new(&root_index_path)).await?;
                 Ok(Response::WorkspaceConfig(config))
+            }
+
+            Command::SetWorkspaceConfig {
+                root_index_path,
+                field,
+                value,
+            } => {
+                let ws = self.workspace().inner();
+                ws.set_workspace_config_field(Path::new(&root_index_path), &field, &value)
+                    .await?;
+                Ok(Response::Ok)
             }
 
             Command::ConvertLinks {

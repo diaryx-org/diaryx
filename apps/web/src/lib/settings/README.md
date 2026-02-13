@@ -41,13 +41,13 @@ Settings panel components for the settings dialog.
 | `FormattingSettings.svelte` | Text formatting options |
 | `GoogleDriveSettings.svelte` | Google Drive integration |
 | `ImportSettings.svelte` | Import from file |
-| `LinkSettings.svelte` | Link format settings |
+| `LinkSettings.svelte` | Link format settings (workspace config) |
 | `S3BackupSettings.svelte` | S3 backup configuration |
 | `StorageSettings.svelte` | Storage backend settings |
 | `SyncSettings.svelte` | Sync server settings + synced attachment storage usage |
 | `syncSettingsLogic.ts` | Storage usage status/summary helpers for sync settings |
-| `TemplateSettings.svelte` | Template management |
-| `WorkspaceSettings.svelte` | Workspace configuration |
+| `TemplateSettings.svelte` | Template management (default_template/daily_template in workspace config) |
+| `WorkspaceSettings.svelte` | Workspace config: location, daily folder, entry behavior, filename style |
 
 `SyncSettings.svelte` displays:
 

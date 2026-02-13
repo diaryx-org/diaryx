@@ -62,8 +62,6 @@ pub struct ExcludedFile {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings/")]
 pub enum ExclusionReason {
-    /// File is marked as private
-    Private,
     /// File's audience doesn't include the target audience
     AudienceMismatch {
         /// What audiences are intended to view the document
@@ -71,19 +69,13 @@ pub enum ExclusionReason {
         /// What audiences were requested for the export
         requested: String,
     },
-    /// File inherits private from parent
-    InheritedPrivate {
-        /// Path to the parent that was marked as `private`
-        from: PathBuf,
-    },
-    /// File has no audience and inherits to root which has no audience (default private)
+    /// File has no audience defined and no audience inherited from parent
     NoAudienceDefined,
 }
 
 impl std::fmt::Display for ExclusionReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ExclusionReason::Private => write!(f, "marked as private"),
             ExclusionReason::AudienceMismatch {
                 file_audience,
                 requested,
@@ -94,11 +86,8 @@ impl std::fmt::Display for ExclusionReason {
                     file_audience, requested
                 )
             }
-            ExclusionReason::InheritedPrivate { from } => {
-                write!(f, "inherits private from {}", from.display())
-            }
             ExclusionReason::NoAudienceDefined => {
-                write!(f, "no audience defined (defaults to private)")
+                write!(f, "no audience defined")
             }
         }
     }
@@ -282,8 +271,8 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
         Ok(true)
     }
 
-    /// Check if a file is visible to the given audience
-    /// Returns (is_visible, effective_audience_for_children)
+    /// Check if a file is visible to the given audience.
+    /// Returns (is_visible, effective_audience_for_children).
     fn check_visibility(
         &self,
         frontmatter: &IndexFrontmatter,
@@ -292,14 +281,8 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
     ) -> (bool, Option<Vec<String>>) {
         let audience = audience.trim();
 
-        // Check for explicit private - always excluded
-        if frontmatter.is_private() {
-            return (false, None);
-        }
-
-        // Special case: "*" means "all non-private files"
+        // Special case: "*" means "all files"
         if audience == "*" {
-            // Return the file's explicit audience for inheritance, or None
             let effective_audience = frontmatter.audience.clone();
             return (true, effective_audience);
         }
@@ -317,36 +300,24 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
             let visible = parent_audience
                 .iter()
                 .any(|a| a.trim().eq_ignore_ascii_case(audience));
-            return (visible, None); // Don't override inherited audience
+            return (visible, None);
         }
 
-        // No audience defined anywhere - default to private (not visible)
+        // No audience defined anywhere — not visible for this audience
         (false, None)
     }
 
-    /// Determine the reason a file was excluded
+    /// Determine the reason a file was excluded.
     fn get_exclusion_reason(
         &self,
         frontmatter: &IndexFrontmatter,
         audience: &str,
-        inherited: Option<&Vec<String>>,
+        _inherited: Option<&Vec<String>>,
     ) -> ExclusionReason {
-        if frontmatter.is_private() {
-            return ExclusionReason::Private;
-        }
-
         if let Some(file_audience) = &frontmatter.audience {
             return ExclusionReason::AudienceMismatch {
                 file_audience: file_audience.clone(),
                 requested: audience.to_string(),
-            };
-        }
-
-        if inherited.is_some() {
-            // Parent had audience but this file wasn't included
-            // This shouldn't happen if parent was visible, so it must be inherited private
-            return ExclusionReason::InheritedPrivate {
-                from: PathBuf::from("parent"),
             };
         }
 
@@ -538,7 +509,7 @@ mod tests {
     }
 
     #[test]
-    fn test_private_file_excluded() {
+    fn test_audience_mismatch_excluded() {
         let fs = make_test_fs();
         fs.write_file(
             Path::new("/workspace/README.md"),
@@ -547,7 +518,7 @@ mod tests {
         .unwrap();
         fs.write_file(
             Path::new("/workspace/secret.md"),
-            "---\ntitle: Secret\npart_of: README.md\naudience:\n  - private\n---\n\n# Secret\n",
+            "---\ntitle: Secret\npart_of: README.md\naudience:\n  - internal\n---\n\n# Secret\n",
         )
         .unwrap();
 
@@ -562,7 +533,13 @@ mod tests {
 
         assert_eq!(plan.included.len(), 1);
         assert_eq!(plan.excluded.len(), 1);
-        assert_eq!(plan.excluded[0].reason, ExclusionReason::Private);
+        assert_eq!(
+            plan.excluded[0].reason,
+            ExclusionReason::AudienceMismatch {
+                file_audience: vec!["internal".to_string()],
+                requested: "family".to_string(),
+            }
+        );
     }
 
     #[test]
@@ -594,7 +571,7 @@ mod tests {
     }
 
     #[test]
-    fn test_no_audience_defaults_to_private() {
+    fn test_no_audience_excluded() {
         let fs = make_test_fs();
         fs.write_file(
             Path::new("/workspace/README.md"),
@@ -611,7 +588,7 @@ mod tests {
         ))
         .unwrap();
 
-        // Root has no audience, defaults to private
+        // Root has no audience — excluded from audience-specific export
         assert_eq!(plan.included.len(), 0);
         assert_eq!(plan.excluded.len(), 1);
         assert_eq!(plan.excluded[0].reason, ExclusionReason::NoAudienceDefined);
@@ -622,17 +599,17 @@ mod tests {
         let fs = make_test_fs();
         fs.write_file(
             Path::new("/workspace/README.md"),
-            "---\ntitle: Root\ncontents:\n  - public.md\n  - private.md\naudience:\n  - family\n---\n\n# Root\n",
+            "---\ntitle: Root\ncontents:\n  - visible.md\n  - hidden.md\naudience:\n  - family\n---\n\n# Root\n",
         )
         .unwrap();
         fs.write_file(
-            Path::new("/workspace/public.md"),
-            "---\ntitle: Public\npart_of: README.md\n---\n\n# Public\n",
+            Path::new("/workspace/visible.md"),
+            "---\ntitle: Visible\npart_of: README.md\n---\n\n# Visible\n",
         )
         .unwrap();
         fs.write_file(
-            Path::new("/workspace/private.md"),
-            "---\ntitle: Private\npart_of: README.md\naudience:\n  - private\n---\n\n# Private\n",
+            Path::new("/workspace/hidden.md"),
+            "---\ntitle: Hidden\npart_of: README.md\naudience:\n  - internal\n---\n\n# Hidden\n",
         )
         .unwrap();
 
@@ -652,8 +629,8 @@ mod tests {
             .find(|f| f.source_path == Path::new("/workspace/README.md"))
             .unwrap();
 
-        // Root should track that private.md was filtered
-        assert!(root.filtered_contents.contains(&"private.md".to_string()));
+        // Root should track that hidden.md was filtered
+        assert!(root.filtered_contents.contains(&"hidden.md".to_string()));
     }
 
     #[test]

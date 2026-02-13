@@ -348,7 +348,7 @@ pub fn handle_create(
     let workspace_dir = Some(config.default_workspace.as_path());
     match app.create_entry_from_template(
         path_buf,
-        template.as_deref().or(config.default_template.as_deref()),
+        template.as_deref(),
         title.as_deref(),
         workspace_dir,
     ) {

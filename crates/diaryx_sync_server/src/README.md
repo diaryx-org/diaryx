@@ -30,7 +30,7 @@ This directory contains the source code for the Diaryx sync server.
 | `main.rs` | Server entry point |
 | `config.rs` | Configuration from environment variables |
 | `blob_store.rs` | Attachment blob storage abstraction (R2/in-memory) |
-| `publish.rs` | Static site publishing pipeline + token signing helpers (audience-filtered builds, including `public`, with per-audience artifact replacement, root-index selection via `diaryx_core::workspace`, helper-tested audience discovery/normalization, and zero-build diagnostics) |
+| `publish.rs` | Static site publishing pipeline + token signing helpers (audience-filtered builds using workspace config's `public_audience`, per-audience artifact replacement, root-index selection via `diaryx_core::workspace`, helper-tested audience discovery/normalization, and zero-build diagnostics) |
 
 ## Modules
 

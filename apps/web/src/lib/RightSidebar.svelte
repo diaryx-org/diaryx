@@ -8,6 +8,7 @@
   import * as Alert from "$lib/components/ui/alert";
   import FilePickerPopover from "$lib/components/FilePickerPopover.svelte";
   import AudienceEditor from "$lib/components/AudienceEditor.svelte";
+  import WorkspaceConfigSection from "$lib/components/WorkspaceConfigSection.svelte";
   import {
     Calendar,
     Clock,
@@ -36,6 +37,7 @@
     ArrowUpRight,
     Replace,
     Eye,
+    Settings2,
   } from "@lucide/svelte";
   import type { Component } from "svelte";
   import VersionDiff from "./history/VersionDiff.svelte";
@@ -108,6 +110,11 @@
     triggerStartSession = false,
     onTriggerStartSessionConsumed,
   }: Props = $props();
+
+  // Detect if current entry is the workspace root index
+  const isRootIndex = $derived(
+    entry !== null && workspaceStore.tree !== null && entry.path === workspaceStore.tree.path
+  );
 
   // Tab state
   type TabType = "properties" | "history" | "share";
@@ -389,6 +396,19 @@
   // Keys that have dedicated UI sections and should not appear in generic metadata
   const DEDICATED_SECTION_KEYS = ["attachments", "audience"];
 
+  // Workspace config keys that are shown in the dedicated config section (root index only)
+  const WORKSPACE_CONFIG_KEYS = [
+    "link_format",
+    "daily_entry_folder",
+    "default_template",
+    "daily_template",
+    "sync_title_to_heading",
+    "auto_update_timestamp",
+    "auto_rename_to_title",
+    "filename_style",
+    "public_audience",
+  ];
+
   // Get frontmatter entries sorted with common fields first
   function getSortedFrontmatter(
     frontmatter: Record<string, unknown>,
@@ -404,7 +424,9 @@
       "contents",
     ];
     const entries = Object.entries(frontmatter).filter(
-      ([key]) => !DEDICATED_SECTION_KEYS.includes(key.toLowerCase()),
+      ([key]) =>
+        !DEDICATED_SECTION_KEYS.includes(key.toLowerCase()) &&
+        !(isRootIndex && WORKSPACE_CONFIG_KEYS.includes(key.toLowerCase())),
     );
 
     return entries.sort(([a], [b]) => {
@@ -918,6 +940,19 @@
           }}
         />
       </div>
+
+      <!-- Workspace Config Section (root index only) -->
+      {#if isRootIndex}
+        <div class="p-3 border-t border-sidebar-border">
+          <div class="flex items-center justify-between mb-2">
+            <div class="flex items-center gap-2 text-xs text-muted-foreground">
+              <Settings2 class="size-3.5" />
+              <span class="font-medium">Workspace Config</span>
+            </div>
+          </div>
+          <WorkspaceConfigSection rootIndexPath={entry.path} />
+        </div>
+      {/if}
 
       <!-- Attachments Section -->
       <div class="p-3 border-t border-sidebar-border">

@@ -746,8 +746,21 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                         if !is_excluded {
                             result.warnings.push(ValidationWarning::OrphanFile {
                                 file: entry.clone(),
-                                suggested_index,
+                                suggested_index: suggested_index.clone(),
                             });
+
+                            // Also check if this orphan file is missing part_of
+                            if let Ok(index) = self.ws.parse_index(&entry).await {
+                                let is_index = index.frontmatter.contents.is_some()
+                                    || !index.frontmatter.contents_list().is_empty();
+
+                                if !is_index && index.frontmatter.part_of.is_none() {
+                                    result.warnings.push(ValidationWarning::MissingPartOf {
+                                        file: entry.clone(),
+                                        suggested_index,
+                                    });
+                                }
+                            }
                         }
                     } else if extension.is_some() && !is_excluded {
                         // Binary file not referenced by any attachments
@@ -902,6 +915,23 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                             target: part_of.clone(),
                         });
                     }
+                }
+            } else if from_parent.is_some() {
+                // File has no part_of but was reached from a parent's contents.
+                // Non-index files should have part_of to maintain hierarchy links.
+                // Index files without part_of could be sub-roots, which is allowed.
+                let is_index = index.frontmatter.contents.is_some()
+                    || !index.frontmatter.contents_list().is_empty();
+
+                if !is_index {
+                    let suggested_index =
+                        find_index_in_directory(&self.ws, dir, Some(path)).await;
+                    ctx.result
+                        .warnings
+                        .push(ValidationWarning::MissingPartOf {
+                            file: path.to_path_buf(),
+                            suggested_index,
+                        });
                 }
             }
 
@@ -2648,6 +2678,167 @@ contents:
             orphan_warnings.contains(&"notes.md".to_string()),
             "notes.md should trigger a warning, got warnings: {:?}",
             orphan_warnings
+        );
+    }
+
+    #[test]
+    fn test_validate_workspace_missing_part_of_in_contents() {
+        // A file listed in contents but missing part_of should produce MissingPartOf warning
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents:\n  - note.md\n---\n",
+        )
+        .unwrap();
+        // note.md has no part_of property
+        fs.write_file(Path::new("note.md"), "---\ntitle: Note\n---\n")
+            .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+        let missing_part_of: Vec<_> = result
+            .warnings
+            .iter()
+            .filter(|w| matches!(w, ValidationWarning::MissingPartOf { .. }))
+            .collect();
+
+        assert_eq!(
+            missing_part_of.len(),
+            1,
+            "Expected 1 MissingPartOf warning, got: {:?}",
+            missing_part_of
+        );
+        match &missing_part_of[0] {
+            ValidationWarning::MissingPartOf { file, .. } => {
+                assert_eq!(file, Path::new("note.md"));
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn test_validate_workspace_no_missing_part_of_for_root() {
+        // The root index should NOT produce a MissingPartOf warning
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents:\n  - note.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("note.md"),
+            "---\ntitle: Note\npart_of: README.md\n---\n",
+        )
+        .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+        let missing_part_of: Vec<_> = result
+            .warnings
+            .iter()
+            .filter(|w| matches!(w, ValidationWarning::MissingPartOf { .. }))
+            .collect();
+
+        assert!(
+            missing_part_of.is_empty(),
+            "Root index should not get MissingPartOf, got: {:?}",
+            missing_part_of
+        );
+    }
+
+    #[test]
+    fn test_validate_workspace_no_missing_part_of_for_sub_index() {
+        // A sub-index (has contents) without part_of should NOT produce MissingPartOf
+        // since it could be a valid sub-root
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents:\n  - sub/index.md\n---\n",
+        )
+        .unwrap();
+        fs.create_dir_all(Path::new("sub")).unwrap();
+        // sub/index.md has contents but no part_of
+        fs.write_file(
+            Path::new("sub/index.md"),
+            "---\ntitle: Sub\ncontents:\n  - child.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("sub/child.md"),
+            "---\ntitle: Child\npart_of: index.md\n---\n",
+        )
+        .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+        let missing_part_of: Vec<_> = result
+            .warnings
+            .iter()
+            .filter(|w| matches!(w, ValidationWarning::MissingPartOf { .. }))
+            .collect();
+
+        assert!(
+            missing_part_of.is_empty(),
+            "Sub-index without part_of should not get MissingPartOf, got: {:?}",
+            missing_part_of
+        );
+    }
+
+    #[test]
+    fn test_validate_workspace_orphan_file_missing_part_of() {
+        // An orphan markdown file (not in any contents) without part_of should produce
+        // both OrphanFile and MissingPartOf warnings
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents:\n  - note.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("note.md"),
+            "---\ntitle: Note\npart_of: README.md\n---\n",
+        )
+        .unwrap();
+        // orphan.md is not listed in any contents and has no part_of
+        fs.write_file(Path::new("orphan.md"), "---\ntitle: Orphan\n---\n")
+            .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+        let orphan_warnings: Vec<_> = result
+            .warnings
+            .iter()
+            .filter(|w| matches!(w, ValidationWarning::OrphanFile { .. }))
+            .collect();
+        let missing_part_of: Vec<_> = result
+            .warnings
+            .iter()
+            .filter(|w| matches!(w, ValidationWarning::MissingPartOf { .. }))
+            .collect();
+
+        assert_eq!(
+            orphan_warnings.len(),
+            1,
+            "Expected 1 OrphanFile warning, got: {:?}",
+            orphan_warnings
+        );
+        assert_eq!(
+            missing_part_of.len(),
+            1,
+            "Expected 1 MissingPartOf warning for orphan, got: {:?}",
+            missing_part_of
         );
     }
 

@@ -75,7 +75,7 @@ async function authenticateAudience(
     if (!claims || !isClaimsAllowed(claims, siteMeta, slug)) {
       return {
         audience: 'public',
-        earlyResponse: jsonError(403, 'invalid_access_token', 'Access token is invalid'),
+        earlyResponse: forbidden('This access token is invalid or has expired.'),
       };
     }
 
@@ -133,7 +133,7 @@ async function serveAttachment(
   const filename = sitePathSegments.slice(3).join('/');
 
   if (urlAudience !== effectiveAudience) {
-    return jsonError(403, 'forbidden', 'Audience mismatch for attachment');
+    return forbidden('You do not have permission to access this resource.');
   }
 
   const key = `${siteMeta.attachment_prefix}/${hash}`;
@@ -270,14 +270,81 @@ function rewriteRootRelativeUrls(html: string, slug: string): string {
 }
 
 function notFound(): Response {
-  return jsonError(404, 'not_found', 'Not found');
+  return htmlError(404, 'Page not found', "The page you're looking for doesn't exist or may have been moved.");
 }
 
-function jsonError(status: number, error: string, message: string): Response {
-  return new Response(JSON.stringify({ error, message }), {
+function forbidden(message: string): Response {
+  return htmlError(403, 'Access denied', message);
+}
+
+function htmlError(status: number, title: string, message: string): Response {
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${title}</title>
+    <style>
+    :root {
+        --bg: #fafaf9;
+        --text: #0f172a;
+        --text-muted: #64748b;
+        --border: #e5e7eb;
+    }
+    @media (prefers-color-scheme: dark) {
+        :root {
+            --bg: #0a0a0f;
+            --text: #f1f5f9;
+            --text-muted: #94a3b8;
+            --border: #334155;
+        }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        color: var(--text);
+        background: var(--bg);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        padding: 2rem;
+        -webkit-font-smoothing: antialiased;
+    }
+    .error {
+        text-align: center;
+        max-width: 28rem;
+    }
+    .error-code {
+        font-size: 4rem;
+        font-weight: 700;
+        line-height: 1;
+        color: var(--text-muted);
+        margin-bottom: 0.75rem;
+    }
+    .error-title {
+        font-size: 1.25rem;
+        font-weight: 600;
+        margin-bottom: 0.5rem;
+    }
+    .error-message {
+        font-size: 0.9375rem;
+        color: var(--text-muted);
+        line-height: 1.6;
+    }
+    </style>
+</head>
+<body>
+    <div class="error">
+        <div class="error-code">${status}</div>
+        <h1 class="error-title">${title}</h1>
+        <p class="error-message">${message}</p>
+    </div>
+</body>
+</html>`;
+
+  return new Response(html, {
     status,
-    headers: {
-      'content-type': 'application/json; charset=utf-8',
-    },
+    headers: { 'content-type': 'text/html; charset=utf-8' },
   });
 }

@@ -10,7 +10,9 @@ use diaryx_sync_server::{
     config::Config,
     db::{AuthRepo, init_database},
     email::EmailService,
+    handlers::sites::verify_domain_route,
     handlers::{api_routes, auth_routes, session_routes, site_routes},
+    kv_client::CloudflareKvClient,
     publish::{
         new_publish_lock, publish_workspace_to_r2, release_publish_lock, try_acquire_publish_lock,
     },
@@ -136,6 +138,16 @@ async fn main() {
         repo: repo.clone(),
         sync_v2: sync_v2_state.clone(),
     };
+    let kv_client = if config.is_kv_configured() {
+        Some(Arc::new(CloudflareKvClient::new(
+            config.r2.account_id.clone(),
+            config.kv_namespace_id.clone(),
+            config.kv_api_token.clone(),
+        )))
+    } else {
+        None
+    };
+
     let sites_state = diaryx_sync_server::handlers::sites::SitesState {
         repo: repo.clone(),
         sync_v2: sync_v2_state.clone(),
@@ -145,6 +157,7 @@ async fn main() {
         site_limit: config.published_site_limit,
         sites_base_url: config.sites_base_url.clone(),
         publish_lock: publish_lock.clone(),
+        kv_client,
     };
 
     // Build CORS layer
@@ -180,7 +193,9 @@ async fn main() {
         .nest("/auth", auth_routes(auth_state))
         // API routes
         .nest("/api", api_routes(api_state))
-        .nest("/api", site_routes(sites_state))
+        .nest("/api", site_routes(sites_state.clone()))
+        // Caddy verify-domain endpoint (unauthenticated)
+        .nest("/api", verify_domain_route(sites_state))
         // Session routes (for live share)
         .nest("/api/sessions", session_routes(sessions_state))
         // Sync v2 endpoint (siphonophore-based)

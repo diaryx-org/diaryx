@@ -142,6 +142,7 @@ CREATE TABLE IF NOT EXISTS published_sites (
     workspace_id TEXT NOT NULL REFERENCES user_workspaces(id) ON DELETE CASCADE,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     slug TEXT NOT NULL UNIQUE,
+    custom_domain TEXT,
     enabled INTEGER NOT NULL DEFAULT 1,
     auto_publish INTEGER NOT NULL DEFAULT 1,
     last_published_at INTEGER,
@@ -151,6 +152,8 @@ CREATE TABLE IF NOT EXISTS published_sites (
 
 CREATE INDEX IF NOT EXISTS idx_published_sites_workspace ON published_sites(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_published_sites_user ON published_sites(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_published_sites_custom_domain
+  ON published_sites(custom_domain) WHERE custom_domain IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS site_audience_builds (
     site_id TEXT NOT NULL REFERENCES published_sites(id) ON DELETE CASCADE,
@@ -241,6 +244,24 @@ pub fn init_database(conn: &Connection) -> Result<(), rusqlite::Error> {
     if !has_published_sites {
         conn.execute_batch(PUBLISHED_SITE_SCHEMA)?;
     }
+
+    // Forward migration: add custom_domain column to published_sites.
+    let has_custom_domain_col: bool = conn
+        .prepare("PRAGMA table_info(published_sites)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|name| name == "custom_domain");
+    if !has_custom_domain_col {
+        conn.execute(
+            "ALTER TABLE published_sites ADD COLUMN custom_domain TEXT",
+            [],
+        )?;
+        conn.execute_batch(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_published_sites_custom_domain \
+             ON published_sites(custom_domain) WHERE custom_domain IS NOT NULL;",
+        )?;
+    }
+
     Ok(())
 }
 
@@ -284,6 +305,15 @@ mod tests {
             .filter_map(|r| r.ok())
             .collect();
         assert!(user_cols.contains(&"attachment_limit_bytes".to_string()));
+
+        let site_cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(published_sites)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(site_cols.contains(&"custom_domain".to_string()));
     }
 
     #[test]

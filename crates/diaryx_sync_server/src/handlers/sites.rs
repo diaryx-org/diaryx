@@ -1,6 +1,7 @@
 use crate::auth::RequireAuth;
 use crate::blob_store::BlobStore;
 use crate::db::{AccessTokenInfo, AuthRepo, PublishedSiteInfo};
+use crate::kv_client::CloudflareKvClient;
 use crate::publish::{
     PublishLock, create_signed_token, publish_workspace_to_r2, release_publish_lock,
     try_acquire_publish_lock, write_site_meta,
@@ -8,10 +9,10 @@ use crate::publish::{
 use crate::sync_v2::SyncV2State;
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{delete, post},
+    routing::{delete, get, post},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -27,6 +28,7 @@ pub struct SitesState {
     pub site_limit: usize,
     pub sites_base_url: String,
     pub publish_lock: PublishLock,
+    pub kv_client: Option<Arc<CloudflareKvClient>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -61,12 +63,23 @@ struct SiteResponse {
     id: String,
     workspace_id: String,
     slug: String,
+    custom_domain: Option<String>,
     enabled: bool,
     auto_publish: bool,
     last_published_at: Option<i64>,
     created_at: i64,
     updated_at: i64,
     audiences: Vec<AudienceBuildResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetDomainRequest {
+    domain: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct VerifyDomainParams {
+    domain: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -113,6 +126,10 @@ pub fn site_routes(state: SitesState) -> Router {
             post(trigger_publish),
         )
         .route(
+            "/workspaces/{workspace_id}/site/domain",
+            post(set_custom_domain).delete(remove_custom_domain),
+        )
+        .route(
             "/workspaces/{workspace_id}/site/tokens",
             post(create_token).get(list_tokens),
         )
@@ -120,6 +137,14 @@ pub fn site_routes(state: SitesState) -> Router {
             "/workspaces/{workspace_id}/site/tokens/{token_id}",
             delete(delete_token),
         )
+        .with_state(state)
+}
+
+/// Unauthenticated endpoint for Caddy's on_demand_tls `ask` directive.
+/// Returns 200 if the domain has a published site, 404 otherwise.
+pub fn verify_domain_route(state: SitesState) -> Router {
+    Router::new()
+        .route("/verify-domain", get(verify_domain))
         .with_state(state)
 }
 
@@ -299,6 +324,13 @@ async fn delete_site(
     let delete_prefix = format!("{}/", site.slug);
     let cleanup_result = state.sites_store.delete_by_prefix(&delete_prefix).await;
     let db_result = state.repo.delete_published_site(&site.id);
+
+    // Clean up custom domain KV mapping if set.
+    if let Some(domain) = &site.custom_domain {
+        if let Some(kv) = &state.kv_client {
+            let _ = kv.delete_domain_mapping(domain).await;
+        }
+    }
 
     release_publish_lock(&state.publish_lock, &workspace_id).await;
 
@@ -638,6 +670,177 @@ fn ensure_workspace_owner(
     Ok(workspace)
 }
 
+async fn set_custom_domain(
+    State(state): State<SitesState>,
+    RequireAuth(auth): RequireAuth,
+    Path(workspace_id): Path<String>,
+    Json(body): Json<SetDomainRequest>,
+) -> Response {
+    if let Err(resp) = ensure_workspace_owner(&state, &auth.user.id, &workspace_id) {
+        return resp;
+    }
+
+    let site = match state.repo.get_site_for_workspace(&workspace_id) {
+        Ok(Some(site)) => site,
+        Ok(None) => {
+            return error_response(StatusCode::NOT_FOUND, "not_found", "Site not found");
+        }
+        Err(_) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "db_error",
+                "Failed to query site",
+            );
+        }
+    };
+
+    let domain = body.domain.trim().to_lowercase();
+    if !domain_is_valid(&domain) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_domain",
+            "Domain must be a valid hostname (e.g. blog.example.com or example.com)",
+        );
+    }
+
+    // Check the domain is not already taken by another site.
+    match state.repo.get_site_by_custom_domain(&domain) {
+        Ok(Some(existing)) if existing.id != site.id => {
+            return error_response(
+                StatusCode::CONFLICT,
+                "domain_taken",
+                "This domain is already in use by another site",
+            );
+        }
+        Ok(_) => {}
+        Err(_) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "db_error",
+                "Failed to check domain availability",
+            );
+        }
+    }
+
+    // Remove old KV mapping if changing domains.
+    if let Some(old_domain) = &site.custom_domain {
+        if *old_domain != domain {
+            if let Some(kv) = &state.kv_client {
+                let _ = kv.delete_domain_mapping(old_domain).await;
+            }
+        }
+    }
+
+    if state
+        .repo
+        .set_custom_domain(&site.id, Some(&domain))
+        .is_err()
+    {
+        return error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "db_error",
+            "Failed to set custom domain",
+        );
+    }
+
+    // Write domain→slug mapping to KV.
+    if let Some(kv) = &state.kv_client {
+        if let Err(err) = kv.put_domain_mapping(&domain, &site.slug).await {
+            tracing::error!("Failed to write KV domain mapping: {}", err);
+            // Don't fail the request — SQLite is the source of truth.
+        }
+    }
+
+    // Re-fetch the updated site for the response.
+    let updated_site = match state.repo.get_site_for_workspace(&workspace_id) {
+        Ok(Some(site)) => site,
+        _ => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "db_error",
+                "Failed to read updated site",
+            );
+        }
+    };
+    let builds = state
+        .repo
+        .list_site_audience_builds(&updated_site.id)
+        .unwrap_or_default();
+    Json(site_to_response(&updated_site, builds)).into_response()
+}
+
+async fn remove_custom_domain(
+    State(state): State<SitesState>,
+    RequireAuth(auth): RequireAuth,
+    Path(workspace_id): Path<String>,
+) -> Response {
+    if let Err(resp) = ensure_workspace_owner(&state, &auth.user.id, &workspace_id) {
+        return resp;
+    }
+
+    let site = match state.repo.get_site_for_workspace(&workspace_id) {
+        Ok(Some(site)) => site,
+        Ok(None) => {
+            return error_response(StatusCode::NOT_FOUND, "not_found", "Site not found");
+        }
+        Err(_) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "db_error",
+                "Failed to query site",
+            );
+        }
+    };
+
+    if let Some(domain) = &site.custom_domain {
+        if let Some(kv) = &state.kv_client {
+            let _ = kv.delete_domain_mapping(domain).await;
+        }
+    }
+
+    if state.repo.set_custom_domain(&site.id, None).is_err() {
+        return error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "db_error",
+            "Failed to remove custom domain",
+        );
+    }
+
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn verify_domain(
+    State(state): State<SitesState>,
+    Query(params): Query<VerifyDomainParams>,
+) -> Response {
+    let domain = params.domain.trim().to_lowercase();
+    match state.repo.get_site_by_custom_domain(&domain) {
+        Ok(Some(_)) => StatusCode::OK.into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+fn domain_is_valid(domain: &str) -> bool {
+    if domain.is_empty() || domain.len() > 253 {
+        return false;
+    }
+    // Must have at least one dot (e.g. example.com), no protocol, no path.
+    if !domain.contains('.') || domain.contains('/') || domain.contains(':') {
+        return false;
+    }
+    // Each label: alphanumeric + hyphens, not starting/ending with hyphen.
+    domain.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    })
+}
+
 fn parse_expires_at(expires_in: Option<&str>) -> Result<Option<i64>, &'static str> {
     let now = chrono::Utc::now().timestamp();
     let ttl = match expires_in {
@@ -682,6 +885,7 @@ fn site_to_response(
         id: site.id.clone(),
         workspace_id: site.workspace_id.clone(),
         slug: site.slug.clone(),
+        custom_domain: site.custom_domain.clone(),
         enabled: site.enabled,
         auto_publish: site.auto_publish,
         last_published_at: site.last_published_at,

@@ -51,6 +51,7 @@ pub struct PublishedSiteInfo {
     pub workspace_id: String,
     pub user_id: String,
     pub slug: String,
+    pub custom_domain: Option<String>,
     pub enabled: bool,
     pub auto_publish: bool,
     pub last_published_at: Option<i64>,
@@ -639,6 +640,7 @@ impl AuthRepo {
             workspace_id: workspace_id.to_string(),
             user_id: user_id.to_string(),
             slug: slug.to_string(),
+            custom_domain: None,
             enabled,
             auto_publish,
             last_published_at: None,
@@ -654,7 +656,7 @@ impl AuthRepo {
     ) -> Result<Option<PublishedSiteInfo>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, workspace_id, user_id, slug, enabled, auto_publish, last_published_at, created_at, updated_at
+            "SELECT id, workspace_id, user_id, slug, custom_domain, enabled, auto_publish, last_published_at, created_at, updated_at
              FROM published_sites
              WHERE workspace_id = ?",
             [workspace_id],
@@ -664,11 +666,12 @@ impl AuthRepo {
                     workspace_id: row.get(1)?,
                     user_id: row.get(2)?,
                     slug: row.get(3)?,
-                    enabled: row.get::<_, i32>(4)? != 0,
-                    auto_publish: row.get::<_, i32>(5)? != 0,
-                    last_published_at: row.get(6)?,
-                    created_at: row.get(7)?,
-                    updated_at: row.get(8)?,
+                    custom_domain: row.get(4)?,
+                    enabled: row.get::<_, i32>(5)? != 0,
+                    auto_publish: row.get::<_, i32>(6)? != 0,
+                    last_published_at: row.get(7)?,
+                    created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
                 })
             },
         )
@@ -682,7 +685,7 @@ impl AuthRepo {
     ) -> Result<Option<PublishedSiteInfo>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, workspace_id, user_id, slug, enabled, auto_publish, last_published_at, created_at, updated_at
+            "SELECT id, workspace_id, user_id, slug, custom_domain, enabled, auto_publish, last_published_at, created_at, updated_at
              FROM published_sites
              WHERE slug = ?",
             [slug],
@@ -692,11 +695,12 @@ impl AuthRepo {
                     workspace_id: row.get(1)?,
                     user_id: row.get(2)?,
                     slug: row.get(3)?,
-                    enabled: row.get::<_, i32>(4)? != 0,
-                    auto_publish: row.get::<_, i32>(5)? != 0,
-                    last_published_at: row.get(6)?,
-                    created_at: row.get(7)?,
-                    updated_at: row.get(8)?,
+                    custom_domain: row.get(4)?,
+                    enabled: row.get::<_, i32>(5)? != 0,
+                    auto_publish: row.get::<_, i32>(6)? != 0,
+                    last_published_at: row.get(7)?,
+                    created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
                 })
             },
         )
@@ -762,6 +766,50 @@ impl AuthRepo {
     pub fn delete_published_site(&self, site_id: &str) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM published_sites WHERE id = ?", [site_id])?;
+        Ok(())
+    }
+
+    /// Get a published site by custom domain hostname.
+    pub fn get_site_by_custom_domain(
+        &self,
+        domain: &str,
+    ) -> Result<Option<PublishedSiteInfo>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, workspace_id, user_id, slug, custom_domain, enabled, auto_publish, last_published_at, created_at, updated_at
+             FROM published_sites
+             WHERE custom_domain = ?",
+            [domain],
+            |row| {
+                Ok(PublishedSiteInfo {
+                    id: row.get(0)?,
+                    workspace_id: row.get(1)?,
+                    user_id: row.get(2)?,
+                    slug: row.get(3)?,
+                    custom_domain: row.get(4)?,
+                    enabled: row.get::<_, i32>(5)? != 0,
+                    auto_publish: row.get::<_, i32>(6)? != 0,
+                    last_published_at: row.get(7)?,
+                    created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
+                })
+            },
+        )
+        .optional()
+    }
+
+    /// Set or clear the custom domain for a published site.
+    pub fn set_custom_domain(
+        &self,
+        site_id: &str,
+        domain: Option<&str>,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+        conn.execute(
+            "UPDATE published_sites SET custom_domain = ?, updated_at = ? WHERE id = ?",
+            params![domain, now, site_id],
+        )?;
         Ok(())
     }
 

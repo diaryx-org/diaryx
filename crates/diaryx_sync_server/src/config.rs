@@ -38,6 +38,10 @@ pub struct Config {
     pub sites_base_url: String,
     /// Global HMAC key for audience access tokens (32 bytes)
     pub token_signing_key: Vec<u8>,
+    /// Cloudflare KV namespace ID for domain→slug mapping
+    pub kv_namespace_id: String,
+    /// Cloudflare API token with KV write permissions
+    pub kv_api_token: String,
 }
 
 /// Email configuration (Resend HTTP API)
@@ -170,6 +174,9 @@ impl Config {
             return Err(ConfigError::InvalidTokenSigningKey);
         }
 
+        let kv_namespace_id = env::var("KV_NAMESPACE_ID").unwrap_or_default();
+        let kv_api_token = env::var("KV_API_TOKEN").unwrap_or_default();
+
         Ok(Config {
             host,
             port,
@@ -188,6 +195,8 @@ impl Config {
             published_site_limit,
             sites_r2_bucket,
             token_signing_key,
+            kv_namespace_id,
+            kv_api_token,
         })
     }
 
@@ -206,6 +215,13 @@ impl Config {
         !self.r2.account_id.is_empty()
             && !self.r2.access_key_id.is_empty()
             && !self.r2.secret_access_key.is_empty()
+    }
+
+    /// Check if Cloudflare KV is configured for custom domain mappings.
+    pub fn is_kv_configured(&self) -> bool {
+        !self.r2.account_id.is_empty()
+            && !self.kv_namespace_id.is_empty()
+            && !self.kv_api_token.is_empty()
     }
 }
 

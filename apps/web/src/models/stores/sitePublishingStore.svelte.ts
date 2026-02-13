@@ -10,7 +10,9 @@ import {
   getSite,
   listTokens,
   publishSite,
+  removeCustomDomain,
   revokeToken,
+  setCustomDomain,
   type AudienceBuildSummary,
   type CreateSiteRequest,
   type CreateTokenRequest,
@@ -47,6 +49,8 @@ class SitePublishingStore {
   isCreatingToken = $state(false);
   isRevokingToken = $state(false);
   isRefreshingTokens = $state(false);
+  isSettingDomain = $state(false);
+  isRemovingDomain = $state(false);
 
   get state() {
     return {
@@ -307,6 +311,52 @@ class SitePublishingStore {
     }
   }
 
+  async setDomain(domain: string, workspaceId?: string): Promise<boolean> {
+    if (this.isSettingDomain) return false;
+
+    const resolvedWorkspaceId = this.resolveWorkspaceId(workspaceId);
+    if (!resolvedWorkspaceId) return false;
+
+    this.isSettingDomain = true;
+    this.error = null;
+
+    try {
+      const updated = await setCustomDomain(resolvedWorkspaceId, domain);
+      this.site = updated;
+      return true;
+    } catch (error) {
+      this.error = getErrorMessage(error);
+      console.error('[SitePublishingStore] Failed to set custom domain:', error);
+      return false;
+    } finally {
+      this.isSettingDomain = false;
+    }
+  }
+
+  async removeDomain(workspaceId?: string): Promise<boolean> {
+    if (this.isRemovingDomain) return false;
+
+    const resolvedWorkspaceId = this.resolveWorkspaceId(workspaceId);
+    if (!resolvedWorkspaceId) return false;
+
+    this.isRemovingDomain = true;
+    this.error = null;
+
+    try {
+      await removeCustomDomain(resolvedWorkspaceId);
+      if (this.site) {
+        this.site = { ...this.site, custom_domain: null };
+      }
+      return true;
+    } catch (error) {
+      this.error = getErrorMessage(error);
+      console.error('[SitePublishingStore] Failed to remove custom domain:', error);
+      return false;
+    } finally {
+      this.isRemovingDomain = false;
+    }
+  }
+
   // Test helper / manual reset
   reset() {
     this.site = null;
@@ -322,6 +372,8 @@ class SitePublishingStore {
     this.isCreatingToken = false;
     this.isRevokingToken = false;
     this.isRefreshingTokens = false;
+    this.isSettingDomain = false;
+    this.isRemovingDomain = false;
   }
 }
 

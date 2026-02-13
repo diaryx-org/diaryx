@@ -4,6 +4,7 @@ type Env = {
   SITES_BUCKET: R2Bucket;
   ATTACHMENTS_BUCKET: R2Bucket;
   TOKEN_SIGNING_KEY: string;
+  KV: KVNamespace;
 };
 
 type SiteMeta = {
@@ -24,6 +25,18 @@ const metaCache = new Map<string, { expiresAt: number; value: SiteMeta | null }>
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+
+    // Custom domain support: Caddy proxies custom domain requests with these headers.
+    const customDomain = request.headers.get('X-Custom-Domain');
+    if (customDomain) {
+      const secret = request.headers.get('X-Proxy-Secret');
+      if (secret !== env.TOKEN_SIGNING_KEY) {
+        return forbidden('Invalid proxy request.');
+      }
+      return serveCustomDomain(request, env, customDomain, url);
+    }
+
+    // Standard slug-based routing: /{slug}/{path}
     const segments = url.pathname.split('/').filter(Boolean);
     if (segments.length === 0) {
       return notFound();
@@ -91,6 +104,113 @@ async function authenticateAudience(
     return {
       audience: claims.a,
       earlyResponse: response,
+    };
+  }
+
+  const cookieValue = getCookie(request.headers.get('Cookie') ?? '', `diaryx_access_${slug}`);
+  if (cookieValue) {
+    const claims = await validateSignedToken(env.TOKEN_SIGNING_KEY, cookieValue);
+    if (claims && isClaimsAllowed(claims, siteMeta, slug)) {
+      return { audience: claims.a };
+    }
+  }
+
+  return { audience: 'public' };
+}
+
+async function serveCustomDomain(
+  request: Request,
+  env: Env,
+  hostname: string,
+  url: URL,
+): Promise<Response> {
+  // Resolve domain → slug via KV.
+  const slug = await env.KV.get(`domain:${hostname.toLowerCase()}`);
+  if (!slug) {
+    return notFound();
+  }
+
+  const siteMeta = await getSiteMeta(slug, env);
+  if (!siteMeta) {
+    return notFound();
+  }
+
+  const segments = url.pathname.split('/').filter(Boolean);
+
+  const auth = await authenticateAudienceCustomDomain(request, url, env, siteMeta, slug);
+  if (auth.earlyResponse) {
+    return auth.earlyResponse;
+  }
+
+  // Attachment route: /_a/{audience}/{hash}/{filename}
+  if (segments[0] === '_a') {
+    return serveAttachment(segments, auth.audience, siteMeta, env);
+  }
+
+  // Canonicalize root to "/" with trailing slash.
+  if (segments.length === 0 && !url.pathname.endsWith('/')) {
+    const canonicalUrl = new URL(url.toString());
+    canonicalUrl.pathname = '/';
+    return new Response(null, { status: 302, headers: { Location: canonicalUrl.toString() } });
+  }
+
+  // Serve static page — same R2 layout, just no slug in the URL.
+  let path = segments.map((s) => decodeURIComponent(s)).join('/');
+  if (!path) {
+    path = 'index.html';
+  }
+
+  let key = `${slug}/${auth.audience}/${path}`;
+  let object = await env.SITES_BUCKET.get(key);
+
+  if (!object && !path.endsWith('/index.html')) {
+    key = `${slug}/${auth.audience}/${path.replace(/\/$/, '')}/index.html`;
+    object = await env.SITES_BUCKET.get(key);
+  }
+
+  if (!object) {
+    return notFound();
+  }
+
+  const contentType = object.httpMetadata?.contentType ?? contentTypeForPath(path);
+  const headers = new Headers();
+  headers.set('Content-Type', contentType);
+  headers.set('Cache-Control', 'public, max-age=60');
+
+  if (contentType.toLowerCase().includes('text/html')) {
+    const html = await object.text();
+    const rewritten = stripSlugPrefix(html, slug);
+    return new Response(rewritten, { headers });
+  }
+
+  return new Response(object.body, { headers });
+}
+
+async function authenticateAudienceCustomDomain(
+  request: Request,
+  url: URL,
+  env: Env,
+  siteMeta: SiteMeta,
+  slug: string,
+): Promise<AuthResult> {
+  const access = url.searchParams.get('access');
+  if (access) {
+    const claims = await validateSignedToken(env.TOKEN_SIGNING_KEY, access);
+    if (!claims || !isClaimsAllowed(claims, siteMeta, slug)) {
+      return {
+        audience: 'public',
+        earlyResponse: forbidden('This access token is invalid or has expired.'),
+      };
+    }
+
+    const redirectUrl = new URL(url.toString());
+    redirectUrl.searchParams.delete('access');
+    const headers = new Headers();
+    headers.set('Location', redirectUrl.toString());
+    headers.append('Set-Cookie', buildCookie(slug, access, '/'));
+    return {
+      audience: claims.a,
+      earlyResponse: new Response(null, { status: 302, headers }),
     };
   }
 
@@ -234,8 +354,9 @@ function getCookie(cookieHeader: string, name: string): string | null {
   return null;
 }
 
-function buildCookie(slug: string, token: string): string {
-  return `diaryx_access_${slug}=${encodeURIComponent(token)}; Path=/${slug}; HttpOnly; Secure; SameSite=Lax`;
+function buildCookie(slug: string, token: string, path?: string): string {
+  const cookiePath = path ?? `/${slug}`;
+  return `diaryx_access_${slug}=${encodeURIComponent(token)}; Path=${cookiePath}; HttpOnly; Secure; SameSite=Lax`;
 }
 
 function contentTypeForPath(path: string): string {
@@ -266,6 +387,24 @@ function rewriteRootRelativeUrls(html: string, slug: string): string {
       return `${attr}=${quote}${slugPrefix}/${quote}`;
     }
     return `${attr}=${quote}${slugPrefix}/${normalized}${quote}`;
+  });
+}
+
+/** Strip the /{slug}/ prefix from root-relative URLs in HTML for custom domain serving. */
+function stripSlugPrefix(html: string, slug: string): string {
+  const attrPattern = /\b(href|src|action)=(["'])\/(?!\/)([^"']*)\2/gi;
+
+  return html.replace(attrPattern, (_match, attr: string, quote: string, rawPath: string) => {
+    // If the path starts with the slug prefix, strip it.
+    if (rawPath === slug) {
+      return `${attr}=${quote}/${quote}`;
+    }
+    if (rawPath.startsWith(`${slug}/`)) {
+      const stripped = rawPath.slice(slug.length); // keeps the leading /
+      return `${attr}=${quote}${stripped}${quote}`;
+    }
+    // Already doesn't have slug prefix — leave as-is.
+    return _match;
   });
 }
 

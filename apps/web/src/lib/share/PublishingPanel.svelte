@@ -49,12 +49,15 @@
   let isCreatingToken = $derived(sitePublishingStore.isCreatingToken);
   let isRevokingToken = $derived(sitePublishingStore.isRevokingToken);
   let isRefreshingTokens = $derived(sitePublishingStore.isRefreshingTokens);
+  let isSettingDomain = $derived(sitePublishingStore.isSettingDomain);
+  let isRemovingDomain = $derived(sitePublishingStore.isRemovingDomain);
   let lastCreatedAccessUrl = $derived(sitePublishingStore.lastCreatedAccessUrl);
 
   let slug = $state('');
   let siteEnabled = $state(true);
   let autoPublish = $state(true);
   let slugError = $state<string | null>(null);
+  let customDomainInput = $state('');
 
   let tokenAudience = $state('public');
   let tokenExpiresPreset = $state('7d');
@@ -209,6 +212,30 @@
     showInfo('Open Sync settings to complete setup before publishing.');
   }
 
+  async function handleSetDomain() {
+    const domain = customDomainInput.trim().toLowerCase();
+    if (!domain) return;
+
+    const ok = await sitePublishingStore.setDomain(domain);
+    if (ok) {
+      customDomainInput = '';
+      showSuccess('Custom domain set', domain);
+    } else {
+      showError(sitePublishingStore.error ?? 'Failed to set custom domain', 'Publishing');
+    }
+  }
+
+  async function handleRemoveDomain() {
+    if (!confirm('Remove custom domain from this site?')) return;
+
+    const ok = await sitePublishingStore.removeDomain();
+    if (ok) {
+      showSuccess('Custom domain removed');
+    } else {
+      showError(sitePublishingStore.error ?? 'Failed to remove custom domain', 'Publishing');
+    }
+  }
+
   async function copyText(value: string, mode: 'access-url' | 'token-id', tokenId?: string) {
     try {
       await navigator.clipboard.writeText(value);
@@ -338,6 +365,61 @@
               {/each}
             </div>
           </div>
+        {/if}
+      </div>
+
+      <!-- Custom Domain -->
+      <div class="space-y-2 p-3 rounded-md bg-muted/50 border border-border">
+        <h4 class="text-sm font-medium">Custom Domain</h4>
+        {#if site.custom_domain}
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-xs font-mono text-foreground truncate" title={site.custom_domain}>
+              {site.custom_domain}
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              class="h-7 text-xs text-destructive hover:text-destructive"
+              onclick={handleRemoveDomain}
+              disabled={isRemovingDomain}
+            >
+              {#if isRemovingDomain}
+                <Loader2 class="size-3.5 animate-spin" />
+              {:else}
+                <Trash2 class="size-3.5 mr-1" />
+                Remove
+              {/if}
+            </Button>
+          </div>
+          <p class="text-[11px] text-muted-foreground">
+            Point a CNAME to <code class="text-[10px]">site.diaryx.org</code>, or for apex domains, set an A record to your server IP.
+          </p>
+        {:else}
+          <div class="flex gap-2">
+            <Input
+              type="text"
+              bind:value={customDomainInput}
+              placeholder="blog.example.com"
+              class="h-8 text-xs flex-1"
+            />
+            <Button
+              variant="secondary"
+              size="sm"
+              class="h-8 text-xs shrink-0"
+              onclick={handleSetDomain}
+              disabled={isSettingDomain || customDomainInput.trim().length === 0}
+            >
+              {#if isSettingDomain}
+                <Loader2 class="size-3.5 mr-1 animate-spin" />
+              {:else}
+                <Globe class="size-3.5 mr-1" />
+              {/if}
+              Set
+            </Button>
+          </div>
+          <p class="text-[11px] text-muted-foreground">
+            After setting, point a CNAME to <code class="text-[10px]">site.diaryx.org</code>. For apex domains, use an A record.
+          </p>
         {/if}
       </div>
 

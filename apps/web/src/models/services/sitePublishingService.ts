@@ -12,6 +12,7 @@ export interface PublishedSite {
   id: string;
   workspace_id: string;
   slug: string;
+  custom_domain: string | null;
   enabled: boolean;
   auto_publish: boolean;
   last_published_at: number | null;
@@ -138,6 +139,9 @@ function mapErrorMessage(status: number, code: string | undefined, details: unkn
     if (code === 'site_exists') {
       return 'This workspace already has a configured site.';
     }
+    if (code === 'domain_taken') {
+      return 'This domain is already in use by another site.';
+    }
     return backendMessage ?? 'Conflict while processing publishing request.';
   }
 
@@ -206,6 +210,7 @@ function toPublishedSite(site: SiteResponse): PublishedSite {
     id: site.id,
     workspace_id: site.workspace_id,
     slug: site.slug,
+    custom_domain: site.custom_domain ?? null,
     enabled: site.enabled,
     auto_publish: site.auto_publish,
     last_published_at: site.last_published_at,
@@ -289,6 +294,23 @@ export async function listTokens(workspaceId: string): Promise<SiteAccessToken[]
 
 export async function revokeToken(workspaceId: string, tokenId: string): Promise<void> {
   await apiFetch<void>(workspaceId, `/site/tokens/${encodeURIComponent(tokenId)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function setCustomDomain(
+  workspaceId: string,
+  domain: string,
+): Promise<PublishedSite> {
+  const response = await apiFetch<SiteResponse>(workspaceId, '/site/domain', {
+    method: 'POST',
+    body: JSON.stringify({ domain }),
+  });
+  return toPublishedSite(response);
+}
+
+export async function removeCustomDomain(workspaceId: string): Promise<void> {
+  await apiFetch<void>(workspaceId, '/site/domain', {
     method: 'DELETE',
   });
 }

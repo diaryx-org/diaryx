@@ -12,6 +12,12 @@
 			"bucket_name": "diaryx-user-data"
 		}
 	],
+	"kv_namespaces": [
+    {
+      "binding": "KV",
+      "id": "92891768520a46e883f4eb111c02b4d8",
+    }
+  ],
   "observability": {
     "logs": {
       "enabled": true,

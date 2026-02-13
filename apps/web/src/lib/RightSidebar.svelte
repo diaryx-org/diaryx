@@ -7,6 +7,7 @@
   import { Input } from "$lib/components/ui/input";
   import * as Alert from "$lib/components/ui/alert";
   import FilePickerPopover from "$lib/components/FilePickerPopover.svelte";
+  import AudienceEditor from "$lib/components/AudienceEditor.svelte";
   import {
     Calendar,
     Clock,
@@ -34,6 +35,7 @@
     RotateCcw,
     ArrowUpRight,
     Replace,
+    Eye,
   } from "@lucide/svelte";
   import type { Component } from "svelte";
   import VersionDiff from "./history/VersionDiff.svelte";
@@ -42,6 +44,7 @@
   import * as Tooltip from "$lib/components/ui/tooltip";
   import * as Kbd from "$lib/components/ui/kbd";
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
+  import { workspaceStore } from "@/models/stores/workspaceStore.svelte";
 
   // Platform detection for keyboard shortcut display
   const isMac =
@@ -384,7 +387,7 @@
   }
 
   // Keys that have dedicated UI sections and should not appear in generic metadata
-  const DEDICATED_SECTION_KEYS = ["attachments"];
+  const DEDICATED_SECTION_KEYS = ["attachments", "audience"];
 
   // Get frontmatter entries sorted with common fields first
   function getSortedFrontmatter(
@@ -396,6 +399,7 @@
       "updated",
       "date",
       "tags",
+      "audience",
       "part_of",
       "contents",
     ];
@@ -889,6 +893,30 @@
             Add Property
           </Button>
         {/if}
+      </div>
+
+      <!-- Audience Section -->
+      <div class="p-3 border-t border-sidebar-border">
+        <div class="flex items-center justify-between mb-2">
+          <div class="flex items-center gap-2 text-xs text-muted-foreground">
+            <Eye class="size-3.5" />
+            <span class="font-medium">Audience</span>
+          </div>
+        </div>
+        <AudienceEditor
+          audience={entry.frontmatter.audience as string[] | null ?? null}
+          entryPath={entry.path}
+          rootPath={workspaceStore.tree?.path ?? ""}
+          {api}
+          {rustApi}
+          onChange={(value) => {
+            if (value === null) {
+              onPropertyRemove?.("audience");
+            } else {
+              onPropertyChange?.("audience", value);
+            }
+          }}
+        />
       </div>
 
       <!-- Attachments Section -->

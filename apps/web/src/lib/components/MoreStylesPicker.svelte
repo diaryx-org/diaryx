@@ -21,16 +21,23 @@
   let isStrikeActive = $state(false);
   let isCodeActive = $state(false);
   let isSpoilerActive = $state(false);
+  let mounted = $state(true);
 
   // True if any of the overflow items is active (to show indicator on the button)
   let hasActiveItem = $derived(isStrikeActive || isCodeActive || isSpoilerActive);
 
   function updateActiveStates() {
-    if (!editor) return;
+    if (!editor || !mounted) return;
     isStrikeActive = editor.isActive("strike");
     isCodeActive = editor.isActive("code");
     isSpoilerActive = editor.isActive("spoiler");
   }
+
+  $effect(() => {
+    return () => {
+      mounted = false;
+    };
+  });
 
   function handleStrike() {
     editor?.chain().focus().toggleStrike().run();
@@ -92,7 +99,9 @@
     if (!editor) return;
 
     const ed = editor;
-    const handleUpdate = () => updateActiveStates();
+    // Defer to avoid state_unsafe_mutation when TipTap transaction handlers
+    // fire during Svelte template/derived evaluation.
+    const handleUpdate = () => queueMicrotask(() => updateActiveStates());
 
     ed.on("selectionUpdate", handleUpdate);
     ed.on("transaction", handleUpdate);

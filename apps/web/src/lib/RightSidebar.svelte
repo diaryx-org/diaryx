@@ -38,6 +38,7 @@
     Replace,
     Eye,
     Settings2,
+    ChevronRight,
   } from "@lucide/svelte";
   import type { Component } from "svelte";
   import VersionDiff from "./history/VersionDiff.svelte";
@@ -327,6 +328,11 @@
     if (codeExts.includes(ext)) return FileCode;
     return File;
   }
+
+  // Collapsible section state
+  let audienceCollapsed = $state(true);
+  let configCollapsed = $state(true);
+  let attachmentsCollapsed = $state(true);
 
   // State for adding new properties
   let showAddProperty = $state(false);
@@ -919,12 +925,18 @@
 
       <!-- Audience Section -->
       <div class="p-3 border-t border-sidebar-border">
-        <div class="flex items-center justify-between mb-2">
+        <button
+          type="button"
+          class="flex items-center justify-between w-full cursor-pointer {audienceCollapsed ? '' : 'mb-2'}"
+          onclick={() => audienceCollapsed = !audienceCollapsed}
+        >
           <div class="flex items-center gap-2 text-xs text-muted-foreground">
             <Eye class="size-3.5" />
             <span class="font-medium">Audience</span>
           </div>
-        </div>
+          <ChevronRight class="size-3.5 text-muted-foreground transition-transform {audienceCollapsed ? '' : 'rotate-90'}" />
+        </button>
+        {#if !audienceCollapsed}
         <AudienceEditor
           audience={entry.frontmatter.audience as string[] | null ?? null}
           entryPath={entry.path}
@@ -939,30 +951,44 @@
             }
           }}
         />
+        {/if}
       </div>
 
       <!-- Workspace Config Section (root index only) -->
       {#if isRootIndex}
         <div class="p-3 border-t border-sidebar-border">
-          <div class="flex items-center justify-between mb-2">
+          <button
+            type="button"
+            class="flex items-center justify-between w-full cursor-pointer {configCollapsed ? '' : 'mb-2'}"
+            onclick={() => configCollapsed = !configCollapsed}
+          >
             <div class="flex items-center gap-2 text-xs text-muted-foreground">
               <Settings2 class="size-3.5" />
               <span class="font-medium">Workspace Config</span>
             </div>
-          </div>
-          <WorkspaceConfigSection rootIndexPath={entry.path} />
+            <ChevronRight class="size-3.5 text-muted-foreground transition-transform {configCollapsed ? '' : 'rotate-90'}" />
+          </button>
+          {#if !configCollapsed}
+            <WorkspaceConfigSection rootIndexPath={entry.path} />
+          {/if}
         </div>
       {/if}
 
       <!-- Attachments Section -->
       <div class="p-3 border-t border-sidebar-border">
-        <div class="flex items-center justify-between mb-2">
+        <button
+          type="button"
+          class="flex items-center justify-between w-full cursor-pointer {attachmentsCollapsed ? '' : 'mb-2'}"
+          onclick={() => attachmentsCollapsed = !attachmentsCollapsed}
+        >
           <div class="flex items-center gap-2 text-xs text-muted-foreground">
             <Paperclip class="size-3.5" />
             <span class="font-medium">Attachments</span>
           </div>
-        </div>
+          <ChevronRight class="size-3.5 text-muted-foreground transition-transform {attachmentsCollapsed ? '' : 'rotate-90'}" />
+        </button>
 
+        {#if !attachmentsCollapsed}
         {#if attachmentError}
           <Alert.Root variant="destructive" class="mb-2 py-2">
             <AlertCircle class="size-4" />
@@ -1040,6 +1066,7 @@
             Add Attachment
           </Button>
         </FilePickerPopover>
+        {/if}
       </div>
       {:else}
         <div

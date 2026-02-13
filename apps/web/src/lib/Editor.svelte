@@ -606,7 +606,7 @@
 
 <!-- BubbleMenu for inline formatting (appears when text is selected) -->
 {#if !readonly}
-  <BubbleMenuComponent {editor} bind:element={bubbleMenuElement} {enableSpoilers} />
+  <BubbleMenuComponent {editor} bind:element={bubbleMenuElement} {enableSpoilers} {entryPath} {api} />
 {/if}
 
 <style global>

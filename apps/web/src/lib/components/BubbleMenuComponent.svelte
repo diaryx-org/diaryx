@@ -9,16 +9,22 @@
   import HighlightColorPicker from "./HighlightColorPicker.svelte";
   import BlockStylePicker from "./BlockStylePicker.svelte";
   import MoreStylesPicker from "./MoreStylesPicker.svelte";
+  import LinkInsertPopover from "./LinkInsertPopover.svelte";
   import type { HighlightColor } from "$lib/extensions/ColoredHighlightMark";
+  import type { Api } from "$lib/backend/api";
 
   interface Props {
     editor: Editor | null;
     element?: HTMLDivElement;
     /** Whether spoiler functionality is enabled */
     enableSpoilers?: boolean;
+    /** Current entry path for resolving local links */
+    entryPath?: string;
+    /** API instance for link formatting */
+    api?: Api | null;
   }
 
-  let { editor, element = $bindable(), enableSpoilers = true }: Props = $props();
+  let { editor, element = $bindable(), enableSpoilers = true, entryPath = "", api = null }: Props = $props();
 
   // Track active states reactively
   let isBoldActive = $state(false);
@@ -54,16 +60,38 @@
     updateActiveStates();
   }
 
+  // Dropdown mutual exclusion: only one open at a time
+  let blockStyleOpen = $state(false);
+  let highlightOpen = $state(false);
+  let linkPopoverOpen = $state(false);
+  let moreStylesOpen = $state(false);
+
+  function closeAllDropdowns() {
+    blockStyleOpen = false;
+    highlightOpen = false;
+    linkPopoverOpen = false;
+    moreStylesOpen = false;
+  }
+
   function handleLink() {
     if (isLinkActive) {
       editor?.chain().focus().unsetLink().run();
+      updateActiveStates();
     } else {
-      const url = prompt("Enter URL:");
-      if (url) {
-        editor?.chain().focus().setLink({ href: url }).run();
-      }
+      closeAllDropdowns();
+      linkPopoverOpen = true;
     }
+  }
+
+  function handleLinkSelect(href: string) {
+    editor?.chain().focus().setLink({ href }).run();
+    linkPopoverOpen = false;
     updateActiveStates();
+  }
+
+  function handleLinkClose() {
+    linkPopoverOpen = false;
+    editor?.commands.focus();
   }
 
   // Update active states when editor changes
@@ -71,7 +99,9 @@
     if (!editor) return;
 
     const ed = editor;
-    const handleUpdate = () => updateActiveStates();
+    // Defer to avoid state_unsafe_mutation when called from TipTap transaction
+    // handlers that fire during Svelte template evaluation
+    const handleUpdate = () => queueMicrotask(() => updateActiveStates());
 
     ed.on("selectionUpdate", handleUpdate);
     ed.on("transaction", handleUpdate);
@@ -101,7 +131,7 @@
     e.preventDefault();
   }}
 >
-  <BlockStylePicker {editor} />
+  <BlockStylePicker {editor} bind:open={blockStyleOpen} onOpen={() => { closeAllDropdowns(); }} />
 
   {#if !isInCodeBlock}
     <div class="toolbar-divider"></div>
@@ -136,30 +166,40 @@
       <Italic class="size-4" />
     </button>
 
-    <HighlightColorPicker {editor} isActive={isHighlightActive} currentColor={currentHighlightColor} />
+    <HighlightColorPicker {editor} isActive={isHighlightActive} currentColor={currentHighlightColor} bind:open={highlightOpen} onOpen={() => { closeAllDropdowns(); }} />
 
-    <button
-      type="button"
-      class="toolbar-button"
-      class:active={isLinkActive}
-      onmousedown={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        handleLink();
-      }}
-      title={isLinkActive ? "Remove Link" : "Add Link"}
-      aria-pressed={isLinkActive}
-    >
-      {#if isLinkActive}
-        <Unlink class="size-4" />
-      {:else}
-        <LinkIcon class="size-4" />
-      {/if}
-    </button>
+    <div class="link-button-wrapper">
+      <button
+        type="button"
+        class="toolbar-button"
+        class:active={isLinkActive}
+        onmousedown={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          handleLink();
+        }}
+        title={isLinkActive ? "Remove Link" : "Add Link"}
+        aria-pressed={isLinkActive}
+      >
+        {#if isLinkActive}
+          <Unlink class="size-4" />
+        {:else}
+          <LinkIcon class="size-4" />
+        {/if}
+      </button>
+
+      <LinkInsertPopover
+        bind:open={linkPopoverOpen}
+        onSelect={handleLinkSelect}
+        onClose={handleLinkClose}
+        currentEntryPath={entryPath}
+        {api}
+      />
+    </div>
 
     <div class="toolbar-divider"></div>
 
-    <MoreStylesPicker {editor} {enableSpoilers} />
+    <MoreStylesPicker {editor} {enableSpoilers} bind:open={moreStylesOpen} onOpen={() => { closeAllDropdowns(); }} />
   {/if}
 </div>
 
@@ -209,6 +249,11 @@
   .toolbar-button.active {
     background: var(--accent);
     color: var(--accent-foreground);
+  }
+
+  .link-button-wrapper {
+    position: relative;
+    display: inline-flex;
   }
 
   .toolbar-divider {

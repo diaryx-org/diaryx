@@ -7,11 +7,11 @@
     editor: Editor | null;
     isActive: boolean;
     currentColor?: HighlightColor | null;
+    open?: boolean;
+    onOpen?: () => void;
   }
 
-  let { editor, isActive, currentColor = null }: Props = $props();
-
-  let open = $state(false);
+  let { editor, isActive, currentColor = null, open = $bindable(false), onOpen }: Props = $props();
   let wrapperElement: HTMLDivElement | null = $state(null);
 
   // Color display configuration
@@ -46,6 +46,7 @@
 
     // If already highlighted, show the color picker (for mobile double-tap behavior)
     if (isActive) {
+      onOpen?.();
       open = true;
       return;
     }
@@ -58,6 +59,7 @@
     // Right-click: show color picker (desktop)
     e.preventDefault();
     e.stopPropagation();
+    onOpen?.();
     open = true;
   }
 

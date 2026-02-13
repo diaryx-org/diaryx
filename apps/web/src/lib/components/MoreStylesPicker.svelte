@@ -10,12 +10,13 @@
   interface Props {
     editor: Editor | null;
     enableSpoilers?: boolean;
+    open?: boolean;
+    onOpen?: () => void;
   }
 
-  let { editor, enableSpoilers = true }: Props = $props();
-
-  let open = $state(false);
+  let { editor, enableSpoilers = true, open = $bindable(false), onOpen }: Props = $props();
   let wrapperElement: HTMLDivElement | null = $state(null);
+  let showBelow = $state(false);
 
   let isStrikeActive = $state(false);
   let isCodeActive = $state(false);
@@ -49,6 +50,13 @@
   function handleClick(e: MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
+    if (!open) {
+      onOpen?.();
+      if (wrapperElement) {
+        const rect = wrapperElement.getBoundingClientRect();
+        showBelow = rect.top < 200;
+      }
+    }
     open = !open;
   }
 
@@ -113,6 +121,7 @@
   {#if open}
     <div
       class="more-styles-dropdown"
+      class:show-below={showBelow}
       role="menu"
       tabindex="-1"
       onmousedown={(e) => e.preventDefault()}
@@ -127,8 +136,8 @@
           handleStrike();
         }}
         title="Strikethrough"
-        aria-pressed={isStrikeActive}
-        role="menuitem"
+        aria-checked={isStrikeActive}
+        role="menuitemcheckbox"
       >
         <Strikethrough class="size-4" />
         <span>Strikethrough</span>
@@ -144,8 +153,8 @@
           handleCode();
         }}
         title="Inline Code"
-        aria-pressed={isCodeActive}
-        role="menuitem"
+        aria-checked={isCodeActive}
+        role="menuitemcheckbox"
       >
         <Code class="size-4" />
         <span>Inline Code</span>
@@ -162,8 +171,8 @@
             handleSpoiler();
           }}
           title="Spoiler"
-          aria-pressed={isSpoilerActive}
-          role="menuitem"
+          aria-checked={isSpoilerActive}
+          role="menuitemcheckbox"
         >
           <EyeOff class="size-4" />
           <span>Spoiler</span>
@@ -195,13 +204,30 @@
       0 4px 6px -2px rgba(0, 0, 0, 0.05);
     z-index: 100;
     min-width: max-content;
-    animation: fadeIn 0.15s ease;
+    animation: fadeInAbove 0.15s ease;
   }
 
-  @keyframes fadeIn {
+  .more-styles-dropdown.show-below {
+    bottom: auto;
+    top: calc(100% + 8px);
+    animation: fadeInBelow 0.15s ease;
+  }
+
+  @keyframes fadeInAbove {
     from {
       opacity: 0;
       transform: translateX(-50%) translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+  }
+
+  @keyframes fadeInBelow {
+    from {
+      opacity: 0;
+      transform: translateX(-50%) translateY(-4px);
     }
     to {
       opacity: 1;

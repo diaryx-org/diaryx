@@ -16,11 +16,11 @@
 
   interface Props {
     editor: Editor | null;
+    open?: boolean;
+    onOpen?: () => void;
   }
 
-  let { editor }: Props = $props();
-
-  let open = $state(false);
+  let { editor, open = $bindable(false), onOpen }: Props = $props();
   let wrapperElement: HTMLDivElement | null = $state(null);
 
   type BlockType =
@@ -42,7 +42,25 @@
     action: () => void;
   }
 
-  let activeBlock = $state<BlockType>("paragraph");
+  // Use a tick counter to trigger reactivity when the editor state changes.
+  // This avoids the state_unsafe_mutation error from updating $state inside event handlers
+  // that may fire during template evaluation.
+  let editorTick = $state(0);
+
+  let activeBlock = $derived.by(() => {
+    // Read tick to establish reactive dependency
+    void editorTick;
+    if (!editor) return "paragraph" as BlockType;
+    if (editor.isActive("heading", { level: 1 })) return "heading1" as BlockType;
+    if (editor.isActive("heading", { level: 2 })) return "heading2" as BlockType;
+    if (editor.isActive("heading", { level: 3 })) return "heading3" as BlockType;
+    if (editor.isActive("bulletList")) return "bulletList" as BlockType;
+    if (editor.isActive("orderedList")) return "orderedList" as BlockType;
+    if (editor.isActive("taskList")) return "taskList" as BlockType;
+    if (editor.isActive("blockquote")) return "blockquote" as BlockType;
+    if (editor.isActive("codeBlock")) return "codeBlock" as BlockType;
+    return "paragraph" as BlockType;
+  });
 
   const headingOptions: BlockOption[] = [
     {
@@ -109,27 +127,10 @@
 
   const allOptions = [...headingOptions, ...listOptions, ...otherOptions];
 
-  function updateActiveBlock() {
-    if (!editor) return;
-    if (editor.isActive("heading", { level: 1 })) {
-      activeBlock = "heading1";
-    } else if (editor.isActive("heading", { level: 2 })) {
-      activeBlock = "heading2";
-    } else if (editor.isActive("heading", { level: 3 })) {
-      activeBlock = "heading3";
-    } else if (editor.isActive("bulletList")) {
-      activeBlock = "bulletList";
-    } else if (editor.isActive("orderedList")) {
-      activeBlock = "orderedList";
-    } else if (editor.isActive("taskList")) {
-      activeBlock = "taskList";
-    } else if (editor.isActive("blockquote")) {
-      activeBlock = "blockquote";
-    } else if (editor.isActive("codeBlock")) {
-      activeBlock = "codeBlock";
-    } else {
-      activeBlock = "paragraph";
-    }
+  function bumpEditorTick() {
+    // Defer to avoid state_unsafe_mutation when called from TipTap transaction
+    // handlers that fire during Svelte template evaluation
+    queueMicrotask(() => { editorTick++; });
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -140,12 +141,13 @@
   function handleSelect(option: BlockOption) {
     option.action();
     open = false;
-    updateActiveBlock();
+    bumpEditorTick();
   }
 
   function handleClick(e: MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
+    if (!open) onOpen?.();
     open = !open;
   }
 
@@ -183,11 +185,10 @@
     if (!editor) return;
 
     const ed = editor;
-    const handleUpdate = () => updateActiveBlock();
+    const handleUpdate = () => bumpEditorTick();
 
     ed.on("selectionUpdate", handleUpdate);
     ed.on("transaction", handleUpdate);
-    updateActiveBlock();
 
     return () => {
       ed.off("selectionUpdate", handleUpdate);

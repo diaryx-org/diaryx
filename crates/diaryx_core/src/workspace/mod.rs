@@ -704,14 +704,20 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
     /// # Arguments
     /// * `root_index_path` - Path to the root index file
     /// * `field` - Field name to set (e.g., "link_format", "daily_entry_folder")
-    /// * `value` - Value to set (will be stored as a string)
+    /// * `value` - Value to set as a string; boolean strings ("true"/"false") are
+    ///   stored as YAML booleans so that `as_bool()` works when reading back.
     pub async fn set_workspace_config_field(
         &self,
         root_index_path: &Path,
         field: &str,
         value: &str,
     ) -> Result<()> {
-        self.set_frontmatter_property(root_index_path, field, Value::String(value.to_string()))
+        let yaml_value = match value {
+            "true" => Value::Bool(true),
+            "false" => Value::Bool(false),
+            _ => Value::String(value.to_string()),
+        };
+        self.set_frontmatter_property(root_index_path, field, yaml_value)
             .await
     }
 

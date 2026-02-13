@@ -28,7 +28,10 @@
     ChevronDown,
     ChevronUp,
     Server,
+    HardDriveDownload,
   } from "@lucide/svelte";
+  import { clearAllLocalData } from "./clearData";
+  import { isTauri } from "$lib/backend/interface";
   import {
     getAuthState,
     logout,
@@ -58,6 +61,8 @@
   let isLoggingOut = $state(false);
   let isDeleting = $state(false);
   let showDeleteConfirm = $state(false);
+  let showClearAfterLogout = $state(false);
+  let isClearingData = $state(false);
   let error = $state<string | null>(null);
 
   // Inline sign-in state
@@ -171,7 +176,25 @@
 
   async function handleLogout() {
     isLoggingOut = true;
-    try { await logout(); } finally { isLoggingOut = false; }
+    try {
+      await logout();
+      if (!isTauri()) {
+        showClearAfterLogout = true;
+      }
+    } finally {
+      isLoggingOut = false;
+    }
+  }
+
+  async function handleClearAfterLogout() {
+    isClearingData = true;
+    try {
+      showClearAfterLogout = false;
+      await clearAllLocalData();
+    } catch (e) {
+      error = e instanceof Error ? e.message : "Failed to clear data";
+      isClearingData = false;
+    }
   }
 
   async function handleDeleteDevice(deviceId: string) {
@@ -467,6 +490,43 @@
           <Loader2 class="size-4 mr-2 animate-spin" />
         {/if}
         Delete Everything
+      </Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
+
+<!-- Clear Local Data After Logout Dialog -->
+<Dialog.Root bind:open={showClearAfterLogout}>
+  <Dialog.Content class="sm:max-w-md">
+    <Dialog.Header>
+      <Dialog.Title class="flex items-center gap-2">
+        <HardDriveDownload class="size-5" />
+        Clear local data?
+      </Dialog.Title>
+      <Dialog.Description>
+        You've been signed out. Would you like to clear all local data? This is recommended if you're switching accounts.
+      </Dialog.Description>
+    </Dialog.Header>
+
+    <p class="text-xs text-muted-foreground">
+      This will remove all workspace files, settings, and cached data stored in your browser and reload the page.
+    </p>
+
+    <Dialog.Footer class="gap-2 sm:gap-0">
+      <Button variant="outline" onclick={() => (showClearAfterLogout = false)}>
+        Keep Local Data
+      </Button>
+      <Button
+        variant="destructive"
+        onclick={handleClearAfterLogout}
+        disabled={isClearingData}
+      >
+        {#if isClearingData}
+          <Loader2 class="size-4 mr-2 animate-spin" />
+          Clearing...
+        {:else}
+          Clear Everything
+        {/if}
       </Button>
     </Dialog.Footer>
   </Dialog.Content>

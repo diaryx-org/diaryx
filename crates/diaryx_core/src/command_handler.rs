@@ -2481,9 +2481,29 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                     // Reconciliation logic: compare file mtime vs CRDT modified_at
                     // If CRDT has newer or equal timestamp, skip updating from file
-                    if let Some(crdt_entry) = &existing_crdt_entry
-                        && !crdt_entry.deleted
-                    {
+                    if let Some(crdt_entry) = &existing_crdt_entry {
+                        if crdt_entry.deleted {
+                            // CRDT says this file was deleted — trust the tombstone.
+                            // The file still exists on disk (e.g. from a previous
+                            // session that crashed before the FS delete, or from
+                            // sync re-materializing before the deletion propagated).
+                            // Do NOT overwrite the CRDT with disk data, as that would
+                            // resurrect the file and cause it to reappear after every
+                            // sync cycle.
+                            log::info!(
+                                "[InitializeWorkspaceCrdt] Skipping deleted file {} (CRDT tombstone exists, removing stale disk copy)",
+                                canonical_path
+                            );
+                            if let Err(e) = self.fs().delete_file(&node.path).await {
+                                log::warn!(
+                                    "[InitializeWorkspaceCrdt] Failed to clean up stale file {}: {:?}",
+                                    canonical_path,
+                                    e
+                                );
+                            }
+                            continue;
+                        }
+
                         // If we have file mtime, compare timestamps
                         // If no file mtime available (OPFS/web), trust the CRDT if it has data
                         let should_keep_crdt = match file_mtime {

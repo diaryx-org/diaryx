@@ -1,0 +1,13 @@
+# Limit rust-analyzer memory usage
+# See: https://rust-analyzer.github.io/manual.html#configuration
+
+[cargo]
+# Analyze only the native target (skips wasm32 analysis)
+target = "aarch64-apple-darwin"
+
+# Build scripts (wasm-bindgen, ts-rs) are expensive; disable if not needed
+# buildScripts.enable = false
+
+[check]
+# Only check the current target, not all targets
+allTargets = false

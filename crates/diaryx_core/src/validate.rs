@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::error::Result;
-use crate::fs::AsyncFileSystem;
+use crate::fs::{AsyncFileSystem, is_temp_file};
 use crate::link_parser::{self, LinkFormat};
 use crate::utils::matches_glob_pattern;
 use crate::utils::path::relative_path_from_file_to_target;
@@ -801,6 +801,13 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                     continue;
                 }
 
+                // Skip temporary files (.tmp, .bak, .swap) from atomic write operations
+                if let Some(name) = entry.file_name().and_then(|n| n.to_str())
+                    && is_temp_file(name)
+                {
+                    continue;
+                }
+
                 all_entries.push(entry.clone());
 
                 // Recurse into subdirectories
@@ -1187,6 +1194,15 @@ impl<FS: AsyncFileSystem> Validator<FS> {
                         .file_name()
                         .and_then(|n| n.to_str())
                         .is_some_and(|s| s.starts_with('.'))
+                    {
+                        continue;
+                    }
+
+                    // Skip temporary files (.tmp, .bak, .swap) from atomic write operations
+                    if entry_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(is_temp_file)
                     {
                         continue;
                     }
@@ -2900,6 +2916,67 @@ contents:
             1,
             "Expected 1 MissingPartOf warning for orphan, got: {:?}",
             missing_part_of
+        );
+    }
+
+    #[test]
+    fn test_temp_files_excluded_from_validation() {
+        // Temp files (.bak, .tmp, .swap) from atomic writes should not produce warnings
+        let fs = make_test_fs();
+
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents: []\n---\n",
+        )
+        .unwrap();
+
+        // Create temp files that should be silently ignored
+        fs.write_file(Path::new("file.md.bak"), "backup content")
+            .unwrap();
+        fs.write_file(Path::new("file.md.tmp"), "temp content")
+            .unwrap();
+        fs.write_file(Path::new("file.md.swap"), "swap content")
+            .unwrap();
+
+        // Create a real orphan for contrast
+        fs.write_file(Path::new("orphan.txt"), "real orphan")
+            .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let validator = Validator::new(async_fs);
+        let result =
+            block_on_test(validator.validate_workspace(Path::new("README.md"), None)).unwrap();
+
+        let all_warning_files: Vec<String> = result
+            .warnings
+            .iter()
+            .filter_map(|w| {
+                w.file_path()
+                    .and_then(|p| p.file_name())
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string())
+            })
+            .collect();
+
+        assert!(
+            !all_warning_files.iter().any(|f| f.ends_with(".bak")),
+            ".bak files should be excluded, got warnings: {:?}",
+            all_warning_files
+        );
+        assert!(
+            !all_warning_files.iter().any(|f| f.ends_with(".tmp")),
+            ".tmp files should be excluded, got warnings: {:?}",
+            all_warning_files
+        );
+        assert!(
+            !all_warning_files.iter().any(|f| f.ends_with(".swap")),
+            ".swap files should be excluded, got warnings: {:?}",
+            all_warning_files
+        );
+        assert!(
+            all_warning_files.contains(&"orphan.txt".to_string()),
+            "Real orphan should still produce a warning, got: {:?}",
+            all_warning_files
         );
     }
 

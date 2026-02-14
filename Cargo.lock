@@ -1834,7 +1834,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -1868,7 +1868,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_core"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1900,7 +1900,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_sync_server"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "async-trait",
  "aws-config",
@@ -1940,7 +1940,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_tauri"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "aws-config",
  "aws-sdk-s3",
@@ -1978,7 +1978,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_wasm"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "chrono",
  "comrak",

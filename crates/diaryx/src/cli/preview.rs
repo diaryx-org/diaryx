@@ -79,6 +79,7 @@ fn do_publish(
         title: title.clone(),
         audience: audience.clone(),
         force: true,
+        copy_attachments: true,
     };
 
     match futures_lite::future::block_on(publisher.publish(workspace_root, dest, &options)) {

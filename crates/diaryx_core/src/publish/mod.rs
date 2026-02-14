@@ -13,7 +13,7 @@ mod types;
 // Re-export types for backwards compatibility
 pub use types::{NavLink, PublishOptions, PublishResult, PublishedPage};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::entry::slugify;
@@ -58,10 +58,12 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
             return Ok(PublishResult {
                 pages: vec![],
                 files_processed: 0,
+                attachments_copied: 0,
             });
         }
 
         let files_processed = pages.len();
+        let workspace_dir = workspace_root.parent().unwrap_or(workspace_root);
 
         // Generate output
         if options.single_file {
@@ -70,9 +72,37 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
             self.write_multi_file(&pages, destination, options).await?;
         }
 
+        // Copy attachments to output directory
+        let mut attachments_copied = 0;
+        if options.copy_attachments && !options.single_file {
+            let attachments = Self::collect_attachment_paths(&pages, workspace_dir);
+            for (src, dest_rel) in &attachments {
+                let dest = destination.join(dest_rel);
+                if let Some(parent) = dest.parent() {
+                    self.fs.create_dir_all(parent).await?;
+                }
+                match self.fs.read_binary(src).await {
+                    Ok(bytes) => {
+                        self.fs.write_binary(&dest, &bytes).await?;
+                        attachments_copied += 1;
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        // Attachment file doesn't exist on disk — skip silently
+                    }
+                    Err(e) => {
+                        return Err(DiaryxError::FileRead {
+                            path: src.clone(),
+                            source: e,
+                        });
+                    }
+                }
+            }
+        }
+
         Ok(PublishResult {
             pages,
             files_processed,
+            attachments_copied,
         })
     }
 
@@ -478,6 +508,60 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
         result.push_str(remaining);
 
         result
+    }
+
+    /// Collect non-markdown file paths referenced by published pages.
+    ///
+    /// Scans each page's markdown body for local file references (images,
+    /// PDFs, etc.) and the frontmatter `attachments` list. Returns
+    /// deduplicated pairs of `(source_absolute_path, dest_relative_path)`.
+    /// Markdown files are excluded since they become HTML pages.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn collect_attachment_paths(
+        pages: &[PublishedPage],
+        workspace_dir: &Path,
+    ) -> Vec<(PathBuf, PathBuf)> {
+        let mut seen = HashSet::new();
+        let mut results = Vec::new();
+
+        for page in pages {
+            let current_rel = page
+                .source_path
+                .strip_prefix(workspace_dir)
+                .unwrap_or(&page.source_path);
+
+            // Scan markdown body for local file references
+            for raw_path in extract_local_file_refs(&page.markdown_body) {
+                let parsed = link_parser::parse_link(&raw_path);
+                let canonical = link_parser::to_canonical(&parsed, current_rel);
+                if !canonical.ends_with(".md") {
+                    let src = workspace_dir.join(&canonical);
+                    let dest_rel = PathBuf::from(&canonical);
+                    if seen.insert(canonical) {
+                        results.push((src, dest_rel));
+                    }
+                }
+            }
+
+            // Check frontmatter attachments list
+            if let Some(serde_yaml::Value::Sequence(seq)) = page.frontmatter.get("attachments") {
+                for item in seq {
+                    if let Some(s) = item.as_str() {
+                        let parsed = link_parser::parse_link(s);
+                        let canonical = link_parser::to_canonical(&parsed, current_rel);
+                        if !canonical.ends_with(".md") {
+                            let src = workspace_dir.join(&canonical);
+                            let dest_rel = PathBuf::from(&canonical);
+                            if seen.insert(canonical) {
+                                results.push((src, dest_rel));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        results
     }
 
     /// Write multiple HTML files
@@ -1379,6 +1463,72 @@ footer a:hover {
     }
 }
 
+/// Extract local file reference paths from markdown text.
+///
+/// Finds references inside markdown link/image syntax `[...](...)`
+/// and HTML attributes `src="..."` / `href="..."`. Excludes external
+/// URLs, anchors, and data/javascript URIs.
+#[cfg(not(target_arch = "wasm32"))]
+fn extract_local_file_refs(markdown: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+
+    // Find paths in markdown links: [text](path) and ![alt](path)
+    let mut remaining = markdown;
+    while let Some(paren_pos) = remaining.find('(') {
+        remaining = &remaining[paren_pos + 1..];
+        if let Some(close) = remaining.find(')') {
+            let path = remaining[..close].trim();
+            if is_local_file_ref(path) {
+                paths.push(path.to_string());
+            }
+            remaining = &remaining[close + 1..];
+        } else {
+            break;
+        }
+    }
+
+    // Find paths in HTML attributes: src="path" and href="path"
+    for marker in &["src=\"", "href=\""] {
+        let mut remaining = markdown;
+        while let Some(pos) = remaining.find(marker) {
+            remaining = &remaining[pos + marker.len()..];
+            if let Some(end) = remaining.find('"') {
+                let path = remaining[..end].trim();
+                if is_local_file_ref(path) {
+                    paths.push(path.to_string());
+                }
+                remaining = &remaining[end + 1..];
+            } else {
+                break;
+            }
+        }
+    }
+
+    paths
+}
+
+/// Returns true if a path looks like a local file reference (not an external
+/// URL, anchor, or special URI scheme).
+#[cfg(not(target_arch = "wasm32"))]
+fn is_local_file_ref(path: &str) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    // Exclude external URLs, anchors, and special schemes
+    if path.starts_with("http://")
+        || path.starts_with("https://")
+        || path.starts_with('#')
+        || path.starts_with("mailto:")
+        || path.starts_with("data:")
+        || path.starts_with("javascript:")
+    {
+        return false;
+    }
+    // Must have a file extension (to avoid matching plain text in parens)
+    let filename = path.rsplit('/').next().unwrap_or(path);
+    filename.contains('.')
+}
+
 /// Escape HTML special characters
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn html_escape(s: &str) -> String {
@@ -1421,6 +1571,8 @@ fn hex_val(b: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "markdown")]
+    use crate::fs::FileSystem;
 
     #[test]
     fn test_html_escape() {
@@ -1448,8 +1600,6 @@ mod tests {
     #[cfg(feature = "markdown")]
     #[test]
     fn test_transform_links_no_corruption() {
-        use std::path::PathBuf;
-
         let fs = crate::fs::SyncToAsyncFs::new(crate::fs::RealFileSystem);
         let publisher = Publisher::new(fs);
 
@@ -1510,6 +1660,167 @@ mod tests {
             !result2.contains("stp;"),
             "Spurious text after link: {}",
             result2
+        );
+    }
+
+    #[test]
+    fn test_extract_local_file_refs_markdown() {
+        let md = "Some text\n![image](_attachments/photo.png)\n[pdf](./_attachments/doc.pdf)\nno match here";
+        let refs = extract_local_file_refs(md);
+        assert!(refs.contains(&"_attachments/photo.png".to_string()));
+        assert!(refs.contains(&"./_attachments/doc.pdf".to_string()));
+    }
+
+    #[test]
+    fn test_extract_local_file_refs_non_attachments_folder() {
+        let md = "![icon](/public/icon.svg)\n[doc](assets/readme.pdf)";
+        let refs = extract_local_file_refs(md);
+        assert!(refs.contains(&"/public/icon.svg".to_string()));
+        assert!(refs.contains(&"assets/readme.pdf".to_string()));
+    }
+
+    #[test]
+    fn test_extract_local_file_refs_html_src() {
+        let md = r#"<img src="/public/diaryx-icon.svg" alt="icon" style="width: 6rem;">"#;
+        let refs = extract_local_file_refs(md);
+        assert_eq!(refs.len(), 1);
+        assert!(refs.contains(&"/public/diaryx-icon.svg".to_string()));
+    }
+
+    #[test]
+    fn test_extract_local_file_refs_skips_external_and_anchors() {
+        let md = "[link](https://example.com)\n[anchor](#heading)\n[mail](mailto:a@b.com)\nplain text (no file ref)";
+        let refs = extract_local_file_refs(md);
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn test_extract_local_file_refs_skips_md_links() {
+        // .md links are handled by the HTML link transformer, not attachment copying
+        let md = "[sibling](./other.md)";
+        let refs = extract_local_file_refs(md);
+        // .md files DO get extracted here, but collect_attachment_paths filters them out
+        assert!(refs.contains(&"./other.md".to_string()));
+    }
+
+    #[test]
+    fn test_collect_attachment_paths_deduplicates() {
+        let workspace_dir = Path::new("/workspace");
+        let pages = vec![PublishedPage {
+            source_path: PathBuf::from("/workspace/README.md"),
+            dest_filename: "index.html".to_string(),
+            title: "Root".to_string(),
+            html_body: String::new(),
+            markdown_body: "![img](_attachments/a.png)\n![img2](_attachments/a.png)".to_string(),
+            contents_links: vec![],
+            parent_link: None,
+            is_root: true,
+            frontmatter: indexmap::IndexMap::new(),
+        }];
+        let paths = Publisher::<crate::fs::SyncToAsyncFs<crate::fs::InMemoryFileSystem>>::collect_attachment_paths(&pages, workspace_dir);
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].0, PathBuf::from("/workspace/_attachments/a.png"));
+        assert_eq!(paths[0].1, PathBuf::from("_attachments/a.png"));
+    }
+
+    #[test]
+    fn test_collect_attachment_paths_from_frontmatter() {
+        let workspace_dir = Path::new("/workspace");
+        let mut fm = indexmap::IndexMap::new();
+        fm.insert(
+            "attachments".to_string(),
+            serde_yaml::Value::Sequence(vec![
+                serde_yaml::Value::String("_attachments/doc.pdf".to_string()),
+                serde_yaml::Value::String("[Icon](/public/icon.svg)".to_string()),
+            ]),
+        );
+        let pages = vec![PublishedPage {
+            source_path: PathBuf::from("/workspace/notes/entry.md"),
+            dest_filename: "notes/entry.html".to_string(),
+            title: "Entry".to_string(),
+            html_body: String::new(),
+            markdown_body: String::new(),
+            contents_links: vec![],
+            parent_link: None,
+            is_root: false,
+            frontmatter: fm,
+        }];
+        let paths = Publisher::<crate::fs::SyncToAsyncFs<crate::fs::InMemoryFileSystem>>::collect_attachment_paths(&pages, workspace_dir);
+        assert_eq!(paths.len(), 2);
+        assert_eq!(
+            paths[0].0,
+            PathBuf::from("/workspace/notes/_attachments/doc.pdf")
+        );
+        assert_eq!(paths[0].1, PathBuf::from("notes/_attachments/doc.pdf"));
+        // Diaryx link format with root-relative path
+        assert_eq!(paths[1].0, PathBuf::from("/workspace/public/icon.svg"));
+        assert_eq!(paths[1].1, PathBuf::from("public/icon.svg"));
+    }
+
+    #[cfg(feature = "markdown")]
+    #[test]
+    fn test_publish_copies_attachments() {
+        let fs = crate::fs::InMemoryFileSystem::new();
+
+        // Create workspace structure
+        let workspace_dir = Path::new("/workspace");
+        let workspace_root = workspace_dir.join("README.md");
+        fs.create_dir_all(workspace_dir).unwrap();
+        fs.create_dir_all(&workspace_dir.join("_attachments"))
+            .unwrap();
+        fs.create_dir_all(&workspace_dir.join("public")).unwrap();
+        fs.write_file(
+            &workspace_root,
+            "---\ntitle: Test Site\ncontents: []\nattachments:\n  - '[Icon](/public/icon.svg)'\n---\n\n![photo](_attachments/image.png)\n\n<img src=\"public/banner.jpg\" alt=\"banner\">\n",
+        )
+        .unwrap();
+        fs.write_binary(
+            &workspace_dir.join("_attachments/image.png"),
+            b"fake-png-data",
+        )
+        .unwrap();
+        fs.write_binary(&workspace_dir.join("public/icon.svg"), b"<svg>icon</svg>")
+            .unwrap();
+        fs.write_binary(&workspace_dir.join("public/banner.jpg"), b"fake-jpg-data")
+            .unwrap();
+
+        let async_fs = crate::fs::SyncToAsyncFs::new(fs.clone());
+        let publisher = Publisher::new(async_fs);
+        let dest = Path::new("/output");
+
+        // Publish with copy_attachments: true
+        let options = PublishOptions {
+            copy_attachments: true,
+            force: true,
+            ..Default::default()
+        };
+        let result =
+            futures_lite::future::block_on(publisher.publish(&workspace_root, dest, &options))
+                .unwrap();
+        assert_eq!(result.attachments_copied, 3);
+        let copied = fs
+            .read_binary(&dest.join("_attachments/image.png"))
+            .unwrap();
+        assert_eq!(copied, b"fake-png-data");
+        let copied_icon = fs.read_binary(&dest.join("public/icon.svg")).unwrap();
+        assert_eq!(copied_icon, b"<svg>icon</svg>");
+        let copied_banner = fs.read_binary(&dest.join("public/banner.jpg")).unwrap();
+        assert_eq!(copied_banner, b"fake-jpg-data");
+
+        // Publish with copy_attachments: false
+        let dest2 = Path::new("/output2");
+        let options2 = PublishOptions {
+            copy_attachments: false,
+            force: true,
+            ..Default::default()
+        };
+        let result2 =
+            futures_lite::future::block_on(publisher.publish(&workspace_root, dest2, &options2))
+                .unwrap();
+        assert_eq!(result2.attachments_copied, 0);
+        assert!(
+            fs.read_binary(&dest2.join("_attachments/image.png"))
+                .is_err()
         );
     }
 }

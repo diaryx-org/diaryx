@@ -256,6 +256,10 @@ pub enum Commands {
         #[arg(short, long)]
         force: bool,
 
+        /// Don't copy attachment files to the output directory
+        #[arg(long)]
+        no_copy_attachments: bool,
+
         /// Show what would be done without making changes
         #[arg(long)]
         dry_run: bool,

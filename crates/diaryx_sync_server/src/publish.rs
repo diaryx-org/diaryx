@@ -202,6 +202,8 @@ pub async fn publish_workspace_to_r2(
             // Always apply audience filtering, including `public`.
             audience: publish_audience_filter(audience),
             force: true,
+            // Server handles attachments via R2 URL rewriting, not file copying
+            copy_attachments: false,
         };
 
         let result = publisher

@@ -213,6 +213,7 @@ pub fn run_cli() {
             single_file,
             title,
             force,
+            no_copy_attachments,
             dry_run,
         } => {
             publish::handle_publish(
@@ -223,6 +224,7 @@ pub fn run_cli() {
                 single_file,
                 title,
                 force,
+                no_copy_attachments,
                 dry_run,
             );
             true

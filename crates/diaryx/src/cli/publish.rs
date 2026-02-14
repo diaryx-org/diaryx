@@ -21,6 +21,7 @@ pub fn handle_publish(
     single_file: bool,
     title: Option<String>,
     force: bool,
+    no_copy_attachments: bool,
     dry_run: bool,
 ) {
     // Validate format (publish doesn't support "markdown" — it always starts from HTML)
@@ -70,6 +71,7 @@ pub fn handle_publish(
         title,
         audience: audience.clone(),
         force,
+        copy_attachments: !no_copy_attachments,
     };
 
     // Show plan
@@ -118,6 +120,17 @@ pub fn handle_publish(
                 if result.files_processed == 1 { "" } else { "s" },
                 destination.display()
             );
+            if result.attachments_copied > 0 {
+                println!(
+                    "  Copied {} attachment{}",
+                    result.attachments_copied,
+                    if result.attachments_copied == 1 {
+                        ""
+                    } else {
+                        "s"
+                    }
+                );
+            }
 
             // Post-process with pandoc if a non-HTML format was requested
             if pandoc::requires_pandoc(format) {

@@ -69,6 +69,7 @@ fn setup() -> (
         site_limit: 1,
         sites_base_url: "https://sites.example.com".to_string(),
         publish_lock: new_publish_lock(),
+        kv_client: None,
     };
 
     let app = Router::new()

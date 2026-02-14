@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 
 /// Options for publishing
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PublishOptions {
     /// Output as a single HTML file instead of multiple files
     pub single_file: bool,
@@ -17,6 +17,20 @@ pub struct PublishOptions {
     pub audience: Option<String>,
     /// Overwrite existing destination
     pub force: bool,
+    /// Copy referenced attachment files to the output directory
+    pub copy_attachments: bool,
+}
+
+impl Default for PublishOptions {
+    fn default() -> Self {
+        Self {
+            single_file: false,
+            title: None,
+            audience: None,
+            force: false,
+            copy_attachments: true,
+        }
+    }
 }
 
 /// A navigation link
@@ -58,4 +72,6 @@ pub struct PublishResult {
     pub pages: Vec<PublishedPage>,
     /// Total files processed
     pub files_processed: usize,
+    /// Number of attachment files copied to the output directory
+    pub attachments_copied: usize,
 }

@@ -12,7 +12,9 @@ export async function clearOpfs(): Promise<void> {
 
   const root = await navigator.storage.getDirectory();
 
-  const dirsToDelete = ["diaryx", ".diaryx", "guest"];
+  // Include legacy "diaryx", legacy ".diaryx" at root, configured workspace name, and "guest"
+  const workspaceName = localStorage.getItem("diaryx-workspace-name") || "My Journal";
+  const dirsToDelete = [...new Set(["diaryx", ".diaryx", "guest", workspaceName])];
 
   for (const dir of dirsToDelete) {
     try {
@@ -79,6 +81,7 @@ export function clearLocalStorage(): void {
     "diaryx_gd_client_id",
     "diaryx_gd_client_secret",
     "diaryx_sync_enabled",
+    "diaryx-workspace-name",
   ];
 
   for (const key of keysToRemove) {

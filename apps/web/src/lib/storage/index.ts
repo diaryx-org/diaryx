@@ -11,6 +11,8 @@ export {
   getSqliteStorageSync,
   flushSqliteStorage,
   type CrdtUpdate,
+  type DbPersistence,
+  DirectoryHandlePersistence,
 } from "./sqliteStorage.js";
 
 export {
@@ -25,19 +27,23 @@ export {
  * Call this BEFORE creating DiaryxBackend to enable persistent CRDT storage.
  * Works in both Window and Worker contexts using globalThis.
  *
+ * @param persistence - Where to persist the database. If omitted, no persistence.
+ *
  * @example
  * ```typescript
- * import { setupCrdtStorageBridge } from './lib/storage';
- * await setupCrdtStorageBridge();
- * const backend = await DiaryxBackend.createOpfs();
+ * import { setupCrdtStorageBridge, DirectoryHandlePersistence } from './lib/storage';
+ * const handle = await navigator.storage.getDirectory();
+ * const wsDir = await handle.getDirectoryHandle('My Journal', { create: true });
+ * await setupCrdtStorageBridge(new DirectoryHandlePersistence(wsDir));
+ * const backend = await DiaryxBackend.createOpfs('My Journal');
  * ```
  */
-export async function setupCrdtStorageBridge(): Promise<void> {
+export async function setupCrdtStorageBridge(persistence?: import("./sqliteStorage.js").DbPersistence | null): Promise<void> {
   // Dynamically import to avoid circular dependencies
   const bridge = await import("./sqliteStorageBridge.js");
 
-  // Initialize the storage
-  await bridge.initializeSqliteStorage();
+  // Initialize the storage with the provided persistence adapter
+  await bridge.initializeSqliteStorage(persistence);
 
   // Set up the global bridge object that Rust will access
   // Use globalThis for compatibility with both Window and Worker contexts

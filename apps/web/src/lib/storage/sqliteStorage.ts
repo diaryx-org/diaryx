@@ -1,23 +1,78 @@
 /**
- * SQLite-based CRDT storage using sql.js with OPFS persistence.
+ * SQLite-based CRDT storage using sql.js with pluggable persistence.
  *
  * This provides persistent storage for CRDT documents and updates in the web app,
  * matching the schema used by the native SqliteStorage in diaryx_core.
  *
  * ## Architecture
  * - Uses sql.js (SQLite compiled to WASM) for in-memory database
- * - Persists database file to OPFS for durability across page reloads
+ * - Persists database file via a pluggable DbPersistence adapter
  * - Provides synchronous read/write operations (required by CrdtStorage trait)
- * - Background async persistence to OPFS on changes
+ * - Background async persistence on changes
  */
 
 import initSqlJs, { type Database } from "sql.js";
 
-// OPFS path for the database file
-const DB_OPFS_PATH = ".diaryx/crdt.db";
+// Default path for the database file within the workspace
+const DB_PATH = ".diaryx/crdt.db";
 
-// Debounce delay for OPFS persistence (ms)
+// Debounce delay for persistence (ms)
 const PERSIST_DEBOUNCE_MS = 1000;
+
+/**
+ * Interface for database file persistence.
+ * Abstracts where the crdt.db file is stored (OPFS, FSA directory, etc).
+ */
+export interface DbPersistence {
+  load(): Promise<Uint8Array | null>;
+  save(data: Uint8Array): Promise<void>;
+}
+
+/**
+ * Persists the database file into a FileSystemDirectoryHandle.
+ * Works for both OPFS workspace handles and FSA user-selected directories.
+ */
+export class DirectoryHandlePersistence implements DbPersistence {
+  constructor(
+    private rootHandle: FileSystemDirectoryHandle,
+    private path: string = DB_PATH,
+  ) {}
+
+  async load(): Promise<Uint8Array | null> {
+    try {
+      const segments = this.path.split("/").filter((s) => s.length > 0);
+      const fileName = segments.pop()!;
+      let dir = this.rootHandle;
+      for (const segment of segments) {
+        dir = await dir.getDirectoryHandle(segment, { create: false });
+      }
+      const fileHandle = await dir.getFileHandle(fileName);
+      const file = await fileHandle.getFile();
+      const buffer = await file.arrayBuffer();
+      return new Uint8Array(buffer);
+    } catch {
+      return null;
+    }
+  }
+
+  async save(data: Uint8Array): Promise<void> {
+    const segments = this.path.split("/").filter((s) => s.length > 0);
+    const fileName = segments.pop()!;
+    let dir = this.rootHandle;
+    for (const segment of segments) {
+      dir = await dir.getDirectoryHandle(segment, { create: true });
+    }
+    const fileHandle = await dir.getFileHandle(fileName, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(
+      data.buffer.slice(
+        data.byteOffset,
+        data.byteOffset + data.byteLength,
+      ) as ArrayBuffer,
+    );
+    await writable.close();
+  }
+}
 
 /**
  * Represents a CRDT update stored in the database.
@@ -33,47 +88,55 @@ export interface CrdtUpdate {
 }
 
 /**
- * SQLite-based CRDT storage with OPFS persistence.
+ * SQLite-based CRDT storage with pluggable persistence.
  */
 export class SqliteStorage {
   private db: Database;
+  private persistence: DbPersistence | null;
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
   private dirty = false;
 
-  private constructor(db: Database) {
+  private constructor(db: Database, persistence: DbPersistence | null) {
     this.db = db;
+    this.persistence = persistence;
   }
 
   /**
    * Create and initialize a new SqliteStorage instance.
-   * Loads existing database from OPFS if available.
+   * @param persistence - Where to persist the database. If null, no persistence (memory-only).
    */
-  static async create(): Promise<SqliteStorage> {
+  static async create(
+    persistence?: DbPersistence | null,
+  ): Promise<SqliteStorage> {
     // Initialize sql.js with the WASM file
     const SQL = await initSqlJs({
       // Use CDN for the WASM file
-      locateFile: (file: string) =>
-        `https://sql.js.org/dist/${file}`,
+      locateFile: (file: string) => `https://sql.js.org/dist/${file}`,
     });
 
-    // Try to load existing database from OPFS
+    const resolvedPersistence = persistence ?? null;
+
+    // Try to load existing database
     let dbData: Uint8Array | null = null;
-    try {
-      dbData = await loadFromOpfs(DB_OPFS_PATH);
-    } catch (e) {
-      // No existing database, will create new one
-      console.log("[SqliteStorage] No existing database found, creating new");
+    if (resolvedPersistence) {
+      try {
+        dbData = await resolvedPersistence.load();
+      } catch (e) {
+        console.log(
+          "[SqliteStorage] No existing database found, creating new",
+        );
+      }
     }
 
     // Create database (with existing data if available)
     const db = dbData ? new SQL.Database(dbData) : new SQL.Database();
 
-    const storage = new SqliteStorage(db);
+    const storage = new SqliteStorage(db, resolvedPersistence);
     storage.initSchema();
 
     // If this is a new database, persist it immediately
-    if (!dbData) {
-      await storage.persistToOpfs();
+    if (!dbData && resolvedPersistence) {
+      await storage.persist();
     }
 
     return storage;
@@ -151,7 +214,7 @@ export class SqliteStorage {
     const now = Date.now();
     this.db.run(
       "INSERT OR REPLACE INTO documents (name, state, state_vector, updated_at) VALUES (?, ?, ?, ?)",
-      [name, state, stateVector, now]
+      [name, state, stateVector, now],
     );
     this.markDirty();
   }
@@ -190,12 +253,12 @@ export class SqliteStorage {
     update: Uint8Array,
     origin: string,
     deviceId: string | null = null,
-    deviceName: string | null = null
+    deviceName: string | null = null,
   ): number {
     const now = Date.now();
     this.db.run(
       "INSERT INTO updates (doc_name, data, origin, timestamp, device_id, device_name) VALUES (?, ?, ?, ?, ?, ?)",
-      [name, update, origin, now, deviceId, deviceName]
+      [name, update, origin, now, deviceId, deviceName],
     );
 
     // Get the last inserted row ID
@@ -213,7 +276,7 @@ export class SqliteStorage {
    */
   getUpdatesSince(name: string, sinceId: number): CrdtUpdate[] {
     const stmt = this.db.prepare(
-      "SELECT id, data, origin, timestamp, device_id, device_name FROM updates WHERE doc_name = ? AND id > ? ORDER BY id ASC"
+      "SELECT id, data, origin, timestamp, device_id, device_name FROM updates WHERE doc_name = ? AND id > ? ORDER BY id ASC",
     );
     stmt.bind([name, sinceId]);
 
@@ -248,7 +311,7 @@ export class SqliteStorage {
    */
   getLatestUpdateId(name: string): number {
     const stmt = this.db.prepare(
-      "SELECT id FROM updates WHERE doc_name = ? ORDER BY id DESC LIMIT 1"
+      "SELECT id FROM updates WHERE doc_name = ? ORDER BY id DESC LIMIT 1",
     );
     stmt.bind([name]);
 
@@ -278,7 +341,7 @@ export class SqliteStorage {
   compact(name: string, keepUpdates: number): void {
     // Count updates
     const countStmt = this.db.prepare(
-      "SELECT COUNT(*) FROM updates WHERE doc_name = ?"
+      "SELECT COUNT(*) FROM updates WHERE doc_name = ?",
     );
     countStmt.bind([name]);
     countStmt.step();
@@ -291,7 +354,7 @@ export class SqliteStorage {
 
     // Find the cutoff ID
     const cutoffStmt = this.db.prepare(
-      "SELECT id FROM updates WHERE doc_name = ? ORDER BY id DESC LIMIT 1 OFFSET ?"
+      "SELECT id FROM updates WHERE doc_name = ? ORDER BY id DESC LIMIT 1 OFFSET ?",
     );
     cutoffStmt.bind([name, keepUpdates - 1]);
     cutoffStmt.step();
@@ -338,11 +401,11 @@ export class SqliteStorage {
     title: string | null,
     partOf: string | null,
     deleted: boolean,
-    modifiedAt: number
+    modifiedAt: number,
   ): void {
     this.db.run(
       "INSERT OR REPLACE INTO file_index (path, title, part_of, deleted, modified_at) VALUES (?, ?, ?, ?, ?)",
-      [path, title, partOf, deleted ? 1 : 0, modifiedAt]
+      [path, title, partOf, deleted ? 1 : 0, modifiedAt],
     );
     this.markDirty();
   }
@@ -356,7 +419,7 @@ export class SqliteStorage {
     partOf: string | null;
   }> {
     const stmt = this.db.prepare(
-      "SELECT path, title, part_of FROM file_index WHERE deleted = 0 ORDER BY path"
+      "SELECT path, title, part_of FROM file_index WHERE deleted = 0 ORDER BY path",
     );
     const files: Array<{
       path: string;
@@ -386,7 +449,7 @@ export class SqliteStorage {
   }
 
   // =========================================================================
-  // OPFS persistence
+  // Persistence
   // =========================================================================
 
   /**
@@ -398,7 +461,7 @@ export class SqliteStorage {
   }
 
   /**
-   * Schedule a debounced persist to OPFS.
+   * Schedule a debounced persist.
    */
   private schedulePersist(): void {
     if (this.persistTimer) {
@@ -407,21 +470,22 @@ export class SqliteStorage {
 
     this.persistTimer = setTimeout(async () => {
       if (this.dirty) {
-        await this.persistToOpfs();
+        await this.persist();
         this.dirty = false;
       }
     }, PERSIST_DEBOUNCE_MS);
   }
 
   /**
-   * Persist the database to OPFS immediately.
+   * Persist the database immediately.
    */
-  async persistToOpfs(): Promise<void> {
+  async persist(): Promise<void> {
+    if (!this.persistence) return;
     try {
       const data = this.db.export();
-      await saveToOpfs(DB_OPFS_PATH, data);
+      await this.persistence.save(data);
     } catch (e) {
-      console.error("[SqliteStorage] Failed to persist to OPFS:", e);
+      console.error("[SqliteStorage] Failed to persist:", e);
     }
   }
 
@@ -434,13 +498,13 @@ export class SqliteStorage {
       this.persistTimer = null;
     }
     if (this.dirty) {
-      await this.persistToOpfs();
+      await this.persist();
       this.dirty = false;
     }
   }
 
   /**
-   * Close the database and flush to OPFS.
+   * Close the database and flush.
    */
   async close(): Promise<void> {
     await this.flush();
@@ -456,55 +520,6 @@ export class SqliteStorage {
 }
 
 // ============================================================================
-// OPFS Helper Functions
-// ============================================================================
-
-/**
- * Get or create nested directories in OPFS.
- */
-async function getOrCreateDir(
-  root: FileSystemDirectoryHandle,
-  path: string[]
-): Promise<FileSystemDirectoryHandle> {
-  let current = root;
-  for (const segment of path) {
-    current = await current.getDirectoryHandle(segment, { create: true });
-  }
-  return current;
-}
-
-/**
- * Load a file from OPFS.
- */
-async function loadFromOpfs(path: string): Promise<Uint8Array> {
-  const root = await navigator.storage.getDirectory();
-  const segments = path.split("/").filter((s) => s.length > 0);
-  const fileName = segments.pop()!;
-  const dir = await getOrCreateDir(root, segments);
-
-  const fileHandle = await dir.getFileHandle(fileName);
-  const file = await fileHandle.getFile();
-  const buffer = await file.arrayBuffer();
-  return new Uint8Array(buffer);
-}
-
-/**
- * Save a file to OPFS.
- */
-async function saveToOpfs(path: string, data: Uint8Array): Promise<void> {
-  const root = await navigator.storage.getDirectory();
-  const segments = path.split("/").filter((s) => s.length > 0);
-  const fileName = segments.pop()!;
-  const dir = await getOrCreateDir(root, segments);
-
-  const fileHandle = await dir.getFileHandle(fileName, { create: true });
-  const writable = await fileHandle.createWritable();
-  // Write using ArrayBuffer - cast to avoid SharedArrayBuffer type issue
-  await writable.write(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer);
-  await writable.close();
-}
-
-// ============================================================================
 // Global instance management
 // ============================================================================
 
@@ -514,8 +529,11 @@ let initPromise: Promise<SqliteStorage> | null = null;
 /**
  * Get the global SqliteStorage instance.
  * Creates one if it doesn't exist.
+ * @param persistence - Where to persist the database. Only used on first call.
  */
-export async function getSqliteStorage(): Promise<SqliteStorage> {
+export async function getSqliteStorage(
+  persistence?: DbPersistence | null,
+): Promise<SqliteStorage> {
   if (globalStorage) {
     return globalStorage;
   }
@@ -524,7 +542,7 @@ export async function getSqliteStorage(): Promise<SqliteStorage> {
     return initPromise;
   }
 
-  initPromise = SqliteStorage.create().then((storage) => {
+  initPromise = SqliteStorage.create(persistence).then((storage) => {
     globalStorage = storage;
     return storage;
   });
@@ -541,7 +559,7 @@ export function getSqliteStorageSync(): SqliteStorage | null {
 }
 
 /**
- * Flush the global storage to OPFS (call before page unload).
+ * Flush the global storage (call before page unload).
  */
 export async function flushSqliteStorage(): Promise<void> {
   if (globalStorage) {

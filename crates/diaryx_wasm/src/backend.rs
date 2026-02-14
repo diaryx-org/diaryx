@@ -471,12 +471,15 @@ impl DiaryxBackend {
     /// ```javascript
     /// import { initializeSqliteStorage } from './lib/storage/sqliteStorageBridge.js';
     /// await initializeSqliteStorage();
-    /// const backend = await DiaryxBackend.createOpfs();
+    /// const backend = await DiaryxBackend.createOpfs('My Journal');
     /// ```
     #[cfg(feature = "browser")]
     #[wasm_bindgen(js_name = "createOpfs")]
-    pub async fn create_opfs() -> std::result::Result<DiaryxBackend, JsValue> {
-        let opfs = OpfsFileSystem::create().await?;
+    pub async fn create_opfs(
+        root_name: Option<String>,
+    ) -> std::result::Result<DiaryxBackend, JsValue> {
+        let name = root_name.unwrap_or_else(|| "My Journal".to_string());
+        let opfs = OpfsFileSystem::create_with_name(&name).await?;
         let storage_backend = StorageBackend::Opfs(opfs);
 
         // Create event registries
@@ -691,7 +694,7 @@ impl DiaryxBackend {
     pub async fn create(storage_type: &str) -> std::result::Result<DiaryxBackend, JsValue> {
         match storage_type.to_lowercase().as_str() {
             #[cfg(feature = "browser")]
-            "opfs" => Self::create_opfs().await,
+            "opfs" => Self::create_opfs(None).await,
             #[cfg(feature = "browser")]
             "indexeddb" | "indexed_db" => Self::create_indexed_db().await,
             "memory" | "inmemory" | "in_memory" => Self::create_in_memory(),

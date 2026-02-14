@@ -21,10 +21,11 @@ import {
 /**
  * Initialize the SQLite storage. Must be called before any other functions.
  * Returns a promise that resolves when storage is ready.
+ * @param {import("./sqliteStorage.js").DbPersistence | null | undefined} persistence - Where to persist the database.
  * @returns {Promise<void>}
  */
-export async function initializeSqliteStorage() {
-  await getSqliteStorage();
+export async function initializeSqliteStorage(persistence) {
+  await getSqliteStorage(persistence);
   console.log("[SqliteStorageBridge] Storage initialized");
 }
 

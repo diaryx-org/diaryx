@@ -73,19 +73,124 @@ async function executeAndExtract<T>(
 }
 
 /**
+ * Migrate legacy OPFS workspace directory to a new name.
+ * Copies files from "diaryx/" to the target name, then deletes the old directory.
+ * Also migrates legacy ".diaryx/" at OPFS root into the workspace directory.
+ */
+async function migrateWorkspaceDirectory(targetName: string): Promise<void> {
+  if (targetName === 'diaryx') return;
+
+  try {
+    const root = await navigator.storage.getDirectory();
+
+    // Check if target already exists — no migration needed
+    try {
+      await root.getDirectoryHandle(targetName, { create: false });
+      // Target exists. Still check for legacy .diaryx/ at root to migrate into workspace.
+      await migrateLegacyCrdtDir(root, targetName);
+      return;
+    } catch {
+      // Target doesn't exist, check for old directory
+    }
+
+    // Check if old "diaryx" directory exists
+    let oldDir: FileSystemDirectoryHandle;
+    try {
+      oldDir = await root.getDirectoryHandle('diaryx', { create: false });
+    } catch {
+      // Neither exists — fresh install, also migrate legacy .diaryx/ if present
+      await migrateLegacyCrdtDir(root, targetName);
+      return;
+    }
+
+    // Old directory exists — copy recursively to new name
+    console.log(`[WasmWorker] Migrating workspace directory: diaryx -> ${targetName}`);
+    const newDir = await root.getDirectoryHandle(targetName, { create: true });
+    await copyDirectoryRecursive(oldDir, newDir);
+    await root.removeEntry('diaryx', { recursive: true });
+    console.log(`[WasmWorker] Migration complete: diaryx -> ${targetName}`);
+
+    // Also migrate legacy .diaryx/ at root
+    await migrateLegacyCrdtDir(root, targetName);
+  } catch (e) {
+    console.error('[WasmWorker] Migration failed:', e);
+  }
+}
+
+/**
+ * Migrate legacy ".diaryx/" directory from OPFS root into the workspace directory.
+ */
+async function migrateLegacyCrdtDir(root: FileSystemDirectoryHandle, workspaceName: string): Promise<void> {
+  try {
+    const legacyDir = await root.getDirectoryHandle('.diaryx', { create: false });
+    // Legacy .diaryx/ exists at root — copy crdt.db into workspace/.diaryx/
+    console.log('[WasmWorker] Migrating legacy .diaryx/ into workspace');
+    const wsDir = await root.getDirectoryHandle(workspaceName, { create: true });
+    const targetDir = await wsDir.getDirectoryHandle('.diaryx', { create: true });
+    await copyDirectoryRecursive(legacyDir, targetDir);
+    await root.removeEntry('.diaryx', { recursive: true });
+    console.log('[WasmWorker] Legacy .diaryx/ migrated into workspace');
+  } catch {
+    // No legacy .diaryx/ at root — nothing to do
+  }
+}
+
+/**
+ * Recursively copy all files and subdirectories from source to dest.
+ */
+async function copyDirectoryRecursive(
+  source: FileSystemDirectoryHandle,
+  dest: FileSystemDirectoryHandle,
+): Promise<void> {
+  for await (const [name, handle] of (source as any).entries()) {
+    if (handle.kind === 'file') {
+      const file = await (handle as FileSystemFileHandle).getFile();
+      const data = await file.arrayBuffer();
+      const newFile = await dest.getFileHandle(name, { create: true });
+      const writable = await newFile.createWritable();
+      await writable.write(data);
+      await writable.close();
+    } else if (handle.kind === 'directory') {
+      const newSubDir = await dest.getDirectoryHandle(name, { create: true });
+      await copyDirectoryRecursive(handle as FileSystemDirectoryHandle, newSubDir);
+    }
+  }
+}
+
+/**
  * Initialize the backend and set up event forwarding.
  */
-async function init(port: MessagePort, storageType: StorageType, directoryHandle?: FileSystemDirectoryHandle): Promise<void> {
+async function init(port: MessagePort, storageType: StorageType, workspaceName?: string, directoryHandle?: FileSystemDirectoryHandle): Promise<void> {
   // Store event port for forwarding filesystem events
   eventPort = port;
+
+  const resolvedWorkspaceName = workspaceName || 'My Journal';
+
+  // For OPFS, run migration before anything else
+  if (storageType === 'opfs') {
+    await migrateWorkspaceDirectory(resolvedWorkspaceName);
+  }
 
   // Initialize CRDT storage bridge BEFORE importing WASM
   // This sets up the global bridge that Rust will use for persistent CRDT storage
   // Skip for memory storage (guest mode) since CRDT doesn't need persistence there
   if (storageType !== 'memory') {
     try {
-      const { setupCrdtStorageBridge } = await import('../storage/index.js');
-      await setupCrdtStorageBridge();
+      const { setupCrdtStorageBridge, DirectoryHandlePersistence } = await import('../storage/index.js');
+
+      // Create persistence adapter based on storage type
+      let persistence: InstanceType<typeof DirectoryHandlePersistence> | null = null;
+      if (storageType === 'opfs') {
+        // Get the workspace directory handle from OPFS for .diaryx/crdt.db persistence
+        const opfsRoot = await navigator.storage.getDirectory();
+        const wsHandle = await opfsRoot.getDirectoryHandle(resolvedWorkspaceName, { create: true });
+        persistence = new DirectoryHandlePersistence(wsHandle);
+      } else if (storageType === 'filesystem-access' && directoryHandle) {
+        // Use the user's selected directory for .diaryx/crdt.db persistence
+        persistence = new DirectoryHandlePersistence(directoryHandle);
+      }
+
+      await setupCrdtStorageBridge(persistence);
       console.log('[WasmWorker] CRDT storage bridge initialized');
     } catch (e) {
       console.warn('[WasmWorker] Failed to initialize CRDT storage bridge, using memory storage:', e);
@@ -109,7 +214,7 @@ async function init(port: MessagePort, storageType: StorageType, directoryHandle
 
   // Create backend with specified storage type
   if (storageType === 'opfs') {
-    backend = await wasm.DiaryxBackend.createOpfs();
+    backend = await wasm.DiaryxBackend.createOpfs(resolvedWorkspaceName);
   } else if (storageType === 'filesystem-access') {
     if (!directoryHandle) {
       throw new Error('Directory handle required for filesystem-access storage type');
@@ -147,7 +252,7 @@ async function init(port: MessagePort, storageType: StorageType, directoryHandle
  * This is called when the user selects "Local Folder" storage.
  */
 async function initWithDirectoryHandle(_port: MessagePort, directoryHandle: FileSystemDirectoryHandle): Promise<void> {
-  return init(_port, 'filesystem-access', directoryHandle);
+  return init(_port, 'filesystem-access', undefined, directoryHandle);
 }
 
 /**

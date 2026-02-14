@@ -87,10 +87,10 @@ async fn get_opfs_root() -> std::result::Result<web_sys::FileSystemDirectoryHand
 impl OpfsFileSystem {
     /// Create a new OpfsFileSystem with the default app directory.
     ///
-    /// This creates a "diaryx" directory in the origin-private file system.
+    /// This creates a "My Journal" directory in the origin-private file system.
     #[wasm_bindgen]
     pub async fn create() -> std::result::Result<OpfsFileSystem, JsValue> {
-        Self::create_with_name("diaryx").await
+        Self::create_with_name("My Journal").await
     }
 
     /// Create a new OpfsFileSystem with a custom root directory name.

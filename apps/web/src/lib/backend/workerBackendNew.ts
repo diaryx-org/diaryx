@@ -113,7 +113,8 @@ export class WorkerBackendNew implements Backend {
 
       await this.remote.initWithDirectoryHandle(Comlink.transfer(port2, [port2]), handle!);
     } else {
-      await this.remote.init(Comlink.transfer(port2, [port2]), storageType);
+      const workspaceName = localStorage.getItem('diaryx-workspace-name') || 'My Journal';
+      await this.remote.init(Comlink.transfer(port2, [port2]), storageType, workspaceName);
     }
 
     this._ready = true;

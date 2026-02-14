@@ -132,7 +132,6 @@
     <Tabs.Content value="sync">
       <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
         <SyncSettings onOpenWizard={onOpenSyncWizard} />
-        <StorageSettings />
       </div>
     </Tabs.Content>
 
@@ -144,6 +143,7 @@
 
     <Tabs.Content value="data">
       <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
+        <StorageSettings />
         <BackupSettings {workspacePath} />
         <ImportSettings {workspacePath} />
         <CloudBackupSettings {workspacePath} />

@@ -111,10 +111,16 @@ export class WorkerBackendNew implements Backend {
         }
       }
 
-      await this.remote.initWithDirectoryHandle(Comlink.transfer(port2, [port2]), handle!);
+      // Check if sync is configured (auth token present) to decide whether to
+      // eagerly initialize the SQLite CRDT storage bridge. This avoids downloading
+      // sql.js WASM when sync isn't needed (important for IndexedDB targets).
+      const syncEnabled = !!localStorage.getItem('diaryx_auth_token');
+
+      await this.remote.initWithDirectoryHandle(Comlink.transfer(port2, [port2]), handle!, syncEnabled);
     } else {
       const workspaceName = localStorage.getItem('diaryx-workspace-name') || 'My Journal';
-      await this.remote.init(Comlink.transfer(port2, [port2]), storageType, workspaceName);
+      const syncEnabled = !!localStorage.getItem('diaryx_auth_token');
+      await this.remote.init(Comlink.transfer(port2, [port2]), storageType, workspaceName, undefined, syncEnabled);
     }
 
     this._ready = true;
@@ -235,6 +241,9 @@ export class WorkerBackendNew implements Backend {
   // CrdtFs control
   setCrdtEnabled = (enabled: boolean) => this.remote!.setCrdtEnabled(enabled);
   isCrdtEnabled = () => this.remote!.isCrdtEnabled();
+
+  // CRDT storage bridge (lazy init for sync)
+  setupCrdtStorage = () => this.remote!.setupCrdtStorage();
 
   // Root index discovery
   findRootIndex = (dirPath?: string) => this.remote!.findRootIndex(dirPath);

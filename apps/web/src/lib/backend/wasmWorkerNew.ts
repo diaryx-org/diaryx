@@ -28,6 +28,12 @@ let fsEventSubscriptionId: number | null = null;
 // WasmSyncClient instance (created by createSyncClient, lives in worker)
 let syncClient: any | null = null;
 
+// Stored init params for lazy CRDT storage setup
+let _storedStorageType: StorageType | null = null;
+let _storedWorkspaceName: string | null = null;
+let _storedDirectoryHandle: FileSystemDirectoryHandle | null = null;
+let _crdtStorageReady = false;
+
 // Clear cached root path (call after rename operations)
 function clearRootPathCache() {
   rootPath = null;
@@ -158,43 +164,61 @@ async function copyDirectoryRecursive(
 }
 
 /**
+ * Set up the CRDT storage bridge (sql.js SQLite).
+ * Uses stored init params from init(). Safe to call multiple times (no-op after first).
+ */
+async function doSetupCrdtStorage(): Promise<void> {
+  if (_crdtStorageReady) return;
+  if (!_storedStorageType || _storedStorageType === 'memory') return;
+
+  try {
+    const { setupCrdtStorageBridge, DirectoryHandlePersistence } = await import('../storage/index.js');
+
+    // Create persistence adapter based on storage type
+    let persistence: InstanceType<typeof DirectoryHandlePersistence> | null = null;
+    if (_storedStorageType === 'opfs') {
+      // Get the workspace directory handle from OPFS for .diaryx/crdt.db persistence
+      const opfsRoot = await navigator.storage.getDirectory();
+      const wsHandle = await opfsRoot.getDirectoryHandle(_storedWorkspaceName || 'My Journal', { create: true });
+      persistence = new DirectoryHandlePersistence(wsHandle);
+    } else if (_storedStorageType === 'filesystem-access' && _storedDirectoryHandle) {
+      // Use the user's selected directory for .diaryx/crdt.db persistence
+      persistence = new DirectoryHandlePersistence(_storedDirectoryHandle);
+    }
+
+    await setupCrdtStorageBridge(persistence);
+    _crdtStorageReady = true;
+    console.log('[WasmWorker] CRDT storage bridge initialized');
+  } catch (e) {
+    console.warn('[WasmWorker] Failed to initialize CRDT storage bridge, using memory storage:', e);
+  }
+}
+
+/**
  * Initialize the backend and set up event forwarding.
  */
-async function init(port: MessagePort, storageType: StorageType, workspaceName?: string, directoryHandle?: FileSystemDirectoryHandle): Promise<void> {
+async function init(port: MessagePort, storageType: StorageType, workspaceName?: string, directoryHandle?: FileSystemDirectoryHandle, syncEnabled?: boolean): Promise<void> {
   // Store event port for forwarding filesystem events
   eventPort = port;
 
   const resolvedWorkspaceName = workspaceName || 'My Journal';
+
+  // Store init params for lazy CRDT storage setup
+  _storedStorageType = storageType;
+  _storedWorkspaceName = resolvedWorkspaceName;
+  _storedDirectoryHandle = directoryHandle ?? null;
 
   // For OPFS, run migration before anything else
   if (storageType === 'opfs') {
     await migrateWorkspaceDirectory(resolvedWorkspaceName);
   }
 
-  // Initialize CRDT storage bridge BEFORE importing WASM
-  // This sets up the global bridge that Rust will use for persistent CRDT storage
-  // Skip for memory storage (guest mode) since CRDT doesn't need persistence there
-  if (storageType !== 'memory') {
-    try {
-      const { setupCrdtStorageBridge, DirectoryHandlePersistence } = await import('../storage/index.js');
-
-      // Create persistence adapter based on storage type
-      let persistence: InstanceType<typeof DirectoryHandlePersistence> | null = null;
-      if (storageType === 'opfs') {
-        // Get the workspace directory handle from OPFS for .diaryx/crdt.db persistence
-        const opfsRoot = await navigator.storage.getDirectory();
-        const wsHandle = await opfsRoot.getDirectoryHandle(resolvedWorkspaceName, { create: true });
-        persistence = new DirectoryHandlePersistence(wsHandle);
-      } else if (storageType === 'filesystem-access' && directoryHandle) {
-        // Use the user's selected directory for .diaryx/crdt.db persistence
-        persistence = new DirectoryHandlePersistence(directoryHandle);
-      }
-
-      await setupCrdtStorageBridge(persistence);
-      console.log('[WasmWorker] CRDT storage bridge initialized');
-    } catch (e) {
-      console.warn('[WasmWorker] Failed to initialize CRDT storage bridge, using memory storage:', e);
-    }
+  // Initialize CRDT storage bridge BEFORE importing WASM, but only when sync
+  // is configured. Without sync, Rust falls back to MemoryStorage which is fine
+  // for local-only usage. This avoids downloading sql.js WASM unnecessarily
+  // (important for IndexedDB targets where there's no OPFS persistence anyway).
+  if (syncEnabled && storageType !== 'memory') {
+    await doSetupCrdtStorage();
   }
 
   // Import WASM module
@@ -251,8 +275,8 @@ async function init(port: MessagePort, storageType: StorageType, workspaceName?:
  * Initialize the backend with a File System Access API directory handle.
  * This is called when the user selects "Local Folder" storage.
  */
-async function initWithDirectoryHandle(_port: MessagePort, directoryHandle: FileSystemDirectoryHandle): Promise<void> {
-  return init(_port, 'filesystem-access', undefined, directoryHandle);
+async function initWithDirectoryHandle(_port: MessagePort, directoryHandle: FileSystemDirectoryHandle, syncEnabled?: boolean): Promise<void> {
+  return init(_port, 'filesystem-access', undefined, directoryHandle, syncEnabled);
 }
 
 /**
@@ -263,6 +287,15 @@ async function initWithDirectoryHandle(_port: MessagePort, directoryHandle: File
 const workerApi = {
   init,
   initWithDirectoryHandle,
+
+  /**
+   * Lazily initialize the CRDT storage bridge (sql.js SQLite).
+   * Call this before sync operations if the bridge wasn't set up at init time.
+   * No-op if already initialized.
+   */
+  async setupCrdtStorage(): Promise<void> {
+    await doSetupCrdtStorage();
+  },
 
   isReady(): boolean {
     return backend !== null;

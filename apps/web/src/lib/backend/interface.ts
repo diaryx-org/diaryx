@@ -351,6 +351,13 @@ export interface Backend {
    */
   isCrdtEnabled?(): Promise<boolean>;
 
+  /**
+   * Lazily initialize the CRDT storage bridge (sql.js SQLite).
+   * Called before sync operations if the bridge wasn't set up at init time.
+   * No-op if already initialized or not applicable (e.g., Tauri).
+   */
+  setupCrdtStorage?(): Promise<void>;
+
   // --------------------------------------------------------------------------
   // Unified Command API
   // --------------------------------------------------------------------------

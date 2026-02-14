@@ -388,6 +388,10 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
 
   // Create new sync if URL is set
   if (url && _backend) {
+    // Ensure CRDT storage bridge is initialized before sync connects.
+    // This is a no-op if already set up (e.g., sync was configured at startup).
+    await _backend.setupCrdtStorage?.();
+
     // Reset initial sync tracking since we're starting a new sync connection
     _initialSyncComplete = false;
     _initialSyncResolvers = [];
@@ -856,6 +860,9 @@ export async function startSessionSync(
     return;
   }
 
+  // Ensure CRDT storage bridge is initialized before session sync connects.
+  await _backend.setupCrdtStorage?.();
+
   // Create a promise that resolves when initial workspace sync completes
   let syncResolve: () => void;
   const syncPromise = new Promise<void>((resolve) => {
@@ -1062,6 +1069,9 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
     // Connect sync if we have a workspaceId (authenticated mode, not local-only)
     if (_workspaceId) {
       if (serverUrl && rustApi && _backend) {
+        // Ensure CRDT storage bridge is initialized before sync connects.
+        await _backend.setupCrdtStorage?.();
+
         const workspaceDocName = _workspaceId ? `${_workspaceId}:workspace` : 'workspace';
 
         // Check if backend supports native sync (Tauri)

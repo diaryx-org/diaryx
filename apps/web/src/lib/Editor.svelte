@@ -29,6 +29,8 @@
   import { BlockPickerNode } from "./extensions/BlockPickerNode";
   // Custom extension for Discord-style spoiler syntax
   import { SpoilerMark } from "./extensions/SpoilerMark";
+  // Custom extension for raw HTML blocks
+  import { HtmlBlock } from "./extensions/HtmlBlock";
   import type { Api } from "$lib/backend/api";
 
   interface Props {
@@ -190,6 +192,11 @@
         HTMLAttributes: {
           class: "editor-image",
         },
+      }),
+      // Raw HTML block extension
+      HtmlBlock.configure({
+        entryPath,
+        api,
       }),
       // Inline attachment picker node extension
       AttachmentPickerNode.configure({

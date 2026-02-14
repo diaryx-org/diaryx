@@ -319,6 +319,48 @@ export function hasBlobUrls(): boolean {
   return blobUrlMap.size > 0;
 }
 
+/**
+ * Resolve a local image path to a blob URL for display.
+ * Returns the blob URL on success, or undefined if the attachment can't be loaded.
+ * Checks the cache first, then fetches from the backend.
+ */
+export async function resolveImageSrc(
+  rawImagePath: string,
+  entryPath: string,
+  api: Api,
+): Promise<string | undefined> {
+  // Skip URLs that don't need resolution
+  if (
+    rawImagePath.startsWith('http://') ||
+    rawImagePath.startsWith('https://') ||
+    rawImagePath.startsWith('blob:') ||
+    rawImagePath.startsWith('data:')
+  ) {
+    return rawImagePath;
+  }
+
+  const { canonical: canonicalPath, sourceRelative: sourceRelativePath } =
+    await normalizeAttachmentReference(api, entryPath, rawImagePath);
+
+  // Check cache first
+  const cached = blobUrlMap.get(sourceRelativePath);
+  if (cached) return cached;
+
+  try {
+    const data = await api.getAttachmentData(entryPath, sourceRelativePath);
+    const mimeType = getMimeType(canonicalPath);
+    let blob = new Blob([new Uint8Array(data)], { type: mimeType });
+    if (isHeicFile(canonicalPath)) {
+      blob = await convertHeicToJpeg(blob);
+    }
+    const blobUrl = URL.createObjectURL(blob);
+    blobUrlMap.set(sourceRelativePath, blobUrl);
+    return blobUrl;
+  } catch {
+    return undefined;
+  }
+}
+
 // ============================================================================
 // Path Utilities
 // ============================================================================

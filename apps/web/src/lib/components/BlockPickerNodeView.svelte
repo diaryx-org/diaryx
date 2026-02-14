@@ -10,6 +10,7 @@
     Braces,
     Minus,
     Paperclip,
+    Code,
   } from "@lucide/svelte";
 
   interface Props {
@@ -107,6 +108,10 @@
 
   function handleHorizontalRule() {
     onSelect(() => editor.chain().focus().setHorizontalRule().run());
+  }
+
+  function handleHtmlBlock() {
+    onSelect(() => editor.commands.insertHtmlBlock());
   }
 
   function handleAttachment() {
@@ -223,6 +228,15 @@
     >
       <Minus class="size-4" />
       <span>Divider</span>
+    </button>
+    <button
+      type="button"
+      onclick={(e) => handleMenuItemClick(e, handleHtmlBlock)}
+      class="menu-item"
+      title="HTML Block"
+    >
+      <Code class="size-4" />
+      <span>HTML</span>
     </button>
   </div>
 

@@ -803,6 +803,16 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 Ok(Response::Ok)
             }
 
+            Command::ClearDirectory { path } => {
+                self.fs().clear_dir(Path::new(&path)).await.map_err(|e| {
+                    DiaryxError::FileWrite {
+                        path: PathBuf::from(&path),
+                        source: e,
+                    }
+                })?;
+                Ok(Response::Ok)
+            }
+
             Command::WriteFileWithMetadata {
                 path,
                 metadata,

@@ -93,6 +93,22 @@ pub trait AsyncFileSystem: Send + Sync {
     /// and should error if the source does not exist or if the destination already exists.
     fn move_file<'a>(&'a self, from: &'a Path, to: &'a Path) -> BoxFuture<'a, Result<()>>;
 
+    /// Delete all files and subdirectories within a directory.
+    /// The directory itself is preserved (remains as an empty directory).
+    fn clear_dir<'a>(&'a self, dir: &'a Path) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let entries = self.list_files(dir).await?;
+            for entry in entries {
+                if self.is_dir(&entry).await {
+                    self.clear_dir(&entry).await?;
+                } else {
+                    self.delete_file(&entry).await?;
+                }
+            }
+            Ok(())
+        })
+    }
+
     // ==================== Binary File Methods ====================
     // These methods support binary files (attachments) without base64 overhead
 
@@ -246,6 +262,22 @@ pub trait AsyncFileSystem {
     /// Implementations should treat this as an atomic-ish move when possible,
     /// and should error if the source does not exist or if the destination already exists.
     fn move_file<'a>(&'a self, from: &'a Path, to: &'a Path) -> BoxFuture<'a, Result<()>>;
+
+    /// Delete all files and subdirectories within a directory.
+    /// The directory itself is preserved (remains as an empty directory).
+    fn clear_dir<'a>(&'a self, dir: &'a Path) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let entries = self.list_files(dir).await?;
+            for entry in entries {
+                if self.is_dir(&entry).await {
+                    self.clear_dir(&entry).await?;
+                } else {
+                    self.delete_file(&entry).await?;
+                }
+            }
+            Ok(())
+        })
+    }
 
     // ==================== Binary File Methods ====================
     // These methods support binary files (attachments) without base64 overhead
@@ -565,6 +597,10 @@ impl<T: AsyncFileSystem + ?Sized> AsyncFileSystem for &T {
         (*self).move_file(from, to)
     }
 
+    fn clear_dir<'a>(&'a self, dir: &'a Path) -> BoxFuture<'a, Result<()>> {
+        (*self).clear_dir(dir)
+    }
+
     fn read_binary<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<Vec<u8>>> {
         (*self).read_binary(path)
     }
@@ -631,6 +667,10 @@ impl<T: AsyncFileSystem + ?Sized> AsyncFileSystem for &T {
 
     fn move_file<'a>(&'a self, from: &'a Path, to: &'a Path) -> BoxFuture<'a, Result<()>> {
         (*self).move_file(from, to)
+    }
+
+    fn clear_dir<'a>(&'a self, dir: &'a Path) -> BoxFuture<'a, Result<()>> {
+        (*self).clear_dir(dir)
     }
 
     fn read_binary<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<Vec<u8>>> {

@@ -474,6 +474,12 @@ pub enum Command {
         path: String,
     },
 
+    /// Delete all files and subdirectories within a directory.
+    ClearDirectory {
+        /// Path to the directory to clear.
+        path: String,
+    },
+
     /// Write a file with metadata as YAML frontmatter + body content.
     /// This generates the YAML frontmatter from the metadata and writes it to the file.
     WriteFileWithMetadata {

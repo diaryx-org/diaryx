@@ -384,6 +384,9 @@
 
   // Check if we're on desktop and expand sidebars by default
   onMount(async () => {
+    // Refresh tree when zip import completes (from ImportSettings)
+    window.addEventListener("import:complete", handleImportComplete);
+
     // Expand sidebars on desktop
     if (window.innerWidth >= 768) {
       uiStore.setLeftSidebarCollapsed(false);
@@ -745,6 +748,7 @@
       };
       document.addEventListener("touchstart", handleTouchStart);
       document.addEventListener("touchend", handleTouchEnd);
+
     } catch (e) {
       console.error("[App] Initialization error:", e);
       uiStore.setError(e instanceof Error ? e.message : String(e));
@@ -767,6 +771,8 @@
     cleanupSyncStatus?.();
     // Disconnect workspace CRDT (keeps local state for quick reconnect)
     disconnectWorkspace();
+    // Cleanup import:complete listener
+    window.removeEventListener("import:complete", handleImportComplete);
   });
 
   // Initialize the workspace CRDT
@@ -1256,6 +1262,11 @@
   async function refreshTree() {
     if (!api || !backend) return;
     await refreshTreeController(api, backend, showUnlinkedFiles, showHiddenFiles);
+  }
+
+  // Handle import:complete event from ImportSettings
+  function handleImportComplete() {
+    debouncedRefreshTree();
   }
 
   // Debounced version of refreshTree to prevent rapid refreshes during sync

@@ -396,6 +396,10 @@ content: string, } } | { "type": "DeleteFile", "params": {
 /**
  * Path to delete.
  */
+path: string, } } | { "type": "ClearDirectory", "params": {
+/**
+ * Path to the directory to clear.
+ */
 path: string, } } | { "type": "WriteFileWithMetadata", "params": {
 /**
  * Path to the file to write.

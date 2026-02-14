@@ -184,6 +184,18 @@ const workerApi = {
   },
 
   // =========================================================================
+  // CrdtFs Control
+  // =========================================================================
+
+  setCrdtEnabled(enabled: boolean): void {
+    getBackend().setCrdtEnabled(enabled);
+  },
+
+  isCrdtEnabled(): boolean {
+    return getBackend().isCrdtEnabled();
+  },
+
+  // =========================================================================
   // Unified Command API
   // =========================================================================
 

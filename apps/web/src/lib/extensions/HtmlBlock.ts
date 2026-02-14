@@ -167,13 +167,14 @@ export const HtmlBlock = Node.create<HtmlBlockOptions>({
     name: "htmlBlock",
     level: "block",
     start(src: string) {
-      const match = src.match(/^<[a-zA-Z][a-zA-Z0-9]*/);
+      const match = src.match(/^<[a-zA-Z][a-zA-Z0-9]*/m);
       return match ? match.index! : -1;
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     tokenize(src: string, _tokens: any[]) {
       // Must start with an HTML tag at the beginning of the line
-      const openTagMatch = /^<([a-zA-Z][a-zA-Z0-9]*)(\s[^>]*)?\/?>/m.exec(src);
+      const openTagMatch = /^<([a-zA-Z][a-zA-Z0-9]*)(\s[^>]*)?\/?>/
+        .exec(src);
       if (!openTagMatch) return undefined;
 
       const tagName = openTagMatch[1].toLowerCase();

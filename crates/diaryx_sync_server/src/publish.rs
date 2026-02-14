@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::warn;
+use tracing::{debug, info, warn};
 
 pub type PublishLock = Arc<RwLock<HashSet<String>>>;
 type HmacSha256 = Hmac<Sha256>;
@@ -85,12 +85,31 @@ pub async fn publish_workspace_to_r2(
     let workspace = WorkspaceCrdt::load_with_name(storage.clone(), workspace_doc_name)
         .map_err(|e| format!("failed to load workspace CRDT: {}", e))?;
     let body_docs = BodyDocManager::new(storage);
-    let mut files = materialize_workspace(&workspace, &body_docs, workspace_id).files;
+    let result = materialize_workspace(&workspace, &body_docs, workspace_id);
+    let mut files = result.files;
     if files.is_empty() {
         return Err("workspace has no materialized markdown files".to_string());
     }
 
     files.sort_by(|a, b| a.path.cmp(&b.path));
+
+    info!(
+        workspace_id,
+        file_count = files.len(),
+        skipped_count = result.skipped.len(),
+        file_paths = ?files.iter().map(|f| &f.path).collect::<Vec<_>>(),
+        "publish: materialized workspace"
+    );
+    for file in &files {
+        debug!(
+            workspace_id,
+            path = %file.path,
+            audience = ?file.metadata.audience,
+            extra_keys = ?file.metadata.extra.keys().collect::<Vec<_>>(),
+            content_preview = %file.content.chars().take(300).collect::<String>(),
+            "publish: materialized file details"
+        );
+    }
 
     let temp_dir = tempfile::tempdir().map_err(|e| format!("tempdir failed: {}", e))?;
     let workspace_dir = temp_dir.path().join("workspace");
@@ -184,9 +203,35 @@ pub async fn publish_workspace_to_r2(
             })
     };
 
+    info!(
+        workspace_id,
+        public_audience = ?public_audience,
+        "publish: extracted public_audience from root index"
+    );
+
     let discovered_audiences = discover_audiences(&files);
+    info!(
+        workspace_id,
+        discovered = ?discovered_audiences,
+        "publish: discovered audiences from materialized files"
+    );
+
     let audiences_to_build =
         build_audiences_to_build(discovered_audiences, public_audience.as_deref());
+    info!(
+        workspace_id,
+        audiences = ?audiences_to_build,
+        "publish: final audiences to build"
+    );
+
+    if audiences_to_build.is_empty() {
+        warn!(
+            workspace_id,
+            file_count = files.len(),
+            root_file_content_preview = %files.first().map(|f| f.content.chars().take(500).collect::<String>()).unwrap_or_default(),
+            "publish: no audiences to build — check that files have 'audience' frontmatter"
+        );
+    }
 
     let mut audience_builds = Vec::new();
 
@@ -872,6 +917,30 @@ mod tests {
             .collect();
         let audiences = build_audiences_to_build(discovered, None);
         assert_eq!(audiences, vec!["family".to_string(), "friends".to_string()]);
+    }
+
+    #[test]
+    fn discover_audiences_from_file_with_public_audience_config() {
+        // Simulates the user's scenario: root index with audience + public_audience
+        let content = "---\ntitle: My Journal\ncontents:\n  - '[New Entry](/new-entry.md)'\ndescription: A diaryx workspace\naudience:\n  - public\npublic_audience: public\n---\n\nHello world\n";
+        let files = vec![materialized("README.md", content)];
+        let discovered = discover_audiences(&files);
+        assert!(
+            discovered.contains("public"),
+            "Expected to discover 'public' audience, got: {:?}",
+            discovered
+        );
+
+        // Also verify public_audience is extractable from the frontmatter
+        let parsed = diaryx_core::frontmatter::parse_or_empty(content).unwrap();
+        let public_audience = parsed
+            .frontmatter
+            .get("public_audience")
+            .and_then(|v| v.as_str());
+        assert_eq!(public_audience, Some("public"));
+
+        let audiences = build_audiences_to_build(discovered, public_audience);
+        assert_eq!(audiences, vec!["public".to_string()]);
     }
 
     #[test]

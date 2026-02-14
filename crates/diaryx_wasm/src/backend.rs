@@ -930,6 +930,27 @@ impl DiaryxBackend {
     }
 
     // ========================================================================
+    // CrdtFs Control
+    // ========================================================================
+
+    /// Enable or disable the CrdtFs decorator.
+    ///
+    /// When disabled, file writes pass through to storage without updating CRDTs.
+    /// CrdtFs starts disabled by default and should be enabled after sync
+    /// handshake completes (or immediately in local-only mode).
+    #[wasm_bindgen(js_name = "setCrdtEnabled")]
+    pub fn set_crdt_enabled(&self, enabled: bool) {
+        self.fs.inner().set_enabled(enabled);
+        log::info!("[DiaryxBackend] CrdtFs enabled: {}", enabled);
+    }
+
+    /// Check whether CrdtFs is currently enabled.
+    #[wasm_bindgen(js_name = "isCrdtEnabled")]
+    pub fn is_crdt_enabled(&self) -> bool {
+        self.fs.inner().is_enabled()
+    }
+
+    // ========================================================================
     // Unified Command API
     // ========================================================================
 

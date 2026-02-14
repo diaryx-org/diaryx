@@ -231,6 +231,10 @@ export class WorkerBackendNew implements Backend {
 
   saveConfig = (config: any) => this.remote!.saveConfig(config);
 
+  // CrdtFs control
+  setCrdtEnabled = (enabled: boolean) => this.remote!.setCrdtEnabled(enabled);
+  isCrdtEnabled = () => this.remote!.isCrdtEnabled();
+
   // Root index discovery
   findRootIndex = (dirPath?: string) => this.remote!.findRootIndex(dirPath);
   getDefaultWorkspacePath = () => this.remote!.getDefaultWorkspacePath();

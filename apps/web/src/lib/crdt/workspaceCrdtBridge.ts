@@ -242,19 +242,6 @@ let pendingLocalSyncUpdates: Array<{ docId: string; bytes: Uint8Array }> = [];
 // Cached server URL (WebSocket) for sync readiness checks
 let _serverUrl: string | null = null;
 
-// Flag: true when this client loaded from server (load_server mode).
-// When set, body CRDTs are cleared before sync to prevent duplication
-// (importFromZip populates body CRDT locally, then server sends the same content).
-let _freshFromServerLoad = false;
-
-export function setFreshFromServerLoad(value: boolean): void {
-  _freshFromServerLoad = value;
-}
-
-export function isFreshFromServerLoad(): boolean {
-  return _freshFromServerLoad;
-}
-
 function refreshAttachmentSyncContext(): void {
   setAttachmentSyncContext({
     enabled: Boolean(serverUrl && _workspaceId && getToken()),
@@ -262,40 +249,6 @@ function refreshAttachmentSyncContext(): void {
     authToken: getToken(),
     workspaceId: _workspaceId,
   });
-}
-
-/**
- * Reset local body CRDT docs before a "load from server" sync connection.
- *
- * Without this, previously loaded local body docs (for example, default README.md
- * content) can contribute independent Yjs operations that merge with server
- * operations, causing duplicated body content on initial join.
- */
-async function resetBodyDocsForFreshServerLoad(): Promise<void> {
-  if (!_freshFromServerLoad || !rustApi) return;
-
-  try {
-    const loadedDocs = await rustApi.listLoadedBodyDocs();
-    const activeFiles = await rustApi.listFiles(false);
-    const docNames = new Set<string>(loadedDocs);
-    for (const [path] of activeFiles) {
-      docNames.add(path);
-    }
-
-    if (docNames.size === 0) return;
-
-    console.log(`[WorkspaceCrdtBridge] Fresh server load: resetting ${docNames.size} body doc(s)`);
-    for (const docName of docNames) {
-      if (!docName || isTempFile(docName)) continue;
-      try {
-        await rustApi.resetBodyDoc(docName);
-      } catch (error) {
-        console.warn(`[WorkspaceCrdtBridge] Failed to reset body doc '${docName}' before sync:`, error);
-      }
-    }
-  } catch (error) {
-    console.warn('[WorkspaceCrdtBridge] Failed to prepare fresh server body state:', error);
-  }
 }
 
 // Per-file mutex to prevent race conditions on concurrent updates
@@ -308,18 +261,6 @@ const pendingTimeouts: Set<ReturnType<typeof setTimeout>> = new Set();
 
 async function flushPendingLocalSyncUpdates(): Promise<void> {
   if (pendingLocalSyncUpdates.length === 0) {
-    return;
-  }
-
-  // In "load from server" mode we intentionally discard any queued local sync
-  // updates captured during bootstrap. Replaying them would merge stale local
-  // operations (for example, default README content) into server state.
-  if (_freshFromServerLoad) {
-    const dropped = pendingLocalSyncUpdates.length;
-    pendingLocalSyncUpdates = [];
-    console.log(
-      `[WorkspaceCrdtBridge] Fresh server load: dropped ${dropped} queued local sync update(s)`
-    );
     return;
   }
 
@@ -447,12 +388,6 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
 
   // Create new sync if URL is set
   if (url && _backend) {
-    // "Load from server" should start from empty body docs to avoid
-    // merging local bootstrap operations into server content.
-    if (_freshFromServerLoad) {
-      await resetBodyDocsForFreshServerLoad();
-    }
-
     // Reset initial sync tracking since we're starting a new sync connection
     _initialSyncComplete = false;
     _initialSyncResolvers = [];
@@ -507,12 +442,14 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
             notifySyncStatus('error', message);
           },
           onWorkspaceSynced: async () => {
+            // Enable CrdtFs now that sync handshake is complete —
+            // file writes from this point will populate CRDTs for sync.
+            if (_backend?.setCrdtEnabled) await _backend.setCrdtEnabled(true);
             notifySyncStatus('synced');
             notifyFileChange(null, null);
             await updateFileIndexFromCrdt();
             markInitialSyncComplete();
             // Body sync is handled automatically by SyncSession in Rust
-            _freshFromServerLoad = false;
             collaborationStore.setBodySyncStatus('synced');
           },
           onSyncComplete: (filesSynced) => {
@@ -946,11 +883,11 @@ export async function startSessionSync(
     },
     onWorkspaceSynced: async () => {
       console.log('[WorkspaceCrdtBridge] Session workspace sync complete, isHost:', isHost);
+      if (_backend?.setCrdtEnabled) await _backend.setCrdtEnabled(true);
       notifySyncStatus('synced');
       if (!isHost) notifySessionSync();
       syncResolve();
       // Body sync is handled automatically by SyncSession in Rust
-      _freshFromServerLoad = false;
       collaborationStore.setBodySyncStatus('synced');
     },
     onFilesChanged: async () => {
@@ -1125,10 +1062,6 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
     // Connect sync if we have a workspaceId (authenticated mode, not local-only)
     if (_workspaceId) {
       if (serverUrl && rustApi && _backend) {
-        if (_freshFromServerLoad) {
-          await resetBodyDocsForFreshServerLoad();
-        }
-
         const workspaceDocName = _workspaceId ? `${_workspaceId}:workspace` : 'workspace';
 
         // Check if backend supports native sync (Tauri)
@@ -1170,12 +1103,12 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
               }
             },
             onWorkspaceSynced: async () => {
+              if (_backend?.setCrdtEnabled) await _backend.setCrdtEnabled(true);
               notifySyncStatus('synced');
               notifyFileChange(null, null);
               await updateFileIndexFromCrdt();
               markInitialSyncComplete();
               // Body sync is handled automatically by SyncSession in Rust
-              _freshFromServerLoad = false;
               collaborationStore.setBodySyncStatus('synced');
             },
             onSyncComplete: (filesSynced) => {
@@ -1208,6 +1141,8 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
       }
     } else {
       console.log('[WorkspaceCrdtBridge] Sync skipped: local-only mode (no workspaceId)');
+      // Enable CrdtFs immediately — no sync to wait for.
+      if (_backend?.setCrdtEnabled) await _backend.setCrdtEnabled(true);
       // No sync needed - mark as complete immediately
       markInitialSyncComplete();
     }
@@ -1758,16 +1693,20 @@ export async function updateFileMetadata(
     const newDescription = updates.description ?? existing?.description ?? null;
     const newExtra = updates.extra ?? existing?.extra ?? {};
 
+    // BigInt-safe JSON.stringify (u64/i64 from WASM become BigInt in JS)
+    const safeStringify = (v: unknown) =>
+      JSON.stringify(v, (_k, val) => typeof val === 'bigint' ? Number(val) : val);
+
     // Check if there are actual changes (excluding modified_at)
     const hasChanges = existing === null ||
       newTitle !== existing.title ||
       newPartOf !== existing.part_of ||
       newContents !== existing.contents ||
-      JSON.stringify(newAttachments) !== JSON.stringify(existing.attachments) ||
+      safeStringify(newAttachments) !== safeStringify(existing.attachments) ||
       newDeleted !== existing.deleted ||
       newAudience !== existing.audience ||
       newDescription !== existing.description ||
-      JSON.stringify(newExtra) !== JSON.stringify(existing.extra);
+      safeStringify(newExtra) !== safeStringify(existing.extra);
 
     if (!hasChanges) {
       console.log('[WorkspaceCrdtBridge] No changes detected, skipping update:', path);

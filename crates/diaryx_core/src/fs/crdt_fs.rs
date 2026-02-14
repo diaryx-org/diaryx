@@ -98,7 +98,7 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
             inner,
             workspace_crdt,
             body_doc_manager,
-            enabled: AtomicBool::new(true),
+            enabled: AtomicBool::new(false),
             local_writes_in_progress: RwLock::new(HashSet::new()),
             sync_writes_in_progress: RwLock::new(HashSet::new()),
         }
@@ -427,6 +427,31 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
             // Only default to "now" if modified_at is missing/zero
             if metadata.modified_at == 0 {
                 metadata.modified_at = chrono::Utc::now().timestamp_millis();
+            }
+
+            // Preserve unknown frontmatter fields in extra.
+            // The JSON fast path deserializes into FileMetadata which drops
+            // fields not defined on the struct (e.g. public_audience).
+            let known_fields = [
+                "title",
+                "part_of",
+                "contents",
+                "audience",
+                "description",
+                "attachments",
+                "deleted",
+                "modified_at",
+                "updated",
+                "filename",
+                "extra",
+            ];
+            for (key, value) in fm {
+                if !known_fields.contains(&key.as_str())
+                    && !metadata.extra.contains_key(key)
+                    && let Ok(json_value) = serde_json::to_value(value)
+                {
+                    metadata.extra.insert(key.clone(), json_value);
+                }
             }
 
             return metadata;
@@ -1320,7 +1345,10 @@ mod tests {
         let storage: Arc<dyn CrdtStorage> = Arc::new(MemoryStorage::new());
         let workspace_crdt = Arc::new(WorkspaceCrdt::new(Arc::clone(&storage)));
         let body_manager = Arc::new(BodyDocManager::new(storage));
-        CrdtFs::new(inner, workspace_crdt, body_manager)
+        let fs = CrdtFs::new(inner, workspace_crdt, body_manager);
+        // Enable for tests — production code enables after sync handshake
+        fs.set_enabled(true);
+        fs
     }
 
     #[test]
@@ -1706,6 +1734,34 @@ Content"#;
                 "Folder/Sub/child2.md".to_string(),
                 "sibling.md".to_string(),
             ])
+        );
+    }
+
+    #[test]
+    fn test_write_preserves_extra_frontmatter_fields_in_crdt() {
+        let fs = create_test_crdt_fs();
+        let content = "---\ntitle: My Journal\naudience:\n  - public\npublic_audience: public\ndescription: A workspace\n---\nBody";
+
+        futures_lite::future::block_on(async {
+            fs.write_file(Path::new("README.md"), content)
+                .await
+                .unwrap();
+        });
+
+        let metadata = fs.workspace_crdt.get_file("README.md").unwrap();
+        assert_eq!(metadata.title, Some("My Journal".to_string()));
+        assert_eq!(metadata.audience, Some(vec!["public".to_string()]));
+        assert!(
+            metadata.extra.contains_key("public_audience"),
+            "Expected 'public_audience' in extra, got keys: {:?}",
+            metadata.extra.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            metadata
+                .extra
+                .get("public_audience")
+                .and_then(|v| v.as_str()),
+            Some("public")
         );
     }
 }

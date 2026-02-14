@@ -337,6 +337,21 @@ export interface Backend {
   getAppPaths(): Record<string, string | boolean | null> | null;
 
   // --------------------------------------------------------------------------
+  // CrdtFs Control
+  // --------------------------------------------------------------------------
+
+  /**
+   * Enable or disable CrdtFs (CRDT updates on file writes).
+   * CrdtFs starts disabled and should be enabled after sync handshake completes.
+   */
+  setCrdtEnabled?(enabled: boolean): Promise<void>;
+
+  /**
+   * Check whether CrdtFs is currently enabled.
+   */
+  isCrdtEnabled?(): Promise<boolean>;
+
+  // --------------------------------------------------------------------------
   // Unified Command API
   // --------------------------------------------------------------------------
 

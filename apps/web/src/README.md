@@ -51,14 +51,11 @@ This directory contains the source code for the Diaryx web application.
 
 ## Sync Bootstrap Safeguards
 
-`workspaceCrdtBridge.ts` has explicit protections for `load_server` setup:
-
-- Before opening the sync transport, it resets loaded/known body docs so local
-  bootstrap body ops do not merge into server bodies.
-- While `freshFromServerLoad` is active, queued local sync updates are dropped
-  instead of flushed to the server on connect.
-- Snapshot-based wizard flows also discard queued pre-connect updates before
-  establishing the WebSocket transport.
+CrdtFs (the filesystem decorator that auto-updates CRDTs on file writes) starts
+**disabled** by default. It is only enabled after the sync handshake completes
+(`onWorkspaceSynced`), or immediately in local-only mode. This prevents file
+writes during import/bootstrap from creating local CRDT operations that would
+merge with server state and cause content duplication.
 
 ## Share Sidebar
 

@@ -72,7 +72,6 @@ import {
   getWorkspaceStats,
   setBackendApi,
   setBackend,
-  setFreshFromServerLoad,
   startSessionSync,
   stopSessionSync,
   getSessionCode,
@@ -437,11 +436,11 @@ describe('workspaceCrdtBridge', () => {
       cleanup()
     })
 
-    it('should drop queued local updates during fresh server-load bootstrap', async () => {
+    it('should flush queued local updates on connect', async () => {
       await initWorkspace({
         rustApi: mockRustApi as any,
       })
-      await setWorkspaceId('fresh-load-workspace')
+      await setWorkspaceId('flush-workspace')
 
       let eventHandler: ((event: any) => void) | null = null
       const backend = {
@@ -457,25 +456,19 @@ describe('workspaceCrdtBridge', () => {
       const cleanup = initEventSubscription(backend as any)
       expect(eventHandler).toBeTruthy()
 
-      // Queue a local body update before the transport exists.
+      // Queue a local update before the transport exists.
       eventHandler!({
         type: 'SendSyncMessage',
-        doc_name: 'README.md',
-        is_body: true,
-        message: new Uint8Array([1, 2, 3]),
+        doc_name: 'workspace',
+        is_body: false,
+        message: new Uint8Array([4, 5]),
       })
 
-      mockRustApi.listLoadedBodyDocs.mockResolvedValue(['README.md'])
-      mockRustApi.listFiles.mockResolvedValue([['README.md', { deleted: false }]])
-
-      setFreshFromServerLoad(true)
       await setWorkspaceServer('http://localhost:3030')
 
-      expect(mockRustApi.resetBodyDoc).toHaveBeenCalledWith('README.md')
-      expect(transportMocks.queueLocalUpdate).not.toHaveBeenCalled()
-      expect(discardQueuedLocalSyncUpdates('post-connect-check')).toBe(0)
+      // Queued update should have been flushed through the transport
+      expect(transportMocks.queueLocalUpdate).toHaveBeenCalled()
 
-      setFreshFromServerLoad(false)
       cleanup()
     })
   })

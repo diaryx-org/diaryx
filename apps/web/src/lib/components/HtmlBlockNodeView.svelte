@@ -4,6 +4,37 @@
   import type { Api } from "$lib/backend/api";
   import { resolveImageSrc } from "@/models/services/attachmentService";
 
+  const ALLOWED_IFRAME_ORIGINS = [
+    'https://www.youtube.com',
+    'https://www.youtube-nocookie.com',
+    'https://player.vimeo.com',
+    'https://docs.google.com',
+    'https://drive.google.com',
+    'https://sheets.google.com',
+    'https://slides.google.com',
+    'https://calendar.google.com',
+    'https://www.google.com',
+    'https://codepen.io',
+    'https://codesandbox.io',
+    'https://stackblitz.com',
+    'https://open.spotify.com',
+    'https://w.soundcloud.com',
+    'https://bandcamp.com',
+    'https://www.figma.com',
+    'https://excalidraw.com',
+    'https://gist.github.com',
+  ];
+
+  // Remove iframes whose src doesn't match the whitelist
+  DOMPurify.addHook('uponSanitizeElement', (node, data) => {
+    if (data.tagName === 'iframe' && node instanceof Element) {
+      const src = node.getAttribute('src') || '';
+      if (!ALLOWED_IFRAME_ORIGINS.some(origin => src.startsWith(origin + '/'))) {
+        node.parentNode?.removeChild(node);
+      }
+    }
+  });
+
   interface Props {
     content: string;
     readonly: boolean;
@@ -66,8 +97,9 @@
 
   const sanitized = $derived(
     DOMPurify.sanitize(previewHtml, {
-      ADD_TAGS: ["style"],
-      ADD_ATTR: ["style", "class"],
+      ADD_TAGS: ["style", "iframe"],
+      ADD_ATTR: ["style", "class", "src", "width", "height", "frameborder",
+        "allow", "allowfullscreen", "title", "loading", "referrerpolicy"],
       FORBID_TAGS: ["script"],
       FORBID_ATTR: ["onerror", "onclick", "onload", "onmouseover"],
       // Allow blob: URIs so resolved attachment images render in preview

@@ -192,7 +192,7 @@ impl<FS: AsyncFileSystem> DecoratedFsBuilder<FS> {
         Self {
             base,
             storage: None,
-            crdt_enabled: true,
+            crdt_enabled: false,
             events_enabled: true,
         }
     }
@@ -316,7 +316,8 @@ mod tests {
         let base = create_test_base_fs();
         let decorated = DecoratedFsBuilder::new(base).build();
 
-        assert!(decorated.is_crdt_enabled());
+        // CrdtFs starts disabled by default — must be explicitly enabled after sync
+        assert!(!decorated.is_crdt_enabled());
         assert!(decorated.is_events_enabled());
     }
 
@@ -327,15 +328,15 @@ mod tests {
 
         let decorated = DecoratedFsBuilder::new(base).with_crdt(storage).build();
 
-        assert!(decorated.is_crdt_enabled());
+        assert!(!decorated.is_crdt_enabled());
     }
 
     #[test]
-    fn test_build_with_disabled_crdt() {
+    fn test_build_with_explicitly_enabled_crdt() {
         let base = create_test_base_fs();
-        let decorated = DecoratedFsBuilder::new(base).crdt_enabled(false).build();
+        let decorated = DecoratedFsBuilder::new(base).crdt_enabled(true).build();
 
-        assert!(!decorated.is_crdt_enabled());
+        assert!(decorated.is_crdt_enabled());
     }
 
     #[test]
@@ -351,11 +352,11 @@ mod tests {
         let base = create_test_base_fs();
         let decorated = DecoratedFsBuilder::new(base).build();
 
-        assert!(decorated.is_crdt_enabled());
-        decorated.set_crdt_enabled(false);
         assert!(!decorated.is_crdt_enabled());
         decorated.set_crdt_enabled(true);
         assert!(decorated.is_crdt_enabled());
+        decorated.set_crdt_enabled(false);
+        assert!(!decorated.is_crdt_enabled());
     }
 
     #[test]
@@ -410,7 +411,7 @@ mod tests {
     #[test]
     fn test_crdt_updates_on_write() {
         let base = create_test_base_fs();
-        let decorated = DecoratedFsBuilder::new(base).build();
+        let decorated = DecoratedFsBuilder::new(base).crdt_enabled(true).build();
 
         futures_lite::future::block_on(async {
             decorated
@@ -454,6 +455,7 @@ mod tests {
             let base = create_test_base_fs();
             let decorated = DecoratedFsBuilder::new(base)
                 .with_crdt(Arc::clone(&storage))
+                .crdt_enabled(true)
                 .build();
 
             futures_lite::future::block_on(async {

@@ -52,8 +52,6 @@
     getAllFiles,
     proactivelySyncBodies,
     markAllCrdtFilesAsDeleted,
-    setFreshFromServerLoad,
-    discardQueuedLocalSyncUpdates,
   } from "$lib/crdt/workspaceCrdtBridge";
   import { getDefaultWorkspace, getServerUrl } from "$lib/auth";
 
@@ -619,19 +617,6 @@
 
         // Set workspace ID for proper document routing
         await setWorkspaceId(workspaceId);
-
-        // Mark load_server mode so body CRDTs are cleared before sync
-        // (prevents duplication when importFromZip populates body locally)
-        if (initMode === 'load_server') {
-          setFreshFromServerLoad(true);
-        }
-
-        // Snapshot-based flows already established workspace state (upload/download).
-        // Drop pre-connect local updates captured during bootstrap to avoid replaying
-        // stale create/delete/body changes immediately after connect.
-        if (initMode === 'load_server' || (initMode === 'sync_local' && snapshotUploaded)) {
-          discardQueuedLocalSyncUpdates(`sync wizard bootstrap (${initMode})`);
-        }
 
         // Set server URL to create UnifiedSyncTransport and connect
         // This triggers the WebSocket connection that syncs CRDT data to server

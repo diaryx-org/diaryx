@@ -35,6 +35,8 @@
   import { SpoilerMark } from "./extensions/SpoilerMark";
   // Custom extension for raw HTML blocks
   import { HtmlBlock } from "./extensions/HtmlBlock";
+  // Custom extension for markdown footnotes
+  import { FootnoteRef, preprocessFootnotes, appendFootnoteDefinitions } from "./extensions/FootnoteRef";
   import type { Api } from "$lib/backend/api";
 
   interface Props {
@@ -202,6 +204,8 @@
       TableRow,
       TableHeader,
       TableCell,
+      // Footnote extension
+      FootnoteRef,
       // Raw HTML block extension
       HtmlBlock.configure({
         entryPath,
@@ -360,7 +364,7 @@
     editor = new Editor({
       element,
       extensions,
-      content: content,
+      content: preprocessFootnotes(content),
       contentType: "markdown",
       editable: !readonly,
       onCreate: () => {
@@ -369,7 +373,7 @@
       },
       onUpdate: ({ editor }) => {
         if (onchange && !isUpdatingContent) {
-          const markdown = editor.getMarkdown();
+          const markdown = appendFootnoteDefinitions(editor);
           onchange(markdown);
         }
       },
@@ -429,7 +433,8 @@
   }
 
   export function getMarkdown(): string | undefined {
-    return editor?.getMarkdown();
+    if (!editor) return undefined;
+    return appendFootnoteDefinitions(editor);
   }
 
   /**
@@ -437,7 +442,7 @@
    */
   export function setContent(markdown: string): void {
     if (!editor) return;
-    editor.commands.setContent(markdown, { contentType: "markdown" });
+    editor.commands.setContent(preprocessFootnotes(markdown), { contentType: "markdown" });
   }
 
   /**
@@ -591,7 +596,7 @@
     // Content prop changed - sync it to the editor
     lastSyncedContent = content;
     isUpdatingContent = true;
-    editor.commands.setContent(content, { contentType: "markdown" });
+    editor.commands.setContent(preprocessFootnotes(content), { contentType: "markdown" });
     setTimeout(() => {
       isUpdatingContent = false;
     }, 0);
@@ -787,6 +792,20 @@
     height: auto;
     border-radius: 6px;
     margin: 0.5em 0;
+  }
+
+  /* Footnote ref styles */
+  :global(.footnote-ref) {
+    font-size: 0.75em;
+    vertical-align: super;
+    color: var(--primary);
+    cursor: pointer;
+    font-weight: 600;
+    line-height: 1;
+  }
+
+  :global(.footnote-ref:hover) {
+    opacity: 0.8;
   }
 
   /* Spoiler mark styles */

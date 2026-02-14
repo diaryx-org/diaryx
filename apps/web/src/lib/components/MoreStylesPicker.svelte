@@ -5,6 +5,7 @@
     Strikethrough,
     Code,
     EyeOff,
+    Superscript,
   } from "@lucide/svelte";
 
   interface Props {
@@ -51,6 +52,11 @@
 
   function handleSpoiler() {
     editor?.chain().focus().toggleSpoiler().run();
+    updateActiveStates();
+  }
+
+  function handleFootnote() {
+    editor?.chain().focus().insertFootnote().run();
     updateActiveStates();
   }
 
@@ -187,6 +193,21 @@
           <span>Spoiler</span>
         </button>
       {/if}
+
+      <button
+        type="button"
+        class="more-styles-option"
+        onmousedown={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          handleFootnote();
+        }}
+        title="Footnote"
+        role="menuitem"
+      >
+        <Superscript class="size-4" />
+        <span>Footnote</span>
+      </button>
     </div>
   {/if}
 </div>

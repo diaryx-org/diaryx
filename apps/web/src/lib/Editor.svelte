@@ -11,6 +11,10 @@
   import { ColoredHighlightMark } from "./extensions/ColoredHighlightMark";
   import Typography from "@tiptap/extension-typography";
   import Image from "@tiptap/extension-image";
+  import { Table } from "@tiptap/extension-table";
+  import { TableRow } from "@tiptap/extension-table-row";
+  import { TableHeader } from "@tiptap/extension-table-header";
+  import { TableCell } from "@tiptap/extension-table-cell";
   // FloatingMenu extension for block formatting
   import FloatingMenu from "@tiptap/extension-floating-menu";
   // BubbleMenu extension for inline formatting on selection
@@ -123,6 +127,7 @@
       Markdown.configure({
         //transformPastedText: true,
         //transformCopiedText: true,
+        markedOptions: { gfm: true },
       }),
       // Always load SpoilerMark to ensure consistent parsing (tokenizer stays registered in marked.js)
       // Pass enabled option to control visual behavior
@@ -193,6 +198,10 @@
           class: "editor-image",
         },
       }),
+      Table.configure({ resizable: false }),
+      TableRow,
+      TableHeader,
+      TableCell,
       // Raw HTML block extension
       HtmlBlock.configure({
         entryPath,
@@ -275,6 +284,9 @@
 
             // Don't show in code blocks
             if (ed.isActive("codeBlock")) return false;
+
+            // Don't show in tables
+            if (ed.isActive("table")) return false;
 
             // Don't show in blockquotes
             if (ed.isActive("blockquote")) return false;
@@ -810,6 +822,30 @@
 
   :global(.spoiler-hidden:hover) {
     opacity: 0.8;
+  }
+
+  /* Table styles */
+  :global(.editor-content table) {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 0.75em 0;
+  }
+
+  :global(.editor-content th),
+  :global(.editor-content td) {
+    border: 1px solid var(--border);
+    padding: 8px 12px;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  :global(.editor-content th) {
+    background: var(--muted);
+    font-weight: 600;
+  }
+
+  :global(.editor-content tr:hover td) {
+    background: color-mix(in oklch, var(--muted) 50%, transparent);
   }
 
   /* Colored highlight mark styles */

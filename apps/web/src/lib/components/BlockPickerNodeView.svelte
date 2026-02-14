@@ -11,6 +11,7 @@
     Minus,
     Paperclip,
     Code,
+    Table2,
   } from "@lucide/svelte";
 
   interface Props {
@@ -112,6 +113,12 @@
 
   function handleHtmlBlock() {
     onSelect(() => editor.commands.insertHtmlBlock());
+  }
+
+  function handleTable() {
+    onSelect(() =>
+      editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
+    );
   }
 
   function handleAttachment() {
@@ -237,6 +244,15 @@
     >
       <Code class="size-4" />
       <span>HTML</span>
+    </button>
+    <button
+      type="button"
+      onclick={(e) => handleMenuItemClick(e, handleTable)}
+      class="menu-item"
+      title="Table"
+    >
+      <Table2 class="size-4" />
+      <span>Table</span>
     </button>
   </div>
 

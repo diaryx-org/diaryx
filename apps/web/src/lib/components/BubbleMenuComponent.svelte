@@ -33,6 +33,7 @@
   let currentHighlightColor = $state<HighlightColor | null>(null);
   let isLinkActive = $state(false);
   let isInCodeBlock = $state(false);
+  let isInTable = $state(false);
 
   function updateActiveStates() {
     if (!editor) return;
@@ -48,6 +49,7 @@
     }
     isLinkActive = editor.isActive("link");
     isInCodeBlock = editor.isActive("codeBlock");
+    isInTable = editor.isActive("table");
   }
 
   function handleBold() {
@@ -131,7 +133,9 @@
     e.preventDefault();
   }}
 >
-  <BlockStylePicker {editor} bind:open={blockStyleOpen} onOpen={() => { closeAllDropdowns(); }} />
+  {#if !isInTable}
+    <BlockStylePicker {editor} bind:open={blockStyleOpen} onOpen={() => { closeAllDropdowns(); }} />
+  {/if}
 
   {#if !isInCodeBlock}
     <div class="toolbar-divider"></div>

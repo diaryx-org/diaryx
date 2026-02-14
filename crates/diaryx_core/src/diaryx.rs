@@ -800,7 +800,15 @@ impl<'a, FS: AsyncFileSystem + Clone> ValidateOps<'a, FS> {
 
     /// Get a fixer for validation issues.
     pub fn fixer(&self) -> crate::validate::ValidationFixer<FS> {
-        crate::validate::ValidationFixer::new(self.diaryx.fs.clone())
+        if let Some(root) = self.diaryx.workspace_root() {
+            crate::validate::ValidationFixer::with_link_format(
+                self.diaryx.fs.clone(),
+                root,
+                self.diaryx.link_format,
+            )
+        } else {
+            crate::validate::ValidationFixer::new(self.diaryx.fs.clone())
+        }
     }
 }
 

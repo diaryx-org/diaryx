@@ -6,31 +6,31 @@
  * Binary files (images, PDFs, etc.) are stored separately from the CRDT,
  * with only their metadata tracked in the synchronization system.
  */
-export type BinaryRef = { 
+export type BinaryRef = {
 /**
  * Relative path within workspace (e.g., "_attachments/image.png")
  */
-path: string, 
+path: string,
 /**
  * Source of the binary: "local", "pending", or external URL
  */
-source: string, 
+source: string,
 /**
  * SHA-256 hash for deduplication and integrity
  */
-hash: string, 
+hash: string,
 /**
  * MIME type (e.g., "image/png")
  */
-mime_type: string, 
+mime_type: string,
 /**
  * File size in bytes
  */
-size: bigint, 
+size: bigint,
 /**
  * Unix timestamp when uploaded (milliseconds)
  */
-uploaded_at: bigint | null, 
+uploaded_at: bigint | null,
 /**
  * Soft deletion tombstone
  */

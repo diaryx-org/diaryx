@@ -3,27 +3,27 @@
 /**
  * A history entry with metadata about what changed.
  */
-export type HistoryEntry = { 
+export type HistoryEntry = {
 /**
  * Unique update ID
  */
-update_id: bigint, 
+update_id: bigint,
 /**
  * Unix timestamp (milliseconds)
  */
-timestamp: bigint, 
+timestamp: bigint,
 /**
  * Origin of the change
  */
-origin: string, 
+origin: string,
 /**
  * Files that were changed in this update (if determinable)
  */
-files_changed: Array<string>, 
+files_changed: Array<string>,
 /**
  * Device ID that created this update (for multi-device attribution)
  */
-device_id: string | null, 
+device_id: string | null,
 /**
  * Human-readable device name (e.g., "MacBook Pro", "iPhone")
  */

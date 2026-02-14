@@ -5,23 +5,23 @@ import type { ExportFile } from "./ExportFile";
 /**
  * Result of planning an export operation
  */
-export type ExportPlan = { 
+export type ExportPlan = {
 /**
  * Files that will be exported
  */
-included: Array<ExportFile>, 
+included: Array<ExportFile>,
 /**
  * Files that were filtered out (with reason)
  */
-excluded: Array<ExcludedFile>, 
+excluded: Array<ExcludedFile>,
 /**
  * The audience being exported for
  */
-audience: string, 
+audience: string,
 /**
  * Source workspace root
  */
-source_root: string, 
+source_root: string,
 /**
  * Destination directory
  */

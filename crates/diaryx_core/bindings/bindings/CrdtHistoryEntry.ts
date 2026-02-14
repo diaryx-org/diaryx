@@ -3,27 +3,27 @@
 /**
  * CRDT history entry for version tracking.
  */
-export type CrdtHistoryEntry = { 
+export type CrdtHistoryEntry = {
 /**
  * Update ID.
  */
-update_id: bigint, 
+update_id: bigint,
 /**
  * Timestamp of the update (Unix milliseconds).
  */
-timestamp: bigint, 
+timestamp: bigint,
 /**
  * Origin of the update.
  */
-origin: string, 
+origin: string,
 /**
  * Files that were changed in this update.
  */
-files_changed: Array<string>, 
+files_changed: Array<string>,
 /**
  * Device ID that created this update (for multi-device attribution).
  */
-device_id: string | null, 
+device_id: string | null,
 /**
  * Human-readable device name.
  */

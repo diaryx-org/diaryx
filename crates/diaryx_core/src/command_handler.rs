@@ -505,6 +505,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                     let mut effective_path = path.clone();
 
+                    // Write the title FIRST so that rename_entry's resolve_title
+                    // reads the new title when formatting links in parent contents
+                    // and children's part_of references.
+                    let yaml_value = json_to_yaml(value.clone());
+                    self.entry()
+                        .set_frontmatter_property(&path, &key, yaml_value)
+                        .await?;
+
                     // Auto-rename if enabled
                     if ws_config.auto_rename_to_title {
                         let new_stem = apply_filename_style(new_title, &ws_config.filename_style);
@@ -558,12 +566,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                             effective_path = new_path_str;
                         }
                     }
-
-                    // Set the title property at the (possibly new) path
-                    let yaml_value = json_to_yaml(value.clone());
-                    self.entry()
-                        .set_frontmatter_property(&effective_path, &key, yaml_value)
-                        .await?;
 
                     // sync_title_to_heading
                     if ws_config.sync_title_to_heading {

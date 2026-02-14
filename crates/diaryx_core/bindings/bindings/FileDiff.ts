@@ -5,19 +5,19 @@ import type { FileMetadata } from "./FileMetadata";
 /**
  * Difference between two versions of a file.
  */
-export type FileDiff = { 
+export type FileDiff = {
 /**
  * Path to the file
  */
-path: string, 
+path: string,
 /**
  * Type of change
  */
-change_type: ChangeType, 
+change_type: ChangeType,
 /**
  * Metadata before the change (None if file was added)
  */
-old_metadata: FileMetadata | null, 
+old_metadata: FileMetadata | null,
 /**
  * Metadata after the change (None if file was removed)
  */

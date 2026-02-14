@@ -1415,12 +1415,27 @@ impl FixResult {
 /// This struct provides methods to automatically fix validation errors and warnings.
 pub struct ValidationFixer<FS: AsyncFileSystem> {
     fs: FS,
+    link_format: LinkFormat,
+    root_path: Option<PathBuf>,
 }
 
 impl<FS: AsyncFileSystem> ValidationFixer<FS> {
     /// Create a new fixer.
     pub fn new(fs: FS) -> Self {
-        Self { fs }
+        Self {
+            fs,
+            link_format: LinkFormat::default(),
+            root_path: None,
+        }
+    }
+
+    /// Create a new fixer with workspace link format support.
+    pub fn with_link_format(fs: FS, root_path: PathBuf, link_format: LinkFormat) -> Self {
+        Self {
+            fs,
+            link_format,
+            root_path: Some(root_path),
+        }
     }
 
     // ==================== Internal Frontmatter Helpers ====================
@@ -1533,6 +1548,55 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
                 source: e,
             }
         })
+    }
+
+    // ==================== Link Format Helpers ====================
+
+    /// Get the canonical (workspace-relative) path for a filesystem path.
+    fn get_canonical(&self, path: &Path) -> String {
+        let raw = if let Some(ref root) = self.root_path {
+            path.strip_prefix(root)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .replace('\\', "/")
+        } else {
+            path.to_string_lossy().replace('\\', "/")
+        };
+        // Strip leading ./ or /
+        let trimmed = raw.trim_start_matches("./").trim_start_matches('/');
+        trimmed.to_string()
+    }
+
+    /// Read title from a file's frontmatter, falling back to filename stem.
+    async fn resolve_title(&self, path: &Path) -> String {
+        if let Ok(content) = self.fs.read_to_string(path).await
+            && let Ok(parsed) = crate::frontmatter::parse_or_empty(&content)
+            && let Some(title) = crate::frontmatter::get_string(&parsed.frontmatter, "title")
+        {
+            return title.to_string();
+        }
+        path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Untitled")
+            .to_string()
+    }
+
+    /// Format a link from one file to another using the configured link format.
+    /// Falls back to a plain relative path when no root_path is configured.
+    async fn format_link(&self, target: &Path, from: &Path) -> String {
+        if self.root_path.is_some() {
+            let target_canonical = self.get_canonical(target);
+            let from_canonical = self.get_canonical(from);
+            let title = self.resolve_title(target).await;
+            link_parser::format_link_with_format(
+                &target_canonical,
+                &title,
+                self.link_format,
+                &from_canonical,
+            )
+        } else {
+            relative_path_from_file_to_target(from, target)
+        }
     }
 
     // ==================== Fix Methods ====================
@@ -1718,18 +1782,18 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
 
     /// Add an unlisted file to an index's contents.
     pub async fn fix_unlisted_file(&self, index: &Path, file: &Path) -> FixResult {
-        let file_rel = relative_path_from_file_to_target(index, file);
+        let formatted = self.format_link(file, index).await;
 
         match self.get_frontmatter_property(index, "contents").await {
             Some(serde_yaml::Value::Sequence(mut items)) => {
-                items.push(serde_yaml::Value::String(file_rel.clone()));
+                items.push(serde_yaml::Value::String(formatted.clone()));
                 match self
                     .set_frontmatter_property(index, "contents", serde_yaml::Value::Sequence(items))
                     .await
                 {
                     Ok(_) => FixResult::success(format!(
                         "Added '{}' to contents in {}",
-                        file_rel,
+                        formatted,
                         index.display()
                     )),
                     Err(e) => FixResult::failure(format!(
@@ -1746,14 +1810,14 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
                         index,
                         "contents",
                         serde_yaml::Value::Sequence(vec![serde_yaml::Value::String(
-                            file_rel.clone(),
+                            formatted.clone(),
                         )]),
                     )
                     .await
                 {
                     Ok(_) => FixResult::success(format!(
                         "Added '{}' to new contents in {}",
-                        file_rel,
+                        formatted,
                         index.display()
                     )),
                     Err(e) => FixResult::failure(format!(
@@ -1827,19 +1891,19 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
 
     /// Fix a missing `part_of` by setting it to point to the given index.
     pub async fn fix_missing_part_of(&self, file: &Path, index: &Path) -> FixResult {
-        let index_rel = relative_path_from_file_to_target(file, index);
+        let formatted = self.format_link(index, file).await;
 
         match self
             .set_frontmatter_property(
                 file,
                 "part_of",
-                serde_yaml::Value::String(index_rel.clone()),
+                serde_yaml::Value::String(formatted.clone()),
             )
             .await
         {
             Ok(_) => FixResult::success(format!(
                 "Set part_of to '{}' in {}",
-                index_rel,
+                formatted,
                 file.display()
             )),
             Err(e) => FixResult::failure(format!(

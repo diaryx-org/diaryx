@@ -3,19 +3,19 @@
 /**
  * A single match within a file
  */
-export type SearchMatch = { 
+export type SearchMatch = {
 /**
  * Line number (1-based)
  */
-line_number: number, 
+line_number: number,
 /**
  * The full line content
  */
-line_content: string, 
+line_content: string,
 /**
  * Column where match starts (0-based)
  */
-match_start: number, 
+match_start: number,
 /**
  * Column where match ends (0-based, exclusive)
  */

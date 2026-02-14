@@ -44,3 +44,17 @@ fi
 # Change to workspace root first to ensure cargo can find workspace
 cd "$WORKSPACE_ROOT"
 $WEB_DIR/node_modules/.bin/wasm-pack build crates/diaryx_wasm --target web --out-dir "$WEB_DIR/src/lib/wasm"
+
+# Clean up trailing whitespace in ts-rs generated bindings
+# (ts-rs emits trailing spaces on struct field lines)
+BINDINGS_DIR="$WORKSPACE_ROOT/crates/diaryx_core/bindings"
+if [ -d "$BINDINGS_DIR" ]; then
+    # Portable in-place sed: GNU sed uses -i, BSD sed uses -i ''
+    if sed --version >/dev/null 2>&1; then
+        SED_INPLACE=(sed -i)
+    else
+        SED_INPLACE=(sed -i '')
+    fi
+    find "$BINDINGS_DIR" -name '*.ts' -exec "${SED_INPLACE[@]}" 's/[[:space:]]*$//' {} +
+    echo "Cleaned trailing whitespace in ts-rs bindings"
+fi

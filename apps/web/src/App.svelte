@@ -31,6 +31,7 @@
   import ExportDialog from "./lib/ExportDialog.svelte";
   import SyncSetupWizard from "./lib/SyncSetupWizard.svelte";
   import ImagePreviewDialog from "./lib/ImagePreviewDialog.svelte";
+  import MarkdownPreviewDialog from "./lib/MarkdownPreviewDialog.svelte";
     import EditorHeader from "./views/editor/EditorHeader.svelte";
   import EditorEmptyState from "./views/editor/EditorEmptyState.svelte";
   import EditorContent from "./views/editor/EditorContent.svelte";
@@ -94,6 +95,7 @@
     handleWordCount as wordCountHandler,
     handleImportFromClipboard as importFromClipboardHandler,
     handleCopyAsMarkdown as copyAsMarkdownHandler,
+    handleViewMarkdown as viewMarkdownHandler,
     handleAddAttachment as addAttachmentHandler,
     handleAttachmentFileSelect as attachmentFileSelectHandler,
     handleEditorFileDrop as editorFileDropHandler,
@@ -354,6 +356,11 @@
   let imagePreviewOpen = $state(false);
   let previewImageUrl: string | null = $state(null);
   let previewImageName = $state("");
+
+  // Markdown preview state
+  let markdownPreviewOpen = $state(false);
+  let markdownPreviewBody = $state("");
+  let markdownPreviewFrontmatter: Record<string, unknown> = $state({});
 
   // Note: Blob URL management is now in attachmentService.ts
 
@@ -1335,6 +1342,15 @@
     await copyAsMarkdownHandler(editorRef, currentEntry);
   }
 
+  function handleViewMarkdown() {
+    const result = viewMarkdownHandler(editorRef, currentEntry);
+    if (result !== null) {
+      markdownPreviewBody = result.body;
+      markdownPreviewFrontmatter = result.frontmatter;
+      markdownPreviewOpen = true;
+    }
+  }
+
   // ========================================================================
   // Attachment Handlers - Thin wrappers that delegate to controllers
   // ========================================================================
@@ -1606,6 +1622,7 @@
   onWordCount={handleWordCount}
   onImportFromClipboard={handleImportFromClipboard}
   onCopyAsMarkdown={handleCopyAsMarkdown}
+  onViewMarkdown={handleViewMarkdown}
 />
 
 <!-- Settings Dialog -->
@@ -1792,4 +1809,11 @@
   imageUrl={previewImageUrl}
   imageName={previewImageName}
   onOpenChange={handleImagePreviewClose}
+/>
+
+<MarkdownPreviewDialog
+  open={markdownPreviewOpen}
+  body={markdownPreviewBody}
+  frontmatter={markdownPreviewFrontmatter}
+  onOpenChange={(open) => (markdownPreviewOpen = open)}
 />

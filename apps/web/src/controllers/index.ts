@@ -46,6 +46,7 @@ export {
   handleWordCount,
   handleImportFromClipboard,
   handleCopyAsMarkdown,
+  handleViewMarkdown,
 } from './commandPaletteController';
 
 export {

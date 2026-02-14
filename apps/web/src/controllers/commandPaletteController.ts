@@ -8,6 +8,7 @@
  * - Share session management
  * - Clipboard operations
  * - Word count and find
+ * - View markdown source
  */
 
 import { tick } from 'svelte';
@@ -356,4 +357,22 @@ export async function handleCopyAsMarkdown(
       description: e instanceof Error ? e.message : String(e),
     });
   }
+}
+
+/**
+ * View the current entry's markdown source.
+ * Returns the body markdown and frontmatter so the caller can display them in a dialog.
+ */
+export function handleViewMarkdown(
+  editorRef: any,
+  currentEntry: EntryData | null
+): { body: string; frontmatter: Record<string, unknown> } | null {
+  if (!editorRef || !currentEntry) {
+    toast.error('No entry open');
+    return null;
+  }
+  const markdown = editorRef.getMarkdown() || '';
+  const body = reverseBlobUrlsToAttachmentPaths(markdown);
+  const frontmatter = currentEntry.frontmatter ?? {};
+  return { body, frontmatter };
 }

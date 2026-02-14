@@ -23,6 +23,7 @@
     FileSearch,
     ClipboardPaste,
     LetterText,
+    Code,
   } from "@lucide/svelte";
 
   interface Props {
@@ -48,6 +49,7 @@
     onWordCount: () => void;
     onImportFromClipboard: () => void;
     onCopyAsMarkdown: () => void;
+    onViewMarkdown: () => void;
   }
 
   let {
@@ -73,6 +75,7 @@
     onWordCount,
     onImportFromClipboard,
     onCopyAsMarkdown,
+    onViewMarkdown,
   }: Props = $props();
 
   let searchValue = $state("");
@@ -193,6 +196,11 @@
           <Copy class="mr-2 size-4" />
           <span>Copy as Markdown</span>
           <Command.Shortcut>Copy to clipboard</Command.Shortcut>
+        </Command.Item>
+        <Command.Item onSelect={() => handleCommand(onViewMarkdown)}>
+          <Code class="mr-2 size-4" />
+          <span>View Markdown</span>
+          <Command.Shortcut>See markdown source</Command.Shortcut>
         </Command.Item>
         <Command.Item onSelect={() => handleCommand(onCreateChildEntry)}>
           <FilePlus2 class="mr-2 size-4" />

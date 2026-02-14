@@ -65,7 +65,14 @@
       // Only handle clicks directly on this container (not bubbled from editor content)
       // This allows clicking in the empty space below the editor to focus at the end
       if (e.target === e.currentTarget) {
-        editorRef?.focusAtEnd?.();
+        // Only trigger when clicking below the editor content, not on side padding
+        const editorEl = (e.currentTarget as HTMLElement).querySelector('.editor-content');
+        if (editorEl) {
+          const rect = editorEl.getBoundingClientRect();
+          if (e.clientY > rect.bottom) {
+            editorRef?.focusAtEnd?.();
+          }
+        }
       }
     }}
   >

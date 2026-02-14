@@ -24,6 +24,7 @@
     ClipboardPaste,
     LetterText,
     Code,
+    ListOrdered,
   } from "@lucide/svelte";
 
   interface Props {
@@ -50,6 +51,7 @@
     onImportFromClipboard: () => void;
     onCopyAsMarkdown: () => void;
     onViewMarkdown: () => void;
+    onReorderFootnotes: () => void;
   }
 
   let {
@@ -76,6 +78,7 @@
     onImportFromClipboard,
     onCopyAsMarkdown,
     onViewMarkdown,
+    onReorderFootnotes,
   }: Props = $props();
 
   let searchValue = $state("");
@@ -201,6 +204,11 @@
           <Code class="mr-2 size-4" />
           <span>View Markdown</span>
           <Command.Shortcut>See markdown source</Command.Shortcut>
+        </Command.Item>
+        <Command.Item onSelect={() => handleCommand(onReorderFootnotes)}>
+          <ListOrdered class="mr-2 size-4" />
+          <span>Reorder Footnotes</span>
+          <Command.Shortcut>Renumber by position</Command.Shortcut>
         </Command.Item>
         <Command.Item onSelect={() => handleCommand(onCreateChildEntry)}>
           <FilePlus2 class="mr-2 size-4" />

@@ -3,28 +3,46 @@
     label: string;
     content: string;
     readonly: boolean;
-    onUpdate: (content: string) => void;
+    autoOpen?: boolean;
+    onUpdate: (content: string, label?: string) => void;
   }
 
-  let { label, content, readonly, onUpdate }: Props = $props();
+  let { label, content, readonly, autoOpen = false, onUpdate }: Props = $props();
 
   let showPopover = $state(false);
   let editContent = $state("");
-  let inputElement: HTMLInputElement | undefined = $state();
+  let editLabel = $state("");
+  let contentInput: HTMLInputElement | undefined = $state();
+
+  // Auto-open popover when created via insertFootnote command (runs once on mount)
+  let didAutoOpen = false;
+  $effect(() => {
+    if (!didAutoOpen && autoOpen && !readonly) {
+      didAutoOpen = true;
+      showPopover = true;
+      editContent = content;
+      editLabel = label;
+      requestAnimationFrame(() => {
+        contentInput?.focus();
+      });
+    }
+  });
 
   function handleClick() {
     if (readonly) return;
     editContent = content;
+    editLabel = label;
     showPopover = !showPopover;
     if (!showPopover) return;
-    // Focus input after mount
+    // Focus content input after mount
     requestAnimationFrame(() => {
-      inputElement?.focus();
+      contentInput?.focus();
     });
   }
 
   function handleSave() {
-    onUpdate(editContent);
+    const newLabel = editLabel.trim() || label;
+    onUpdate(editContent, newLabel !== label ? newLabel : undefined);
     showPopover = false;
   }
 
@@ -35,6 +53,7 @@
     } else if (e.key === "Escape") {
       e.preventDefault();
       editContent = content;
+      editLabel = label;
       showPopover = false;
     }
   }
@@ -69,14 +88,31 @@
   >{label}</span>
   {#if showPopover}
     <span class="footnote-popover">
-      <input
-        bind:this={inputElement}
-        type="text"
-        class="footnote-input"
-        bind:value={editContent}
-        onkeydown={handleKeydown}
-        placeholder="Footnote content..."
-      />
+      <div class="footnote-fields">
+        <div class="footnote-field-row">
+          <label class="footnote-field-label" for="fn-label">Label</label>
+          <input
+            id="fn-label"
+            type="text"
+            class="footnote-input footnote-label-input"
+            bind:value={editLabel}
+            onkeydown={handleKeydown}
+            placeholder="#"
+          />
+        </div>
+        <div class="footnote-field-row">
+          <label class="footnote-field-label" for="fn-content">Content</label>
+          <input
+            id="fn-content"
+            bind:this={contentInput}
+            type="text"
+            class="footnote-input"
+            bind:value={editContent}
+            onkeydown={handleKeydown}
+            placeholder="Footnote content..."
+          />
+        </div>
+      </div>
     </span>
   {/if}
 </span>
@@ -117,6 +153,25 @@
     min-width: 200px;
   }
 
+  .footnote-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .footnote-field-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .footnote-field-label {
+    font-size: 11px;
+    color: var(--muted-foreground);
+    min-width: 46px;
+    flex-shrink: 0;
+  }
+
   .footnote-input {
     width: 100%;
     padding: 4px 8px;
@@ -130,5 +185,9 @@
 
   .footnote-input:focus {
     border-color: var(--primary);
+  }
+
+  .footnote-label-input {
+    max-width: 60px;
   }
 </style>

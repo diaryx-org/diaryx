@@ -360,6 +360,18 @@ export async function handleCopyAsMarkdown(
 }
 
 /**
+ * Reorder footnotes sequentially based on their position in the document.
+ */
+export function handleReorderFootnotes(editorRef: any): void {
+  if (!editorRef) {
+    toast.error('No entry open');
+    return;
+  }
+  editorRef.reorderFootnotes();
+  toast.success('Footnotes reordered');
+}
+
+/**
  * View the current entry's markdown source.
  * Returns the body markdown and frontmatter so the caller can display them in a dialog.
  */

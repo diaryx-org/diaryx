@@ -491,6 +491,11 @@
       .run();
   }
 
+  export function reorderFootnotes(): void {
+    if (!editor) return;
+    editor.chain().focus().reorderFootnotes().run();
+  }
+
   onMount(() => {
     // Don't create editor here - let the $effect handle it once menu elements are ready
     // This ensures BubbleMenu and FloatingMenu extensions have elements to bind to

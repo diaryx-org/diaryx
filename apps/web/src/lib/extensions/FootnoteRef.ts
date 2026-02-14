@@ -14,6 +14,7 @@
 
 import { Node } from "@tiptap/core";
 import type { Editor } from "@tiptap/core";
+import { TextSelection } from "@tiptap/pm/state";
 import FootnoteNodeView from "../components/FootnoteNodeView.svelte";
 import { mount, unmount } from "svelte";
 
@@ -22,12 +23,17 @@ declare module "@tiptap/core" {
     footnoteRef: {
       /** Insert a footnote with optional content */
       insertFootnote: (content?: string) => ReturnType;
+      /** Renumber all footnotes sequentially based on document order */
+      reorderFootnotes: () => ReturnType;
     };
   }
 }
 
 // Module-level map populated by preprocessFootnotes, read by parseMarkdown
 let _footnoteDefinitions = new Map<string, string>();
+
+// Flag: the next mounted footnote node view should auto-open its popover
+let _autoOpenNext = false;
 
 export const FootnoteRef = Node.create({
   name: "footnoteRef",
@@ -66,7 +72,7 @@ export const FootnoteRef = Node.create({
     return {
       insertFootnote:
         (content?: string) =>
-        ({ editor, commands }) => {
+        ({ editor, tr, dispatch }) => {
           // Find next available numeric label
           const existingLabels = new Set<string>();
           editor.state.doc.descendants((node) => {
@@ -78,10 +84,52 @@ export const FootnoteRef = Node.create({
           while (existingLabels.has(String(nextNum))) {
             nextNum++;
           }
-          return commands.insertContent({
-            type: "footnoteRef",
-            attrs: { label: String(nextNum), content: content ?? "" },
+
+          // If text is selected, use it as footnote content and insert after selection
+          const { from, to } = tr.selection;
+          const selectedText = tr.doc.textBetween(from, to);
+          const footnoteContent = content ?? selectedText ?? "";
+
+          if (dispatch) {
+            const footnoteNode = editor.schema.nodes.footnoteRef.create({
+              label: String(nextNum),
+              content: footnoteContent,
+            });
+            // Insert at the end of the selection (preserving selected text)
+            _autoOpenNext = true;
+            tr.insert(to, footnoteNode);
+            // Collapse selection to after the footnote so BubbleMenu hides
+            const posAfter = to + footnoteNode.nodeSize;
+            tr.setSelection(TextSelection.create(tr.doc, posAfter));
+            dispatch(tr);
+          }
+          return true;
+        },
+      reorderFootnotes:
+        () =>
+        ({ tr, dispatch }) => {
+          // Collect only numeric-labeled footnotes in document order
+          const numericFootnotes: { pos: number; attrs: { label: string; content: string } }[] = [];
+          tr.doc.descendants((node, pos) => {
+            if (node.type.name === "footnoteRef" && /^\d+$/.test(node.attrs.label)) {
+              numericFootnotes.push({ pos, attrs: { label: node.attrs.label, content: node.attrs.content } });
+            }
           });
+
+          if (numericFootnotes.length === 0) return false;
+
+          if (dispatch) {
+            // Renumber 1, 2, 3, ... in document order (skip named labels)
+            for (let i = 0; i < numericFootnotes.length; i++) {
+              const newLabel = String(i + 1);
+              const { pos, attrs } = numericFootnotes[i];
+              if (attrs.label !== newLabel) {
+                tr.setNodeMarkup(pos, null, { ...attrs, label: newLabel });
+              }
+            }
+            dispatch(tr);
+          }
+          return true;
         },
     };
   },
@@ -98,29 +146,33 @@ export const FootnoteRef = Node.create({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let svelteComponent: Record<string, any> | null = null;
 
-      const onUpdate = (newContent: string) => {
+      const onUpdate = (newContent: string, newLabel?: string) => {
         const pos = getPos();
         if (typeof pos !== "number") return;
         const tr = editor.view.state.tr.setNodeMarkup(pos, null, {
-          label: currentLabel,
+          label: newLabel ?? currentLabel,
           content: newContent,
         });
         editor.view.dispatch(tr);
       };
 
-      function mountComponent(label: string, content: string) {
+      function mountComponent(label: string, content: string, autoOpen = false) {
         svelteComponent = mount(FootnoteNodeView, {
           target: dom,
           props: {
             label,
             content,
             readonly: !editor.isEditable,
+            autoOpen,
             onUpdate,
           },
         });
       }
 
-      mountComponent(currentLabel, currentContent);
+      // Consume the auto-open flag if set (from insertFootnote command)
+      const shouldAutoOpen = _autoOpenNext;
+      _autoOpenNext = false;
+      mountComponent(currentLabel, currentContent, shouldAutoOpen);
 
       return {
         dom,

@@ -96,6 +96,7 @@
     handleImportFromClipboard as importFromClipboardHandler,
     handleCopyAsMarkdown as copyAsMarkdownHandler,
     handleViewMarkdown as viewMarkdownHandler,
+    handleReorderFootnotes as reorderFootnotesHandler,
     handleAddAttachment as addAttachmentHandler,
     handleAttachmentFileSelect as attachmentFileSelectHandler,
     handleEditorFileDrop as editorFileDropHandler,
@@ -1342,6 +1343,10 @@
     await copyAsMarkdownHandler(editorRef, currentEntry);
   }
 
+  function handleReorderFootnotes() {
+    reorderFootnotesHandler(editorRef);
+  }
+
   function handleViewMarkdown() {
     const result = viewMarkdownHandler(editorRef, currentEntry);
     if (result !== null) {
@@ -1623,6 +1628,7 @@
   onImportFromClipboard={handleImportFromClipboard}
   onCopyAsMarkdown={handleCopyAsMarkdown}
   onViewMarkdown={handleViewMarkdown}
+  onReorderFootnotes={handleReorderFootnotes}
 />
 
 <!-- Settings Dialog -->

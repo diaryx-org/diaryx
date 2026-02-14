@@ -47,6 +47,7 @@ export {
   handleImportFromClipboard,
   handleCopyAsMarkdown,
   handleViewMarkdown,
+  handleReorderFootnotes,
 } from './commandPaletteController';
 
 export {

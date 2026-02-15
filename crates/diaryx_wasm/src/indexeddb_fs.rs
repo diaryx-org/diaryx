@@ -29,9 +29,28 @@ const STORE_FILES: &str = "files";
 const STORE_BINARY_FILES: &str = "binary_files";
 const STORE_DIRECTORIES: &str = "directories";
 
+/// Normalize a file path for use as an IndexedDB key.
+///
+/// Strips leading `./` and `/` prefixes so that `"./README.md"`, `"/README.md"`,
+/// and `"README.md"` all map to the same key. This matches the normalization
+/// done by `normalize_sync_path` in diaryx_core, ensuring consistency between
+/// the filesystem layer and the CRDT layer.
+fn normalize_file_path(path: &Path) -> String {
+    let value = path.to_string_lossy().replace('\\', "/");
+    let trimmed = value.trim_start_matches("./").trim_start_matches('/');
+    trimmed.to_string()
+}
+
 fn normalize_dir_input(path: &Path) -> String {
     let mut value = path.to_string_lossy().replace('\\', "/");
     if value == "." {
+        return String::new();
+    }
+    // Also strip leading "./" for consistency with file path normalization
+    while value.starts_with("./") {
+        value = value[2..].to_string();
+    }
+    if value.is_empty() {
         return String::new();
     }
     while value.ends_with('/') {
@@ -140,7 +159,7 @@ impl IndexedDbFileSystem {
 
 impl AsyncFileSystem for IndexedDbFileSystem {
     fn read_to_string<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<String>> {
-        let path_str = path.to_string_lossy().to_string();
+        let path_str = normalize_file_path(path);
         let db = self.db.clone();
 
         Box::pin(async move {
@@ -171,7 +190,7 @@ impl AsyncFileSystem for IndexedDbFileSystem {
     }
 
     fn write_file<'a>(&'a self, path: &'a Path, content: &'a str) -> BoxFuture<'a, Result<()>> {
-        let path_str = path.to_string_lossy().to_string();
+        let path_str = normalize_file_path(path);
         let content = content.to_string();
         let db = self.db.clone();
         let parent_dirs = parent_directories(&path_str);
@@ -199,7 +218,7 @@ impl AsyncFileSystem for IndexedDbFileSystem {
     }
 
     fn create_new<'a>(&'a self, path: &'a Path, content: &'a str) -> BoxFuture<'a, Result<()>> {
-        let path_str = path.to_string_lossy().to_string();
+        let path_str = normalize_file_path(path);
         let content = content.to_string();
         let db = self.db.clone();
         let parent_dirs = parent_directories(&path_str);
@@ -236,7 +255,7 @@ impl AsyncFileSystem for IndexedDbFileSystem {
     }
 
     fn delete_file<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<()>> {
-        let path_str = path.to_string_lossy().to_string();
+        let path_str = normalize_file_path(path);
         let db = self.db.clone();
 
         Box::pin(async move {
@@ -272,7 +291,7 @@ impl AsyncFileSystem for IndexedDbFileSystem {
     }
 
     fn list_md_files<'a>(&'a self, dir_path: &'a Path) -> BoxFuture<'a, Result<Vec<PathBuf>>> {
-        let dir_str = dir_path.to_string_lossy().to_string();
+        let dir_str = normalize_dir_input(dir_path);
         let db = self.db.clone();
 
         Box::pin(async move {
@@ -496,7 +515,7 @@ impl AsyncFileSystem for IndexedDbFileSystem {
     }
 
     fn read_binary<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<Vec<u8>>> {
-        let path_str = path.to_string_lossy().to_string();
+        let path_str = normalize_file_path(path);
         let db = self.db.clone();
 
         Box::pin(async move {
@@ -524,7 +543,7 @@ impl AsyncFileSystem for IndexedDbFileSystem {
     }
 
     fn write_binary<'a>(&'a self, path: &'a Path, content: &'a [u8]) -> BoxFuture<'a, Result<()>> {
-        let path_str = path.to_string_lossy().to_string();
+        let path_str = normalize_file_path(path);
         let content = content.to_vec();
         let db = self.db.clone();
         let parent_dirs = parent_directories(&path_str);

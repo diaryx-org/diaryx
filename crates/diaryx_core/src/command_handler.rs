@@ -521,9 +521,12 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         let entry_path = PathBuf::from(&path);
                         let ws = self.workspace().inner();
                         let is_index = ws.is_index_file(&entry_path).await;
+                        let is_root = ws.is_root_index(&entry_path).await;
 
-                        // Compare current name (dir name for index, file stem for leaf)
-                        let current_comparable = if is_index {
+                        // Compare current name:
+                        // - Non-root index: dir name (index lives in dirname/dirname.md)
+                        // - Root index or leaf: file stem
+                        let current_comparable = if is_index && !is_root {
                             entry_path
                                 .parent()
                                 .and_then(|p| p.file_name())

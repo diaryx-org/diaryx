@@ -2098,13 +2098,70 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
     ///
     /// This method handles both leaf files and index files:
     /// - Leaf files: renames the file directly and updates parent `contents`
+    /// - Root index files: renames the file in place and updates children's `part_of`
     /// - Index files: renames the containing directory AND the file itself, updates grandparent `contents`
     ///
     /// Returns the new path to the renamed file.
     pub async fn rename_entry(&self, path: &Path, new_filename: &str) -> Result<PathBuf> {
         let is_index = self.is_index_file(path).await;
+        let is_root = self.is_root_index(path).await;
 
-        if is_index {
+        if is_index && is_root {
+            // Root index files live at the workspace root (e.g. README.md).
+            // There is no containing subdirectory to rename, so just rename the file in place.
+            let parent = path.parent().ok_or_else(|| DiaryxError::InvalidPath {
+                path: path.to_path_buf(),
+                message: "File has no parent directory".to_string(),
+            })?;
+
+            let new_path = parent.join(new_filename);
+
+            if new_path == path {
+                return Ok(path.to_path_buf());
+            }
+
+            if self.fs.exists(&new_path).await {
+                return Err(DiaryxError::InvalidPath {
+                    path: new_path,
+                    message: "Target file already exists".to_string(),
+                });
+            }
+
+            self.fs.move_file(path, &new_path).await?;
+
+            // Update children's part_of to point to the renamed root index
+            let new_path_canonical = self.get_canonical_path(&new_path);
+            let new_title = self.resolve_title(&new_path_canonical).await;
+            if let Ok(children) = self.fs.list_md_files(parent).await {
+                for child in children {
+                    if child == new_path {
+                        continue;
+                    }
+                    let part_of_value = if self.root_path.is_some() {
+                        let child_canonical = self.get_canonical_path(&child);
+                        self.format_link_sync(&new_path_canonical, &new_title, &child_canonical)
+                    } else {
+                        use crate::path_utils::relative_path_from_file_to_target;
+                        relative_path_from_file_to_target(&child, &new_path)
+                    };
+                    if let Err(e) = self
+                        .set_frontmatter_property(&child, "part_of", Value::String(part_of_value))
+                        .await
+                    {
+                        log::warn!(
+                            "rename_entry: failed to update child part_of for '{}': {}",
+                            child.display(),
+                            e
+                        );
+                    }
+                }
+            }
+
+            // Update contents references to use new self-path
+            // (contents entries reference children, not self, so no update needed)
+
+            Ok(new_path)
+        } else if is_index {
             // For index files, we rename the containing directory AND the file
             let current_dir = path.parent().ok_or_else(|| DiaryxError::InvalidPath {
                 path: path.to_path_buf(),
@@ -2947,5 +3004,41 @@ mod tests {
         let tree = block_on_test(ws.build_tree(Path::new("README.md"))).unwrap();
         assert_eq!(tree.children.len(), 1);
         assert_eq!(tree.children[0].path, PathBuf::from("test.md"));
+    }
+
+    #[test]
+    fn test_rename_root_index() {
+        let fs = InMemoryFileSystem::new();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: My Site\ncontents:\n  - child.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("child.md"),
+            "---\ntitle: Child\npart_of: README.md\n---\n",
+        )
+        .unwrap();
+
+        let async_fs = SyncToAsyncFs::new(fs.clone());
+        let ws = Workspace::new(async_fs);
+
+        let renamed = block_on_test(ws.rename_entry(Path::new("README.md"), "My Site.md")).unwrap();
+        assert_eq!(renamed, PathBuf::from("My Site.md"));
+
+        // File should exist at new path
+        assert!(fs.exists(Path::new("My Site.md")));
+        assert!(!fs.exists(Path::new("README.md")));
+
+        // Child's part_of should be updated to point to the new filename
+        let part_of =
+            block_on_test(ws.get_frontmatter_property(Path::new("child.md"), "part_of")).unwrap();
+        let part_of_str = part_of.unwrap();
+        let part_of_str = part_of_str.as_str().unwrap();
+        assert!(
+            part_of_str.contains("My Site.md"),
+            "Expected part_of to contain 'My Site.md', got '{}'",
+            part_of_str
+        );
     }
 }

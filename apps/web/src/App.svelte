@@ -65,6 +65,8 @@
     transformAttachmentPaths,
     initializeWorkspaceCrdt,
     updateCrdtFileMetadata,
+    setShareServerUrl,
+    joinShareSession,
   } from "./models/services";
   import { getMimeType, isHeicFile, convertHeicToJpeg } from "./models/services/attachmentService";
 
@@ -434,6 +436,24 @@
       }
     }
 
+    // Check for local edit mode params (from `diaryx edit` CLI command)
+    // These override the sync server URL and auto-join a guest session
+    let localEditParams: { syncUrl: string; joinCode: string } | null = null;
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const syncUrl = params.get("sync_url");
+      const joinCode = params.get("join_code");
+      if (syncUrl && joinCode) {
+        localEditParams = { syncUrl, joinCode };
+        // Clear query params from URL to prevent re-joining on reload
+        const url = new URL(window.location.href);
+        url.searchParams.delete("sync_url");
+        url.searchParams.delete("join_code");
+        window.history.replaceState({}, "", url.toString());
+        console.log('[App] Local edit mode detected, sync_url:', syncUrl, 'join_code:', joinCode);
+      }
+    }
+
     try {
       // Dynamically import the Editor component
       const module = await import("./lib/Editor.svelte");
@@ -454,8 +474,27 @@
       // Initialize Rust CRDT API
       rustApi = new RustCrdtApi(backendInstance);
 
-      // Initialize workspace CRDT (unless disabled for debugging)
-      if (!workspaceCrdtDisabled) {
+      // Initialize workspace CRDT (unless disabled or in local edit mode)
+      if (localEditParams) {
+        // Local edit mode: override the share server URL and auto-join
+        console.log('[App] Joining local edit session...');
+        setShareServerUrl(localEditParams.syncUrl);
+        try {
+          workspaceStore.saveTreeState();
+          await joinShareSession(localEditParams.joinCode);
+          console.log('[App] Successfully joined local edit session');
+        } catch (e) {
+          console.error('[App] Failed to join local edit session:', e);
+          workspaceStore.clearSavedTreeState();
+          setShareServerUrl(null);
+          // Fall back to normal workspace CRDT setup
+          await setupWorkspaceCrdt();
+          const syncCompleted = await waitForInitialSync(10000);
+          if (syncCompleted) {
+            console.log('[App] Fallback: initial sync complete');
+          }
+        }
+      } else if (!workspaceCrdtDisabled) {
         await setupWorkspaceCrdt();
 
         // Wait for initial sync to complete before building tree

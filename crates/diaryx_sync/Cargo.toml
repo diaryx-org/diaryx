@@ -1,0 +1,38 @@
+[package]
+name = "diaryx_sync"
+description = "Sync protocol engine for Diaryx - siphonophore hooks, CRDT persistence, and local server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+license-file.workspace = true
+
+[dependencies]
+# Internal crate
+diaryx_core = { workspace = true, features = ["crdt", "crdt-sqlite"] }
+
+# Web framework (for WebSocket router)
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors"] }
+
+# Database (for StorageCache)
+rusqlite = { version = "0.34", features = ["bundled"] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Y-sync v2 (siphonophore-based)
+siphonophore = { git = "https://github.com/diaryx-org/siphonophore.git", branch = "main" }
+kameo = "0.19"
+async-trait = "0.1"
+yrs = "0.24"
+
+# Utilities
+rand = "0.8"
+base64 = "0.22"
+tracing = "0.1"
+futures = "0.3"

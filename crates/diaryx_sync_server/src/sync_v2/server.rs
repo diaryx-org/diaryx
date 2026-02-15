@@ -1,8 +1,12 @@
-//! Siphonophore server wrapper for Diaryx.
+//! Siphonophore server wrapper for Diaryx cloud service.
 //!
-//! This module wraps the siphonophore Server with Diaryx-specific configuration.
+//! This module wraps the siphonophore Server with Diaryx-specific configuration,
+//! using the CloudSyncHook delegate and DiarySyncHook from the shared crate.
 
 use axum::Router;
+use diaryx_sync::hooks::DiarySyncHook;
+use diaryx_sync::protocol::DirtyWorkspaces;
+use diaryx_sync::storage::StorageCache;
 use siphonophore::{Handle, Server};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -12,8 +16,8 @@ use tracing::info;
 
 use crate::db::AuthRepo;
 
-use super::hooks::{DiaryxHook, DirtyWorkspaces};
-use super::store::{StorageCache, WorkspaceStore};
+use super::hooks::CloudSyncHook;
+use super::store::WorkspaceStore;
 
 /// State for the sync v2 server, shared with HTTP handlers.
 ///
@@ -111,12 +115,14 @@ impl SyncV2Server {
         let session_to_workspace = Arc::new(RwLock::new(HashMap::new()));
         let dirty_workspaces: DirtyWorkspaces = Arc::new(RwLock::new(HashMap::new()));
 
-        let (hook, handle_cell) = DiaryxHook::new(
+        let delegate = Arc::new(CloudSyncHook::new(
             repo,
             storage_cache.clone(),
             session_to_workspace.clone(),
-            dirty_workspaces.clone(),
-        );
+        ));
+
+        let (hook, handle_cell) =
+            DiarySyncHook::new(delegate, storage_cache.clone(), dirty_workspaces.clone());
         let server = Server::with_hooks(vec![Box::new(hook)]);
         // Set the handle so the hook can broadcast messages to clients
         handle_cell.set(server.handle()).ok();

@@ -327,6 +327,19 @@ pub enum Commands {
         #[arg(short, long, default_value = "0")]
         depth: usize,
     },
+
+    /// Open workspace in the web editor for rich editing
+    /// Starts a local sync server and opens the Diaryx web app
+    #[cfg(feature = "web-edit")]
+    Edit {
+        /// URL of the web app to open (default: https://app.diaryx.org)
+        #[arg(short, long, env = "DIARYX_EDIT_URL")]
+        url: Option<String>,
+
+        /// Port to run the local sync server on (default: auto-select)
+        #[arg(short, long)]
+        port: Option<u16>,
+    },
 }
 
 #[derive(Subcommand, Clone)]

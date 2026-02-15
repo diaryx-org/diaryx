@@ -1,22 +1,24 @@
 //! Workspace storage and snapshot operations.
 //!
 //! This module provides:
-//! - `StorageCache`: shared cache of per-workspace `SqliteStorage` connections
 //! - `WorkspaceStore`: snapshot export/import and file queries for HTTP API handlers
+//!
+//! `StorageCache` is re-exported from `diaryx_sync::storage`.
 
 use crate::blob_store::BlobStore;
 use crate::db::{AuthRepo, CompletedAttachmentUploadInfo, WorkspaceAttachmentRefRecord};
 use chrono::Utc;
 use diaryx_core::crdt::{
-    BodyDocManager, SqliteStorage, WorkspaceCrdt, materialize_workspace, parse_snapshot_markdown,
+    BodyDocManager, WorkspaceCrdt, materialize_workspace, parse_snapshot_markdown,
 };
 use diaryx_core::link_parser;
+pub use diaryx_sync::storage::StorageCache;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use tracing::{debug, info, warn};
 use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipWriter};
@@ -244,55 +246,7 @@ fn mime_for_path(path: &str) -> String {
         .to_string()
 }
 
-// ==================== StorageCache ====================
-
-/// Shared cache of per-workspace `SqliteStorage` connections.
-///
-/// Used by both `DiaryxHook` (for sync persistence) and `WorkspaceStore`
-/// (for HTTP API snapshot operations) to avoid duplicate connections.
-pub struct StorageCache {
-    workspaces_dir: PathBuf,
-    cache: RwLock<HashMap<String, Arc<SqliteStorage>>>,
-}
-
-impl StorageCache {
-    pub fn new(workspaces_dir: PathBuf) -> Self {
-        Self {
-            workspaces_dir,
-            cache: RwLock::new(HashMap::new()),
-        }
-    }
-
-    /// Get the path where the bare git repo for a workspace lives.
-    pub fn git_repo_path(&self, workspace_id: &str) -> PathBuf {
-        self.workspaces_dir.join(format!("{}.git", workspace_id))
-    }
-
-    /// Get or create storage for a workspace.
-    pub fn get_storage(&self, workspace_id: &str) -> Result<Arc<SqliteStorage>, String> {
-        // Check cache first
-        {
-            let cache = self.cache.read().unwrap();
-            if let Some(storage) = cache.get(workspace_id) {
-                return Ok(storage.clone());
-            }
-        }
-
-        // Create new storage
-        let db_path = self.workspaces_dir.join(format!("{}.db", workspace_id));
-        let storage = SqliteStorage::open(&db_path)
-            .map_err(|e| format!("Failed to open storage for {}: {}", workspace_id, e))?;
-        let storage = Arc::new(storage);
-
-        // Cache it
-        {
-            let mut cache = self.cache.write().unwrap();
-            cache.insert(workspace_id.to_string(), storage.clone());
-        }
-
-        Ok(storage)
-    }
-}
+// StorageCache is re-exported from diaryx_sync::storage (see pub use above)
 
 // ==================== WorkspaceStore ====================
 

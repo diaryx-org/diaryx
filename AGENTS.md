@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-02-09T17:16:35Z
+updated: 2026-02-15T02:08:56Z
 part_of: '[README](/README.md)'
 ---
 
@@ -31,12 +31,13 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │       └── Workspace module - Workspace tree organization - crates/diaryx_core/src/workspace/README.md
 │   ├── diaryx_wasm - WASM bindings for diaryx_core - crates/diaryx_wasm/README.md
 │   │   └── diaryx_wasm src - Source code for WASM bindings - crates/diaryx_wasm/src/README.md
-│   └── diaryx_sync_server - Sync server used by frontends - crates/diaryx_sync_server/README.md
-│       └── diaryx_sync_server src - Source code for the sync server - crates/diaryx_sync_server/src/README.md
-│           ├── Auth module - Authentication middleware and magic link handling - crates/diaryx_sync_server/src/auth/README.md
-│           ├── Database module - SQLite database schema and repository - crates/diaryx_sync_server/src/db/README.md
-│           ├── Email module - SMTP email sending for magic links - crates/diaryx_sync_server/src/email/README.md
-│           └── Handlers module - HTTP route handlers - crates/diaryx_sync_server/src/handlers/README.md
+│   ├── diaryx_sync_server - Sync server used by frontends - crates/diaryx_sync_server/README.md
+│   │   └── diaryx_sync_server src - Source code for the sync server - crates/diaryx_sync_server/src/README.md
+│   │       ├── Auth module - Authentication middleware and magic link handling - crates/diaryx_sync_server/src/auth/README.md
+│   │       ├── Database module - SQLite database schema and repository - crates/diaryx_sync_server/src/db/README.md
+│   │       ├── Email module - SMTP email sending for magic links - crates/diaryx_sync_server/src/email/README.md
+│   │       └── Handlers module - HTTP route handlers - crates/diaryx_sync_server/src/handlers/README.md
+│   └── diaryx_sync - crates/diaryx_sync/README.md
 ├── apps - GUI frontends for Diaryx - apps/README.md
 │   ├── web - Svelte + Tiptap frontend for Diaryx - apps/web/README.md
 │   │   ├── web src - Source code for the Diaryx web application - apps/web/src/README.md

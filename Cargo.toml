@@ -4,6 +4,7 @@ members = [
     "crates/diaryx_core",
     "crates/diaryx",
     "crates/diaryx_wasm",
+    "crates/diaryx_sync",
     "crates/diaryx_sync_server",
     "apps/tauri/src-tauri"
 ]
@@ -29,6 +30,7 @@ indexmap = { version = "2.0", features = ["serde"] }
 
 # Internal crates - version must match workspace.package.version for publishing
 diaryx_core = { path = "crates/diaryx_core", version = "0.13.1" }
+diaryx_sync = { path = "crates/diaryx_sync", version = "0.13.1" }
 
 # cargo-release configuration
 [workspace.metadata.release]

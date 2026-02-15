@@ -39,6 +39,7 @@ export {
   createShareSession,
   joinShareSession,
   endShareSession,
+  setShareServerUrl,
   getGuestStoragePath,
   isGuestMode,
   getCurrentJoinCode,

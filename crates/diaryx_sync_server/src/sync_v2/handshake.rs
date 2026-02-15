@@ -34,73 +34,16 @@ use futures::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},
 };
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{debug, info};
 
-use super::hooks::AuthenticatedUser;
-
-/// File entry in the manifest.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ManifestFileEntry {
-    pub doc_id: String,
-    pub filename: String,
-    pub title: Option<String>,
-    pub part_of: Option<String>,
-    pub deleted: bool,
-}
-
-/// Control messages sent from server to client.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ServerControlMessage {
-    /// File manifest for initial sync.
-    FileManifest {
-        files: Vec<ManifestFileEntry>,
-        client_is_new: bool,
-    },
-    /// Full CRDT state after files are ready.
-    CrdtState {
-        state: String, // Base64 encoded
-    },
-    /// Peer joined the session.
-    PeerJoined { guest_id: String, peer_count: usize },
-    /// Peer left the session.
-    PeerLeft { guest_id: String, peer_count: usize },
-    /// Session has ended.
-    SessionEnded,
-    /// Sync progress update.
-    SyncProgress { completed: usize, total: usize },
-    /// Initial sync complete.
-    SyncComplete { files_synced: usize },
-    /// Focus list changed.
-    FocusListChanged { files: Vec<String> },
-}
-
-/// Control messages sent from client to server.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ClientControlMessage {
-    /// Client is ready with all files downloaded.
-    FilesReady,
-    /// Client wants to focus on files.
-    Focus { files: Vec<String> },
-    /// Client wants to unfocus files.
-    Unfocus { files: Vec<String> },
-}
-
-/// State for a client connection during handshake.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HandshakeState {
-    /// Awaiting file manifest (server needs to send it)
-    AwaitingManifest,
-    /// Manifest sent, awaiting FilesReady from client
-    AwaitingFilesReady,
-    /// Handshake complete, normal sync in progress
-    Complete,
-}
+// Re-export shared protocol types for backward compatibility
+use diaryx_sync::protocol::AuthenticatedUser;
+pub use diaryx_sync::protocol::{
+    ClientControlMessage, HandshakeState, ManifestFileEntry, ServerControlMessage,
+};
 
 /// Connection context for tracking state.
 pub struct ConnectionContext {

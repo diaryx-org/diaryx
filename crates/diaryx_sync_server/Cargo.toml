@@ -10,8 +10,9 @@ readme = "README.md"
 license-file.workspace = true
 
 [dependencies]
-# Internal crate
+# Internal crates
 diaryx_core = { workspace = true, features = ["crdt", "crdt-sqlite", "git", "markdown"] }
+diaryx_sync = { workspace = true }
 
 # Web framework
 axum = { version = "0.8", features = ["ws"] }

@@ -123,12 +123,13 @@ function getBaseServerUrl(): string {
 }
 
 /**
- * Get the WebSocket URL for the sync server (with /sync2 path).
+ * Get the WebSocket URL for the sync server (base URL without /sync2 path).
+ * The /sync2 path is appended by the transport layer (Rust get_ws_url() or JS buildUrl()).
  */
 function getWsServerUrl(): string {
   const baseUrl = getBaseServerUrl();
-  // Convert http(s) to ws(s) and add /sync2 path
-  return baseUrl.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:') + '/sync2';
+  // Convert http(s) to ws(s) — /sync2 path is added by the transport layer
+  return baseUrl.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
 }
 
 /**

@@ -36,7 +36,7 @@
       class="flex-1 px-2 py-1 text-[11px] font-medium rounded transition-colors {shareSubTab === 'live-collaboration' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
       onclick={() => (shareSubTab = 'live-collaboration')}
     >
-      Live Collaboration <span class="text-[8px] font-semibold uppercase px-1 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">alpha</span>
+      Live Collaboration
     </button>
     <button
       type="button"

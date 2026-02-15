@@ -94,6 +94,164 @@ pub struct FileMetadata {
 }
 
 impl FileMetadata {
+    /// Build FileMetadata from parsed YAML frontmatter.
+    ///
+    /// Tries a fast JSON round-trip first, then falls back to manual field extraction.
+    /// Unknown frontmatter keys are preserved in `extra`.
+    pub fn from_frontmatter(fm: &indexmap::IndexMap<String, serde_yaml::Value>) -> Self {
+        /// Parse the frontmatter "updated" value into a timestamp (ms).
+        fn parse_updated_value(value: &serde_yaml::Value) -> Option<i64> {
+            if let Some(num) = value.as_i64() {
+                return Some(num);
+            }
+            if let Some(num) = value.as_f64() {
+                return Some(num as i64);
+            }
+            if let Some(raw) = value.as_str() {
+                if let Ok(num) = raw.parse::<i64>() {
+                    return Some(num);
+                }
+                if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(raw) {
+                    return Some(parsed.timestamp_millis());
+                }
+            }
+            None
+        }
+
+        let known_fields: &[&str] = &[
+            "title",
+            "part_of",
+            "contents",
+            "audience",
+            "description",
+            "attachments",
+            "deleted",
+            "modified_at",
+            "updated",
+            "filename",
+            "extra",
+        ];
+
+        // Fast path: convert via JSON for automatic field mapping
+        if let Ok(json_value) = serde_json::to_value(fm)
+            && let Ok(mut metadata) = serde_json::from_value::<FileMetadata>(json_value)
+        {
+            if let Some(updated) = fm.get("updated").and_then(parse_updated_value) {
+                metadata.modified_at = updated;
+            }
+            if metadata.modified_at == 0 {
+                metadata.modified_at = chrono::Utc::now().timestamp_millis();
+            }
+
+            // Preserve unknown frontmatter fields in extra
+            for (key, value) in fm {
+                if !known_fields.contains(&key.as_str())
+                    && !metadata.extra.contains_key(key)
+                    && let Ok(json_value) = serde_json::to_value(value)
+                {
+                    metadata.extra.insert(key.clone(), json_value);
+                }
+            }
+
+            return metadata;
+        }
+
+        // Fallback: manual extraction of known fields
+        let mut metadata = FileMetadata::default();
+
+        if let Some(title) = fm.get("title") {
+            metadata.title = title.as_str().map(String::from);
+        }
+        if let Some(part_of) = fm.get("part_of") {
+            metadata.part_of = part_of.as_str().map(String::from);
+        }
+        if let Some(contents) = fm.get("contents")
+            && let Some(seq) = contents.as_sequence()
+        {
+            metadata.contents = Some(
+                seq.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect(),
+            );
+        }
+        if let Some(audience) = fm.get("audience")
+            && let Some(seq) = audience.as_sequence()
+        {
+            metadata.audience = Some(
+                seq.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect(),
+            );
+        }
+        if let Some(description) = fm.get("description") {
+            metadata.description = description.as_str().map(String::from);
+        }
+        if let Some(attachments) = fm.get("attachments")
+            && let Some(seq) = attachments.as_sequence()
+        {
+            metadata.attachments = seq
+                .iter()
+                .filter_map(|value| match value {
+                    serde_yaml::Value::String(path) => Some(BinaryRef {
+                        path: path.clone(),
+                        source: "local".to_string(),
+                        hash: String::new(),
+                        mime_type: String::new(),
+                        size: 0,
+                        uploaded_at: None,
+                        deleted: false,
+                    }),
+                    serde_yaml::Value::Mapping(map) => {
+                        let key = |name: &str| serde_yaml::Value::String(name.to_string());
+                        let path = map.get(&key("path")).and_then(|v| v.as_str())?;
+                        let source = map
+                            .get(&key("source"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("local");
+                        let hash = map.get(&key("hash")).and_then(|v| v.as_str()).unwrap_or("");
+                        let mime_type = map
+                            .get(&key("mime_type"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let size = map.get(&key("size")).and_then(|v| v.as_u64()).unwrap_or(0);
+                        let uploaded_at = map.get(&key("uploaded_at")).and_then(|v| v.as_i64());
+                        let deleted = map
+                            .get(&key("deleted"))
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+
+                        Some(BinaryRef {
+                            path: path.to_string(),
+                            source: source.to_string(),
+                            hash: hash.to_string(),
+                            mime_type: mime_type.to_string(),
+                            size,
+                            uploaded_at,
+                            deleted,
+                        })
+                    }
+                    _ => None,
+                })
+                .collect();
+        }
+
+        // Store remaining fields in extra
+        for (key, value) in fm {
+            if !known_fields.contains(&key.as_str())
+                && let Ok(json_value) = serde_json::to_value(value)
+            {
+                metadata.extra.insert(key.clone(), json_value);
+            }
+        }
+
+        if let Some(updated) = fm.get("updated").and_then(parse_updated_value) {
+            metadata.modified_at = updated;
+        } else if metadata.modified_at == 0 {
+            metadata.modified_at = chrono::Utc::now().timestamp_millis();
+        }
+        metadata
+    }
+
     /// Create new FileMetadata with the given title
     pub fn new(title: Option<String>) -> Self {
         Self {

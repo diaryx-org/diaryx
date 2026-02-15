@@ -1842,6 +1842,7 @@ dependencies = [
  "clap",
  "crossterm 0.28.1",
  "diaryx_core",
+ "diaryx_sync",
  "dirs 6.0.0",
  "env_logger",
  "futures-lite",
@@ -1899,6 +1900,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "diaryx_sync"
+version = "0.13.1"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "diaryx_core",
+ "futures",
+ "kameo",
+ "rand 0.8.5",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "siphonophore",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "yrs 0.24.0",
+]
+
+[[package]]
 name = "diaryx_sync_server"
 version = "0.13.1"
 dependencies = [
@@ -1911,6 +1933,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "diaryx_core",
+ "diaryx_sync",
  "dotenvy",
  "futures",
  "git2",

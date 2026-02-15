@@ -593,14 +593,14 @@
         class="px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === 'history' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
         onclick={() => activeTab = "history"}
       >
-        History <span class="text-[8px] font-semibold uppercase px-1 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">α</span>
+        History
       </button>
       <button
         type="button"
         class="px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === 'share' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
         onclick={() => activeTab = "share"}
       >
-        Share <span class="text-[8px] font-semibold uppercase px-1 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">α</span>
+        Share
       </button>
     </div>
   </div>
@@ -1089,14 +1089,14 @@
             class="flex-1 px-2 py-1 text-[11px] font-medium rounded transition-colors {historySubTab === 'changes' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
             onclick={() => historySubTab = "changes"}
           >
-            Changes <span class="text-[8px] font-semibold uppercase px-1 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">α</span>
+            Changes
           </button>
           <button
             type="button"
             class="flex-1 px-2 py-1 text-[11px] font-medium rounded transition-colors {historySubTab === 'snapshots' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
             onclick={() => historySubTab = "snapshots"}
           >
-            Snapshots <span class="text-[8px] font-semibold uppercase px-1 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">α</span>
+            Snapshots
           </button>
         </div>
       </div>

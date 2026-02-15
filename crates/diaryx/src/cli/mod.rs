@@ -45,6 +45,10 @@ mod sync;
 /// Navigate workspace hierarchy with TUI
 mod nav;
 
+/// Web-based editing via local sync server
+#[cfg(feature = "web-edit")]
+mod edit;
+
 /// Template management
 mod template;
 
@@ -268,6 +272,17 @@ pub fn run_cli() {
         Commands::Log { count } => {
             let workspace_root = resolve_workspace_root(cli.workspace);
             git::handle_log(&workspace_root, count)
+        }
+
+        #[cfg(feature = "web-edit")]
+        Commands::Edit { url, port } => {
+            // Edit defaults to the current directory (not the configured default workspace)
+            // since it's meant for editing local files in a web editor.
+            let workspace_root = cli
+                .workspace
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(edit::handle_edit(&workspace_root, url, port))
         }
     };
 

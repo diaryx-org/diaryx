@@ -26,13 +26,17 @@ import { crdt_update_file_index, isStorageReady } from '$lib/storage/sqliteStora
 import type { Api } from '../backend/api';
 import { shareSessionStore } from '@/models/stores/shareSessionStore.svelte';
 import { collaborationStore } from '@/models/stores/collaborationStore.svelte';
-import { getToken } from '$lib/auth/authStore.svelte';
+import { getToken, setActiveWorkspaceId } from '$lib/auth/authStore.svelte';
 import * as syncHelpers from './syncHelpers';
 import {
   setAttachmentSyncBackend,
   setAttachmentSyncContext,
   enqueueMissingDownloadsFromMetadata,
 } from '../../models/services/attachmentSyncService';
+import {
+  setCurrentWorkspaceId as registrySetCurrentWorkspaceId,
+  addLocalWorkspace,
+} from '$lib/storage/localWorkspaceRegistry';
 
 /**
  * Convert an HTTP URL to a WebSocket URL for sync v2 (/sync2).
@@ -1214,6 +1218,111 @@ export async function destroyWorkspace(): Promise<void> {
   rustApi = null;
   initialized = false;
   fileChangeCallbacks.clear();
+}
+
+/**
+ * Switch to a different workspace.
+ *
+ * This is the main entry point for workspace switching. It tears down the
+ * current sync + CRDT state, resets the backend worker, and re-initializes
+ * everything for the new workspace. The UI layer (App.svelte) should call
+ * this instead of manually orchestrating teardown/init.
+ *
+ * @param newWorkspaceId - Server workspace UUID to switch to
+ * @param newWorkspaceName - Display name for the workspace
+ * @param options.onTeardownComplete - Called after teardown, before re-init
+ *        (use this to clear UI state like current entry, tree, etc.)
+ * @param options.onReady - Called after the new workspace is fully initialized
+ */
+export async function switchWorkspace(
+  newWorkspaceId: string,
+  newWorkspaceName: string,
+  options?: {
+    onTeardownComplete?: () => void;
+    onReady?: () => void;
+  },
+): Promise<void> {
+  console.log('[WorkspaceCrdtBridge] switchWorkspace:', { newWorkspaceId, newWorkspaceName });
+
+  // 1. Save CRDT state before tearing down
+  try {
+    await saveCrdtState();
+  } catch (e) {
+    console.warn('[WorkspaceCrdtBridge] Failed to save CRDT state before switch:', e);
+  }
+
+  // 2. Tear down existing sync + bridge state
+  await destroyWorkspace();
+
+  // 3. Reset additional state that destroyWorkspace doesn't clear
+  _initialSyncComplete = false;
+  _initialSyncResolvers = [];
+  bodyChangeCallbacks.clear();
+  fileRenamedCallbacks.clear();
+  sessionSyncCallbacks.clear();
+  syncProgressCallbacks.clear();
+  syncStatusCallbacks.clear();
+
+  // 4. Reset SQLite CRDT storage (closes DB, clears singleton)
+  try {
+    const { resetSqliteStorage } = await import('$lib/storage/sqliteStorage.js');
+    await resetSqliteStorage();
+  } catch (e) {
+    console.warn('[WorkspaceCrdtBridge] Failed to reset SQLite storage:', e);
+  }
+
+  // 5. Let UI clear its state
+  options?.onTeardownComplete?.();
+
+  // 6. Create new backend with workspace-isolated storage
+  const { getBackend } = await import('$lib/backend/index');
+  const { createApi } = await import('$lib/backend/api');
+  const backend = await getBackend(newWorkspaceId);
+  const api = createApi(backend);
+
+  // 7. Set up the new backend on the bridge
+  setBackend(backend);
+
+  // 8. Create new RustCrdtApi
+  const newRustApi = new RustCrdtApi(backend);
+
+  // 9. Find workspace root in the new storage
+  let workspacePath: string;
+  try {
+    const root = await api.findRootIndex('.');
+    workspacePath = root ?? '.';
+  } catch {
+    workspacePath = '.';
+  }
+
+  // 10. Initialize CRDT from filesystem
+  try {
+    const result = await api.initializeWorkspaceCrdt(workspacePath);
+    console.log('[WorkspaceCrdtBridge] CRDT initialized for new workspace:', result);
+  } catch (e) {
+    console.warn('[WorkspaceCrdtBridge] Failed to initialize CRDT from filesystem:', e);
+  }
+
+  // 11. Set workspace ID and reconnect
+  _workspaceId = newWorkspaceId;
+  refreshAttachmentSyncContext();
+
+  // 12. Re-initialize the workspace bridge with sync
+  const savedServerUrl = serverUrl;
+  serverUrl = null; // Reset so initWorkspace re-establishes connection
+  await initWorkspace({
+    rustApi: newRustApi,
+    serverUrl: savedServerUrl ?? undefined,
+    workspaceId: newWorkspaceId,
+    onReady: options?.onReady,
+  });
+
+  // 13. Update local workspace registry and reactive state
+  addLocalWorkspace({ id: newWorkspaceId, name: newWorkspaceName });
+  registrySetCurrentWorkspaceId(newWorkspaceId);
+  setActiveWorkspaceId(newWorkspaceId);
+
+  console.log('[WorkspaceCrdtBridge] switchWorkspace complete:', newWorkspaceId);
 }
 
 /**

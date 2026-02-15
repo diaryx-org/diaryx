@@ -111,16 +111,33 @@ fn idb_to_io_error(e: indexed_db::Error<Error>) -> Error {
 
 #[wasm_bindgen]
 impl IndexedDbFileSystem {
-    /// Create a new IndexedDbFileSystem.
+    /// Create a new IndexedDbFileSystem with the default database name.
     ///
     /// Opens or creates the IndexedDB database with the required object stores.
     #[wasm_bindgen]
     pub async fn create() -> std::result::Result<IndexedDbFileSystem, JsValue> {
+        Self::create_with_name(None).await
+    }
+
+    /// Create a new IndexedDbFileSystem with an optional custom database name.
+    ///
+    /// When `db_name` is provided, uses `"diaryx-{db_name}"` as the database name,
+    /// allowing multiple isolated IndexedDB databases (one per workspace).
+    /// When `None`, uses the legacy `"diaryx"` database name.
+    #[wasm_bindgen(js_name = "createWithName")]
+    pub async fn create_with_name(
+        db_name: Option<String>,
+    ) -> std::result::Result<IndexedDbFileSystem, JsValue> {
+        let name = match db_name {
+            Some(ref n) if !n.is_empty() => format!("diaryx-{}", n),
+            _ => DB_NAME.to_string(),
+        };
+
         let factory = Factory::<Error>::get()
             .map_err(|e| JsValue::from_str(&format!("Failed to get IndexedDB factory: {:?}", e)))?;
 
         let db = factory
-            .open(DB_NAME, DB_VERSION, |evt| async move {
+            .open(&name, DB_VERSION, |evt| async move {
                 let db = evt.database();
 
                 // Create files store if it doesn't exist

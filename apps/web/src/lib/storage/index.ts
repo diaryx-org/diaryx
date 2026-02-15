@@ -10,6 +10,7 @@ export {
   getSqliteStorage,
   getSqliteStorageSync,
   flushSqliteStorage,
+  resetSqliteStorage,
   type CrdtUpdate,
   type DbPersistence,
   DirectoryHandlePersistence,
@@ -20,6 +21,19 @@ export {
   isStorageReady,
   flushStorage,
 } from "./sqliteStorageBridge.js";
+
+export {
+  getLocalWorkspaces,
+  getLocalWorkspace,
+  getCurrentWorkspaceId,
+  isWorkspaceLocal,
+  addLocalWorkspace,
+  removeLocalWorkspace,
+  setCurrentWorkspaceId,
+  clearCurrentWorkspaceId,
+  renameLocalWorkspace,
+  type LocalWorkspace,
+} from "./localWorkspaceRegistry.js";
 
 /**
  * Set up the global bridge that Rust WASM code will use to access storage.

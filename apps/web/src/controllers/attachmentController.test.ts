@@ -4,7 +4,7 @@ const {
   getFileMetadataMock,
   setFileMetadataMock,
   getWorkspaceIdMock,
-  getDefaultWorkspaceMock,
+  getCurrentWorkspaceMock,
   enqueueAttachmentUploadMock,
   isAttachmentSyncEnabledMock,
   sha256HexMock,
@@ -12,7 +12,7 @@ const {
   getFileMetadataMock: vi.fn(),
   setFileMetadataMock: vi.fn(),
   getWorkspaceIdMock: vi.fn(),
-  getDefaultWorkspaceMock: vi.fn(),
+  getCurrentWorkspaceMock: vi.fn(),
   enqueueAttachmentUploadMock: vi.fn(),
   isAttachmentSyncEnabledMock: vi.fn(() => false),
   sha256HexMock: vi.fn(),
@@ -40,7 +40,7 @@ vi.mock("../models/services/attachmentSyncService", () => ({
 }));
 
 vi.mock("../lib/auth/authStore.svelte", () => ({
-  getDefaultWorkspace: getDefaultWorkspaceMock,
+  getCurrentWorkspace: getCurrentWorkspaceMock,
 }));
 
 vi.mock("../lib/crdt", () => ({
@@ -90,7 +90,7 @@ describe("enqueueIncrementalAttachmentUpload", () => {
 
   it("updates BinaryRef metadata using canonical attachment path and enqueues with upload path", async () => {
     getWorkspaceIdMock.mockReturnValue("ws-active");
-    getDefaultWorkspaceMock.mockReturnValue({ id: "ws-default", name: "default" });
+    getCurrentWorkspaceMock.mockReturnValue({ id: "ws-default", name: "default" });
 
     const file = makeMockFile([1, 2, 3]);
 
@@ -119,7 +119,7 @@ describe("enqueueIncrementalAttachmentUpload", () => {
 
   it("still updates CRDT hash metadata when workspace id is unavailable", async () => {
     getWorkspaceIdMock.mockReturnValue(null);
-    getDefaultWorkspaceMock.mockReturnValue(null);
+    getCurrentWorkspaceMock.mockReturnValue(null);
 
     const file = makeMockFile([7, 8, 9]);
 

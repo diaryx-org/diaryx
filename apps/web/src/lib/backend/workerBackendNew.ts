@@ -34,8 +34,10 @@ export class WorkerBackendNew implements Backend {
    * Initialize the backend.
    * @param storageTypeOverride Optional storage type to use instead of the default.
    *                            Use 'memory' for guest mode (in-memory filesystem).
+   * @param workspaceId Optional workspace UUID for storage isolation.
+   *                    When provided, each workspace gets its own OPFS directory / IndexedDB database.
    */
-  async init(storageTypeOverride?: StorageType): Promise<void> {
+  async init(storageTypeOverride?: StorageType, workspaceId?: string): Promise<void> {
     // Create the worker
     this.worker = new Worker(
       new URL('./wasmWorkerNew.ts', import.meta.url),
@@ -120,7 +122,7 @@ export class WorkerBackendNew implements Backend {
     } else {
       const workspaceName = localStorage.getItem('diaryx-workspace-name') || 'My Journal';
       const syncEnabled = !!localStorage.getItem('diaryx_auth_token');
-      await this.remote.init(Comlink.transfer(port2, [port2]), storageType, workspaceName, undefined, syncEnabled);
+      await this.remote.init(Comlink.transfer(port2, [port2]), storageType, workspaceName, undefined, syncEnabled, workspaceId);
     }
 
     this._ready = true;

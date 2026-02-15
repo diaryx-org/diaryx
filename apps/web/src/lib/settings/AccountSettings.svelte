@@ -29,6 +29,9 @@
     ChevronUp,
     Server,
     HardDriveDownload,
+    Pencil,
+    Check,
+    X,
   } from "@lucide/svelte";
   import { clearAllLocalData } from "./clearData";
   import { isTauri } from "$lib/backend/interface";
@@ -36,6 +39,7 @@
     getAuthState,
     logout,
     deleteDevice,
+    renameDevice,
     deleteAccount,
     refreshUserInfo,
     initAuth,
@@ -64,6 +68,10 @@
   let showClearAfterLogout = $state(false);
   let isClearingData = $state(false);
   let error = $state<string | null>(null);
+
+  // Device rename state
+  let renamingDeviceId = $state<string | null>(null);
+  let renameValue = $state("");
 
   // Inline sign-in state
   let email = $state("");
@@ -207,6 +215,27 @@
     catch (e) { error = e instanceof Error ? e.message : "Failed to refresh"; }
   }
 
+  function startRenameDevice(deviceId: string, currentName: string) {
+    renamingDeviceId = deviceId;
+    renameValue = currentName;
+  }
+
+  function cancelRenameDevice() {
+    renamingDeviceId = null;
+    renameValue = "";
+  }
+
+  async function confirmRenameDevice() {
+    if (!renamingDeviceId || !renameValue.trim()) return;
+    try {
+      await renameDevice(renamingDeviceId, renameValue.trim());
+      renamingDeviceId = null;
+      renameValue = "";
+    } catch (e) {
+      error = e instanceof Error ? e.message : "Failed to rename device";
+    }
+  }
+
   async function handleDeleteAccount() {
     isDeleting = true;
     error = null;
@@ -272,18 +301,61 @@
           <div class="space-y-1">
             {#each authState.devices as device}
               <div class="flex items-center justify-between text-sm p-2 bg-muted/50 rounded-md">
-                <div class="flex items-center gap-2">
-                  <Smartphone class="size-4 text-muted-foreground" />
-                  <span>{device.name || "Unknown Device"}</span>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  class="h-7 w-7 p-0"
-                  onclick={() => handleDeleteDevice(device.id)}
-                >
-                  <Trash2 class="size-3 text-muted-foreground" />
-                </Button>
+                {#if renamingDeviceId === device.id}
+                  <div class="flex items-center gap-1 flex-1 mr-2">
+                    <Smartphone class="size-4 text-muted-foreground shrink-0" />
+                    <Input
+                      type="text"
+                      bind:value={renameValue}
+                      class="h-7 text-sm"
+                      onkeydown={(e) => {
+                        if (e.key === "Enter") confirmRenameDevice();
+                        if (e.key === "Escape") cancelRenameDevice();
+                      }}
+                    />
+                  </div>
+                  <div class="flex items-center gap-0.5">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      class="h-7 w-7 p-0"
+                      onclick={confirmRenameDevice}
+                    >
+                      <Check class="size-3 text-primary" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      class="h-7 w-7 p-0"
+                      onclick={cancelRenameDevice}
+                    >
+                      <X class="size-3 text-muted-foreground" />
+                    </Button>
+                  </div>
+                {:else}
+                  <div class="flex items-center gap-2">
+                    <Smartphone class="size-4 text-muted-foreground" />
+                    <span>{device.name || "Unknown Device"}</span>
+                  </div>
+                  <div class="flex items-center gap-0.5">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      class="h-7 w-7 p-0"
+                      onclick={() => startRenameDevice(device.id, device.name || "")}
+                    >
+                      <Pencil class="size-3 text-muted-foreground" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      class="h-7 w-7 p-0"
+                      onclick={() => handleDeleteDevice(device.id)}
+                    >
+                      <Trash2 class="size-3 text-muted-foreground" />
+                    </Button>
+                  </div>
+                {/if}
               </div>
             {/each}
           </div>

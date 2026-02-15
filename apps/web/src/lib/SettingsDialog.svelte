@@ -26,6 +26,7 @@
   import ClearDataSettings from "./settings/ClearDataSettings.svelte";
   import DebugInfo from "./settings/DebugInfo.svelte";
   import TemplateSettings from "./settings/TemplateSettings.svelte";
+  import WorkspaceManagement from "./settings/WorkspaceManagement.svelte";
 
   interface Props {
     open?: boolean;
@@ -138,6 +139,7 @@
     <Tabs.Content value="account">
       <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
         <AccountSettings onOpenWizard={onOpenSyncWizard} />
+        <WorkspaceManagement />
       </div>
     </Tabs.Content>
 

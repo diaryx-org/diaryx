@@ -2,7 +2,7 @@
  * Site Publishing Store - Manages published-site state in the Share sidebar.
  */
 
-import { getDefaultWorkspace } from '$lib/auth';
+import { getCurrentWorkspace } from '$lib/auth';
 import {
   createSite,
   createToken,
@@ -73,7 +73,7 @@ class SitePublishingStore {
   }
 
   get defaultWorkspaceId(): string | null {
-    return getDefaultWorkspace()?.id ?? null;
+    return getCurrentWorkspace()?.id ?? null;
   }
 
   get hasDefaultWorkspace(): boolean {

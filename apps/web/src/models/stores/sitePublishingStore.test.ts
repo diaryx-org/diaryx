@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('$lib/auth', () => ({
-  getDefaultWorkspace: vi.fn(),
+  getCurrentWorkspace: vi.fn(),
 }));
 
 vi.mock('../services/sitePublishingService', () => ({
@@ -14,7 +14,7 @@ vi.mock('../services/sitePublishingService', () => ({
   revokeToken: vi.fn(),
 }));
 
-import { getDefaultWorkspace } from '$lib/auth';
+import { getCurrentWorkspace } from '$lib/auth';
 import {
   createToken,
   getSite,
@@ -30,11 +30,11 @@ describe('sitePublishingStore', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     store.reset();
-    vi.mocked(getDefaultWorkspace).mockReturnValue({ id: 'workspace-1', name: 'default' } as any);
+    vi.mocked(getCurrentWorkspace).mockReturnValue({ id: 'workspace-1', name: 'default' } as any);
   });
 
   it('disables publishing actions when default workspace is missing', async () => {
-    vi.mocked(getDefaultWorkspace).mockReturnValue(null);
+    vi.mocked(getCurrentWorkspace).mockReturnValue(null);
 
     await store.load();
 

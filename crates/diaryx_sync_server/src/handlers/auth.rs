@@ -101,7 +101,10 @@ pub fn auth_routes(state: AuthState) -> Router {
         .route("/logout", post(logout))
         .route("/account", delete(delete_account))
         .route("/devices", get(list_devices))
-        .route("/devices/{device_id}", axum::routing::delete(delete_device))
+        .route(
+            "/devices/{device_id}",
+            axum::routing::patch(rename_device).delete(delete_device),
+        )
         .with_state(state)
 }
 
@@ -316,6 +319,50 @@ async fn list_devices(
         .collect::<Vec<_>>();
 
     Json(devices)
+}
+
+/// Request body for device rename
+#[derive(Debug, Deserialize)]
+pub struct RenameDeviceRequest {
+    pub name: String,
+}
+
+/// PATCH /auth/devices/:device_id - Rename a device
+async fn rename_device(
+    State(state): State<AuthState>,
+    RequireAuth(auth): RequireAuth,
+    axum::extract::Path(device_id): axum::extract::Path<String>,
+    Json(body): Json<RenameDeviceRequest>,
+) -> impl IntoResponse {
+    // Verify the device belongs to the user
+    let devices = state
+        .repo
+        .get_user_devices(&auth.user.id)
+        .unwrap_or_default();
+
+    if !devices.iter().any(|d| d.id == device_id) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    let name = body.name.trim().to_string();
+    if name.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Device name cannot be empty".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    match state.repo.rename_device(&device_id, &name) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => {
+            error!("Failed to rename device: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 /// DELETE /auth/devices/:device_id - Delete a device

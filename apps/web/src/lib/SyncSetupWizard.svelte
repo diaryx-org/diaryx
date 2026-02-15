@@ -53,7 +53,7 @@
     proactivelySyncBodies,
     markAllCrdtFilesAsDeleted,
   } from "$lib/crdt/workspaceCrdtBridge";
-  import { getDefaultWorkspace, getServerUrl } from "$lib/auth";
+  import { getCurrentWorkspace, getServerUrl } from "$lib/auth";
 
   interface Props {
     open?: boolean;
@@ -274,7 +274,8 @@
     error = null;
 
     try {
-      await verifyMagicLink(token.trim());
+      const savedDeviceName = localStorage.getItem("diaryx_device_name") || undefined;
+      await verifyMagicLink(token.trim(), savedDeviceName);
 
       // Check if user has server data
       await checkServerData();
@@ -392,7 +393,7 @@
     try {
       const backend = await getBackend();
       const api = createApi(backend);
-      const defaultWorkspace = getDefaultWorkspace();
+      const defaultWorkspace = getCurrentWorkspace();
       const workspaceId = defaultWorkspace?.id ?? null;
       let snapshotUploaded = false;
 
@@ -707,6 +708,15 @@
         importProgress = 100;
       }
 
+      // Register the workspace in the local workspace registry
+      if (workspaceId && defaultWorkspace) {
+        const { addLocalWorkspace, setCurrentWorkspaceId } = await import("$lib/storage/localWorkspaceRegistry");
+        const { setActiveWorkspaceId } = await import("$lib/auth/authStore.svelte");
+        addLocalWorkspace({ id: workspaceId, name: defaultWorkspace.name });
+        setCurrentWorkspaceId(workspaceId);
+        setActiveWorkspaceId(workspaceId);
+      }
+
       // Mark sync as explicitly enabled (persists across sessions)
       enableSync();
 
@@ -887,6 +897,21 @@
                 onkeydown={(e) => e.key === "Enter" && handleSendMagicLink()}
               />
             </div>
+
+            <!-- Device name (always visible) -->
+            <div class="space-y-2">
+              <Label for="device-name" class="text-sm">Device Name</Label>
+              <Input
+                id="device-name"
+                type="text"
+                bind:value={deviceName}
+                placeholder="My Mac"
+                disabled={isSendingMagicLink}
+              />
+              <p class="text-xs text-muted-foreground">
+                A name to identify this device. You can change it later in Settings.
+              </p>
+            </div>
           </div>
 
           <!-- Advanced settings (toggle) -->
@@ -906,16 +931,6 @@
             </Button>
             {#if showAdvanced}
               <div class="space-y-3 mt-2">
-                <div class="space-y-2">
-                  <Label for="device-name" class="text-sm">Device Name</Label>
-                  <Input
-                    id="device-name"
-                    type="text"
-                    bind:value={deviceName}
-                    placeholder="My Mac"
-                    disabled={isSendingMagicLink}
-                  />
-                </div>
                 <div class="space-y-2">
                   <Label for="server-url" class="text-sm">Server URL</Label>
                   <Input

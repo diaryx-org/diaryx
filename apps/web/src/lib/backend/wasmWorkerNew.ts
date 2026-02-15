@@ -197,19 +197,21 @@ async function doSetupCrdtStorage(): Promise<void> {
 /**
  * Initialize the backend and set up event forwarding.
  */
-async function init(port: MessagePort, storageType: StorageType, workspaceName?: string, directoryHandle?: FileSystemDirectoryHandle, syncEnabled?: boolean): Promise<void> {
+async function init(port: MessagePort, storageType: StorageType, workspaceName?: string, directoryHandle?: FileSystemDirectoryHandle, syncEnabled?: boolean, workspaceId?: string): Promise<void> {
   // Store event port for forwarding filesystem events
   eventPort = port;
 
-  const resolvedWorkspaceName = workspaceName || 'My Journal';
+  // When a workspace ID is provided, use it as the storage root name for isolation.
+  // Otherwise fall back to the legacy workspace display name.
+  const resolvedWorkspaceName = workspaceId || workspaceName || 'My Journal';
 
   // Store init params for lazy CRDT storage setup
   _storedStorageType = storageType;
   _storedWorkspaceName = resolvedWorkspaceName;
   _storedDirectoryHandle = directoryHandle ?? null;
 
-  // For OPFS, run migration before anything else
-  if (storageType === 'opfs') {
+  // For OPFS, run migration only for legacy (non-workspace-ID) paths
+  if (storageType === 'opfs' && !workspaceId) {
     await migrateWorkspaceDirectory(resolvedWorkspaceName);
   }
 
@@ -250,7 +252,7 @@ async function init(port: MessagePort, storageType: StorageType, workspaceName?:
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     backend = (wasm.DiaryxBackend as any).createInMemory();
   } else {
-    backend = await wasm.DiaryxBackend.createIndexedDb();
+    backend = await wasm.DiaryxBackend.createIndexedDb(workspaceId ?? undefined);
   }
 
   // Subscribe to filesystem events and forward them to the main thread

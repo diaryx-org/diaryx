@@ -381,6 +381,16 @@ impl AuthRepo {
         Ok(())
     }
 
+    /// Rename a device. Returns true if the row was updated.
+    pub fn rename_device(&self, device_id: &str, new_name: &str) -> Result<bool, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let updated = conn.execute(
+            "UPDATE devices SET name = ? WHERE id = ?",
+            params![new_name, device_id],
+        )?;
+        Ok(updated > 0)
+    }
+
     /// Delete a device (and its sessions)
     pub fn delete_device(&self, device_id: &str) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock().unwrap();

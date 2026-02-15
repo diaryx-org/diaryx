@@ -28,7 +28,7 @@ import {
 } from '../models/services/attachmentSyncService';
 import type { QueueItemEvent } from '../models/services/attachmentSyncService';
 import { showLoading } from '../models/services/toastService';
-import { getDefaultWorkspace } from '../lib/auth/authStore.svelte';
+import { getCurrentWorkspace } from '../lib/auth/authStore.svelte';
 import { getFileMetadata, getWorkspaceId, setFileMetadata } from '../lib/crdt';
 import { toast } from 'svelte-sonner';
 
@@ -163,7 +163,7 @@ async function updateAttachmentRefMetadata(
   };
   await setFileMetadata(entryPath, updatedMetadata);
 
-  const workspaceId = getWorkspaceId() ?? getDefaultWorkspace()?.id;
+  const workspaceId = getWorkspaceId() ?? getCurrentWorkspace()?.id;
   if (workspaceId) {
     indexAttachmentRefs(entryPath, updatedAttachments, workspaceId);
   }
@@ -184,7 +184,7 @@ export async function enqueueIncrementalAttachmentUpload(
     file.type || getMimeType(file.name),
     file.size,
   );
-  const workspaceId = getWorkspaceId() ?? getDefaultWorkspace()?.id;
+  const workspaceId = getWorkspaceId() ?? getCurrentWorkspace()?.id;
   if (!workspaceId) return;
   const syncEnabled = isAttachmentSyncEnabled();
   console.log('[AttachmentController] enqueue: workspaceId=', workspaceId, 'syncEnabled=', syncEnabled);
@@ -459,7 +459,7 @@ export async function handleDeleteAttachment(
     if (onEntryUpdate) {
       onEntryUpdate(entry);
     }
-    const workspaceId = getDefaultWorkspace()?.id;
+    const workspaceId = getCurrentWorkspace()?.id;
     if (workspaceId) {
       indexAttachmentRefs(currentEntry.path, (entry.frontmatter.attachments as any[]) ?? [], workspaceId);
     }
@@ -535,7 +535,7 @@ export async function handleMoveAttachment(
       }
     }
 
-    const workspaceId = getDefaultWorkspace()?.id;
+    const workspaceId = getCurrentWorkspace()?.id;
     if (workspaceId) {
       const sourceMetadata = await getFileMetadata(sourceEntryPath);
       if (sourceMetadata) {

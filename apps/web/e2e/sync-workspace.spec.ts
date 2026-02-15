@@ -297,14 +297,14 @@ async function uploadWorkspaceSnapshot(
 ): Promise<void> {
   await page.evaluate(async (uploadMode) => {
     const { getBackend, createApi } = await import("/src/lib/backend");
-    const { getDefaultWorkspace, uploadWorkspaceSnapshot } = await import(
+    const { getCurrentWorkspace, uploadWorkspaceSnapshot } = await import(
       "/src/lib/auth/authStore.svelte"
     );
     const JSZip = (await import("jszip")).default;
 
     const backend = await getBackend();
     const api = createApi(backend);
-    const workspace = getDefaultWorkspace();
+    const workspace = getCurrentWorkspace();
 
     if (!workspace?.id) {
       throw new Error("No default workspace available for snapshot upload");

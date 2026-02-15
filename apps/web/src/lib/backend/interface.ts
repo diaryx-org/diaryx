@@ -309,7 +309,7 @@ export interface Backend {
    * @param storageTypeOverride Optional storage type to use instead of the default.
    *                            Use 'memory' for guest mode (in-memory filesystem).
    */
-  init(storageTypeOverride?: string): Promise<void>;
+  init(storageTypeOverride?: string, workspaceId?: string): Promise<void>;
 
   /**
    * Check if the backend is ready to use.

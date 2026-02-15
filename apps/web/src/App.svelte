@@ -51,7 +51,7 @@
   import { getFormattingStore } from "./lib/stores/formattingStore.svelte";
 
   // Import auth
-  import { initAuth, getDefaultWorkspace, verifyMagicLink, setServerUrl } from "./lib/auth";
+  import { initAuth, getCurrentWorkspace, verifyMagicLink, setServerUrl } from "./lib/auth";
 
   // Initialize theme store immediately
   getThemeStore();
@@ -814,6 +814,29 @@
     window.removeEventListener("import:complete", handleImportComplete);
   });
 
+  // Workspace switching handlers
+  function handleWorkspaceSwitchStart() {
+    // Auto-save before switching
+    if (isDirty && api && currentEntry && editorRef) {
+      cancelAutoSave();
+      save();
+    }
+    // Clear UI state
+    entryStore.setCurrentEntry(null);
+    workspaceStore.setTree(null);
+    entryStore.setLoading(true);
+  }
+
+  async function handleWorkspaceSwitchComplete() {
+    // Re-initialize references: get the new backend from the singleton
+    const newBackend = await getBackend();
+    workspaceStore.setBackend(newBackend);
+    rustApi = new RustCrdtApi(newBackend);
+    // Refresh tree from new workspace
+    await refreshTree();
+    entryStore.setLoading(false);
+  }
+
   // Initialize the workspace CRDT
   async function setupWorkspaceCrdt() {
     if (!api || !backend || !rustApi) return;
@@ -822,7 +845,7 @@
       // Get workspace ID from auth store (server is source of truth)
       // When authenticated, the server generates and stores the workspace UUID
       // For local-only mode (not signed in), we use null
-      const defaultWorkspace = getDefaultWorkspace();
+      const defaultWorkspace = getCurrentWorkspace();
       const sharedWorkspaceId = defaultWorkspace?.id ?? null;
 
       if (sharedWorkspaceId) {
@@ -1756,6 +1779,8 @@
     onValidate={handleValidate}
     onRenameEntry={handleRenameEntry}
     onDuplicateEntry={handleDuplicateEntry}
+    onWorkspaceSwitchStart={handleWorkspaceSwitchStart}
+    onWorkspaceSwitchComplete={handleWorkspaceSwitchComplete}
   />
 
   <!-- Hidden file input for attachments (accepts all file types) -->

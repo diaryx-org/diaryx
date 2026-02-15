@@ -59,10 +59,22 @@ function getInitPromise(): Promise<Backend> | null {
 function setInitPromise(p: Promise<Backend> | null): void {
   _g.__diaryx_initPromise = p;
 }
+function getBackendWorkspaceId(): string | undefined {
+  return _g.__diaryx_backendWorkspaceId ?? undefined;
+}
+function setBackendWorkspaceId(id: string | undefined): void {
+  _g.__diaryx_backendWorkspaceId = id;
+}
 
 /**
  * Get the backend instance, creating it if necessary.
  * This is the main entry point for the backend abstraction.
+ *
+ * When `workspaceId` is provided and differs from the current backend's workspace,
+ * the existing backend is discarded and a new one is created with isolated storage.
+ * Callers switching workspaces should use the `switchWorkspace()` orchestrator
+ * (in workspaceCrdtBridge) instead of calling this directly — it handles teardown
+ * of sync, CRDT state, and UI before creating the new backend.
  *
  * Usage:
  * ```ts
@@ -70,10 +82,22 @@ function setInitPromise(p: Promise<Backend> | null): void {
  * const config = await backend.getConfig();
  * ```
  */
-export async function getBackend(): Promise<Backend> {
+export async function getBackend(workspaceId?: string): Promise<Backend> {
   const existing = getBackendInstance();
-  if (existing?.isReady()) {
+
+  // If a workspace ID is specified and it matches the current backend, reuse it
+  if (existing?.isReady() && workspaceId && getBackendWorkspaceId() === workspaceId) {
     return existing;
+  }
+
+  // If no workspace ID specified, return existing backend if ready
+  if (existing?.isReady() && !workspaceId) {
+    return existing;
+  }
+
+  // If workspace ID differs from current, reset so we create a fresh backend
+  if (workspaceId && getBackendWorkspaceId() !== workspaceId) {
+    resetBackend();
   }
 
   // Prevent multiple simultaneous initializations
@@ -82,8 +106,8 @@ export async function getBackend(): Promise<Backend> {
     return pending;
   }
 
-  console.log("[Backend] Starting initialization...");
-  const promise = initializeBackend();
+  console.log("[Backend] Starting initialization...", workspaceId ? `workspace: ${workspaceId}` : '');
+  const promise = initializeBackend(workspaceId);
   setInitPromise(promise);
   return promise;
 }
@@ -91,7 +115,7 @@ export async function getBackend(): Promise<Backend> {
 /**
  * Initialize the appropriate backend based on runtime environment.
  */
-async function initializeBackend(): Promise<Backend> {
+async function initializeBackend(workspaceId?: string): Promise<Backend> {
   console.log("[Backend] Detecting runtime environment...");
   console.log("[Backend] isTauri():", isTauri());
   console.log("[Backend] isBrowser():", isBrowser());
@@ -117,9 +141,10 @@ async function initializeBackend(): Promise<Backend> {
     }
 
     console.log("[Backend] Calling backend.init()...");
-    await instance.init();
+    await instance.init(undefined, workspaceId);
     console.log("[Backend] Backend initialized successfully");
     setBackendInstance(instance);
+    setBackendWorkspaceId(workspaceId);
     return instance;
   } catch (error) {
     console.error("[Backend] Initialization failed:", error);
@@ -137,6 +162,8 @@ export function resetBackend(): void {
   console.log("[Backend] Resetting backend instance");
   setBackendInstance(null);
   setInitPromise(null);
+  setBackendWorkspaceId(undefined);
+  apiInstance = null;
 }
 
 // ============================================================================

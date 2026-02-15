@@ -591,12 +591,17 @@ impl DiaryxBackend {
 
     /// Create a new DiaryxBackend with IndexedDB storage.
     ///
+    /// When `db_name` is provided, uses `"diaryx-{db_name}"` as the database name,
+    /// allowing per-workspace isolation. When `None`, uses the legacy database name.
+    ///
     /// This attempts to use persistent SQLite-based CRDT storage (via sql.js).
     /// If SQLite storage is not available, falls back to in-memory CRDT storage.
     #[cfg(feature = "browser")]
     #[wasm_bindgen(js_name = "createIndexedDb")]
-    pub async fn create_indexed_db() -> std::result::Result<DiaryxBackend, JsValue> {
-        let idb = IndexedDbFileSystem::create().await?;
+    pub async fn create_indexed_db(
+        db_name: Option<String>,
+    ) -> std::result::Result<DiaryxBackend, JsValue> {
+        let idb = IndexedDbFileSystem::create_with_name(db_name).await?;
         let storage_backend = StorageBackend::IndexedDb(idb);
 
         // Create event registries
@@ -704,7 +709,7 @@ impl DiaryxBackend {
             #[cfg(feature = "browser")]
             "opfs" => Self::create_opfs(None).await,
             #[cfg(feature = "browser")]
-            "indexeddb" | "indexed_db" => Self::create_indexed_db().await,
+            "indexeddb" | "indexed_db" => Self::create_indexed_db(None).await,
             "memory" | "inmemory" | "in_memory" => Self::create_in_memory(),
             _ => Err(JsValue::from_str(&format!(
                 "Unknown storage type: {}",

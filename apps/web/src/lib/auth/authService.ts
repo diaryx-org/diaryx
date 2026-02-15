@@ -28,6 +28,7 @@ export interface MeResponse {
   user: User;
   workspaces: Workspace[];
   devices: Device[];
+  workspace_limit: number;
 }
 
 export interface MagicLinkResponse {
@@ -230,6 +231,24 @@ export class AuthService {
     }
 
     return response.json();
+  }
+
+  /**
+   * Rename a device.
+   */
+  async renameDevice(authToken: string, deviceId: string, newName: string): Promise<void> {
+    const response = await fetch(`${this.serverUrl}/auth/devices/${deviceId}`, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ name: newName }),
+    });
+
+    if (!response.ok) {
+      throw new AuthError("Failed to rename device", response.status);
+    }
   }
 
   /**
@@ -548,6 +567,75 @@ export class AuthService {
       status: response.status,
       contentRange: response.headers.get("Content-Range"),
     };
+  }
+
+  // =========================================================================
+  // Workspace CRUD
+  // =========================================================================
+
+  /**
+   * Create a new workspace.
+   * Returns the created workspace object.
+   * Throws 403 if workspace limit reached, 409 if name taken.
+   */
+  async createWorkspace(authToken: string, name: string): Promise<Workspace> {
+    const response = await fetch(`${this.serverUrl}/api/workspaces`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ name }),
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      if (response.status === 403) {
+        throw new AuthError(data.error || "Workspace limit reached", 403);
+      }
+      if (response.status === 409) {
+        throw new AuthError(data.error || "Workspace name already taken", 409);
+      }
+      throw new AuthError(data.error || "Failed to create workspace", response.status);
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Rename a workspace.
+   */
+  async renameWorkspace(authToken: string, workspaceId: string, newName: string): Promise<void> {
+    const response = await fetch(`${this.serverUrl}/api/workspaces/${workspaceId}`, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ name: newName }),
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new AuthError(data.error || "Failed to rename workspace", response.status);
+    }
+  }
+
+  /**
+   * Delete a workspace.
+   */
+  async deleteWorkspace(authToken: string, workspaceId: string): Promise<void> {
+    const response = await fetch(`${this.serverUrl}/api/workspaces/${workspaceId}`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new AuthError(data.error || "Failed to delete workspace", response.status);
+    }
   }
 }
 

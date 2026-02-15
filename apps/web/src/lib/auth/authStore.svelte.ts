@@ -28,6 +28,7 @@ import {
   setCollaborationWorkspaceId,
 } from "../crdt";
 import { collaborationStore } from "@/models/stores/collaborationStore.svelte";
+import { getCurrentWorkspaceId as registryGetCurrentWorkspaceId } from "$lib/storage/localWorkspaceRegistry";
 
 // ============================================================================
 // Types
@@ -39,6 +40,9 @@ export interface AuthState {
   user: User | null;
   workspaces: Workspace[];
   devices: Device[];
+  workspaceLimit: number;
+  /** The currently active workspace ID (reactive). Updated on switch. */
+  activeWorkspaceId: string | null;
   storageUsage: UserStorageUsageResponse | null;
   error: string | null;
   serverUrl: string | null;
@@ -64,6 +68,8 @@ let state = $state<AuthState>({
   user: null,
   workspaces: [],
   devices: [],
+  workspaceLimit: 1,
+  activeWorkspaceId: registryGetCurrentWorkspaceId(),
   storageUsage: null,
   error: null,
   serverUrl: null,
@@ -102,6 +108,46 @@ export function getDefaultWorkspace(): Workspace | null {
     state.workspaces[0] ??
     null
   );
+}
+
+/**
+ * Get the currently active workspace, respecting the user's workspace selection.
+ *
+ * Uses the reactive `activeWorkspaceId` from auth state (updated via
+ * `setActiveWorkspaceId()`), then falls back to getDefaultWorkspace()
+ * for backward compatibility.
+ */
+export function getCurrentWorkspace(): Workspace | null {
+  const currentId = state.activeWorkspaceId;
+  if (currentId) {
+    const ws = state.workspaces.find(w => w.id === currentId);
+    if (ws) return ws;
+  }
+  return getDefaultWorkspace();
+}
+
+/**
+ * Set the active workspace ID in reactive state.
+ * Call this after switching workspaces so that `$derived(getCurrentWorkspace())`
+ * re-evaluates in all consumers.
+ */
+export function setActiveWorkspaceId(id: string | null): void {
+  state.activeWorkspaceId = id;
+}
+
+/**
+ * Get the list of workspaces the server knows about.
+ */
+export function getWorkspaces(): Workspace[] {
+  return state.workspaces;
+}
+
+/**
+ * Get the workspace limit for the current user.
+ * Returns null if not authenticated or limit info not available.
+ */
+export function getWorkspaceLimit(): number {
+  return state.workspaceLimit;
 }
 
 export function getStorageUsage(): UserStorageUsageResponse | null {
@@ -149,14 +195,14 @@ export async function initAuth(): Promise<void> {
       state.user = me.user;
       state.workspaces = me.workspaces;
       state.devices = me.devices;
+      state.workspaceLimit = me.workspace_limit;
       state.isAuthenticated = true;
 
       // Update collaboration settings
       setAuthToken(token);
-      const defaultWorkspace =
-        me.workspaces.find((w) => w.name === "default") ?? me.workspaces[0];
-      if (defaultWorkspace) {
-        setCollaborationWorkspaceId(defaultWorkspace.id);
+      const activeWorkspace = getCurrentWorkspace();
+      if (activeWorkspace) {
+        setCollaborationWorkspaceId(activeWorkspace.id);
       }
 
       // Only re-enable sync if user previously completed sync setup
@@ -243,8 +289,10 @@ export async function requestMagicLink(
 
 /**
  * Verify a magic link token and log in.
+ * @param token - The magic link token
+ * @param customDeviceName - Optional custom device name (from user input). Falls back to auto-detected name.
  */
-export async function verifyMagicLink(token: string): Promise<void> {
+export async function verifyMagicLink(token: string, customDeviceName?: string): Promise<void> {
   if (!authService) {
     throw new Error("Server URL not configured");
   }
@@ -253,8 +301,8 @@ export async function verifyMagicLink(token: string): Promise<void> {
   state.error = null;
 
   try {
-    // Get device name
-    const deviceName = getDeviceName();
+    // Use custom name if provided, otherwise auto-detect
+    const deviceName = customDeviceName?.trim() || getDeviceName();
 
     const response = await authService.verifyMagicLink(token, deviceName);
 
@@ -295,12 +343,12 @@ export async function refreshUserInfo(): Promise<void> {
     state.user = me.user;
     state.workspaces = me.workspaces;
     state.devices = me.devices;
+    state.workspaceLimit = me.workspace_limit;
 
     // Update workspace ID
-    const defaultWorkspace =
-      me.workspaces.find((w) => w.name === "default") ?? me.workspaces[0];
-    if (defaultWorkspace) {
-      setCollaborationWorkspaceId(defaultWorkspace.id);
+    const activeWorkspace = getCurrentWorkspace();
+    if (activeWorkspace) {
+      setCollaborationWorkspaceId(activeWorkspace.id);
     }
   } catch (err) {
     console.error("[AuthStore] Failed to refresh user info:", err);
@@ -352,6 +400,8 @@ export async function logout(): Promise<void> {
   state.user = null;
   state.workspaces = [];
   state.devices = [];
+  state.workspaceLimit = 1;
+  state.activeWorkspaceId = null;
   state.error = null;
   state.storageUsage = null;
 
@@ -370,6 +420,17 @@ export async function logout(): Promise<void> {
       // Ignore logout errors
     });
   }
+}
+
+/**
+ * Rename a device.
+ */
+export async function renameDevice(deviceId: string, newName: string): Promise<void> {
+  const token = getToken();
+  if (!authService || !token) return;
+
+  await authService.renameDevice(token, deviceId, newName);
+  await refreshUserInfo();
 }
 
 /**
@@ -399,6 +460,8 @@ export async function deleteAccount(): Promise<void> {
   state.user = null;
   state.workspaces = [];
   state.devices = [];
+  state.workspaceLimit = 1;
+  state.activeWorkspaceId = null;
   state.error = null;
   state.storageUsage = null;
 
@@ -452,6 +515,48 @@ function getDeviceName(): string {
 
   return "Web Browser";
 }
+
+// ============================================================================
+// Workspace CRUD (server-side)
+// ============================================================================
+
+/**
+ * Create a new workspace on the server.
+ * Refreshes the workspace list on success.
+ */
+export async function createServerWorkspace(name: string): Promise<Workspace> {
+  const token = getToken();
+  if (!authService || !token) throw new Error("Not authenticated");
+  const ws = await authService.createWorkspace(token, name);
+  await refreshUserInfo();
+  return ws;
+}
+
+/**
+ * Rename a workspace on the server.
+ * Refreshes the workspace list on success.
+ */
+export async function renameServerWorkspace(workspaceId: string, newName: string): Promise<void> {
+  const token = getToken();
+  if (!authService || !token) throw new Error("Not authenticated");
+  await authService.renameWorkspace(token, workspaceId, newName);
+  await refreshUserInfo();
+}
+
+/**
+ * Delete a workspace on the server.
+ * Refreshes the workspace list on success.
+ */
+export async function deleteServerWorkspace(workspaceId: string): Promise<void> {
+  const token = getToken();
+  if (!authService || !token) throw new Error("Not authenticated");
+  await authService.deleteWorkspace(token, workspaceId);
+  await refreshUserInfo();
+}
+
+// ============================================================================
+// Data Queries
+// ============================================================================
 
 /**
  * Check if user has synced data on the server.

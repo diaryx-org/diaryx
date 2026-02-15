@@ -38,6 +38,7 @@
     CircleUser,
   } from "@lucide/svelte";
   import { getAuthState } from "./auth";
+  import WorkspaceSelector from "./WorkspaceSelector.svelte";
 
   interface Props {
     tree: TreeNode | null;
@@ -68,6 +69,8 @@
     onValidate?: (path: string) => void;
     onRenameEntry?: (path: string, newFilename: string) => Promise<string>;
     onDuplicateEntry?: (path: string) => Promise<string>;
+    onWorkspaceSwitchStart?: () => void;
+    onWorkspaceSwitchComplete?: () => void;
   }
 
   let {
@@ -99,6 +102,8 @@
     onValidate,
     onRenameEntry,
     onDuplicateEntry,
+    onWorkspaceSwitchStart,
+    onWorkspaceSwitchComplete,
   }: Props = $props();
 
   // Platform detection for keyboard shortcut display
@@ -1016,6 +1021,14 @@
         {/if}
       </Tooltip.Root>
     </div>
+  </div>
+
+  <!-- Workspace Selector -->
+  <div class="px-3 pt-2">
+    <WorkspaceSelector
+      onSwitchStart={onWorkspaceSwitchStart}
+      onSwitchComplete={onWorkspaceSwitchComplete}
+    />
   </div>
 
   <!-- Content Area -->

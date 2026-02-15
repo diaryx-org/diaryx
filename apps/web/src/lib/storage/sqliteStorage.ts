@@ -566,3 +566,17 @@ export async function flushSqliteStorage(): Promise<void> {
     await globalStorage.flush();
   }
 }
+
+/**
+ * Reset the global SqliteStorage instance.
+ * Flushes, closes, and clears the singleton so the next call to
+ * getSqliteStorage() creates a fresh instance with new persistence.
+ * Used when switching workspaces.
+ */
+export async function resetSqliteStorage(): Promise<void> {
+  if (globalStorage) {
+    await globalStorage.close();
+    globalStorage = null;
+  }
+  initPromise = null;
+}

@@ -68,14 +68,13 @@ impl CloudSyncHook {
             .iter()
             .any(|w| w.id == workspace_id || w.name == workspace_id);
 
-        // Allow access if user owns the workspace, or get/create default
-        let workspace_id = if !has_access {
-            self.repo
-                .get_or_create_workspace(&auth.user.id, "default")
-                .map_err(|e| format!("Failed to get/create workspace: {}", e))?
-        } else {
-            workspace_id.to_string()
-        };
+        if !has_access {
+            return Err(format!(
+                "User does not have access to workspace '{}'",
+                workspace_id
+            ));
+        }
+        let workspace_id = workspace_id.to_string();
 
         Ok(AuthenticatedUser {
             user_id: auth.user.id,

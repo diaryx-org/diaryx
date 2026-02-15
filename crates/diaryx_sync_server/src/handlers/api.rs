@@ -119,8 +119,13 @@ pub struct RestoreResponse {
 pub fn api_routes(state: ApiState) -> Router {
     Router::new()
         .route("/status", get(get_status))
-        .route("/workspaces", get(list_workspaces))
-        .route("/workspaces/{workspace_id}", get(get_workspace))
+        .route("/workspaces", get(list_workspaces).post(create_workspace))
+        .route(
+            "/workspaces/{workspace_id}",
+            get(get_workspace)
+                .patch(rename_workspace)
+                .delete(delete_workspace),
+        )
         .route(
             "/workspaces/{workspace_id}/snapshot",
             get(get_workspace_snapshot)
@@ -212,6 +217,157 @@ async fn get_workspace(
         name: workspace.name,
     })
     .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateWorkspaceRequest {
+    name: String,
+}
+
+/// POST /api/workspaces - Create a new workspace
+async fn create_workspace(
+    State(state): State<ApiState>,
+    RequireAuth(auth): RequireAuth,
+    Json(body): Json<CreateWorkspaceRequest>,
+) -> impl IntoResponse {
+    let name = body.name.trim();
+    if name.is_empty() || name.len() > 100 {
+        return (StatusCode::BAD_REQUEST, "Invalid workspace name").into_response();
+    }
+
+    match state.repo.create_workspace(&auth.user.id, name) {
+        Ok(Ok(workspace_id)) => Json(WorkspaceResponse {
+            id: workspace_id,
+            name: name.to_string(),
+        })
+        .into_response(),
+        Ok(Err(limit_msg)) => (StatusCode::FORBIDDEN, limit_msg).into_response(),
+        Err(err) => {
+            // Check for unique constraint violation (duplicate name)
+            let err_str = err.to_string();
+            if err_str.contains("UNIQUE constraint") {
+                return (
+                    StatusCode::CONFLICT,
+                    "A workspace with that name already exists",
+                )
+                    .into_response();
+            }
+            error!("Failed to create workspace: {}", err);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RenameWorkspaceRequest {
+    name: String,
+}
+
+/// PATCH /api/workspaces/:workspace_id - Rename a workspace
+async fn rename_workspace(
+    State(state): State<ApiState>,
+    RequireAuth(auth): RequireAuth,
+    axum::extract::Path(workspace_id): axum::extract::Path<String>,
+    Json(body): Json<RenameWorkspaceRequest>,
+) -> impl IntoResponse {
+    let new_name = body.name.trim();
+    if new_name.is_empty() || new_name.len() > 100 {
+        return (StatusCode::BAD_REQUEST, "Invalid workspace name").into_response();
+    }
+
+    let workspace = match state.repo.get_workspace(&workspace_id) {
+        Ok(Some(w)) => w,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+
+    if workspace.user_id != auth.user.id {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    match state.repo.rename_workspace(&workspace_id, new_name) {
+        Ok(true) => Json(WorkspaceResponse {
+            id: workspace_id,
+            name: new_name.to_string(),
+        })
+        .into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(err) => {
+            let err_str = err.to_string();
+            if err_str.contains("UNIQUE constraint") {
+                return (
+                    StatusCode::CONFLICT,
+                    "A workspace with that name already exists",
+                )
+                    .into_response();
+            }
+            error!("Failed to rename workspace: {}", err);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// DELETE /api/workspaces/:workspace_id - Delete a workspace and all its data
+async fn delete_workspace(
+    State(state): State<ApiState>,
+    RequireAuth(auth): RequireAuth,
+    axum::extract::Path(workspace_id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let workspace = match state.repo.get_workspace(&workspace_id) {
+        Ok(Some(w)) => w,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+
+    if workspace.user_id != auth.user.id {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    // Decrement blob ref counts before deleting the workspace row
+    if let Err(err) = state
+        .repo
+        .replace_workspace_attachment_refs(&workspace_id, &[])
+    {
+        error!(
+            "Failed to clear attachment refs for workspace {}: {}",
+            workspace_id, err
+        );
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    // Delete workspace row (CASCADE handles share_sessions, attachment_refs, etc.)
+    match state.repo.delete_workspace(&workspace_id) {
+        Ok(true) => {}
+        Ok(false) => return StatusCode::NOT_FOUND.into_response(),
+        Err(err) => {
+            error!("Failed to delete workspace {}: {}", workspace_id, err);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+
+    // Clean up git repo directory
+    let git_path = state.sync_v2.storage_cache.git_repo_path(&workspace_id);
+    if git_path.exists() {
+        if let Err(err) = std::fs::remove_dir_all(&git_path) {
+            warn!(
+                "Failed to remove git repo for deleted workspace {}: {}",
+                workspace_id, err
+            );
+        }
+    }
+
+    // Clean up CRDT storage
+    if let Ok(storage) = state.sync_v2.storage_cache.get_storage(&workspace_id) {
+        // Drop the storage to release file handles, then clean up
+        drop(storage);
+    }
+
+    info!(
+        "Deleted workspace {} (name: {}) for user {}",
+        workspace_id, workspace.name, auth.user.id
+    );
+
+    StatusCode::NO_CONTENT.into_response()
 }
 
 /// GET /api/workspaces/:workspace_id/snapshot - Download workspace snapshot zip

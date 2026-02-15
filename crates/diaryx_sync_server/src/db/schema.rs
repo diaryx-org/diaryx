@@ -8,7 +8,8 @@ CREATE TABLE IF NOT EXISTS users (
     email TEXT UNIQUE NOT NULL,
     created_at INTEGER NOT NULL,
     last_login_at INTEGER,
-    attachment_limit_bytes INTEGER
+    attachment_limit_bytes INTEGER,
+    workspace_limit INTEGER
 );
 
 -- Devices table (tracks client devices)
@@ -234,6 +235,16 @@ pub fn init_database(conn: &Connection) -> Result<(), rusqlite::Error> {
         [],
     )?;
 
+    // Forward migration: add workspace_limit column to users table.
+    let has_workspace_limit_col: bool = conn
+        .prepare("PRAGMA table_info(users)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|name| name == "workspace_limit");
+    if !has_workspace_limit_col {
+        conn.execute("ALTER TABLE users ADD COLUMN workspace_limit INTEGER", [])?;
+    }
+
     let has_published_sites = conn
         .query_row(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='published_sites' LIMIT 1",
@@ -305,6 +316,7 @@ mod tests {
             .filter_map(|r| r.ok())
             .collect();
         assert!(user_cols.contains(&"attachment_limit_bytes".to_string()));
+        assert!(user_cols.contains(&"workspace_limit".to_string()));
 
         let site_cols: Vec<String> = conn
             .prepare("PRAGMA table_info(published_sites)")

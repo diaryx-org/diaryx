@@ -76,6 +76,7 @@ pub struct MeResponse {
     pub user: UserResponse,
     pub workspaces: Vec<WorkspaceResponse>,
     pub devices: Vec<DeviceResponse>,
+    pub workspace_limit: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -269,6 +270,11 @@ async fn get_current_user(
         })
         .collect();
 
+    let workspace_limit = state
+        .repo
+        .get_effective_workspace_limit(&auth.user.id)
+        .unwrap_or(crate::db::AuthRepo::DEFAULT_WORKSPACE_LIMIT);
+
     Json(MeResponse {
         user: UserResponse {
             id: auth.user.id,
@@ -276,6 +282,7 @@ async fn get_current_user(
         },
         workspaces,
         devices,
+        workspace_limit,
     })
 }
 

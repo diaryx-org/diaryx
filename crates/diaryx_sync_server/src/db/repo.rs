@@ -12,6 +12,7 @@ pub struct UserInfo {
     pub created_at: DateTime<Utc>,
     pub last_login_at: Option<DateTime<Utc>>,
     pub attachment_limit_bytes: Option<u64>,
+    pub workspace_limit: Option<u32>,
 }
 
 /// Device information
@@ -172,7 +173,7 @@ impl AuthRepo {
     pub fn get_user(&self, user_id: &str) -> Result<Option<UserInfo>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, email, created_at, last_login_at, attachment_limit_bytes FROM users WHERE id = ?",
+            "SELECT id, email, created_at, last_login_at, attachment_limit_bytes, workspace_limit FROM users WHERE id = ?",
             [user_id],
             |row| {
                 Ok(UserInfo {
@@ -181,6 +182,7 @@ impl AuthRepo {
                     created_at: timestamp_to_datetime(row.get(2)?),
                     last_login_at: row.get::<_, Option<i64>>(3)?.map(timestamp_to_datetime),
                     attachment_limit_bytes: row.get::<_, Option<i64>>(4)?.map(|v| v as u64),
+                    workspace_limit: row.get::<_, Option<i64>>(5)?.map(|v| v as u32),
                 })
             },
         )
@@ -191,7 +193,7 @@ impl AuthRepo {
     pub fn get_user_by_email(&self, email: &str) -> Result<Option<UserInfo>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, email, created_at, last_login_at, attachment_limit_bytes FROM users WHERE email = ?",
+            "SELECT id, email, created_at, last_login_at, attachment_limit_bytes, workspace_limit FROM users WHERE email = ?",
             [email],
             |row| {
                 Ok(UserInfo {
@@ -200,6 +202,7 @@ impl AuthRepo {
                     created_at: timestamp_to_datetime(row.get(2)?),
                     last_login_at: row.get::<_, Option<i64>>(3)?.map(timestamp_to_datetime),
                     attachment_limit_bytes: row.get::<_, Option<i64>>(4)?.map(|v| v as u64),
+                    workspace_limit: row.get::<_, Option<i64>>(5)?.map(|v| v as u32),
                 })
             },
         )
@@ -594,6 +597,118 @@ impl AuthRepo {
             },
         )
         .optional()
+    }
+
+    /// Create a new workspace for a user, checking the workspace limit.
+    /// Returns the workspace ID on success, or an error string if the limit is exceeded.
+    pub fn create_workspace(
+        &self,
+        user_id: &str,
+        name: &str,
+    ) -> Result<Result<String, String>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+
+        // Check limit
+        let limit = self.get_effective_workspace_limit_inner(&conn, user_id)?;
+        let count = self.count_user_workspaces_inner(&conn, user_id)?;
+        if count >= limit as usize {
+            return Ok(Err(format!(
+                "Workspace limit reached ({}/{})",
+                count, limit
+            )));
+        }
+
+        // Check name uniqueness (the DB unique index also enforces this)
+        let workspace_id = uuid::Uuid::new_v4().to_string();
+        let now = Utc::now().timestamp();
+
+        conn.execute(
+            "INSERT INTO user_workspaces (id, user_id, name, created_at) VALUES (?, ?, ?, ?)",
+            params![workspace_id, user_id, name, now],
+        )?;
+
+        Ok(Ok(workspace_id))
+    }
+
+    /// Rename a workspace. Returns true if the row was updated, false if not found.
+    pub fn rename_workspace(
+        &self,
+        workspace_id: &str,
+        new_name: &str,
+    ) -> Result<bool, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let updated = conn.execute(
+            "UPDATE user_workspaces SET name = ? WHERE id = ?",
+            params![new_name, workspace_id],
+        )?;
+        Ok(updated > 0)
+    }
+
+    /// Delete a workspace by ID. Returns true if the row was deleted.
+    pub fn delete_workspace(&self, workspace_id: &str) -> Result<bool, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let deleted = conn.execute("DELETE FROM user_workspaces WHERE id = ?", [workspace_id])?;
+        Ok(deleted > 0)
+    }
+
+    /// Count the number of workspaces for a user.
+    pub fn count_user_workspaces(&self, user_id: &str) -> Result<usize, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        self.count_user_workspaces_inner(&conn, user_id)
+    }
+
+    fn count_user_workspaces_inner(
+        &self,
+        conn: &Connection,
+        user_id: &str,
+    ) -> Result<usize, rusqlite::Error> {
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM user_workspaces WHERE user_id = ?",
+            [user_id],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
+    /// Default workspace limit when the user has no explicit limit set.
+    pub const DEFAULT_WORKSPACE_LIMIT: u32 = 1;
+
+    /// Get the effective workspace limit for a user (falls back to default).
+    pub fn get_effective_workspace_limit(&self, user_id: &str) -> Result<u32, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        self.get_effective_workspace_limit_inner(&conn, user_id)
+    }
+
+    fn get_effective_workspace_limit_inner(
+        &self,
+        conn: &Connection,
+        user_id: &str,
+    ) -> Result<u32, rusqlite::Error> {
+        let limit: Option<i64> = conn
+            .query_row(
+                "SELECT workspace_limit FROM users WHERE id = ?",
+                [user_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
+        Ok(limit
+            .map(|v| v as u32)
+            .unwrap_or(Self::DEFAULT_WORKSPACE_LIMIT))
+    }
+
+    /// Set explicit per-user workspace limit (None resets to default).
+    pub fn set_user_workspace_limit(
+        &self,
+        user_id: &str,
+        limit: Option<u32>,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE users SET workspace_limit = ? WHERE id = ?",
+            params![limit.map(|v| v as i64), user_id],
+        )?;
+        Ok(())
     }
 
     // ===== Published site operations =====
@@ -1995,5 +2110,134 @@ mod tests {
         assert_eq!(found.blob_hash, "b".repeat(64));
         assert_eq!(found.size_bytes, 222);
         assert_eq!(found.mime_type, "image/webp");
+    }
+
+    #[test]
+    fn test_workspace_create_respects_limit() {
+        let repo = setup_test_db();
+        let user_id = repo.get_or_create_user("limit-test@example.com").unwrap();
+
+        // Default limit is 1
+        let limit = repo.get_effective_workspace_limit(&user_id).unwrap();
+        assert_eq!(limit, AuthRepo::DEFAULT_WORKSPACE_LIMIT);
+
+        // First workspace should succeed
+        let result = repo.create_workspace(&user_id, "first").unwrap();
+        assert!(result.is_ok());
+
+        // Second workspace should fail (limit = 1)
+        let result = repo.create_workspace(&user_id, "second").unwrap();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Workspace limit reached"));
+
+        // Bump limit to 3
+        repo.set_user_workspace_limit(&user_id, Some(3)).unwrap();
+        assert_eq!(repo.get_effective_workspace_limit(&user_id).unwrap(), 3);
+
+        // Now second workspace should succeed
+        let result = repo.create_workspace(&user_id, "second").unwrap();
+        assert!(result.is_ok());
+
+        // Third workspace should succeed
+        let result = repo.create_workspace(&user_id, "third").unwrap();
+        assert!(result.is_ok());
+
+        // Fourth should fail (limit = 3)
+        let result = repo.create_workspace(&user_id, "fourth").unwrap();
+        assert!(result.is_err());
+
+        // Count should be 3
+        assert_eq!(repo.count_user_workspaces(&user_id).unwrap(), 3);
+    }
+
+    #[test]
+    fn test_workspace_rename() {
+        let repo = setup_test_db();
+        let user_id = repo.get_or_create_user("rename-test@example.com").unwrap();
+        repo.set_user_workspace_limit(&user_id, Some(2)).unwrap();
+
+        let ws_id = repo
+            .create_workspace(&user_id, "original")
+            .unwrap()
+            .unwrap();
+
+        // Rename succeeds
+        assert!(repo.rename_workspace(&ws_id, "renamed").unwrap());
+
+        // Verify the name changed
+        let ws = repo.get_workspace(&ws_id).unwrap().unwrap();
+        assert_eq!(ws.name, "renamed");
+
+        // Create another workspace and try to rename to the same name
+        let ws2_id = repo.create_workspace(&user_id, "other").unwrap().unwrap();
+        let result = repo.rename_workspace(&ws2_id, "renamed");
+        assert!(result.is_err()); // UNIQUE constraint violation
+
+        // Rename non-existent workspace returns false
+        assert!(!repo.rename_workspace("nonexistent", "whatever").unwrap());
+    }
+
+    #[test]
+    fn test_workspace_delete() {
+        let repo = setup_test_db();
+        let user_id = repo
+            .get_or_create_user("delete-ws-test@example.com")
+            .unwrap();
+        repo.set_user_workspace_limit(&user_id, Some(2)).unwrap();
+
+        let ws_id = repo
+            .create_workspace(&user_id, "to-delete")
+            .unwrap()
+            .unwrap();
+
+        // Verify it exists
+        assert!(repo.get_workspace(&ws_id).unwrap().is_some());
+        assert_eq!(repo.count_user_workspaces(&user_id).unwrap(), 1);
+
+        // Delete it
+        assert!(repo.delete_workspace(&ws_id).unwrap());
+
+        // Verify it's gone
+        assert!(repo.get_workspace(&ws_id).unwrap().is_none());
+        assert_eq!(repo.count_user_workspaces(&user_id).unwrap(), 0);
+
+        // Deleting again returns false
+        assert!(!repo.delete_workspace(&ws_id).unwrap());
+
+        // Can now create a new workspace with the same name
+        let result = repo.create_workspace(&user_id, "to-delete").unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_workspace_limit_reset_to_default() {
+        let repo = setup_test_db();
+        let user_id = repo.get_or_create_user("reset-test@example.com").unwrap();
+
+        // Set custom limit
+        repo.set_user_workspace_limit(&user_id, Some(5)).unwrap();
+        assert_eq!(repo.get_effective_workspace_limit(&user_id).unwrap(), 5);
+
+        // Reset to default
+        repo.set_user_workspace_limit(&user_id, None).unwrap();
+        assert_eq!(
+            repo.get_effective_workspace_limit(&user_id).unwrap(),
+            AuthRepo::DEFAULT_WORKSPACE_LIMIT
+        );
+    }
+
+    #[test]
+    fn test_workspace_create_duplicate_name_fails() {
+        let repo = setup_test_db();
+        let user_id = repo.get_or_create_user("dup-test@example.com").unwrap();
+        repo.set_user_workspace_limit(&user_id, Some(5)).unwrap();
+
+        repo.create_workspace(&user_id, "myworkspace")
+            .unwrap()
+            .unwrap();
+
+        // Creating with the same name should fail with a DB error (UNIQUE constraint)
+        let result = repo.create_workspace(&user_id, "myworkspace");
+        assert!(result.is_err());
     }
 }

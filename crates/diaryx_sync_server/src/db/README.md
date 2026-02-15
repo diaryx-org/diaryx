@@ -23,6 +23,7 @@ SQLite database layer for the sync server.
 The schema includes attachment usage tracking tables:
 
 - `users.attachment_limit_bytes` (per-user attachment quota; defaults to 1 GiB)
+- `users.workspace_limit` (per-user workspace count limit; defaults to 1)
 - `user_attachment_blobs` (per-user deduplicated blob metadata + ref counts)
 - `workspace_attachment_refs` (workspace path refs to blob hashes)
 - `attachment_uploads` (resumable multipart upload sessions)

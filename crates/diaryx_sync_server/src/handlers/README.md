@@ -22,11 +22,25 @@ HTTP route handlers for the sync server API.
 | File          | Purpose                                               |
 | ------------- | ----------------------------------------------------- |
 | `mod.rs`      | Router setup and middleware                           |
-| `api.rs`      | General API endpoints (status, workspaces)            |
+| `api.rs`      | General API endpoints (status, workspace CRUD)        |
 | `auth.rs`     | Authentication endpoints (magic-link, verify, logout) |
 | `sites.rs`    | Published site and access-token management endpoints   |
 | `sessions.rs` | Share session management endpoints                    |
 | `ws.rs`       | WebSocket upgrade and sync handling                   |
+
+### Workspace CRUD Endpoints
+
+- `GET /api/workspaces` — list user's workspaces
+- `POST /api/workspaces` — create workspace (body: `{"name": "..."}`, enforces per-user workspace limit)
+- `GET /api/workspaces/{id}` — get workspace info
+- `PATCH /api/workspaces/{id}` — rename workspace (body: `{"name": "..."}`)
+- `DELETE /api/workspaces/{id}` — delete workspace + cleanup (git repo, CRDT storage, attachment refs)
+
+Workspace creation returns `403` when the user's workspace limit is reached, and `409` for duplicate names.
+The per-user workspace limit defaults to 1 and can be overridden via `workspace_limit` on the users table.
+The `GET /auth/me` response includes the user's `workspace_limit`.
+
+### Snapshot Endpoints
 
 `api.rs` also serves workspace snapshot downloads and uploads at
 `GET /api/workspaces/{workspace_id}/snapshot` and

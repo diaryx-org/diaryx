@@ -33,3 +33,7 @@ This directory contains the source code for the WASM bindings.
 | `opfs_fs.rs` | Origin Private File System filesystem |
 | `utils.rs` | Utility functions for WASM |
 | `wasm_sqlite_storage.rs` | SQLite storage for WASM CRDT |
+
+`backend.rs` keeps `setCrdtEnabled` synchronized between the control-side
+filesystem handle and the command-execution `Diaryx` filesystem handle so guest
+session edits correctly emit CRDT updates after sync bootstrap.

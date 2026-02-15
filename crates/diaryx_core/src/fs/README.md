@@ -59,6 +59,10 @@ sync writes from being re-emitted as new local CRDT updates.
 so path aliases (`README.md`, `./README.md`, `/README.md`) map to one logical
 file during sync echo handling.
 
+`CrdtFs` now shares its enabled flag across cloned decorator instances. This
+keeps runtime `set_enabled()` toggles consistent when one clone is used for
+command execution and another for control/sync wiring.
+
 Sync write suppression now applies to `move_file` and `delete_file` too (not
 just `write_file`). This is critical for safe-write swaps (`file -> file.bak ->
 file`) used by metadata updates during remote sync. Temp-file paths (`.tmp`,

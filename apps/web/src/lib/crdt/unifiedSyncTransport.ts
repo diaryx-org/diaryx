@@ -268,10 +268,13 @@ export class UnifiedSyncTransport {
    * Call this when local CRDT changes need to be synced.
    */
   async queueLocalUpdate(docId: string, data: Uint8Array): Promise<void> {
+    console.log('[UnifiedSyncTransport] queueLocalUpdate: docId=', docId, 'data_len=', data.length, 'isConnected=', this.isConnected);
     const backend = this.options.backend;
     if (backend.syncQueueLocalUpdate) {
       await backend.syncQueueLocalUpdate(docId, data);
       await this.drainAndSend();
+    } else {
+      console.warn('[UnifiedSyncTransport] queueLocalUpdate: no syncQueueLocalUpdate on backend');
     }
   }
 
@@ -320,6 +323,10 @@ export class UnifiedSyncTransport {
     if (!backend.syncDrain) return;
 
     const { binary, text, events } = await backend.syncDrain();
+
+    if (binary.length > 0 || text.length > 0) {
+      console.log('[UnifiedSyncTransport] drainAndSend: binary=', binary.length, 'text=', text.length, 'events=', events.length, 'isConnected=', this.isConnected);
+    }
 
     // Send binary messages
     for (const msg of binary) {

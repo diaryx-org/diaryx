@@ -170,14 +170,14 @@ impl BodyDoc {
     pub fn set_sync_callback(&self, callback: SyncCallback) {
         let doc_name = self.doc_name.read().unwrap().clone();
         if self._update_subscription.read().unwrap().is_some() {
-            log::trace!(
-                "[BodyDoc] set_sync_callback: observer already registered for '{}', skipping",
+            log::warn!(
+                "[BodyDoc] DEBUG set_sync_callback: observer ALREADY registered for '{}', skipping",
                 doc_name
             );
             return;
         }
-        log::trace!(
-            "[BodyDoc] set_sync_callback: registering observer for '{}'",
+        log::warn!(
+            "[BodyDoc] DEBUG set_sync_callback: REGISTERING observer for '{}'",
             doc_name
         );
 
@@ -198,16 +198,17 @@ impl BodyDoc {
 
                 // Skip if this is a remote update (we don't want to echo it back)
                 if applying_remote.load(Ordering::SeqCst) {
-                    log::trace!(
-                        "[BodyDoc] Observer skipping remote update for '{}'",
-                        current_doc_name
+                    log::warn!(
+                        "[BodyDoc] DEBUG Observer: SKIPPING remote update for '{}', update_len={}",
+                        current_doc_name,
+                        event.update.len()
                     );
                     return;
                 }
 
                 // Emit sync message with the update bytes
-                log::trace!(
-                    "[BodyDoc] Observer fired for '{}', update_len={}",
+                log::warn!(
+                    "[BodyDoc] DEBUG Observer: FIRING for '{}', update_len={}",
                     current_doc_name,
                     event.update.len()
                 );
@@ -268,10 +269,12 @@ impl BodyDoc {
     /// Returns an error if the update fails to persist to storage.
     pub fn set_body(&self, content: &str) -> StorageResult<()> {
         let doc_name = self.doc_name.read().unwrap().clone();
-        log::trace!(
-            "[BodyDoc] set_body called for '{}', content_len={}",
+        let has_observer = self._update_subscription.read().unwrap().is_some();
+        log::warn!(
+            "[BodyDoc] DEBUG set_body: doc='{}', content_len={}, has_observer={}",
             doc_name,
-            content.len()
+            content.len(),
+            has_observer
         );
 
         // Get current content and state vector before the change
@@ -282,17 +285,20 @@ impl BodyDoc {
 
         // If content is the same, no-op
         if current == content {
-            log::trace!(
-                "[BodyDoc] set_body: content unchanged for '{}', no-op",
-                doc_name
+            log::warn!(
+                "[BodyDoc] DEBUG set_body: UNCHANGED doc='{}', both_len={}",
+                doc_name,
+                content.len()
             );
             return Ok(());
         }
-        log::trace!(
-            "[BodyDoc] set_body: content changed for '{}', current_len={}, new_len={}",
+        log::warn!(
+            "[BodyDoc] DEBUG set_body: CHANGED doc='{}', current_len={}, new_len={}, current_preview='{}', new_preview='{}'",
             doc_name,
             current.len(),
-            content.len()
+            content.len(),
+            current.chars().take(80).collect::<String>(),
+            content.chars().take(80).collect::<String>()
         );
 
         // Calculate minimal diff using byte offsets.

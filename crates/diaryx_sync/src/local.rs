@@ -10,12 +10,13 @@
 
 use async_trait::async_trait;
 use axum::{Json, Router, extract::Path, extract::State, http::StatusCode, routing::get};
+use diaryx_core::crdt::{BodyDoc, CrdtStorage};
 use rand::Rng;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
-use tracing::info;
+use tracing::{error, info};
 
 use crate::hooks::SyncHookDelegate;
 use crate::protocol::{AuthenticatedUser, DirtyWorkspaces, DocType};
@@ -45,13 +46,22 @@ pub fn generate_session_code() -> String {
 pub struct LocalSyncHook {
     workspace_id: String,
     session_code: String,
+    workspace_root: PathBuf,
+    storage_cache: Arc<StorageCache>,
 }
 
 impl LocalSyncHook {
-    pub fn new(workspace_id: String, session_code: String) -> Self {
+    pub fn new(
+        workspace_id: String,
+        session_code: String,
+        workspace_root: PathBuf,
+        storage_cache: Arc<StorageCache>,
+    ) -> Self {
         Self {
             workspace_id,
             session_code,
+            workspace_root,
+            storage_cache,
         }
     }
 }
@@ -92,6 +102,71 @@ impl SyncHookDelegate for LocalSyncHook {
 
     async fn on_workspace_changed(&self, _workspace_id: &str) {
         // No-op for local mode — no git auto-commit or attachment reconciliation
+    }
+
+    async fn on_body_changed(&self, workspace_id: &str, path: &str) {
+        // Materialize body CRDT changes back to the filesystem
+        eprintln!(
+            "[LocalSyncHook] on_body_changed: ws={}, path={}",
+            workspace_id, path
+        );
+        let file_path = self.workspace_root.join(path);
+
+        let storage = match self.storage_cache.get_storage(workspace_id) {
+            Ok(s) => s,
+            Err(e) => {
+                error!("Failed to get storage for body write-back: {}", e);
+                return;
+            }
+        };
+
+        let body_key = format!("body:{}/{}", workspace_id, path);
+        let body_storage: Arc<dyn CrdtStorage> = storage;
+        let body_doc = match BodyDoc::load(body_storage, body_key) {
+            Ok(doc) => doc,
+            Err(e) => {
+                error!("Failed to load body doc for {}: {}", path, e);
+                return;
+            }
+        };
+
+        let new_body = body_doc.get_body();
+
+        // Read the original file to preserve frontmatter
+        let content = match std::fs::read_to_string(&file_path) {
+            Ok(c) => c,
+            Err(e) => {
+                error!("Failed to read file for write-back {}: {}", path, e);
+                return;
+            }
+        };
+
+        let parsed = match diaryx_core::frontmatter::parse_or_empty(&content) {
+            Ok(p) => p,
+            Err(e) => {
+                error!("Failed to parse frontmatter for {}: {}", path, e);
+                return;
+            }
+        };
+
+        let new_content = match diaryx_core::frontmatter::serialize(&parsed.frontmatter, &new_body)
+        {
+            Ok(c) => c,
+            Err(e) => {
+                error!("Failed to serialize file {}: {}", path, e);
+                return;
+            }
+        };
+
+        if let Err(e) = std::fs::write(&file_path, &new_content) {
+            error!("Failed to write file {}: {}", path, e);
+        } else {
+            info!(
+                "Wrote body update to filesystem: {} ({} bytes)",
+                path,
+                new_content.len()
+            );
+        }
     }
 }
 
@@ -134,11 +209,13 @@ pub fn create_local_router(
     workspace_id: String,
     session_code: String,
 ) -> Router {
-    let storage_cache = Arc::new(StorageCache::new(workspace_root));
+    let storage_cache = Arc::new(StorageCache::new(workspace_root.clone()));
     let dirty_workspaces: DirtyWorkspaces = Arc::new(Default::default());
     let delegate = Arc::new(LocalSyncHook::new(
         workspace_id.clone(),
         session_code.clone(),
+        workspace_root,
+        storage_cache.clone(),
     ));
 
     let sync_server = SyncServer::new(delegate, storage_cache, dirty_workspaces);
@@ -168,6 +245,7 @@ pub fn create_local_router(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use diaryx_core::crdt::CrdtStorage;
 
     #[test]
     fn test_generate_session_code_format() {
@@ -187,6 +265,65 @@ mod tests {
                 .chars()
                 .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()),
             "Code should be uppercase alphanumeric"
+        );
+    }
+
+    /// Test that `on_body_changed` materializes CRDT body updates back to the filesystem.
+    ///
+    /// Simulates the flow: guest edit → body doc update in storage → on_body_changed →
+    /// file written with updated body and preserved frontmatter.
+    #[tokio::test]
+    async fn test_on_body_changed_writes_to_filesystem() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace_root = tmp.path().to_path_buf();
+        let workspace_id = "test-ws";
+
+        // Create a markdown file with frontmatter and initial body
+        let file_path = workspace_root.join("README.md");
+        let initial_content = "---\ntitle: Test Document\n---\nOriginal body content.\n";
+        std::fs::write(&file_path, initial_content).unwrap();
+
+        // Create storage and populate the body doc (simulating initialize_crdt_from_workspace)
+        let storage_cache = Arc::new(StorageCache::new(workspace_root.clone()));
+        let storage = storage_cache.get_storage(workspace_id).unwrap();
+        let body_key = format!("body:{}/README.md", workspace_id);
+        let body_storage: Arc<dyn CrdtStorage> = storage.clone();
+        let body_doc = BodyDoc::new(body_storage.clone(), body_key.clone());
+        body_doc.set_body("Original body content.\n").unwrap();
+        body_doc.save().unwrap();
+
+        // Simulate a guest edit: modify the body doc in storage
+        let body_doc2 = BodyDoc::load(body_storage, body_key).unwrap();
+        body_doc2
+            .set_body("Updated body from guest edit.\n")
+            .unwrap();
+        body_doc2.save().unwrap();
+
+        // Create the hook and call on_body_changed
+        let hook = LocalSyncHook::new(
+            workspace_id.to_string(),
+            "TEST-CODE".to_string(),
+            workspace_root,
+            storage_cache,
+        );
+        hook.on_body_changed(workspace_id, "README.md").await;
+
+        // Verify the file was updated with the new body but preserved frontmatter
+        let result = std::fs::read_to_string(&file_path).unwrap();
+        assert!(
+            result.contains("title: Test Document"),
+            "Frontmatter should be preserved. Got:\n{}",
+            result
+        );
+        assert!(
+            result.contains("Updated body from guest edit."),
+            "Body should be updated. Got:\n{}",
+            result
+        );
+        assert!(
+            !result.contains("Original body content"),
+            "Old body should be gone. Got:\n{}",
+            result
         );
     }
 }

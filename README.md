@@ -23,7 +23,6 @@ attachments:
 - '[release.toml](/release.toml)'
 - '[Cargo.toml](/Cargo.toml)'
 ---
-
 # Diaryx
 
 Diaryx is software for personal writing, designed to embed standardized metadata into markdown files, which leads to a wide range of emergent benefits:
@@ -39,17 +38,17 @@ All of this logic is defined in the `diaryx_core` Rust crate, and is used by the
 
 ## Codebase organization
 
-- [`crates/diaryx_core`](crates/diaryx_core/README.md): Core logic for all Diaryx apps.
-- [`crates/diaryx`](crates/diaryx/README.md): CLI frontend for Diaryx.
-- [`crates/diaryx_wasm`](crates/diaryx_wasm/README.md): WebAssembly bindings for `diaryx_core`, used in `apps/web`.
-[`crates/diaryx_sync_server`](crates/diaryx_sync_server/README.md): Sync server to allow sync/live editing functionality in Web/Tauri clients.
-- [`apps/web`](apps/web/README.md): Svelte + TipTap frontend for Diaryx.
-- [`apps/tauri`](apps/tauri/README.md): Tauri frontend for Diaryx. Uses `apps/web` as its frontend, but calls the functions through the Tauri backend instead of through WebAssembly, allowing for native filesystem access.
-- [`workers/site-proxy`](workers/site-proxy/README.md): Cloudflare Worker for serving published static sites with audience-gated access.
+- `[crates/diaryx_core](crates/diaryx_core/README.md)`: Core logic for all Diaryx apps.
+- `[crates/diaryx](crates/diaryx/README.md)`: CLI frontend for Diaryx.
+- `[crates/diaryx_wasm](crates/diaryx_wasm/README.md)`: WebAssembly bindings for `diaryx_core`, used in `apps/web`.
+`[crates/diaryx_sync_server](crates/diaryx_sync_server/README.md)`: Sync server to allow sync/live editing functionality in Web/Tauri clients.
+- `[apps/web](apps/web/README.md)`: Svelte + TipTap frontend for Diaryx.
+- `[apps/tauri](apps/tauri/README.md)`: Tauri frontend for Diaryx. Uses `apps/web` as its frontend, but calls the functions through the Tauri backend instead of through WebAssembly, allowing for native filesystem access.
+- `[workers/site-proxy](workers/site-proxy/README.md)`: Cloudflare Worker for serving published static sites with audience-gated access.
 
 ## Installation
 
-You can try a live demo of the Diaryx web frontend at <https://diaryx-org.github.io/diaryx/>.
+You can try a live demo of the Diaryx web frontend at [https://diaryx-org.github.io/diaryx/](https://diaryx-org.github.io/diaryx/).
 
 You can also go into GitHub releases and use the Diaryx app as you please, "except for providing any product that competes with the software or any product the licensor or any of its affiliates provides using the software." (See [the license](./LICENSE.md)).
 

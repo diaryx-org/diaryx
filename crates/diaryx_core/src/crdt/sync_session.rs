@@ -141,13 +141,31 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
     fn mark_body_ready(&self, path: &str) {
         let normalized = normalize_sync_path(path);
         let mut pending = self.pending_body_docs.lock().unwrap();
-        pending.remove(&normalized);
+        let was_present = pending.remove(&normalized);
+        log::warn!(
+            "[SyncSession] DEBUG mark_body_ready: path='{}', was_pending={}, remaining={}",
+            normalized,
+            was_present,
+            pending.len()
+        );
     }
 
     fn maybe_emit_synced(&self) -> Option<SessionAction> {
         let metadata_ready = *self.metadata_ready.lock().unwrap();
-        let pending_empty = self.pending_body_docs.lock().unwrap().is_empty();
+        let pending = self.pending_body_docs.lock().unwrap();
+        let pending_empty = pending.is_empty();
+        let pending_count = pending.len();
+        let pending_preview: Vec<_> = pending.iter().take(5).cloned().collect();
+        drop(pending);
         let mut emitted = self.synced_emitted.lock().unwrap();
+        log::warn!(
+            "[SyncSession] DEBUG maybe_emit_synced: metadata_ready={}, pending_empty={}, pending_count={}, emitted={}, preview={:?}",
+            metadata_ready,
+            pending_empty,
+            pending_count,
+            *emitted,
+            pending_preview
+        );
         if metadata_ready && pending_empty && !*emitted {
             *emitted = true;
             return Some(SessionAction::Emit(SyncEvent::StatusChanged {
@@ -680,6 +698,11 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
 
         // Send body SyncStep1 for all known files
         let file_paths = self.sync_manager.get_all_file_paths();
+        log::warn!(
+            "[SyncSession] DEBUG transition_to_active: {} file paths to sync: {:?}",
+            file_paths.len(),
+            file_paths.iter().take(10).collect::<Vec<_>>()
+        );
         let mut body_actions = self.queue_body_sync_step1_for_paths(&file_paths, true, true);
         actions.append(&mut body_actions);
 

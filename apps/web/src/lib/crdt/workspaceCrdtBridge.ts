@@ -663,7 +663,9 @@ export function setBackendApi(_api: Api): void {
  * This is used for Rust-backed sync helpers that need direct backend access.
  */
 export function setBackend(backend: Backend): void {
+  console.log('[WorkspaceCrdtBridge] setBackend called, has onFileSystemEvent:', !!backend.onFileSystemEvent);
   _backend = backend;
+  initEventSubscription(backend);
   setAttachmentSyncBackend(backend);
   refreshAttachmentSyncContext();
 }
@@ -890,7 +892,11 @@ export async function startSessionSync(
     },
     onWorkspaceSynced: async () => {
       console.log('[WorkspaceCrdtBridge] Session workspace sync complete, isHost:', isHost);
-      if (_backend?.setCrdtEnabled) await _backend.setCrdtEnabled(true);
+      if (_backend?.setCrdtEnabled) {
+        await _backend.setCrdtEnabled(true);
+        const enabled = _backend.isCrdtEnabled ? await _backend.isCrdtEnabled() : 'N/A';
+        console.log('[WorkspaceCrdtBridge] CrdtFs enabled after sync:', enabled);
+      }
       notifySyncStatus('synced');
       if (!isHost) notifySessionSync();
       syncResolve();
@@ -941,6 +947,12 @@ export async function startSessionSync(
     console.log('[WorkspaceCrdtBridge] Session sync fully complete');
   } catch (error) {
     console.warn('[WorkspaceCrdtBridge] Session sync did not complete in time, continuing anyway');
+    // Enable CrdtFs even on timeout — otherwise guest edits won't propagate
+    // because update_crdt_for_file_internal returns early when CrdtFs is disabled
+    if (_backend?.setCrdtEnabled) {
+      await _backend.setCrdtEnabled(true);
+      console.log('[WorkspaceCrdtBridge] CrdtFs enabled after sync timeout');
+    }
   }
 }
 
@@ -2492,6 +2504,11 @@ function handleFileSystemEvent(event: FileSystemEvent): void {
     return;
   }
 
+  // DEBUG: Log all events to trace guest edit flow
+  if (event.type === 'SendSyncMessage' || event.type === 'ContentsChanged' || event.type === 'MetadataChanged') {
+    console.log('[WorkspaceCrdtBridge] handleFileSystemEvent:', event.type, 'is_body' in event ? (event as any).is_body : '', 'doc_name' in event ? (event as any).doc_name : (event as any).path);
+  }
+
   switch (event.type) {
     case 'FileCreated':
       // New file created - notify UI
@@ -2592,11 +2609,14 @@ function handleFileSystemEvent(event: FileSystemEvent): void {
       //
       // For native sync (Tauri): Skip - native SyncClient handles this internally.
       if (_backend?.hasNativeSync?.()) {
+        console.log('[WorkspaceCrdtBridge] SendSyncMessage: SKIPPED (native sync)');
         break;
       }
 
       const { doc_name, message, is_body } = event as any;
       const bytes = new Uint8Array(message);
+
+      console.log('[WorkspaceCrdtBridge] SendSyncMessage: doc_name=', doc_name, 'is_body=', is_body, 'bytes_len=', bytes.length, '_workspaceId=', _workspaceId, 'hasTransport=', !!unifiedSyncTransport);
 
       if (!_workspaceId) {
         console.warn('[WorkspaceCrdtBridge] Dropping sync message: missing workspace ID');
@@ -2609,10 +2629,12 @@ function handleFileSystemEvent(event: FileSystemEvent): void {
         : `workspace:${_workspaceId}`;
 
       if (unifiedSyncTransport) {
+        console.log('[WorkspaceCrdtBridge] SendSyncMessage: queueing docId=', docId);
         unifiedSyncTransport.queueLocalUpdate(docId, bytes).catch(err => {
           console.warn('[WorkspaceCrdtBridge] Failed to queue sync message:', err);
         });
       } else {
+        console.log('[WorkspaceCrdtBridge] SendSyncMessage: queued to pendingLocalSyncUpdates (no transport), docId=', docId);
         // Queue until a transport is connected (reconnect / setup transition).
         pendingLocalSyncUpdates.push({ docId, bytes });
         // Keep bounded to avoid unbounded memory growth if sync is down.

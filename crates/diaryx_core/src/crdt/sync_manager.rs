@@ -161,8 +161,8 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         event_callback: Arc<dyn Fn(&FileSystemEvent) + Send + Sync>,
     ) {
         let sync_callback = Arc::new(move |doc_name: &str, update: &[u8]| {
-            log::debug!(
-                "[SyncManager] Body observer: doc='{}', update_len={}",
+            log::warn!(
+                "[SyncManager] DEBUG Body observer callback: doc='{}', update_len={}",
                 doc_name,
                 update.len()
             );

@@ -354,9 +354,17 @@ thread_local! {
 /// to the WASM-specific WasmCallbackRegistry (which holds JS functions).
 fn create_event_bridge() -> Arc<dyn Fn(&FileSystemEvent) + Send + Sync> {
     Arc::new(|event: &FileSystemEvent| {
+        // Log SendSyncMessage events at warn level so they show up
+        if matches!(event, FileSystemEvent::SendSyncMessage { .. }) {
+            log::warn!(
+                "[EventBridge] DEBUG: Forwarding SendSyncMessage event to WASM_EVENT_REGISTRY"
+            );
+        }
         WASM_EVENT_REGISTRY.with(|reg| {
             if let Some(registry) = reg.borrow().as_ref() {
                 registry.emit(event);
+            } else {
+                log::warn!("[EventBridge] DEBUG: WASM_EVENT_REGISTRY is None!");
             }
         });
     })
@@ -944,13 +952,16 @@ impl DiaryxBackend {
     #[wasm_bindgen(js_name = "setCrdtEnabled")]
     pub fn set_crdt_enabled(&self, enabled: bool) {
         self.fs.inner().set_enabled(enabled);
+        // Keep command-execution writes aligned with explicit toggle calls.
+        // `Diaryx` owns a cloned decorated FS, so we mirror the flag there too.
+        self.diaryx.fs().inner().set_enabled(enabled);
         log::info!("[DiaryxBackend] CrdtFs enabled: {}", enabled);
     }
 
     /// Check whether CrdtFs is currently enabled.
     #[wasm_bindgen(js_name = "isCrdtEnabled")]
     pub fn is_crdt_enabled(&self) -> bool {
-        self.fs.inner().is_enabled()
+        self.diaryx.fs().inner().is_enabled()
     }
 
     // ========================================================================

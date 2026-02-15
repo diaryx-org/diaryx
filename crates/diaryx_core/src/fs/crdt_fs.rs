@@ -79,7 +79,7 @@ pub struct CrdtFs<FS: AsyncFileSystem> {
     /// Manager for per-file body documents.
     body_doc_manager: Arc<BodyDocManager>,
     /// Whether CRDT updates are enabled.
-    enabled: AtomicBool,
+    enabled: Arc<AtomicBool>,
     /// Paths currently being written locally (for loop prevention).
     local_writes_in_progress: RwLock<HashSet<PathBuf>>,
     /// Paths currently being written from sync (skip CRDT updates entirely).
@@ -98,7 +98,7 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
             inner,
             workspace_crdt,
             body_doc_manager,
-            enabled: AtomicBool::new(false),
+            enabled: Arc::new(AtomicBool::new(false)),
             local_writes_in_progress: RwLock::new(HashSet::new()),
             sync_writes_in_progress: RwLock::new(HashSet::new()),
         }
@@ -417,12 +417,16 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
     /// to prevent stale state from being merged with new content.
     async fn update_crdt_for_file_internal(&self, path: &Path, content: &str, is_new_file: bool) {
         if !self.is_enabled() {
+            log::warn!(
+                "[CrdtFs] DEBUG: update_crdt_for_file_internal SKIPPED (disabled) path={:?}",
+                path
+            );
             return;
         }
 
         // Skip CRDT update if this is a sync write (prevents feedback loops)
         if self.is_sync_write_in_progress(path) {
-            log::debug!("CrdtFs: Skipping CRDT update for sync write: {:?}", path);
+            log::warn!("CrdtFs: Skipping CRDT update for sync write: {:?}", path);
             return;
         }
 
@@ -437,6 +441,13 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
             );
             return;
         }
+
+        log::warn!(
+            "[CrdtFs] DEBUG: update_crdt_for_file_internal RUNNING: path='{}', is_new_file={}, content_len={}",
+            path_str,
+            is_new_file,
+            content.len()
+        );
         log::trace!(
             "[CrdtFs] update_crdt_for_file_internal: path_str='{}', is_new_file={}, body_preview='{}'",
             path_str,
@@ -488,22 +499,20 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
         }
 
         // Update workspace CRDT with the doc_key (doc_id or path)
-        log::trace!("[CrdtFs] BEFORE set_file: doc_key={}", doc_key);
+        log::warn!("[CrdtFs] DEBUG: BEFORE set_file: doc_key={}", doc_key);
         if let Err(e) = self.workspace_crdt.set_file(&doc_key, metadata.clone()) {
             log::warn!("[CrdtFs] set_file FAILED: {}: {}", doc_key, e);
         } else {
-            log::trace!("[CrdtFs] set_file SUCCESS: {}", doc_key);
-            // Verify write by reading back (debug only)
-            let verify = self.workspace_crdt.get_file(&doc_key);
-            log::trace!(
-                "[CrdtFs] set_file VERIFY: {} -> {:?}",
-                doc_key,
-                verify.is_some()
-            );
+            log::warn!("[CrdtFs] DEBUG: set_file SUCCESS: doc_key={}", doc_key);
         }
 
         // Update body doc using the same key
         let body = frontmatter::extract_body(content);
+        log::warn!(
+            "[CrdtFs] DEBUG: body extracted, len={}, preview='{}'",
+            body.len(),
+            body.chars().take(50).collect::<String>()
+        );
 
         // For new files, delete any stale storage and create a fresh doc
         // to prevent concatenation with old content from deleted files
@@ -574,7 +583,7 @@ impl<FS: AsyncFileSystem + Clone> Clone for CrdtFs<FS> {
             inner: self.inner.clone(),
             workspace_crdt: Arc::clone(&self.workspace_crdt),
             body_doc_manager: Arc::clone(&self.body_doc_manager),
-            enabled: AtomicBool::new(self.enabled.load(Ordering::SeqCst)),
+            enabled: Arc::clone(&self.enabled),
             local_writes_in_progress: RwLock::new(HashSet::new()),
             sync_writes_in_progress: RwLock::new(HashSet::new()),
         }
@@ -1279,6 +1288,23 @@ mod tests {
         assert!(!fs.is_enabled());
         fs.set_enabled(true);
         assert!(fs.is_enabled());
+    }
+
+    #[test]
+    fn test_clone_shares_enabled_state() {
+        let fs = create_test_crdt_fs();
+        let clone = fs.clone();
+
+        assert!(fs.is_enabled());
+        assert!(clone.is_enabled());
+
+        fs.set_enabled(false);
+        assert!(!fs.is_enabled());
+        assert!(!clone.is_enabled());
+
+        clone.set_enabled(true);
+        assert!(fs.is_enabled());
+        assert!(clone.is_enabled());
     }
 
     #[test]

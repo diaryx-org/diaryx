@@ -22,6 +22,10 @@ rm -f "$REPO_ROOT/Cargo.toml.bak"
 sed -i.bak -E 's/(diaryx_core = \{ path = "[^"]+", version = ")[^"]+(" \})/\1'"$VERSION"'\2/' "$REPO_ROOT/Cargo.toml"
 rm -f "$REPO_ROOT/Cargo.toml.bak"
 
+# Update diaryx_sync dependency version in root Cargo.toml
+sed -i.bak -E 's/(diaryx_sync = \{ path = "[^"]+", version = ")[^"]+(" \})/\1'"$VERSION"'\2/' "$REPO_ROOT/Cargo.toml"
+rm -f "$REPO_ROOT/Cargo.toml.bak"
+
 # Update tauri.conf.json
 sed -i.bak -E 's/("version": ")[^"]+(")/\1'"$VERSION"'\2/' "$REPO_ROOT/apps/tauri/src-tauri/tauri.conf.json"
 rm -f "$REPO_ROOT/apps/tauri/src-tauri/tauri.conf.json.bak"

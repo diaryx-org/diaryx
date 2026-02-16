@@ -57,6 +57,7 @@ fn setup() -> (
         blob_store: Arc::new(InMemoryBlobStore::new("diaryx-sync".to_string())),
         snapshot_upload_max_bytes: 1024 * 1024 * 1024,
         attachment_incremental_sync_enabled: true,
+        admin_secret: None,
     };
 
     let app = Router::new()

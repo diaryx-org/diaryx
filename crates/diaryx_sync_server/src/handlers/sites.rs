@@ -25,7 +25,6 @@ pub struct SitesState {
     pub sites_store: Arc<dyn BlobStore>,
     pub attachments_store: Arc<dyn BlobStore>,
     pub token_signing_key: Vec<u8>,
-    pub site_limit: usize,
     pub sites_base_url: String,
     pub publish_lock: PublishLock,
     pub kv_client: Option<Arc<CloudflareKvClient>>,
@@ -185,6 +184,16 @@ async fn create_site(
         }
     }
 
+    let site_limit = match state.repo.get_effective_published_site_limit(&auth.user.id) {
+        Ok(limit) => limit as usize,
+        Err(_) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "db_error",
+                "Failed to check site limit",
+            );
+        }
+    };
     let count = match state.repo.count_user_sites(&auth.user.id) {
         Ok(count) => count,
         Err(_) => {
@@ -195,7 +204,7 @@ async fn create_site(
             );
         }
     };
-    if count >= state.site_limit {
+    if count >= site_limit {
         return error_response(
             StatusCode::FORBIDDEN,
             "site_limit_reached",

@@ -27,6 +27,7 @@ pub struct ApiState {
     pub blob_store: Arc<dyn BlobStore>,
     pub snapshot_upload_max_bytes: usize,
     pub attachment_incremental_sync_enabled: bool,
+    pub admin_secret: Option<String>,
 }
 
 /// Server status response
@@ -162,6 +163,7 @@ pub fn api_routes(state: ApiState) -> Router {
         )
         .route("/user/has-data", get(check_user_has_data))
         .route("/user/storage", get(get_user_storage))
+        .route("/admin/users/{user_id}/tier", put(set_user_tier))
         .with_state(state)
 }
 
@@ -1368,6 +1370,53 @@ async fn restore_workspace(
                 workspace_id, body.commit_id, e
             );
             (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct SetTierRequest {
+    tier: String,
+}
+
+/// PUT /api/admin/users/:user_id/tier - Set user tier (admin only)
+async fn set_user_tier(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    axum::extract::Path(user_id): axum::extract::Path<String>,
+    Json(body): Json<SetTierRequest>,
+) -> impl IntoResponse {
+    let secret = match &state.admin_secret {
+        Some(s) => s,
+        None => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    let provided = headers
+        .get("x-admin-secret")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if provided != secret {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    let tier = match body.tier.as_str() {
+        "free" => crate::db::UserTier::Free,
+        "plus" => crate::db::UserTier::Plus,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "Invalid tier (must be 'free' or 'plus')",
+            )
+                .into_response();
+        }
+    };
+
+    match state.repo.set_user_tier(&user_id, tier) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(err) => {
+            error!("Failed to set user tier: {}", err);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
 }

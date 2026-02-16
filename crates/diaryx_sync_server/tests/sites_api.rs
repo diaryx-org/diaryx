@@ -66,7 +66,6 @@ fn setup() -> (
         sites_store: Arc::new(InMemoryBlobStore::new("diaryx-sync")),
         attachments_store: Arc::new(InMemoryBlobStore::new("diaryx-sync")),
         token_signing_key: vec![7; 32],
-        site_limit: 1,
         sites_base_url: "https://sites.example.com".to_string(),
         publish_lock: new_publish_lock(),
         kv_client: None,

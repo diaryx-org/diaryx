@@ -29,6 +29,9 @@ export interface MeResponse {
   workspaces: Workspace[];
   devices: Device[];
   workspace_limit: number;
+  tier: string;
+  published_site_limit: number;
+  attachment_limit_bytes: number;
 }
 
 export interface MagicLinkResponse {

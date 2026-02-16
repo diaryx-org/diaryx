@@ -77,6 +77,9 @@ pub struct MeResponse {
     pub workspaces: Vec<WorkspaceResponse>,
     pub devices: Vec<DeviceResponse>,
     pub workspace_limit: u32,
+    pub tier: String,
+    pub published_site_limit: u32,
+    pub attachment_limit_bytes: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -276,7 +279,22 @@ async fn get_current_user(
     let workspace_limit = state
         .repo
         .get_effective_workspace_limit(&auth.user.id)
-        .unwrap_or(crate::db::AuthRepo::DEFAULT_WORKSPACE_LIMIT);
+        .unwrap_or(crate::db::UserTier::Free.defaults().workspace_limit);
+
+    let tier = state
+        .repo
+        .get_user_tier(&auth.user.id)
+        .unwrap_or(crate::db::UserTier::Free);
+
+    let published_site_limit = state
+        .repo
+        .get_effective_published_site_limit(&auth.user.id)
+        .unwrap_or(tier.defaults().published_site_limit);
+
+    let attachment_limit_bytes = state
+        .repo
+        .get_effective_user_attachment_limit(&auth.user.id)
+        .unwrap_or(tier.defaults().attachment_limit_bytes);
 
     Json(MeResponse {
         user: UserResponse {
@@ -286,6 +304,9 @@ async fn get_current_user(
         workspaces,
         devices,
         workspace_limit,
+        tier: tier.as_str().to_string(),
+        published_site_limit,
+        attachment_limit_bytes,
     })
 }
 

@@ -30,8 +30,6 @@ pub struct Config {
     pub snapshot_upload_max_bytes: usize,
     /// Enable incremental attachment sync endpoints (default: true)
     pub attachment_incremental_sync_enabled: bool,
-    /// Per-user max number of published sites (default: 1)
-    pub published_site_limit: usize,
     /// R2 bucket for published static site artifacts
     pub sites_r2_bucket: String,
     /// Base URL for published sites (defaults to APP_BASE_URL)
@@ -42,6 +40,8 @@ pub struct Config {
     pub kv_namespace_id: String,
     /// Cloudflare API token with KV write permissions
     pub kv_api_token: String,
+    /// Optional admin secret for tier management endpoints
+    pub admin_secret: Option<String>,
 }
 
 /// Email configuration (Resend HTTP API)
@@ -149,11 +149,6 @@ impl Config {
         let attachment_incremental_sync_enabled = env::var("ATTACHMENT_INCREMENTAL_SYNC_ENABLED")
             .unwrap_or_else(|_| "true".to_string())
             .eq_ignore_ascii_case("true");
-        let published_site_limit = env::var("PUBLISHED_SITE_LIMIT")
-            .unwrap_or_else(|_| "1".to_string())
-            .parse::<usize>()
-            .unwrap_or(1)
-            .max(1);
         let sites_r2_bucket =
             env::var("SITES_R2_BUCKET").unwrap_or_else(|_| "diaryx-sites".to_string());
 
@@ -176,6 +171,10 @@ impl Config {
 
         let kv_namespace_id = env::var("KV_NAMESPACE_ID").unwrap_or_default();
         let kv_api_token = env::var("KV_API_TOKEN").unwrap_or_default();
+        let admin_secret = env::var("ADMIN_SECRET")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
 
         Ok(Config {
             host,
@@ -192,11 +191,11 @@ impl Config {
             r2,
             snapshot_upload_max_bytes,
             attachment_incremental_sync_enabled,
-            published_site_limit,
             sites_r2_bucket,
             token_signing_key,
             kv_namespace_id,
             kv_api_token,
+            admin_secret,
         })
     }
 

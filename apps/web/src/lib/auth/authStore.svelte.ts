@@ -41,6 +41,9 @@ export interface AuthState {
   workspaces: Workspace[];
   devices: Device[];
   workspaceLimit: number;
+  tier: string;
+  publishedSiteLimit: number;
+  attachmentLimitBytes: number;
   /** The currently active workspace ID (reactive). Updated on switch. */
   activeWorkspaceId: string | null;
   storageUsage: UserStorageUsageResponse | null;
@@ -69,6 +72,9 @@ let state = $state<AuthState>({
   workspaces: [],
   devices: [],
   workspaceLimit: 1,
+  tier: "free",
+  publishedSiteLimit: 1,
+  attachmentLimitBytes: 200 * 1024 * 1024,
   activeWorkspaceId: registryGetCurrentWorkspaceId(),
   storageUsage: null,
   error: null,
@@ -196,6 +202,9 @@ export async function initAuth(): Promise<void> {
       state.workspaces = me.workspaces;
       state.devices = me.devices;
       state.workspaceLimit = me.workspace_limit;
+      state.tier = me.tier;
+      state.publishedSiteLimit = me.published_site_limit;
+      state.attachmentLimitBytes = me.attachment_limit_bytes;
       state.isAuthenticated = true;
 
       // Update collaboration settings
@@ -344,6 +353,9 @@ export async function refreshUserInfo(): Promise<void> {
     state.workspaces = me.workspaces;
     state.devices = me.devices;
     state.workspaceLimit = me.workspace_limit;
+    state.tier = me.tier;
+    state.publishedSiteLimit = me.published_site_limit;
+    state.attachmentLimitBytes = me.attachment_limit_bytes;
 
     // Update workspace ID
     const activeWorkspace = getCurrentWorkspace();
@@ -401,6 +413,9 @@ export async function logout(): Promise<void> {
   state.workspaces = [];
   state.devices = [];
   state.workspaceLimit = 1;
+  state.tier = "free";
+  state.publishedSiteLimit = 1;
+  state.attachmentLimitBytes = 200 * 1024 * 1024;
   state.activeWorkspaceId = null;
   state.error = null;
   state.storageUsage = null;
@@ -461,6 +476,9 @@ export async function deleteAccount(): Promise<void> {
   state.workspaces = [];
   state.devices = [];
   state.workspaceLimit = 1;
+  state.tier = "free";
+  state.publishedSiteLimit = 1;
+  state.attachmentLimitBytes = 200 * 1024 * 1024;
   state.activeWorkspaceId = null;
   state.error = null;
   state.storageUsage = null;

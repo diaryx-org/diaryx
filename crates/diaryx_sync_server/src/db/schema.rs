@@ -9,7 +9,9 @@ CREATE TABLE IF NOT EXISTS users (
     created_at INTEGER NOT NULL,
     last_login_at INTEGER,
     attachment_limit_bytes INTEGER,
-    workspace_limit INTEGER
+    workspace_limit INTEGER,
+    tier TEXT NOT NULL DEFAULT 'free',
+    published_site_limit INTEGER
 );
 
 -- Devices table (tracks client devices)
@@ -229,11 +231,9 @@ pub fn init_database(conn: &Connection) -> Result<(), rusqlite::Error> {
             [],
         )?;
     }
-    // Backfill/normalize existing users to 200 MiB default.
-    conn.execute(
-        "UPDATE users SET attachment_limit_bytes = 209715200 WHERE attachment_limit_bytes IS NULL",
-        [],
-    )?;
+    // Note: the old backfill that set attachment_limit_bytes = 209715200 for
+    // NULL rows has been replaced by the tier system. The reverse backfill
+    // above clears explicit 200 MiB limits so tier defaults take effect.
 
     // Forward migration: add workspace_limit column to users table.
     let has_workspace_limit_col: bool = conn
@@ -244,6 +244,39 @@ pub fn init_database(conn: &Connection) -> Result<(), rusqlite::Error> {
     if !has_workspace_limit_col {
         conn.execute("ALTER TABLE users ADD COLUMN workspace_limit INTEGER", [])?;
     }
+
+    // Forward migration: add tier column to users table.
+    let has_tier_col: bool = conn
+        .prepare("PRAGMA table_info(users)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|name| name == "tier");
+    if !has_tier_col {
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN tier TEXT NOT NULL DEFAULT 'free'",
+            [],
+        )?;
+    }
+
+    // Forward migration: add published_site_limit column to users table.
+    let has_published_site_limit_col: bool = conn
+        .prepare("PRAGMA table_info(users)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|name| name == "published_site_limit");
+    if !has_published_site_limit_col {
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN published_site_limit INTEGER",
+            [],
+        )?;
+    }
+
+    // Backfill: clear explicit attachment limits that match the old Free default (200 MiB)
+    // so tier defaults take effect cleanly.
+    conn.execute(
+        "UPDATE users SET attachment_limit_bytes = NULL WHERE attachment_limit_bytes = 209715200",
+        [],
+    )?;
 
     let has_published_sites = conn
         .query_row(
@@ -317,6 +350,8 @@ mod tests {
             .collect();
         assert!(user_cols.contains(&"attachment_limit_bytes".to_string()));
         assert!(user_cols.contains(&"workspace_limit".to_string()));
+        assert!(user_cols.contains(&"tier".to_string()));
+        assert!(user_cols.contains(&"published_site_limit".to_string()));
 
         let site_cols: Vec<String> = conn
             .prepare("PRAGMA table_info(published_sites)")
@@ -329,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn test_migrates_and_backfills_attachment_limit() {
+    fn test_migrates_old_schema_and_adds_tier() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             r#"
@@ -346,13 +381,65 @@ mod tests {
 
         init_database(&conn).unwrap();
 
-        let limit: i64 = conn
+        // Tier column should be added with default 'free'
+        let tier: String = conn
+            .query_row("SELECT tier FROM users WHERE id = 'u1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(tier, "free");
+
+        // published_site_limit should be NULL
+        let psl: Option<i64> = conn
+            .query_row(
+                "SELECT published_site_limit FROM users WHERE id = 'u1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(psl.is_none());
+    }
+
+    #[test]
+    fn test_backfill_clears_old_200mib_default() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE users (
+                id TEXT PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                created_at INTEGER NOT NULL,
+                last_login_at INTEGER,
+                attachment_limit_bytes INTEGER
+            );
+            INSERT INTO users (id, email, created_at, attachment_limit_bytes)
+                VALUES ('u1', 'u1@example.com', 1, 209715200);
+            INSERT INTO users (id, email, created_at, attachment_limit_bytes)
+                VALUES ('u2', 'u2@example.com', 1, 500000000);
+            "#,
+        )
+        .unwrap();
+
+        init_database(&conn).unwrap();
+
+        // u1 had the old 200MiB default → should be cleared to NULL
+        let u1_limit: Option<i64> = conn
             .query_row(
                 "SELECT attachment_limit_bytes FROM users WHERE id = 'u1'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(limit, 209_715_200);
+        assert!(u1_limit.is_none());
+
+        // u2 had a custom limit → should be preserved
+        let u2_limit: Option<i64> = conn
+            .query_row(
+                "SELECT attachment_limit_bytes FROM users WHERE id = 'u2'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(u2_limit, Some(500_000_000));
     }
 }

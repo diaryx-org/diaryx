@@ -37,8 +37,8 @@ HTTP route handlers for the sync server API.
 - `DELETE /api/workspaces/{id}` — delete workspace + cleanup (git repo, CRDT storage, attachment refs)
 
 Workspace creation returns `403` when the user's workspace limit is reached, and `409` for duplicate names.
-The per-user workspace limit defaults to 1 and can be overridden via `workspace_limit` on the users table.
-The `GET /auth/me` response includes the user's `workspace_limit`.
+The per-user workspace limit defaults to the user's tier (Free=1, Plus=10) and can be overridden via `workspace_limit` on the users table.
+The `GET /auth/me` response includes `workspace_limit`, `tier`, `published_site_limit`, and `attachment_limit_bytes`.
 
 ### Snapshot Endpoints
 
@@ -82,3 +82,7 @@ attachment limits. Over-limit requests return `413` with
 - `POST /api/workspaces/{id}/site/tokens` — create signed access token (`audience`, optional `label`, optional `expires_in`).
 - `GET /api/workspaces/{id}/site/tokens` — list token metadata for the workspace site.
 - `DELETE /api/workspaces/{id}/site/tokens/{token_id}` — revoke a token and refresh `_meta.json` revocation list.
+
+### Admin Endpoints
+
+- `PUT /api/admin/users/{user_id}/tier` — set a user's tier (body: `{"tier": "free"|"plus"}`). Requires `X-Admin-Secret` header matching the `ADMIN_SECRET` env var. Returns `204` on success, `401` on bad secret, `404` if no admin secret configured or user not found, `400` on invalid tier.

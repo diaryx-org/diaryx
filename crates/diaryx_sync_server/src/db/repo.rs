@@ -2,7 +2,52 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::sync::{Arc, Mutex};
 
-pub const DEFAULT_ATTACHMENT_LIMIT_BYTES: u64 = 209_715_200;
+/// Tier-based limits for user accounts.
+#[derive(Debug, Clone, Copy)]
+pub struct TierDefaults {
+    pub attachment_limit_bytes: u64,
+    pub workspace_limit: u32,
+    pub published_site_limit: u32,
+}
+
+/// User account tier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserTier {
+    Free,
+    Plus,
+}
+
+impl UserTier {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            UserTier::Free => "free",
+            UserTier::Plus => "plus",
+        }
+    }
+
+    /// Parse a tier string; unknown values fall back to Free.
+    pub fn from_str_lossy(s: &str) -> Self {
+        match s {
+            "plus" => UserTier::Plus,
+            _ => UserTier::Free,
+        }
+    }
+
+    pub fn defaults(&self) -> TierDefaults {
+        match self {
+            UserTier::Free => TierDefaults {
+                attachment_limit_bytes: 200 * 1024 * 1024, // 200 MiB
+                workspace_limit: 1,
+                published_site_limit: 1,
+            },
+            UserTier::Plus => TierDefaults {
+                attachment_limit_bytes: 2 * 1024 * 1024 * 1024, // 2 GiB
+                workspace_limit: 10,
+                published_site_limit: 5,
+            },
+        }
+    }
+}
 
 /// User information
 #[derive(Debug, Clone)]
@@ -13,6 +58,8 @@ pub struct UserInfo {
     pub last_login_at: Option<DateTime<Utc>>,
     pub attachment_limit_bytes: Option<u64>,
     pub workspace_limit: Option<u32>,
+    pub tier: UserTier,
+    pub published_site_limit: Option<u32>,
 }
 
 /// Device information
@@ -173,7 +220,7 @@ impl AuthRepo {
     pub fn get_user(&self, user_id: &str) -> Result<Option<UserInfo>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, email, created_at, last_login_at, attachment_limit_bytes, workspace_limit FROM users WHERE id = ?",
+            "SELECT id, email, created_at, last_login_at, attachment_limit_bytes, workspace_limit, tier, published_site_limit FROM users WHERE id = ?",
             [user_id],
             |row| {
                 Ok(UserInfo {
@@ -183,6 +230,8 @@ impl AuthRepo {
                     last_login_at: row.get::<_, Option<i64>>(3)?.map(timestamp_to_datetime),
                     attachment_limit_bytes: row.get::<_, Option<i64>>(4)?.map(|v| v as u64),
                     workspace_limit: row.get::<_, Option<i64>>(5)?.map(|v| v as u32),
+                    tier: UserTier::from_str_lossy(&row.get::<_, String>(6)?),
+                    published_site_limit: row.get::<_, Option<i64>>(7)?.map(|v| v as u32),
                 })
             },
         )
@@ -193,7 +242,7 @@ impl AuthRepo {
     pub fn get_user_by_email(&self, email: &str) -> Result<Option<UserInfo>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, email, created_at, last_login_at, attachment_limit_bytes, workspace_limit FROM users WHERE email = ?",
+            "SELECT id, email, created_at, last_login_at, attachment_limit_bytes, workspace_limit, tier, published_site_limit FROM users WHERE email = ?",
             [email],
             |row| {
                 Ok(UserInfo {
@@ -203,6 +252,8 @@ impl AuthRepo {
                     last_login_at: row.get::<_, Option<i64>>(3)?.map(timestamp_to_datetime),
                     attachment_limit_bytes: row.get::<_, Option<i64>>(4)?.map(|v| v as u64),
                     workspace_limit: row.get::<_, Option<i64>>(5)?.map(|v| v as u32),
+                    tier: UserTier::from_str_lossy(&row.get::<_, String>(6)?),
+                    published_site_limit: row.get::<_, Option<i64>>(7)?.map(|v| v as u32),
                 })
             },
         )
@@ -223,13 +274,13 @@ impl AuthRepo {
             return Ok(user_id);
         }
 
-        // Create new user
+        // Create new user (NULL limit columns → tier defaults apply)
         let user_id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now().timestamp();
 
         conn.execute(
-            "INSERT INTO users (id, email, created_at, attachment_limit_bytes) VALUES (?, ?, ?, ?)",
-            params![user_id, email, now, DEFAULT_ATTACHMENT_LIMIT_BYTES as i64],
+            "INSERT INTO users (id, email, created_at, tier) VALUES (?, ?, ?, ?)",
+            params![user_id, email, now, UserTier::Free.as_str()],
         )?;
 
         Ok(user_id)
@@ -276,14 +327,26 @@ impl AuthRepo {
         .map(|value| value.flatten())
     }
 
-    /// Get effective attachment limit for a user (1 GiB fallback).
+    /// Get effective attachment limit for a user (per-user override wins, else tier default).
     pub fn get_effective_user_attachment_limit(
         &self,
         user_id: &str,
     ) -> Result<u64, rusqlite::Error> {
-        Ok(self
-            .get_user_attachment_limit(user_id)?
-            .unwrap_or(DEFAULT_ATTACHMENT_LIMIT_BYTES))
+        let conn = self.conn.lock().unwrap();
+        let row: Option<(String, Option<i64>)> = conn
+            .query_row(
+                "SELECT tier, attachment_limit_bytes FROM users WHERE id = ?",
+                [user_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?)),
+            )
+            .optional()?;
+        match row {
+            Some((_tier_str, Some(limit))) => Ok(limit as u64),
+            Some((tier_str, None)) => Ok(UserTier::from_str_lossy(&tier_str)
+                .defaults()
+                .attachment_limit_bytes),
+            None => Ok(UserTier::Free.defaults().attachment_limit_bytes),
+        }
     }
 
     /// Set explicit per-user attachment limit bytes (None resets to default fallback behavior).
@@ -680,10 +743,7 @@ impl AuthRepo {
         Ok(count as usize)
     }
 
-    /// Default workspace limit when the user has no explicit limit set.
-    pub const DEFAULT_WORKSPACE_LIMIT: u32 = 1;
-
-    /// Get the effective workspace limit for a user (falls back to default).
+    /// Get the effective workspace limit for a user (per-user override wins, else tier default).
     pub fn get_effective_workspace_limit(&self, user_id: &str) -> Result<u32, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         self.get_effective_workspace_limit_inner(&conn, user_id)
@@ -694,17 +754,20 @@ impl AuthRepo {
         conn: &Connection,
         user_id: &str,
     ) -> Result<u32, rusqlite::Error> {
-        let limit: Option<i64> = conn
+        let row: Option<(String, Option<i64>)> = conn
             .query_row(
-                "SELECT workspace_limit FROM users WHERE id = ?",
+                "SELECT tier, workspace_limit FROM users WHERE id = ?",
                 [user_id],
-                |row| row.get(0),
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?)),
             )
-            .optional()?
-            .flatten();
-        Ok(limit
-            .map(|v| v as u32)
-            .unwrap_or(Self::DEFAULT_WORKSPACE_LIMIT))
+            .optional()?;
+        match row {
+            Some((_tier_str, Some(limit))) => Ok(limit as u32),
+            Some((tier_str, None)) => Ok(UserTier::from_str_lossy(&tier_str)
+                .defaults()
+                .workspace_limit),
+            None => Ok(UserTier::Free.defaults().workspace_limit),
+        }
     }
 
     /// Set explicit per-user workspace limit (None resets to default).
@@ -719,6 +782,65 @@ impl AuthRepo {
             params![limit.map(|v| v as i64), user_id],
         )?;
         Ok(())
+    }
+
+    /// Get effective published site limit for a user (per-user override wins, else tier default).
+    pub fn get_effective_published_site_limit(
+        &self,
+        user_id: &str,
+    ) -> Result<u32, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let row: Option<(String, Option<i64>)> = conn
+            .query_row(
+                "SELECT tier, published_site_limit FROM users WHERE id = ?",
+                [user_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?)),
+            )
+            .optional()?;
+        match row {
+            Some((_tier_str, Some(limit))) => Ok(limit as u32),
+            Some((tier_str, None)) => Ok(UserTier::from_str_lossy(&tier_str)
+                .defaults()
+                .published_site_limit),
+            None => Ok(UserTier::Free.defaults().published_site_limit),
+        }
+    }
+
+    /// Set explicit per-user published site limit (None resets to tier default).
+    pub fn set_user_published_site_limit(
+        &self,
+        user_id: &str,
+        limit: Option<u32>,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE users SET published_site_limit = ? WHERE id = ?",
+            params![limit.map(|v| v as i64), user_id],
+        )?;
+        Ok(())
+    }
+
+    /// Get the tier for a user.
+    pub fn get_user_tier(&self, user_id: &str) -> Result<UserTier, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let tier_str: Option<String> = conn
+            .query_row("SELECT tier FROM users WHERE id = ?", [user_id], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        Ok(tier_str
+            .map(|s| UserTier::from_str_lossy(&s))
+            .unwrap_or(UserTier::Free))
+    }
+
+    /// Set the tier for a user. Returns true if the row was updated.
+    pub fn set_user_tier(&self, user_id: &str, tier: UserTier) -> Result<bool, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let updated = conn.execute(
+            "UPDATE users SET tier = ? WHERE id = ?",
+            params![tier.as_str(), user_id],
+        )?;
+        Ok(updated > 0)
     }
 
     // ===== Published site operations =====
@@ -1916,17 +2038,16 @@ mod tests {
     }
 
     #[test]
-    fn test_default_user_attachment_limit_is_one_gib() {
+    fn test_default_user_attachment_limit_uses_tier() {
         let repo = setup_test_db();
         let user_id = repo.get_or_create_user("limit-test@example.com").unwrap();
         let user = repo.get_user(&user_id).unwrap().unwrap();
-        assert_eq!(
-            user.attachment_limit_bytes,
-            Some(DEFAULT_ATTACHMENT_LIMIT_BYTES)
-        );
+        // New users have NULL attachment_limit_bytes → tier default applies
+        assert_eq!(user.attachment_limit_bytes, None);
+        assert_eq!(user.tier, UserTier::Free);
 
         let effective = repo.get_effective_user_attachment_limit(&user_id).unwrap();
-        assert_eq!(effective, DEFAULT_ATTACHMENT_LIMIT_BYTES);
+        assert_eq!(effective, UserTier::Free.defaults().attachment_limit_bytes);
     }
 
     #[test]
@@ -1972,23 +2093,20 @@ mod tests {
         let user_id = repo
             .get_or_create_user("boundary-test@example.com")
             .unwrap();
+        let free_limit = UserTier::Free.defaults().attachment_limit_bytes;
 
         let (used, projected, is_new) = repo
-            .compute_projected_usage_after_blob(&user_id, "hash-a", DEFAULT_ATTACHMENT_LIMIT_BYTES)
+            .compute_projected_usage_after_blob(&user_id, "hash-a", free_limit)
             .unwrap();
         assert_eq!(used, 0);
-        assert_eq!(projected, DEFAULT_ATTACHMENT_LIMIT_BYTES);
+        assert_eq!(projected, free_limit);
         assert!(is_new);
-        assert!(projected <= DEFAULT_ATTACHMENT_LIMIT_BYTES);
+        assert!(projected <= free_limit);
 
         let (_, projected, _) = repo
-            .compute_projected_usage_after_blob(
-                &user_id,
-                "hash-b",
-                DEFAULT_ATTACHMENT_LIMIT_BYTES + 1,
-            )
+            .compute_projected_usage_after_blob(&user_id, "hash-b", free_limit + 1)
             .unwrap();
-        assert!(projected > DEFAULT_ATTACHMENT_LIMIT_BYTES);
+        assert!(projected > free_limit);
     }
 
     #[test]
@@ -2127,9 +2245,9 @@ mod tests {
         let repo = setup_test_db();
         let user_id = repo.get_or_create_user("limit-test@example.com").unwrap();
 
-        // Default limit is 1
+        // Default limit is 1 (Free tier)
         let limit = repo.get_effective_workspace_limit(&user_id).unwrap();
-        assert_eq!(limit, AuthRepo::DEFAULT_WORKSPACE_LIMIT);
+        assert_eq!(limit, UserTier::Free.defaults().workspace_limit);
 
         // First workspace should succeed
         let result = repo.create_workspace(&user_id, "first").unwrap();
@@ -2228,11 +2346,11 @@ mod tests {
         repo.set_user_workspace_limit(&user_id, Some(5)).unwrap();
         assert_eq!(repo.get_effective_workspace_limit(&user_id).unwrap(), 5);
 
-        // Reset to default
+        // Reset to default (tier-based)
         repo.set_user_workspace_limit(&user_id, None).unwrap();
         assert_eq!(
             repo.get_effective_workspace_limit(&user_id).unwrap(),
-            AuthRepo::DEFAULT_WORKSPACE_LIMIT
+            UserTier::Free.defaults().workspace_limit
         );
     }
 
@@ -2249,5 +2367,135 @@ mod tests {
         // Creating with the same name should fail with a DB error (UNIQUE constraint)
         let result = repo.create_workspace(&user_id, "myworkspace");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_user_tier_defaults_to_free() {
+        let repo = setup_test_db();
+        let user_id = repo.get_or_create_user("tier-test@example.com").unwrap();
+        let user = repo.get_user(&user_id).unwrap().unwrap();
+        assert_eq!(user.tier, UserTier::Free);
+
+        let tier = repo.get_user_tier(&user_id).unwrap();
+        assert_eq!(tier, UserTier::Free);
+    }
+
+    #[test]
+    fn test_set_user_tier_changes_effective_limits() {
+        let repo = setup_test_db();
+        let user_id = repo.get_or_create_user("tier-change@example.com").unwrap();
+
+        // Free defaults
+        let free = UserTier::Free.defaults();
+        assert_eq!(
+            repo.get_effective_workspace_limit(&user_id).unwrap(),
+            free.workspace_limit
+        );
+        assert_eq!(
+            repo.get_effective_user_attachment_limit(&user_id).unwrap(),
+            free.attachment_limit_bytes
+        );
+        assert_eq!(
+            repo.get_effective_published_site_limit(&user_id).unwrap(),
+            free.published_site_limit
+        );
+
+        // Upgrade to Plus
+        assert!(repo.set_user_tier(&user_id, UserTier::Plus).unwrap());
+        let plus = UserTier::Plus.defaults();
+        assert_eq!(
+            repo.get_effective_workspace_limit(&user_id).unwrap(),
+            plus.workspace_limit
+        );
+        assert_eq!(
+            repo.get_effective_user_attachment_limit(&user_id).unwrap(),
+            plus.attachment_limit_bytes
+        );
+        assert_eq!(
+            repo.get_effective_published_site_limit(&user_id).unwrap(),
+            plus.published_site_limit
+        );
+
+        // Downgrade back to Free
+        assert!(repo.set_user_tier(&user_id, UserTier::Free).unwrap());
+        assert_eq!(
+            repo.get_effective_workspace_limit(&user_id).unwrap(),
+            free.workspace_limit
+        );
+    }
+
+    #[test]
+    fn test_per_user_override_beats_tier_default() {
+        let repo = setup_test_db();
+        let user_id = repo
+            .get_or_create_user("override-test@example.com")
+            .unwrap();
+
+        // Set to Plus tier
+        repo.set_user_tier(&user_id, UserTier::Plus).unwrap();
+        let plus = UserTier::Plus.defaults();
+        assert_eq!(
+            repo.get_effective_workspace_limit(&user_id).unwrap(),
+            plus.workspace_limit
+        );
+
+        // Set explicit per-user override
+        repo.set_user_workspace_limit(&user_id, Some(50)).unwrap();
+        assert_eq!(repo.get_effective_workspace_limit(&user_id).unwrap(), 50);
+
+        // Explicit attachment limit override
+        repo.set_user_attachment_limit(&user_id, Some(999)).unwrap();
+        assert_eq!(
+            repo.get_effective_user_attachment_limit(&user_id).unwrap(),
+            999
+        );
+
+        // Clear overrides → tier defaults apply again
+        repo.set_user_workspace_limit(&user_id, None).unwrap();
+        repo.set_user_attachment_limit(&user_id, None).unwrap();
+        assert_eq!(
+            repo.get_effective_workspace_limit(&user_id).unwrap(),
+            plus.workspace_limit
+        );
+        assert_eq!(
+            repo.get_effective_user_attachment_limit(&user_id).unwrap(),
+            plus.attachment_limit_bytes
+        );
+    }
+
+    #[test]
+    fn test_effective_published_site_limit() {
+        let repo = setup_test_db();
+        let user_id = repo
+            .get_or_create_user("site-limit-test@example.com")
+            .unwrap();
+
+        // Free tier default
+        assert_eq!(
+            repo.get_effective_published_site_limit(&user_id).unwrap(),
+            UserTier::Free.defaults().published_site_limit
+        );
+
+        // Explicit override
+        repo.set_user_published_site_limit(&user_id, Some(10))
+            .unwrap();
+        assert_eq!(
+            repo.get_effective_published_site_limit(&user_id).unwrap(),
+            10
+        );
+
+        // Clear override → tier default
+        repo.set_user_published_site_limit(&user_id, None).unwrap();
+        assert_eq!(
+            repo.get_effective_published_site_limit(&user_id).unwrap(),
+            UserTier::Free.defaults().published_site_limit
+        );
+
+        // Plus tier
+        repo.set_user_tier(&user_id, UserTier::Plus).unwrap();
+        assert_eq!(
+            repo.get_effective_published_site_limit(&user_id).unwrap(),
+            UserTier::Plus.defaults().published_site_limit
+        );
     }
 }

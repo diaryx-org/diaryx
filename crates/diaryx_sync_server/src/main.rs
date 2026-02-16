@@ -132,6 +132,7 @@ async fn main() {
         blob_store: blob_store.clone(),
         snapshot_upload_max_bytes: config.snapshot_upload_max_bytes,
         attachment_incremental_sync_enabled: config.attachment_incremental_sync_enabled,
+        admin_secret: config.admin_secret.clone(),
     };
 
     let sessions_state = diaryx_sync_server::handlers::sessions::SessionsState {
@@ -154,7 +155,6 @@ async fn main() {
         sites_store: sites_store.clone(),
         attachments_store: blob_store.clone(),
         token_signing_key: config.token_signing_key.clone(),
-        site_limit: config.published_site_limit,
         sites_base_url: config.sites_base_url.clone(),
         publish_lock: publish_lock.clone(),
         kv_client,

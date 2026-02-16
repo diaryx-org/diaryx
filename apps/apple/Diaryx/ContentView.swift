@@ -19,6 +19,11 @@ struct ContentView: View {
     @State private var newEntryName: String = ""
     @State private var expandedFolders: Set<String> = []
     @State private var autoSaveTask: Task<Void, Never>?
+    @State private var nodeToRename: SidebarTreeNode?
+    @State private var renameText: String = ""
+    @State private var nodeToDelete: SidebarTreeNode?
+    @State private var nodeForNewChild: SidebarTreeNode?
+    @State private var newChildTitle: String = ""
 
     var body: some View {
         NavigationSplitView {
@@ -84,11 +89,11 @@ struct ContentView: View {
                 List(selection: $selectedPath) {
                     if !tree.path.isEmpty {
                         // Root index: show it as a top-level folder
-                        FileTreeRow(node: tree, expandedFolders: $expandedFolders)
+                        FileTreeRow(node: tree, expandedFolders: $expandedFolders, actions: treeActions)
                     } else {
                         // Filesystem tree: root is the workspace dir, show children directly
                         ForEach(tree.children) { child in
-                            FileTreeRow(node: child, expandedFolders: $expandedFolders)
+                            FileTreeRow(node: child, expandedFolders: $expandedFolders, actions: treeActions)
                         }
                     }
                 }
@@ -120,6 +125,44 @@ struct ContentView: View {
                 onCreate: { createNewEntry(name: newEntryName) },
                 onCancel: { showNewEntrySheet = false }
             )
+        }
+        .sheet(item: $nodeToRename) { node in
+            RenameSheet(
+                name: $renameText,
+                onRename: { renameNode(node, newName: renameText) },
+                onCancel: { nodeToRename = nil }
+            )
+        }
+        .sheet(item: $nodeForNewChild) { node in
+            AddChildSheet(
+                title: $newChildTitle,
+                parentName: node.displayName,
+                onCreate: { addChildToNode(node) },
+                onCancel: { nodeForNewChild = nil }
+            )
+        }
+        .confirmationDialog(
+            "Delete \"\(nodeToDelete?.displayName ?? "")\"?",
+            isPresented: Binding(
+                get: { nodeToDelete != nil },
+                set: { if !$0 { nodeToDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let node = nodeToDelete {
+                    deleteNode(node)
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                nodeToDelete = nil
+            }
+        } message: {
+            if let node = nodeToDelete, node.isFolder {
+                Text("This folder and all its contents will be permanently deleted.")
+            } else {
+                Text("This file will be permanently deleted.")
+            }
         }
         .frame(minWidth: 200)
         .onChange(of: selectedPath) { oldPath, newPath in
@@ -158,6 +201,95 @@ struct ContentView: View {
             } description: {
                 Text("Select a Markdown file from the sidebar to start editing.")
             }
+        }
+    }
+
+    // MARK: - Tree Actions
+
+    private var treeActions: TreeNodeActions {
+        TreeNodeActions(
+            addChild: { node in
+                newChildTitle = ""
+                nodeForNewChild = node
+            },
+            rename: { node in
+                renameText = node.name
+                nodeToRename = node
+            },
+            delete: { node in
+                nodeToDelete = node
+            },
+            moveToParent: { draggedPath, target in
+                moveNodeToParent(draggedPath: draggedPath, target: target)
+            }
+        )
+    }
+
+    private func addChildToNode(_ node: SidebarTreeNode) {
+        nodeForNewChild = nil
+        guard let backend else { return }
+        let trimmed = newChildTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        do {
+            let result = try backend.createChildEntry(parentPath: node.path, title: trimmed)
+            refreshTree()
+            expandParentFolders(for: result.childPath)
+            // Also expand the parent itself
+            expandedFolders.insert(result.parentPath)
+            selectedPath = result.childPath
+        } catch {
+            report(error)
+        }
+    }
+
+    private func renameNode(_ node: SidebarTreeNode, newName: String) {
+        nodeToRename = nil
+        guard let backend else { return }
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        do {
+            let newPath = try backend.renameEntry(path: node.path, newFilename: trimmed)
+            let wasSelected = selectedPath == node.path
+            refreshTree()
+            if wasSelected {
+                selectedPath = newPath
+            }
+        } catch {
+            report(error)
+        }
+    }
+
+    private func deleteNode(_ node: SidebarTreeNode) {
+        nodeToDelete = nil
+        guard let backend else { return }
+
+        do {
+            let wasSelected = selectedPath == node.path
+            try backend.deleteEntry(path: node.path)
+            refreshTree()
+            if wasSelected {
+                selectedPath = nil
+            }
+        } catch {
+            report(error)
+        }
+    }
+
+    private func moveNodeToParent(draggedPath: String, target: SidebarTreeNode) {
+        guard let backend else { return }
+        do {
+            let newPath = try backend.attachAndMoveEntryToParent(
+                entryPath: draggedPath, parentPath: target.path
+            )
+            refreshTree()
+            expandedFolders.insert(target.path)
+            if selectedPath == draggedPath {
+                selectedPath = newPath
+            }
+        } catch {
+            report(error)
         }
     }
 
@@ -362,9 +494,78 @@ private struct NewEntrySheet: View {
     }
 }
 
+private struct RenameSheet: View {
+    @Binding var name: String
+    let onRename: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("Rename")
+                .font(.headline)
+
+            TextField("New name", text: $name)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit {
+                    guard !name.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+                    onRename()
+                }
+
+            HStack {
+                Button("Cancel", role: .cancel, action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Button("Rename", action: onRename)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding()
+        .frame(minWidth: 320)
+    }
+}
+
+private struct AddChildSheet: View {
+    @Binding var title: String
+    let parentName: String
+    let onCreate: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("Add Child to \"\(parentName)\"")
+                .font(.headline)
+
+            TextField("Child title", text: $title)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit {
+                    guard !title.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+                    onCreate()
+                }
+
+            HStack {
+                Button("Cancel", role: .cancel, action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Button("Create", action: onCreate)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding()
+        .frame(minWidth: 320)
+    }
+}
+
+private struct TreeNodeActions {
+    let addChild: (SidebarTreeNode) -> Void
+    let rename: (SidebarTreeNode) -> Void
+    let delete: (SidebarTreeNode) -> Void
+    let moveToParent: (String, SidebarTreeNode) -> Void
+}
+
 private struct FileTreeRow: View {
     let node: SidebarTreeNode
     @Binding var expandedFolders: Set<String>
+    let actions: TreeNodeActions
 
     var body: some View {
         if node.isFolder {
@@ -379,15 +580,56 @@ private struct FileTreeRow: View {
                 }
             )) {
                 ForEach(node.children) { child in
-                    FileTreeRow(node: child, expandedFolders: $expandedFolders)
+                    FileTreeRow(node: child, expandedFolders: $expandedFolders, actions: actions)
                 }
             } label: {
                 Label(node.displayName, systemImage: "folder")
+                    .draggable(node.path)
+                    .dropDestination(for: String.self) { paths, _ in
+                        guard let draggedPath = paths.first, draggedPath != node.path else {
+                            return false
+                        }
+                        actions.moveToParent(draggedPath, node)
+                        return true
+                    }
+                    .contextMenu { contextMenuItems }
             }
             .tag(node.path)
         } else {
             Label(node.displayName, systemImage: "doc.text")
                 .tag(node.path)
+                .draggable(node.path)
+                .dropDestination(for: String.self) { paths, _ in
+                    guard let draggedPath = paths.first, draggedPath != node.path else {
+                        return false
+                    }
+                    actions.moveToParent(draggedPath, node)
+                    return true
+                }
+                .contextMenu { contextMenuItems }
+        }
+    }
+
+    @ViewBuilder
+    private var contextMenuItems: some View {
+        Button {
+            actions.addChild(node)
+        } label: {
+            Label("Add Child", systemImage: "doc.badge.plus")
+        }
+
+        Button {
+            actions.rename(node)
+        } label: {
+            Label("Rename...", systemImage: "pencil")
+        }
+
+        Divider()
+
+        Button(role: .destructive) {
+            actions.delete(node)
+        } label: {
+            Label("Delete", systemImage: "trash")
         }
     }
 }

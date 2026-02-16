@@ -3,7 +3,6 @@ title: diaryx_sync
 author: adammharris
 part_of: '[Crates README](/crates/README.md)'
 ---
-
 # diaryx_sync
 
 Sync protocol engine for Diaryx.

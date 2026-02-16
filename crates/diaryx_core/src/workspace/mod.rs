@@ -208,6 +208,45 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         None
     }
 
+    /// Resolve a file's `part_of` frontmatter to an absolute parent index path.
+    ///
+    /// Reads the `part_of` property from `file_path`, parses the link, and
+    /// resolves it to an absolute path. Falls back to `find_any_index_in_dir`
+    /// on `fallback_dir` when `part_of` is absent or unresolvable.
+    async fn resolve_part_of_to_path(
+        &self,
+        file_path: &Path,
+        fallback_dir: &Path,
+    ) -> Option<PathBuf> {
+        use crate::path_utils::normalize_path;
+
+        if let Ok(Some(Value::String(part_of))) =
+            self.get_frontmatter_property(file_path, "part_of").await
+        {
+            let file_dir = file_path.parent().unwrap_or_else(|| Path::new(""));
+            let parsed = link_parser::parse_link(&part_of);
+            let resolved = match parsed.path_type {
+                link_parser::PathType::WorkspaceRoot => {
+                    if let Some(ref root) = self.root_path {
+                        normalize_path(&root.join(&parsed.path))
+                    } else {
+                        PathBuf::from(&parsed.path)
+                    }
+                }
+                link_parser::PathType::Relative | link_parser::PathType::Ambiguous => {
+                    normalize_path(&file_dir.join(&parsed.path))
+                }
+            };
+            return Some(resolved);
+        }
+
+        // Fallback: search for an index in the given directory
+        self.find_any_index_in_dir(fallback_dir)
+            .await
+            .ok()
+            .flatten()
+    }
+
     /// Format a link for frontmatter based on configured link format.
     ///
     /// # Arguments
@@ -1532,7 +1571,8 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
 
         // Parse the new entry to get its canonical path for comparison
         let parsed_entry = link_parser::parse_link(normalized_entry);
-        let entry_canonical = link_parser::to_canonical(&parsed_entry, index_path);
+        let index_canonical = self.get_canonical_path(index_path);
+        let entry_canonical = link_parser::to_canonical(&parsed_entry, Path::new(&index_canonical));
 
         match self.get_frontmatter_property(index_path, "contents").await {
             Ok(Some(Value::Sequence(mut items))) => {
@@ -1540,7 +1580,8 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 let already_exists = items.iter().any(|item| {
                     if let Some(s) = item.as_str() {
                         let parsed = link_parser::parse_link(s);
-                        let existing_canonical = link_parser::to_canonical(&parsed, index_path);
+                        let existing_canonical =
+                            link_parser::to_canonical(&parsed, Path::new(&index_canonical));
                         existing_canonical == entry_canonical
                     } else {
                         false
@@ -1651,7 +1692,8 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
     async fn remove_from_index_contents(&self, index_path: &Path, entry: &str) -> Result<bool> {
         // Parse the entry to remove to get its canonical form
         let parsed_entry = link_parser::parse_link(entry);
-        let entry_canonical = link_parser::to_canonical(&parsed_entry, index_path);
+        let index_canonical = self.get_canonical_path(index_path);
+        let entry_canonical = link_parser::to_canonical(&parsed_entry, Path::new(&index_canonical));
 
         match self.get_frontmatter_property(index_path, "contents").await {
             Ok(Some(Value::Sequence(mut items))) => {
@@ -1661,7 +1703,8 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     if let Some(s) = item.as_str() {
                         // Parse the existing item to get its canonical path
                         let parsed = link_parser::parse_link(s);
-                        let existing_canonical = link_parser::to_canonical(&parsed, index_path);
+                        let existing_canonical =
+                            link_parser::to_canonical(&parsed, Path::new(&index_canonical));
                         existing_canonical != entry_canonical
                     } else {
                         true
@@ -1706,9 +1749,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         entry_path: &Path,
         parent_index_path: &Path,
     ) -> Result<()> {
-        use crate::path_utils::{
-            relative_path_from_dir_to_target, relative_path_from_file_to_target,
-        };
+        use crate::path_utils::relative_path_from_file_to_target;
 
         // Validate both paths exist
         if !self.fs.exists(entry_path).await {
@@ -1727,19 +1768,21 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             });
         }
 
-        // Calculate relative path from parent's directory to entry
-        let parent_dir = parent_index_path.parent().unwrap_or_else(|| Path::new(""));
-        let child_rel = relative_path_from_dir_to_target(parent_dir, entry_path);
-
-        // Add entry to parent's contents
-        self.add_to_index_contents(parent_index_path, &child_rel)
+        // Add entry to parent's contents with proper formatting
+        let entry_canonical = self.get_canonical_path(entry_path);
+        let title = self.resolve_title(&entry_canonical).await;
+        self.add_to_index_contents_canonical(parent_index_path, &entry_canonical, &title)
             .await?;
 
-        // Calculate relative path from entry to parent index
-        let parent_rel = relative_path_from_file_to_target(entry_path, parent_index_path);
-
-        // Set entry's part_of
-        self.set_frontmatter_property(entry_path, "part_of", Value::String(parent_rel))
+        // Set entry's part_of with proper formatting
+        let part_of = if self.root_path.is_some() {
+            let parent_canonical = self.get_canonical_path(parent_index_path);
+            let parent_title = self.resolve_title(&parent_canonical).await;
+            self.format_link_sync(&parent_canonical, &parent_title, &entry_canonical)
+        } else {
+            relative_path_from_file_to_target(entry_path, parent_index_path)
+        };
+        self.set_frontmatter_property(entry_path, "part_of", Value::String(part_of))
             .await?;
 
         Ok(())
@@ -1767,15 +1810,6 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             path: from_path.to_path_buf(),
             message: "No parent directory for source path".to_string(),
         })?;
-        let old_file_name = from_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| DiaryxError::InvalidPath {
-                path: from_path.to_path_buf(),
-                message: "Invalid source file name".to_string(),
-            })?
-            .to_string();
-
         let new_parent = to_path.parent().ok_or_else(|| DiaryxError::InvalidPath {
             path: to_path.to_path_buf(),
             message: "No parent directory for destination path".to_string(),
@@ -1798,8 +1832,10 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 source: e,
             })?;
 
-        // Discover index files after move.
-        let old_index_path = self.find_any_index_in_dir(old_parent).await.ok().flatten();
+        // Find old parent index by following part_of (the moved file still has its
+        // original part_of at this point). This is more robust than searching by
+        // directory, which fails when the moved file was itself the index in old_parent.
+        let old_index_path = self.resolve_part_of_to_path(to_path, old_parent).await;
         let new_index_path = self.find_any_index_in_dir(new_parent).await.ok().flatten();
         let same_index_parent = old_index_path
             .as_ref()
@@ -1830,17 +1866,19 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         }
 
         // Remove from old parent's contents after successful add to avoid lossy updates.
-        if let Some(old_index_path) = old_index_path.as_ref()
-            && let Err(e) = self
-                .remove_from_index_contents(old_index_path, &old_file_name)
+        if let Some(old_index_path) = old_index_path.as_ref() {
+            let from_canonical = self.get_canonical_path(from_path);
+            if let Err(e) = self
+                .remove_from_index_contents(old_index_path, &from_canonical)
                 .await
-        {
-            log::warn!(
-                "move_entry: failed to remove old contents reference '{}' from '{}': {}",
-                old_file_name,
-                old_index_path.display(),
-                e
-            );
+            {
+                log::warn!(
+                    "move_entry: failed to remove old contents reference '{}' from '{}': {}",
+                    from_canonical,
+                    old_index_path.display(),
+                    e
+                );
+            }
         }
 
         Ok(())
@@ -1883,8 +1921,34 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             })?
             .to_string();
 
-        // Remove from parent's contents (if parent has an index)
-        if let Ok(Some(index_path)) = self.find_any_index_in_dir(parent).await {
+        // Remove from parent's contents by following the part_of link.
+        // This correctly handles both leaf files (parent index in same dir)
+        // and index files (parent index in grandparent dir).
+        if let Ok(Some(Value::String(part_of))) =
+            self.get_frontmatter_property(path, "part_of").await
+        {
+            use crate::path_utils::normalize_path;
+
+            let parsed = link_parser::parse_link(&part_of);
+            let parent_index = match parsed.path_type {
+                link_parser::PathType::WorkspaceRoot => {
+                    if let Some(ref root) = self.root_path {
+                        normalize_path(&root.join(&parsed.path))
+                    } else {
+                        PathBuf::from(&parsed.path)
+                    }
+                }
+                link_parser::PathType::Relative | link_parser::PathType::Ambiguous => {
+                    normalize_path(&parent.join(&parsed.path))
+                }
+            };
+
+            let entry_canonical = self.get_canonical_path(path);
+            let _ = self
+                .remove_from_index_contents(&parent_index, &entry_canonical)
+                .await;
+        } else if let Ok(Some(index_path)) = self.find_any_index_in_dir(parent).await {
+            // No part_of: fall back to finding an index in same directory
             let _ = self
                 .remove_from_index_contents(&index_path, &file_name)
                 .await;
@@ -2238,30 +2302,28 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 }
             }
 
-            // Update grandparent's contents if it exists
-            if let Ok(Some(grandparent_index)) = self.find_any_index_in_dir(parent_of_dir).await {
-                let old_dir_name = current_dir
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or_default();
-
-                let old_rel = format!("{}/{}.md", old_dir_name, old_dir_name);
+            // Update parent's contents via part_of (fallback: grandparent directory)
+            if let Some(parent_index) = self
+                .resolve_part_of_to_path(&new_file_path, parent_of_dir)
+                .await
+            {
+                let old_canonical = self.get_canonical_path(path);
                 // Add new entry first to avoid transient "missing child" states.
                 self.add_to_index_contents_canonical(
-                    &grandparent_index,
+                    &parent_index,
                     &new_file_canonical,
                     &new_file_title,
                 )
                 .await?;
 
                 if let Err(e) = self
-                    .remove_from_index_contents(&grandparent_index, &old_rel)
+                    .remove_from_index_contents(&parent_index, &old_canonical)
                     .await
                 {
                     log::warn!(
-                        "rename_entry: failed to remove old grandparent contents reference '{}' from '{}': {}",
-                        old_rel,
-                        grandparent_index.display(),
+                        "rename_entry: failed to remove old parent contents reference '{}' from '{}': {}",
+                        old_canonical,
+                        parent_index.display(),
                         e
                     );
                 }
@@ -2274,15 +2336,6 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 path: path.to_path_buf(),
                 message: "File has no parent directory".to_string(),
             })?;
-
-            let old_filename = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .ok_or_else(|| DiaryxError::InvalidPath {
-                    path: path.to_path_buf(),
-                    message: "Invalid file name".to_string(),
-                })?
-                .to_string();
 
             let new_path = parent.join(new_filename);
 
@@ -2302,21 +2355,22 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             // Move the file
             self.fs.move_file(path, &new_path).await?;
 
-            // Update parent's contents if it exists
-            if let Ok(Some(parent_index)) = self.find_any_index_in_dir(parent).await {
+            // Update parent's contents via part_of (fallback: same directory)
+            if let Some(parent_index) = self.resolve_part_of_to_path(&new_path, parent).await {
                 // Add new entry first to avoid transient "missing child" states.
                 let new_path_canonical = self.get_canonical_path(&new_path);
+                let old_canonical = self.get_canonical_path(path);
                 let title = self.resolve_title(&new_path_canonical).await;
                 self.add_to_index_contents_canonical(&parent_index, &new_path_canonical, &title)
                     .await?;
 
                 if let Err(e) = self
-                    .remove_from_index_contents(&parent_index, &old_filename)
+                    .remove_from_index_contents(&parent_index, &old_canonical)
                     .await
                 {
                     log::warn!(
                         "rename_entry: failed to remove old parent contents reference '{}' from '{}': {}",
-                        old_filename,
+                        old_canonical,
                         parent_index.display(),
                         e
                     );
@@ -2562,15 +2616,6 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     message: "Invalid file name".to_string(),
                 })?;
 
-        let old_filename = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| DiaryxError::InvalidPath {
-                path: path.to_path_buf(),
-                message: "Invalid file name".to_string(),
-            })?
-            .to_string();
-
         // Create new directory and file paths
         let new_dir = parent.join(file_stem);
         let new_filename = format!("{}.md", file_stem);
@@ -2629,11 +2674,11 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 .await;
         }
 
-        // Update parent's contents to point to new location
-        if let Ok(Some(parent_index)) = self.find_any_index_in_dir(parent).await {
-            // Remove old entry (works with both plain paths and markdown links)
+        // Update parent's contents via part_of (fallback: original parent directory)
+        if let Some(parent_index) = self.resolve_part_of_to_path(&new_path, parent).await {
+            let old_canonical = self.get_canonical_path(path);
             let _ = self
-                .remove_from_index_contents(&parent_index, &old_filename)
+                .remove_from_index_contents(&parent_index, &old_canonical)
                 .await;
 
             // Add new entry with proper formatting
@@ -2754,19 +2799,18 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 .await;
         }
 
-        // Update grandparent's contents
-        if let Ok(Some(grandparent_index)) = self.find_any_index_in_dir(parent_of_dir).await {
-            // Remove old entry (works with both plain paths and markdown links)
-            let old_rel = format!("{}/{}.md", dir_name, dir_name);
+        // Update parent's contents via part_of (fallback: grandparent directory)
+        if let Some(parent_index) = self.resolve_part_of_to_path(&new_path, parent_of_dir).await {
+            let old_canonical = self.get_canonical_path(path);
             let _ = self
-                .remove_from_index_contents(&grandparent_index, &old_rel)
+                .remove_from_index_contents(&parent_index, &old_canonical)
                 .await;
 
             // Add new entry with proper formatting
             let new_path_canonical = self.get_canonical_path(&new_path);
             let title = self.resolve_title(&new_path_canonical).await;
             let _ = self
-                .add_to_index_contents_canonical(&grandparent_index, &new_path_canonical, &title)
+                .add_to_index_contents_canonical(&parent_index, &new_path_canonical, &title)
                 .await;
         }
 
@@ -2818,14 +2862,16 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         // Calculate new path for entry
         let new_entry_path = parent_dir.join(entry_filename);
 
-        // Move entry if not already in parent directory
+        // Move entry if not already in parent directory.
+        // move_entry already updates contents and part_of when it discovers the
+        // target directory's index, so we only need attach_entry_to_parent when
+        // the file didn't actually move.
         if entry.parent() != Some(parent_dir) {
             self.move_entry(entry, &new_entry_path).await?;
+        } else {
+            self.attach_entry_to_parent(&new_entry_path, &effective_parent)
+                .await?;
         }
-
-        // Attach entry to parent (creates bidirectional links)
-        self.attach_entry_to_parent(&new_entry_path, &effective_parent)
-            .await?;
 
         Ok(new_entry_path)
     }

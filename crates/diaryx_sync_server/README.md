@@ -3,19 +3,18 @@ title: diaryx_sync_server
 description: Sync server used by frontends
 author: adammharris
 audience:
-  - public
-  - developers
-part_of: "[README](/crates/README.md)"
+- public
+- developers
+part_of: '[README](/crates/README.md)'
 contents:
-  - "[README](/crates/diaryx_sync_server/src/README.md)"
+- '[README](/crates/diaryx_sync_server/src/README.md)'
 attachments:
-  - "[Cargo.toml](/crates/diaryx_sync_server/Cargo.toml)"
-  - "[build.rs](/crates/diaryx_sync_server/build.rs)"
+- '[Cargo.toml](/crates/diaryx_sync_server/Cargo.toml)'
+- '[build.rs](/crates/diaryx_sync_server/build.rs)'
 exclude:
-  - "*.lock"
-  - "*.db"
+- '*.lock'
+- '*.db'
 ---
-
 # Diaryx Sync Server
 
 A Rust-based multi-device sync server for Diaryx with magic link authentication.
@@ -43,31 +42,33 @@ cargo run -p diaryx_sync_server
 
 ## Environment Variables
 
-| Variable                    | Default                                       | Description                                           |
-| --------------------------- | --------------------------------------------- | ----------------------------------------------------- |
-| `HOST`                      | `0.0.0.0`                                     | Server host                                           |
-| `PORT`                      | `3030`                                        | Server port                                           |
-| `DATABASE_PATH`             | `./diaryx_sync.db`                            | Path to SQLite database                               |
-| `APP_BASE_URL`              | `http://localhost:5174`                       | Base URL for magic link verification                  |
-| `RESEND_API_KEY`            | -                                             | Resend API key                                        |
-| `EMAIL_FROM`                | `noreply@diaryx.org`                          | From email address                                    |
-| `EMAIL_FROM_NAME`           | `Diaryx`                                      | From name                                             |
-| `SESSION_EXPIRY_DAYS`       | `30`                                          | Session token expiration in days                      |
-| `MAGIC_LINK_EXPIRY_MINUTES` | `15`                                          | Magic link expiration in minutes                      |
-| `CORS_ORIGINS`              | `http://localhost:5174,http://localhost:5175` | Comma-separated CORS origins (methods: GET, POST, PUT, PATCH, DELETE, OPTIONS; headers: Authorization, Content-Type, Cache-Control, Pragma) |
-| `SNAPSHOT_UPLOAD_MAX_BYTES` | `1073741824`                                  | Max snapshot upload size accepted by the API          |
-| `R2_BUCKET`                 | `diaryx-user-data`                            | Cloudflare R2 bucket for attachment blobs             |
-| `R2_ACCOUNT_ID`             | -                                             | Cloudflare account ID                                 |
-| `R2_ACCESS_KEY_ID`          | -                                             | R2 access key ID                                      |
-| `R2_SECRET_ACCESS_KEY`      | -                                             | R2 secret access key                                  |
-| `R2_ENDPOINT`               | -                                             | Optional custom S3 endpoint override                  |
-| `R2_PREFIX`                 | `diaryx-sync`                                 | Object key prefix inside the bucket                   |
-| `R2_GC_RETENTION_DAYS`      | `7`                                           | Soft-delete retention before blob garbage collection  |
-| `ATTACHMENT_INCREMENTAL_SYNC_ENABLED` | `true`                              | Enable incremental multipart attachment APIs          |
-| `SITES_R2_BUCKET`           | `diaryx-sites`                                | Cloudflare R2 bucket for published static site files  |
-| `PUBLISHED_SITE_LIMIT`      | `1`                                           | Per-user max published sites                          |
-| `SITES_BASE_URL`            | `APP_BASE_URL`                                | Public base URL used when generating tokenized links  |
-| `TOKEN_SIGNING_KEY`         | `AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=` | Base64 32-byte HMAC key shared with Worker            |
+
+| Variable                              | Default                                        | Description                                                                                                                                 |
+| ------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `HOST`                                | `0.0.0.0`                                      | Server host                                                                                                                                 |
+| `PORT`                                | `3030`                                         | Server port                                                                                                                                 |
+| `DATABASE_PATH`                       | `./diaryx_sync.db`                             | Path to SQLite database                                                                                                                     |
+| `APP_BASE_URL`                        | `http://localhost:5174`                        | Base URL for magic link verification                                                                                                        |
+| `RESEND_API_KEY`                      | -                                              | Resend API key                                                                                                                              |
+| `EMAIL_FROM`                          | `noreply@diaryx.org`                           | From email address                                                                                                                          |
+| `EMAIL_FROM_NAME`                     | `Diaryx`                                       | From name                                                                                                                                   |
+| `SESSION_EXPIRY_DAYS`                 | `30`                                           | Session token expiration in days                                                                                                            |
+| `MAGIC_LINK_EXPIRY_MINUTES`           | `15`                                           | Magic link expiration in minutes                                                                                                            |
+| `CORS_ORIGINS`                        | `http://localhost:5174,http://localhost:5175`  | Comma-separated CORS origins (methods: GET, POST, PUT, PATCH, DELETE, OPTIONS; headers: Authorization, Content-Type, Cache-Control, Pragma) |
+| `SNAPSHOT_UPLOAD_MAX_BYTES`           | `1073741824`                                   | Max snapshot upload size accepted by the API                                                                                                |
+| `R2_BUCKET`                           | `diaryx-user-data`                             | Cloudflare R2 bucket for attachment blobs                                                                                                   |
+| `R2_ACCOUNT_ID`                       | -                                              | Cloudflare account ID                                                                                                                       |
+| `R2_ACCESS_KEY_ID`                    | -                                              | R2 access key ID                                                                                                                            |
+| `R2_SECRET_ACCESS_KEY`                | -                                              | R2 secret access key                                                                                                                        |
+| `R2_ENDPOINT`                         | -                                              | Optional custom S3 endpoint override                                                                                                        |
+| `R2_PREFIX`                           | `diaryx-sync`                                  | Object key prefix inside the bucket                                                                                                         |
+| `R2_GC_RETENTION_DAYS`                | `7`                                            | Soft-delete retention before blob garbage collection                                                                                        |
+| `ATTACHMENT_INCREMENTAL_SYNC_ENABLED` | `true`                                         | Enable incremental multipart attachment APIs                                                                                                |
+| `SITES_R2_BUCKET`                     | `diaryx-sites`                                 | Cloudflare R2 bucket for published static site files                                                                                        |
+| `PUBLISHED_SITE_LIMIT`                | `1`                                            | Per-user max published sites                                                                                                                |
+| `SITES_BASE_URL`                      | `APP_BASE_URL`                                 | Public base URL used when generating tokenized links                                                                                        |
+| `TOKEN_SIGNING_KEY`                   | `AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=` | Base64 32-byte HMAC key shared with Worker                                                                                                  |
+
 
 ## API Endpoints
 
@@ -441,3 +442,5 @@ The `tests/e2e_sync.rs` file contains comprehensive end-to-end integration tests
 - **test_body_content_integrity**: Tests unicode, special characters, and large (>100KB) files
 - **test_empty_update_detection**: Ensures no unnecessary updates when state is identical
 - **test_concurrent_modifications**: Verifies CRDT merging with concurrent changes
+
+&nbsp;

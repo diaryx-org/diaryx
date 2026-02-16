@@ -82,6 +82,17 @@ protocol WorkspaceBackend {
     func createEntry(path: String, markdown: String) throws
     func createFolder(path: String) throws
     func buildFileTree() throws -> SidebarTreeNode
+
+    // Hierarchy manipulation
+    func createChildEntry(parentPath: String, title: String?) throws -> CreateChildResultData
+    func moveEntry(fromPath: String, toPath: String) throws
+    func attachAndMoveEntryToParent(entryPath: String, parentPath: String) throws -> String
+    func convertToIndex(path: String) throws -> String
+    func convertToLeaf(path: String) throws -> String
+    func setFrontmatterProperty(path: String, key: String, value: FrontmatterValue) throws
+    func removeFrontmatterProperty(path: String, key: String) throws
+    func renameEntry(path: String, newFilename: String) throws -> String
+    func deleteEntry(path: String) throws
 }
 
 protocol WorkspaceBackendFactory {
@@ -224,6 +235,78 @@ final class RustWorkspaceBackend: WorkspaceBackend {
         }
     }
 
+    func createChildEntry(parentPath: String, title: String?) throws -> CreateChildResultData {
+        do {
+            return try inner.createChildEntry(parentPath: parentPath, title: title)
+        } catch {
+            throw wrapRustError(error)
+        }
+    }
+
+    func moveEntry(fromPath: String, toPath: String) throws {
+        do {
+            try inner.moveEntry(fromPath: fromPath, toPath: toPath)
+        } catch {
+            throw wrapRustError(error)
+        }
+    }
+
+    func attachAndMoveEntryToParent(entryPath: String, parentPath: String) throws -> String {
+        do {
+            return try inner.attachAndMoveEntryToParent(entryPath: entryPath, parentPath: parentPath)
+        } catch {
+            throw wrapRustError(error)
+        }
+    }
+
+    func convertToIndex(path: String) throws -> String {
+        do {
+            return try inner.convertToIndex(path: path)
+        } catch {
+            throw wrapRustError(error)
+        }
+    }
+
+    func convertToLeaf(path: String) throws -> String {
+        do {
+            return try inner.convertToLeaf(path: path)
+        } catch {
+            throw wrapRustError(error)
+        }
+    }
+
+    func setFrontmatterProperty(path: String, key: String, value: FrontmatterValue) throws {
+        do {
+            try inner.setFrontmatterProperty(path: path, key: key, value: value)
+        } catch {
+            throw wrapRustError(error)
+        }
+    }
+
+    func removeFrontmatterProperty(path: String, key: String) throws {
+        do {
+            try inner.removeFrontmatterProperty(path: path, key: key)
+        } catch {
+            throw wrapRustError(error)
+        }
+    }
+
+    func renameEntry(path: String, newFilename: String) throws -> String {
+        do {
+            return try inner.renameEntry(path: path, newFilename: newFilename)
+        } catch {
+            throw wrapRustError(error)
+        }
+    }
+
+    func deleteEntry(path: String) throws {
+        do {
+            try inner.deleteEntry(path: path)
+        } catch {
+            throw wrapRustError(error)
+        }
+    }
+
     private static func convertTreeNode(_ node: TreeNodeData) -> SidebarTreeNode {
         SidebarTreeNode(
             name: node.name,
@@ -352,6 +435,44 @@ final class LocalWorkspaceBackend: WorkspaceBackend {
 
     func buildFileTree() throws -> SidebarTreeNode {
         try buildTreeNode(at: workspaceRoot, relativeTo: workspaceRoot)
+    }
+
+    // MARK: - Hierarchy Manipulation (unsupported in local backend)
+
+    func createChildEntry(parentPath: String, title: String?) throws -> CreateChildResultData {
+        throw WorkspaceBackendError.rustBackendUnavailable
+    }
+
+    func moveEntry(fromPath: String, toPath: String) throws {
+        throw WorkspaceBackendError.rustBackendUnavailable
+    }
+
+    func attachAndMoveEntryToParent(entryPath: String, parentPath: String) throws -> String {
+        throw WorkspaceBackendError.rustBackendUnavailable
+    }
+
+    func convertToIndex(path: String) throws -> String {
+        throw WorkspaceBackendError.rustBackendUnavailable
+    }
+
+    func convertToLeaf(path: String) throws -> String {
+        throw WorkspaceBackendError.rustBackendUnavailable
+    }
+
+    func setFrontmatterProperty(path: String, key: String, value: FrontmatterValue) throws {
+        throw WorkspaceBackendError.rustBackendUnavailable
+    }
+
+    func removeFrontmatterProperty(path: String, key: String) throws {
+        throw WorkspaceBackendError.rustBackendUnavailable
+    }
+
+    func renameEntry(path: String, newFilename: String) throws -> String {
+        throw WorkspaceBackendError.rustBackendUnavailable
+    }
+
+    func deleteEntry(path: String) throws {
+        throw WorkspaceBackendError.rustBackendUnavailable
     }
 
     private func buildTreeNode(at url: URL, relativeTo root: URL) -> SidebarTreeNode {

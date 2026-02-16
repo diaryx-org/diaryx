@@ -142,9 +142,19 @@ struct EditorWebView: NSViewRepresentable {
             guard let webView = webView else { return }
             lastSetContent = markdown
             let escaped = quotedForJavaScript(markdown)
-            webView.evaluateJavaScript("editorBridge.setMarkdown(\(escaped))") { _, error in
+            webView.evaluateJavaScript("editorBridge.setMarkdown(\(escaped))") { [weak self] _, error in
                 if let error = error {
                     print("Error setting markdown: \(error)")
+                } else {
+                    // Read back TipTap's normalized output so the echo guard
+                    // baseline matches what the editor actually produces.
+                    // Without this, TipTap's whitespace normalization makes the
+                    // initial content look "changed" and triggers a false save.
+                    self?.getMarkdown { normalized in
+                        if let normalized = normalized {
+                            self?.lastSetContent = normalized
+                        }
+                    }
                 }
             }
         }

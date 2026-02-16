@@ -147,6 +147,34 @@ pub fn get_string_array(frontmatter: &IndexMap<String, Value>, key: &str) -> Vec
     }
 }
 
+/// Replace only the body portion of a markdown string, preserving the raw
+/// frontmatter block byte-for-byte. This avoids a `serde_yaml` round-trip.
+///
+/// If `content` has no frontmatter (or has a malformed opening/closing
+/// delimiter), returns `new_body` as-is.
+pub fn replace_body(content: &str, new_body: &str) -> String {
+    let open_len = if content.starts_with("---\n") {
+        4
+    } else if content.starts_with("---\r\n") {
+        5
+    } else {
+        return new_body.to_string();
+    };
+
+    let rest = &content[open_len..];
+
+    let header_end = if let Some(idx) = rest.find("\n---\n") {
+        open_len + idx + 5 // through "\n---\n"
+    } else if let Some(idx) = rest.find("\n---\r\n") {
+        open_len + idx + 6 // through "\n---\r\n"
+    } else {
+        // Malformed frontmatter — no closing delimiter
+        return new_body.to_string();
+    };
+
+    format!("{}\n{}", &content[..header_end], new_body)
+}
+
 /// Sort frontmatter keys alphabetically.
 pub fn sort_alphabetically(frontmatter: IndexMap<String, Value>) -> IndexMap<String, Value> {
     let mut pairs: Vec<_> = frontmatter.into_iter().collect();
@@ -255,6 +283,50 @@ mod tests {
         let sorted = sort_alphabetically(fm);
         let keys: Vec<_> = sorted.keys().collect();
         assert_eq!(keys, vec!["apple", "banana", "zebra"]);
+    }
+
+    #[test]
+    fn test_replace_body_with_frontmatter() {
+        let content = "---\ntitle: Test\n---\n\nOld body";
+        let result = replace_body(content, "New body");
+        assert_eq!(result, "---\ntitle: Test\n---\n\nNew body");
+    }
+
+    #[test]
+    fn test_replace_body_no_frontmatter() {
+        let result = replace_body("Just body", "New body");
+        assert_eq!(result, "New body");
+    }
+
+    #[test]
+    fn test_replace_body_empty_new_body() {
+        let content = "---\ntitle: Test\n---\n\nOld body";
+        let result = replace_body(content, "");
+        assert_eq!(result, "---\ntitle: Test\n---\n\n");
+    }
+
+    #[test]
+    fn test_replace_body_crlf() {
+        let content = "---\r\ntitle: Test\r\n---\r\n\r\nOld body";
+        let result = replace_body(content, "New body");
+        assert_eq!(result, "---\r\ntitle: Test\r\n---\r\n\nNew body");
+    }
+
+    #[test]
+    fn test_replace_body_malformed() {
+        let content = "---\nunclosed frontmatter";
+        let result = replace_body(content, "New body");
+        assert_eq!(result, "New body");
+    }
+
+    #[test]
+    fn test_replace_body_preserves_formatting() {
+        let content = "---\ntitle: \"Quoted Title\"\ntags:\n  - rust\n  - swift\n---\n\nOld body";
+        let result = replace_body(content, "New body");
+        assert!(
+            result.starts_with("---\ntitle: \"Quoted Title\"\ntags:\n  - rust\n  - swift\n---\n")
+        );
+        assert!(result.ends_with("\nNew body"));
     }
 
     #[test]

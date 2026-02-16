@@ -6,14 +6,13 @@ audience:
 - public
 part_of: '[README](/crates/README.md)'
 contents:
-  - '[README](/crates/diaryx/src/README.md)'
+- '[README](/crates/diaryx/src/README.md)'
 attachments:
-  - '[Cargo.toml](/crates/diaryx/Cargo.toml)'
-  - '[build.rs](/crates/diaryx/build.rs)'
+- '[Cargo.toml](/crates/diaryx/Cargo.toml)'
+- '[build.rs](/crates/diaryx/build.rs)'
 exclude:
-  - '*.lock'
+- '*.lock'
 ---
-
 # Diaryx CLI
 
 A command line interface for the diaryx_core library. Allows command-line journaling.
@@ -117,17 +116,19 @@ Interactively browse your workspace hierarchy with a TUI:
 
 ### Key Bindings
 
-| Key | Action |
-|-----|--------|
-| `j` / `↓` | Move selection down |
-| `k` / `↑` | Move selection up |
-| `h` / `←` | Collapse / Go to parent |
-| `l` / `→` | Expand / Enter child |
-| `Space` / `Tab` | Toggle expand/collapse |
-| `J` / `K` | Scroll preview down/up |
-| `Ctrl+d` / `Ctrl+u` | Page down/up in preview |
-| `Enter` | Open selected file in `$EDITOR` |
-| `q` / `Esc` | Quit |
+
+| Key                 | Action                          |
+| ------------------- | ------------------------------- |
+| `j` / `↓`           | Move selection down             |
+| `k` / `↑`           | Move selection up               |
+| `h` / `←`           | Collapse / Go to parent         |
+| `l` / `→`           | Expand / Enter child            |
+| `Space` / `Tab`     | Toggle expand/collapse          |
+| `J` / `K`           | Scroll preview down/up          |
+| `Ctrl+d` / `Ctrl+u` | Page down/up in preview         |
+| `Enter`             | Open selected file in `$EDITOR` |
+| `q` / `Esc`         | Quit                            |
+
 
 ### Navigation Options
 

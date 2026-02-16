@@ -52,9 +52,21 @@ The Apple editor bundle does not use `marked` for markdown-to-HTML conversion.
 - `WorkspaceBackend.createEntry(path:markdown:)` — create a new markdown file (with parent dirs)
 - `WorkspaceBackend.createFolder(path:)` — create a subfolder
 
+### Hierarchy Manipulation
+
+The backend also supports workspace hierarchy operations (Rust backend only):
+
+- `createChildEntry(parentPath:title:)` → `CreateChildResultData` — add a child (auto-converts leaf parent to index)
+- `moveEntry(fromPath:toPath:)` — move an entry
+- `attachAndMoveEntryToParent(entryPath:parentPath:)` → `String` — reparent with frontmatter link updates
+- `convertToIndex(path:)` / `convertToLeaf(path:)` → `String` — toggle leaf/index
+- `setFrontmatterProperty(path:key:value:)` / `removeFrontmatterProperty(path:key:)` — edit frontmatter
+- `renameEntry(path:newFilename:)` → `String` — rename a file
+- `deleteEntry(path:)` — delete an entry
+
 Two implementations are provided:
 
-- `LocalWorkspaceBackend` — pure-Swift `FileManager` I/O (no Rust dependency)
+- `LocalWorkspaceBackend` — pure-Swift `FileManager` I/O (no Rust dependency). Hierarchy operations throw `.rustBackendUnavailable`.
 - `RustWorkspaceBackend` — wraps the `diaryx_apple` UniFFI bindings, delegating to `diaryx_core`
 
 Backend selection is controlled by `DIARYX_APPLE_BACKEND`:
@@ -65,6 +77,25 @@ Backend selection is controlled by `DIARYX_APPLE_BACKEND`:
 ## File Tree Sidebar
 
 The left sidebar displays a collapsible tree built from the workspace's `contents`/`part_of` hierarchy — the same tree-building logic used by the web app's LeftSidebar (`diaryx_core::Workspace::build_tree()`). If the workspace has a root index file (a `.md` with `contents` but no `part_of`), the tree follows frontmatter references. Otherwise it falls back to `build_filesystem_tree()` for plain directory structure. The `RustWorkspaceBackend` delegates to the core Rust tree builder, while `LocalWorkspaceBackend` implements a filesystem-based fallback in pure Swift.
+
+## Context Menu
+
+Right-clicking any node in the file tree sidebar shows a context menu with hierarchy operations:
+
+- **Add Child** — creates a child entry under the node (auto-converts leaf to index folder)
+- **Rename...** — opens a sheet to rename the file
+- **Delete** — deletes the entry with a confirmation dialog (warns about folder contents)
+
+These operations require the Rust backend (`RustWorkspaceBackend`). The local-only backend does not support hierarchy manipulation.
+
+## Drag and Drop
+
+Files and folders in the sidebar support drag-and-drop for reparenting:
+
+- **Drag a file onto a folder** — moves the file into the folder, updating `contents`/`part_of` frontmatter links
+- **Drag a file onto another file** — the target is auto-converted to a folder (index), and the dragged file becomes a child
+
+Both operations use `attachAndMoveEntryToParent` from `diaryx_core`, which handles leaf-to-index conversion, bidirectional frontmatter link updates, and file relocation.
 
 ## Metadata Inspector
 

@@ -30,15 +30,15 @@ struct EditorWebView: NSViewRepresentable {
         return webView
     }
 
-    func updateNSView(_ webView: WKWebView, context: Context) {
-        // Only push content if it changed externally (e.g., file switch)
-        if context.coordinator.pendingMarkdown != initialMarkdown {
-            context.coordinator.pendingMarkdown = initialMarkdown
-            if context.coordinator.isReady {
-                context.coordinator.setContent(initialMarkdown)
+        func updateNSView(_ webView: WKWebView, context: Context) {
+            // Only push content if it changed externally (e.g., file switch)
+            if context.coordinator.pendingMarkdown != initialMarkdown {
+                context.coordinator.pendingMarkdown = initialMarkdown
+                if context.coordinator.isReady {
+                    context.coordinator.setMarkdown(initialMarkdown)
+                }
             }
         }
-    }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(onContentChanged: onContentChanged, onLinkClicked: onLinkClicked)
@@ -74,7 +74,7 @@ struct EditorWebView: NSViewRepresentable {
             case "ready":
                 isReady = true
                 if !pendingMarkdown.isEmpty {
-                    setContent(pendingMarkdown)
+                    setMarkdown(pendingMarkdown)
                 }
 
             case "contentChanged":
@@ -130,28 +130,58 @@ struct EditorWebView: NSViewRepresentable {
 
         // MARK: - Bridge Methods
 
-        func setContent(_ markdown: String) {
+        private func quotedForJavaScript(_ value: String) -> String {
+            guard let data = try? JSONEncoder().encode(value),
+                  let encoded = String(data: data, encoding: .utf8) else {
+                return "\"\""
+            }
+            return encoded
+        }
+
+        func setMarkdown(_ markdown: String) {
             guard let webView = webView else { return }
             lastSetContent = markdown
-            let escaped = markdown
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "`", with: "\\`")
-                .replacingOccurrences(of: "$", with: "\\$")
-            webView.evaluateJavaScript("editorBridge.setContent(`\(escaped)`)") { _, error in
+            let escaped = quotedForJavaScript(markdown)
+            webView.evaluateJavaScript("editorBridge.setMarkdown(\(escaped))") { _, error in
                 if let error = error {
-                    print("Error setting content: \(error)")
+                    print("Error setting markdown: \(error)")
                 }
             }
         }
 
-        func getContent(completion: @escaping (String?) -> Void) {
+        func getMarkdown(completion: @escaping (String?) -> Void) {
             guard let webView = webView else {
                 completion(nil)
                 return
             }
-            webView.evaluateJavaScript("editorBridge.getContent()") { result, error in
+            webView.evaluateJavaScript("editorBridge.getMarkdown()") { result, error in
                 if let error = error {
-                    print("Error getting content: \(error)")
+                    print("Error getting markdown: \(error)")
+                    completion(nil)
+                } else {
+                    completion(result as? String)
+                }
+            }
+        }
+
+        func setJSON(_ json: String) {
+            guard let webView = webView else { return }
+            let escaped = quotedForJavaScript(json)
+            webView.evaluateJavaScript("editorBridge.setJSON(\(escaped))") { _, error in
+                if let error = error {
+                    print("Error setting editor JSON: \(error)")
+                }
+            }
+        }
+
+        func getJSON(completion: @escaping (String?) -> Void) {
+            guard let webView = webView else {
+                completion(nil)
+                return
+            }
+            webView.evaluateJavaScript("editorBridge.getJSON()") { result, error in
+                if let error = error {
+                    print("Error getting editor JSON: \(error)")
                     completion(nil)
                 } else {
                     completion(result as? String)

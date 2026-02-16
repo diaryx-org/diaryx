@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-02-15T02:08:56Z
+updated: 2026-02-16T04:29:58Z
 part_of: '[README](/README.md)'
 ---
 
@@ -55,9 +55,7 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │   │   │   ├── Settings - Settings panel components - apps/web/src/lib/settings/README.md
 │   │   │   │   ├── Share - Share session components - apps/web/src/lib/share/README.md
 │   │   │   │   ├── Storage - Storage abstraction layer - apps/web/src/lib/storage/README.md
-│   │   │   │   ├── Lib Stores - Svelte stores for UI preferences - apps/web/src/lib/stores/README.md
-│   │   │   │   └── diaryx_wasm - WASM bindings for diaryx_core - apps/web/src/lib/wasm/README.md
-│   │   │   │       └── diaryx_wasm src - Source code for WASM bindings - crates/diaryx_wasm/src/README.md
+│   │   │   │   └── Lib Stores - Svelte stores for UI preferences - apps/web/src/lib/stores/README.md
 │   │   │   ├── Models - Stores and services for application state - apps/web/src/models/README.md
 │   │   │   │   ├── Services - Business logic services - apps/web/src/models/services/README.md
 │   │   │   │   └── Stores - Svelte stores for reactive state - apps/web/src/models/stores/README.md
@@ -68,7 +66,8 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │   │   │   └── Sidebar Views - Sidebar components - apps/web/src/views/sidebar/README.md
 │   │   │   └── LICENSE - PolyForm Shield License 1.0.0 - apps/web/src/LICENSE.md
 │   │   └── TipTap Custom Extensions - Guide to creating custom TipTap extensions with markdown support - apps/web/docs/tiptap-custom-extensions.md
-│   └── tauri - Web app + native backend - apps/tauri/README.md
+│   ├── tauri - Web app + native backend - apps/tauri/README.md
+│   └── apple - Native SwiftUI app for Diaryx using WKWebView + TipTap - apps/apple/README.md
 ├── LICENSE - PolyForm Shield License 1.0.0 - LICENSE.md
 ├── ROADMAP - The plan for future Diaryx features - ROADMAP.md
 ├── AGENTS - Instructions for AI Agents - AGENTS.md

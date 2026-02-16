@@ -8,12 +8,9 @@ audience:
 - public
 part_of: '[README](/README.md)'
 ---
-
 # Roadmap
 
 ## v0.15.0
-
-
 
 ## Other considerations
 

@@ -6,14 +6,13 @@ audience:
 - public
 part_of: '[README](/crates/README.md)'
 contents:
-  - '[README](/crates/diaryx_core/src/README.md)'
+- '[README](/crates/diaryx_core/src/README.md)'
 attachments:
-  - '[Cargo.toml](/crates/diaryx_core/Cargo.toml)'
-  - '[build.rs](/crates/diaryx_core/build.rs)'
+- '[Cargo.toml](/crates/diaryx_core/Cargo.toml)'
+- '[build.rs](/crates/diaryx_core/build.rs)'
 exclude:
-  - '*.lock'
+- '*.lock'
 ---
-
 # Diaryx Core Library
 
 This is the `diaryx_core` library! It contains shared code for the Diaryx clients.
@@ -90,10 +89,12 @@ diaryx_core
 
 ### Module Documentation
 
-| Module | README | Description |
-|--------|--------|-------------|
-| `crdt` | [src/crdt/README.md](src/crdt/README.md) | Real-time collaboration via Y.js CRDTs |
+
+| Module  | README                                     | Description                                |
+| ------- | ------------------------------------------ | ------------------------------------------ |
+| `crdt`  | [src/crdt/README.md](src/crdt/README.md)   | Real-time collaboration via Y.js CRDTs     |
 | `cloud` | [src/cloud/README.md](src/cloud/README.md) | Bidirectional file sync with cloud storage |
+
 
 ## Provided functionality
 
@@ -306,6 +307,7 @@ The CRDT system uses two document types:
 - **BodyDoc** - Per-file Y.Docs that store document content (body text and frontmatter)
 
 Both document types support:
+
 - Real-time synchronization via Y-sync protocol (compatible with Hocuspocus server)
 - Version history with time travel capabilities
 - Pluggable storage backends (in-memory or SQLite)
@@ -853,3 +855,5 @@ let workspace = Workspace::new(fs);
 // Access the inner sync filesystem if needed
 // let inner = async_fs.inner();
 ```
+
+&nbsp;

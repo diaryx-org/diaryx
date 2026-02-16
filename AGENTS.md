@@ -2,42 +2,20 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-02-15T02:08:56Z
+updated: 2026-02-16T21:41:33Z
 part_of: '[README](/README.md)'
 ---
-
 # Instructions for AI agents
 
 Always read the relevant docs before making changes, and update the relevant docs after making changes. A tree is shown below for reference, with the title, description, and filepath of each file shown.
 
 ## Workspace Overview
 
-<!-- BEGIN:WORKSPACE_INDEX -->
+```workspace-index
 Diaryx Monorepo - README/repo for the Diaryx project - README.md
-├── crates - Cargo crates for Diaryx - crates/README.md
-│   ├── diaryx - CLI frontend - crates/diaryx/README.md
-│   │   └── diaryx src - Source code for the Diaryx CLI application - crates/diaryx/src/README.md
-│   │       └── Command-line module - The main CLI command implementation module - crates/diaryx/src/cli/README.md
-│   │           ├── Navigation TUI module - Interactive TUI for navigating workspace hierarchy - crates/diaryx/src/cli/nav/README.md
-│   │           └── Sync CLI module - CLI commands for workspace synchronization - crates/diaryx/src/cli/sync/README.md
-│   ├── diaryx_core - Core library shared by Diaryx clients - crates/diaryx_core/README.md
-│   │   └── diaryx_core src - Source code for the core Diaryx library - crates/diaryx_core/src/README.md
-│   │       ├── CRDT Synchronization - Conflict-free replicated data types for real-time collaboration - crates/diaryx_core/src/crdt/README.md
-│   │       ├── Cloud Sync - Bidirectional file synchronization with cloud storage - crates/diaryx_core/src/cloud/README.md
-│   │       ├── Entry module - Entry manipulation functionality - crates/diaryx_core/src/entry/README.md
-│   │       ├── Filesystem module - Filesystem abstraction layer - crates/diaryx_core/src/fs/README.md
-│   │       ├── Publish module - HTML publishing using comrak - crates/diaryx_core/src/publish/README.md
-│   │       ├── Utils module - Utility functions for date and path handling - crates/diaryx_core/src/utils/README.md
-│   │       └── Workspace module - Workspace tree organization - crates/diaryx_core/src/workspace/README.md
-│   ├── diaryx_wasm - WASM bindings for diaryx_core - crates/diaryx_wasm/README.md
-│   │   └── diaryx_wasm src - Source code for WASM bindings - crates/diaryx_wasm/src/README.md
-│   ├── diaryx_sync_server - Sync server used by frontends - crates/diaryx_sync_server/README.md
-│   │   └── diaryx_sync_server src - Source code for the sync server - crates/diaryx_sync_server/src/README.md
-│   │       ├── Auth module - Authentication middleware and magic link handling - crates/diaryx_sync_server/src/auth/README.md
-│   │       ├── Database module - SQLite database schema and repository - crates/diaryx_sync_server/src/db/README.md
-│   │       ├── Email module - SMTP email sending for magic links - crates/diaryx_sync_server/src/email/README.md
-│   │       └── Handlers module - HTTP route handlers - crates/diaryx_sync_server/src/handlers/README.md
-│   └── diaryx_sync - crates/diaryx_sync/README.md
+├── AGENTS - Instructions for AI Agents - AGENTS.md
+├── CONTRIBUTING - A guide for making contributions in the Diaryx repo - CONTRIBUTING.md
+├── LICENSE - PolyForm Shield License 1.0.0 - LICENSE.md
 ├── apps - GUI frontends for Diaryx - apps/README.md
 │   ├── web - Svelte + Tiptap frontend for Diaryx - apps/web/README.md
 │   │   ├── web src - Source code for the Diaryx web application - apps/web/src/README.md
@@ -68,27 +46,53 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │   │   │   └── Sidebar Views - Sidebar components - apps/web/src/views/sidebar/README.md
 │   │   │   └── LICENSE - PolyForm Shield License 1.0.0 - apps/web/src/LICENSE.md
 │   │   └── TipTap Custom Extensions - Guide to creating custom TipTap extensions with markdown support - apps/web/docs/tiptap-custom-extensions.md
-│   └── tauri - Web app + native backend - apps/tauri/README.md
-├── LICENSE - PolyForm Shield License 1.0.0 - LICENSE.md
+│   ├── tauri - Web app + native backend - apps/tauri/README.md
+│   └── apple - Native SwiftUI app for Diaryx using WKWebView + TipTap - apps/apple/README.md
+├── crates - Cargo crates for Diaryx - crates/README.md
+│   ├── diaryx - CLI frontend - crates/diaryx/README.md
+│   │   └── diaryx src - Source code for the Diaryx CLI application - crates/diaryx/src/README.md
+│   │       └── Command-line module - The main CLI command implementation module - crates/diaryx/src/cli/README.md
+│   │           ├── Navigation TUI module - Interactive TUI for navigating workspace hierarchy - crates/diaryx/src/cli/nav/README.md
+│   │           └── Sync CLI module - CLI commands for workspace synchronization - crates/diaryx/src/cli/sync/README.md
+│   ├── diaryx_apple - UniFFI bridge crate for Apple clients - crates/diaryx_apple/README.md
+│   │   └── diaryx_apple src - Source code for the Apple UniFFI bridge crate - crates/diaryx_apple/src/README.md
+│   ├── diaryx_core - Core library shared by Diaryx clients - crates/diaryx_core/README.md
+│   │   └── diaryx_core src - Source code for the core Diaryx library - crates/diaryx_core/src/README.md
+│   │       ├── CRDT Synchronization - Conflict-free replicated data types for real-time collaboration - crates/diaryx_core/src/crdt/README.md
+│   │       ├── Cloud Sync - Bidirectional file synchronization with cloud storage - crates/diaryx_core/src/cloud/README.md
+│   │       ├── Entry module - Entry manipulation functionality - crates/diaryx_core/src/entry/README.md
+│   │       ├── Filesystem module - Filesystem abstraction layer - crates/diaryx_core/src/fs/README.md
+│   │       ├── Publish module - HTML publishing using comrak - crates/diaryx_core/src/publish/README.md
+│   │       ├── Utils module - Utility functions for date and path handling - crates/diaryx_core/src/utils/README.md
+│   │       └── Workspace module - Workspace tree organization - crates/diaryx_core/src/workspace/README.md
+│   ├── diaryx_wasm - WASM bindings for diaryx_core - crates/diaryx_wasm/README.md
+│   │   └── diaryx_wasm src - Source code for WASM bindings - crates/diaryx_wasm/src/README.md
+│   ├── diaryx_sync_server - Sync server used by frontends - crates/diaryx_sync_server/README.md
+│   │   └── diaryx_sync_server src - Source code for the sync server - crates/diaryx_sync_server/src/README.md
+│   │       ├── Auth module - Authentication middleware and magic link handling - crates/diaryx_sync_server/src/auth/README.md
+│   │       ├── Database module - SQLite database schema and repository - crates/diaryx_sync_server/src/db/README.md
+│   │       ├── Email module - SMTP email sending for magic links - crates/diaryx_sync_server/src/email/README.md
+│   │       └── Handlers module - HTTP route handlers - crates/diaryx_sync_server/src/handlers/README.md
+│   └── diaryx_sync - crates/diaryx_sync/README.md
 ├── ROADMAP - The plan for future Diaryx features - ROADMAP.md
-├── AGENTS - Instructions for AI Agents - AGENTS.md
-├── CONTRIBUTING - A guide for making contributions in the Diaryx repo - CONTRIBUTING.md
 └── Scripts - scripts/scripts.md
-<!-- END:WORKSPACE_INDEX -->
+```
 
 ## Entry Points
 
 Read the root README.md first. For specific projects, use these entry points:
 
-| Project | Entry point |
-|---------|-------------|
-| Entire workspace | README.md |
-| Core library | crates/diaryx_core/README.md |
-| CLI | crates/diaryx/README.md |
-| Web app | apps/web/README.md |
-| Tauri app | apps/tauri/README.md |
-| WASM bindings | crates/diaryx_wasm/README.md |
-| Sync server | crates/diaryx_sync_server/README.md |
+
+| Project          | Entry point                         |
+| ---------------- | ----------------------------------- |
+| Entire workspace | README.md                           |
+| Core library     | crates/diaryx_core/README.md        |
+| CLI              | crates/diaryx/README.md             |
+| Web app          | apps/web/README.md                  |
+| Tauri app        | apps/tauri/README.md                |
+| WASM bindings    | crates/diaryx_wasm/README.md        |
+| Sync server      | crates/diaryx_sync_server/README.md |
+
 
 ## Commands
 
@@ -119,5 +123,8 @@ cd apps/tauri && cargo tauri dev
 ## Not Documented
 
 Read these files directly when needed:
+
 - CI/workflows: `.github/workflows/*.yml`
 - Pre-commit config: `.pre-commit-config.yaml`
+
+&nbsp;

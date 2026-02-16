@@ -13,6 +13,9 @@ targets:
     sources:
       - path: Diaryx
         type: group
+    dependencies:
+      - framework: diaryx_apple.xcframework
+        embed: false
     postBuildScripts:
       - name: Copy Editor Bundle
         script: |

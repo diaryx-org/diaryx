@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::sync::{Arc, Mutex};
 
-pub const DEFAULT_ATTACHMENT_LIMIT_BYTES: u64 = 1_073_741_824;
+pub const DEFAULT_ATTACHMENT_LIMIT_BYTES: u64 = 209_715_200;
 
 /// User information
 #[derive(Debug, Clone)]

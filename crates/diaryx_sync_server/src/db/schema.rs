@@ -229,9 +229,9 @@ pub fn init_database(conn: &Connection) -> Result<(), rusqlite::Error> {
             [],
         )?;
     }
-    // Backfill/normalize existing users to 1 GiB default.
+    // Backfill/normalize existing users to 200 MiB default.
     conn.execute(
-        "UPDATE users SET attachment_limit_bytes = 1073741824 WHERE attachment_limit_bytes IS NULL",
+        "UPDATE users SET attachment_limit_bytes = 209715200 WHERE attachment_limit_bytes IS NULL",
         [],
     )?;
 
@@ -353,6 +353,6 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(limit, 1_073_741_824);
+        assert_eq!(limit, 209_715_200);
     }
 }

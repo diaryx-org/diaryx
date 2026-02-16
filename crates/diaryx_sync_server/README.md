@@ -201,14 +201,14 @@ Response:
 {
   "used_bytes": 123456,
   "blob_count": 42,
-  "limit_bytes": 1073741824,
+  "limit_bytes": 209715200,
   "warning_threshold": 0.8,
   "over_limit": false,
   "scope": "attachments"
 }
 ```
 
-`limit_bytes` is per-user. New/existing users default to 1 GiB unless the
+`limit_bytes` is per-user. New/existing users default to 200 MiB unless the
 `users.attachment_limit_bytes` value is changed in the database.
 
 #### Incremental Attachment Upload (Resumable)
@@ -247,7 +247,7 @@ or completion returns:
   "error": "storage_limit_exceeded",
   "message": "Attachment storage limit exceeded",
   "used_bytes": 123,
-  "limit_bytes": 1073741824,
+  "limit_bytes": 209715200,
   "requested_bytes": 456
 }
 ```

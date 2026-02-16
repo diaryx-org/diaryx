@@ -5,13 +5,14 @@ author: adammharris
 version: v0.14.1
 updated: 2026-01-10T13:50:20-05:00
 contents:
-- '[README](/crates/README.md)'
-- '[README](/apps/README.md)'
-- '[LICENSE](/LICENSE.md)'
-- '[ROADMAP](/ROADMAP.md)'
 - '[AGENTS](/AGENTS.md)'
 - '[CONTRIBUTING](/CONTRIBUTING.md)'
+- '[LICENSE](/LICENSE.md)'
+- '[README](/apps/README.md)'
+- '[README](/crates/README.md)'
+- '[ROADMAP](/ROADMAP.md)'
 - '[Scripts](/scripts/scripts.md)'
+- '[test1](/new-entry/new-entry.md)'
 audience:
 - public
 - developers
@@ -27,7 +28,7 @@ attachments:
 
 Diaryx is software for personal writing, designed to embed standardized metadata into markdown files, which leads to a wide range of emergent benefits:
 
-- No need to keep an index of the files
+- No need to keep an index of the files!
 - Better portability + longevity
 - Easily readable by humans (and AI agents)
 - Hierarchal, heritable traits
@@ -40,6 +41,7 @@ All of this logic is defined in the `diaryx_core` Rust crate, and is used by the
 
 - `[crates/diaryx_core](crates/diaryx_core/README.md)`: Core logic for all Diaryx apps.
 - `[crates/diaryx](crates/diaryx/README.md)`: CLI frontend for Diaryx.
+- `[crates/diaryx_apple](crates/diaryx_apple/README.md)`: Apple bridge crate with UniFFI bindings over `diaryx_core`.
 - `[crates/diaryx_wasm](crates/diaryx_wasm/README.md)`: WebAssembly bindings for `diaryx_core`, used in `apps/web`.
 `[crates/diaryx_sync_server](crates/diaryx_sync_server/README.md)`: Sync server to allow sync/live editing functionality in Web/Tauri clients.
 - `[apps/web](apps/web/README.md)`: Svelte + TipTap frontend for Diaryx.

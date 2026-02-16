@@ -1,0 +1,36 @@
+[package]
+name = "diaryx_apple"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license-file.workspace = true
+description = "UniFFI bindings and Apple-focused bridge crate for diaryx_core"
+keywords = ["diary", "journal", "swift", "uniffi", "ios"]
+categories = ["api-bindings"]
+
+[lib]
+crate-type = ["rlib", "staticlib", "cdylib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+diaryx_core.workspace = true
+futures-lite = "2"
+indexmap.workspace = true
+serde_yaml.workspace = true
+thiserror.workspace = true
+uniffi = "0.29"
+
+[dev-dependencies]
+tempfile = "3"
+
+[package.metadata.release]
+publish = true

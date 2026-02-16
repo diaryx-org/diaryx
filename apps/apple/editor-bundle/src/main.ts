@@ -12,7 +12,6 @@ import { TableRow } from "@tiptap/extension-table-row";
 import { TableHeader } from "@tiptap/extension-table-header";
 import { TableCell } from "@tiptap/extension-table-cell";
 import { Markdown } from "@tiptap/markdown";
-import { marked } from "marked";
 
 import "./style.css";
 
@@ -31,6 +30,11 @@ declare global {
 }
 
 interface EditorBridge {
+  setMarkdown(markdown: string): void;
+  getMarkdown(): string;
+  setJSON(json: string): void;
+  getJSON(): string;
+  // Compatibility aliases for existing Swift bridge calls.
   setContent(markdown: string): void;
   getContent(): string;
   setEditable(editable: boolean): void;
@@ -94,7 +98,7 @@ try {
     ],
     content: "",
     onUpdate: () => {
-      const markdown = editor.storage.markdown.getMarkdown();
+      const markdown = editor.getMarkdown();
       postMessage({ type: "contentChanged", markdown });
     },
     editorProps: {
@@ -114,15 +118,28 @@ try {
 
   // Expose bridge API for Swift to call via evaluateJavaScript
   window.editorBridge = {
+    setMarkdown(markdown: string) {
+      editor.commands.setContent(markdown, { contentType: "markdown" });
+    },
+    getMarkdown(): string {
+      return editor.getMarkdown();
+    },
+    setJSON(json: string) {
+      try {
+        const doc = JSON.parse(json);
+        editor.commands.setContent(doc);
+      } catch (error) {
+        console.error("Invalid JSON passed to setJSON:", error);
+      }
+    },
+    getJSON(): string {
+      return JSON.stringify(editor.getJSON());
+    },
     setContent(markdown: string) {
-      // Convert markdown → HTML via marked, then set as HTML content.
-      // setContent() expects HTML; the Markdown extension only handles
-      // serialization (getMarkdown), not deserialization via setContent.
-      const html = marked.parse(markdown, { async: false, gfm: true }) as string;
-      editor.commands.setContent(html);
+      this.setMarkdown(markdown);
     },
     getContent(): string {
-      return editor.storage.markdown.getMarkdown();
+      return this.getMarkdown();
     },
     setEditable(editable: boolean) {
       editor.setEditable(editable);

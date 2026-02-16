@@ -4,16 +4,15 @@ description: Interactive TUI for navigating workspace hierarchy
 part_of: '[README](/crates/diaryx/src/cli/README.md)'
 author: adammharris
 audience:
-  - public
+- public
 attachments:
-  - '[mod.rs](/crates/diaryx/src/cli/nav/mod.rs)'
-  - '[app.rs](/crates/diaryx/src/cli/nav/app.rs)'
-  - '[state.rs](/crates/diaryx/src/cli/nav/state.rs)'
-  - '[keys.rs](/crates/diaryx/src/cli/nav/keys.rs)'
-  - '[tree.rs](/crates/diaryx/src/cli/nav/tree.rs)'
-  - '[ui.rs](/crates/diaryx/src/cli/nav/ui.rs)'
+- '[mod.rs](/crates/diaryx/src/cli/nav/mod.rs)'
+- '[app.rs](/crates/diaryx/src/cli/nav/app.rs)'
+- '[state.rs](/crates/diaryx/src/cli/nav/state.rs)'
+- '[keys.rs](/crates/diaryx/src/cli/nav/keys.rs)'
+- '[tree.rs](/crates/diaryx/src/cli/nav/tree.rs)'
+- '[ui.rs](/crates/diaryx/src/cli/nav/ui.rs)'
 ---
-
 # Navigation TUI Module
 
 This module implements `diaryx nav` (alias `go`), an interactive TUI for browsing the workspace's `contents`/`part_of` hierarchy.
@@ -34,14 +33,16 @@ This module implements `diaryx nav` (alias `go`), an interactive TUI for browsin
 
 ## Module Structure
 
-| File | Purpose |
-|------|---------|
-| `mod.rs` | Entry point, workspace resolution, terminal lifecycle |
-| `app.rs` | Main event loop, editor suspend/resume logic |
+
+| File       | Purpose                                                              |
+| ---------- | -------------------------------------------------------------------- |
+| `mod.rs`   | Entry point, workspace resolution, terminal lifecycle                |
+| `app.rs`   | Main event loop, editor suspend/resume logic                         |
 | `state.rs` | `NavState` struct, preview content management, frontmatter stripping |
-| `keys.rs` | Key binding handlers (vim-style navigation) |
-| `tree.rs` | `TreeNode` → `TreeItem` conversion |
-| `ui.rs` | Widget layout and rendering |
+| `keys.rs`  | Key binding handlers (vim-style navigation)                          |
+| `tree.rs`  | `TreeNode` → `TreeItem` conversion                                   |
+| `ui.rs`    | Widget layout and rendering                                          |
+
 
 ## Key Dependencies
 
@@ -51,19 +52,22 @@ This module implements `diaryx nav` (alias `go`), an interactive TUI for browsin
 
 ## Key Bindings
 
-| Key | Action |
-|-----|--------|
-| `j`/`k` | Navigate up/down |
-| `h`/`l` | Collapse/expand or navigate parent/child |
-| `Space`/`Tab` | Toggle expand |
-| `J`/`K` | Scroll preview |
-| `Ctrl+d`/`Ctrl+u` | Page down/up in preview |
-| `Enter` | Open in editor (TUI resumes after) |
-| `q`/`Esc` | Quit |
+
+| Key               | Action                                   |
+| ----------------- | ---------------------------------------- |
+| `j`/`k`           | Navigate up/down                         |
+| `h`/`l`           | Collapse/expand or navigate parent/child |
+| `Space`/`Tab`     | Toggle expand                            |
+| `J`/`K`           | Scroll preview                           |
+| `Ctrl+d`/`Ctrl+u` | Page down/up in preview                  |
+| `Enter`           | Open in editor (TUI resumes after)       |
+| `q`/`Esc`         | Quit                                     |
+
 
 ## Editor Integration
 
 When Enter is pressed:
+
 1. Terminal is restored to normal mode
 2. Editor is launched with the selected file
 3. After editor closes, terminal is re-initialized

@@ -7,9 +7,9 @@ audience:
 contents:
 - '[README](/apps/web/README.md)'
 - '[README](/apps/tauri/README.md)'
+- '[README](/apps/apple/README.md)'
 part_of: '[README](/README.md)'
 ---
-
 # Diaryx Frontend Apps
 
 This directory contains the frontend applications for Diaryx.
@@ -33,7 +33,7 @@ apps/
 │   ├── vite.config.ts
 │   └── package.json
 │
-└── tauri/                  # Tauri desktop wrapper
+├── tauri/                  # Tauri desktop wrapper
     ├── src-tauri/          # Rust Tauri backend
     │   ├── src/
     │   │   ├── commands.rs # Tauri IPC command handlers
@@ -41,6 +41,9 @@ apps/
     │   └── Cargo.toml
     ├── vite.config.ts      # Points to ../web as root
     └── package.json
+└── apple/                  # Native SwiftUI frontend (WKWebView + TipTap)
+    ├── Diaryx/             # Swift app source
+    └── editor-bundle/      # TipTap editor bundle loaded into WKWebView
 ```
 
 ## Backend Abstraction
@@ -49,24 +52,20 @@ The key to supporting both Tauri (desktop) and pure web targets is the **Backend
 
 ### How It Works
 
-1. **`interface.ts`** - Defines the `Backend` interface with all operations (getConfig, getEntry, saveEntry, search, etc.)
-
-2. **`tauri.ts`** - Implements `Backend` using Tauri's `invoke()` IPC to call Rust backend
-
-3. **`wasm.ts`** - Implements `Backend` using:
-   - `InMemoryFileSystem` for synchronous file operations
-   - IndexedDB for persistence
-   - JavaScript fallbacks (or WASM module) for parsing/rendering
-
-4. **`index.ts`** - Factory that auto-detects the runtime environment:
-
-   ```typescript
+1. `**interface.ts**` - Defines the `Backend` interface with all operations (getConfig, getEntry, saveEntry, search, etc.)
+2. `**tauri.ts**` - Implements `Backend` using Tauri's `invoke()` IPC to call Rust backend
+3. `**wasm.ts**` - Implements `Backend` using:
+  - `InMemoryFileSystem` for synchronous file operations
+  - IndexedDB for persistence
+  - JavaScript fallbacks (or WASM module) for parsing/rendering
+4. `**index.ts**` - Factory that auto-detects the runtime environment:
+  ```typescript
    import { getBackend } from "./lib/backend";
 
    const backend = await getBackend();
    // Returns TauriBackend if window.__TAURI__ exists
    // Returns WasmBackend otherwise
-   ```
+  ```
 
 ### Runtime Detection
 

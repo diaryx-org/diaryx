@@ -3,15 +3,14 @@ title: Sync CLI module
 description: CLI commands for workspace synchronization
 part_of: '[README](/crates/diaryx/src/cli/README.md)'
 attachments:
-  - '[mod.rs](/crates/diaryx/src/cli/sync/mod.rs)'
-  - '[auth.rs](/crates/diaryx/src/cli/sync/auth.rs)'
-  - '[client.rs](/crates/diaryx/src/cli/sync/client.rs)'
-  - '[status.rs](/crates/diaryx/src/cli/sync/status.rs)'
-  - '[progress.rs](/crates/diaryx/src/cli/sync/progress.rs)'
+- '[mod.rs](/crates/diaryx/src/cli/sync/mod.rs)'
+- '[auth.rs](/crates/diaryx/src/cli/sync/auth.rs)'
+- '[client.rs](/crates/diaryx/src/cli/sync/client.rs)'
+- '[status.rs](/crates/diaryx/src/cli/sync/status.rs)'
+- '[progress.rs](/crates/diaryx/src/cli/sync/progress.rs)'
 exclude:
-  - '*.lock'
+- '*.lock'
 ---
-
 # Sync CLI Module
 
 CLI commands for workspace synchronization with the Diaryx sync server.

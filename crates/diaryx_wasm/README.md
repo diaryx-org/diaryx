@@ -5,16 +5,15 @@ part_of: '[README](/crates/README.md)'
 audience:
 - developers
 contents:
-  - '[README](/crates/diaryx_wasm/src/README.md)'
+- '[README](/crates/diaryx_wasm/src/README.md)'
 attachments:
-  - '[Cargo.toml](/crates/diaryx_wasm/Cargo.toml)'
-  - '[build.rs](/crates/diaryx_wasm/build.rs)'
+- '[Cargo.toml](/crates/diaryx_wasm/Cargo.toml)'
+- '[build.rs](/crates/diaryx_wasm/build.rs)'
 exclude:
-  - '*.lock'
-  - '*.db'
-  - 'pkg/**'
+- '*.lock'
+- '*.db'
+- pkg/**
 ---
-
 # diaryx_wasm
 
 WebAssembly bindings for `diaryx_core`, used by the web frontend in `apps/web`.
@@ -50,19 +49,21 @@ Current filesystem test suites live in:
 
 The crate provides typed class-based APIs that wrap `diaryx_core` functionality:
 
-| Class                    | Purpose                                   |
-| ------------------------ | ----------------------------------------- |
-| `DiaryxWorkspace`        | Workspace tree operations                 |
-| `DiaryxEntry`            | Entry CRUD operations                     |
-| `DiaryxFrontmatter`      | Frontmatter manipulation                  |
-| `DiaryxSearch`           | Workspace search                          |
-| `DiaryxTemplate`         | Template management                       |
-| `DiaryxValidation`       | Link integrity validation and fixing      |
-| `DiaryxExport`           | Export with audience filtering            |
-| `DiaryxAttachment`       | Attachment upload/download                |
-| `DiaryxFilesystem`       | Low-level filesystem operations (sync)    |
-| `DiaryxAsyncFilesystem`  | Async filesystem operations with Promises |
-| `Diaryx`                 | Unified command API (includes CRDT ops)   |
+
+| Class                   | Purpose                                   |
+| ----------------------- | ----------------------------------------- |
+| `DiaryxWorkspace`       | Workspace tree operations                 |
+| `DiaryxEntry`           | Entry CRUD operations                     |
+| `DiaryxFrontmatter`     | Frontmatter manipulation                  |
+| `DiaryxSearch`          | Workspace search                          |
+| `DiaryxTemplate`        | Template management                       |
+| `DiaryxValidation`      | Link integrity validation and fixing      |
+| `DiaryxExport`          | Export with audience filtering            |
+| `DiaryxAttachment`      | Attachment upload/download                |
+| `DiaryxFilesystem`      | Low-level filesystem operations (sync)    |
+| `DiaryxAsyncFilesystem` | Async filesystem operations with Promises |
+| `Diaryx`                | Unified command API (includes CRDT ops)   |
+
 
 ### In-Memory Filesystem
 
@@ -352,10 +353,12 @@ await diaryx.executeJs({
 
 CRDT operations use `doc_type` to specify which document to operate on:
 
-| doc_type    | doc_name  | Description                              |
-| ----------- | --------- | ---------------------------------------- |
-| `workspace` | `null`    | The workspace file hierarchy metadata    |
+
+| doc_type    | doc_name  | Description                                |
+| ----------- | --------- | ------------------------------------------ |
+| `workspace` | `null`    | The workspace file hierarchy metadata      |
 | `body`      | file path | Per-file body content (e.g., `notes/a.md`) |
+
 
 ## Error Handling
 

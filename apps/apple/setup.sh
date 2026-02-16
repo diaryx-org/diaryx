@@ -14,6 +14,9 @@ bun install
 bun run build
 cd ..
 
+echo "==> Building Rust library and generating UniFFI bindings..."
+./build-rust.sh
+
 echo "==> Generating Xcode project..."
 if ! command -v xcodegen &> /dev/null; then
     echo "xcodegen not found. Installing via Homebrew..."

@@ -7,7 +7,6 @@ attachments:
 - test-sync.sh
 - update-agents-index.sh
 ---
-
 # Scripts
 
 This folder contains four scripts:
@@ -16,3 +15,5 @@ This folder contains four scripts:
 - `sync-versions.sh`: Using the root README.md as a source of truth, updates every version number in the repository.
 - `test-sync.sh`: Opens a tmux window with the diaryx_sync_server and two web app dev servers.
 - `update-agents-index.sh`: Updates the workspace index in AGENTS.md using `diaryx workspace info`.
+
+&nbsp;

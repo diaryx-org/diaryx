@@ -1924,6 +1924,8 @@ version = "0.14.1"
 dependencies = [
  "diaryx_core",
  "futures-lite",
+ "indexmap 2.13.0",
+ "serde_yaml",
  "thiserror 2.0.18",
  "uniffi",
 ]
@@ -8431,7 +8433,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3291800a6b06569f7d3e15bdb6dc235e0f0c8bd3eb07177f430057feb076415f"
 dependencies = [
  "anyhow",
+ "camino",
  "cargo_metadata",
+ "clap",
  "uniffi_bindgen",
  "uniffi_core",
  "uniffi_macros",

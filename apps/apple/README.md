@@ -11,6 +11,7 @@ attachments:
 - '[ContentView](/apps/apple/Diaryx/ContentView.swift)'
 - '[EditorWebView](/apps/apple/Diaryx/EditorWebView.swift)'
 - '[WorkspaceBackend](/apps/apple/Diaryx/WorkspaceBackend.swift)'
+- '[MetadataSidebar](/apps/apple/Diaryx/MetadataSidebar.swift)'
 ---
 
 # Diaryx Apple App
@@ -43,12 +44,43 @@ The Apple editor bundle does not use `marked` for markdown-to-HTML conversion.
 
 - `WorkspaceBackendFactory.openWorkspace(at:)`
 - `WorkspaceBackend.listEntries()`
-- `WorkspaceBackend.getEntry(id:)`
-- `WorkspaceBackend.saveEntry(id:markdown:)`
+- `WorkspaceBackend.getEntry(id:)` — returns `WorkspaceEntryData` with `body`, `metadata`, and raw `markdown`
+- `WorkspaceBackend.saveEntry(id:markdown:)` — save raw markdown
+- `WorkspaceBackend.saveEntryBody(id:body:)` — save body only, preserving frontmatter
 
-The default implementation is `LocalWorkspaceBackend` (filesystem-based), with a placeholder `RustWorkspaceBackendFactory` for switching to UniFFI-backed `diaryx_apple` integration in the next step.
+Two implementations are provided:
+
+- `LocalWorkspaceBackend` — pure-Swift `FileManager` I/O (no Rust dependency)
+- `RustWorkspaceBackend` — wraps the `diaryx_apple` UniFFI bindings, delegating to `diaryx_core`
 
 Backend selection is controlled by `DIARYX_APPLE_BACKEND`:
 
-- `local` (default)
-- `rust` (currently placeholder until generated UniFFI Swift bindings are linked)
+- `local` (default) — uses `LocalWorkspaceBackend`
+- `rust` — uses `RustWorkspaceBackend` via UniFFI
+
+## Metadata Inspector
+
+The right sidebar shows a read-only view of YAML frontmatter fields parsed from the current file. Toggle it with the toolbar button (sidebar.trailing icon) or hide it completely when not needed.
+
+- Scalar values (title, date, draft) display as plain text
+- Array values (tags, audience) display as bulleted lists
+- Files without frontmatter show an empty state
+- Editing in the TipTap editor only saves the body; frontmatter is preserved automatically via `saveEntryBody()`
+
+## Building
+
+```bash
+./setup.sh          # builds editor bundle, Rust library + UniFFI bindings, then generates Xcode project
+open Diaryx.xcodeproj
+```
+
+To rebuild just the Rust library and bindings:
+
+```bash
+./build-rust.sh             # release build (default)
+./build-rust.sh debug       # debug build
+```
+
+`build-rust.sh` produces:
+- `diaryx_apple.xcframework/` — static XCFramework linked by Xcode
+- `Diaryx/Generated/diaryx_apple.swift` — generated Swift bindings (compiled as source)

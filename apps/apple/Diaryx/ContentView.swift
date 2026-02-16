@@ -10,6 +10,8 @@ struct ContentView: View {
     @State private var workspaceURL: URL?
     @State private var isDirty: Bool = false
     @State private var lastError: String?
+    @State private var currentMetadata: [MetadataFieldItem] = []
+    @State private var showInspector: Bool = true
 
     var body: some View {
         NavigationSplitView {
@@ -17,8 +19,22 @@ struct ContentView: View {
         } detail: {
             detail
         }
+        .inspector(isPresented: $showInspector) {
+            MetadataSidebar(metadata: currentMetadata)
+                .inspectorColumnWidth(min: 200, ideal: 260, max: 400)
+        }
         .navigationTitle(selectedFile?.name ?? "Diaryx")
         .focusedSceneValue(\.saveAction, SaveAction(save: saveCurrentFile))
+        .toolbar {
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    showInspector.toggle()
+                } label: {
+                    Label("Inspector", systemImage: "sidebar.trailing")
+                }
+                .help("Toggle metadata inspector")
+            }
+        }
         .alert("Error", isPresented: Binding(
             get: { lastError != nil },
             set: { if !$0 { lastError = nil } }
@@ -71,6 +87,8 @@ struct ContentView: View {
         .onChange(of: selectedFile) { _, newFile in
             if let file = newFile {
                 loadFile(file)
+            } else {
+                currentMetadata = []
             }
         }
     }
@@ -121,6 +139,7 @@ struct ContentView: View {
             files = []
             selectedFile = nil
             backend = nil
+            currentMetadata = []
             report(error)
         }
     }
@@ -138,6 +157,7 @@ struct ContentView: View {
                 self.selectedFile = nil
                 editorContent = ""
                 isDirty = false
+                currentMetadata = []
             }
         } catch {
             files = []
@@ -155,18 +175,20 @@ struct ContentView: View {
 
         do {
             let entry = try backend.getEntry(id: file.id)
-            editorContent = entry.markdown
+            editorContent = entry.body
+            currentMetadata = entry.metadata
             isDirty = false
         } catch {
             report(error)
             editorContent = "Error loading file: \(error.localizedDescription)"
+            currentMetadata = []
         }
     }
 
     private func saveCurrentFile() {
         guard let file = selectedFile, let backend, isDirty else { return }
         do {
-            try backend.saveEntry(id: file.id, markdown: editorContent)
+            try backend.saveEntryBody(id: file.id, body: editorContent)
             isDirty = false
         } catch {
             report(error)

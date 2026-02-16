@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-02-16T15:33:30Z
+updated: 2026-02-16T16:08:41Z
 part_of: '[README](/README.md)'
 ---
 
@@ -57,7 +57,9 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │   │   │   ├── Settings - Settings panel components - apps/web/src/lib/settings/README.md
 │   │   │   │   ├── Share - Share session components - apps/web/src/lib/share/README.md
 │   │   │   │   ├── Storage - Storage abstraction layer - apps/web/src/lib/storage/README.md
-│   │   │   │   └── Lib Stores - Svelte stores for UI preferences - apps/web/src/lib/stores/README.md
+│   │   │   │   ├── Lib Stores - Svelte stores for UI preferences - apps/web/src/lib/stores/README.md
+│   │   │   │   └── diaryx_wasm - WASM bindings for diaryx_core - apps/web/src/lib/wasm/README.md
+│   │   │   │       └── diaryx_wasm src - Source code for WASM bindings - crates/diaryx_wasm/src/README.md
 │   │   │   ├── Models - Stores and services for application state - apps/web/src/models/README.md
 │   │   │   │   ├── Services - Business logic services - apps/web/src/models/services/README.md
 │   │   │   │   └── Stores - Svelte stores for reactive state - apps/web/src/models/stores/README.md

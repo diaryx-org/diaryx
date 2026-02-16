@@ -1,12 +1,15 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct ContentView: View {
+    private let backendFactory: any WorkspaceBackendFactory = AppBackends.makeDefaultFactory()
+
+    @State private var backend: (any WorkspaceBackend)?
     @State private var files: [FileItem] = []
     @State private var selectedFile: FileItem?
     @State private var editorContent: String = ""
     @State private var workspaceURL: URL?
     @State private var isDirty: Bool = false
+    @State private var lastError: String?
 
     var body: some View {
         NavigationSplitView {
@@ -16,6 +19,16 @@ struct ContentView: View {
         }
         .navigationTitle(selectedFile?.name ?? "Diaryx")
         .focusedSceneValue(\.saveAction, SaveAction(save: saveCurrentFile))
+        .alert("Error", isPresented: Binding(
+            get: { lastError != nil },
+            set: { if !$0 { lastError = nil } }
+        )) {
+            Button("OK", role: .cancel) {
+                lastError = nil
+            }
+        } message: {
+            Text(lastError ?? "Unknown error")
+        }
     }
 
     // MARK: - Sidebar
@@ -100,23 +113,35 @@ struct ContentView: View {
         // Start security-scoped access for the user-selected folder
         _ = url.startAccessingSecurityScopedResource()
         workspaceURL = url
-        scanFolder(url)
+        do {
+            let openedBackend = try backendFactory.openWorkspace(at: url)
+            backend = openedBackend
+            refreshEntries()
+        } catch {
+            files = []
+            selectedFile = nil
+            backend = nil
+            report(error)
+        }
     }
 
-    private func scanFolder(_ url: URL) {
-        do {
-            let contents = try FileManager.default.contentsOfDirectory(
-                at: url,
-                includingPropertiesForKeys: [.isRegularFileKey],
-                options: [.skipsHiddenFiles]
-            )
-            files = contents
-                .filter { $0.pathExtension.lowercased() == "md" }
-                .sorted { $0.lastPathComponent.localizedCompare($1.lastPathComponent) == .orderedAscending }
-                .map { FileItem(id: $0, url: $0) }
-        } catch {
-            print("Error scanning folder: \(error)")
+    private func refreshEntries() {
+        guard let backend else {
             files = []
+            return
+        }
+
+        do {
+            files = try backend.listEntries().map(FileItem.from(entry:))
+            if let selectedFile,
+               !files.contains(where: { $0.id == selectedFile.id }) {
+                self.selectedFile = nil
+                editorContent = ""
+                isDirty = false
+            }
+        } catch {
+            files = []
+            report(error)
         }
     }
 
@@ -126,22 +151,25 @@ struct ContentView: View {
             saveCurrentFile()
         }
 
+        guard let backend else { return }
+
         do {
-            editorContent = try String(contentsOf: file.url, encoding: .utf8)
+            let entry = try backend.getEntry(id: file.id)
+            editorContent = entry.markdown
             isDirty = false
         } catch {
-            print("Error loading file: \(error)")
+            report(error)
             editorContent = "Error loading file: \(error.localizedDescription)"
         }
     }
 
     private func saveCurrentFile() {
-        guard let file = selectedFile, isDirty else { return }
+        guard let file = selectedFile, let backend, isDirty else { return }
         do {
-            try editorContent.write(to: file.url, atomically: true, encoding: .utf8)
+            try backend.saveEntry(id: file.id, markdown: editorContent)
             isDirty = false
         } catch {
-            print("Error saving file: \(error)")
+            report(error)
         }
     }
 
@@ -155,11 +183,27 @@ struct ContentView: View {
         }
 
         // Relative markdown links: try to navigate to the file
-        guard let workspace = workspaceURL else { return }
-        let targetURL = workspace.appendingPathComponent(href)
+        var targetPath = href
+        if let withoutFragment = targetPath.split(separator: "#", maxSplits: 1).first {
+            targetPath = String(withoutFragment)
+        }
+        if let withoutQuery = targetPath.split(separator: "?", maxSplits: 1).first {
+            targetPath = String(withoutQuery)
+        }
 
-        if let target = files.first(where: { $0.url == targetURL }) {
+        if let target = files.first(where: { $0.id == targetPath }) {
+            selectedFile = target
+            return
+        }
+
+        if !targetPath.hasSuffix(".md"),
+           let target = files.first(where: { $0.id == "\(targetPath).md" }) {
             selectedFile = target
         }
+    }
+
+    private func report(_ error: Error) {
+        print("[ContentView] \(error)")
+        lastError = error.localizedDescription
     }
 }

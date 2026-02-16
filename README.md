@@ -40,6 +40,7 @@ All of this logic is defined in the `diaryx_core` Rust crate, and is used by the
 
 - `[crates/diaryx_core](crates/diaryx_core/README.md)`: Core logic for all Diaryx apps.
 - `[crates/diaryx](crates/diaryx/README.md)`: CLI frontend for Diaryx.
+- `[crates/diaryx_apple](crates/diaryx_apple/README.md)`: Apple bridge crate with UniFFI bindings over `diaryx_core`.
 - `[crates/diaryx_wasm](crates/diaryx_wasm/README.md)`: WebAssembly bindings for `diaryx_core`, used in `apps/web`.
 `[crates/diaryx_sync_server](crates/diaryx_sync_server/README.md)`: Sync server to allow sync/live editing functionality in Web/Tauri clients.
 - `[apps/web](apps/web/README.md)`: Svelte + TipTap frontend for Diaryx.

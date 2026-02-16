@@ -10,6 +10,7 @@ attachments:
 - '[DiaryxApp](/apps/apple/Diaryx/DiaryxApp.swift)'
 - '[ContentView](/apps/apple/Diaryx/ContentView.swift)'
 - '[EditorWebView](/apps/apple/Diaryx/EditorWebView.swift)'
+- '[WorkspaceBackend](/apps/apple/Diaryx/WorkspaceBackend.swift)'
 ---
 
 # Diaryx Apple App
@@ -35,3 +36,19 @@ Compatibility aliases are also kept for existing Swift call sites:
 
 Markdown is parsed/serialized through TipTap's `@tiptap/markdown` extension.
 The Apple editor bundle does not use `marked` for markdown-to-HTML conversion.
+
+## Workspace Backend Abstraction
+
+`ContentView` now consumes a `WorkspaceBackend` protocol instead of directly reading/writing files.
+
+- `WorkspaceBackendFactory.openWorkspace(at:)`
+- `WorkspaceBackend.listEntries()`
+- `WorkspaceBackend.getEntry(id:)`
+- `WorkspaceBackend.saveEntry(id:markdown:)`
+
+The default implementation is `LocalWorkspaceBackend` (filesystem-based), with a placeholder `RustWorkspaceBackendFactory` for switching to UniFFI-backed `diaryx_apple` integration in the next step.
+
+Backend selection is controlled by `DIARYX_APPLE_BACKEND`:
+
+- `local` (default)
+- `rust` (currently placeholder until generated UniFFI Swift bindings are linked)

@@ -42,11 +42,15 @@ The Apple editor bundle does not use `marked` for markdown-to-HTML conversion.
 
 `ContentView` now consumes a `WorkspaceBackend` protocol instead of directly reading/writing files.
 
-- `WorkspaceBackendFactory.openWorkspace(at:)`
-- `WorkspaceBackend.listEntries()`
+- `WorkspaceBackendFactory.openWorkspace(at:)` — open an existing workspace
+- `WorkspaceBackendFactory.createWorkspace(at:)` — create a new workspace directory
+- `WorkspaceBackend.listEntries()` — flat list of all entries
+- `WorkspaceBackend.buildFileTree()` → `SidebarTreeNode` — recursive directory tree (used by sidebar)
 - `WorkspaceBackend.getEntry(id:)` — returns `WorkspaceEntryData` with `body`, `metadata`, and raw `markdown`
 - `WorkspaceBackend.saveEntry(id:markdown:)` — save raw markdown
 - `WorkspaceBackend.saveEntryBody(id:body:)` — save body only, preserving frontmatter
+- `WorkspaceBackend.createEntry(path:markdown:)` — create a new markdown file (with parent dirs)
+- `WorkspaceBackend.createFolder(path:)` — create a subfolder
 
 Two implementations are provided:
 
@@ -55,8 +59,12 @@ Two implementations are provided:
 
 Backend selection is controlled by `DIARYX_APPLE_BACKEND`:
 
-- `local` (default) — uses `LocalWorkspaceBackend`
-- `rust` — uses `RustWorkspaceBackend` via UniFFI
+- `rust` (default) — uses `RustWorkspaceBackend` via UniFFI
+- `local` — uses `LocalWorkspaceBackend`
+
+## File Tree Sidebar
+
+The left sidebar displays a collapsible tree built from the workspace's `contents`/`part_of` hierarchy — the same tree-building logic used by the web app's LeftSidebar (`diaryx_core::Workspace::build_tree()`). If the workspace has a root index file (a `.md` with `contents` but no `part_of`), the tree follows frontmatter references. Otherwise it falls back to `build_filesystem_tree()` for plain directory structure. The `RustWorkspaceBackend` delegates to the core Rust tree builder, while `LocalWorkspaceBackend` implements a filesystem-based fallback in pure Swift.
 
 ## Metadata Inspector
 

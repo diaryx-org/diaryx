@@ -27,7 +27,7 @@ attachments:
 
 Diaryx is software for personal writing, designed to embed standardized metadata into markdown files, which leads to a wide range of emergent benefits:
 
-- No need to keep an index of the files
+- No need to keep an index of the files!
 - Better portability + longevity
 - Easily readable by humans (and AI agents)
 - Hierarchal, heritable traits

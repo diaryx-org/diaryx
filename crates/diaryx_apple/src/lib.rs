@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use diaryx_core::frontmatter;
 use diaryx_core::fs::{AsyncFileSystem, RealFileSystem, SyncToAsyncFs};
+use diaryx_core::workspace::{TreeNode, Workspace};
 use indexmap::IndexMap;
 use serde_yaml::Value;
 use thiserror::Error;
@@ -49,6 +50,43 @@ pub struct EntryData {
     pub body: String,
     /// Parsed frontmatter fields.
     pub metadata: Vec<MetadataField>,
+}
+
+/// A node in the workspace file tree, flattened for UniFFI.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct TreeNodeData {
+    /// Display name (title from frontmatter, or filename).
+    pub name: String,
+    /// Optional description from frontmatter.
+    pub description: Option<String>,
+    /// Workspace-relative path to this node's file or directory.
+    pub path: String,
+    /// Whether this node is a directory/folder (has children).
+    pub is_folder: bool,
+    /// Child nodes.
+    pub children: Vec<TreeNodeData>,
+}
+
+/// Convert a core `TreeNode` to a UniFFI-friendly `TreeNodeData`.
+fn tree_node_to_data(node: &TreeNode, workspace_root: &Path) -> TreeNodeData {
+    let path = node
+        .path
+        .strip_prefix(workspace_root)
+        .unwrap_or(&node.path)
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    TreeNodeData {
+        name: node.name.clone(),
+        description: node.description.clone(),
+        path,
+        is_folder: !node.children.is_empty(),
+        children: node
+            .children
+            .iter()
+            .map(|c| tree_node_to_data(c, workspace_root))
+            .collect(),
+    }
 }
 
 /// Errors surfaced through UniFFI.
@@ -189,9 +227,80 @@ impl DiaryxAppleWorkspace {
     pub fn save_entry(&self, id: String, markdown: String) -> Result<(), DiaryxAppleError> {
         let rel = Self::validated_relative_path(&id)?;
         let full = self.workspace_root.join(&rel);
-        futures_lite::future::block_on(self.fs.write_file(&full, &markdown)).map_err(|e| {
+        std::fs::write(&full, markdown).map_err(|e| {
             DiaryxAppleError::Core(format!("Failed to save entry '{}': {e}", full.display()))
         })
+    }
+
+    /// Create a new markdown entry at the given workspace-relative path.
+    ///
+    /// Parent directories are created automatically. Returns an error if the
+    /// file already exists.
+    pub fn create_entry(&self, path: String, markdown: String) -> Result<(), DiaryxAppleError> {
+        let rel = Self::validated_relative_path(&path)?;
+        let full = self.workspace_root.join(&rel);
+
+        if full.exists() {
+            return Err(DiaryxAppleError::Core(format!(
+                "Entry already exists: {path}"
+            )));
+        }
+
+        // Create parent directories if needed
+        if let Some(parent) = full.parent() {
+            if !parent.exists() {
+                futures_lite::future::block_on(self.fs.create_dir_all(parent)).map_err(|e| {
+                    DiaryxAppleError::Core(format!(
+                        "Failed to create directories for '{}': {e}",
+                        parent.display()
+                    ))
+                })?;
+            }
+        }
+
+        futures_lite::future::block_on(self.fs.write_file(&full, &markdown)).map_err(|e| {
+            DiaryxAppleError::Core(format!("Failed to create entry '{}': {e}", full.display()))
+        })
+    }
+
+    /// Create a subfolder inside the workspace.
+    pub fn create_folder(&self, path: String) -> Result<(), DiaryxAppleError> {
+        let rel = Self::validated_relative_path(&path)?;
+        let full = self.workspace_root.join(&rel);
+
+        futures_lite::future::block_on(self.fs.create_dir_all(&full)).map_err(|e| {
+            DiaryxAppleError::Core(format!("Failed to create folder '{}': {e}", full.display()))
+        })
+    }
+
+    /// Build a workspace tree following `contents`/`part_of` hierarchy.
+    ///
+    /// Looks for a root index file (has `contents` but no `part_of`) in the
+    /// workspace root directory. If found, builds the tree by following
+    /// frontmatter `contents` references — the same logic used by the web
+    /// app's left sidebar. Falls back to a filesystem directory tree when
+    /// no root index exists.
+    pub fn build_file_tree(&self) -> Result<TreeNodeData, DiaryxAppleError> {
+        let ws = Workspace::new(self.fs.clone());
+
+        // Try to find a root index and build a contents-based tree
+        let root_index =
+            futures_lite::future::block_on(ws.find_root_index_in_dir(&self.workspace_root))
+                .map_err(|e| {
+                    DiaryxAppleError::Core(format!("Failed to scan for root index: {e}"))
+                })?;
+
+        let tree = if let Some(root_path) = root_index {
+            futures_lite::future::block_on(ws.build_tree(&root_path)).map_err(|e| {
+                DiaryxAppleError::Core(format!("Failed to build workspace tree: {e}"))
+            })?
+        } else {
+            // No root index — fall back to filesystem tree
+            futures_lite::future::block_on(ws.build_filesystem_tree(&self.workspace_root, false))
+                .map_err(|e| DiaryxAppleError::Core(format!("Failed to build file tree: {e}")))?
+        };
+
+        Ok(tree_node_to_data(&tree, &self.workspace_root))
     }
 
     /// Save only the body content for an entry, preserving existing frontmatter.
@@ -218,7 +327,7 @@ impl DiaryxAppleWorkspace {
             })?
         };
 
-        futures_lite::future::block_on(self.fs.write_file(&full, &content)).map_err(|e| {
+        std::fs::write(&full, content).map_err(|e| {
             DiaryxAppleError::Core(format!("Failed to save entry '{}': {e}", full.display()))
         })
     }
@@ -229,6 +338,34 @@ impl DiaryxAppleWorkspace {
 pub fn open_workspace(
     workspace_path: String,
 ) -> Result<Arc<DiaryxAppleWorkspace>, DiaryxAppleError> {
+    DiaryxAppleWorkspace::new(workspace_path)
+}
+
+/// Create a new workspace directory and return a handle to it.
+///
+/// Creates all parent directories as needed. Returns an error if the path
+/// already exists and is not a directory.
+#[uniffi::export]
+pub fn create_workspace(
+    workspace_path: String,
+) -> Result<Arc<DiaryxAppleWorkspace>, DiaryxAppleError> {
+    let root = PathBuf::from(&workspace_path);
+
+    if root.exists() {
+        if !root.is_dir() {
+            return Err(DiaryxAppleError::WorkspaceNotDirectory(workspace_path));
+        }
+        // Already exists as a directory — just open it
+        return DiaryxAppleWorkspace::new(workspace_path);
+    }
+
+    std::fs::create_dir_all(&root).map_err(|e| {
+        DiaryxAppleError::Core(format!(
+            "Failed to create workspace '{}': {e}",
+            root.display()
+        ))
+    })?;
+
     DiaryxAppleWorkspace::new(workspace_path)
 }
 
@@ -350,6 +487,211 @@ mod tests {
         let fm = IndexMap::new();
         let fields = frontmatter_to_metadata(&fm);
         assert!(fields.is_empty());
+    }
+
+    // ---- Integration tests: full save round-trip ----
+
+    /// Helper: create a workspace with a single file, return (workspace, relative_path).
+    fn setup_workspace(filename: &str, content: &str) -> (Arc<DiaryxAppleWorkspace>, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join(filename);
+        if let Some(parent) = file_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&file_path, content).unwrap();
+
+        let ws = DiaryxAppleWorkspace::new(dir.path().to_string_lossy().into_owned()).unwrap();
+        // Leak the TempDir so it isn't deleted while the workspace is in use
+        std::mem::forget(dir);
+        (ws, filename.to_string())
+    }
+
+    #[test]
+    fn test_save_body_roundtrip_no_frontmatter() {
+        let (ws, path) = setup_workspace("note.md", "Original body");
+
+        // Read: body should be the full content (no frontmatter)
+        let entry = ws.get_entry(path.clone()).unwrap();
+        assert_eq!(entry.body, "Original body");
+        assert!(entry.metadata.is_empty());
+
+        // Save new body
+        ws.save_entry_body(path.clone(), "Updated body".to_string())
+            .unwrap();
+
+        // Read back: body should reflect the save
+        let entry2 = ws.get_entry(path).unwrap();
+        assert_eq!(entry2.body, "Updated body");
+        assert!(entry2.metadata.is_empty());
+    }
+
+    #[test]
+    fn test_save_body_preserves_frontmatter() {
+        let content = "---\ntitle: My Note\ntags:\n  - rust\n  - swift\n---\nOriginal body";
+        let (ws, path) = setup_workspace("note.md", content);
+
+        // Read: frontmatter should be parsed
+        let entry = ws.get_entry(path.clone()).unwrap();
+        assert_eq!(entry.body, "Original body");
+        assert!(
+            entry
+                .metadata
+                .iter()
+                .any(|m| m.key == "title" && m.value == "My Note")
+        );
+        assert!(
+            entry
+                .metadata
+                .iter()
+                .any(|m| m.key == "tags" && m.values == vec!["rust", "swift"])
+        );
+
+        // Save new body
+        ws.save_entry_body(path.clone(), "New body content".to_string())
+            .unwrap();
+
+        // Read back: body should be updated, frontmatter preserved
+        let entry2 = ws.get_entry(path).unwrap();
+        assert_eq!(entry2.body, "New body content");
+        assert!(
+            entry2
+                .metadata
+                .iter()
+                .any(|m| m.key == "title" && m.value == "My Note")
+        );
+        assert!(
+            entry2
+                .metadata
+                .iter()
+                .any(|m| m.key == "tags" && m.values == vec!["rust", "swift"])
+        );
+    }
+
+    #[test]
+    fn test_save_body_multiple_edits() {
+        let content = "---\ntitle: Journal\n---\nFirst version";
+        let (ws, path) = setup_workspace("journal.md", content);
+
+        // Simulate multiple edits (like a user typing then saving repeatedly)
+        ws.save_entry_body(path.clone(), "Second version".to_string())
+            .unwrap();
+        ws.save_entry_body(path.clone(), "Third version".to_string())
+            .unwrap();
+        ws.save_entry_body(path.clone(), "Final version".to_string())
+            .unwrap();
+
+        let entry = ws.get_entry(path).unwrap();
+        assert_eq!(entry.body, "Final version");
+        assert!(
+            entry
+                .metadata
+                .iter()
+                .any(|m| m.key == "title" && m.value == "Journal")
+        );
+    }
+
+    #[test]
+    fn test_create_then_save_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = DiaryxAppleWorkspace::new(dir.path().to_string_lossy().into_owned()).unwrap();
+        std::mem::forget(dir);
+
+        // Create a new entry
+        ws.create_entry(
+            "2026/02/16.md".to_string(),
+            "---\ntitle: Today\n---\n".to_string(),
+        )
+        .unwrap();
+
+        // Read it back
+        let entry = ws.get_entry("2026/02/16.md".to_string()).unwrap();
+        assert_eq!(entry.body, "");
+        assert!(
+            entry
+                .metadata
+                .iter()
+                .any(|m| m.key == "title" && m.value == "Today")
+        );
+
+        // Save body content
+        ws.save_entry_body(
+            "2026/02/16.md".to_string(),
+            "Had a great day writing Rust.".to_string(),
+        )
+        .unwrap();
+
+        // Read back: body updated, frontmatter preserved
+        let entry2 = ws.get_entry("2026/02/16.md".to_string()).unwrap();
+        assert_eq!(entry2.body, "Had a great day writing Rust.");
+        assert!(
+            entry2
+                .metadata
+                .iter()
+                .any(|m| m.key == "title" && m.value == "Today")
+        );
+    }
+
+    #[test]
+    fn test_save_body_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir_path = dir.path().to_path_buf();
+        let content = "---\ntitle: Disk Test\n---\nBefore save";
+        std::fs::write(dir_path.join("test.md"), content).unwrap();
+
+        let ws = DiaryxAppleWorkspace::new(dir_path.to_string_lossy().into_owned()).unwrap();
+
+        ws.save_entry_body("test.md".to_string(), "After save".to_string())
+            .unwrap();
+
+        // Verify the actual file on disk (bypass the API)
+        let on_disk = std::fs::read_to_string(dir_path.join("test.md")).unwrap();
+        assert!(
+            on_disk.contains("title: Disk Test"),
+            "Frontmatter should be preserved on disk: {on_disk}"
+        );
+        assert!(
+            on_disk.contains("After save"),
+            "New body should be on disk: {on_disk}"
+        );
+        assert!(
+            !on_disk.contains("Before save"),
+            "Old body should be gone from disk: {on_disk}"
+        );
+    }
+
+    #[test]
+    fn test_switch_files_saves_correct_content() {
+        // Simulates the file-switch flow: edit file A, then load file B.
+        // Verifies that saving A's content doesn't corrupt B.
+        let dir = tempfile::tempdir().unwrap();
+        let dir_path = dir.path().to_path_buf();
+        std::fs::write(dir_path.join("a.md"), "---\ntitle: A\n---\nBody A").unwrap();
+        std::fs::write(dir_path.join("b.md"), "---\ntitle: B\n---\nBody B").unwrap();
+
+        let ws = DiaryxAppleWorkspace::new(dir_path.to_string_lossy().into_owned()).unwrap();
+
+        // Step 1: Read file A
+        let a1 = ws.get_entry("a.md".to_string()).unwrap();
+        assert_eq!(a1.body, "Body A");
+
+        // Step 2: User edits A's body (simulated)
+        let edited_a = "Edited Body A";
+
+        // Step 3: Before switching to B, save A with the CORRECT path and content
+        ws.save_entry_body("a.md".to_string(), edited_a.to_string())
+            .unwrap();
+
+        // Step 4: Load file B
+        let b = ws.get_entry("b.md".to_string()).unwrap();
+        assert_eq!(b.body, "Body B"); // B should be untouched
+
+        // Step 5: Switch back to A — should see our edit
+        let a2 = ws.get_entry("a.md".to_string()).unwrap();
+        assert_eq!(a2.body, "Edited Body A");
+
+        // Verify B is still intact on disk
+        let b_disk = std::fs::read_to_string(dir_path.join("b.md")).unwrap();
+        assert!(b_disk.contains("Body B"), "B should be untouched: {b_disk}");
     }
 }
 

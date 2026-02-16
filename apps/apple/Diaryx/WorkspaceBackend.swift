@@ -47,16 +47,46 @@ enum WorkspaceBackendError: LocalizedError {
     }
 }
 
+/// A node in the workspace file tree.
+final class SidebarTreeNode: Identifiable, ObservableObject {
+    let id: String
+    let name: String
+    let path: String
+    let isFolder: Bool
+    let children: [SidebarTreeNode]
+
+    init(name: String, path: String, isFolder: Bool, children: [SidebarTreeNode] = []) {
+        self.id = path.isEmpty ? name : path
+        self.name = name
+        self.path = path
+        self.isFolder = isFolder
+        self.children = children
+    }
+
+    /// Display name: use title (name) but strip .md extension for leaf files.
+    var displayName: String {
+        if isFolder { return name }
+        if name.hasSuffix(".md") {
+            return String(name.dropLast(3))
+        }
+        return name
+    }
+}
+
 protocol WorkspaceBackend {
     var workspaceRoot: URL { get }
     func listEntries() throws -> [WorkspaceEntrySummary]
     func getEntry(id: String) throws -> WorkspaceEntryData
     func saveEntry(id: String, markdown: String) throws
     func saveEntryBody(id: String, body: String) throws
+    func createEntry(path: String, markdown: String) throws
+    func createFolder(path: String) throws
+    func buildFileTree() throws -> SidebarTreeNode
 }
 
 protocol WorkspaceBackendFactory {
     func openWorkspace(at url: URL) throws -> any WorkspaceBackend
+    func createWorkspace(at url: URL) throws -> any WorkspaceBackend
 }
 
 enum AppBackends {
@@ -67,7 +97,7 @@ enum AppBackends {
 
     static func configuredMode() -> Mode {
         let raw = ProcessInfo.processInfo.environment["DIARYX_APPLE_BACKEND"]?.lowercased()
-        return Mode(rawValue: raw ?? "local") ?? .local
+        return Mode(rawValue: raw ?? "rust") ?? .rust
     }
 
     static func makeDefaultFactory() -> any WorkspaceBackendFactory {
@@ -84,15 +114,33 @@ struct LocalWorkspaceBackendFactory: WorkspaceBackendFactory {
     func openWorkspace(at url: URL) throws -> any WorkspaceBackend {
         try LocalWorkspaceBackend(workspaceRoot: url)
     }
+
+    func createWorkspace(at url: URL) throws -> any WorkspaceBackend {
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return try LocalWorkspaceBackend(workspaceRoot: url)
+    }
 }
 
 struct RustWorkspaceBackendFactory: WorkspaceBackendFactory {
+    private func wrapRustError(_ error: Error) -> WorkspaceBackendError {
+        WorkspaceBackendError.io("Rust backend: \(String(describing: error))")
+    }
+
     func openWorkspace(at url: URL) throws -> any WorkspaceBackend {
         do {
             let workspace = try DiaryxAppleWorkspace(workspacePath: url.path)
             return RustWorkspaceBackend(inner: workspace)
         } catch {
-            throw WorkspaceBackendError.io("Rust backend: \(error.localizedDescription)")
+            throw wrapRustError(error)
+        }
+    }
+
+    func createWorkspace(at url: URL) throws -> any WorkspaceBackend {
+        do {
+            let workspace = try Diaryx.createWorkspace(workspacePath: url.path)
+            return RustWorkspaceBackend(inner: workspace)
+        } catch {
+            throw wrapRustError(error)
         }
     }
 }
@@ -106,13 +154,17 @@ final class RustWorkspaceBackend: WorkspaceBackend {
         self.workspaceRoot = URL(fileURLWithPath: inner.workspaceRoot())
     }
 
+    private func wrapRustError(_ error: Error) -> WorkspaceBackendError {
+        WorkspaceBackendError.io("Rust backend: \(String(describing: error))")
+    }
+
     func listEntries() throws -> [WorkspaceEntrySummary] {
         do {
             return try inner.listEntries().map {
                 WorkspaceEntrySummary(id: $0.id, path: $0.path, title: $0.title)
             }
         } catch {
-            throw WorkspaceBackendError.io("Rust backend: \(error.localizedDescription)")
+            throw wrapRustError(error)
         }
     }
 
@@ -127,7 +179,7 @@ final class RustWorkspaceBackend: WorkspaceBackend {
                 body: d.body, metadata: metadata
             )
         } catch {
-            throw WorkspaceBackendError.io("Rust backend: \(error.localizedDescription)")
+            throw wrapRustError(error)
         }
     }
 
@@ -135,7 +187,7 @@ final class RustWorkspaceBackend: WorkspaceBackend {
         do {
             try inner.saveEntry(id: id, markdown: markdown)
         } catch {
-            throw WorkspaceBackendError.io("Rust backend: \(error.localizedDescription)")
+            throw wrapRustError(error)
         }
     }
 
@@ -143,8 +195,42 @@ final class RustWorkspaceBackend: WorkspaceBackend {
         do {
             try inner.saveEntryBody(id: id, body: body)
         } catch {
-            throw WorkspaceBackendError.io("Rust backend: \(error.localizedDescription)")
+            throw wrapRustError(error)
         }
+    }
+
+    func createEntry(path: String, markdown: String) throws {
+        do {
+            try inner.createEntry(path: path, markdown: markdown)
+        } catch {
+            throw wrapRustError(error)
+        }
+    }
+
+    func createFolder(path: String) throws {
+        do {
+            try inner.createFolder(path: path)
+        } catch {
+            throw wrapRustError(error)
+        }
+    }
+
+    func buildFileTree() throws -> SidebarTreeNode {
+        do {
+            let tree = try inner.buildFileTree()
+            return Self.convertTreeNode(tree)
+        } catch {
+            throw wrapRustError(error)
+        }
+    }
+
+    private static func convertTreeNode(_ node: TreeNodeData) -> SidebarTreeNode {
+        SidebarTreeNode(
+            name: node.name,
+            path: node.path,
+            isFolder: node.isFolder,
+            children: node.children.map { convertTreeNode($0) }
+        )
     }
 }
 
@@ -231,6 +317,113 @@ final class LocalWorkspaceBackend: WorkspaceBackend {
         } catch {
             throw WorkspaceBackendError.io("Failed to save entry: \(error.localizedDescription)")
         }
+    }
+
+    func createEntry(path: String, markdown: String) throws {
+        let rel = try normalizedRelativePath(path)
+        let fileURL = workspaceRoot.appendingPathComponent(rel)
+
+        guard !fileManager.fileExists(atPath: fileURL.path) else {
+            throw WorkspaceBackendError.io("Entry already exists: \(path)")
+        }
+
+        // Create parent directories if needed
+        let parentDir = fileURL.deletingLastPathComponent()
+        if !fileManager.fileExists(atPath: parentDir.path) {
+            try fileManager.createDirectory(at: parentDir, withIntermediateDirectories: true)
+        }
+
+        do {
+            try markdown.write(to: fileURL, atomically: true, encoding: .utf8)
+        } catch {
+            throw WorkspaceBackendError.io("Failed to create entry: \(error.localizedDescription)")
+        }
+    }
+
+    func createFolder(path: String) throws {
+        let rel = try normalizedRelativePath(path)
+        let folderURL = workspaceRoot.appendingPathComponent(rel)
+        do {
+            try fileManager.createDirectory(at: folderURL, withIntermediateDirectories: true)
+        } catch {
+            throw WorkspaceBackendError.io("Failed to create folder: \(error.localizedDescription)")
+        }
+    }
+
+    func buildFileTree() throws -> SidebarTreeNode {
+        try buildTreeNode(at: workspaceRoot, relativeTo: workspaceRoot)
+    }
+
+    private func buildTreeNode(at url: URL, relativeTo root: URL) -> SidebarTreeNode {
+        let name: String
+        let relPath: String
+        if url == root {
+            name = url.lastPathComponent
+            relPath = ""
+        } else {
+            name = titleFromFile(at: url) ?? url.lastPathComponent
+            let rootPath = root.standardizedFileURL.path
+            let fullPath = url.standardizedFileURL.path
+            if fullPath.hasPrefix(rootPath) {
+                let start = fullPath.index(fullPath.startIndex, offsetBy: rootPath.count)
+                relPath = String(fullPath[start...])
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                    .replacingOccurrences(of: "\\", with: "/")
+            } else {
+                relPath = url.lastPathComponent
+            }
+        }
+
+        var isDir: ObjCBool = false
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDir) else {
+            return SidebarTreeNode(name: name, path: relPath, isFolder: false)
+        }
+
+        guard isDir.boolValue else {
+            return SidebarTreeNode(name: name, path: relPath, isFolder: false)
+        }
+
+        // Directory: enumerate children
+        let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .nameKey]
+        let contents = (try? fileManager.contentsOfDirectory(
+            at: url, includingPropertiesForKeys: keys,
+            options: [.skipsHiddenFiles]
+        )) ?? []
+
+        var folders: [SidebarTreeNode] = []
+        var files: [SidebarTreeNode] = []
+
+        for child in contents {
+            var childIsDir: ObjCBool = false
+            fileManager.fileExists(atPath: child.path, isDirectory: &childIsDir)
+
+            if childIsDir.boolValue {
+                let childNode = buildTreeNode(at: child, relativeTo: root)
+                // Only include folders that contain .md files (directly or nested)
+                if childNode.children.contains(where: { !$0.isFolder }) || childNode.children.contains(where: { $0.isFolder }) {
+                    folders.append(childNode)
+                }
+            } else if child.pathExtension.lowercased() == "md" {
+                let childName = titleFromFile(at: child) ?? child.lastPathComponent
+                let childRelPath = relativePath(for: child)
+                files.append(SidebarTreeNode(name: childName, path: childRelPath, isFolder: false))
+            }
+        }
+
+        // Sort: folders first (alphabetical), then files (alphabetical)
+        folders.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        files.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+
+        return SidebarTreeNode(
+            name: name, path: relPath, isFolder: true,
+            children: folders + files
+        )
+    }
+
+    /// Try to get a title from a file's frontmatter, or nil.
+    private func titleFromFile(at url: URL) -> String? {
+        guard url.pathExtension.lowercased() == "md" else { return nil }
+        return try? titleFromFrontmatter(at: url)
     }
 
     // MARK: - Frontmatter Parsing

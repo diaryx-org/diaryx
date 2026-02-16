@@ -98,7 +98,7 @@ try {
     ],
     content: "",
     onUpdate: () => {
-      const markdown = editor.storage.markdown.getMarkdown();
+      const markdown = editor.getMarkdown();
       postMessage({ type: "contentChanged", markdown });
     },
     editorProps: {
@@ -122,7 +122,7 @@ try {
       editor.commands.setContent(markdown, { contentType: "markdown" });
     },
     getMarkdown(): string {
-      return editor.storage.markdown.getMarkdown();
+      return editor.getMarkdown();
     },
     setJSON(json: string) {
       try {

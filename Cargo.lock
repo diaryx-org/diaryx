@@ -1926,6 +1926,7 @@ dependencies = [
  "futures-lite",
  "indexmap 2.13.0",
  "serde_yaml",
+ "tempfile",
  "thiserror 2.0.18",
  "uniffi",
 ]

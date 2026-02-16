@@ -1,0 +1,51 @@
+name: Diaryx
+options:
+  bundleIdPrefix: com.diaryx
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "16.0"
+  createIntermediateGroups: true
+
+targets:
+  Diaryx:
+    type: application
+    platform: macOS
+    sources:
+      - path: Diaryx
+        type: group
+    postBuildScripts:
+      - name: Copy Editor Bundle
+        script: |
+          EDITOR_DIST="${SRCROOT}/editor-bundle/dist"
+          TARGET_DIR="${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/dist"
+          if [ -d "${EDITOR_DIST}" ]; then
+            rm -rf "${TARGET_DIR}"
+            mkdir -p "${TARGET_DIR}"
+            cp -R "${EDITOR_DIST}/" "${TARGET_DIR}/"
+          else
+            echo "warning: editor-bundle/dist not found. Run 'cd editor-bundle && bun install && bun run build' first."
+          fi
+        basedOnDependencyAnalysis: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.diaryx.macos
+        INFOPLIST_KEY_CFBundleDisplayName: Diaryx
+        INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.productivity"
+        SWIFT_VERSION: "6.0"
+        GENERATE_INFOPLIST_FILE: YES
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        CODE_SIGN_STYLE: Automatic
+        PRODUCT_NAME: Diaryx
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: 1
+      configs:
+        Debug:
+          SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+        Release:
+          SWIFT_OPTIMIZATION_LEVEL: "-O"
+    entitlements:
+      path: Diaryx/Diaryx.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.files.user-selected.read-write: true
+        com.apple.security.network.client: true

@@ -1,0 +1,12 @@
+# Xcode
+Diaryx.xcodeproj/
+xcuserdata/
+*.xcworkspace/
+
+# Editor bundle build artifacts
+editor-bundle/node_modules/
+editor-bundle/dist/
+editor-bundle/bun.lock
+
+# macOS
+.DS_Store

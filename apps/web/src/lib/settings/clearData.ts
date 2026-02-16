@@ -4,25 +4,78 @@
  * Used by ClearDataSettings (manual clear) and AccountSettings (post-logout prompt).
  */
 
+import { getLocalWorkspaces } from "$lib/storage/localWorkspaceRegistry";
+
 /**
- * Clear all OPFS data by deleting diaryx directories.
+ * Delete a single workspace's OPFS directory by its ID and/or name.
+ * Tries both since directories may be UUID-named (legacy) or name-based (current).
+ */
+export async function deleteLocalWorkspaceData(workspaceId: string, workspaceName?: string): Promise<void> {
+  if (!navigator.storage?.getDirectory) return;
+  const root = await navigator.storage.getDirectory();
+
+  // Try deleting by ID (legacy UUID-named dirs)
+  try {
+    await root.removeEntry(workspaceId, { recursive: true });
+    console.log(`[ClearData] Deleted OPFS workspace directory: ${workspaceId}`);
+  } catch (e) {
+    if ((e as Error).name !== "NotFoundError") {
+      console.warn(`[ClearData] Failed to delete OPFS workspace ${workspaceId}:`, e);
+    }
+  }
+
+  // Also try deleting by name (current name-based dirs)
+  if (workspaceName && workspaceName !== workspaceId) {
+    try {
+      await root.removeEntry(workspaceName, { recursive: true });
+      console.log(`[ClearData] Deleted OPFS workspace directory by name: ${workspaceName}`);
+    } catch (e) {
+      if ((e as Error).name !== "NotFoundError") {
+        console.warn(`[ClearData] Failed to delete OPFS workspace ${workspaceName}:`, e);
+      }
+    }
+  }
+}
+
+/**
+ * Clear all OPFS data by enumerating and deleting all entries in the OPFS root.
+ * This catches any orphaned directories (UUID-named, name-based, legacy, etc.)
  */
 export async function clearOpfs(): Promise<void> {
   if (!navigator.storage?.getDirectory) return;
 
   const root = await navigator.storage.getDirectory();
 
-  // Include legacy "diaryx", legacy ".diaryx" at root, configured workspace name, and "guest"
-  const workspaceName = localStorage.getItem("diaryx-workspace-name") || "My Journal";
-  const dirsToDelete = [...new Set(["diaryx", ".diaryx", "guest", workspaceName])];
+  // Enumerate all entries in the OPFS root and delete them
+  try {
+    for await (const [name] of (root as any).entries()) {
+      try {
+        await root.removeEntry(name, { recursive: true });
+        console.log(`[ClearData] Deleted OPFS entry: ${name}`);
+      } catch (e) {
+        if ((e as Error).name !== "NotFoundError") {
+          console.warn(`[ClearData] Failed to delete OPFS ${name}:`, e);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("[ClearData] Failed to enumerate OPFS root:", e);
 
-  for (const dir of dirsToDelete) {
-    try {
-      await root.removeEntry(dir, { recursive: true });
-      console.log(`[ClearData] Deleted OPFS directory: ${dir}`);
-    } catch (e) {
-      if ((e as Error).name !== "NotFoundError") {
-        console.warn(`[ClearData] Failed to delete OPFS ${dir}:`, e);
+    // Fallback: try known directory names
+    const workspaceName = localStorage.getItem("diaryx-workspace-name") || "My Journal";
+    const dirsToDelete = [...new Set(["diaryx", ".diaryx", "guest", workspaceName])];
+    for (const ws of getLocalWorkspaces()) {
+      dirsToDelete.push(ws.id);
+      dirsToDelete.push(ws.name);
+    }
+    for (const dir of dirsToDelete) {
+      try {
+        await root.removeEntry(dir, { recursive: true });
+        console.log(`[ClearData] Deleted OPFS directory: ${dir}`);
+      } catch (e) {
+        if ((e as Error).name !== "NotFoundError") {
+          console.warn(`[ClearData] Failed to delete OPFS ${dir}:`, e);
+        }
       }
     }
   }

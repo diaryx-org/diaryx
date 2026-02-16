@@ -52,6 +52,7 @@
 
   // Import auth
   import { initAuth, getCurrentWorkspace, verifyMagicLink, setServerUrl } from "./lib/auth";
+  import { getLocalWorkspace, getCurrentWorkspaceId, bootstrapDefaultWorkspace, discoverOpfsWorkspaces } from "$lib/storage/localWorkspaceRegistry";
 
   // Initialize theme store immediately
   getThemeStore();
@@ -459,8 +460,25 @@
       const module = await import("./lib/Editor.svelte");
       Editor = module.default;
 
+      // Discover any OPFS workspace directories not yet in the local registry.
+      // This catches workspaces created by other tabs or previous sessions.
+      await discoverOpfsWorkspaces();
+
       // Initialize the backend (auto-detects Tauri vs WASM)
-      const backendInstance = await getBackend();
+      // Pass workspace ID and name so the backend uses the correct OPFS directory
+      const defaultWorkspace = getCurrentWorkspace();
+      let wsId: string | undefined;
+      let wsName: string | undefined;
+      if (defaultWorkspace) {
+        wsId = defaultWorkspace.id;
+        wsName = defaultWorkspace.name;
+      } else {
+        // Not authenticated — use local workspace registry (bootstraps if empty)
+        const localWs = getLocalWorkspace(getCurrentWorkspaceId() ?? '') ?? bootstrapDefaultWorkspace();
+        wsId = localWs.id;
+        wsName = localWs.name;
+      }
+      const backendInstance = await getBackend(wsId, wsName);
       workspaceStore.setBackend(backendInstance);
 
       // Set the backend API for CRDT bridge (used for writing synced files to disk)

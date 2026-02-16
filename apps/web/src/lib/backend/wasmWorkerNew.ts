@@ -142,6 +142,49 @@ async function migrateLegacyCrdtDir(root: FileSystemDirectoryHandle, workspaceNa
 }
 
 /**
+ * Migrate a UUID-named OPFS directory to a name-based one.
+ * This handles users who previously had UUID-named directories from workspace switching.
+ */
+async function migrateUuidToName(workspaceId: string, workspaceName: string): Promise<void> {
+  try {
+    const root = await navigator.storage.getDirectory();
+
+    // Check if name-based directory already exists
+    try {
+      await root.getDirectoryHandle(workspaceName, { create: false });
+      // Name-based dir already exists — skip migration, just clean up UUID dir if present
+      try {
+        await root.removeEntry(workspaceId, { recursive: true });
+        console.log(`[WasmWorker] Cleaned up orphaned UUID directory: ${workspaceId}`);
+      } catch {
+        // UUID dir doesn't exist — nothing to clean up
+      }
+      return;
+    } catch {
+      // Name-based dir doesn't exist — check for UUID dir to migrate
+    }
+
+    // Check if UUID-named directory exists
+    let uuidDir: FileSystemDirectoryHandle;
+    try {
+      uuidDir = await root.getDirectoryHandle(workspaceId, { create: false });
+    } catch {
+      // Neither exists — nothing to migrate
+      return;
+    }
+
+    // UUID dir exists, name dir doesn't — copy UUID → name and delete UUID
+    console.log(`[WasmWorker] Migrating UUID directory to name: ${workspaceId} -> ${workspaceName}`);
+    const nameDir = await root.getDirectoryHandle(workspaceName, { create: true });
+    await copyDirectoryRecursive(uuidDir, nameDir);
+    await root.removeEntry(workspaceId, { recursive: true });
+    console.log(`[WasmWorker] UUID-to-name migration complete: ${workspaceId} -> ${workspaceName}`);
+  } catch (e) {
+    console.error('[WasmWorker] UUID-to-name migration failed:', e);
+  }
+}
+
+/**
  * Recursively copy all files and subdirectories from source to dest.
  */
 async function copyDirectoryRecursive(
@@ -201,18 +244,23 @@ async function init(port: MessagePort, storageType: StorageType, workspaceName?:
   // Store event port for forwarding filesystem events
   eventPort = port;
 
-  // When a workspace ID is provided, use it as the storage root name for isolation.
-  // Otherwise fall back to the legacy workspace display name.
-  const resolvedWorkspaceName = workspaceId || workspaceName || 'My Journal';
+  // Use workspace name for OPFS directory naming (human-readable).
+  // The workspaceId is only used for CRDT document namespacing, not storage paths.
+  const resolvedWorkspaceName = workspaceName || 'My Journal';
 
   // Store init params for lazy CRDT storage setup
   _storedStorageType = storageType;
   _storedWorkspaceName = resolvedWorkspaceName;
   _storedDirectoryHandle = directoryHandle ?? null;
 
-  // For OPFS, run migration only for legacy (non-workspace-ID) paths
-  if (storageType === 'opfs' && !workspaceId) {
+  // For OPFS, run legacy "diaryx" -> name migration
+  if (storageType === 'opfs') {
     await migrateWorkspaceDirectory(resolvedWorkspaceName);
+
+    // Also migrate UUID-named directories to name-based (for users who had UUID dirs)
+    if (workspaceId && workspaceId !== resolvedWorkspaceName) {
+      await migrateUuidToName(workspaceId, resolvedWorkspaceName);
+    }
   }
 
   // Initialize CRDT storage bridge BEFORE importing WASM, but only when sync

@@ -65,6 +65,9 @@ function getBackendWorkspaceId(): string | undefined {
 function setBackendWorkspaceId(id: string | undefined): void {
   _g.__diaryx_backendWorkspaceId = id;
 }
+function setBackendWorkspaceName(name: string | undefined): void {
+  _g.__diaryx_backendWorkspaceName = name;
+}
 
 /**
  * Get the backend instance, creating it if necessary.
@@ -82,7 +85,7 @@ function setBackendWorkspaceId(id: string | undefined): void {
  * const config = await backend.getConfig();
  * ```
  */
-export async function getBackend(workspaceId?: string): Promise<Backend> {
+export async function getBackend(workspaceId?: string, workspaceName?: string): Promise<Backend> {
   const existing = getBackendInstance();
 
   // If a workspace ID is specified and it matches the current backend, reuse it
@@ -106,8 +109,8 @@ export async function getBackend(workspaceId?: string): Promise<Backend> {
     return pending;
   }
 
-  console.log("[Backend] Starting initialization...", workspaceId ? `workspace: ${workspaceId}` : '');
-  const promise = initializeBackend(workspaceId);
+  console.log("[Backend] Starting initialization...", workspaceId ? `workspace: ${workspaceId}` : '', workspaceName ? `name: ${workspaceName}` : '');
+  const promise = initializeBackend(workspaceId, workspaceName);
   setInitPromise(promise);
   return promise;
 }
@@ -115,7 +118,7 @@ export async function getBackend(workspaceId?: string): Promise<Backend> {
 /**
  * Initialize the appropriate backend based on runtime environment.
  */
-async function initializeBackend(workspaceId?: string): Promise<Backend> {
+async function initializeBackend(workspaceId?: string, workspaceName?: string): Promise<Backend> {
   console.log("[Backend] Detecting runtime environment...");
   console.log("[Backend] isTauri():", isTauri());
   console.log("[Backend] isBrowser():", isBrowser());
@@ -141,10 +144,11 @@ async function initializeBackend(workspaceId?: string): Promise<Backend> {
     }
 
     console.log("[Backend] Calling backend.init()...");
-    await instance.init(undefined, workspaceId);
+    await instance.init(undefined, workspaceId, workspaceName);
     console.log("[Backend] Backend initialized successfully");
     setBackendInstance(instance);
     setBackendWorkspaceId(workspaceId);
+    setBackendWorkspaceName(workspaceName);
     return instance;
   } catch (error) {
     console.error("[Backend] Initialization failed:", error);
@@ -163,6 +167,7 @@ export function resetBackend(): void {
   setBackendInstance(null);
   setInitPromise(null);
   setBackendWorkspaceId(undefined);
+  setBackendWorkspaceName(undefined);
   apiInstance = null;
 }
 

@@ -710,11 +710,22 @@
 
       // Register the workspace in the local workspace registry
       if (workspaceId && defaultWorkspace) {
-        const { addLocalWorkspace, setCurrentWorkspaceId } = await import("$lib/storage/localWorkspaceRegistry");
+        const { addLocalWorkspace, setCurrentWorkspaceId, getCurrentWorkspaceId, promoteLocalWorkspace } = await import("$lib/storage/localWorkspaceRegistry");
         const { setActiveWorkspaceId } = await import("$lib/auth/authStore.svelte");
-        addLocalWorkspace({ id: workspaceId, name: defaultWorkspace.name });
+
+        // If a local-only workspace is active, promote it to a synced workspace
+        const currentLocalId = getCurrentWorkspaceId();
+        if (currentLocalId && currentLocalId.startsWith('local-')) {
+          promoteLocalWorkspace(currentLocalId, workspaceId);
+        } else {
+          addLocalWorkspace({ id: workspaceId, name: defaultWorkspace.name });
+        }
+
         setCurrentWorkspaceId(workspaceId);
         setActiveWorkspaceId(workspaceId);
+
+        // Keep localStorage workspace name in sync so page reloads use the correct OPFS dir
+        localStorage.setItem('diaryx-workspace-name', defaultWorkspace.name);
       }
 
       // Mark sync as explicitly enabled (persists across sessions)

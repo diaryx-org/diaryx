@@ -6,6 +6,8 @@
     Check,
     Plus,
     Loader2,
+    HardDrive,
+    Cloud,
   } from "@lucide/svelte";
   import {
     getAuthState,
@@ -19,6 +21,8 @@
     isWorkspaceLocal,
     addLocalWorkspace,
     setCurrentWorkspaceId,
+    getLocalWorkspaces,
+    createLocalWorkspace,
   } from "$lib/storage/localWorkspaceRegistry";
   import { switchWorkspace } from "$lib/crdt/workspaceCrdtBridge";
   import { getBackend } from "$lib/backend";
@@ -45,29 +49,77 @@
   let currentWorkspace = $derived(getCurrentWorkspace());
   let serverWorkspaces = $derived(getWorkspaces());
   let workspaceLimit = $derived(getWorkspaceLimit());
-  let canCreate = $derived(serverWorkspaces.length < workspaceLimit);
+  let allLocalWorkspaces = $derived(getLocalWorkspaces());
+
+  // Merge server and local workspaces into a unified list.
+  // When logged in: workspaces on server with isLocal=false are 'server', rest are 'local'.
+  // When logged out: all workspaces are 'local' (no syncing possible).
+  type UnifiedWorkspace = { id: string; name: string; source: 'server' | 'local' };
+  let allWorkspaces = $derived.by(() => {
+    const merged: UnifiedWorkspace[] = [];
+    const seen = new Set<string>();
+
+    if (authState.isAuthenticated) {
+      // Server workspaces that aren't flagged local in registry
+      for (const ws of serverWorkspaces) {
+        const localEntry = allLocalWorkspaces.find(lw => lw.id === ws.id);
+        const isLocalOnly = localEntry?.isLocal ?? false;
+        merged.push({ id: ws.id, name: ws.name, source: isLocalOnly ? 'local' : 'server' });
+        seen.add(ws.id);
+      }
+    }
+    // All local-registry workspaces not already added
+    for (const ws of allLocalWorkspaces) {
+      if (!seen.has(ws.id)) {
+        merged.push({ id: ws.id, name: ws.name, source: 'local' });
+        seen.add(ws.id);
+      }
+    }
+    return merged;
+  });
+
+  let syncedCount = $derived(serverWorkspaces.length);
+  let localCount = $derived(allWorkspaces.filter(w => w.source === 'local').length);
+
+  // Always show selector so users can create new workspaces
+  let showSelector = $derived(allWorkspaces.length > 0);
+  let canCreateServer = $derived(authState.isAuthenticated && serverWorkspaces.length < workspaceLimit);
+
+  // Current workspace name for display
+  let currentName = $derived.by(() => {
+    if (currentWorkspace?.name) return currentWorkspace.name;
+    const all = getLocalWorkspaces();
+    const currentId = localStorage.getItem('diaryx_current_workspace');
+    const localWs = currentId ? all.find(w => w.id === currentId) : all[0];
+    return localWs?.name ?? 'My Journal';
+  });
+
+  // Current workspace ID (from auth or local registry)
+  let currentWsId = $derived(currentWorkspace?.id ?? localStorage.getItem('diaryx_current_workspace'));
 
   function isLocal(id: string): boolean {
     return isWorkspaceLocal(id);
   }
 
-  function isCurrent(id: string): boolean {
-    return currentWorkspace?.id === id;
-  }
-
-  async function handleSelect(ws: Workspace) {
-    if (isCurrent(ws.id)) {
+  async function handleSelect(ws: UnifiedWorkspace) {
+    if (currentWsId === ws.id) {
       open = false;
       return;
     }
 
-    if (!isLocal(ws.id)) {
-      // Need to download first
-      await handleDownloadAndSwitch(ws);
+    if (ws.source === 'local') {
+      // Local workspace — switch directly
+      await doSwitch(ws.id, ws.name);
       return;
     }
 
-    // Switch to locally-available workspace
+    if (!isLocal(ws.id)) {
+      // Server workspace not downloaded — download first
+      await handleDownloadAndSwitch(ws as Workspace);
+      return;
+    }
+
+    // Switch to locally-available server workspace
     await doSwitch(ws.id, ws.name);
   }
 
@@ -86,7 +138,7 @@
       setCurrentWorkspaceId(ws.id);
 
       // Create backend for this workspace and import the snapshot
-      const backend = await getBackend(ws.id);
+      const backend = await getBackend(ws.id, ws.name);
       const api = createApi(backend);
 
       // Create workspace structure
@@ -138,17 +190,27 @@
 
     creating = true;
     try {
-      const ws = await createServerWorkspace(name);
-      newWorkspaceName = "";
-      showCreateInput = false;
-      toast.success(`Workspace "${name}" created`);
+      if (authState.isAuthenticated && canCreateServer) {
+        // Create on server (synced)
+        const ws = await createServerWorkspace(name);
+        newWorkspaceName = "";
+        showCreateInput = false;
+        toast.success(`Workspace "${name}" created`);
 
-      // Immediately switch to the new workspace
-      addLocalWorkspace({ id: ws.id, name: ws.name });
-      await doSwitch(ws.id, ws.name);
+        // Immediately switch to the new workspace
+        addLocalWorkspace({ id: ws.id, name: ws.name });
+        await doSwitch(ws.id, ws.name);
+      } else {
+        // Create local-only workspace (no limit)
+        const ws = createLocalWorkspace(name);
+        newWorkspaceName = "";
+        showCreateInput = false;
+        toast.success(`Workspace "${name}" created`);
+        await doSwitch(ws.id, ws.name);
+      }
     } catch (e: any) {
       if (e?.statusCode === 403) {
-        toast.error("Workspace limit reached");
+        toast.error("Synced workspace limit reached");
       } else if (e?.statusCode === 409) {
         toast.error("A workspace with that name already exists");
       } else {
@@ -169,7 +231,7 @@
   }
 </script>
 
-{#if authState.isAuthenticated && serverWorkspaces.length > 0}
+{#if showSelector}
   <Popover.Root bind:open>
     <Popover.Trigger>
       <button
@@ -180,18 +242,18 @@
         {#if switching}
           <Loader2 class="size-3.5 animate-spin shrink-0" />
         {/if}
-        <span class="truncate">{currentWorkspace?.name ?? "Workspace"}</span>
+        <span class="truncate">{currentWorkspace?.name ?? currentName}</span>
         <ChevronsUpDown class="size-3.5 shrink-0 opacity-50" />
       </button>
     </Popover.Trigger>
     <Popover.Content class="w-64 p-0" align="start" side="bottom">
       <div class="p-2">
         <p class="px-2 py-1 text-xs font-medium text-muted-foreground">
-          Workspaces ({serverWorkspaces.length}/{workspaceLimit})
+          Workspaces
         </p>
       </div>
       <div class="max-h-64 overflow-y-auto">
-        {#each serverWorkspaces as ws (ws.id)}
+        {#each allWorkspaces as ws (ws.id)}
           <button
             type="button"
             class="flex items-center gap-2 w-full px-4 py-2 text-sm text-left hover:bg-accent transition-colors"
@@ -199,21 +261,37 @@
             onclick={() => handleSelect(ws)}
           >
             <span class="size-4 shrink-0 flex items-center justify-center">
-              {#if isCurrent(ws.id)}
+              {#if currentWsId === ws.id}
                 <Check class="size-3.5" />
               {/if}
             </span>
+            <!-- Icon indicating local vs synced -->
+            {#if ws.source === 'local'}
+              <HardDrive class="size-3.5 shrink-0 text-muted-foreground" />
+            {:else}
+              <Cloud class="size-3.5 shrink-0 text-muted-foreground" />
+            {/if}
             <span class="truncate flex-1">{ws.name}</span>
             {#if downloading === ws.id}
               <Loader2 class="size-3.5 animate-spin shrink-0 text-muted-foreground" />
-            {:else if !isLocal(ws.id)}
-              <span class="text-xs text-muted-foreground">cloud</span>
+            {:else if ws.source === 'server' && !isLocal(ws.id)}
+              <span class="text-[10px] px-1 py-0.5 rounded bg-muted text-muted-foreground shrink-0">cloud</span>
             {/if}
           </button>
         {/each}
       </div>
-      {#if canCreate}
-        <div class="border-t p-2">
+
+      <!-- Footer: counts + create -->
+      <div class="border-t">
+        {#if authState.isAuthenticated}
+          <div class="px-4 py-1.5 text-[10px] text-muted-foreground flex items-center gap-3">
+            <span class="flex items-center gap-1"><Cloud class="size-3" /> {syncedCount}/{workspaceLimit} synced</span>
+            {#if localCount > 0}
+              <span class="flex items-center gap-1"><HardDrive class="size-3" /> {localCount} local</span>
+            {/if}
+          </div>
+        {/if}
+        <div class="p-2 {authState.isAuthenticated ? '' : 'pt-2'}">
           {#if showCreateInput}
             <div class="flex items-center gap-1">
               <input
@@ -238,6 +316,11 @@
                 {/if}
               </Button>
             </div>
+            {#if authState.isAuthenticated && canCreateServer}
+              <p class="text-[10px] text-muted-foreground mt-1 px-1">Creates a synced workspace</p>
+            {:else if authState.isAuthenticated}
+              <p class="text-[10px] text-muted-foreground mt-1 px-1">Creates a local workspace (synced limit reached)</p>
+            {/if}
           {:else}
             <button
               type="button"
@@ -249,7 +332,7 @@
             </button>
           {/if}
         </div>
-      {/if}
+      </div>
     </Popover.Content>
   </Popover.Root>
 {/if}

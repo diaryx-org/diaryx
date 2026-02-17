@@ -51,7 +51,7 @@
   import { getFormattingStore } from "./lib/stores/formattingStore.svelte";
 
   // Import auth
-  import { initAuth, getCurrentWorkspace, verifyMagicLink, setServerUrl } from "./lib/auth";
+  import { initAuth, getCurrentWorkspace, verifyMagicLink, setServerUrl, refreshUserInfo, getAuthState } from "./lib/auth";
   import { getLocalWorkspace, getCurrentWorkspaceId, bootstrapDefaultWorkspace, discoverOpfsWorkspaces } from "$lib/storage/localWorkspaceRegistry";
 
   // Initialize theme store immediately
@@ -434,6 +434,39 @@
         // Verify automatically and wait for completion before continuing
         // This ensures workspace CRDT is initialized with auth credentials
         await handleMagicLinkToken(token);
+      }
+    }
+
+    // Check for Stripe checkout result in URL
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const checkoutResult = params.get("checkout");
+      if (checkoutResult) {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("checkout");
+        window.history.replaceState({}, "", url.toString());
+
+        if (checkoutResult === "success") {
+          // Poll for tier update — the webhook often arrives after the redirect
+          let upgraded = false;
+          for (let i = 0; i < 10; i++) {
+            await refreshUserInfo();
+            if (getAuthState().tier === "plus") {
+              upgraded = true;
+              break;
+            }
+            await new Promise((r) => setTimeout(r, 1500));
+          }
+          if (upgraded) {
+            toast.success("Welcome to Diaryx Plus!", {
+              description: "Your subscription is now active.",
+            });
+          } else {
+            toast.info("Payment received!", {
+              description: "Your subscription is being activated. Please refresh in a moment.",
+            });
+          }
+        }
       }
     }
 

@@ -42,6 +42,21 @@ pub struct Config {
     pub kv_api_token: String,
     /// Optional admin secret for tier management endpoints
     pub admin_secret: Option<String>,
+    /// Stripe billing configuration (None if STRIPE_SECRET_KEY not set)
+    pub stripe: Option<StripeConfig>,
+}
+
+/// Stripe billing configuration.
+#[derive(Debug, Clone)]
+pub struct StripeConfig {
+    /// Stripe secret key (sk_live_... or sk_test_...)
+    pub secret_key: String,
+    /// Webhook endpoint signing secret (whsec_...)
+    pub webhook_secret: String,
+    /// Price ID for the Plus plan (price_...)
+    pub price_id: String,
+    /// Publishable key returned to client (pk_live_... or pk_test_...)
+    pub publishable_key: String,
 }
 
 /// Email configuration (Resend HTTP API)
@@ -176,6 +191,20 @@ impl Config {
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty());
 
+        let stripe = {
+            let secret_key = env::var("STRIPE_SECRET_KEY").unwrap_or_default();
+            if secret_key.is_empty() {
+                None
+            } else {
+                Some(StripeConfig {
+                    secret_key,
+                    webhook_secret: env::var("STRIPE_WEBHOOK_SECRET").unwrap_or_default(),
+                    price_id: env::var("STRIPE_PRICE_ID").unwrap_or_default(),
+                    publishable_key: env::var("STRIPE_PUBLISHABLE_KEY").unwrap_or_default(),
+                })
+            }
+        };
+
         Ok(Config {
             host,
             port,
@@ -196,6 +225,7 @@ impl Config {
             kv_namespace_id,
             kv_api_token,
             admin_secret,
+            stripe,
         })
     }
 
@@ -214,6 +244,11 @@ impl Config {
         !self.r2.account_id.is_empty()
             && !self.r2.access_key_id.is_empty()
             && !self.r2.secret_access_key.is_empty()
+    }
+
+    /// Check if Stripe billing is configured.
+    pub fn is_stripe_configured(&self) -> bool {
+        self.stripe.is_some()
     }
 
     /// Check if Cloudflare KV is configured for custom domain mappings.

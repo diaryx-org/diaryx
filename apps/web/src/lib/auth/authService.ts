@@ -640,6 +640,48 @@ export class AuthService {
       throw new AuthError(data.error || "Failed to delete workspace", response.status);
     }
   }
+
+  // =========================================================================
+  // Stripe Billing
+  // =========================================================================
+
+  /**
+   * Create a Stripe Checkout Session for upgrading to Plus.
+   * Returns the hosted checkout page URL.
+   */
+  async createCheckoutSession(authToken: string): Promise<{ url: string }> {
+    const response = await fetch(`${this.serverUrl}/api/stripe/checkout`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      throw new AuthError("Failed to create checkout session", response.status);
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Create a Stripe Customer Portal session for managing billing.
+   * Returns the portal URL.
+   */
+  async createPortalSession(authToken: string): Promise<{ url: string }> {
+    const response = await fetch(`${this.serverUrl}/api/stripe/portal`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      throw new AuthError("Failed to create portal session", response.status);
+    }
+
+    return response.json();
+  }
 }
 
 /**

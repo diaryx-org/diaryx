@@ -160,6 +160,22 @@ async fn main() {
         kv_client,
     };
 
+    // Create Stripe state (if configured)
+    let stripe_router = if let Some(stripe_config) = config.stripe.clone() {
+        info!("Stripe billing: enabled (price={})", stripe_config.price_id);
+        let stripe_state = diaryx_sync_server::handlers::stripe::StripeState {
+            repo: repo.clone(),
+            config: stripe_config,
+            app_base_url: config.app_base_url.clone(),
+        };
+        Some(diaryx_sync_server::handlers::stripe::stripe_routes(
+            stripe_state,
+        ))
+    } else {
+        info!("Stripe billing: disabled (STRIPE_SECRET_KEY not set)");
+        None
+    };
+
     // Build CORS layer
     let origins: Vec<_> = config
         .cors_origins
@@ -185,7 +201,7 @@ async fn main() {
         .allow_origin(AllowOrigin::list(origins));
 
     // Build the router
-    let app = Router::new()
+    let mut app = Router::new()
         // Health check
         .route("/", get(|| async { "Diaryx Sync Server" }))
         .route("/health", get(|| async { "OK" }))
@@ -199,7 +215,14 @@ async fn main() {
         // Session routes (for live share)
         .nest("/api/sessions", session_routes(sessions_state))
         // Sync v2 endpoint (siphonophore-based)
-        .merge(sync_v2_router)
+        .merge(sync_v2_router);
+
+    // Stripe billing routes (only if configured)
+    if let Some(stripe) = stripe_router {
+        app = app.nest("/api", stripe);
+    }
+
+    let app = app
         // Add layers
         .layer(Extension(auth_extractor))
         .layer(cors)

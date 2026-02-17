@@ -843,6 +843,63 @@ impl AuthRepo {
         Ok(updated > 0)
     }
 
+    // ===== Stripe billing operations =====
+
+    /// Set the Stripe customer ID for a user.
+    pub fn set_stripe_customer_id(
+        &self,
+        user_id: &str,
+        customer_id: &str,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE users SET stripe_customer_id = ? WHERE id = ?",
+            params![customer_id, user_id],
+        )?;
+        Ok(())
+    }
+
+    /// Get the Stripe customer ID for a user.
+    pub fn get_stripe_customer_id(&self, user_id: &str) -> Result<Option<String>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let result: Option<Option<String>> = conn
+            .query_row(
+                "SELECT stripe_customer_id FROM users WHERE id = ?",
+                [user_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(result.flatten())
+    }
+
+    /// Find a user ID by their Stripe customer ID.
+    pub fn get_user_id_by_stripe_customer_id(
+        &self,
+        customer_id: &str,
+    ) -> Result<Option<String>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id FROM users WHERE stripe_customer_id = ?",
+            [customer_id],
+            |row| row.get(0),
+        )
+        .optional()
+    }
+
+    /// Set the Stripe subscription ID for a user.
+    pub fn set_stripe_subscription_id(
+        &self,
+        user_id: &str,
+        subscription_id: Option<&str>,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE users SET stripe_subscription_id = ? WHERE id = ?",
+            params![subscription_id, user_id],
+        )?;
+        Ok(())
+    }
+
     // ===== Published site operations =====
 
     /// Count published sites owned by a user.

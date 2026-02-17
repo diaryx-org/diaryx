@@ -68,6 +68,10 @@ cargo run -p diaryx_sync_server
 | `PUBLISHED_SITE_LIMIT`                | `1`                                            | Per-user max published sites                                                                                                                |
 | `SITES_BASE_URL`                      | `APP_BASE_URL`                                 | Public base URL used when generating tokenized links                                                                                        |
 | `TOKEN_SIGNING_KEY`                   | `AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=` | Base64 32-byte HMAC key shared with Worker                                                                                                  |
+| `STRIPE_SECRET_KEY`                   | -                                              | Stripe API secret key (sk_live_... or sk_test_...). Billing endpoints disabled when empty.                                                  |
+| `STRIPE_WEBHOOK_SECRET`               | -                                              | Stripe webhook signing secret (whsec_...)                                                                                                   |
+| `STRIPE_PRICE_ID`                     | -                                              | Stripe Price ID for the Plus plan (price_...)                                                                                               |
+| `STRIPE_PUBLISHABLE_KEY`              | -                                              | Stripe publishable key returned to client (pk_live_... or pk_test_...)                                                                      |
 
 
 ## API Endpoints
@@ -282,6 +286,49 @@ Audience builds (including `public`) use frontmatter audience filtering; files
 without explicit or inherited audience are excluded by default.
 Each publish replaces prior artifacts under `/{slug}/{audience}/` to avoid
 stale files remaining accessible.
+
+### Billing (Stripe)
+
+These endpoints are only available when `STRIPE_SECRET_KEY` is configured.
+
+#### Create Checkout Session
+
+```
+POST /api/stripe/checkout
+Authorization: Bearer <session_token>
+```
+
+Response: `{ "url": "https://checkout.stripe.com/..." }`
+
+Redirects user to Stripe's hosted checkout page for upgrading to Plus.
+
+#### Create Customer Portal Session
+
+```
+POST /api/stripe/portal
+Authorization: Bearer <session_token>
+```
+
+Response: `{ "url": "https://billing.stripe.com/..." }`
+
+Redirects user to Stripe's customer portal for managing billing, payment methods, and cancellation.
+
+#### Stripe Webhook
+
+```
+POST /api/stripe/webhook
+Stripe-Signature: <signature>
+```
+
+Handles `checkout.session.completed`, `customer.subscription.updated`, and `customer.subscription.deleted` events to update user tiers.
+
+#### Get Stripe Config
+
+```
+GET /api/stripe/config
+```
+
+Response: `{ "publishable_key": "pk_..." }`
 
 ### Share Sessions (Live Collaboration)
 

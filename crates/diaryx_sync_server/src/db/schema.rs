@@ -11,7 +11,9 @@ CREATE TABLE IF NOT EXISTS users (
     attachment_limit_bytes INTEGER,
     workspace_limit INTEGER,
     tier TEXT NOT NULL DEFAULT 'free',
-    published_site_limit INTEGER
+    published_site_limit INTEGER,
+    stripe_customer_id TEXT,
+    stripe_subscription_id TEXT
 );
 
 -- Devices table (tracks client devices)
@@ -306,6 +308,34 @@ pub fn init_database(conn: &Connection) -> Result<(), rusqlite::Error> {
         )?;
     }
 
+    // Forward migration: add stripe_customer_id column to users table.
+    let has_stripe_customer_id_col: bool = conn
+        .prepare("PRAGMA table_info(users)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|name| name == "stripe_customer_id");
+    if !has_stripe_customer_id_col {
+        conn.execute("ALTER TABLE users ADD COLUMN stripe_customer_id TEXT", [])?;
+    }
+
+    // Forward migration: add stripe_subscription_id column to users table.
+    let has_stripe_subscription_id_col: bool = conn
+        .prepare("PRAGMA table_info(users)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|name| name == "stripe_subscription_id");
+    if !has_stripe_subscription_id_col {
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN stripe_subscription_id TEXT",
+            [],
+        )?;
+    }
+
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_users_stripe_customer \
+         ON users(stripe_customer_id) WHERE stripe_customer_id IS NOT NULL;",
+    )?;
+
     Ok(())
 }
 
@@ -352,6 +382,8 @@ mod tests {
         assert!(user_cols.contains(&"workspace_limit".to_string()));
         assert!(user_cols.contains(&"tier".to_string()));
         assert!(user_cols.contains(&"published_site_limit".to_string()));
+        assert!(user_cols.contains(&"stripe_customer_id".to_string()));
+        assert!(user_cols.contains(&"stripe_subscription_id".to_string()));
 
         let site_cols: Vec<String> = conn
             .prepare("PRAGMA table_info(published_sites)")

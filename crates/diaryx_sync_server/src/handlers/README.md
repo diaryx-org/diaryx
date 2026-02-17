@@ -8,6 +8,7 @@ attachments:
   - "[auth.rs](/crates/diaryx_sync_server/src/handlers/auth.rs)"
   - "[sites.rs](/crates/diaryx_sync_server/src/handlers/sites.rs)"
   - "[sessions.rs](/crates/diaryx_sync_server/src/handlers/sessions.rs)"
+  - "[stripe.rs](/crates/diaryx_sync_server/src/handlers/stripe.rs)"
   - "[ws.rs](/crates/diaryx_sync_server/src/handlers/ws.rs)"
 exclude:
   - "*.lock"
@@ -26,6 +27,7 @@ HTTP route handlers for the sync server API.
 | `auth.rs`     | Authentication endpoints (magic-link, verify, logout) |
 | `sites.rs`    | Published site and access-token management endpoints   |
 | `sessions.rs` | Share session management endpoints                    |
+| `stripe.rs`   | Stripe billing endpoints (checkout, portal, webhook)  |
 | `ws.rs`       | WebSocket upgrade and sync handling                   |
 
 ### Workspace CRUD Endpoints
@@ -82,6 +84,15 @@ attachment limits. Over-limit requests return `413` with
 - `POST /api/workspaces/{id}/site/tokens` — create signed access token (`audience`, optional `label`, optional `expires_in`).
 - `GET /api/workspaces/{id}/site/tokens` — list token metadata for the workspace site.
 - `DELETE /api/workspaces/{id}/site/tokens/{token_id}` — revoke a token and refresh `_meta.json` revocation list.
+
+### Stripe Billing Endpoints
+
+Only available when `STRIPE_SECRET_KEY` is configured.
+
+- `POST /api/stripe/checkout` — create Stripe Checkout Session for Plus upgrade. Returns `{ url }`. Requires auth.
+- `POST /api/stripe/portal` — create Stripe Customer Portal session. Returns `{ url }`. Requires auth.
+- `POST /api/stripe/webhook` — Stripe webhook handler (no auth, uses signature verification). Handles `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`.
+- `GET /api/stripe/config` — returns `{ publishable_key }`. Public endpoint.
 
 ### Admin Endpoints
 

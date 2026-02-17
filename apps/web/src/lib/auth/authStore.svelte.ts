@@ -573,6 +573,32 @@ export async function deleteServerWorkspace(workspaceId: string): Promise<void> 
 }
 
 // ============================================================================
+// Stripe Billing
+// ============================================================================
+
+/**
+ * Create a Stripe Checkout Session for upgrading to Plus.
+ * Returns the checkout URL for redirect.
+ */
+export async function createCheckoutSession(): Promise<string> {
+  const token = getToken();
+  if (!authService || !token) throw new Error("Not authenticated");
+  const { url } = await authService.createCheckoutSession(token);
+  return url;
+}
+
+/**
+ * Create a Stripe Customer Portal session for managing billing.
+ * Returns the portal URL for redirect.
+ */
+export async function createPortalSession(): Promise<string> {
+  const token = getToken();
+  if (!authService || !token) throw new Error("Not authenticated");
+  const { url } = await authService.createPortalSession(token);
+  return url;
+}
+
+// ============================================================================
 // Data Queries
 // ============================================================================
 

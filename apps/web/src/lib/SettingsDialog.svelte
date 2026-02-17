@@ -9,11 +9,13 @@
   import * as Drawer from "$lib/components/ui/drawer";
   import * as Tabs from "$lib/components/ui/tabs";
   import { Button } from "$lib/components/ui/button";
-  import { Settings, Eye, FolderOpen, FileText, RefreshCw, Database, Bug, User } from "@lucide/svelte";
+  import { Settings, Eye, FolderOpen, FileText, RefreshCw, Database, Bug, User, CreditCard } from "@lucide/svelte";
   import { getMobileState } from "./hooks/useMobile.svelte";
+  import { getAuthState } from "$lib/auth";
 
   // Import modular settings components
   import DisplaySettings from "./settings/DisplaySettings.svelte";
+  import BillingSettings from "./settings/BillingSettings.svelte";
   import FormattingSettings from "./settings/FormattingSettings.svelte";
   import WorkspaceSettings from "./settings/WorkspaceSettings.svelte";
   import LinkSettings from "./settings/LinkSettings.svelte";
@@ -57,6 +59,7 @@
   }: Props = $props();
 
   const mobileState = getMobileState();
+  let authState = $derived(getAuthState());
 
   // Track active tab
   let activeTab = $state("general");
@@ -93,6 +96,12 @@
         <User class="size-4 mr-1.5 hidden sm:inline" />
         Account
       </Tabs.Trigger>
+      {#if authState.isAuthenticated}
+        <Tabs.Trigger value="billing" class="shrink-0">
+          <CreditCard class="size-4 mr-1.5 hidden sm:inline" />
+          Billing
+        </Tabs.Trigger>
+      {/if}
       <Tabs.Trigger value="data" class="shrink-0">
         <Database class="size-4 mr-1.5 hidden sm:inline" />
         Data
@@ -140,6 +149,12 @@
       <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
         <AccountSettings onOpenWizard={onOpenSyncWizard} />
         <WorkspaceManagement />
+      </div>
+    </Tabs.Content>
+
+    <Tabs.Content value="billing">
+      <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
+        <BillingSettings />
       </div>
     </Tabs.Content>
 

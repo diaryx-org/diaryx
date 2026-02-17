@@ -63,6 +63,9 @@ kameo = "0.19"
 async-trait = "0.1"
 yrs = "0.24"
 
+# Stripe billing
+async-stripe = { version = "0.41", default-features = false, features = ["runtime-tokio-hyper-rustls", "checkout", "billing"] }
+
 # Environment
 dotenvy = "0.15"
 

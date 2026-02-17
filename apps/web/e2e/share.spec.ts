@@ -24,7 +24,7 @@ test.describe('Share Tab', () => {
 
     await shareTab.click()
 
-    await expect(page.locator('text=Live Collaboration')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Live Collaboration' })).toBeVisible()
   })
 
   test('should display host and join options', async ({ page }) => {

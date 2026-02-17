@@ -65,7 +65,7 @@ describe('api', () => {
 
       expect(mockBackend.execute).toHaveBeenCalledWith({
         type: 'SaveEntry',
-        params: { path: 'test.md', content: '# Updated Content' },
+        params: { path: 'test.md', content: '# Updated Content', root_index_path: null },
       })
     })
   })
@@ -83,7 +83,7 @@ describe('api', () => {
         type: 'CreateEntry',
         params: {
           path: 'new-entry.md',
-          options: { title: null, part_of: null, template: null },
+          options: { title: null, part_of: null, template: null, root_index_path: null },
         },
       })
       expect(result).toBe('new-entry.md')
@@ -105,7 +105,7 @@ describe('api', () => {
         type: 'CreateEntry',
         params: {
           path: 'new-entry.md',
-          options: { title: 'New Entry', part_of: 'index.md', template: 'daily' },
+          options: { title: 'New Entry', part_of: 'index.md', template: 'daily', root_index_path: null },
         },
       })
     })
@@ -293,7 +293,7 @@ describe('api', () => {
 
       expect(mockBackend.execute).toHaveBeenCalledWith({
         type: 'SetFrontmatterProperty',
-        params: { path: 'test.md', key: 'title', value: 'New Title' },
+        params: { path: 'test.md', key: 'title', value: 'New Title', root_index_path: null },
       })
     })
 

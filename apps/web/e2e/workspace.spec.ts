@@ -34,7 +34,7 @@ test.describe('Workspace', () => {
 
     const shareTab = page.locator('button').filter({ hasText: 'Share' })
     await shareTab.click()
-    await expect(page.locator('text=Live Collaboration')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Live Collaboration' })).toBeVisible()
 
     const propsTab = page.locator('button').filter({ hasText: 'Props' })
     await propsTab.click()
@@ -101,6 +101,7 @@ test.describe('Workspace Navigation', () => {
     await editorHelper.waitForReady()
 
     await editorHelper.focus()
+    await editorHelper.clearContent()
     await editorHelper.type('Line 1')
     await page.keyboard.press('Enter')
     await editorHelper.type('Line 2')

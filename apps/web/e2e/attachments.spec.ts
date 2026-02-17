@@ -51,6 +51,10 @@ test.describe('Attachments in Right Sidebar', () => {
   })
 
   test('should show attachments list or empty state', async ({ page }) => {
+    // Attachments section is collapsed by default — expand it
+    const attachmentsHeader = page.locator('aside button').filter({ hasText: 'Attachments' })
+    await attachmentsHeader.click()
+
     const attachmentItems = page.locator('[role="listitem"][aria-label*="Attachment"]')
     const emptyState = page.locator('aside').locator('text=No attachments')
 

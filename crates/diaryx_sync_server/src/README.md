@@ -42,3 +42,8 @@ This directory contains the source code for the Diaryx sync server.
 - `handlers/` - HTTP route handlers
 - `publish.rs` - CRDT materialization -> static HTML upload pipeline for published sites
 - `sync_v2/` - Siphonophore-based sync implementation
+
+## Operational Notes
+
+- Git auto-commit now treats `No files to commit` as a non-retriable skip and clears the workspace dirty flag to avoid repeated 60s error spam.
+- Auto-commit also ignores workspace IDs that no longer exist in `user_workspaces`, clearing dirty state and opportunistically removing orphan workspace `.db`/`.git` artifacts.

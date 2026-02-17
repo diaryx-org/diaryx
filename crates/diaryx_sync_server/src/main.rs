@@ -25,7 +25,7 @@ use tower_http::{
     cors::{AllowOrigin, CorsLayer},
     trace::TraceLayer,
 };
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -383,6 +383,64 @@ async fn main() {
                 };
 
                 for workspace_id in candidates {
+                    // Skip orphaned workspace IDs that no longer exist in user_workspaces.
+                    // Also opportunistically clean up leftover local artifacts.
+                    match auto_repo.get_workspace(&workspace_id) {
+                        Ok(Some(_)) => {}
+                        Ok(None) => {
+                            sync_v2_state
+                                .dirty_workspaces
+                                .write()
+                                .await
+                                .remove(&workspace_id);
+
+                            sync_v2_state.storage_cache.evict_storage(&workspace_id);
+
+                            let db_path =
+                                sync_v2_state.storage_cache.workspace_db_path(&workspace_id);
+                            if db_path.exists() {
+                                if let Err(err) = std::fs::remove_file(&db_path) {
+                                    warn!(
+                                        "Failed to remove orphan workspace DB {}: {}",
+                                        db_path.display(),
+                                        err
+                                    );
+                                } else {
+                                    info!("Removed orphan workspace DB {}", db_path.display());
+                                }
+                            }
+
+                            let git_path = sync_v2_state.storage_cache.git_repo_path(&workspace_id);
+                            if git_path.exists() {
+                                if let Err(err) = std::fs::remove_dir_all(&git_path) {
+                                    warn!(
+                                        "Failed to remove orphan workspace git repo {}: {}",
+                                        git_path.display(),
+                                        err
+                                    );
+                                } else {
+                                    info!(
+                                        "Removed orphan workspace git repo {}",
+                                        git_path.display()
+                                    );
+                                }
+                            }
+
+                            warn!(
+                                "Skipping auto-commit for unknown workspace {}; cleared dirty state",
+                                workspace_id
+                            );
+                            continue;
+                        }
+                        Err(err) => {
+                            error!(
+                                "Failed to verify workspace {} before auto-commit: {}",
+                                workspace_id, err
+                            );
+                            continue;
+                        }
+                    }
+
                     // Check peer count — prefer committing when no one is connected
                     let doc_id = format!("workspace:{}", workspace_id);
                     let peer_count = sync_v2_state.handle.get_peer_count(&doc_id).await;
@@ -484,8 +542,20 @@ async fn main() {
                             }
                         }
                         Err(e) => {
-                            // Don't remove from dirty — will retry next cycle
-                            error!("Auto-commit failed for {}: {}", workspace_id, e);
+                            if e.to_string().contains("No files to commit") {
+                                sync_v2_state
+                                    .dirty_workspaces
+                                    .write()
+                                    .await
+                                    .remove(&workspace_id);
+                                info!(
+                                    "Auto-commit skipped for {}: no files to commit; cleared dirty state",
+                                    workspace_id
+                                );
+                            } else {
+                                // Keep dirty state for retriable failures.
+                                error!("Auto-commit failed for {}: {}", workspace_id, e);
+                            }
                         }
                     }
                 }

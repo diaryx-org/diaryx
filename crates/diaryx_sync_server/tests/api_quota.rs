@@ -245,3 +245,63 @@ async fn complete_upload_reconciles_workspace_refs() {
         "completed upload should be referenced after reconcile"
     );
 }
+
+#[tokio::test]
+async fn delete_workspace_cleans_dirty_state_and_local_storage_artifacts() {
+    let (app, _repo, sync_v2_state, _user_id, workspace_id, token) = setup();
+
+    let storage = sync_v2_state
+        .storage_cache
+        .get_storage(&workspace_id)
+        .expect("workspace storage");
+    drop(storage);
+
+    let db_path = sync_v2_state.storage_cache.workspace_db_path(&workspace_id);
+    assert!(
+        db_path.exists(),
+        "workspace DB should exist before delete workspace test"
+    );
+
+    let git_path = sync_v2_state.storage_cache.git_repo_path(&workspace_id);
+    std::fs::create_dir_all(&git_path).expect("create dummy git dir");
+    std::fs::write(git_path.join("HEAD"), b"ref: refs/heads/main\n")
+        .expect("create dummy git file");
+    assert!(
+        git_path.exists(),
+        "workspace git repo path should exist before deletion"
+    );
+
+    sync_v2_state
+        .dirty_workspaces
+        .write()
+        .await
+        .insert(workspace_id.clone(), tokio::time::Instant::now());
+
+    let delete_request = Request::builder()
+        .method("DELETE")
+        .uri(format!("/api/workspaces/{}", workspace_id))
+        .header("authorization", format!("Bearer {}", token))
+        .body(Body::empty())
+        .expect("delete request");
+    let delete_response = app
+        .clone()
+        .oneshot(delete_request)
+        .await
+        .expect("delete response");
+    assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+
+    let dirty = sync_v2_state.dirty_workspaces.read().await;
+    assert!(
+        !dirty.contains_key(&workspace_id),
+        "dirty workspace state should be cleared after delete"
+    );
+
+    assert!(
+        !db_path.exists(),
+        "workspace DB file should be removed after delete"
+    );
+    assert!(
+        !git_path.exists(),
+        "workspace git repo should be removed after delete"
+    );
+}

@@ -36,6 +36,20 @@ impl StorageCache {
         self.workspaces_dir.join(format!("{}.git", workspace_id))
     }
 
+    /// Get the path where the SQLite database for a workspace lives.
+    pub fn workspace_db_path(&self, workspace_id: &str) -> PathBuf {
+        self.workspaces_dir.join(format!("{}.db", workspace_id))
+    }
+
+    /// Evict a workspace storage handle from the cache.
+    ///
+    /// This is useful before deleting workspace storage files to avoid keeping
+    /// stale handles around in memory.
+    pub fn evict_storage(&self, workspace_id: &str) -> Option<Arc<SqliteStorage>> {
+        let mut cache = self.cache.write().unwrap();
+        cache.remove(workspace_id)
+    }
+
     /// Get or create storage for a workspace.
     pub fn get_storage(&self, workspace_id: &str) -> Result<Arc<SqliteStorage>, String> {
         // Check cache first
@@ -47,7 +61,7 @@ impl StorageCache {
         }
 
         // Create new storage
-        let db_path = self.workspaces_dir.join(format!("{}.db", workspace_id));
+        let db_path = self.workspace_db_path(workspace_id);
         let storage = SqliteStorage::open(&db_path)
             .map_err(|e| format!("Failed to open storage for {}: {}", workspace_id, e))?;
         let storage = Arc::new(storage);
@@ -59,5 +73,39 @@ impl StorageCache {
         }
 
         Ok(storage)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workspace_db_path_uses_workspace_dir_and_suffix() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let cache = StorageCache::new(temp_dir.path().to_path_buf());
+        let db_path = cache.workspace_db_path("workspace-123");
+
+        assert_eq!(db_path, temp_dir.path().join("workspace-123.db"));
+    }
+
+    #[test]
+    fn evict_storage_removes_cached_entry_and_is_idempotent() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let cache = StorageCache::new(temp_dir.path().to_path_buf());
+
+        let first = cache.get_storage("workspace-123").expect("create storage");
+
+        assert!(cache.evict_storage("workspace-123").is_some());
+        assert!(cache.evict_storage("workspace-123").is_none());
+
+        let second = cache
+            .get_storage("workspace-123")
+            .expect("recreate storage");
+
+        assert!(
+            !Arc::ptr_eq(&first, &second),
+            "evicted storage should not remain cached"
+        );
     }
 }

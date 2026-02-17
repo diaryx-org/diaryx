@@ -347,6 +347,27 @@ async fn delete_workspace(
         }
     }
 
+    // Clear pending auto-commit state for the deleted workspace.
+    state
+        .sync_v2
+        .dirty_workspaces
+        .write()
+        .await
+        .remove(&workspace_id);
+
+    // Evict cached storage handle before removing the database file.
+    state.sync_v2.storage_cache.evict_storage(&workspace_id);
+
+    let db_path = state.sync_v2.storage_cache.workspace_db_path(&workspace_id);
+    if db_path.exists() {
+        if let Err(err) = std::fs::remove_file(&db_path) {
+            warn!(
+                "Failed to remove CRDT DB for deleted workspace {}: {}",
+                workspace_id, err
+            );
+        }
+    }
+
     // Clean up git repo directory
     let git_path = state.sync_v2.storage_cache.git_repo_path(&workspace_id);
     if git_path.exists() {
@@ -356,12 +377,6 @@ async fn delete_workspace(
                 workspace_id, err
             );
         }
-    }
-
-    // Clean up CRDT storage
-    if let Ok(storage) = state.sync_v2.storage_cache.get_storage(&workspace_id) {
-        // Drop the storage to release file handles, then clean up
-        drop(storage);
     }
 
     info!(

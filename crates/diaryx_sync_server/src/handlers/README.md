@@ -36,7 +36,7 @@ HTTP route handlers for the sync server API.
 - `POST /api/workspaces` — create workspace (body: `{"name": "..."}`, enforces per-user workspace limit)
 - `GET /api/workspaces/{id}` — get workspace info
 - `PATCH /api/workspaces/{id}` — rename workspace (body: `{"name": "..."}`)
-- `DELETE /api/workspaces/{id}` — delete workspace + cleanup (git repo, CRDT storage, attachment refs)
+- `DELETE /api/workspaces/{id}` — delete workspace + cleanup (attachment refs, dirty auto-commit state, cached CRDT handle eviction, workspace `.db` removal, git repo removal)
 
 Workspace creation returns `403` when the user's workspace limit is reached, and `409` for duplicate names.
 The per-user workspace limit defaults to the user's tier (Free=1, Plus=10) and can be overridden via `workspace_limit` on the users table.

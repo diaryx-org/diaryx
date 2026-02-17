@@ -39,7 +39,7 @@
     getCurrentWorkspaceId,
     setWorkspaceIsLocal,
     promoteLocalWorkspace,
-  } from "$lib/storage/localWorkspaceRegistry";
+  } from "$lib/storage/localWorkspaceRegistry.svelte";
   import { deleteLocalWorkspaceData } from "$lib/settings/clearData";
   import { toast } from "svelte-sonner";
 
@@ -264,7 +264,7 @@
 
         <div class="space-y-1">
           {#each syncedWorkspaces as ws (ws.id)}
-            <div class="flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-muted/50 group">
+            <div class="flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-muted/50">
               {#if renamingId === ws.id}
                 {@render renameRow(ws.id)}
               {:else}
@@ -279,7 +279,7 @@
                     <span class="text-[10px] px-1 py-0.5 rounded bg-primary/10 text-primary shrink-0">active</span>
                   {/if}
                 </span>
-                <div class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div class="flex items-center gap-0.5">
                   {#if confirmAction?.id === ws.id}
                     {#if confirmAction.type === 'delete-server'}
                       {@render confirmRow(ws.id, "Delete from cloud", () => handleDeleteFromServer(ws.id))}
@@ -305,17 +305,16 @@
                     >
                       <CloudOff class="size-3" />
                     </Button>
-                    {#if ws.id !== currentId}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        class="size-6"
-                        onclick={() => handleDeleteFromServer(ws.id)}
-                        title="Delete from cloud"
-                      >
-                        <Trash2 class="size-3" />
-                      </Button>
-                    {/if}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class="size-6"
+                      onclick={() => handleDeleteFromServer(ws.id)}
+                      disabled={ws.id === currentId}
+                      title={ws.id === currentId ? "Switch to another workspace first" : "Delete from cloud"}
+                    >
+                      <Trash2 class="size-3" />
+                    </Button>
                   {/if}
                 </div>
               {/if}
@@ -348,7 +347,7 @@
 
         <div class="space-y-1">
           {#each localWorkspaces as ws (ws.id)}
-            <div class="flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-muted/50 group">
+            <div class="flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-muted/50">
               {#if renamingId === ws.id}
                 {@render renameRow(ws.id)}
               {:else}
@@ -359,7 +358,7 @@
                     <span class="text-[10px] px-1 py-0.5 rounded bg-primary/10 text-primary shrink-0">active</span>
                   {/if}
                 </span>
-                <div class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div class="flex items-center gap-0.5">
                   {#if confirmAction?.id === ws.id}
                     {@render confirmRow(ws.id, "Confirm delete", () => handleDeleteLocal(ws.id))}
                   {:else}
@@ -372,14 +371,14 @@
                     >
                       <Pencil class="size-3" />
                     </Button>
-                    {#if canCreateServer}
+                    {#if authState.isAuthenticated}
                       <Button
                         variant="ghost"
                         size="icon"
                         class="size-6"
                         onclick={() => handleStartSync(ws.id, ws.name)}
-                        disabled={actionLoading && actionId === ws.id}
-                        title="Start syncing"
+                        disabled={!canCreateServer || (actionLoading && actionId === ws.id)}
+                        title={canCreateServer ? "Start syncing" : "Synced workspace limit reached"}
                       >
                         {#if actionLoading && actionId === ws.id}
                           <Loader2 class="size-3 animate-spin" />
@@ -388,17 +387,16 @@
                         {/if}
                       </Button>
                     {/if}
-                    {#if ws.id !== currentId}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        class="size-6"
-                        onclick={() => handleDeleteLocal(ws.id)}
-                        title="Delete"
-                      >
-                        <Trash2 class="size-3" />
-                      </Button>
-                    {/if}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class="size-6"
+                      onclick={() => handleDeleteLocal(ws.id)}
+                      disabled={ws.id === currentId}
+                      title={ws.id === currentId ? "Switch to another workspace first" : "Delete"}
+                    >
+                      <Trash2 class="size-3" />
+                    </Button>
                   {/if}
                 </div>
               {/if}
@@ -414,10 +412,5 @@
       </div>
     {/if}
 
-    {#if currentId}
-      <p class="text-xs text-muted-foreground">
-        The active workspace cannot be deleted. Switch to a different workspace first.
-      </p>
-    {/if}
   </div>
 {/if}

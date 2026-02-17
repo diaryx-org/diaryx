@@ -4,7 +4,7 @@
  * Used by ClearDataSettings (manual clear) and AccountSettings (post-logout prompt).
  */
 
-import { getLocalWorkspaces } from "$lib/storage/localWorkspaceRegistry";
+import { getLocalWorkspaces } from "$lib/storage/localWorkspaceRegistry.svelte";
 
 /**
  * Delete a single workspace's OPFS directory by its ID and/or name.

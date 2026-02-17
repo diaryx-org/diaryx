@@ -1950,6 +1950,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "diaryx-siphonophore"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68fc2d2d3f3b066b2a2de5d3ddbd8a5973d3c1a32fd3cecc43ab36758280b654"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bytes",
+ "futures",
+ "kameo",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "yrs 0.24.0",
+]
+
+[[package]]
 name = "diaryx_apple"
 version = "0.14.1"
 dependencies = [
@@ -2001,6 +2019,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "diaryx-siphonophore",
  "diaryx_core",
  "futures",
  "kameo",
@@ -2008,7 +2027,6 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "siphonophore",
  "tempfile",
  "tokio",
  "tower-http",
@@ -2029,6 +2047,7 @@ dependencies = [
  "axum-extra",
  "base64 0.22.1",
  "chrono",
+ "diaryx-siphonophore",
  "diaryx_core",
  "diaryx_sync",
  "dotenvy",
@@ -2044,7 +2063,6 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2",
- "siphonophore",
  "tempfile",
  "tokio",
  "tokio-tungstenite 0.26.2",
@@ -6953,23 +6971,6 @@ name = "siphasher"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b2aa850e253778c88a04c3d7323b043aeda9d3e30d5971937c1855769763678e"
-
-[[package]]
-name = "siphonophore"
-version = "0.1.0"
-source = "git+https://github.com/diaryx-org/siphonophore.git?branch=main#2d9b62a780c74760e46618bcd090dd33c2f0c8d5"
-dependencies = [
- "async-trait",
- "axum",
- "bytes",
- "futures",
- "kameo",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "yrs 0.24.0",
-]
 
 [[package]]
 name = "slab"

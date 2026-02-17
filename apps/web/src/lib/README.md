@@ -61,3 +61,13 @@ Shared libraries, components, and utilities for the web application.
 (`upload snapshot` -> `prepare local CRDT` -> `connect` -> `metadata sync`) so
 users see visible forward motion even when backend operations don't emit
 granular file progress for small workspaces.
+
+## Command Palette Dialog Sequencing
+
+`CommandPalette.svelte` closes the palette and awaits a Svelte `tick()` before
+running the selected command action. This prevents overlapping Radix dialogs
+when a command opens another modal (for example, `New Entry`).
+
+`NewEntryModal.svelte` also guards its parent-picker root expansion effect so it
+does not continuously rewrite `pickerExpanded`. This avoids reactive update-loop
+errors that can leave overlapping dialogs/focus traps on screen.

@@ -3534,6 +3534,24 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 Ok(Response::WorkspaceConfig(config))
             }
 
+            Command::GenerateFilename {
+                title,
+                root_index_path,
+            } => {
+                use crate::entry::apply_filename_style;
+                use crate::workspace::FilenameStyle;
+
+                let style = if let Some(ref root_path) = root_index_path {
+                    let ws = self.workspace().inner();
+                    let config = ws.get_workspace_config(Path::new(root_path)).await?;
+                    config.filename_style
+                } else {
+                    FilenameStyle::default()
+                };
+                let stem = apply_filename_style(&title, &style);
+                Ok(Response::String(format!("{}.md", stem)))
+            }
+
             Command::SetWorkspaceConfig {
                 root_index_path,
                 field,

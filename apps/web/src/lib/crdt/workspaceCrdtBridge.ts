@@ -36,7 +36,7 @@ import {
 import {
   setCurrentWorkspaceId as registrySetCurrentWorkspaceId,
   addLocalWorkspace,
-} from '$lib/storage/localWorkspaceRegistry';
+} from '$lib/storage/localWorkspaceRegistry.svelte';
 
 /**
  * Convert an HTTP URL to a WebSocket URL for sync v2 (/sync2).

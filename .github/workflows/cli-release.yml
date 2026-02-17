@@ -20,6 +20,8 @@ jobs:
     name: Publish to crates.io
     needs: [build]
     runs-on: ubuntu-latest
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -31,15 +33,21 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Publish diaryx_core
-        run: cargo publish -p diaryx_core --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p diaryx_core
+        continue-on-error: true # May already be published
+
+      - name: Wait for crates.io index update
+        run: sleep 30
+
+      - name: Publish diaryx_sync
+        run: cargo publish -p diaryx_sync
         continue-on-error: true # May already be published
 
       - name: Wait for crates.io index update
         run: sleep 30
 
       - name: Publish diaryx (CLI)
-        run: cargo publish -p diaryx --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
+        run: cargo publish -p diaryx
   # Build binaries for cargo-binstall
   build:
     name: Build ${{ matrix.target }}

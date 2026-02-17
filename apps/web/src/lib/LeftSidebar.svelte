@@ -71,6 +71,7 @@
     onDuplicateEntry?: (path: string) => Promise<string>;
     onWorkspaceSwitchStart?: () => void;
     onWorkspaceSwitchComplete?: () => void;
+    onInitializeWorkspace?: () => void;
   }
 
   let {
@@ -104,6 +105,7 @@
     onDuplicateEntry,
     onWorkspaceSwitchStart,
     onWorkspaceSwitchComplete,
+    onInitializeWorkspace,
   }: Props = $props();
 
   // Platform detection for keyboard shortcut display
@@ -1039,10 +1041,24 @@
         <Loader2 class="size-6 animate-spin text-muted-foreground" />
       </div>
     {:else if tree}
-      <!-- Tree View -->
-      <div class="space-y-0.5" role="tree" aria-label="Workspace entries">
-        {@render treeNode(tree, 0)}
-      </div>
+      {#if tree.path === '.' && tree.children.length === 0}
+        <!-- Empty Workspace State -->
+        <div class="flex flex-col items-center justify-center py-8 text-center gap-3">
+          <Folder class="size-8 text-muted-foreground" />
+          <p class="text-sm text-muted-foreground">This workspace is empty</p>
+          {#if onInitializeWorkspace}
+            <Button variant="outline" size="sm" onclick={onInitializeWorkspace}>
+              <Plus class="size-4 mr-1.5" />
+              Create root index
+            </Button>
+          {/if}
+        </div>
+      {:else}
+        <!-- Tree View -->
+        <div class="space-y-0.5" role="tree" aria-label="Workspace entries">
+          {@render treeNode(tree, 0)}
+        </div>
+      {/if}
     {:else}
       <!-- Empty State -->
       <div class="flex flex-col items-center justify-center py-8 text-center">

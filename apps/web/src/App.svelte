@@ -50,9 +50,10 @@
   } from "./models/stores";
   import { getFormattingStore } from "./lib/stores/formattingStore.svelte";
 
+
   // Import auth
   import { initAuth, getCurrentWorkspace, verifyMagicLink, setServerUrl, refreshUserInfo, getAuthState } from "./lib/auth";
-  import { getLocalWorkspace, getCurrentWorkspaceId, bootstrapDefaultWorkspace, discoverOpfsWorkspaces } from "$lib/storage/localWorkspaceRegistry";
+  import { getLocalWorkspace, getCurrentWorkspaceId, bootstrapDefaultWorkspace, discoverOpfsWorkspaces } from "$lib/storage/localWorkspaceRegistry.svelte";
 
   // Initialize theme store immediately
   getThemeStore();
@@ -1185,16 +1186,53 @@
   }
 
   // Create a new entry - delegates to controller with sync support
-  async function createNewEntry(path: string, title: string) {
+  async function createNewEntry(title: string, parentPath: string | null) {
     if (!api) return;
-    // Template is resolved by the backend from workspace config (default_template field).
-    // Falls back to built-in "note" template if not configured.
-    const newPath = await createEntryWithSync(api, path, { title, rootIndexPath: tree?.path }, async () => {
+
+    // Generate filename from title using Rust backend (reads workspace config's filename_style)
+    const filename = await api.generateFilename(title, tree?.path ?? undefined);
+
+    // Create the entry at workspace root
+    const newPath = await createEntryWithSync(api, filename, { title, rootIndexPath: tree?.path }, async () => {
       await refreshTree();
     });
+
+    if (newPath && parentPath) {
+      // Attach to selected parent
+      try {
+        const movedPath = await api.attachEntryToParent(newPath, parentPath);
+        await refreshTree();
+        await openEntry(movedPath);
+        await runValidation();
+        return;
+      } catch (e) {
+        toast.error("Entry created but failed to attach to parent");
+        console.error("[App] attachEntryToParent failed:", e);
+      }
+    }
+
     if (newPath) {
       await openEntry(newPath);
       await runValidation();
+    }
+  }
+
+  // Initialize an empty workspace with a root index
+  async function handleInitializeWorkspace() {
+    if (!api) return;
+    try {
+      // Get workspace name from local registry
+      const wsId = getCurrentWorkspaceId();
+      const localWs = wsId ? getLocalWorkspace(wsId) : null;
+      const wsName = localWs?.name ?? "My Journal";
+      await api.createWorkspace(".", wsName);
+      await refreshTree();
+      // Open the newly created root index
+      if (tree) {
+        await openEntry(tree.path);
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -1709,8 +1747,11 @@
 
 {#if showNewEntryModal}
   <NewEntryModal
+    {tree}
+    {api}
+    rootIndexPath={tree?.path ?? null}
     onSave={createNewEntry}
-    onCancel={() => (showNewEntryModal = false)}
+    onCancel={() => uiStore.closeNewEntryModal()}
   />
 {/if}
 
@@ -1721,7 +1762,7 @@
   {api}
   currentEntryPath={currentEntry?.path ?? null}
   onOpenEntry={openEntry}
-  onNewEntry={() => (showNewEntryModal = true)}
+  onNewEntry={() => uiStore.openNewEntryModal()}
   onDailyEntry={handleDailyEntry}
   onSettings={() => (showSettingsDialog = true)}
   onExport={() => {
@@ -1832,6 +1873,7 @@
     onDuplicateEntry={handleDuplicateEntry}
     onWorkspaceSwitchStart={handleWorkspaceSwitchStart}
     onWorkspaceSwitchComplete={handleWorkspaceSwitchComplete}
+    onInitializeWorkspace={handleInitializeWorkspace}
   />
 
   <!-- Hidden file input for attachments (accepts all file types) -->

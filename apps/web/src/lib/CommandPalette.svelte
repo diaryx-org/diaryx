@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import * as Command from "$lib/components/ui/command";
   import * as Drawer from "$lib/components/ui/drawer";
   import type { TreeNode, SearchResults } from "./backend";
@@ -127,11 +128,13 @@
     searchResults = null;
   }
 
-  function handleCommand(action: () => void) {
-    action();
+  async function handleCommand(action: () => void | Promise<void>) {
     open = false;
     searchValue = "";
     searchResults = null;
+    // Let the palette dialog unmount before executing commands that open another dialog.
+    await tick();
+    await action();
   }
 
   // Filter entries based on search

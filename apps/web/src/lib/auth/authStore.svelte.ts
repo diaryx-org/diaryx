@@ -28,7 +28,7 @@ import {
   setCollaborationWorkspaceId,
 } from "../crdt";
 import { collaborationStore } from "@/models/stores/collaborationStore.svelte";
-import { getCurrentWorkspaceId as registryGetCurrentWorkspaceId } from "$lib/storage/localWorkspaceRegistry";
+import { getCurrentWorkspaceId as registryGetCurrentWorkspaceId } from "$lib/storage/localWorkspaceRegistry.svelte";
 
 // ============================================================================
 // Types

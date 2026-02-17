@@ -33,7 +33,7 @@ export {
   clearCurrentWorkspaceId,
   renameLocalWorkspace,
   type LocalWorkspace,
-} from "./localWorkspaceRegistry.js";
+} from "./localWorkspaceRegistry.svelte.js";
 
 /**
  * Set up the global bridge that Rust WASM code will use to access storage.

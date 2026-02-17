@@ -26,7 +26,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 # Y-sync v2 (siphonophore-based)
-siphonophore = { git = "https://github.com/diaryx-org/siphonophore.git", branch = "main" }
+siphonophore = { version = "0.1.0", package = "diaryx-siphonophore" }
 kameo = "0.19"
 async-trait = "0.1"
 yrs = "0.24"

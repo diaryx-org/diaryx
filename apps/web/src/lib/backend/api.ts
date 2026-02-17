@@ -171,12 +171,13 @@ export function createApi(backend: Backend) {
       return expectResponse(response, 'CreateChildResult').data;
     },
 
-    /** Attach an existing entry to a parent index. */
-    async attachEntryToParent(entryPath: string, parentPath: string): Promise<void> {
-      await backend.execute({
+    /** Attach an existing entry to a parent index. Returns the (possibly moved) entry path. */
+    async attachEntryToParent(entryPath: string, parentPath: string): Promise<string> {
+      const response = await backend.execute({
         type: 'AttachEntryToParent',
         params: { entry_path: entryPath, parent_path: parentPath },
       });
+      return expectResponse(response, 'String').data;
     },
 
     /** Ensure today's daily entry exists. Returns the path to the daily entry. */
@@ -268,6 +269,15 @@ export function createApi(backend: Backend) {
         params: { root_index_path: rootIndexPath },
       });
       return expectResponse(response, 'WorkspaceConfig').data;
+    },
+
+    /** Generate a filename from a title using the workspace's filename_style. Returns filename with .md extension. */
+    async generateFilename(title: string, rootIndexPath?: string): Promise<string> {
+      const response = await backend.execute({
+        type: 'GenerateFilename',
+        params: { title, root_index_path: rootIndexPath ?? null },
+      } as any);
+      return expectResponse(response, 'String').data;
     },
 
     /** Set a workspace configuration field in root index frontmatter. */

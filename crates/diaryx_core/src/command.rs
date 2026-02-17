@@ -993,6 +993,17 @@ pub enum Command {
         root_index_path: String,
     },
 
+    /// Generate a filename from a title using the workspace's filename_style setting.
+    ///
+    /// Returns the generated filename (with .md extension) as a String.
+    GenerateFilename {
+        /// The entry title to convert to a filename.
+        title: String,
+        /// Path to the workspace root index file (to read filename_style config).
+        /// If None, uses the default style (preserve).
+        root_index_path: Option<String>,
+    },
+
     /// Set a workspace configuration field in the root index file's frontmatter.
     SetWorkspaceConfig {
         /// Path to the workspace root index file.

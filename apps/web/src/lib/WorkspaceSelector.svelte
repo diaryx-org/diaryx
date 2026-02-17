@@ -23,7 +23,7 @@
     setCurrentWorkspaceId,
     getLocalWorkspaces,
     createLocalWorkspace,
-  } from "$lib/storage/localWorkspaceRegistry";
+  } from "$lib/storage/localWorkspaceRegistry.svelte";
   import { switchWorkspace } from "$lib/crdt/workspaceCrdtBridge";
   import { getBackend } from "$lib/backend";
   import { createApi } from "$lib/backend/api";
@@ -94,8 +94,8 @@
     return localWs?.name ?? 'My Journal';
   });
 
-  // Current workspace ID (from auth or local registry)
-  let currentWsId = $derived(currentWorkspace?.id ?? localStorage.getItem('diaryx_current_workspace'));
+  // Current workspace ID (from reactive auth state, updated by switchWorkspace)
+  let currentWsId = $derived(authState.activeWorkspaceId);
 
   function isLocal(id: string): boolean {
     return isWorkspaceLocal(id);

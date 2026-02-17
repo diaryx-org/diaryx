@@ -710,7 +710,7 @@
 
       // Register the workspace in the local workspace registry
       if (workspaceId && defaultWorkspace) {
-        const { addLocalWorkspace, setCurrentWorkspaceId, getCurrentWorkspaceId, promoteLocalWorkspace } = await import("$lib/storage/localWorkspaceRegistry");
+        const { addLocalWorkspace, setCurrentWorkspaceId, getCurrentWorkspaceId, promoteLocalWorkspace } = await import("$lib/storage/localWorkspaceRegistry.svelte");
         const { setActiveWorkspaceId } = await import("$lib/auth/authStore.svelte");
 
         // If a local-only workspace is active, promote it to a synced workspace

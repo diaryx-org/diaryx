@@ -113,18 +113,40 @@ export class EditorHelper {
 }
 
 /**
+ * Complete the welcome screen onboarding flow if it appears.
+ * Creates a default workspace so tests can proceed to the editor.
+ */
+async function handleWelcomeScreenIfNeeded(page: Page, timeoutMs: number): Promise<void> {
+  const editor = page.locator('.ProseMirror, [contenteditable="true"]')
+  const welcomeHeading = page.getByRole('heading', { name: 'Welcome to Diaryx' })
+
+  // Wait for either the editor or welcome screen to appear
+  await Promise.race([
+    editor.first().waitFor({ state: 'visible', timeout: timeoutMs }),
+    welcomeHeading.waitFor({ state: 'visible', timeout: timeoutMs }),
+  ])
+
+  // If the welcome screen appeared, complete it
+  if (await welcomeHeading.isVisible().catch(() => false)) {
+    const createButton = page.getByRole('button', { name: 'Create Workspace' })
+    await expect(createButton).toBeVisible({ timeout: 5000 })
+    await createButton.click()
+
+    // Wait for the editor to load after workspace creation
+    await editor.first().waitFor({ state: 'visible', timeout: timeoutMs })
+  }
+}
+
+/**
  * Wait for the app to be fully initialized.
- * This is more reliable than networkidle for WASM apps.
+ * Handles the welcome screen onboarding if no workspaces exist.
  */
 export async function waitForAppReady(page: Page, timeoutMs: number = 20000): Promise<void> {
   // Wait for the main app container
   await page.waitForSelector('body', { state: 'visible' })
 
-  // Wait for the editor to be available (indicates WASM is loaded)
-  await page.waitForSelector('.ProseMirror, [contenteditable="true"]', {
-    state: 'visible',
-    timeout: timeoutMs
-  })
+  // Handle welcome screen if it appears (first run / cleared storage)
+  await handleWelcomeScreenIfNeeded(page, timeoutMs)
 
   // Additional check: ensure no loading spinners are visible
   const spinner = page.locator('.loading, [data-loading="true"]')
@@ -264,15 +286,21 @@ export async function mockAuth(page: Page): Promise<void> {
     }))
   })
 
-  // Mock the /api/me validation call that initAuth() makes on startup
-  await page.route('**/api/me', route => {
+  // Mock the /auth/me validation call that initAuth() makes on startup.
+  // Return empty workspaces to prevent SyncSetupWizard from auto-opening,
+  // and tier: "plus" so the Host button is visible (not gated behind upgrade).
+  await page.route('**/auth/me', route => {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
         user: { id: 'test-user-id', email: 'test@example.com' },
-        workspaces: [{ id: 'test-workspace-id', name: 'default' }],
+        workspaces: [],
         devices: [],
+        tier: 'plus',
+        workspace_limit: 10,
+        published_site_limit: 10,
+        attachment_limit_bytes: 200 * 1024 * 1024,
       }),
     })
   })

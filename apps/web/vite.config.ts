@@ -71,6 +71,12 @@ export default defineConfig({
     // Exclude Tauri API from optimization since it's optional
     // Exclude wasm-pandoc so Vite doesn't try to pre-bundle the 56MB WASM
     exclude: ["@tauri-apps/api", "wasm-pandoc", "@diaryx/wasm"],
+    // Pre-bundle deps used by export workers so Vite doesn't discover them
+    // at runtime and trigger a full page reload.
+    include: [
+      "@bjorn3/browser_wasi_shim",
+      "@myriaddreamin/typst.ts/dist/esm/contrib/snippet.mjs",
+    ],
   },
   // Env variables starting with the item of `envPrefix` will be exposed in tauri's source code through `import.meta.env`.
   envPrefix: ["VITE_", "TAURI_ENV_*"],

@@ -54,7 +54,7 @@
 
   // Import auth
   import { initAuth, getCurrentWorkspace, verifyMagicLink, setServerUrl, refreshUserInfo, getAuthState, isAuthenticated, getWorkspaces, isSyncEnabled } from "./lib/auth";
-  import { getLocalWorkspace, getLocalWorkspaces, getCurrentWorkspaceId, discoverOpfsWorkspaces } from "$lib/storage/localWorkspaceRegistry.svelte";
+  import { getLocalWorkspace, getLocalWorkspaces, getCurrentWorkspaceId, getWorkspaceStorageType, discoverOpfsWorkspaces } from "$lib/storage/localWorkspaceRegistry.svelte";
 
   // Initialize theme store immediately
   getThemeStore();
@@ -531,7 +531,7 @@
         wsId = localWs.id;
         wsName = localWs.name;
       }
-      const backendInstance = await getBackend(wsId, wsName);
+      const backendInstance = await getBackend(wsId, wsName, wsId ? getWorkspaceStorageType(wsId) : undefined);
       workspaceStore.setBackend(backendInstance);
 
       // Set the backend API for CRDT bridge (used for writing synced files to disk)
@@ -1250,7 +1250,7 @@
       const localWs = wsId ? getLocalWorkspace(wsId) : null;
       if (!localWs) return;
 
-      const backendInstance = await getBackend(localWs.id, localWs.name);
+      const backendInstance = await getBackend(localWs.id, localWs.name, getWorkspaceStorageType(localWs.id));
       workspaceStore.setBackend(backendInstance);
 
       const apiInstance = createApi(backendInstance);

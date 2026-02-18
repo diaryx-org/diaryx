@@ -4,35 +4,70 @@
  * Used by ClearDataSettings (manual clear) and AccountSettings (post-logout prompt).
  */
 
-import { getLocalWorkspaces } from "$lib/storage/localWorkspaceRegistry.svelte";
+import { getLocalWorkspaces, getWorkspaceStorageType } from "$lib/storage/localWorkspaceRegistry.svelte";
+import { clearWorkspaceFileSystemHandle } from "$lib/backend/storageType";
 
 /**
- * Delete a single workspace's OPFS directory by its ID and/or name.
- * Tries both since directories may be UUID-named (legacy) or name-based (current).
+ * Delete a single workspace's data based on its storage type.
+ * - OPFS: deletes the OPFS directory (by ID and name)
+ * - IndexedDB: deletes the workspace's IndexedDB database
+ * - File System Access: clears the stored handle (user's files stay on disk)
  */
 export async function deleteLocalWorkspaceData(workspaceId: string, workspaceName?: string): Promise<void> {
-  if (!navigator.storage?.getDirectory) return;
-  const root = await navigator.storage.getDirectory();
+  const storageType = getWorkspaceStorageType(workspaceId);
 
-  // Try deleting by ID (legacy UUID-named dirs)
-  try {
-    await root.removeEntry(workspaceId, { recursive: true });
-    console.log(`[ClearData] Deleted OPFS workspace directory: ${workspaceId}`);
-  } catch (e) {
-    if ((e as Error).name !== "NotFoundError") {
-      console.warn(`[ClearData] Failed to delete OPFS workspace ${workspaceId}:`, e);
-    }
-  }
+  switch (storageType) {
+    case 'opfs': {
+      if (!navigator.storage?.getDirectory) return;
+      const root = await navigator.storage.getDirectory();
 
-  // Also try deleting by name (current name-based dirs)
-  if (workspaceName && workspaceName !== workspaceId) {
-    try {
-      await root.removeEntry(workspaceName, { recursive: true });
-      console.log(`[ClearData] Deleted OPFS workspace directory by name: ${workspaceName}`);
-    } catch (e) {
-      if ((e as Error).name !== "NotFoundError") {
-        console.warn(`[ClearData] Failed to delete OPFS workspace ${workspaceName}:`, e);
+      // Try deleting by ID (legacy UUID-named dirs)
+      try {
+        await root.removeEntry(workspaceId, { recursive: true });
+        console.log(`[ClearData] Deleted OPFS workspace directory: ${workspaceId}`);
+      } catch (e) {
+        if ((e as Error).name !== "NotFoundError") {
+          console.warn(`[ClearData] Failed to delete OPFS workspace ${workspaceId}:`, e);
+        }
       }
+
+      // Also try deleting by name (current name-based dirs)
+      if (workspaceName && workspaceName !== workspaceId) {
+        try {
+          await root.removeEntry(workspaceName, { recursive: true });
+          console.log(`[ClearData] Deleted OPFS workspace directory by name: ${workspaceName}`);
+        } catch (e) {
+          if ((e as Error).name !== "NotFoundError") {
+            console.warn(`[ClearData] Failed to delete OPFS workspace ${workspaceName}:`, e);
+          }
+        }
+      }
+      break;
+    }
+
+    case 'indexeddb': {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const request = indexedDB.deleteDatabase(`diaryx-${workspaceId}`);
+          request.onsuccess = () => resolve();
+          request.onerror = () => reject(request.error);
+          request.onblocked = () => {
+            console.warn(`[ClearData] IndexedDB diaryx-${workspaceId} is blocked`);
+            resolve();
+          };
+        });
+        console.log(`[ClearData] Deleted IndexedDB database: diaryx-${workspaceId}`);
+      } catch (e) {
+        console.warn(`[ClearData] Failed to delete IndexedDB diaryx-${workspaceId}:`, e);
+      }
+      break;
+    }
+
+    case 'filesystem-access': {
+      // Only clear the stored handle — user's files stay on disk
+      await clearWorkspaceFileSystemHandle(workspaceId);
+      console.log(`[ClearData] Cleared FSA handle for workspace: ${workspaceId}`);
+      break;
     }
   }
 }

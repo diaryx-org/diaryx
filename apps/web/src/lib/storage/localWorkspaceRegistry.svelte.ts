@@ -9,6 +9,8 @@
  * will automatically update when the registry changes.
  */
 
+import { getStorageType, type StorageType } from '$lib/backend/storageType';
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -20,6 +22,8 @@ export interface LocalWorkspace {
   name: string;
   /** Whether this workspace is local-only (not synced to server) */
   isLocal: boolean;
+  /** Storage backend for this workspace. Undefined = inherit global default. */
+  storageType?: import('$lib/backend/storageType').StorageType;
   /** When this workspace was first created/downloaded to this device */
   downloadedAt: number;
   /** When the user last opened this workspace */
@@ -101,6 +105,26 @@ export function isWorkspaceLocal(id: string): boolean {
   return registryState.some(w => w.id === id);
 }
 
+/**
+ * Get the storage type for a workspace, falling back to the global default.
+ */
+export function getWorkspaceStorageType(id: string): StorageType {
+  const ws = registryState.find(w => w.id === id);
+  return ws?.storageType ?? getStorageType();
+}
+
+/**
+ * Set the storage type for a specific workspace.
+ */
+export function setWorkspaceStorageType(id: string, type: StorageType): void {
+  const list = [...registryState];
+  const ws = list.find(w => w.id === id);
+  if (ws) {
+    ws.storageType = type;
+    saveRegistry(list);
+  }
+}
+
 // ============================================================================
 // Write Operations
 // ============================================================================
@@ -109,7 +133,7 @@ export function isWorkspaceLocal(id: string): boolean {
  * Register a workspace as locally available.
  * If it already exists, updates the name.
  */
-export function addLocalWorkspace(ws: { id: string; name: string; isLocal?: boolean }): void {
+export function addLocalWorkspace(ws: { id: string; name: string; isLocal?: boolean; storageType?: StorageType }): void {
   const list = [...registryState];
   const existing = list.find(w => w.id === ws.id);
   if (existing) {
@@ -117,11 +141,15 @@ export function addLocalWorkspace(ws: { id: string; name: string; isLocal?: bool
     if (ws.isLocal !== undefined) {
       existing.isLocal = ws.isLocal;
     }
+    if (ws.storageType !== undefined) {
+      existing.storageType = ws.storageType;
+    }
   } else {
     list.push({
       id: ws.id,
       name: ws.name,
       isLocal: ws.isLocal ?? false,
+      storageType: ws.storageType,
       downloadedAt: Date.now(),
       lastOpenedAt: Date.now(),
     });
@@ -208,12 +236,13 @@ export function setWorkspaceIsLocal(id: string, isLocal: boolean): void {
  * Create a new local-only workspace (no server required).
  * Returns the created workspace entry.
  */
-export function createLocalWorkspace(name: string): LocalWorkspace {
+export function createLocalWorkspace(name: string, storageType?: StorageType): LocalWorkspace {
   const id = `local-${crypto.randomUUID()}`;
   const ws: LocalWorkspace = {
     id,
     name,
     isLocal: true,
+    storageType: storageType ?? getStorageType(),
     downloadedAt: Date.now(),
     lastOpenedAt: Date.now(),
   };
@@ -289,8 +318,8 @@ export async function discoverOpfsWorkspaces(): Promise<LocalWorkspace[]> {
       if (SYSTEM_DIRS.has(name)) continue;
       if (knownNames.has(name)) continue;
 
-      // This is an unregistered workspace directory — add it
-      const ws = createLocalWorkspace(name);
+      // This is an unregistered workspace directory — add it (OPFS since discovered there)
+      const ws = createLocalWorkspace(name, 'opfs');
       discovered.push(ws);
       knownNames.add(name);
       console.log(`[WorkspaceRegistry] Discovered unregistered workspace: ${name}`);

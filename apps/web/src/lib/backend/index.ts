@@ -3,6 +3,7 @@
 import type { Backend } from "./interface";
 import { isTauri, isBrowser } from "./interface";
 import { createApi, type Api } from "./api";
+import type { StorageType } from "./storageType";
 
 // Re-export types and utilities
 export type {
@@ -68,6 +69,9 @@ function setBackendWorkspaceId(id: string | undefined): void {
 function setBackendWorkspaceName(name: string | undefined): void {
   _g.__diaryx_backendWorkspaceName = name;
 }
+function setBackendStorageType(type: StorageType | undefined): void {
+  _g.__diaryx_backendStorageType = type;
+}
 
 /**
  * Get the backend instance, creating it if necessary.
@@ -85,7 +89,7 @@ function setBackendWorkspaceName(name: string | undefined): void {
  * const config = await backend.getConfig();
  * ```
  */
-export async function getBackend(workspaceId?: string, workspaceName?: string): Promise<Backend> {
+export async function getBackend(workspaceId?: string, workspaceName?: string, storageType?: StorageType): Promise<Backend> {
   const existing = getBackendInstance();
 
   // If a workspace ID is specified and it matches the current backend, reuse it
@@ -109,8 +113,8 @@ export async function getBackend(workspaceId?: string, workspaceName?: string): 
     return pending;
   }
 
-  console.log("[Backend] Starting initialization...", workspaceId ? `workspace: ${workspaceId}` : '', workspaceName ? `name: ${workspaceName}` : '');
-  const promise = initializeBackend(workspaceId, workspaceName);
+  console.log("[Backend] Starting initialization...", workspaceId ? `workspace: ${workspaceId}` : '', workspaceName ? `name: ${workspaceName}` : '', storageType ? `storage: ${storageType}` : '');
+  const promise = initializeBackend(workspaceId, workspaceName, storageType);
   setInitPromise(promise);
   return promise;
 }
@@ -118,7 +122,7 @@ export async function getBackend(workspaceId?: string, workspaceName?: string): 
 /**
  * Initialize the appropriate backend based on runtime environment.
  */
-async function initializeBackend(workspaceId?: string, workspaceName?: string): Promise<Backend> {
+async function initializeBackend(workspaceId?: string, workspaceName?: string, storageType?: StorageType): Promise<Backend> {
   console.log("[Backend] Detecting runtime environment...");
   console.log("[Backend] isTauri():", isTauri());
   console.log("[Backend] isBrowser():", isBrowser());
@@ -144,11 +148,12 @@ async function initializeBackend(workspaceId?: string, workspaceName?: string): 
     }
 
     console.log("[Backend] Calling backend.init()...");
-    await instance.init(undefined, workspaceId, workspaceName);
+    await instance.init(storageType, workspaceId, workspaceName);
     console.log("[Backend] Backend initialized successfully");
     setBackendInstance(instance);
     setBackendWorkspaceId(workspaceId);
     setBackendWorkspaceName(workspaceName);
+    setBackendStorageType(storageType);
     return instance;
   } catch (error) {
     console.error("[Backend] Initialization failed:", error);
@@ -168,6 +173,7 @@ export function resetBackend(): void {
   setInitPromise(null);
   setBackendWorkspaceId(undefined);
   setBackendWorkspaceName(undefined);
+  setBackendStorageType(undefined);
   apiInstance = null;
 }
 

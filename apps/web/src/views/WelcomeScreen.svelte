@@ -15,6 +15,7 @@
   import {
     createLocalWorkspace,
     setCurrentWorkspaceId,
+    getWorkspaceStorageType,
   } from "$lib/storage/localWorkspaceRegistry.svelte";
   import { getBackend } from "$lib/backend";
   import { createApi } from "$lib/backend/api";
@@ -43,7 +44,7 @@
 
       if (includeGuide) {
         // Initialize backend with the new workspace and create root index
-        const backend = await getBackend(ws.id, ws.name);
+        const backend = await getBackend(ws.id, ws.name, getWorkspaceStorageType(ws.id));
         const api = createApi(backend);
         await api.createWorkspace(".", name);
       }

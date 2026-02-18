@@ -1,8 +1,8 @@
 <script lang="ts">
   /**
-   * StorageSettings - Storage backend selection component
-   * 
-   * Allows users to choose between:
+   * StorageSettings - Per-workspace storage backend selection component
+   *
+   * Allows users to choose a storage backend for the current workspace:
    * - OPFS (default): High-performance, browser-managed
    * - IndexedDB: Traditional browser database
    * - File System Access: User-visible local folder
@@ -10,19 +10,33 @@
   import { Button } from "$lib/components/ui/button";
   import { HardDrive, Database, FolderOpen, AlertCircle, Check } from "@lucide/svelte";
   import {
-    getStorageType,
-    setStorageType,
     isStorageTypeSupported,
     getStorageTypeName,
     getStorageTypeDescription,
+    storeWorkspaceFileSystemHandle,
     type StorageType,
   } from "$lib/backend/storageType";
+  import {
+    getWorkspaceStorageType,
+    setWorkspaceStorageType,
+  } from "$lib/storage/localWorkspaceRegistry.svelte";
+  import { switchWorkspace } from "$lib/crdt/workspaceCrdtBridge";
   import { isTauri } from "$lib/backend/interface";
 
-  // Current and selected storage type
-  let currentType = $state(getStorageType());
-  let selectedType = $state(getStorageType());
-  let needsRestart = $derived(selectedType !== currentType);
+  interface Props {
+    workspaceId: string;
+    workspaceName: string;
+  }
+
+  let { workspaceId, workspaceName }: Props = $props();
+
+  // Current and selected storage type (per-workspace)
+  let currentType = $derived(getWorkspaceStorageType(workspaceId));
+  let selectedType = $state<StorageType | null>(null);
+
+  // Use selected if user has picked something, otherwise show current
+  let effectiveSelected = $derived(selectedType ?? currentType);
+  let needsChange = $derived(effectiveSelected !== currentType);
   let isChanging = $state(false);
 
   // Storage options with icons
@@ -38,20 +52,33 @@
     }
   }
 
-  function applyChange() {
-    if (selectedType !== currentType) {
-      isChanging = true;
-      setStorageType(selectedType);
-      
-      // Reload the page to use new storage
-      setTimeout(() => {
-        window.location.reload();
-      }, 100);
+  async function applyChange() {
+    if (!needsChange) return;
+    isChanging = true;
+
+    try {
+      // For FSA, prompt for folder first
+      if (effectiveSelected === 'filesystem-access') {
+        const handle = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
+        await storeWorkspaceFileSystemHandle(workspaceId, handle);
+      }
+
+      // Persist the new storage type in the workspace registry
+      setWorkspaceStorageType(workspaceId, effectiveSelected);
+
+      // Re-init workspace with new storage (no page reload)
+      await switchWorkspace(workspaceId, workspaceName);
+
+      selectedType = null;
+    } catch (e) {
+      console.error('[StorageSettings] Failed to switch storage:', e);
+    } finally {
+      isChanging = false;
     }
   }
 
   function cancelChange() {
-    selectedType = currentType;
+    selectedType = null;
   }
 </script>
 
@@ -62,7 +89,7 @@
   </h3>
 
   <p class="text-xs text-muted-foreground px-1">
-    Choose where to store your workspace data.
+    Choose where to store this workspace's data.
   </p>
 
   <!-- Storage Options -->
@@ -90,9 +117,9 @@
     {:else}
       {#each storageOptions as option}
         {@const isSupported = isStorageTypeSupported(option.type)}
-        {@const isSelected = selectedType === option.type}
+        {@const isSelected = effectiveSelected === option.type}
         {@const isCurrent = currentType === option.type}
-        
+
         <button
           type="button"
           class="w-full flex items-start gap-3 p-3 rounded-lg border text-left transition-colors
@@ -127,12 +154,12 @@
   </div>
 
   <!-- Change Confirmation -->
-  {#if needsRestart}
+  {#if needsChange}
     <div class="flex items-start gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30">
       <AlertCircle class="size-4 text-amber-600 mt-0.5 shrink-0" />
       <div class="flex-1 min-w-0">
         <p class="text-sm text-amber-700 dark:text-amber-400">
-          Switching storage will reload the app. Your data will remain in the previous storage location.
+          Switching storage will re-initialize this workspace. Your data will remain in the previous storage location.
         </p>
         <div class="flex gap-2 mt-2">
           <Button size="sm" onclick={applyChange} disabled={isChanging}>

@@ -12,6 +12,7 @@
   import { Settings, Eye, FolderOpen, FileText, RefreshCw, Database, Bug, User, CreditCard } from "@lucide/svelte";
   import { getMobileState } from "./hooks/useMobile.svelte";
   import { getAuthState } from "$lib/auth";
+  import { getCurrentWorkspaceId, getLocalWorkspace } from "$lib/storage/localWorkspaceRegistry.svelte";
 
   // Import modular settings components
   import DisplaySettings from "./settings/DisplaySettings.svelte";
@@ -60,6 +61,10 @@
 
   const mobileState = getMobileState();
   let authState = $derived(getAuthState());
+
+  // Current workspace info for per-workspace settings
+  let currentWorkspaceId = $derived(getCurrentWorkspaceId() ?? '');
+  let currentWorkspaceName = $derived(getLocalWorkspace(currentWorkspaceId)?.name ?? 'My Journal');
 
   // Track active tab
   let activeTab = $state("general");
@@ -130,6 +135,7 @@
       <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
         <WorkspaceSettings workspaceRootIndex={workspacePath} />
         <LinkSettings workspaceRootIndex={workspacePath} />
+        <StorageSettings workspaceId={currentWorkspaceId} workspaceName={currentWorkspaceName} />
       </div>
     </Tabs.Content>
 
@@ -160,7 +166,6 @@
 
     <Tabs.Content value="data">
       <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
-        <StorageSettings />
         <BackupSettings {workspacePath} />
         <ImportSettings {workspacePath} />
         <CloudBackupSettings {workspacePath} />

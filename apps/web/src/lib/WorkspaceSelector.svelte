@@ -21,8 +21,10 @@
     addLocalWorkspace,
     setCurrentWorkspaceId,
     getLocalWorkspaces,
+    getWorkspaceStorageType,
     createLocalWorkspace,
   } from "$lib/storage/localWorkspaceRegistry.svelte";
+  import type { StorageType } from "$lib/backend/storageType";
   import { switchWorkspace } from "$lib/crdt/workspaceCrdtBridge";
   import { getBackend } from "$lib/backend";
   import { createApi } from "$lib/backend/api";
@@ -80,6 +82,21 @@
 
   let syncedCount = $derived(serverWorkspaces.length);
   let localCount = $derived(allWorkspaces.filter(w => w.source === 'local').length);
+
+  // Show storage badges only when workspaces use mixed storage types
+  let showStorageBadges = $derived.by(() => {
+    const types = new Set(allLocalWorkspaces.map(w => getWorkspaceStorageType(w.id)));
+    return types.size > 1;
+  });
+
+  function storageLabel(type: StorageType): string {
+    switch (type) {
+      case 'opfs': return 'OPFS';
+      case 'indexeddb': return 'IDB';
+      case 'filesystem-access': return 'Folder';
+      default: return type;
+    }
+  }
 
   // Always show selector so users can create new workspaces
   let showSelector = $derived(allWorkspaces.length > 0);
@@ -144,7 +161,7 @@
       setCurrentWorkspaceId(ws.id);
 
       // Create backend for this workspace and import the snapshot
-      const backend = await getBackend(ws.id, ws.name);
+      const backend = await getBackend(ws.id, ws.name, getWorkspaceStorageType(ws.id));
       const api = createApi(backend);
 
       // Create workspace structure
@@ -278,6 +295,9 @@
               <Cloud class="size-3.5 shrink-0 text-muted-foreground" />
             {/if}
             <span class="truncate flex-1">{ws.name}</span>
+            {#if showStorageBadges && isLocal(ws.id)}
+              <span class="text-[9px] px-1 py-0.5 rounded bg-muted text-muted-foreground shrink-0 font-medium">{storageLabel(getWorkspaceStorageType(ws.id))}</span>
+            {/if}
             {#if downloading === ws.id}
               <Loader2 class="size-3.5 animate-spin shrink-0 text-muted-foreground" />
             {:else if ws.source === 'server' && !isLocal(ws.id)}

@@ -1277,7 +1277,8 @@ export async function switchWorkspace(
   // 6. Create new backend with workspace-isolated storage (use name for OPFS dir)
   const { getBackend } = await import('$lib/backend/index');
   const { createApi } = await import('$lib/backend/api');
-  const backend = await getBackend(newWorkspaceId, newWorkspaceName);
+  const { getWorkspaceStorageType } = await import('$lib/storage/localWorkspaceRegistry.svelte');
+  const backend = await getBackend(newWorkspaceId, newWorkspaceName, getWorkspaceStorageType(newWorkspaceId));
   const api = createApi(backend);
 
   // 7. Set up the new backend on the bridge

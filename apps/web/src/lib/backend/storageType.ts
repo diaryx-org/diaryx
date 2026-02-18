@@ -68,7 +68,8 @@ export function getSupportedStorageTypes(): StorageType[] {
 // ============================================================================
 
 /**
- * Get the currently selected storage type.
+ * Get the default storage type for new workspaces.
+ * Individual workspaces may override this via the workspace registry.
  * Defaults to OPFS if supported, otherwise IndexedDB.
  */
 export function getStorageType(): StorageType {
@@ -91,8 +92,8 @@ export function getStorageType(): StorageType {
 }
 
 /**
- * Set the storage type preference.
- * Note: Changing storage type requires app restart to take effect.
+ * Set the default storage type for new workspaces.
+ * Individual workspaces can be overridden via the workspace registry.
  */
 export function setStorageType(type: StorageType): void {
   if (!isStorageTypeSupported(type)) {
@@ -184,6 +185,106 @@ export async function clearFileSystemHandle(): Promise<void> {
       const db = request.result;
       const tx = db.transaction('handles', 'readwrite');
       tx.objectStore('handles').delete(FS_HANDLE_KEY);
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onerror = () => {
+        db.close();
+        resolve();
+      };
+    };
+  });
+}
+
+// ============================================================================
+// Per-Workspace File System Access Handle Persistence
+// ============================================================================
+
+/**
+ * Store a directory handle for a specific workspace.
+ * Uses the same IndexedDB database as the global handle, with a workspace-scoped key.
+ */
+export async function storeWorkspaceFileSystemHandle(
+  workspaceId: string,
+  handle: FileSystemDirectoryHandle
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open('diaryx-fs-handles', 1);
+
+    request.onerror = () => reject(new Error('Failed to open handle database'));
+
+    request.onupgradeneeded = (event) => {
+      const db = (event.target as IDBOpenDBRequest).result;
+      if (!db.objectStoreNames.contains('handles')) {
+        db.createObjectStore('handles');
+      }
+    };
+
+    request.onsuccess = () => {
+      const db = request.result;
+      const tx = db.transaction('handles', 'readwrite');
+      tx.objectStore('handles').put(handle, `fsa-handle-${workspaceId}`);
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onerror = () => reject(new Error('Failed to store workspace handle'));
+    };
+  });
+}
+
+/**
+ * Retrieve the stored directory handle for a specific workspace.
+ * Returns null if no handle is stored.
+ */
+export async function getWorkspaceFileSystemHandle(
+  workspaceId: string
+): Promise<FileSystemDirectoryHandle | null> {
+  return new Promise((resolve) => {
+    const request = indexedDB.open('diaryx-fs-handles', 1);
+
+    request.onerror = () => resolve(null);
+
+    request.onupgradeneeded = (event) => {
+      const db = (event.target as IDBOpenDBRequest).result;
+      if (!db.objectStoreNames.contains('handles')) {
+        db.createObjectStore('handles');
+      }
+    };
+
+    request.onsuccess = () => {
+      const db = request.result;
+      const tx = db.transaction('handles', 'readonly');
+      const getReq = tx.objectStore('handles').get(`fsa-handle-${workspaceId}`);
+
+      getReq.onsuccess = () => {
+        db.close();
+        resolve(getReq.result ?? null);
+      };
+      getReq.onerror = () => {
+        db.close();
+        resolve(null);
+      };
+    };
+  });
+}
+
+/**
+ * Clear the stored file system handle for a specific workspace.
+ */
+export async function clearWorkspaceFileSystemHandle(
+  workspaceId: string
+): Promise<void> {
+  return new Promise((resolve) => {
+    const request = indexedDB.open('diaryx-fs-handles', 1);
+
+    request.onerror = () => resolve();
+
+    request.onsuccess = () => {
+      const db = request.result;
+      const tx = db.transaction('handles', 'readwrite');
+      tx.objectStore('handles').delete(`fsa-handle-${workspaceId}`);
       tx.oncomplete = () => {
         db.close();
         resolve();

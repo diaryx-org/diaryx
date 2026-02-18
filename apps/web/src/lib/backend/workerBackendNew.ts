@@ -83,16 +83,40 @@ export class WorkerBackendNew implements Backend {
     console.log(`[WorkerBackendNew] Initializing with storage: ${storageType}`);
 
     if (storageType === 'filesystem-access') {
-      // For FSA, we need to get or request the directory handle
-      const { getStoredFileSystemHandle, storeFileSystemHandle } = await import('./storageType');
-      let handle = await getStoredFileSystemHandle();
+      // For FSA, we need to get or request the directory handle (per-workspace or legacy global)
+      const {
+        getWorkspaceFileSystemHandle,
+        storeWorkspaceFileSystemHandle,
+        getStoredFileSystemHandle,
+        storeFileSystemHandle,
+      } = await import('./storageType');
+
+      let handle: FileSystemDirectoryHandle | null = null;
+
+      // Try per-workspace handle first
+      if (workspaceId) {
+        handle = await getWorkspaceFileSystemHandle(workspaceId);
+      }
+
+      // Fall back to legacy global handle (migration path)
+      if (!handle) {
+        handle = await getStoredFileSystemHandle();
+        // If found globally and we have a workspace ID, migrate to per-workspace key
+        if (handle && workspaceId) {
+          await storeWorkspaceFileSystemHandle(workspaceId, handle);
+        }
+      }
 
       if (!handle) {
         // No stored handle - prompt user to select a folder
         // Note: showDirectoryPicker requires user gesture, so this will fail if not triggered by user action
         try {
           handle = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
-          await storeFileSystemHandle(handle!);
+          if (workspaceId) {
+            await storeWorkspaceFileSystemHandle(workspaceId, handle!);
+          } else {
+            await storeFileSystemHandle(handle!);
+          }
         } catch (e) {
           console.error('[WorkerBackendNew] Failed to get directory handle:', e);
           throw new Error('Failed to open local folder. Please try again from Settings.');

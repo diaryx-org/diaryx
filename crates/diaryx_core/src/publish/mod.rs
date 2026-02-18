@@ -1482,6 +1482,7 @@ footer a:hover {
 /* ── Colored highlights ── */
 
 .highlight-mark {
+    background: none;
     padding: 0.1em 0.2em;
     border-radius: 0.2em;
 }
@@ -2185,5 +2186,20 @@ mod tests {
         let result = preprocess_custom_syntax("==<b>bold</b>==");
         assert!(result.contains("&lt;b&gt;bold&lt;/b&gt;"));
         assert!(!result.contains("<b>bold</b>"));
+    }
+
+    #[cfg(feature = "markdown")]
+    #[test]
+    fn test_markdown_to_html_colored_highlight() {
+        let fs = crate::fs::SyncToAsyncFs::new(crate::fs::RealFileSystem);
+        let publisher = Publisher::new(fs);
+        let md = "This is =={red}important== text.";
+        let html = publisher.markdown_to_html(md);
+        eprintln!("Colored highlight HTML: {}", html);
+        assert!(
+            html.contains("highlight-red"),
+            "Expected highlight-red class in: {}",
+            html
+        );
     }
 }

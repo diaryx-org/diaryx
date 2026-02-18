@@ -750,6 +750,58 @@ fn hash_looks_like_sha256(hash: &str) -> bool {
     hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+fn record_existing_blob_path_mapping(
+    state: &ApiState,
+    workspace_id: &str,
+    user_id: &str,
+    blob_hash: &str,
+    attachment_path: &str,
+    mime_type: &str,
+    size_bytes: u64,
+) -> Result<(), rusqlite::Error> {
+    let (r2_key, existing_size_bytes, existing_mime_type) =
+        match state.repo.get_user_blob(user_id, blob_hash)? {
+            Some(row) => row,
+            None => return Ok(()),
+        };
+
+    let now = chrono::Utc::now().timestamp();
+    let deterministic_id_input = format!("{workspace_id}:{attachment_path}:{blob_hash}");
+    let upload_id = uuid::Uuid::new_v5(
+        &uuid::Uuid::NAMESPACE_URL,
+        deterministic_id_input.as_bytes(),
+    )
+    .to_string();
+    let session = AttachmentUploadSession {
+        upload_id,
+        workspace_id: workspace_id.to_string(),
+        user_id: user_id.to_string(),
+        blob_hash: blob_hash.to_string(),
+        attachment_path: attachment_path.to_string(),
+        mime_type: if mime_type.trim().is_empty() {
+            existing_mime_type.clone()
+        } else {
+            mime_type.to_string()
+        },
+        size_bytes: if size_bytes == 0 {
+            existing_size_bytes
+        } else {
+            size_bytes
+        },
+        part_size: ATTACHMENT_PART_SIZE_DEFAULT,
+        total_parts: 1,
+        r2_key,
+        r2_multipart_upload_id: String::new(),
+        status: "completed".to_string(),
+        created_at: now,
+        updated_at: now,
+        // completed sessions are used as attachment-path -> hash lookup fallback
+        expires_at: now + ATTACHMENT_UPLOAD_SESSION_TTL_SECS,
+    };
+
+    state.repo.create_attachment_upload_session(&session)
+}
+
 #[cfg(test)]
 mod tests {
     use super::normalize_attachment_path;
@@ -824,6 +876,21 @@ async fn init_attachment_upload(
     let use_direct_put = total_parts == 1;
 
     if let Ok(Some((_key, _size, _mime))) = state.repo.get_user_blob(&auth.user.id, &body.hash) {
+        if let Err(err) = record_existing_blob_path_mapping(
+            &state,
+            &workspace_id,
+            &auth.user.id,
+            &body.hash,
+            &attachment_path,
+            &body.mime_type,
+            body.size_bytes,
+        ) {
+            error!(
+                "Failed to record existing blob upload mapping for workspace={} attachment_path={}: {}",
+                workspace_id, attachment_path, err
+            );
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
         return Json(InitAttachmentUploadResponse {
             upload_id: None,
             status: "already_exists".to_string(),

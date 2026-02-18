@@ -47,3 +47,6 @@ This directory contains the source code for the Diaryx sync server.
 
 - Git auto-commit now treats `No files to commit` as a non-retriable skip and clears the workspace dirty flag to avoid repeated 60s error spam.
 - Auto-commit also ignores workspace IDs that no longer exist in `user_workspaces`, clearing dirty state and opportunistically removing orphan workspace `.db`/`.git` artifacts.
+- Attachment reconciliation now derives candidate paths from both markdown links
+  and raw HTML `src`/`href` attributes (with percent-decoding), which improves
+  publish-time attachment URL rewriting for HTML-embedded media.

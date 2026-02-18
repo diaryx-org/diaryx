@@ -192,6 +192,34 @@ fn normalize_attachment_path(file_path: &str, raw_attachment_path: &str) -> Opti
 // because `file.metadata.attachments` is always empty even when
 // the markdown contains attachments and the upload is completed
 fn extract_attachment_paths_from_markdown(file_path: &str, content: &str) -> Vec<String> {
+    fn percent_decode(input: &str) -> String {
+        fn hex_val(b: u8) -> Option<u8> {
+            match b {
+                b'0'..=b'9' => Some(b - b'0'),
+                b'a'..=b'f' => Some(b - b'a' + 10),
+                b'A'..=b'F' => Some(b - b'A' + 10),
+                _ => None,
+            }
+        }
+
+        let mut result = Vec::with_capacity(input.len());
+        let bytes = input.as_bytes();
+        let mut i = 0usize;
+        while i < bytes.len() {
+            if bytes[i] == b'%'
+                && i + 2 < bytes.len()
+                && let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2]))
+            {
+                result.push(hi << 4 | lo);
+                i += 3;
+                continue;
+            }
+            result.push(bytes[i]);
+            i += 1;
+        }
+        String::from_utf8(result).unwrap_or_else(|_| input.to_string())
+    }
+
     fn find_closing_paren(s: &str) -> Option<usize> {
         let mut depth = 0;
         for (i, c) in s.char_indices() {
@@ -209,6 +237,35 @@ fn extract_attachment_paths_from_markdown(file_path: &str, content: &str) -> Vec
         None
     }
 
+    fn extract_attribute_links(
+        out: &mut HashSet<String>,
+        file_path: &str,
+        content: &str,
+        marker: &str,
+        quote: char,
+    ) {
+        let mut cursor = 0usize;
+        while let Some(rel) = content[cursor..].find(marker) {
+            let start = cursor + rel + marker.len();
+            let rest = &content[start..];
+            let Some(close_rel) = rest.find(quote) else {
+                break;
+            };
+            let raw = rest[..close_rel].trim();
+            let raw_unwrapped = raw
+                .strip_prefix('<')
+                .and_then(|s| s.strip_suffix('>'))
+                .unwrap_or(raw);
+            let decoded = percent_decode(raw_unwrapped);
+            if decoded.contains("_attachments")
+                && let Some(normalized) = normalize_attachment_path(file_path, &decoded)
+            {
+                out.insert(normalized);
+            }
+            cursor = start + close_rel + 1;
+        }
+    }
+
     let mut out = HashSet::new();
     let mut cursor = 0usize;
     while let Some(rel) = content[cursor..].find("](") {
@@ -222,13 +279,19 @@ fn extract_attachment_paths_from_markdown(file_path: &str, content: &str) -> Vec
             .strip_prefix('<')
             .and_then(|s| s.strip_suffix('>'))
             .unwrap_or(raw);
-        if raw_unwrapped.contains("_attachments")
-            && let Some(normalized) = normalize_attachment_path(file_path, raw_unwrapped)
+        let decoded = percent_decode(raw_unwrapped);
+        if decoded.contains("_attachments")
+            && let Some(normalized) = normalize_attachment_path(file_path, &decoded)
         {
             out.insert(normalized);
         }
         cursor = start + close + 1;
     }
+
+    extract_attribute_links(&mut out, file_path, content, "src=\"", '"');
+    extract_attribute_links(&mut out, file_path, content, "src='", '\'');
+    extract_attribute_links(&mut out, file_path, content, "href=\"", '"');
+    extract_attribute_links(&mut out, file_path, content, "href='", '\'');
 
     out.into_iter().collect()
 }
@@ -853,6 +916,24 @@ mod tests {
             vec![
                 "_attachments/a.png".to_string(),
                 "_attachments/b c.jpg".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn extract_attachment_paths_from_markdown_finds_raw_html_links() {
+        let content = r#"
+<img src="_attachments/a.png" />
+<img src='/_attachments/b%20c.jpg' />
+<a href="_attachments/a.png">open</a>
+"#;
+        let mut paths = extract_attachment_paths_from_markdown("README.md", content);
+        paths.sort();
+        assert_eq!(
+            paths,
+            vec![
+                "_attachments/a.png".to_string(),
+                "_attachments/b c.jpg".to_string(),
             ]
         );
     }

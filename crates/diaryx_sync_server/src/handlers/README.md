@@ -63,6 +63,9 @@ max payload size (`SNAPSHOT_UPLOAD_MAX_BYTES`, default 1 GiB).
 - Init/complete upload handlers canonicalize `attachment_path` against
   `entry_path` before storing/comparing upload sessions, so relative and
   canonical client path formats resolve to the same workspace attachment path.
+- `already_exists` init responses now also persist a completed
+  attachment-path→hash lookup session so reconciliation can still backfill refs
+  for frontmatter/body paths that do not yet carry explicit hash metadata.
 
 For one-part uploads, the handler uses a direct blob `put` path internally and
 skips remote multipart completion/abort calls.

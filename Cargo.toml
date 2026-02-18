@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 rust-version = "1.91"
 repository = "https://github.com/diaryx-org/diaryx"
@@ -30,9 +30,9 @@ chrono = { version = "0.4", features = ["serde"] }
 indexmap = { version = "2.0", features = ["serde"] }
 
 # Internal crates - version must match workspace.package.version for publishing
-diaryx_core = { path = "crates/diaryx_core", version = "1.0.0" }
+diaryx_core = { path = "crates/diaryx_core", version = "1.0.1" }
 diaryx_apple = { path = "crates/diaryx_apple", version = "0.14.1" }
-diaryx_sync = { path = "crates/diaryx_sync", version = "1.0.0" }
+diaryx_sync = { path = "crates/diaryx_sync", version = "1.0.1" }
 
 # cargo-release configuration
 [workspace.metadata.release]

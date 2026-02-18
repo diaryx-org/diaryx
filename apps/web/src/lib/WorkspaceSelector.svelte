@@ -11,7 +11,6 @@
   } from "@lucide/svelte";
   import {
     getAuthState,
-    getCurrentWorkspace,
     getWorkspaces,
     getWorkspaceLimit,
     createServerWorkspace,
@@ -46,7 +45,6 @@
 
   // Derived state
   let authState = $derived(getAuthState());
-  let currentWorkspace = $derived(getCurrentWorkspace());
   let serverWorkspaces = $derived(getWorkspaces());
   let workspaceLimit = $derived(getWorkspaceLimit());
   let allLocalWorkspaces = $derived(getLocalWorkspaces());
@@ -54,6 +52,7 @@
   // Merge server and local workspaces into a unified list.
   // When logged in: workspaces on server with isLocal=false are 'server', rest are 'local'.
   // When logged out: all workspaces are 'local' (no syncing possible).
+  // Deduplicates by ID defensively (server may return duplicates).
   type UnifiedWorkspace = { id: string; name: string; source: 'server' | 'local' };
   let allWorkspaces = $derived.by(() => {
     const merged: UnifiedWorkspace[] = [];
@@ -62,6 +61,7 @@
     if (authState.isAuthenticated) {
       // Server workspaces that aren't flagged local in registry
       for (const ws of serverWorkspaces) {
+        if (seen.has(ws.id)) continue;
         const localEntry = allLocalWorkspaces.find(lw => lw.id === ws.id);
         const isLocalOnly = localEntry?.isLocal ?? false;
         merged.push({ id: ws.id, name: ws.name, source: isLocalOnly ? 'local' : 'server' });
@@ -85,17 +85,23 @@
   let showSelector = $derived(allWorkspaces.length > 0);
   let canCreateServer = $derived(authState.isAuthenticated && serverWorkspaces.length < workspaceLimit);
 
-  // Current workspace name for display
-  let currentName = $derived.by(() => {
-    if (currentWorkspace?.name) return currentWorkspace.name;
-    const all = getLocalWorkspaces();
-    const currentId = localStorage.getItem('diaryx_current_workspace');
-    const localWs = currentId ? all.find(w => w.id === currentId) : all[0];
-    return localWs?.name ?? 'My Journal';
-  });
-
   // Current workspace ID (from reactive auth state, updated by switchWorkspace)
   let currentWsId = $derived(authState.activeWorkspaceId);
+
+  // Display name: look up from the merged allWorkspaces list so local-only workspaces
+  // resolve correctly. getCurrentWorkspace() only searches server workspaces and would
+  // fall back to the first server workspace for local-only IDs, showing the wrong name.
+  let displayName = $derived.by(() => {
+    if (currentWsId) {
+      const found = allWorkspaces.find(w => w.id === currentWsId);
+      if (found) return found.name;
+    }
+    const storedId = typeof localStorage !== 'undefined' ? localStorage.getItem('diaryx_current_workspace') : null;
+    const localWs = storedId
+      ? allLocalWorkspaces.find(w => w.id === storedId)
+      : allLocalWorkspaces[0];
+    return localWs?.name ?? 'My Journal';
+  });
 
   function isLocal(id: string): boolean {
     return isWorkspaceLocal(id);
@@ -242,7 +248,7 @@
         {#if switching}
           <Loader2 class="size-3.5 animate-spin shrink-0" />
         {/if}
-        <span class="truncate">{currentWorkspace?.name ?? currentName}</span>
+        <span class="truncate">{displayName}</span>
         <ChevronsUpDown class="size-3.5 shrink-0 opacity-50" />
       </button>
     </Popover.Trigger>

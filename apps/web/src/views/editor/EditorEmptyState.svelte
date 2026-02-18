@@ -9,18 +9,22 @@
    */
 
   import { Button } from "$lib/components/ui/button";
-  import { PanelLeft, Menu, Search } from "@lucide/svelte";
+  import { PanelLeft, Menu, Search, FolderPlus } from "@lucide/svelte";
 
   interface Props {
     leftSidebarCollapsed: boolean;
     onToggleLeftSidebar: () => void;
     onOpenCommandPalette: () => void;
+    hasWorkspaceTree?: boolean;
+    onCreateRootIndex?: () => void;
   }
 
   let {
     leftSidebarCollapsed,
     onToggleLeftSidebar,
     onOpenCommandPalette,
+    hasWorkspaceTree = true,
+    onCreateRootIndex,
   }: Props = $props();
 </script>
 
@@ -66,11 +70,24 @@
         </Button>
       {/if}
     </div>
-    <h2 class="text-2xl font-semibold text-foreground mb-2">
-      Welcome to Diaryx
-    </h2>
-    <p class="text-muted-foreground">
-      Select an entry from the sidebar to start editing, or create a new one.
-    </p>
+    {#if !hasWorkspaceTree && onCreateRootIndex}
+      <h2 class="text-2xl font-semibold text-foreground mb-2">
+        Your workspace is empty
+      </h2>
+      <p class="text-muted-foreground mb-4">
+        A root index organizes your workspace into a navigable hierarchy.
+      </p>
+      <Button onclick={onCreateRootIndex} class="gap-2">
+        <FolderPlus class="size-4" />
+        Create Root Index
+      </Button>
+    {:else}
+      <h2 class="text-2xl font-semibold text-foreground mb-2">
+        Welcome to Diaryx
+      </h2>
+      <p class="text-muted-foreground">
+        Select an entry from the sidebar to start editing, or create a new one.
+      </p>
+    {/if}
   </div>
 </div>

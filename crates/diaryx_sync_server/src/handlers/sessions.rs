@@ -65,7 +65,7 @@ async fn create_session(
     RequireAuth(auth): RequireAuth,
     Json(req): Json<CreateSessionRequest>,
 ) -> impl IntoResponse {
-    // Verify user owns the workspace, or use/create their default workspace
+    // Verify user owns the workspace
     let workspaces = state
         .repo
         .get_user_workspaces(&auth.user.id)
@@ -73,32 +73,17 @@ async fn create_session(
 
     let has_access = workspaces.iter().any(|w| w.id == req.workspace_id);
 
-    // If user doesn't have access to the specified workspace, use their default workspace
-    let workspace_id = if !has_access {
-        match state.repo.get_or_create_workspace(&auth.user.id, "default") {
-            Ok(id) => {
-                tracing::info!(
-                    "Using default workspace {} for user {} (requested: {})",
-                    id,
-                    auth.user.id,
-                    req.workspace_id
-                );
-                id
-            }
-            Err(e) => {
-                tracing::error!("Failed to get/create default workspace: {}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({
-                        "error": "Failed to access workspace"
-                    })),
-                )
-                    .into_response();
-            }
-        }
-    } else {
-        req.workspace_id.clone()
-    };
+    if !has_access {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "You do not have access to the specified workspace"
+            })),
+        )
+            .into_response();
+    }
+
+    let workspace_id = req.workspace_id.clone();
 
     // Create the share session
     match state.repo.create_share_session(

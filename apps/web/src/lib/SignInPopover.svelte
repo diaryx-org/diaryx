@@ -14,6 +14,7 @@
     Settings,
     AlertCircle,
   } from "@lucide/svelte";
+  import SignOutDialog from "$lib/SignOutDialog.svelte";
   import {
     getAuthState,
     logout,
@@ -22,6 +23,7 @@
     requestMagicLink,
     verifyMagicLink,
   } from "$lib/auth";
+  import { isTauri } from "$lib/backend/interface";
   import { collaborationStore } from "@/models/stores/collaborationStore.svelte";
   import { onMount } from "svelte";
 
@@ -49,6 +51,7 @@
   let isSending = $state(false);
   let isValidating = $state(false);
   let isLoggingOut = $state(false);
+  let showSignOutDialog = $state(false);
   let error = $state<string | null>(null);
   let resendCooldown = $state(0);
   let resendInterval: ReturnType<typeof setInterval> | null = null;
@@ -137,14 +140,24 @@
       await verifyMagicLink(token.trim());
       verificationSent = false;
       email = "";
+      // Auto-open sync wizard for returning users with server workspaces
+      if (getAuthState().workspaces.length > 0 && !syncEnabled) {
+        onClose?.();
+        onOpenSyncWizard?.();
+      }
     } catch (e) {
       error = e instanceof Error ? e.message : "Verification failed";
     }
   }
 
   async function handleLogout() {
-    isLoggingOut = true;
-    try { await logout(); } finally { isLoggingOut = false; }
+    if (isTauri()) {
+      isLoggingOut = true;
+      try { await logout(); } finally { isLoggingOut = false; }
+    } else {
+      onClose?.();
+      showSignOutDialog = true;
+    }
   }
 </script>
 
@@ -333,3 +346,5 @@
     </div>
   {/if}
 </div>
+
+<SignOutDialog bind:open={showSignOutDialog} />

@@ -28,12 +28,11 @@
     ChevronDown,
     ChevronUp,
     Server,
-    HardDriveDownload,
     Pencil,
     Check,
     X,
   } from "@lucide/svelte";
-  import { clearAllLocalData } from "./clearData";
+  import SignOutDialog from "$lib/SignOutDialog.svelte";
   import { isTauri } from "$lib/backend/interface";
   import {
     getAuthState,
@@ -65,9 +64,9 @@
   let isLoggingOut = $state(false);
   let isDeleting = $state(false);
   let showDeleteConfirm = $state(false);
-  let showClearAfterLogout = $state(false);
-  let isClearingData = $state(false);
+  let showSignOutDialog = $state(false);
   let error = $state<string | null>(null);
+
 
   // Device rename state
   let renamingDeviceId = $state<string | null>(null);
@@ -172,9 +171,12 @@
     error = null;
     try {
       await verifyMagicLink(token.trim());
-      // Auth is complete. Sync is NOT enabled — user can do that from Sync tab.
       verificationSent = false;
       email = "";
+      // Auto-open sync wizard for returning users with server workspaces
+      if (getAuthState().workspaces.length > 0 && !syncEnabled) {
+        onOpenWizard?.();
+      }
     } catch (e) {
       error = e instanceof Error ? e.message : "Verification failed";
     }
@@ -183,25 +185,15 @@
   // ── Account management handlers ──
 
   async function handleLogout() {
-    isLoggingOut = true;
-    try {
-      await logout();
-      if (!isTauri()) {
-        showClearAfterLogout = true;
+    if (isTauri()) {
+      isLoggingOut = true;
+      try {
+        await logout();
+      } finally {
+        isLoggingOut = false;
       }
-    } finally {
-      isLoggingOut = false;
-    }
-  }
-
-  async function handleClearAfterLogout() {
-    isClearingData = true;
-    try {
-      showClearAfterLogout = false;
-      await clearAllLocalData();
-    } catch (e) {
-      error = e instanceof Error ? e.message : "Failed to clear data";
-      isClearingData = false;
+    } else {
+      showSignOutDialog = true;
     }
   }
 
@@ -567,39 +559,4 @@
   </Dialog.Content>
 </Dialog.Root>
 
-<!-- Clear Local Data After Logout Dialog -->
-<Dialog.Root bind:open={showClearAfterLogout}>
-  <Dialog.Content class="sm:max-w-md">
-    <Dialog.Header>
-      <Dialog.Title class="flex items-center gap-2">
-        <HardDriveDownload class="size-5" />
-        Clear local data?
-      </Dialog.Title>
-      <Dialog.Description>
-        You've been signed out. Would you like to clear all local data? This is recommended if you're switching accounts.
-      </Dialog.Description>
-    </Dialog.Header>
-
-    <p class="text-xs text-muted-foreground">
-      This will remove all workspace files, settings, and cached data stored in your browser and reload the page.
-    </p>
-
-    <Dialog.Footer class="gap-2 sm:gap-0">
-      <Button variant="outline" onclick={() => (showClearAfterLogout = false)}>
-        Keep Local Data
-      </Button>
-      <Button
-        variant="destructive"
-        onclick={handleClearAfterLogout}
-        disabled={isClearingData}
-      >
-        {#if isClearingData}
-          <Loader2 class="size-4 mr-2 animate-spin" />
-          Clearing...
-        {:else}
-          Clear Everything
-        {/if}
-      </Button>
-    </Dialog.Footer>
-  </Dialog.Content>
-</Dialog.Root>
+<SignOutDialog bind:open={showSignOutDialog} />

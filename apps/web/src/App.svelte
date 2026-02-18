@@ -33,6 +33,7 @@
   import MarkdownPreviewDialog from "./lib/MarkdownPreviewDialog.svelte";
     import EditorHeader from "./views/editor/EditorHeader.svelte";
   import EditorEmptyState from "./views/editor/EditorEmptyState.svelte";
+  import WelcomeScreen from "./views/WelcomeScreen.svelte";
   import EditorContent from "./views/editor/EditorContent.svelte";
   import { Toaster } from "$lib/components/ui/sonner";
   import * as Tooltip from "$lib/components/ui/tooltip";
@@ -52,8 +53,8 @@
 
 
   // Import auth
-  import { initAuth, getCurrentWorkspace, verifyMagicLink, setServerUrl, refreshUserInfo, getAuthState } from "./lib/auth";
-  import { getLocalWorkspace, getCurrentWorkspaceId, bootstrapDefaultWorkspace, discoverOpfsWorkspaces } from "$lib/storage/localWorkspaceRegistry.svelte";
+  import { initAuth, getCurrentWorkspace, verifyMagicLink, setServerUrl, refreshUserInfo, getAuthState, isAuthenticated, getWorkspaces, isSyncEnabled } from "./lib/auth";
+  import { getLocalWorkspace, getLocalWorkspaces, getCurrentWorkspaceId, discoverOpfsWorkspaces } from "$lib/storage/localWorkspaceRegistry.svelte";
 
   // Initialize theme store immediately
   getThemeStore();
@@ -144,6 +145,9 @@
 
   // Sync setup wizard
   let showSyncWizard = $state(false);
+
+  // Welcome screen (shown when no workspaces exist)
+  let showWelcomeScreen = $state(false);
 
   // Settings dialog initial tab (for opening to a specific tab)
   let settingsInitialTab = $state<string | undefined>(undefined);
@@ -498,17 +502,32 @@
       // This catches workspaces created by other tabs or previous sessions.
       await discoverOpfsWorkspaces();
 
+      // Check if any workspaces exist before proceeding
+      const defaultWorkspace = getCurrentWorkspace();
+      const localWsList = getLocalWorkspaces();
+      const currentWsId = getCurrentWorkspaceId();
+
+      if (!defaultWorkspace && (localWsList.length === 0 || !currentWsId)) {
+        // No workspaces exist — show welcome screen instead of initializing
+        showWelcomeScreen = true;
+        entryStore.setLoading(false);
+        return;
+      }
+
       // Initialize the backend (auto-detects Tauri vs WASM)
       // Pass workspace ID and name so the backend uses the correct OPFS directory
-      const defaultWorkspace = getCurrentWorkspace();
       let wsId: string | undefined;
       let wsName: string | undefined;
       if (defaultWorkspace) {
         wsId = defaultWorkspace.id;
         wsName = defaultWorkspace.name;
       } else {
-        // Not authenticated — use local workspace registry (bootstraps if empty)
-        const localWs = getLocalWorkspace(getCurrentWorkspaceId() ?? '') ?? bootstrapDefaultWorkspace();
+        const localWs = getLocalWorkspace(currentWsId ?? '');
+        if (!localWs) {
+          showWelcomeScreen = true;
+          entryStore.setLoading(false);
+          return;
+        }
         wsId = localWs.id;
         wsName = localWs.name;
       }
@@ -792,6 +811,16 @@
       // Run initial validation
       await runValidation();
 
+      // Auto-open the sync wizard for clients where sync hasn't been configured yet
+      // but the server already has workspaces. This covers:
+      //   - New devices where the user clicked a magic link (token was in the URL)
+      //   - Returning authenticated sessions where sync setup was never completed
+      // The wizard auto-detects Scenario C (server has workspaces) and runs without
+      // user interaction, downloading the server workspace and enabling sync.
+      if (isAuthenticated() && getWorkspaces().length > 0 && !isSyncEnabled()) {
+        showSyncWizard = true;
+      }
+
       // Add swipe gestures for mobile:
       // - Swipe down from top: open command palette
       // - Swipe right from left edge: open left sidebar
@@ -919,71 +948,14 @@
         workspacePath = foundRoot;
         console.log("[App] Found root index at:", workspacePath);
       } catch (e) {
-        console.warn("[App] Could not find root index:", e);
-
-        // Before creating a new workspace, check if any files exist
-        // This helps diagnose issues where files exist but aren't valid root indexes
-        try {
-          const fsTree = await api.getFilesystemTree(workspaceDir, false, 1);
-          const mdFiles = fsTree.children?.filter((c: any) => c.path?.endsWith('.md')) ?? [];
-          if (mdFiles.length > 0) {
-            console.warn("[App] Found existing markdown files but no valid root index:", mdFiles.map((f: any) => f.path));
-            // If files exist, use the first markdown file as workspace path
-            // rather than creating a new workspace that might conflict
-            const firstMd = mdFiles[0];
-            if (firstMd?.path) {
-              console.log("[App] Using existing markdown file as workspace:", firstMd.path);
-              workspacePath = firstMd.path;
-              // Skip workspace creation - let the existing file be used
-              // The user may need to add proper frontmatter manually
-            }
-          }
-        } catch (listErr) {
-          console.log("[App] Could not list directory (may be empty):", listErr);
-        }
-
-        // Only create workspace if we haven't found an existing file to use
-        if (!workspacePath) {
-          try {
-            console.log("[App] Default workspace missing, creating...");
-            await api.createWorkspace(".", "My Journal");
-            const createdRoot = await api.findRootIndex(workspaceDir);
-            if (!createdRoot) {
-              throw new Error("Root index not found after workspace creation");
-            }
-            workspacePath = createdRoot;
-            console.log("[App] Created workspace root index at:", workspacePath);
-          } catch (createErr) {
-            console.error("[App] Failed to create default workspace:", createErr);
-            // Fall back to default - will trigger workspace creation
-            workspacePath = `${workspaceDir}/index.md`;
-          }
-        }
-      }
-
-      // Ensure local workspace exists (creates index.md if needed)
-      try {
-        await api.getWorkspaceTree(workspacePath);
-      } catch (e) {
-        const errStr = e instanceof Error ? e.message : String(e);
-        if (
-          errStr.includes("No workspace found") ||
-          errStr.includes("NotFoundError") ||
-          errStr.includes("The object can not be found here")
-        ) {
-          console.log("[App] Default workspace missing, creating...");
-          try {
-            await api.createWorkspace(".", "My Journal");
-          } catch (createErr) {
-            console.error("[App] Failed to create default workspace:", createErr);
-          }
-        }
+        console.warn("[App] Could not find root index (workspace may be empty):", e);
+        // No auto-creation — the EditorEmptyState will offer a "Create Root Index" button
       }
 
       // IMPORTANT: Populate CRDT from filesystem BEFORE connecting to server
       // This ensures our local files are available to sync to other devices
       // At startup, reconciles file mtime vs CRDT modified_at - if file is newer, CRDT is updated
-      if (sharedWorkspaceId) {
+      if (sharedWorkspaceId && workspacePath) {
         console.log("[App] Initializing CRDT from filesystem via Rust command...");
         try {
           const result = await api.initializeWorkspaceCrdt(workspacePath);
@@ -1003,20 +975,26 @@
       setWorkspaceId(sharedWorkspaceId);
 
       // Initialize workspace CRDT using service with Rust API
-      const initialized = await initializeWorkspaceCrdt(
-        sharedWorkspaceId,
-        workspacePath,
-        collaborationServerUrl,
-        collaborationEnabled,
-        rustApi,
-        {
-          onConnectionChange: (connected: boolean) => {
-            console.log("[App] Workspace CRDT connection:", connected ? "online" : "offline");
-            collaborationStore.setConnected(connected);
+      // Only if we have a valid workspace path (skip for empty workspaces)
+      if (workspacePath) {
+        const initialized = await initializeWorkspaceCrdt(
+          sharedWorkspaceId,
+          workspacePath,
+          collaborationServerUrl,
+          collaborationEnabled,
+          rustApi,
+          {
+            onConnectionChange: (connected: boolean) => {
+              console.log("[App] Workspace CRDT connection:", connected ? "online" : "offline");
+              collaborationStore.setConnected(connected);
+            },
           },
-        },
-      );
-      workspaceStore.setWorkspaceCrdtInitialized(initialized);
+        );
+        workspaceStore.setWorkspaceCrdtInitialized(initialized);
+      } else {
+        console.log("[App] Skipping CRDT init — no root index found (empty workspace)");
+        workspaceStore.setWorkspaceCrdtInitialized(false);
+      }
     } catch (e) {
       console.error("[App] Failed to initialize workspace CRDT:", e);
       workspaceStore.setWorkspaceCrdtInitialized(false);
@@ -1155,10 +1133,17 @@
       // Set status to idle - workspace CRDT will update to 'synced' when connected
       collaborationStore.setSyncStatus('idle');
 
-      // Show success toast - sync progress will be shown in SyncStatusIndicator
-      toast.success("Signed in successfully", {
-        description: "Your workspace is now syncing.",
-      });
+      // Show success toast. If sync isn't set up yet (new device), the wizard will
+      // open automatically after initialization — avoid the misleading "now syncing" message.
+      if (!isSyncEnabled() && getWorkspaces().length > 0) {
+        toast.success("Signed in successfully", {
+          description: "Downloading your workspace from server...",
+        });
+      } else {
+        toast.success("Signed in successfully", {
+          description: "Your workspace is now syncing.",
+        });
+      }
 
       // Refresh the tree after sync completes (handled by onSessionSync callback)
     } catch (error) {
@@ -1229,11 +1214,75 @@
       await refreshTree();
       // Open the newly created root index
       if (tree) {
+        workspaceStore.expandNode(tree.path);
         await openEntry(tree.path);
       }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     }
+  }
+
+  // Create root index for an empty workspace (from EditorEmptyState)
+  async function handleCreateRootIndex() {
+    if (!api) return;
+    try {
+      const wsId = getCurrentWorkspaceId();
+      const localWs = wsId ? getLocalWorkspace(wsId) : null;
+      const wsName = localWs?.name ?? "My Workspace";
+      await api.createWorkspace(".", wsName);
+      await refreshTree();
+      if (tree) {
+        workspaceStore.expandNode(tree.path);
+        await openEntry(tree.path);
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  // Handle welcome screen completion — re-run initialization
+  async function handleWelcomeComplete(_id: string, _name: string) {
+    showWelcomeScreen = false;
+    entryStore.setLoading(true);
+
+    try {
+      const wsId = getCurrentWorkspaceId();
+      const localWs = wsId ? getLocalWorkspace(wsId) : null;
+      if (!localWs) return;
+
+      const backendInstance = await getBackend(localWs.id, localWs.name);
+      workspaceStore.setBackend(backendInstance);
+
+      const apiInstance = createApi(backendInstance);
+      setBackendApi(apiInstance);
+      setBackend(backendInstance);
+
+      cleanupEventSubscription = initEventSubscription(backendInstance);
+      rustApi = new RustCrdtApi(backendInstance);
+
+      if (!workspaceCrdtDisabled) {
+        await setupWorkspaceCrdt();
+      }
+
+      await refreshTree();
+
+      if (tree && !currentEntry) {
+        workspaceStore.expandNode(tree.path);
+        await openEntry(tree.path);
+      }
+
+      await runValidation();
+    } catch (e) {
+      console.error("[App] Post-welcome initialization error:", e);
+      uiStore.setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      entryStore.setLoading(false);
+    }
+  }
+
+  // Handle sign-in from welcome screen — open sync wizard
+  function handleWelcomeSignIn() {
+    showSyncWizard = true;
   }
 
   async function handleDailyEntry() {
@@ -1828,6 +1877,12 @@
 <!-- Tooltip Provider for keyboard shortcut hints -->
 <Tooltip.Provider>
 
+{#if showWelcomeScreen}
+  <WelcomeScreen
+    onWorkspaceCreated={handleWelcomeComplete}
+    onSignIn={handleWelcomeSignIn}
+  />
+{:else}
 <div class="flex h-dvh bg-background overflow-hidden pt-[env(safe-area-inset-top)]">
   <!-- Left Sidebar -->
   <LeftSidebar
@@ -1929,6 +1984,8 @@
         {leftSidebarCollapsed}
         onToggleLeftSidebar={toggleLeftSidebar}
         onOpenCommandPalette={uiStore.openCommandPalette}
+        hasWorkspaceTree={!!tree && tree.path !== '.'}
+        onCreateRootIndex={handleCreateRootIndex}
       />
     {/if}
   </main>
@@ -1964,6 +2021,7 @@
     onTriggerStartSessionConsumed={() => (triggerStartSession = false)}
   />
 </div>
+{/if}
 
 </Tooltip.Provider>
 

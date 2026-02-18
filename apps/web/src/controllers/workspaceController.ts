@@ -247,32 +247,12 @@ export async function setupWorkspaceCrdt(
       .replace(/\/README\.md$/, '');
     console.log('[WorkspaceController] Workspace directory:', workspaceDir);
 
-    let workspacePath: string;
+    let workspacePath: string | undefined;
     try {
       workspacePath = await api.findRootIndex(workspaceDir);
       console.log('[WorkspaceController] Found root index at:', workspacePath);
     } catch (e) {
-      console.warn('[WorkspaceController] Could not find root index:', e);
-      workspacePath = `${workspaceDir}/index.md`;
-    }
-
-    // Ensure local workspace exists (creates index.md if needed)
-    try {
-      await api.getWorkspaceTree(workspacePath);
-    } catch (e) {
-      const errStr = e instanceof Error ? e.message : String(e);
-      if (
-        errStr.includes('No workspace found') ||
-        errStr.includes('NotFoundError') ||
-        errStr.includes('The object can not be found here')
-      ) {
-        console.log('[WorkspaceController] Default workspace missing, creating...');
-        try {
-          await api.createWorkspace('workspace', 'My Journal');
-        } catch (createErr) {
-          console.error('[WorkspaceController] Failed to create default workspace:', createErr);
-        }
-      }
+      console.warn('[WorkspaceController] Could not find root index (workspace may be empty):', e);
     }
 
     // Set workspace ID for per-file document room naming
@@ -281,25 +261,32 @@ export async function setupWorkspaceCrdt(
     workspaceStore.setWorkspaceId(sharedWorkspaceId);
 
     // Initialize workspace CRDT using service with Rust API
-    const initialized = await initializeWorkspaceCrdt(
-      sharedWorkspaceId,
-      workspacePath,
-      collaborationServerUrl,
-      collaborationEnabled,
-      rustApi,
-      {
-        onConnectionChange: (connected: boolean) => {
-          console.log(
-            '[WorkspaceController] Workspace CRDT connection:',
-            connected ? 'online' : 'offline'
-          );
-          onConnectionChange(connected);
-        },
-      }
-    );
+    // Only if we have a valid workspace path (skip for empty workspaces)
+    if (workspacePath) {
+      const initialized = await initializeWorkspaceCrdt(
+        sharedWorkspaceId,
+        workspacePath,
+        collaborationServerUrl,
+        collaborationEnabled,
+        rustApi,
+        {
+          onConnectionChange: (connected: boolean) => {
+            console.log(
+              '[WorkspaceController] Workspace CRDT connection:',
+              connected ? 'online' : 'offline'
+            );
+            onConnectionChange(connected);
+          },
+        }
+      );
 
-    workspaceStore.setWorkspaceCrdtInitialized(initialized);
-    return { workspaceId: sharedWorkspaceId, initialized };
+      workspaceStore.setWorkspaceCrdtInitialized(initialized);
+      return { workspaceId: sharedWorkspaceId, initialized };
+    } else {
+      console.log('[WorkspaceController] Skipping CRDT init — no root index found');
+      workspaceStore.setWorkspaceCrdtInitialized(false);
+      return { workspaceId: sharedWorkspaceId, initialized: false };
+    }
   } catch (e) {
     console.error('[WorkspaceController] Failed to initialize workspace CRDT:', e);
     workspaceStore.setWorkspaceCrdtInitialized(false);

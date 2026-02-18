@@ -12,6 +12,7 @@
   import {
     getAuthState,
     getStorageUsage,
+    getWorkspaces,
     initAuth,
     refreshUserStorageUsage,
   } from "$lib/auth";
@@ -28,6 +29,7 @@
 
   // Get auth state reactively
   let authState = $derived(getAuthState());
+  let serverWorkspaces = $derived(getWorkspaces());
 
   // Get collaboration state
   let syncStatus = $derived(collaborationStore.syncStatus);
@@ -114,7 +116,7 @@
     <div class="space-y-3">
       <div class="flex items-center gap-2 p-2 bg-muted/50 rounded-md">
         <WifiOff class="size-4 text-muted-foreground" />
-        <span class="text-sm text-muted-foreground">Sync not configured</span>
+        <span class="text-sm text-muted-foreground">Sync not configured on this device</span>
       </div>
 
       {#if onOpenWizard}
@@ -129,7 +131,11 @@
         </Button>
       {/if}
       <p class="text-xs text-muted-foreground px-1">
-        You're signed in. Set up sync to access your notes across devices.
+        {#if serverWorkspaces.length > 0}
+          You have {serverWorkspaces.length} workspace{serverWorkspaces.length === 1 ? '' : 's'} on the server. Click "Set Up Sync" to download and sync on this device, or switch workspaces from the selector in the sidebar.
+        {:else}
+          You're signed in. Set up sync to access your notes across devices.
+        {/if}
       </p>
     </div>
   {:else}

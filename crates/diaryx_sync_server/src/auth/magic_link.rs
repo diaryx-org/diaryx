@@ -120,11 +120,6 @@ impl MagicLinkService {
             .create_session(&user_id, &device_id, expires_at)
             .map_err(|e| MagicLinkError::DatabaseError(e.to_string()))?;
 
-        // Create default workspace if needed
-        self.repo
-            .get_or_create_workspace(&user_id, "default")
-            .map_err(|e| MagicLinkError::DatabaseError(e.to_string()))?;
-
         Ok(VerifyResult {
             session_token,
             user_id,

@@ -49,19 +49,29 @@
   let currentId = $derived(authState.activeWorkspaceId ?? getCurrentWorkspaceId());
   let allLocal = $derived(getLocalWorkspaces());
 
-  // Synced workspaces: on server AND not flagged as local-only in registry
+  // Synced workspaces: on server AND not flagged as local-only in registry.
+  // Deduplicates by ID defensively in case the server returns duplicate entries.
   let syncedWorkspaces = $derived.by(() => {
     if (!authState.isAuthenticated) return [];
+    const seen = new Set<string>();
     return serverWorkspaces.filter(sw => {
+      if (seen.has(sw.id)) return false;
+      seen.add(sw.id);
       const localEntry = allLocal.find(lw => lw.id === sw.id);
       return !localEntry || !localEntry.isLocal;
     });
   });
 
-  // Local workspaces: everything in registry not in the synced list
+  // Local workspaces: everything in registry not in the synced list.
+  // Deduplicates by ID defensively.
   let localWorkspaces = $derived.by(() => {
     const syncedIds = new Set(syncedWorkspaces.map(w => w.id));
-    return allLocal.filter(w => !syncedIds.has(w.id));
+    const seen = new Set<string>();
+    return allLocal.filter(w => {
+      if (syncedIds.has(w.id) || seen.has(w.id)) return false;
+      seen.add(w.id);
+      return true;
+    });
   });
 
   let hasAnyWorkspaces = $derived(syncedWorkspaces.length > 0 || localWorkspaces.length > 0);

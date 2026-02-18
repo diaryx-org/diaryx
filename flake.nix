@@ -42,7 +42,7 @@
             rustc = rustToolchain;
           }).buildRustPackage {
             pname = "diaryx";
-            version = "0.14.1";
+            version = "1.0.0";
             inherit src;
             cargoLock.lockFile = ./Cargo.lock;
             cargoBuildFlags = [ "-p" "diaryx" ];

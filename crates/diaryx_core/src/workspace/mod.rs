@@ -1695,6 +1695,33 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         let index_canonical = self.get_canonical_path(index_path);
         let entry_canonical = link_parser::to_canonical(&parsed_entry, Path::new(&index_canonical));
 
+        self.remove_from_index_contents_impl(index_path, &index_canonical, &entry_canonical)
+            .await
+    }
+
+    /// Remove an entry from an index's contents list using a pre-computed
+    /// canonical path.
+    ///
+    /// Use this instead of [`remove_from_index_contents`] when the entry path
+    /// is already a workspace-relative canonical path (e.g. from
+    /// [`get_canonical_path`]). Passing a canonical path through the regular
+    /// method would double-resolve it when the file lives in a subdirectory.
+    async fn remove_from_index_contents_canonical(
+        &self,
+        index_path: &Path,
+        entry_canonical: &str,
+    ) -> Result<bool> {
+        let index_canonical = self.get_canonical_path(index_path);
+        self.remove_from_index_contents_impl(index_path, &index_canonical, entry_canonical)
+            .await
+    }
+
+    async fn remove_from_index_contents_impl(
+        &self,
+        index_path: &Path,
+        index_canonical: &str,
+        entry_canonical: &str,
+    ) -> Result<bool> {
         match self.get_frontmatter_property(index_path, "contents").await {
             Ok(Some(Value::Sequence(mut items))) => {
                 let before_len = items.len();
@@ -1869,7 +1896,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         if let Some(old_index_path) = old_index_path.as_ref() {
             let from_canonical = self.get_canonical_path(from_path);
             if let Err(e) = self
-                .remove_from_index_contents(old_index_path, &from_canonical)
+                .remove_from_index_contents_canonical(old_index_path, &from_canonical)
                 .await
             {
                 log::warn!(
@@ -1945,7 +1972,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
 
             let entry_canonical = self.get_canonical_path(path);
             let _ = self
-                .remove_from_index_contents(&parent_index, &entry_canonical)
+                .remove_from_index_contents_canonical(&parent_index, &entry_canonical)
                 .await;
         } else if let Ok(Some(index_path)) = self.find_any_index_in_dir(parent).await {
             // No part_of: fall back to finding an index in same directory
@@ -2317,7 +2344,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 .await?;
 
                 if let Err(e) = self
-                    .remove_from_index_contents(&parent_index, &old_canonical)
+                    .remove_from_index_contents_canonical(&parent_index, &old_canonical)
                     .await
                 {
                     log::warn!(
@@ -2365,7 +2392,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     .await?;
 
                 if let Err(e) = self
-                    .remove_from_index_contents(&parent_index, &old_canonical)
+                    .remove_from_index_contents_canonical(&parent_index, &old_canonical)
                     .await
                 {
                     log::warn!(
@@ -2678,7 +2705,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         if let Some(parent_index) = self.resolve_part_of_to_path(&new_path, parent).await {
             let old_canonical = self.get_canonical_path(path);
             let _ = self
-                .remove_from_index_contents(&parent_index, &old_canonical)
+                .remove_from_index_contents_canonical(&parent_index, &old_canonical)
                 .await;
 
             // Add new entry with proper formatting
@@ -2803,7 +2830,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         if let Some(parent_index) = self.resolve_part_of_to_path(&new_path, parent_of_dir).await {
             let old_canonical = self.get_canonical_path(path);
             let _ = self
-                .remove_from_index_contents(&parent_index, &old_canonical)
+                .remove_from_index_contents_canonical(&parent_index, &old_canonical)
                 .await;
 
             // Add new entry with proper formatting
@@ -3050,6 +3077,65 @@ mod tests {
         let tree = block_on_test(ws.build_tree(Path::new("README.md"))).unwrap();
         assert_eq!(tree.children.len(), 1);
         assert_eq!(tree.children[0].path, PathBuf::from("test.md"));
+    }
+
+    #[test]
+    fn test_rename_entry_removes_old_from_parent_contents_with_root_path() {
+        // Regression: when root_path is set and files are in subdirectories,
+        // the old canonical path (e.g. "journal/old.md") was parsed as
+        // Ambiguous and double-resolved relative to the index's directory,
+        // producing "journal/journal/old.md" which never matched the stored
+        // workspace-root link "[Old](/journal/old.md)".
+        let fs = InMemoryFileSystem::new();
+        let root = PathBuf::from("/ws");
+        fs.create_dir_all(Path::new("/ws/journal")).unwrap();
+        fs.write_file(
+            Path::new("/ws/journal/journal.md"),
+            "---\ntitle: Journal\ncontents:\n  - \"[Old Entry](/journal/old-entry.md)\"\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("/ws/journal/old-entry.md"),
+            "---\ntitle: Old Entry\npart_of: \"[Journal](/journal/journal.md)\"\n---\n\n# Old Entry\n",
+        )
+        .unwrap();
+
+        let async_fs = SyncToAsyncFs::new(fs);
+        let ws = Workspace::with_link_format(async_fs, root, LinkFormat::MarkdownRoot);
+
+        let renamed =
+            block_on_test(ws.rename_entry(Path::new("/ws/journal/old-entry.md"), "new-entry.md"))
+                .unwrap();
+        assert_eq!(renamed, PathBuf::from("/ws/journal/new-entry.md"));
+
+        let contents = block_on_test(
+            ws.get_frontmatter_property(Path::new("/ws/journal/journal.md"), "contents"),
+        )
+        .unwrap();
+        let entries = match contents {
+            Some(Value::Sequence(items)) => items
+                .into_iter()
+                .filter_map(|item| item.as_str().map(ToString::to_string))
+                .collect::<Vec<_>>(),
+            other => panic!("expected contents sequence, got {:?}", other),
+        };
+
+        assert!(
+            entries.iter().any(|e| e.contains("new-entry.md")),
+            "new entry should be in contents: {:?}",
+            entries
+        );
+        assert!(
+            !entries.iter().any(|e| e.contains("old-entry.md")),
+            "old entry should NOT be in contents: {:?}",
+            entries
+        );
+        assert_eq!(
+            entries.len(),
+            1,
+            "should have exactly one entry: {:?}",
+            entries
+        );
     }
 
     #[test]

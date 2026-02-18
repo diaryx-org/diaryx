@@ -469,8 +469,17 @@ export class WorkerBackendNew implements Backend {
     const arrayBuffer = await file.arrayBuffer();
     const zip = await JSZip.loadAsync(arrayBuffer);
 
-    // Get workspace path
-    const workspace = workspacePath || await this.remote!.getDefaultWorkspacePath();
+    // Get workspace path (fallback to '.' if no workspace exists yet)
+    let workspace: string;
+    if (workspacePath) {
+      workspace = workspacePath;
+    } else {
+      try {
+        workspace = await this.remote!.getDefaultWorkspacePath();
+      } catch {
+        workspace = '.';
+      }
+    }
 
     const fileNames = Object.keys(zip.files);
     const totalFiles = fileNames.length;

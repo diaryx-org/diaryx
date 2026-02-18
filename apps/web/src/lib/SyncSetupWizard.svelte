@@ -110,10 +110,14 @@
   let devLink = $state<string | null>(null);
 
   // Options screen state — unified picker
-  type PostAuthAction = 'upload_local' | 'download_server' | 'create_new' | 'skip';
+  type PostAuthAction = 'upload_local' | 'download_server' | 'create_new' | 'import_zip' | 'skip';
   let postAuthAction = $state<PostAuthAction>('upload_local');
   let selectedLocalWorkspaceId = $state<string | null>(null);
   let selectedServerWorkspaceId = $state<string | null>(null);
+
+  // Import from ZIP state
+  let importZipFile = $state<File | null>(null);
+  let importZipFileInput = $state<HTMLInputElement | null>(null);
 
   // Server workspaces list (populated after auth)
   let serverWorkspacesList = $state<Array<{ id: string; name: string }>>([]);
@@ -380,6 +384,11 @@
       return;
     }
 
+    if (postAuthAction === 'import_zip' && !importZipFile) {
+      error = "Please select a ZIP file to import";
+      return;
+    }
+
     isInitializing = true;
     error = null;
     importProgress = 0;
@@ -392,6 +401,8 @@
         await handleDownloadServer();
       } else if (postAuthAction === 'upload_local') {
         await handleUploadLocal();
+      } else if (postAuthAction === 'import_zip') {
+        await handleImportZip();
       } else {
         await handleCreateNew();
       }
@@ -743,6 +754,123 @@
 
     registerWorkspaceLocally(workspaceId, 'default');
     enableSync();
+    cleanupSyncSubscriptions();
+    handleClose();
+    onComplete?.();
+  }
+
+  /**
+   * Import from a ZIP file: upload to server, download snapshot, init locally, sync.
+   */
+  async function handleImportZip() {
+    if (!importZipFile) throw new Error("No ZIP file selected");
+
+    const backend = await getBackend();
+    const api = createApi(backend);
+
+    const workspaceDir = backend.getWorkspacePath()
+      .replace(/\/index\.md$/, '')
+      .replace(/\/README\.md$/, '');
+
+    subscribeSyncProgress();
+
+    // Step 1: Create or reuse server workspace
+    let workspaceId: string;
+    if (serverWorkspacesList.length > 0) {
+      const existing = serverWorkspacesList.find(w => w.name === 'default') ?? serverWorkspacesList[0];
+      workspaceId = existing.id;
+      console.log(`[SyncWizard] Importing ZIP to existing server workspace: ${existing.name} (${workspaceId})`);
+    } else {
+      setStageProgress(5, "Creating workspace on server...");
+      let serverWs;
+      try {
+        serverWs = await createServerWorkspace('default');
+      } catch (e: any) {
+        if (e?.statusCode === 409) {
+          throw new Error("A workspace with that name already exists on the server");
+        }
+        throw e;
+      }
+      workspaceId = serverWs.id;
+    }
+
+    // Step 2: Upload ZIP to server
+    setStageProgress(10, "Uploading ZIP to server...");
+    suppressSyncProgress = true;
+    progressMode = 'bytes';
+
+    const uploadResult = await uploadWorkspaceSnapshot(workspaceId, importZipFile, 'replace', true);
+    if (!uploadResult) throw new Error("Upload failed — server returned no result");
+
+    console.log(`[SyncWizard] Server imported ${uploadResult.files_imported} files from ZIP`);
+    setStageProgress(35, "Snapshot uploaded", `${uploadResult.files_imported} files`);
+
+    // Step 3: Download snapshot back — CrdtFs is still disabled, so local import is safe
+    setStageProgress(40, "Downloading workspace from server...");
+    const snapshot = await downloadWorkspaceSnapshot(workspaceId, true);
+    if (snapshot && snapshot.size > 100) {
+      const snapshotFile = new File(
+        [snapshot],
+        `diaryx-snapshot-${workspaceId}.zip`,
+        { type: "application/zip" },
+      );
+
+      const result = await backend.importFromZip(
+        snapshotFile,
+        workspaceDir,
+        (uploaded, total) => {
+          if (total > 0) {
+            const pct = Math.round((uploaded / total) * 100);
+            importProgress = Math.max(importProgress, 40 + Math.round(pct * 0.2));
+          }
+        },
+      );
+
+      if (result.success && result.files_imported > 0) {
+        console.log(`[SyncWizard] Downloaded ${result.files_imported} files from server`);
+      }
+    }
+
+    suppressSyncProgress = false;
+
+    // Step 4: Initialize CRDT from downloaded files
+    setStageProgress(65, "Initializing workspace...");
+    let workspacePath: string;
+    try {
+      workspacePath = await api.findRootIndex(workspaceDir);
+    } catch {
+      workspacePath = `${workspaceDir}/index.md`;
+    }
+
+    try {
+      await api.initializeWorkspaceCrdt(workspacePath);
+    } catch (e) {
+      console.log("[SyncWizard] CRDT init error (continuing):", e);
+    }
+
+    // Step 5: Connect WebSocket
+    setStageProgress(75, "Connecting to sync server...");
+    await setWorkspaceId(workspaceId);
+    const syncServerUrl = getServerUrl() ?? serverUrl;
+    await setWorkspaceServer(syncServerUrl);
+
+    // Step 6: Wait for initial metadata sync
+    setStageProgress(85, "Syncing metadata...");
+    const syncResult = await waitForInitialSync(30000);
+    if (!syncResult) {
+      console.warn("[SyncWizard] Metadata sync timed out, continuing in background");
+    }
+
+    importProgress = 100;
+
+    // Step 7: Register workspace locally & enable sync
+    registerWorkspaceLocally(workspaceId, 'default');
+    enableSync();
+
+    toast.success("Import complete", {
+      description: `Imported ${uploadResult.files_imported} files and sync is now active.`,
+    });
+
     cleanupSyncSubscriptions();
     handleClose();
     onComplete?.();
@@ -1254,6 +1382,63 @@
                   <div class="font-medium text-sm">Start with a new workspace</div>
                   <div class="text-xs text-muted-foreground mt-0.5">
                     Create a fresh synced workspace on the server
+                  </div>
+                </div>
+              </div>
+            </button>
+
+            <!-- Import from ZIP -->
+            <input
+              type="file"
+              accept=".zip"
+              class="hidden"
+              bind:this={importZipFileInput}
+              onchange={(e) => {
+                const input = e.target as HTMLInputElement;
+                const file = input.files?.[0];
+                if (file) {
+                  importZipFile = file;
+                  postAuthAction = 'import_zip';
+                }
+                input.value = "";
+              }}
+            />
+            <button
+              type="button"
+              class="w-full text-left p-3 rounded-lg border-2 transition-colors {postAuthAction === 'import_zip' ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
+              onclick={() => {
+                if (importZipFile) {
+                  postAuthAction = 'import_zip';
+                } else {
+                  importZipFileInput?.click();
+                }
+              }}
+            >
+              <div class="flex items-start gap-3">
+                <div class="mt-0.5">
+                  <Upload class="size-5 {postAuthAction === 'import_zip' ? 'text-primary' : 'text-muted-foreground'}" />
+                </div>
+                <div>
+                  <div class="font-medium text-sm">
+                    {#if importZipFile}
+                      Import "{importZipFile.name}"
+                    {:else}
+                      Import from ZIP backup
+                    {/if}
+                  </div>
+                  <div class="text-xs text-muted-foreground mt-0.5">
+                    {#if importZipFile}
+                      <!-- svelte-ignore node_invalid_placement_ssr -->
+                      <span
+                        role="button"
+                        tabindex="0"
+                        class="text-primary hover:underline cursor-pointer"
+                        onclick={(e: MouseEvent) => { e.stopPropagation(); importZipFileInput?.click(); }}
+                        onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter') { e.stopPropagation(); importZipFileInput?.click(); } }}
+                      >Change file</span> — Upload this ZIP to the server and sync
+                    {:else}
+                      Upload a ZIP export to the server and sync to this device
+                    {/if}
                   </div>
                 </div>
               </div>

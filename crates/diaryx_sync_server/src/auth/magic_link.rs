@@ -54,8 +54,8 @@ impl MagicLinkService {
 
     /// Request a magic link for the given email
     ///
-    /// Returns the magic link token (which should be sent via email)
-    pub fn request_magic_link(&self, email: &str) -> Result<String, MagicLinkError> {
+    /// Returns (token, verification_code)
+    pub fn request_magic_link(&self, email: &str) -> Result<(String, String), MagicLinkError> {
         // Normalize email
         let email = email.trim().to_lowercase();
 
@@ -72,12 +72,12 @@ impl MagicLinkService {
 
         // Create token with configured expiration
         let expires_at = Utc::now() + Duration::minutes(self.config.magic_link_expiry_minutes);
-        let token = self
+        let (token, code) = self
             .repo
             .create_magic_token(&email, expires_at)
             .map_err(|e| MagicLinkError::DatabaseError(e.to_string()))?;
 
-        Ok(token)
+        Ok((token, code))
     }
 
     /// Verify a magic link token and create a session
@@ -96,10 +96,38 @@ impl MagicLinkService {
             .map_err(|e| MagicLinkError::DatabaseError(e.to_string()))?
             .ok_or(MagicLinkError::InvalidToken)?;
 
+        self.create_session_for_email(&email, device_name, user_agent)
+    }
+
+    /// Verify a 6-digit code and create a session
+    pub fn verify_code(
+        &self,
+        code: &str,
+        email: &str,
+        device_name: Option<&str>,
+        user_agent: Option<&str>,
+    ) -> Result<VerifyResult, MagicLinkError> {
+        let email = email.trim().to_lowercase();
+        let verified_email = self
+            .repo
+            .verify_magic_code(code, &email)
+            .map_err(|e| MagicLinkError::DatabaseError(e.to_string()))?
+            .ok_or(MagicLinkError::InvalidToken)?;
+
+        self.create_session_for_email(&verified_email, device_name, user_agent)
+    }
+
+    /// Shared session-creation logic used by link, code, and passkey verification.
+    pub(crate) fn create_session_for_email(
+        &self,
+        email: &str,
+        device_name: Option<&str>,
+        user_agent: Option<&str>,
+    ) -> Result<VerifyResult, MagicLinkError> {
         // Get or create user
         let user_id = self
             .repo
-            .get_or_create_user(&email)
+            .get_or_create_user(email)
             .map_err(|e| MagicLinkError::DatabaseError(e.to_string()))?;
 
         // Update last login
@@ -124,7 +152,7 @@ impl MagicLinkService {
             session_token,
             user_id,
             device_id,
-            email,
+            email: email.to_string(),
         })
     }
 
@@ -166,8 +194,9 @@ mod tests {
         let service = setup_test_service();
 
         // Request magic link
-        let token = service.request_magic_link("test@example.com").unwrap();
+        let (token, code) = service.request_magic_link("test@example.com").unwrap();
         assert!(!token.is_empty());
+        assert_eq!(code.len(), 6);
 
         // Verify magic link
         let result = service
@@ -181,6 +210,40 @@ mod tests {
         // Token should be consumed
         let second_try = service.verify_magic_link(&token, None, None);
         assert!(matches!(second_try, Err(MagicLinkError::InvalidToken)));
+    }
+
+    #[test]
+    fn test_verification_code_flow() {
+        let service = setup_test_service();
+
+        let (_token, code) = service.request_magic_link("code@example.com").unwrap();
+
+        // Verify using the code
+        let result = service
+            .verify_code(&code, "code@example.com", Some("Test Device"), None)
+            .unwrap();
+        assert_eq!(result.email, "code@example.com");
+        assert!(!result.session_token.is_empty());
+
+        // Code should be consumed — second attempt should fail
+        let second_try = service.verify_code(&code, "code@example.com", None, None);
+        assert!(matches!(second_try, Err(MagicLinkError::InvalidToken)));
+    }
+
+    #[test]
+    fn test_code_and_link_consume_same_row() {
+        let service = setup_test_service();
+
+        let (token, code) = service.request_magic_link("both@example.com").unwrap();
+
+        // Using the code should also consume the link
+        service
+            .verify_code(&code, "both@example.com", None, None)
+            .unwrap();
+
+        // Link should now be invalid
+        let link_try = service.verify_magic_link(&token, None, None);
+        assert!(matches!(link_try, Err(MagicLinkError::InvalidToken)));
     }
 
     #[test]

@@ -32,6 +32,7 @@ CREATE INDEX IF NOT EXISTS idx_devices_user_id ON devices(user_id);
 CREATE TABLE IF NOT EXISTS magic_tokens (
     token TEXT PRIMARY KEY,
     email TEXT NOT NULL,
+    code TEXT,
     expires_at INTEGER NOT NULL,
     used INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
@@ -179,6 +180,31 @@ CREATE TABLE IF NOT EXISTS site_access_tokens (
 );
 
 CREATE INDEX IF NOT EXISTS idx_site_access_tokens_site ON site_access_tokens(site_id);
+
+-- Passkey (WebAuthn) credentials for passwordless login.
+CREATE TABLE IF NOT EXISTS passkey_credentials (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    credential_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_passkey_credentials_user ON passkey_credentials(user_id);
+
+-- Ephemeral passkey ceremony state (registration / authentication challenges).
+CREATE TABLE IF NOT EXISTS passkey_challenges (
+    challenge_id TEXT PRIMARY KEY,
+    user_id TEXT,
+    email TEXT NOT NULL,
+    challenge_type TEXT NOT NULL,
+    state_json TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_passkey_challenges_expires ON passkey_challenges(expires_at);
 "#;
 
 const PUBLISHED_SITE_SCHEMA: &str = r#"
@@ -336,6 +362,52 @@ pub fn init_database(conn: &Connection) -> Result<(), rusqlite::Error> {
          ON users(stripe_customer_id) WHERE stripe_customer_id IS NOT NULL;",
     )?;
 
+    // Forward migration: add code column to magic_tokens table.
+    let has_code_col: bool = conn
+        .prepare("PRAGMA table_info(magic_tokens)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|name| name == "code");
+    if !has_code_col {
+        conn.execute("ALTER TABLE magic_tokens ADD COLUMN code TEXT", [])?;
+    }
+    conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_magic_tokens_code ON magic_tokens(code);")?;
+
+    // Forward migration: create passkey tables if missing.
+    let has_passkey_credentials = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='passkey_credentials' LIMIT 1",
+            [],
+            |_| Ok(()),
+        )
+        .is_ok();
+    if !has_passkey_credentials {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS passkey_credentials (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                credential_json TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                last_used_at INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_passkey_credentials_user ON passkey_credentials(user_id);
+
+            CREATE TABLE IF NOT EXISTS passkey_challenges (
+                challenge_id TEXT PRIMARY KEY,
+                user_id TEXT,
+                email TEXT NOT NULL,
+                challenge_type TEXT NOT NULL,
+                state_json TEXT NOT NULL,
+                expires_at INTEGER NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_passkey_challenges_expires ON passkey_challenges(expires_at);
+            "#,
+        )?;
+    }
+
     Ok(())
 }
 
@@ -370,6 +442,8 @@ mod tests {
         assert!(tables.contains(&"published_sites".to_string()));
         assert!(tables.contains(&"site_audience_builds".to_string()));
         assert!(tables.contains(&"site_access_tokens".to_string()));
+        assert!(tables.contains(&"passkey_credentials".to_string()));
+        assert!(tables.contains(&"passkey_challenges".to_string()));
 
         let user_cols: Vec<String> = conn
             .prepare("PRAGMA table_info(users)")

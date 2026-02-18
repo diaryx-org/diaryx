@@ -14,6 +14,7 @@ import {
   type User,
   type Workspace,
   type Device,
+  type PasskeyListItem,
   AuthError,
   type UserHasDataResponse,
   type UserStorageUsageResponse,
@@ -23,6 +24,12 @@ import {
   type CompleteAttachmentUploadResponse,
   type DownloadAttachmentResponse,
 } from "./authService";
+import {
+  prepareCreationOptions,
+  prepareRequestOptions,
+  serializeRegistrationCredential,
+  serializeAuthenticationCredential,
+} from "./webauthnUtils";
 import {
   setAuthToken,
   setCollaborationWorkspaceId,
@@ -275,7 +282,7 @@ export function setServerUrl(url: string | null): void {
  */
 export async function requestMagicLink(
   email: string,
-): Promise<{ success: boolean; devLink?: string }> {
+): Promise<{ success: boolean; devLink?: string; devCode?: string }> {
   if (!authService) {
     throw new Error("Server URL not configured");
   }
@@ -285,7 +292,7 @@ export async function requestMagicLink(
 
   try {
     const response = await authService.requestMagicLink(email);
-    return { success: true, devLink: response.dev_link };
+    return { success: true, devLink: response.dev_link, devCode: response.dev_code };
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Failed to send magic link";
@@ -333,6 +340,49 @@ export async function verifyMagicLink(token: string, customDeviceName?: string):
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Failed to verify magic link";
+    state.error = message;
+    throw err;
+  } finally {
+    state.isLoading = false;
+  }
+}
+
+/**
+ * Verify a 6-digit code and log in.
+ */
+export async function verifyCode(
+  code: string,
+  email: string,
+  customDeviceName?: string,
+): Promise<void> {
+  if (!authService) {
+    throw new Error("Server URL not configured");
+  }
+
+  state.isLoading = true;
+  state.error = null;
+
+  try {
+    const deviceName = customDeviceName?.trim() || getDeviceName();
+    const response = await authService.verifyCode(code, email, deviceName);
+
+    // Store token
+    localStorage.setItem(STORAGE_KEYS.TOKEN, response.token);
+    localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(response.user));
+
+    // Update state
+    state.user = response.user;
+    state.isAuthenticated = true;
+
+    // Update collaboration settings
+    setAuthToken(response.token);
+
+    // Fetch full user info (workspaces, devices)
+    await refreshUserInfo();
+    await refreshUserStorageUsage();
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "Failed to verify code";
     state.error = message;
     throw err;
   } finally {
@@ -596,6 +646,121 @@ export async function createPortalSession(): Promise<string> {
   if (!authService || !token) throw new Error("Not authenticated");
   const { url } = await authService.createPortalSession(token);
   return url;
+}
+
+// ============================================================================
+// Passkeys (WebAuthn)
+// ============================================================================
+
+/**
+ * Register a new passkey for the current user.
+ * Triggers the browser's platform authenticator (Touch ID, Face ID, etc).
+ */
+export async function registerPasskey(name: string): Promise<string> {
+  const token = getToken();
+  if (!authService || !token) throw new Error("Not authenticated");
+
+  // 1. Start registration on server
+  const { challenge_id, options } =
+    await authService.startPasskeyRegistration(token);
+
+  // 2. Create credential with browser
+  const creationOptions = prepareCreationOptions(options);
+  const credential = (await navigator.credentials.create(
+    creationOptions,
+  )) as PublicKeyCredential | null;
+
+  if (!credential) throw new Error("Passkey registration was cancelled");
+
+  // 3. Send credential to server
+  const serialized = serializeRegistrationCredential(credential);
+  const { id } = await authService.finishPasskeyRegistration(
+    token,
+    challenge_id,
+    name,
+    serialized,
+  );
+
+  return id;
+}
+
+/**
+ * Authenticate with a passkey (no session required — used at sign-in).
+ * If email is provided, scopes to that user's passkeys.
+ * If omitted, uses discoverable credentials (browser picks).
+ */
+export async function authenticateWithPasskey(
+  email?: string,
+  customDeviceName?: string,
+): Promise<void> {
+  if (!authService) throw new Error("Server URL not configured");
+
+  state.isLoading = true;
+  state.error = null;
+
+  try {
+    // 1. Start authentication on server
+    const { challenge_id, options } =
+      await authService.startPasskeyAuthentication(email);
+
+    // 2. Get assertion from browser
+    const requestOptions = prepareRequestOptions(options);
+    const credential = (await navigator.credentials.get(
+      requestOptions,
+    )) as PublicKeyCredential | null;
+
+    if (!credential) throw new Error("Passkey authentication was cancelled");
+
+    // 3. Complete authentication on server
+    const deviceName = customDeviceName?.trim() || getDeviceName();
+    const serialized = serializeAuthenticationCredential(credential);
+    const response = await authService.finishPasskeyAuthentication(
+      challenge_id,
+      serialized,
+      deviceName,
+    );
+
+    // 4. Same post-login flow as verifyMagicLink
+    localStorage.setItem(STORAGE_KEYS.TOKEN, response.token);
+    localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(response.user));
+
+    state.user = response.user;
+    state.isAuthenticated = true;
+
+    setAuthToken(response.token);
+
+    await refreshUserInfo();
+    await refreshUserStorageUsage();
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "Failed to authenticate with passkey";
+    state.error = message;
+    throw err;
+  } finally {
+    state.isLoading = false;
+  }
+}
+
+/**
+ * List the current user's passkeys.
+ */
+export async function listPasskeys(): Promise<PasskeyListItem[]> {
+  const token = getToken();
+  if (!authService || !token) return [];
+  try {
+    return await authService.listPasskeys(token);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Delete a passkey.
+ */
+export async function deletePasskey(id: string): Promise<void> {
+  const token = getToken();
+  if (!authService || !token) throw new Error("Not authenticated");
+  await authService.deletePasskey(token, id);
 }
 
 // ============================================================================

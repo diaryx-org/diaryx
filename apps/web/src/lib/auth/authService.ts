@@ -38,6 +38,7 @@ export interface MagicLinkResponse {
   success: boolean;
   message: string;
   dev_link?: string;
+  dev_code?: string;
 }
 
 export interface UserHasDataResponse {
@@ -96,6 +97,13 @@ export interface StorageLimitExceededErrorResponse {
   used_bytes: number;
   limit_bytes: number;
   requested_bytes: number;
+}
+
+export interface PasskeyListItem {
+  id: string;
+  name: string;
+  created_at: number;
+  last_used_at: number | null;
 }
 
 export class AuthError extends Error {
@@ -180,6 +188,38 @@ export class AuthService {
     if (!response.ok) {
       throw new AuthError(
         data.error || "Failed to verify magic link",
+        response.status,
+      );
+    }
+
+    return data;
+  }
+
+  /**
+   * Verify a 6-digit code and get session token.
+   */
+  async verifyCode(
+    code: string,
+    email: string,
+    deviceName?: string,
+  ): Promise<VerifyResponse> {
+    const response = await fetch(`${this.serverUrl}/auth/verify-code`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        code,
+        email,
+        device_name: deviceName,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new AuthError(
+        data.error || "Failed to verify code",
         response.status,
       );
     }
@@ -681,6 +721,150 @@ export class AuthService {
     }
 
     return response.json();
+  }
+
+  // =========================================================================
+  // Passkeys (WebAuthn)
+  // =========================================================================
+
+  /**
+   * Start passkey registration (requires auth).
+   */
+  async startPasskeyRegistration(
+    authToken: string,
+  ): Promise<{ challenge_id: string; options: any }> {
+    const response = await fetch(
+      `${this.serverUrl}/auth/passkeys/register/start`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          "Content-Type": "application/json",
+        },
+      },
+    );
+    if (!response.ok) {
+      throw new AuthError("Failed to start passkey registration", response.status);
+    }
+    return response.json();
+  }
+
+  /**
+   * Finish passkey registration.
+   */
+  async finishPasskeyRegistration(
+    authToken: string,
+    challengeId: string,
+    name: string,
+    credential: any,
+  ): Promise<{ id: string }> {
+    const response = await fetch(
+      `${this.serverUrl}/auth/passkeys/register/finish`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          challenge_id: challengeId,
+          name,
+          credential,
+        }),
+      },
+    );
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new AuthError(
+        data.error || "Failed to finish passkey registration",
+        response.status,
+      );
+    }
+    return response.json();
+  }
+
+  /**
+   * Start passkey authentication (public — no auth required).
+   * If email is provided, scopes to that user's passkeys.
+   * If omitted, uses discoverable credentials (browser picks).
+   */
+  async startPasskeyAuthentication(
+    email?: string,
+  ): Promise<{ challenge_id: string; options: any }> {
+    const response = await fetch(
+      `${this.serverUrl}/auth/passkeys/authenticate/start`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(email ? { email } : {}),
+      },
+    );
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new AuthError(
+        data.error || "Failed to start passkey authentication",
+        response.status,
+      );
+    }
+    return response.json();
+  }
+
+  /**
+   * Finish passkey authentication (public — returns session).
+   */
+  async finishPasskeyAuthentication(
+    challengeId: string,
+    credential: any,
+    deviceName?: string,
+  ): Promise<VerifyResponse> {
+    const response = await fetch(
+      `${this.serverUrl}/auth/passkeys/authenticate/finish`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          challenge_id: challengeId,
+          credential,
+          device_name: deviceName,
+        }),
+      },
+    );
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new AuthError(
+        data.error || "Failed to authenticate with passkey",
+        response.status,
+      );
+    }
+    return response.json();
+  }
+
+  /**
+   * List user's passkeys (requires auth).
+   */
+  async listPasskeys(
+    authToken: string,
+  ): Promise<PasskeyListItem[]> {
+    const response = await fetch(`${this.serverUrl}/auth/passkeys`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    if (!response.ok) {
+      throw new AuthError("Failed to list passkeys", response.status);
+    }
+    return response.json();
+  }
+
+  /**
+   * Delete a passkey (requires auth).
+   */
+  async deletePasskey(authToken: string, id: string): Promise<void> {
+    const response = await fetch(`${this.serverUrl}/auth/passkeys/${id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    if (!response.ok) {
+      throw new AuthError("Failed to delete passkey", response.status);
+    }
   }
 }
 

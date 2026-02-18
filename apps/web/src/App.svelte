@@ -1864,10 +1864,15 @@
 <SyncSetupWizard
   bind:open={showSyncWizard}
   onOpenChange={(open) => showSyncWizard = open}
-  onComplete={() => {
+  onComplete={async () => {
     showSyncWizard = false;
-    // Let final sync writes settle, then refresh tree.
-    debouncedRefreshTree();
+    if (showWelcomeScreen) {
+      // Came from the welcome screen — dismiss it and re-initialize
+      await handleWelcomeComplete("", "");
+    } else {
+      // Let final sync writes settle, then refresh tree.
+      debouncedRefreshTree();
+    }
   }}
 />
 

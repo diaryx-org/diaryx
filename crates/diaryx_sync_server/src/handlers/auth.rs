@@ -1,4 +1,4 @@
-use crate::auth::{MagicLinkService, RequireAuth};
+use crate::auth::{MagicLinkService, PasskeyService, RequireAuth};
 use crate::blob_store::BlobStore;
 use crate::db::AuthRepo;
 use crate::email::EmailService;
@@ -20,6 +20,7 @@ pub struct AuthState {
     pub magic_link_service: Arc<MagicLinkService>,
     pub email_service: Arc<EmailService>,
     pub repo: Arc<AuthRepo>,
+    pub passkey_service: Arc<PasskeyService>,
     /// Path to workspace database files (for cleanup on account deletion)
     pub workspaces_dir: Option<PathBuf>,
     /// Attachment blob store (R2/in-memory)
@@ -40,6 +41,17 @@ pub struct MagicLinkResponse {
     /// Only included in dev mode when email is not configured
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dev_link: Option<String>,
+    /// Only included in dev mode when email is not configured
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dev_code: Option<String>,
+}
+
+/// Request body for verification code
+#[derive(Debug, Deserialize)]
+pub struct VerifyCodeRequest {
+    pub code: String,
+    pub email: String,
+    pub device_name: Option<String>,
 }
 
 /// Query params for magic link verification
@@ -100,6 +112,7 @@ pub fn auth_routes(state: AuthState) -> Router {
     Router::new()
         .route("/magic-link", post(request_magic_link))
         .route("/verify", get(verify_magic_link))
+        .route("/verify-code", post(verify_code))
         .route("/me", get(get_current_user))
         .route("/logout", post(logout))
         .route("/account", delete(delete_account))
@@ -108,6 +121,13 @@ pub fn auth_routes(state: AuthState) -> Router {
             "/devices/{device_id}",
             axum::routing::patch(rename_device).delete(delete_device),
         )
+        // Passkey routes
+        .route("/passkeys/register/start", post(passkey_register_start))
+        .route("/passkeys/register/finish", post(passkey_register_finish))
+        .route("/passkeys/authenticate/start", post(passkey_auth_start))
+        .route("/passkeys/authenticate/finish", post(passkey_auth_finish))
+        .route("/passkeys", get(passkey_list))
+        .route("/passkeys/{id}", delete(passkey_delete))
         .with_state(state)
 }
 
@@ -130,8 +150,8 @@ async fn request_magic_link(
     }
 
     // Request magic link
-    let token = match state.magic_link_service.request_magic_link(&email) {
-        Ok(token) => token,
+    let (token, code) = match state.magic_link_service.request_magic_link(&email) {
+        Ok(result) => result,
         Err(crate::auth::MagicLinkError::RateLimited) => {
             warn!("Rate limited magic link request for {}", email);
             return (
@@ -160,7 +180,7 @@ async fn request_magic_link(
     if state.email_service.is_configured() {
         if let Err(e) = state
             .email_service
-            .send_magic_link(&email, &magic_link_url)
+            .send_magic_link(&email, &magic_link_url, &code)
             .await
         {
             error!("Failed to send magic link email: {}", e);
@@ -180,11 +200,12 @@ async fn request_magic_link(
                 success: true,
                 message: "Check your email for a sign-in link.".to_string(),
                 dev_link: None,
+                dev_code: None,
             }),
         )
             .into_response()
     } else {
-        // Dev mode: return the link directly
+        // Dev mode: return the link and code directly
         warn!(
             "Email not configured, returning magic link directly (dev mode only!): {}",
             magic_link_url
@@ -195,6 +216,7 @@ async fn request_magic_link(
                 success: true,
                 message: "Email not configured. Use the dev link below.".to_string(),
                 dev_link: Some(magic_link_url),
+                dev_code: Some(code),
             }),
         )
             .into_response()
@@ -237,6 +259,57 @@ async fn verify_magic_link(
             .into_response(),
         Err(e) => {
             error!("Failed to verify magic link: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "Verification failed".to_string(),
+                }),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// POST /auth/verify-code - Verify a 6-digit code and return session token
+async fn verify_code(
+    State(state): State<AuthState>,
+    Json(body): Json<VerifyCodeRequest>,
+) -> impl IntoResponse {
+    let result = state.magic_link_service.verify_code(
+        &body.code,
+        &body.email,
+        body.device_name.as_deref(),
+        None,
+    );
+
+    match result {
+        Ok(verify_result) => {
+            info!(
+                "User {} logged in via verification code",
+                verify_result.email
+            );
+            (
+                StatusCode::OK,
+                Json(VerifyResponse {
+                    success: true,
+                    token: verify_result.session_token,
+                    user: UserResponse {
+                        id: verify_result.user_id,
+                        email: verify_result.email,
+                    },
+                }),
+            )
+                .into_response()
+        }
+        Err(crate::auth::MagicLinkError::InvalidToken) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Invalid or expired code. Please request a new one.".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to verify code: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
@@ -483,4 +556,301 @@ async fn delete_account(
     info!("Successfully deleted account for user: {}", user_id);
 
     StatusCode::NO_CONTENT.into_response()
+}
+
+// ===== Passkey handlers =====
+
+#[derive(Debug, Serialize)]
+struct PasskeyRegisterStartResponse {
+    challenge_id: String,
+    options: serde_json::Value,
+}
+
+/// POST /auth/passkeys/register/start (RequireAuth)
+async fn passkey_register_start(
+    State(state): State<AuthState>,
+    RequireAuth(auth): RequireAuth,
+) -> impl IntoResponse {
+    match state
+        .passkey_service
+        .start_registration(&auth.user.id, &auth.user.email)
+    {
+        Ok((ccr, challenge_id)) => {
+            let options = serde_json::to_value(&ccr).unwrap_or_default();
+            (
+                StatusCode::OK,
+                Json(PasskeyRegisterStartResponse {
+                    challenge_id,
+                    options,
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            error!("Passkey register start failed: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct PasskeyRegisterFinishRequest {
+    challenge_id: String,
+    name: String,
+    credential: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+struct PasskeyRegisterFinishResponse {
+    id: String,
+}
+
+/// POST /auth/passkeys/register/finish (RequireAuth)
+async fn passkey_register_finish(
+    State(state): State<AuthState>,
+    RequireAuth(auth): RequireAuth,
+    Json(body): Json<PasskeyRegisterFinishRequest>,
+) -> impl IntoResponse {
+    let credential = match serde_json::from_value(body.credential) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!("Invalid credential: {}", e),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    match state.passkey_service.finish_registration(
+        &body.challenge_id,
+        &auth.user.id,
+        &body.name,
+        &credential,
+    ) {
+        Ok(id) => {
+            info!(
+                "Passkey '{}' registered for user {}",
+                body.name, auth.user.email
+            );
+            (StatusCode::OK, Json(PasskeyRegisterFinishResponse { id })).into_response()
+        }
+        Err(crate::auth::PasskeyError::ChallengeNotFound) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Challenge expired or not found".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Passkey register finish failed: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct PasskeyAuthStartRequest {
+    email: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct PasskeyAuthStartResponse {
+    challenge_id: String,
+    options: serde_json::Value,
+}
+
+/// POST /auth/passkeys/authenticate/start (public)
+async fn passkey_auth_start(
+    State(state): State<AuthState>,
+    Json(body): Json<PasskeyAuthStartRequest>,
+) -> impl IntoResponse {
+    let result = match body
+        .email
+        .as_deref()
+        .map(|e| e.trim())
+        .filter(|e| !e.is_empty())
+    {
+        Some(email) => {
+            let email = email.to_lowercase();
+            state.passkey_service.start_authentication(&email)
+        }
+        None => state.passkey_service.start_discoverable_authentication(),
+    };
+
+    match result {
+        Ok((rcr, challenge_id)) => {
+            let options = serde_json::to_value(&rcr).unwrap_or_default();
+            (
+                StatusCode::OK,
+                Json(PasskeyAuthStartResponse {
+                    challenge_id,
+                    options,
+                }),
+            )
+                .into_response()
+        }
+        Err(crate::auth::PasskeyError::NoPasskeys) => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "No passkeys registered for this email".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Passkey auth start failed: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct PasskeyAuthFinishRequest {
+    challenge_id: String,
+    credential: serde_json::Value,
+    device_name: Option<String>,
+}
+
+/// POST /auth/passkeys/authenticate/finish (public) → VerifyResponse
+async fn passkey_auth_finish(
+    State(state): State<AuthState>,
+    Json(body): Json<PasskeyAuthFinishRequest>,
+) -> impl IntoResponse {
+    let credential = match serde_json::from_value(body.credential) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!("Invalid credential: {}", e),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    match state.passkey_service.finish_any_authentication(
+        &body.challenge_id,
+        &credential,
+        body.device_name.as_deref(),
+        None,
+    ) {
+        Ok(result) => {
+            info!("User {} logged in via passkey", result.email);
+            (
+                StatusCode::OK,
+                Json(VerifyResponse {
+                    success: true,
+                    token: result.session_token,
+                    user: UserResponse {
+                        id: result.user_id,
+                        email: result.email,
+                    },
+                }),
+            )
+                .into_response()
+        }
+        Err(crate::auth::PasskeyError::ChallengeNotFound) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Challenge expired or not found".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(crate::auth::PasskeyError::InvalidCredential(msg)) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: format!("Authentication failed: {}", msg),
+            }),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Passkey auth finish failed: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct PasskeyListItem {
+    id: String,
+    name: String,
+    created_at: i64,
+    last_used_at: Option<i64>,
+}
+
+/// GET /auth/passkeys (RequireAuth) — list user's passkeys
+async fn passkey_list(
+    State(state): State<AuthState>,
+    RequireAuth(auth): RequireAuth,
+) -> impl IntoResponse {
+    match state.passkey_service.list_passkeys(&auth.user.id) {
+        Ok(passkeys) => {
+            let items: Vec<PasskeyListItem> = passkeys
+                .into_iter()
+                .map(|p| PasskeyListItem {
+                    id: p.id,
+                    name: p.name,
+                    created_at: p.created_at,
+                    last_used_at: p.last_used_at,
+                })
+                .collect();
+            Json(items).into_response()
+        }
+        Err(e) => {
+            error!("Failed to list passkeys: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "Failed to list passkeys".to_string(),
+                }),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// DELETE /auth/passkeys/:id (RequireAuth)
+async fn passkey_delete(
+    State(state): State<AuthState>,
+    RequireAuth(auth): RequireAuth,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    match state.passkey_service.delete_passkey(&id, &auth.user.id) {
+        Ok(true) => {
+            info!("Passkey {} deleted for user {}", id, auth.user.email);
+            StatusCode::NO_CONTENT
+        }
+        Ok(false) => StatusCode::NOT_FOUND,
+        Err(e) => {
+            error!("Failed to delete passkey: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
 }

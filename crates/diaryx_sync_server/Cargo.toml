@@ -38,7 +38,8 @@ git2 = { version = "0.19", default-features = false }
 rand = "0.8"
 base64 = "0.22"
 hmac = "0.12"
-uuid = { version = "1", features = ["v4"] }
+url = "2"
+uuid = { version = "1", features = ["v4", "v5"] }
 chrono = { workspace = true }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
@@ -62,6 +63,10 @@ siphonophore = { version = "0.1.0", package = "diaryx-siphonophore" }
 kameo = "0.19"
 async-trait = "0.1"
 yrs = "0.24"
+
+# WebAuthn / Passkeys
+webauthn-rs = { version = "0.5", default-features = false, features = ["danger-allow-state-serialisation", "conditional-ui"] }
+webauthn-rs-proto = "0.5"
 
 # Stripe billing
 async-stripe = { version = "0.41", default-features = false, features = ["runtime-tokio-hyper-rustls", "checkout", "billing"] }

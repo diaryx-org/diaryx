@@ -13,8 +13,10 @@
     Server,
     Settings,
     AlertCircle,
+    Fingerprint,
   } from "@lucide/svelte";
   import SignOutDialog from "$lib/SignOutDialog.svelte";
+  import VerificationCodeInput from "$lib/components/VerificationCodeInput.svelte";
   import {
     getAuthState,
     logout,
@@ -23,6 +25,10 @@
     requestMagicLink,
     verifyMagicLink,
   } from "$lib/auth";
+  import {
+    authenticateWithPasskey,
+  } from "$lib/auth/authStore.svelte";
+  import { isPasskeySupported } from "$lib/auth/webauthnUtils";
   import { isTauri } from "$lib/backend/interface";
   import { collaborationStore } from "@/models/stores/collaborationStore.svelte";
   import { onMount } from "svelte";
@@ -57,8 +63,31 @@
   let resendInterval: ReturnType<typeof setInterval> | null = null;
   let urlCheckInterval: ReturnType<typeof setInterval> | null = null;
 
+  // Passkey state
+  let passkeySupported = $state(false);
+  let isAuthenticatingPasskey = $state(false);
+
+  async function handlePasskeySignIn() {
+    if (!(await validateServer())) return;
+    isAuthenticatingPasskey = true;
+    error = null;
+    try {
+      await authenticateWithPasskey(email.trim() || undefined);
+      email = "";
+      if (getAuthState().workspaces.length > 0 && !syncEnabled) {
+        onClose?.();
+        onOpenSyncWizard?.();
+      }
+    } catch (e) {
+      error = e instanceof Error ? e.message : "Passkey authentication failed";
+    } finally {
+      isAuthenticatingPasskey = false;
+    }
+  }
+
   onMount(() => {
     initAuth();
+    isPasskeySupported().then((v) => { passkeySupported = v; });
     return () => {
       stopMagicLinkDetection();
       if (resendInterval) clearInterval(resendInterval);
@@ -155,7 +184,6 @@
       isLoggingOut = true;
       try { await logout(); } finally { isLoggingOut = false; }
     } else {
-      onClose?.();
       showSignOutDialog = true;
     }
   }
@@ -269,9 +297,33 @@
           {/if}
         </div>
 
+        {#if passkeySupported}
+          <Button
+            class="w-full"
+            size="sm"
+            onclick={handlePasskeySignIn}
+            disabled={isAuthenticatingPasskey || isSending || isValidating}
+          >
+            {#if isAuthenticatingPasskey}
+              <Loader2 class="size-3.5 mr-1.5 animate-spin" />
+              Authenticating...
+            {:else}
+              <Fingerprint class="size-3.5 mr-1.5" />
+              Sign in with Passkey
+            {/if}
+          </Button>
+
+          <div class="flex items-center gap-2">
+            <div class="h-px flex-1 bg-border"></div>
+            <span class="text-[11px] text-muted-foreground">or</span>
+            <div class="h-px flex-1 bg-border"></div>
+          </div>
+        {/if}
+
         <Button
           class="w-full"
           size="sm"
+          variant={passkeySupported ? "outline" : "default"}
           onclick={handleSendMagicLink}
           disabled={isSending || isValidating || !email.trim()}
         >
@@ -313,6 +365,20 @@
                 Click the link in your email to continue.
               </p>
             </div>
+
+            <VerificationCodeInput
+              {email}
+              onVerified={() => {
+                verificationSent = false;
+                stopMagicLinkDetection();
+                email = "";
+                if (getAuthState().workspaces.length > 0 && !syncEnabled) {
+                  onClose?.();
+                  onOpenSyncWizard?.();
+                }
+              }}
+              onError={(msg) => { error = msg; }}
+            />
 
             <div class="flex justify-center">
               <Button

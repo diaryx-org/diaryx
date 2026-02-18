@@ -37,7 +37,11 @@
     setCurrentWorkspaceId,
     promoteLocalWorkspace,
   } from "$lib/storage/localWorkspaceRegistry.svelte";
-  import { setActiveWorkspaceId } from "$lib/auth/authStore.svelte";
+  import {
+    setActiveWorkspaceId,
+    authenticateWithPasskey,
+  } from "$lib/auth/authStore.svelte";
+  import { isPasskeySupported } from "$lib/auth/webauthnUtils";
   import {
     Mail,
     Link,
@@ -52,7 +56,10 @@
     HardDrive,
     Plus,
     Settings2,
+    Fingerprint,
+    SkipForward,
   } from "@lucide/svelte";
+  import VerificationCodeInput from "$lib/components/VerificationCodeInput.svelte";
   import { toast } from "svelte-sonner";
   import { getBackend, createApi } from "./backend";
   import type { TreeNode } from "$lib/backend/interface";
@@ -101,7 +108,7 @@
   let devLink = $state<string | null>(null);
 
   // Options screen state — unified picker
-  type PostAuthAction = 'upload_local' | 'download_server' | 'create_new';
+  type PostAuthAction = 'upload_local' | 'download_server' | 'create_new' | 'skip';
   let postAuthAction = $state<PostAuthAction>('upload_local');
   let selectedLocalWorkspaceId = $state<string | null>(null);
   let selectedServerWorkspaceId = $state<string | null>(null);
@@ -124,6 +131,10 @@
   let syncTotal = $state(0);
   let unsubscribeProgress: (() => void) | null = null;
   let unsubscribeStatus: (() => void) | null = null;
+
+  // Passkey state
+  let passkeySupported = $state(false);
+  let isAuthenticatingPasskey = $state(false);
 
   // Error state
   let error = $state<string | null>(null);
@@ -154,6 +165,28 @@
     if (ua.includes("iPad")) return "iPad";
     if (ua.includes("Android")) return "Android";
     return "My Device";
+  }
+
+  // Check passkeys support on mount
+  if (typeof window !== "undefined") {
+    isPasskeySupported().then((v) => { passkeySupported = v; });
+  }
+
+  async function handlePasskeySignIn() {
+    if (!(await validateServer())) return;
+    isAuthenticatingPasskey = true;
+    error = null;
+    try {
+      localStorage.setItem("diaryx_device_name", deviceName.trim() || getDefaultDeviceName());
+      await authenticateWithPasskey(email.trim() || undefined);
+      email = "";
+      await handlePostAuth();
+      screen = 'options';
+    } catch (e) {
+      error = e instanceof Error ? e.message : "Passkey authentication failed";
+    } finally {
+      isAuthenticatingPasskey = false;
+    }
   }
 
   // Validate and apply server URL
@@ -317,8 +350,8 @@
       // No server workspaces, but local ones exist — pre-select upload
       postAuthAction = 'upload_local';
     } else {
-      // Nothing exists — pre-select create new
-      postAuthAction = 'create_new';
+      // Nothing exists — default to skip (user can opt into creating a synced workspace)
+      postAuthAction = 'skip';
     }
   }
 
@@ -341,7 +374,10 @@
     importProgress = 0;
 
     try {
-      if (postAuthAction === 'download_server') {
+      if (postAuthAction === 'skip') {
+        handleClose();
+        return;
+      } else if (postAuthAction === 'download_server') {
         await handleDownloadServer();
       } else if (postAuthAction === 'upload_local') {
         await handleUploadLocal();
@@ -660,7 +696,12 @@
 
     syncStatusText = "Initializing workspace...";
     importProgress = 30;
-    await api.initializeWorkspaceCrdt(workspacePath);
+    try {
+      await api.initializeWorkspaceCrdt(workspacePath);
+    } catch (e) {
+      // Workspace may be empty (no index.md yet) — that's fine for a fresh workspace
+      console.log("[SyncWizard] CRDT init skipped (empty workspace):", e);
+    }
     importProgress = 60;
 
     // Connect WebSocket
@@ -869,7 +910,7 @@
         {:else if localWorkspaces.length > 0}
           No data found on the server. Upload your local workspace or start fresh.
         {:else}
-          No existing data found. Create a new synced workspace to get started.
+          You're signed in. Set up sync now, or skip and do it later.
         {/if}
       </Dialog.Description>
     </Dialog.Header>
@@ -977,6 +1018,18 @@
                   Click the link in your email to continue.
                 </p>
               </div>
+
+              <VerificationCodeInput
+                {email}
+                onVerified={async () => {
+                  verificationSent = false;
+                  stopMagicLinkDetection();
+                  email = "";
+                  await handlePostAuth();
+                  screen = 'options';
+                }}
+                onError={(msg) => { error = msg; }}
+              />
 
               <!-- Resend button with cooldown -->
               <div class="flex justify-center">
@@ -1150,6 +1203,25 @@
               </div>
             </button>
 
+            <!-- Skip for now -->
+            <button
+              type="button"
+              class="w-full text-left p-3 rounded-lg border-2 transition-colors {postAuthAction === 'skip' ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
+              onclick={() => postAuthAction = 'skip'}
+            >
+              <div class="flex items-start gap-3">
+                <div class="mt-0.5">
+                  <SkipForward class="size-5 {postAuthAction === 'skip' ? 'text-primary' : 'text-muted-foreground'}" />
+                </div>
+                <div>
+                  <div class="font-medium text-sm">Set up later</div>
+                  <div class="text-xs text-muted-foreground mt-0.5">
+                    Continue without sync — you can set it up anytime from Settings
+                  </div>
+                </div>
+              </div>
+            </button>
+
           </div>
         {/if}
       {/if}
@@ -1173,15 +1245,32 @@
 
       {#if screen === 'auth'}
         {#if !verificationSent}
-          <Button onclick={handleSendMagicLink} disabled={isSendingMagicLink || isValidatingServer || !email.trim()}>
-            {#if isSendingMagicLink || isValidatingServer}
-              <Loader2 class="size-4 mr-2 animate-spin" />
-              {isValidatingServer ? 'Connecting...' : 'Sending...'}
-            {:else}
-              <Mail class="size-4 mr-2" />
-              Send Sign-in Link
+          <div class="flex items-center gap-2">
+            {#if passkeySupported}
+              <Button
+                variant="outline"
+                onclick={handlePasskeySignIn}
+                disabled={isAuthenticatingPasskey || isSendingMagicLink || isValidatingServer}
+              >
+                {#if isAuthenticatingPasskey}
+                  <Loader2 class="size-4 mr-2 animate-spin" />
+                  Verifying...
+                {:else}
+                  <Fingerprint class="size-4 mr-2" />
+                  Passkey
+                {/if}
+              </Button>
             {/if}
-          </Button>
+            <Button onclick={handleSendMagicLink} disabled={isSendingMagicLink || isValidatingServer || !email.trim()}>
+              {#if isSendingMagicLink || isValidatingServer}
+                <Loader2 class="size-4 mr-2 animate-spin" />
+                {isValidatingServer ? 'Connecting...' : 'Sending...'}
+              {:else}
+                <Mail class="size-4 mr-2" />
+                Send Sign-in Link
+              {/if}
+            </Button>
+          </div>
         {:else if devLink}
           <div></div>
         {:else}
@@ -1191,9 +1280,13 @@
           </div>
         {/if}
       {:else if !isInitializing}
-        <Button onclick={handleInitialize}>
-          Start Syncing
-          <ArrowRight class="size-4 ml-1" />
+        <Button onclick={handleInitialize} variant={postAuthAction === 'skip' ? 'outline' : 'default'}>
+          {#if postAuthAction === 'skip'}
+            Done
+          {:else}
+            Start Syncing
+            <ArrowRight class="size-4 ml-1" />
+          {/if}
         </Button>
       {:else}
         <div></div>

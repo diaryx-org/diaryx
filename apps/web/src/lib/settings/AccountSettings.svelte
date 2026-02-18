@@ -31,8 +31,11 @@
     Pencil,
     Check,
     X,
+    Fingerprint,
+    Plus,
   } from "@lucide/svelte";
   import SignOutDialog from "$lib/SignOutDialog.svelte";
+  import VerificationCodeInput from "$lib/components/VerificationCodeInput.svelte";
   import { isTauri } from "$lib/backend/interface";
   import {
     getAuthState,
@@ -45,7 +48,14 @@
     setServerUrl,
     requestMagicLink,
     verifyMagicLink,
+    type PasskeyListItem,
   } from "$lib/auth";
+  import {
+    registerPasskey,
+    listPasskeys,
+    deletePasskey,
+  } from "$lib/auth/authStore.svelte";
+  import { isPasskeySupported } from "$lib/auth/webauthnUtils";
   import { collaborationStore } from "@/models/stores/collaborationStore.svelte";
   import { onMount } from "svelte";
 
@@ -88,8 +98,47 @@
   let resendInterval: ReturnType<typeof setInterval> | null = null;
   let urlCheckInterval: ReturnType<typeof setInterval> | null = null;
 
+  // Passkey state
+  let passkeys = $state<PasskeyListItem[]>([]);
+  let passkeySupported = $state(false);
+  let isAddingPasskey = $state(false);
+  let passkeyName = $state("");
+  let passkeyError = $state<string | null>(null);
+
+  async function loadPasskeys() {
+    if (authState.isAuthenticated) {
+      passkeys = await listPasskeys();
+    }
+  }
+
+  async function handleAddPasskey() {
+    const name = passkeyName.trim() || "My Passkey";
+    isAddingPasskey = true;
+    passkeyError = null;
+    try {
+      await registerPasskey(name);
+      passkeyName = "";
+      await loadPasskeys();
+    } catch (e) {
+      passkeyError = e instanceof Error ? e.message : "Failed to add passkey";
+    } finally {
+      isAddingPasskey = false;
+    }
+  }
+
+  async function handleDeletePasskey(id: string) {
+    try {
+      await deletePasskey(id);
+      await loadPasskeys();
+    } catch (e) {
+      passkeyError = e instanceof Error ? e.message : "Failed to delete passkey";
+    }
+  }
+
   onMount(() => {
     initAuth();
+    isPasskeySupported().then((v) => { passkeySupported = v; });
+    loadPasskeys();
     return () => {
       stopMagicLinkDetection();
       if (resendInterval) clearInterval(resendInterval);
@@ -356,6 +405,68 @@
         <Separator />
       {/if}
 
+      <!-- Passkeys -->
+      {#if passkeySupported}
+        <div class="space-y-2">
+          <Label class="text-xs text-muted-foreground">Passkeys</Label>
+
+          {#if passkeys.length > 0}
+            <div class="space-y-1">
+              {#each passkeys as pk}
+                <div class="flex items-center justify-between text-sm p-2 bg-muted/50 rounded-md">
+                  <div class="flex items-center gap-2">
+                    <Fingerprint class="size-4 text-muted-foreground" />
+                    <span>{pk.name}</span>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    class="h-7 w-7 p-0"
+                    onclick={() => handleDeletePasskey(pk.id)}
+                  >
+                    <Trash2 class="size-3 text-muted-foreground" />
+                  </Button>
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <p class="text-xs text-muted-foreground">
+              No passkeys registered. Add one for faster sign-in.
+            </p>
+          {/if}
+
+          {#if passkeyError}
+            <p class="text-xs text-destructive">{passkeyError}</p>
+          {/if}
+
+          <div class="flex items-center gap-2">
+            <Input
+              type="text"
+              placeholder="Passkey name"
+              bind:value={passkeyName}
+              class="h-8 text-sm flex-1"
+              onkeydown={(e) => { if (e.key === "Enter") handleAddPasskey(); }}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              class="h-8"
+              onclick={handleAddPasskey}
+              disabled={isAddingPasskey}
+            >
+              {#if isAddingPasskey}
+                <Loader2 class="size-3.5 mr-1 animate-spin" />
+              {:else}
+                <Plus class="size-3.5 mr-1" />
+              {/if}
+              Add
+            </Button>
+          </div>
+        </div>
+
+        <Separator />
+      {/if}
+
       <!-- Account Actions -->
       <div class="space-y-2">
         <Label class="text-xs text-muted-foreground">Actions</Label>
@@ -484,6 +595,19 @@
                 Click the link in your email to continue.
               </p>
             </div>
+
+            <VerificationCodeInput
+              {email}
+              onVerified={() => {
+                verificationSent = false;
+                stopMagicLinkDetection();
+                email = "";
+                if (getAuthState().workspaces.length > 0 && !syncEnabled) {
+                  onOpenWizard?.();
+                }
+              }}
+              onError={(msg) => { error = msg; }}
+            />
 
             <div class="flex justify-center">
               <Button

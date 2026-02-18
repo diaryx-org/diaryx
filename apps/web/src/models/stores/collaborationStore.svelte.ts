@@ -192,18 +192,12 @@ class CollaborationStore {
     this.bodySyncProgress = null;
   }
 
-  // Server URL
+  // Server URL (in-memory only — the canonical localStorage key
+  // `diaryx_sync_server_url` is managed by authStore.setServerUrl()
+  // which always stores the HTTP URL.  We must NOT overwrite it here
+  // because collaborationStore receives ws:// URLs.)
   setServerUrl(url: string | null) {
     this.collaborationServerUrl = url;
-    if (typeof window !== 'undefined') {
-      if (url) {
-        localStorage.setItem('diaryx_sync_server_url', url);
-        localStorage.setItem('diaryx-sync-server', url); // legacy key
-      } else {
-        localStorage.removeItem('diaryx_sync_server_url');
-        localStorage.removeItem('diaryx-sync-server');
-      }
-    }
   }
 }
 

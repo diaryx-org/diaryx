@@ -96,12 +96,13 @@
               pkg-config
               prek
               llvmPackages.lld
+              openssl.dev
             ];
 
             # Fixed: Using apple-sdk_15 directly avoids the legacy 11.0 stub error
             buildInputs = pkgs.lib.optionals pkgs.stdenv.isDarwin [
               pkgs.apple-sdk_15
-            ];
+            ] ++ [ pkgs.openssl ];
 
             shellHook = ''
               export ZIG_GLOBAL_CACHE_DIR="$PWD/.zig-cache"

@@ -130,18 +130,9 @@ describe('collaborationStore', () => {
       expect(store.collaborationServerUrl).toBe('wss://sync.example.com')
     })
 
-    it('should persist server URL to localStorage', () => {
+    it('should not persist server URL to localStorage (managed by authStore)', () => {
       store.setServerUrl('wss://sync.example.com')
-      expect(localStorage.setItem).toHaveBeenCalledWith(
-        'diaryx-sync-server',
-        'wss://sync.example.com'
-      )
-    })
-
-    it('should remove from localStorage when setting to null', () => {
-      store.setServerUrl('wss://sync.example.com')
-      store.setServerUrl(null)
-      expect(localStorage.removeItem).toHaveBeenCalledWith('diaryx-sync-server')
+      expect(localStorage.setItem).not.toHaveBeenCalled()
     })
   })
 })

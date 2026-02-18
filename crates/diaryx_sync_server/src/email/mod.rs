@@ -57,11 +57,12 @@ impl EmailService {
         self.client.is_some()
     }
 
-    /// Send a magic link email
+    /// Send a magic link email with a verification code
     pub async fn send_magic_link(
         &self,
         to_email: &str,
         magic_link_url: &str,
+        verification_code: &str,
     ) -> Result<(), EmailError> {
         let client = self.client.as_ref().ok_or(EmailError::NotConfigured)?;
 
@@ -72,7 +73,7 @@ impl EmailService {
             ),
             to: vec![to_email.to_string()],
             subject: "Sign in to Diaryx".to_string(),
-            html: self.build_magic_link_email_body(magic_link_url),
+            html: self.build_magic_link_email_body(magic_link_url, verification_code),
         };
 
         let resp = client
@@ -94,7 +95,14 @@ impl EmailService {
         Ok(())
     }
 
-    fn build_magic_link_email_body(&self, magic_link_url: &str) -> String {
+    fn build_magic_link_email_body(&self, magic_link_url: &str, verification_code: &str) -> String {
+        // Space out the digits for readability
+        let spaced_code: String = verification_code
+            .chars()
+            .map(|c| c.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+
         format!(
             r#"<!DOCTYPE html>
 <html>
@@ -110,10 +118,17 @@ impl EmailService {
 
     <div style="background-color: #f9f9f9; border-radius: 8px; padding: 30px; margin-bottom: 20px;">
         <h2 style="margin-top: 0; color: #1a1a1a;">Sign in to your account</h2>
-        <p>Click the button below to sign in to Diaryx. This link will expire in {} minutes.</p>
+        <p>Click the button below to sign in to Diaryx. This link will expire in {expiry} minutes.</p>
+
+        <div style="text-align: center; margin: 24px 0;">
+            <p style="color: #666; font-size: 14px; margin-bottom: 8px;">Or enter this code in the app:</p>
+            <div style="display: inline-block; background-color: #fff; border: 2px solid #e0e0e0; border-radius: 8px; padding: 12px 24px;">
+                <span style="font-family: 'SF Mono', SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace; font-size: 28px; letter-spacing: 6px; color: #1a1a1a; font-weight: 600;">{code}</span>
+            </div>
+        </div>
 
         <div style="text-align: center; margin: 30px 0;">
-            <a href="{}" style="display: inline-block; background-color: #0066cc; color: white; text-decoration: none; padding: 14px 28px; border-radius: 6px; font-weight: 500;">
+            <a href="{link}" style="display: inline-block; background-color: #0066cc; color: white; text-decoration: none; padding: 14px 28px; border-radius: 6px; font-weight: 500;">
                 Sign in to Diaryx
             </a>
         </div>
@@ -122,7 +137,7 @@ impl EmailService {
             If the button doesn't work, copy and paste this link into your browser:
         </p>
         <p style="word-break: break-all; color: #0066cc; font-size: 14px;">
-            <a href="{}" style="color: #0066cc;">{}</a>
+            <a href="{link}" style="color: #0066cc;">{link}</a>
         </p>
     </div>
 
@@ -132,7 +147,9 @@ impl EmailService {
     </div>
 </body>
 </html>"#,
-            self.config.magic_link_expiry_minutes, magic_link_url, magic_link_url, magic_link_url
+            expiry = self.config.magic_link_expiry_minutes,
+            code = spaced_code,
+            link = magic_link_url,
         )
     }
 }

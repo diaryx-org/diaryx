@@ -192,6 +192,29 @@ pub struct AttachmentUploadPart {
     pub size_bytes: u64,
 }
 
+/// Passkey credential info for WebAuthn.
+#[derive(Debug, Clone)]
+pub struct PasskeyCredentialInfo {
+    pub id: String,
+    pub user_id: String,
+    pub name: String,
+    pub credential_json: String,
+    pub created_at: i64,
+    pub last_used_at: Option<i64>,
+}
+
+/// Ephemeral passkey challenge state.
+#[derive(Debug, Clone)]
+pub struct PasskeyChallengeInfo {
+    pub challenge_id: String,
+    pub user_id: Option<String>,
+    pub email: String,
+    pub challenge_type: String,
+    pub state_json: String,
+    pub expires_at: i64,
+    pub created_at: i64,
+}
+
 /// Completed upload metadata lookup row used by attachment reconciliation fallback.
 #[derive(Debug, Clone)]
 pub struct CompletedAttachmentUploadInfo {
@@ -468,19 +491,20 @@ impl AuthRepo {
         &self,
         email: &str,
         expires_at: DateTime<Utc>,
-    ) -> Result<String, rusqlite::Error> {
+    ) -> Result<(String, String), rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
 
-        // Generate secure random token
+        // Generate secure random token and 6-digit verification code
         let token = generate_secure_token();
+        let code = generate_verification_code();
         let now = Utc::now().timestamp();
 
         conn.execute(
-            "INSERT INTO magic_tokens (token, email, expires_at, created_at) VALUES (?, ?, ?, ?)",
-            params![token, email, expires_at.timestamp(), now],
+            "INSERT INTO magic_tokens (token, email, code, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
+            params![token, email, code, expires_at.timestamp(), now],
         )?;
 
-        Ok(token)
+        Ok((token, code))
     }
 
     /// Verify and consume a magic token (returns email if valid)
@@ -503,6 +527,36 @@ impl AuthRepo {
         }
 
         Ok(result)
+    }
+
+    /// Verify and consume a magic code (returns email if valid).
+    /// Looks up by (code, email) where used=0 and not expired, then marks used.
+    pub fn verify_magic_code(
+        &self,
+        code: &str,
+        email: &str,
+    ) -> Result<Option<String>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+
+        let result: Option<String> = conn
+            .query_row(
+                "SELECT token FROM magic_tokens WHERE code = ? AND email = ? AND used = 0 AND expires_at > ?",
+                params![code, email, now],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        if let Some(ref token) = result {
+            // Mark the row as used (consumes both the link and the code)
+            conn.execute(
+                "UPDATE magic_tokens SET used = 1 WHERE token = ?",
+                [token.as_str()],
+            )?;
+        }
+
+        // Return the email on success (mirrors verify_magic_token API)
+        Ok(result.map(|_| email.to_string()))
     }
 
     /// Clean up expired magic tokens
@@ -1857,6 +1911,191 @@ impl AuthRepo {
         )?;
         Ok(deleted)
     }
+
+    // ===== Passkey operations =====
+
+    /// Store a passkey credential for a user.
+    pub fn store_passkey_credential(
+        &self,
+        user_id: &str,
+        name: &str,
+        credential_json: &str,
+    ) -> Result<String, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = Utc::now().timestamp();
+
+        conn.execute(
+            "INSERT INTO passkey_credentials (id, user_id, name, credential_json, created_at) VALUES (?, ?, ?, ?, ?)",
+            params![id, user_id, name, credential_json, now],
+        )?;
+
+        Ok(id)
+    }
+
+    /// Get all passkey credentials for a user.
+    pub fn get_passkey_credentials(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<PasskeyCredentialInfo>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, user_id, name, credential_json, created_at, last_used_at \
+             FROM passkey_credentials WHERE user_id = ? ORDER BY created_at DESC",
+        )?;
+
+        let rows = stmt
+            .query_map([user_id], |row| {
+                Ok(PasskeyCredentialInfo {
+                    id: row.get(0)?,
+                    user_id: row.get(1)?,
+                    name: row.get(2)?,
+                    credential_json: row.get(3)?,
+                    created_at: row.get(4)?,
+                    last_used_at: row.get(5)?,
+                })
+            })?
+            .filter_map(Result::ok)
+            .collect();
+
+        Ok(rows)
+    }
+
+    /// Get passkey credentials by email (looks up user first).
+    pub fn get_passkey_credentials_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Vec<PasskeyCredentialInfo>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT pc.id, pc.user_id, pc.name, pc.credential_json, pc.created_at, pc.last_used_at \
+             FROM passkey_credentials pc \
+             JOIN users u ON u.id = pc.user_id \
+             WHERE u.email = ? \
+             ORDER BY pc.created_at DESC",
+        )?;
+
+        let rows = stmt
+            .query_map([email], |row| {
+                Ok(PasskeyCredentialInfo {
+                    id: row.get(0)?,
+                    user_id: row.get(1)?,
+                    name: row.get(2)?,
+                    credential_json: row.get(3)?,
+                    created_at: row.get(4)?,
+                    last_used_at: row.get(5)?,
+                })
+            })?
+            .filter_map(Result::ok)
+            .collect();
+
+        Ok(rows)
+    }
+
+    /// Update a passkey credential's last_used_at timestamp.
+    pub fn update_passkey_credential_last_used(&self, id: &str) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+        conn.execute(
+            "UPDATE passkey_credentials SET last_used_at = ? WHERE id = ?",
+            params![now, id],
+        )?;
+        Ok(())
+    }
+
+    /// Update a passkey credential's JSON and last_used_at (after successful authentication).
+    pub fn update_passkey_credential(
+        &self,
+        id: &str,
+        credential_json: &str,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+        conn.execute(
+            "UPDATE passkey_credentials SET credential_json = ?, last_used_at = ? WHERE id = ?",
+            params![credential_json, now, id],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a passkey credential (owned by user_id).
+    pub fn delete_passkey_credential(
+        &self,
+        id: &str,
+        user_id: &str,
+    ) -> Result<bool, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let deleted = conn.execute(
+            "DELETE FROM passkey_credentials WHERE id = ? AND user_id = ?",
+            params![id, user_id],
+        )?;
+        Ok(deleted > 0)
+    }
+
+    /// Store an ephemeral passkey challenge.
+    pub fn store_passkey_challenge(
+        &self,
+        challenge_id: &str,
+        user_id: Option<&str>,
+        email: &str,
+        challenge_type: &str,
+        state_json: &str,
+        expires_at: i64,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO passkey_challenges (challenge_id, user_id, email, challenge_type, state_json, expires_at, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params![challenge_id, user_id, email, challenge_type, state_json, expires_at, now],
+        )?;
+        Ok(())
+    }
+
+    /// Retrieve and delete a passkey challenge (one-time use).
+    pub fn get_passkey_challenge(
+        &self,
+        challenge_id: &str,
+    ) -> Result<Option<PasskeyChallengeInfo>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+
+        let result: Option<PasskeyChallengeInfo> = conn
+            .query_row(
+                "SELECT challenge_id, user_id, email, challenge_type, state_json, expires_at, created_at \
+                 FROM passkey_challenges WHERE challenge_id = ? AND expires_at > ?",
+                params![challenge_id, now],
+                |row| {
+                    Ok(PasskeyChallengeInfo {
+                        challenge_id: row.get(0)?,
+                        user_id: row.get(1)?,
+                        email: row.get(2)?,
+                        challenge_type: row.get(3)?,
+                        state_json: row.get(4)?,
+                        expires_at: row.get(5)?,
+                        created_at: row.get(6)?,
+                    })
+                },
+            )
+            .optional()?;
+
+        if result.is_some() {
+            conn.execute(
+                "DELETE FROM passkey_challenges WHERE challenge_id = ?",
+                [challenge_id],
+            )?;
+        }
+
+        Ok(result)
+    }
+
+    /// Clean up expired passkey challenges.
+    pub fn cleanup_expired_passkey_challenges(&self) -> Result<usize, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+        let deleted = conn.execute("DELETE FROM passkey_challenges WHERE expires_at < ?", [now])?;
+        Ok(deleted)
+    }
 }
 
 // ===== Helper functions =====
@@ -1867,6 +2106,13 @@ fn generate_secure_token() -> String {
     let mut rng = rand::thread_rng();
     let bytes: Vec<u8> = (0..32).map(|_| rng.r#gen()).collect();
     base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes)
+}
+
+/// Generate a 6-digit verification code (zero-padded)
+fn generate_verification_code() -> String {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    format!("{:06}", rng.gen_range(0..1_000_000u32))
 }
 
 /// Generate a session code in XXXXXXXX-XXXXXXXX format
@@ -1931,9 +2177,10 @@ mod tests {
         let email = "test@example.com";
         let expires = Utc::now() + chrono::Duration::hours(1);
 
-        // Create token
-        let token = repo.create_magic_token(email, expires).unwrap();
+        // Create token (now returns (token, code))
+        let (token, code) = repo.create_magic_token(email, expires).unwrap();
         assert!(!token.is_empty());
+        assert_eq!(code.len(), 6);
 
         // Verify token
         let verified_email = repo.verify_magic_token(&token).unwrap();
@@ -1942,6 +2189,23 @@ mod tests {
         // Token should be consumed (can't verify again)
         let second_verify = repo.verify_magic_token(&token).unwrap();
         assert!(second_verify.is_none());
+    }
+
+    #[test]
+    fn test_magic_code_flow() {
+        let repo = setup_test_db();
+        let email = "code@example.com";
+        let expires = Utc::now() + chrono::Duration::hours(1);
+
+        let (_token, code) = repo.create_magic_token(email, expires).unwrap();
+
+        // Verify by code + email
+        let verified = repo.verify_magic_code(&code, email).unwrap();
+        assert_eq!(verified, Some(email.to_string()));
+
+        // Code should be consumed
+        let second = repo.verify_magic_code(&code, email).unwrap();
+        assert!(second.is_none());
     }
 
     #[test]

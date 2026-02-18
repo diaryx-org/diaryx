@@ -5,7 +5,7 @@ use axum::{
     routing::get,
 };
 use diaryx_sync_server::{
-    auth::{AuthExtractor, MagicLinkService},
+    auth::{AuthExtractor, MagicLinkService, PasskeyService},
     blob_store::{BlobStore, build_blob_store, build_sites_store},
     config::Config,
     db::{AuthRepo, init_database},
@@ -70,6 +70,11 @@ async fn main() {
     let repo = Arc::new(AuthRepo::new(conn));
     let magic_link_service = Arc::new(MagicLinkService::new(repo.clone(), config.clone()));
     let email_service = Arc::new(EmailService::new(config.clone()));
+    let passkey_service = Arc::new(PasskeyService::new(
+        repo.clone(),
+        config.clone(),
+        magic_link_service.clone(),
+    ));
     let auth_extractor = AuthExtractor::new(repo.clone());
     let blob_store: Arc<dyn BlobStore> = match build_blob_store(config.as_ref()).await {
         Ok(store) => {
@@ -122,6 +127,7 @@ async fn main() {
         magic_link_service,
         email_service,
         repo: repo.clone(),
+        passkey_service,
         workspaces_dir: Some(workspaces_dir.clone()),
         blob_store: blob_store.clone(),
     };
@@ -249,7 +255,8 @@ async fn main() {
             let _ = cleanup_repo.cleanup_expired_magic_tokens();
             let _ = cleanup_repo.cleanup_expired_sessions();
             let _ = cleanup_repo.cleanup_expired_share_sessions();
-            info!("Cleaned up expired tokens, sessions, and share sessions");
+            let _ = cleanup_repo.cleanup_expired_passkey_challenges();
+            info!("Cleaned up expired tokens, sessions, share sessions, and passkey challenges");
         }
     });
 

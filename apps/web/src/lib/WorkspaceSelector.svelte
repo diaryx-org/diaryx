@@ -324,6 +324,8 @@
             </div>
             {#if authState.isAuthenticated && canCreateServer}
               <p class="text-[10px] text-muted-foreground mt-1 px-1">Creates a synced workspace</p>
+            {:else if authState.isAuthenticated && authState.tier !== "plus"}
+              <p class="text-[10px] text-muted-foreground mt-1 px-1">Creates a local workspace — <a href="#billing" class="underline" onclick={(e) => { e.preventDefault(); open = false; document.querySelector('[data-settings-tab="billing"]')?.dispatchEvent(new Event('click')); }}>upgrade to Plus</a> to sync</p>
             {:else if authState.isAuthenticated}
               <p class="text-[10px] text-muted-foreground mt-1 px-1">Creates a local workspace (synced limit reached)</p>
             {/if}

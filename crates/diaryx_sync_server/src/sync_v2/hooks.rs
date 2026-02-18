@@ -16,10 +16,13 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
 use crate::auth::validate_token;
-use crate::db::AuthRepo;
+use crate::db::{AuthRepo, UserTier};
 
 // Re-export AuthenticatedUser for use by other sync_server modules
 pub use diaryx_sync::protocol::AuthenticatedUser;
+
+/// Maximum number of guests per share session workspace.
+const MAX_SESSION_GUESTS: usize = 5;
 
 /// Cloud sync hook delegate providing JWT auth and attachment reconciliation.
 pub struct CloudSyncHook {
@@ -31,6 +34,8 @@ pub struct CloudSyncHook {
     session_to_workspace: Arc<RwLock<HashMap<String, String>>>,
     /// Debounced workspace attachment reconciliation timers.
     attachment_reconcile_tasks: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
+    /// Guest count per workspace (keyed by workspace_id).
+    guest_counts: Arc<RwLock<HashMap<String, usize>>>,
 }
 
 impl CloudSyncHook {
@@ -45,6 +50,7 @@ impl CloudSyncHook {
             storage_cache,
             session_to_workspace,
             attachment_reconcile_tasks: Arc::new(Mutex::new(HashMap::new())),
+            guest_counts: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -74,6 +80,14 @@ impl CloudSyncHook {
                 workspace_id
             ));
         }
+
+        // Sync requires Plus subscription
+        match self.repo.get_user_tier(&auth.user.id) {
+            Ok(UserTier::Plus) => {}
+            Ok(UserTier::Free) => return Err("Sync requires a Plus subscription".into()),
+            Err(e) => return Err(format!("Failed to check user tier: {}", e)),
+        }
+
         let workspace_id = workspace_id.to_string();
 
         Ok(AuthenticatedUser {
@@ -99,6 +113,13 @@ impl CloudSyncHook {
             .get_share_session(&session_code)
             .map_err(|e| format!("Failed to get session: {}", e))?
             .ok_or("Session not found")?;
+
+        // Verify session owner still has Plus subscription
+        match self.repo.get_user_tier(&session.owner_user_id) {
+            Ok(UserTier::Plus) => {}
+            Ok(UserTier::Free) => return Err("Session owner's subscription has expired".into()),
+            Err(e) => return Err(format!("Failed to check session owner tier: {}", e)),
+        }
 
         // Verify this document belongs to the session's workspace
         if doc_type.workspace_id() != session.workspace_id {
@@ -178,6 +199,18 @@ impl SyncHookDelegate for CloudSyncHook {
 
             match self.authenticate_session(session_code, &guest_id, doc_type) {
                 Ok(user) => {
+                    // Enforce guest limit per workspace
+                    let count = self
+                        .guest_counts
+                        .read()
+                        .await
+                        .get(&user.workspace_id)
+                        .copied()
+                        .unwrap_or(0);
+                    if count >= MAX_SESSION_GUESTS {
+                        return Err(format!("Guest limit reached (max {})", MAX_SESSION_GUESTS));
+                    }
+
                     info!(
                         "Authenticated guest {} for session {}",
                         guest_id, session_code,
@@ -203,5 +236,26 @@ impl SyncHookDelegate for CloudSyncHook {
     async fn on_workspace_changed(&self, workspace_id: &str) {
         self.schedule_workspace_attachment_reconcile(workspace_id.to_string())
             .await;
+    }
+
+    async fn on_peer_joined_extra(&self, doc_id: &str, user_id: &str, _peer_count: usize) {
+        if user_id.starts_with("guest:") && doc_id.starts_with("workspace:") {
+            let workspace_id = &doc_id["workspace:".len()..];
+            let mut counts = self.guest_counts.write().await;
+            *counts.entry(workspace_id.to_string()).or_insert(0) += 1;
+        }
+    }
+
+    async fn on_peer_left_extra(&self, doc_id: &str, user_id: &str, _peer_count: usize) {
+        if user_id.starts_with("guest:") && doc_id.starts_with("workspace:") {
+            let workspace_id = &doc_id["workspace:".len()..];
+            let mut counts = self.guest_counts.write().await;
+            if let Some(count) = counts.get_mut(workspace_id) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    counts.remove(workspace_id);
+                }
+            }
+        }
     }
 }

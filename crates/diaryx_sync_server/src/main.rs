@@ -122,6 +122,9 @@ async fn main() {
     let sync_v2_state = Arc::new(sync_v2_server.state());
     let sync_v2_router = sync_v2_server.into_router_at("/sync2");
 
+    // Create shared rate limiter
+    let rate_limiter = diaryx_sync_server::rate_limit::RateLimiter::new();
+
     // Create handler states
     let auth_state = diaryx_sync_server::handlers::auth::AuthState {
         magic_link_service,
@@ -139,6 +142,7 @@ async fn main() {
         snapshot_upload_max_bytes: config.snapshot_upload_max_bytes,
         attachment_incremental_sync_enabled: config.attachment_incremental_sync_enabled,
         admin_secret: config.admin_secret.clone(),
+        rate_limiter: rate_limiter.clone(),
     };
 
     let sessions_state = diaryx_sync_server::handlers::sessions::SessionsState {
@@ -164,6 +168,7 @@ async fn main() {
         sites_base_url: config.sites_base_url.clone(),
         publish_lock: publish_lock.clone(),
         kv_client,
+        rate_limiter: rate_limiter.clone(),
     };
 
     // Create Stripe state (if configured)
@@ -565,6 +570,64 @@ async fn main() {
                             }
                         }
                     }
+                }
+            }
+        });
+    }
+
+    // Start rate limiter cleanup task
+    {
+        let rl = rate_limiter.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(300));
+            loop {
+                interval.tick().await;
+                rl.cleanup(std::time::Duration::from_secs(3600));
+            }
+        });
+    }
+
+    // Start git GC background task
+    {
+        let gc_workspaces_dir = workspaces_dir.clone();
+        let gc_interval_hours = config.git_gc_interval_hours;
+        info!("Git GC: interval={}h", gc_interval_hours);
+        tokio::spawn(async move {
+            let interval_duration =
+                tokio::time::Duration::from_secs(u64::from(gc_interval_hours) * 3600);
+            let mut interval = tokio::time::interval(interval_duration);
+            // Skip the first immediate tick
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                info!("Git GC: starting sweep");
+                let dir = gc_workspaces_dir.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    let mut count = 0u32;
+                    let entries = match std::fs::read_dir(&dir) {
+                        Ok(e) => e,
+                        Err(err) => {
+                            error!("Git GC: failed to read workspaces dir: {}", err);
+                            return 0;
+                        }
+                    };
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.extension().is_some_and(|ext| ext == "git") && path.is_dir() {
+                            if let Err(err) = diaryx_sync_server::git_ops::gc_workspace_repo(&path)
+                            {
+                                warn!("Git GC failed for {}: {}", path.display(), err);
+                            } else {
+                                count += 1;
+                            }
+                        }
+                    }
+                    count
+                })
+                .await;
+                match result {
+                    Ok(count) => info!("Git GC: sweep complete ({} repos)", count),
+                    Err(err) => error!("Git GC: task panicked: {}", err),
                 }
             }
         });

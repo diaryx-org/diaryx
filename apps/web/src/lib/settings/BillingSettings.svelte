@@ -116,9 +116,11 @@
       <div class="space-y-2 text-sm">
         <p class="font-medium">Plus includes:</p>
         <ul class="space-y-1 text-muted-foreground">
+          <li class="flex items-center gap-2"><Check class="size-3 text-primary" /> Multi-device sync</li>
+          <li class="flex items-center gap-2"><Check class="size-3 text-primary" /> Live collaboration sessions (up to 5 guests)</li>
+          <li class="flex items-center gap-2"><Check class="size-3 text-primary" /> Published websites (up to 5, 10 audiences each)</li>
           <li class="flex items-center gap-2"><Check class="size-3 text-primary" /> 10 workspaces</li>
           <li class="flex items-center gap-2"><Check class="size-3 text-primary" /> 2 GiB attachment storage</li>
-          <li class="flex items-center gap-2"><Check class="size-3 text-primary" /> 5 published sites</li>
         </ul>
       </div>
       <Button

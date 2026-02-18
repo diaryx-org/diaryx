@@ -6,6 +6,7 @@ use crate::publish::{
     PublishLock, create_signed_token, publish_workspace_to_r2, release_publish_lock,
     try_acquire_publish_lock, write_site_meta,
 };
+use crate::rate_limit::RateLimiter;
 use crate::sync_v2::SyncV2State;
 use axum::{
     Json, Router,
@@ -28,6 +29,7 @@ pub struct SitesState {
     pub sites_base_url: String,
     pub publish_lock: PublishLock,
     pub kv_client: Option<Arc<CloudflareKvClient>>,
+    pub rate_limiter: RateLimiter,
 }
 
 #[derive(Debug, Serialize)]
@@ -359,6 +361,21 @@ async fn trigger_publish(
     RequireAuth(auth): RequireAuth,
     Path(workspace_id): Path<String>,
 ) -> Response {
+    // Rate limit: 10 per hour
+    if let Err(retry_after) = state.rate_limiter.check(
+        &auth.user.id,
+        "publish",
+        10,
+        std::time::Duration::from_secs(3600),
+    ) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            [("Retry-After", retry_after.to_string())],
+            "Rate limit exceeded",
+        )
+            .into_response();
+    }
+
     if let Err(resp) = ensure_workspace_owner(&state, &auth.user.id, &workspace_id) {
         return resp;
     }

@@ -20,7 +20,7 @@
   import { workspaceStore } from '@/models/stores/workspaceStore.svelte';
   import { sitePublishingStore } from '@/models/stores/sitePublishingStore.svelte';
   import { showError, showInfo, showSuccess } from '@/models/services/toastService';
-  import { getServerUrl } from '$lib/auth';
+  import { getServerUrl, getAuthState, createCheckoutSession } from '$lib/auth';
 
   interface Props {
     onOpenSyncWizard?: () => void;
@@ -277,6 +277,28 @@
   {:else if isLoading && !isConfigured}
     <div class="flex items-center justify-center py-8">
       <Loader2 class="size-5 animate-spin text-muted-foreground" />
+    </div>
+  {:else if !isConfigured && getAuthState().tier !== "plus"}
+    <div class="text-center space-y-3 py-8">
+      <Globe class="size-8 mx-auto text-muted-foreground" />
+      <h3 class="font-medium text-sm">Publishing Requires Plus</h3>
+      <p class="text-xs text-muted-foreground">
+        Upgrade to publish your workspace as a website.
+      </p>
+      <Button
+        variant="default"
+        size="sm"
+        onclick={async () => {
+          try {
+            const url = await createCheckoutSession();
+            window.location.href = url;
+          } catch {
+            // handled by auth layer
+          }
+        }}
+      >
+        Upgrade to Plus — $5/month
+      </Button>
     </div>
   {:else if !isConfigured}
     <div class="space-y-3">

@@ -224,6 +224,15 @@ pub async fn publish_workspace_to_r2(
         "publish: final audiences to build"
     );
 
+    const MAX_AUDIENCE_TAGS: usize = 10;
+    if audiences_to_build.len() > MAX_AUDIENCE_TAGS {
+        return Err(format!(
+            "Too many audience tags ({}, max {})",
+            audiences_to_build.len(),
+            MAX_AUDIENCE_TAGS
+        ));
+    }
+
     if audiences_to_build.is_empty() {
         warn!(
             workspace_id,

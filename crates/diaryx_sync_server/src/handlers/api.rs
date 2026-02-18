@@ -1,6 +1,7 @@
 use crate::auth::RequireAuth;
 use crate::blob_store::{BlobStore, MultipartCompletedPart};
 use crate::db::{AttachmentUploadSession, AuthRepo};
+use crate::rate_limit::RateLimiter;
 use crate::sync_v2::{SnapshotImportMode, SyncV2State};
 use axum::{
     Router,
@@ -13,6 +14,7 @@ use axum::{
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tracing::{error, info, warn};
 
@@ -28,6 +30,7 @@ pub struct ApiState {
     pub snapshot_upload_max_bytes: usize,
     pub attachment_incremental_sync_enabled: bool,
     pub admin_secret: Option<String>,
+    pub rate_limiter: RateLimiter,
 }
 
 /// Server status response
@@ -394,6 +397,23 @@ async fn get_workspace_snapshot(
     axum::extract::Path(workspace_id): axum::extract::Path<String>,
     Query(query): Query<SnapshotQuery>,
 ) -> impl IntoResponse {
+    // Rate limit: 5 per hour
+    if let Err(retry_after) = state.rate_limiter.check(
+        &auth.user.id,
+        "snapshot_export",
+        5,
+        Duration::from_secs(3600),
+    ) {
+        let mut headers = HeaderMap::new();
+        headers.insert("Retry-After", retry_after.to_string().parse().unwrap());
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            headers,
+            "Rate limit exceeded",
+        )
+            .into_response();
+    }
+
     let workspace = match state.repo.get_workspace(&workspace_id) {
         Ok(Some(w)) => w,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
@@ -406,10 +426,10 @@ async fn get_workspace_snapshot(
     }
 
     let include_attachments = query.include_attachments.unwrap_or(true);
-    let snapshot = match state
+    let temp_file = match state
         .sync_v2
         .store
-        .export_snapshot_zip(
+        .export_snapshot_zip_to_file(
             &workspace_id,
             &auth.user.id,
             include_attachments,
@@ -417,12 +437,24 @@ async fn get_workspace_snapshot(
         )
         .await
     {
-        Ok(bytes) => bytes,
+        Ok(f) => f,
         Err(err) => {
             error!("Snapshot export failed for {}: {:?}", workspace_id, err);
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
+
+    // Stream the temp file — on Unix, NamedTempFile drop unlinks the file but
+    // the open fd keeps it readable until the stream completes.
+    let file = match tokio::fs::File::open(temp_file.path()).await {
+        Ok(f) => f,
+        Err(err) => {
+            error!("Failed to open temp snapshot file: {}", err);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let stream = tokio_util::io::ReaderStream::new(file);
+    let body = axum::body::Body::from_stream(stream);
 
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, "application/zip".parse().unwrap());
@@ -436,7 +468,11 @@ async fn get_workspace_snapshot(
         .unwrap(),
     );
 
-    (headers, snapshot).into_response()
+    // Keep temp_file alive until response is built — the Body holds an open fd,
+    // so the file data remains accessible even after unlink.
+    let _keep = temp_file;
+
+    (headers, body).into_response()
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -458,6 +494,23 @@ async fn upload_workspace_snapshot(
     Query(query): Query<SnapshotUploadQuery>,
     request: Request,
 ) -> impl IntoResponse {
+    // Rate limit: 5 per hour
+    if let Err(retry_after) = state.rate_limiter.check(
+        &auth.user.id,
+        "snapshot_import",
+        5,
+        Duration::from_secs(3600),
+    ) {
+        let mut headers = HeaderMap::new();
+        headers.insert("Retry-After", retry_after.to_string().parse().unwrap());
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            headers,
+            "Rate limit exceeded",
+        )
+            .into_response();
+    }
+
     let workspace = match state.repo.get_workspace(&workspace_id) {
         Ok(Some(w)) => w,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
@@ -1190,6 +1243,22 @@ async fn get_workspace_history(
     axum::extract::Path(workspace_id): axum::extract::Path<String>,
     Query(query): Query<HistoryQuery>,
 ) -> impl IntoResponse {
+    // Rate limit: 60 per minute
+    if let Err(retry_after) =
+        state
+            .rate_limiter
+            .check(&auth.user.id, "history", 60, Duration::from_secs(60))
+    {
+        let mut headers = HeaderMap::new();
+        headers.insert("Retry-After", retry_after.to_string().parse().unwrap());
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            headers,
+            "Rate limit exceeded",
+        )
+            .into_response();
+    }
+
     let workspace = match state.repo.get_workspace(&workspace_id) {
         Ok(Some(w)) => w,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),

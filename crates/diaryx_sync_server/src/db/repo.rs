@@ -37,8 +37,8 @@ impl UserTier {
         match self {
             UserTier::Free => TierDefaults {
                 attachment_limit_bytes: 200 * 1024 * 1024, // 200 MiB
-                workspace_limit: 1,
-                published_site_limit: 1,
+                workspace_limit: 0,
+                published_site_limit: 0,
             },
             UserTier::Plus => TierDefaults {
                 attachment_limit_bytes: 2 * 1024 * 1024 * 1024, // 2 GiB
@@ -2566,28 +2566,32 @@ mod tests {
         let repo = setup_test_db();
         let user_id = repo.get_or_create_user("limit-test@example.com").unwrap();
 
-        // Default limit is 1 (Free tier)
+        // Default limit is 0 (Free tier — sync requires Plus)
         let limit = repo.get_effective_workspace_limit(&user_id).unwrap();
         assert_eq!(limit, UserTier::Free.defaults().workspace_limit);
+        assert_eq!(limit, 0);
+
+        // Free user: workspace creation should fail immediately
+        let result = repo.create_workspace(&user_id, "first").unwrap();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Workspace limit reached"));
+
+        // Upgrade to Plus (limit = 10)
+        repo.set_user_tier(&user_id, UserTier::Plus).unwrap();
+        let limit = repo.get_effective_workspace_limit(&user_id).unwrap();
+        assert_eq!(limit, UserTier::Plus.defaults().workspace_limit);
 
         // First workspace should succeed
         let result = repo.create_workspace(&user_id, "first").unwrap();
         assert!(result.is_ok());
 
-        // Second workspace should fail (limit = 1)
-        let result = repo.create_workspace(&user_id, "second").unwrap();
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Workspace limit reached"));
-
-        // Bump limit to 3
+        // Override limit to 3
         repo.set_user_workspace_limit(&user_id, Some(3)).unwrap();
         assert_eq!(repo.get_effective_workspace_limit(&user_id).unwrap(), 3);
 
-        // Now second workspace should succeed
+        // Second and third should succeed
         let result = repo.create_workspace(&user_id, "second").unwrap();
         assert!(result.is_ok());
-
-        // Third workspace should succeed
         let result = repo.create_workspace(&user_id, "third").unwrap();
         assert!(result.is_ok());
 

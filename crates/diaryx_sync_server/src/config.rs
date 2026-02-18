@@ -24,6 +24,8 @@ pub struct Config {
     pub git_quiescence_minutes: u32,
     /// Git auto-commit: max hours before forcing a commit even with activity (default: 24)
     pub git_max_staleness_hours: u32,
+    /// Git GC: interval in hours between `git gc --auto` sweeps (default: 24)
+    pub git_gc_interval_hours: u32,
     /// R2 blob storage configuration for attachment payloads
     pub r2: R2Config,
     /// Snapshot upload max size in bytes (default: 1 GiB)
@@ -141,6 +143,11 @@ impl Config {
             .parse()
             .unwrap_or(24);
 
+        let git_gc_interval_hours = env::var("GIT_GC_INTERVAL_HOURS")
+            .unwrap_or_else(|_| "24".to_string())
+            .parse()
+            .unwrap_or(24);
+
         let r2 = R2Config {
             bucket: env::var("R2_BUCKET").unwrap_or_else(|_| "diaryx-user-data".to_string()),
             account_id: env::var("R2_ACCOUNT_ID").unwrap_or_default(),
@@ -217,6 +224,7 @@ impl Config {
             cors_origins,
             git_quiescence_minutes,
             git_max_staleness_hours,
+            git_gc_interval_hours,
             r2,
             snapshot_upload_max_bytes,
             attachment_incremental_sync_enabled,

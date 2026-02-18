@@ -31,7 +31,7 @@
   } from "@/models/services/shareService";
   import { workspaceStore } from "@/models/stores/workspaceStore.svelte";
   import { entryStore } from "@/models/stores/entryStore.svelte";
-  import { getAuthState } from "$lib/auth";
+  import { getAuthState, createCheckoutSession } from "$lib/auth";
   import type { Api } from "$lib/backend/api";
   import { toast } from "svelte-sonner";
 
@@ -295,24 +295,46 @@
       </div>
 
       <!-- Host Session Button -->
-      <Button
-        variant="default"
-        class="w-full"
-        onclick={handleCreateSession}
-        disabled={!authState.isAuthenticated || isCreating || connecting}
-      >
-        {#if isCreating || connecting}
-          <Loader2 class="size-4 mr-2 animate-spin" />
-          Creating session...
-        {:else}
-          <Link class="size-4 mr-2" />
-          Host a Session
+      {#if authState.isAuthenticated && authState.tier !== "plus"}
+        <div class="text-center space-y-2 py-1">
+          <p class="text-xs text-muted-foreground">
+            Hosting sessions requires Plus.
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            onclick={async () => {
+              try {
+                const url = await createCheckoutSession();
+                window.location.href = url;
+              } catch {
+                toast.error("Failed to start checkout");
+              }
+            }}
+          >
+            Upgrade to Plus — $5/month
+          </Button>
+        </div>
+      {:else}
+        <Button
+          variant="default"
+          class="w-full"
+          onclick={handleCreateSession}
+          disabled={!authState.isAuthenticated || isCreating || connecting}
+        >
+          {#if isCreating || connecting}
+            <Loader2 class="size-4 mr-2 animate-spin" />
+            Creating session...
+          {:else}
+            <Link class="size-4 mr-2" />
+            Host a Session
+          {/if}
+        </Button>
+        {#if !authState.isAuthenticated}
+          <p class="text-xs text-muted-foreground text-center">
+            Sign in from Settings to host sessions.
+          </p>
         {/if}
-      </Button>
-      {#if !authState.isAuthenticated}
-        <p class="text-xs text-muted-foreground text-center">
-          Sign in from Settings to host sessions.
-        </p>
       {/if}
 
       <!-- Divider -->

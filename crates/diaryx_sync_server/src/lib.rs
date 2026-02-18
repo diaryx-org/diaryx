@@ -36,6 +36,7 @@ pub mod git_ops;
 pub mod handlers;
 pub mod kv_client;
 pub mod publish;
+pub mod rate_limit;
 pub mod sync_v2;
 
 pub use config::Config;

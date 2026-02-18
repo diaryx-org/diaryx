@@ -29,6 +29,8 @@
     isSyncEnabled,
     getWorkspaces,
     getServerUrl,
+    getAuthState,
+    createCheckoutSession,
   } from "$lib/auth";
   import {
     getLocalWorkspaces,
@@ -87,7 +89,7 @@
   }: Props = $props();
 
   // Screen tracking
-  type Screen = 'auth' | 'options';
+  type Screen = 'auth' | 'upgrade' | 'options';
   let screen = $state<Screen>('auth');
 
   // Auth screen state
@@ -136,6 +138,9 @@
   let passkeySupported = $state(false);
   let isAuthenticatingPasskey = $state(false);
 
+  // Upgrade state
+  let isUpgrading = $state(false);
+
   // Error state
   let error = $state<string | null>(null);
 
@@ -149,7 +154,7 @@
   // Skip auth screen if user is already signed in (e.g. opened from Sync settings)
   $effect(() => {
     if (open && isAuthenticated() && screen === 'auth') {
-      handlePostAuth().then(() => { screen = 'options'; });
+      handlePostAuth().then((s) => { screen = s; });
     }
   });
 
@@ -180,8 +185,7 @@
       localStorage.setItem("diaryx_device_name", deviceName.trim() || getDefaultDeviceName());
       await authenticateWithPasskey(email.trim() || undefined);
       email = "";
-      await handlePostAuth();
-      screen = 'options';
+      screen = await handlePostAuth();
     } catch (e) {
       error = e instanceof Error ? e.message : "Passkey authentication failed";
     } finally {
@@ -313,8 +317,7 @@
       const savedDeviceName = localStorage.getItem("diaryx_device_name") || undefined;
       await verifyMagicLink(token.trim(), savedDeviceName);
 
-      await handlePostAuth();
-      screen = 'options';
+      screen = await handlePostAuth();
     } catch (e) {
       error = e instanceof Error ? e.message : "Verification failed";
     }
@@ -324,12 +327,18 @@
    * Populate the options screen after authentication.
    * Never auto-starts initialization — always shows the options screen.
    */
-  async function handlePostAuth() {
+  async function handlePostAuth(): Promise<Screen> {
     // Guard: if sync is already set up and server has workspaces, skip
     if (isSyncEnabled() && getWorkspaces().length > 0) {
       handleClose();
       onComplete?.();
-      return;
+      return 'options';
+    }
+
+    // Free users need Plus to sync — show upgrade screen
+    const authState = getAuthState();
+    if (authState.tier !== 'plus') {
+      return 'upgrade';
     }
 
     const serverWs = getWorkspaces();
@@ -353,6 +362,8 @@
       // Nothing exists — default to skip (user can opt into creating a synced workspace)
       postAuthAction = 'skip';
     }
+
+    return 'options';
   }
 
   /**
@@ -808,7 +819,7 @@
 
   // Go back to auth screen
   function handleBack() {
-    if (screen === 'options') {
+    if (screen === 'options' || screen === 'upgrade') {
       screen = 'auth';
       error = null;
     }
@@ -886,6 +897,9 @@
         {#if screen === 'auth'}
           <Mail class="size-5" />
           Sign In to Sync
+        {:else if screen === 'upgrade'}
+          <Settings2 class="size-5" />
+          Sync Requires Plus
         {:else if isInitializing}
           <Loader2 class="size-5 animate-spin" />
           Setting Up Sync
@@ -901,6 +915,8 @@
           {:else}
             Enter your email to sync across devices.
           {/if}
+        {:else if screen === 'upgrade'}
+          Upgrade your account to enable sync.
         {:else if isInitializing}
           {syncStatusText ?? "Setting up..."}
         {:else if serverWorkspacesList.length > 0 && localWorkspaces.length > 0}
@@ -1025,8 +1041,7 @@
                   verificationSent = false;
                   stopMagicLinkDetection();
                   email = "";
-                  await handlePostAuth();
-                  screen = 'options';
+                  screen = await handlePostAuth();
                 }}
                 onError={(msg) => { error = msg; }}
               />
@@ -1052,6 +1067,47 @@
             {/if}
           </div>
         {/if}
+      {/if}
+
+      <!-- Screen: Upgrade required -->
+      {#if screen === 'upgrade'}
+        <div class="space-y-4 py-2">
+          <div class="text-center space-y-2">
+            <p class="text-sm text-muted-foreground">
+              Multi-device sync, live collaboration, and publishing are Plus features.
+            </p>
+          </div>
+          <Button
+            class="w-full"
+            onclick={async () => {
+              isUpgrading = true;
+              error = null;
+              try {
+                const url = await createCheckoutSession();
+                window.location.href = url;
+              } catch (e) {
+                error = e instanceof Error ? e.message : "Failed to start checkout";
+              } finally {
+                isUpgrading = false;
+              }
+            }}
+            disabled={isUpgrading}
+          >
+            {#if isUpgrading}
+              <Loader2 class="size-4 mr-2 animate-spin" />
+              Loading...
+            {:else}
+              Upgrade to Plus — $5/month
+            {/if}
+          </Button>
+          <button
+            type="button"
+            class="w-full text-sm text-muted-foreground hover:text-foreground transition-colors py-1"
+            onclick={() => { handleClose(); }}
+          >
+            Maybe later
+          </button>
+        </div>
       {/if}
 
       <!-- Screen 2: Options -->
@@ -1229,7 +1285,7 @@
 
     <!-- Footer with navigation buttons -->
     <div class="flex justify-between pt-4 border-t">
-      {#if screen === 'options' && !isInitializing}
+      {#if (screen === 'options' || screen === 'upgrade') && !isInitializing}
         <Button variant="ghost" size="sm" onclick={handleBack}>
           <ArrowLeft class="size-4 mr-1" />
           Back

@@ -3,6 +3,7 @@
 //! Thin wrappers around `diaryx_core::crdt::git` that handle storage lookup,
 //! repo open/init, and CRDT loading for a given workspace ID.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use diaryx_core::crdt::git::{
@@ -55,6 +56,27 @@ pub fn commit_workspace_by_id(
         &options,
         &mut tracker,
     )
+}
+
+/// Run `git gc --auto` on a bare workspace repo.
+///
+/// Skips silently if the repo path doesn't exist. Returns an error message
+/// string on failure (non-fatal for callers).
+pub fn gc_workspace_repo(repo_path: &Path) -> Result<(), String> {
+    if !repo_path.exists() {
+        return Ok(());
+    }
+    let output = std::process::Command::new("git")
+        .arg("gc")
+        .arg("--auto")
+        .env("GIT_DIR", repo_path)
+        .output()
+        .map_err(|e| format!("Failed to run git gc: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("git gc failed: {}", stderr));
+    }
+    Ok(())
 }
 
 /// Restore a workspace's CRDT state from a specific git commit.

@@ -16,7 +16,7 @@ pub use diaryx_sync::storage::StorageCache;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
-use std::io::{Cursor, Read, Write};
+use std::io::{BufWriter, Cursor, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
@@ -367,6 +367,96 @@ impl WorkspaceStore {
 
         let cursor = zip.finish()?;
         Ok(cursor.into_inner())
+    }
+
+    /// Export the workspace as a zip, writing to a temporary file instead of RAM.
+    ///
+    /// Returns a `NamedTempFile` whose file descriptor can be streamed.
+    /// On Unix the file is unlinked on drop but the open fd keeps it readable.
+    pub async fn export_snapshot_zip_to_file(
+        &self,
+        workspace_id: &str,
+        user_id: &str,
+        include_attachments: bool,
+        blob_store: &dyn BlobStore,
+    ) -> Result<tempfile::NamedTempFile, SnapshotError> {
+        let storage = self
+            .storage_cache
+            .get_storage(workspace_id)
+            .map_err(SnapshotError::Storage)?;
+
+        let workspace_doc_name = format!("workspace:{}", workspace_id);
+        let workspace = WorkspaceCrdt::load_with_name(storage.clone(), workspace_doc_name)
+            .map_err(|e| SnapshotError::Storage(e.to_string()))?;
+        let body_docs = BodyDocManager::new(storage);
+
+        let result = materialize_workspace(&workspace, &body_docs, workspace_id);
+
+        for skipped in &result.skipped {
+            if skipped.reason == diaryx_core::crdt::materialize::SkipReason::UnresolvedPath {
+                warn!(
+                    "Snapshot export: skipping unresolved path for {}",
+                    skipped.key
+                );
+            }
+        }
+
+        let temp_file = tempfile::NamedTempFile::new().map_err(SnapshotError::Zip)?;
+        let buf_writer = BufWriter::new(temp_file.reopen().map_err(SnapshotError::Zip)?);
+        let mut zip = ZipWriter::new(buf_writer);
+        let markdown_options = FileOptions::<()>::default()
+            .compression_method(CompressionMethod::Deflated)
+            .unix_permissions(0o644);
+        let binary_options = FileOptions::<()>::default()
+            .compression_method(CompressionMethod::Stored)
+            .unix_permissions(0o644);
+
+        let mut unique_attachments: HashSet<String> = HashSet::new();
+        let mut attachment_requests: Vec<(String, String)> = Vec::new();
+
+        for file in result.files {
+            let normalized = normalize_workspace_path(&file.path).ok_or_else(|| {
+                SnapshotError::Parse(format!("Invalid file path while exporting: {}", file.path))
+            })?;
+            zip.start_file(normalized.clone(), markdown_options)?;
+            zip.write_all(file.content.as_bytes())?;
+
+            if include_attachments {
+                for attachment in file.metadata.attachments {
+                    if attachment.deleted || attachment.hash.is_empty() {
+                        continue;
+                    }
+                    if let Some(path) = normalize_attachment_path(&normalized, &attachment.path)
+                        && unique_attachments.insert(path.clone())
+                    {
+                        attachment_requests.push((path, attachment.hash));
+                    }
+                }
+            }
+        }
+
+        if include_attachments {
+            for (attachment_path, hash) in attachment_requests {
+                let key = blob_store.blob_key(user_id, &hash);
+                let bytes = blob_store.get(&key).await.map_err(SnapshotError::Blob)?;
+
+                match bytes {
+                    Some(payload) => {
+                        zip.start_file(attachment_path, binary_options)?;
+                        zip.write_all(&payload)?;
+                    }
+                    None => {
+                        warn!(
+                            "Snapshot export: missing blob for hash {} (workspace {})",
+                            hash, workspace_id
+                        );
+                    }
+                }
+            }
+        }
+
+        zip.finish()?;
+        Ok(temp_file)
     }
 
     /// Import a workspace snapshot zip into the CRDT store.

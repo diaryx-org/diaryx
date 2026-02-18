@@ -1,5 +1,5 @@
 use crate::auth::RequireAuth;
-use crate::db::AuthRepo;
+use crate::db::{AuthRepo, UserTier};
 use crate::sync_v2::SyncV2State;
 use axum::{
     Router,
@@ -81,6 +81,30 @@ async fn create_session(
             })),
         )
             .into_response();
+    }
+
+    // Hosting sessions requires Plus subscription
+    match state.repo.get_user_tier(&auth.user.id) {
+        Ok(UserTier::Plus) => {}
+        Ok(UserTier::Free) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "Hosting sessions requires a Plus subscription"
+                })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            tracing::error!("Failed to check user tier: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": "Failed to check subscription status"
+                })),
+            )
+                .into_response();
+        }
     }
 
     let workspace_id = req.workspace_id.clone();

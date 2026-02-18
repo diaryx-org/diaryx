@@ -13,6 +13,7 @@ use axum::{
 };
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -610,6 +611,8 @@ async fn upload_workspace_snapshot(
 
 #[derive(Debug, Deserialize)]
 struct InitAttachmentUploadRequest {
+    #[serde(default)]
+    entry_path: String,
     attachment_path: String,
     hash: String,
     size_bytes: u64,
@@ -634,6 +637,8 @@ struct AttachmentPartUploadResponse {
 
 #[derive(Debug, Deserialize)]
 struct CompleteAttachmentUploadRequest {
+    #[serde(default)]
+    entry_path: String,
     attachment_path: String,
     hash: String,
     size_bytes: u64,
@@ -667,8 +672,111 @@ fn parse_range_header(headers: &HeaderMap, total_size: u64) -> Option<(u64, u64)
     Some((start, end))
 }
 
+fn normalize_workspace_path(path: &str) -> Option<String> {
+    let mut normalized = PathBuf::new();
+
+    for component in Path::new(path).components() {
+        match component {
+            Component::Normal(part) => normalized.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+
+    if normalized.as_os_str().is_empty() {
+        None
+    } else {
+        Some(normalized.to_string_lossy().replace('\\', "/"))
+    }
+}
+
+fn normalize_attachment_path(file_path: &str, raw_attachment_path: &str) -> Option<String> {
+    fn normalize_attachment_path_once(
+        file_path: &Path,
+        raw_attachment_path: &str,
+    ) -> Option<String> {
+        let parsed = diaryx_core::link_parser::parse_link(raw_attachment_path);
+        let canonical = if parsed.path_type == diaryx_core::link_parser::PathType::Ambiguous {
+            let current_dir = file_path
+                .parent()
+                .and_then(|parent| parent.to_str())
+                .unwrap_or("");
+            let plain_path_looks_canonical = !current_dir.is_empty()
+                && parsed.path.starts_with(current_dir)
+                && parsed
+                    .path
+                    .as_bytes()
+                    .get(current_dir.len())
+                    .is_some_and(|ch| *ch == b'/');
+
+            if plain_path_looks_canonical {
+                diaryx_core::link_parser::to_canonical_with_link_format(
+                    &parsed,
+                    file_path,
+                    Some(diaryx_core::link_parser::LinkFormat::PlainCanonical),
+                )
+            } else {
+                diaryx_core::link_parser::to_canonical(&parsed, file_path)
+            }
+        } else {
+            diaryx_core::link_parser::to_canonical(&parsed, file_path)
+        };
+
+        normalize_workspace_path(&canonical)
+    }
+
+    let normalized_file_path = normalize_workspace_path(file_path);
+    let trimmed = raw_attachment_path.trim();
+
+    if normalized_file_path.is_none() {
+        if let Some(stripped) = trimmed.strip_prefix('/') {
+            return normalize_workspace_path(stripped);
+        }
+        return normalize_workspace_path(trimmed);
+    }
+
+    let file = Path::new(normalized_file_path.as_deref().unwrap_or(""));
+
+    if trimmed.starts_with('[') && trimmed.contains("](") && !trimmed.ends_with(')') {
+        if let Some(normalized) = normalize_attachment_path_once(file, &format!("{})", trimmed)) {
+            return Some(normalized);
+        }
+    }
+
+    normalize_attachment_path_once(file, trimmed)
+}
+
 fn hash_looks_like_sha256(hash: &str) -> bool {
     hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_attachment_path;
+
+    #[test]
+    fn normalize_attachment_path_handles_relative_nested_entry() {
+        let normalized = normalize_attachment_path("notes/day.md", "_attachments/a.png");
+        assert_eq!(normalized.as_deref(), Some("notes/_attachments/a.png"));
+    }
+
+    #[test]
+    fn normalize_attachment_path_handles_plain_canonical_nested_entry() {
+        let normalized = normalize_attachment_path("notes/day.md", "notes/_attachments/a.png");
+        assert_eq!(normalized.as_deref(), Some("notes/_attachments/a.png"));
+    }
+
+    #[test]
+    fn normalize_attachment_path_handles_markdown_root_link() {
+        let normalized = normalize_attachment_path("notes/day.md", "[a](/_attachments/a.png)");
+        assert_eq!(normalized.as_deref(), Some("_attachments/a.png"));
+    }
+
+    #[test]
+    fn normalize_attachment_path_falls_back_when_entry_path_invalid() {
+        let normalized = normalize_attachment_path("../notes/day.md", "_attachments/a.png");
+        assert_eq!(normalized.as_deref(), Some("_attachments/a.png"));
+    }
 }
 
 /// POST /api/workspaces/:workspace_id/attachments/uploads - init resumable upload.
@@ -697,6 +805,10 @@ async fn init_attachment_upload(
     {
         return StatusCode::BAD_REQUEST.into_response();
     }
+    let Some(attachment_path) = normalize_attachment_path(&body.entry_path, &body.attachment_path)
+    else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
 
     let part_size = body.part_size.unwrap_or(ATTACHMENT_PART_SIZE_DEFAULT);
     if part_size == 0 || part_size > 32 * 1024 * 1024 {
@@ -769,7 +881,7 @@ async fn init_attachment_upload(
         workspace_id: workspace_id.clone(),
         user_id: auth.user.id.clone(),
         blob_hash: body.hash,
-        attachment_path: body.attachment_path,
+        attachment_path,
         mime_type: body.mime_type,
         size_bytes: body.size_bytes,
         part_size,
@@ -905,6 +1017,10 @@ async fn complete_attachment_upload(
     if workspace.user_id != auth.user.id {
         return StatusCode::NOT_FOUND.into_response();
     }
+    let Some(attachment_path) = normalize_attachment_path(&body.entry_path, &body.attachment_path)
+    else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
 
     let session = match state.repo.get_attachment_upload_session(&upload_id) {
         Ok(Some(s)) => s,
@@ -923,7 +1039,7 @@ async fn complete_attachment_upload(
     if body.hash != session.blob_hash
         || body.size_bytes != session.size_bytes
         || body.mime_type != session.mime_type
-        || body.attachment_path != session.attachment_path
+        || attachment_path != session.attachment_path
     {
         return StatusCode::BAD_REQUEST.into_response();
     }

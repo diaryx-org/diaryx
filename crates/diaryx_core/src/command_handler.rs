@@ -14,7 +14,7 @@ use crate::error::{DiaryxError, Result};
 use crate::frontmatter;
 use crate::fs::AsyncFileSystem;
 use crate::link_parser;
-use crate::path_utils::normalize_sync_path;
+use crate::path_utils::{normalize_path, normalize_sync_path};
 
 #[cfg(feature = "crdt")]
 use crate::crdt::FileMetadata;
@@ -63,6 +63,42 @@ fn normalize_contents_path(base_dir: &Path, relative: &str, workspace_base: &Pat
         }
     }
     normalized.join("/")
+}
+
+/// Resolve an attachment reference into a workspace-relative storage path.
+///
+/// Handles markdown links, root-relative links, plain relative paths, and
+/// plain canonical paths that start with the current entry directory.
+fn resolve_attachment_storage_path(entry_path: &str, attachment_path: &str) -> PathBuf {
+    let entry = Path::new(entry_path);
+    let parsed = link_parser::parse_link(attachment_path);
+    let canonical = if parsed.path_type == link_parser::PathType::Ambiguous {
+        let current_dir = entry
+            .parent()
+            .and_then(|parent| parent.to_str())
+            .unwrap_or("");
+        let plain_path_looks_canonical = !current_dir.is_empty()
+            && parsed.path.starts_with(current_dir)
+            && parsed
+                .path
+                .as_bytes()
+                .get(current_dir.len())
+                .is_some_and(|ch| *ch == b'/');
+
+        if plain_path_looks_canonical {
+            link_parser::to_canonical_with_link_format(
+                &parsed,
+                entry,
+                Some(link_parser::LinkFormat::PlainCanonical),
+            )
+        } else {
+            link_parser::to_canonical(&parsed, entry)
+        }
+    } else {
+        link_parser::to_canonical(&parsed, entry)
+    };
+
+    normalize_path(Path::new(&canonical))
 }
 
 impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
@@ -2190,12 +2226,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 entry_path,
                 attachment_path,
             } => {
-                let entry = PathBuf::from(&entry_path);
-                let entry_dir = entry.parent().unwrap_or_else(|| Path::new("."));
-                // Parse markdown link to extract the actual path
-                let parsed = link_parser::parse_link(&attachment_path);
-                let canonical = link_parser::to_canonical(&parsed, &entry);
-                let full_path = entry_dir.join(&canonical);
+                let full_path = resolve_attachment_storage_path(&entry_path, &attachment_path);
 
                 // Delete the file if it exists
                 if self.fs().exists(&full_path).await {
@@ -2219,15 +2250,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 entry_path,
                 attachment_path,
             } => {
-                use crate::utils::path::normalize_path;
-
-                let entry = PathBuf::from(&entry_path);
-                let entry_dir = entry.parent().unwrap_or_else(|| Path::new("."));
-                // Parse markdown link to extract the actual path
-                let parsed = link_parser::parse_link(&attachment_path);
-                let canonical = link_parser::to_canonical(&parsed, &entry);
-                // Normalize the path to handle .. components (important for inherited attachments)
-                let full_path = normalize_path(&entry_dir.join(&canonical));
+                let full_path = resolve_attachment_storage_path(&entry_path, &attachment_path);
 
                 let data =
                     self.fs()
@@ -2247,13 +2270,9 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 attachment_path,
                 new_filename,
             } => {
-                // Resolve source paths
-                let source_entry = PathBuf::from(&source_entry_path);
-                let source_dir = source_entry.parent().unwrap_or_else(|| Path::new("."));
-                // Parse markdown link to extract the actual path
-                let parsed = link_parser::parse_link(&attachment_path);
-                let canonical = link_parser::to_canonical(&parsed, &source_entry);
-                let source_attachment_path = source_dir.join(&canonical);
+                // Resolve source attachment path from the link/path reference.
+                let source_attachment_path =
+                    resolve_attachment_storage_path(&source_entry_path, &attachment_path);
 
                 // Get the original filename
                 let original_filename = source_attachment_path
@@ -4558,5 +4577,23 @@ mod tests {
         assert_eq!(incoming.attachments[0].mime_type, "image/png");
         assert_eq!(incoming.attachments[0].size, 321);
         assert_eq!(incoming.attachments[0].uploaded_at, Some(2));
+    }
+
+    #[test]
+    fn test_resolve_attachment_storage_path_relative_nested_entry() {
+        let resolved = resolve_attachment_storage_path("notes/day.md", "_attachments/a.png");
+        assert_eq!(
+            resolved.to_string_lossy().replace('\\', "/"),
+            "notes/_attachments/a.png"
+        );
+    }
+
+    #[test]
+    fn test_resolve_attachment_storage_path_plain_canonical_nested_entry() {
+        let resolved = resolve_attachment_storage_path("notes/day.md", "notes/_attachments/a.png");
+        assert_eq!(
+            resolved.to_string_lossy().replace('\\', "/"),
+            "notes/_attachments/a.png"
+        );
     }
 }

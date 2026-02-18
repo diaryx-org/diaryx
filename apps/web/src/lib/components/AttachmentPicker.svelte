@@ -277,7 +277,6 @@
         entryPath,
         canonicalAttachmentPath,
         file,
-        entryRelativePath,
       );
 
       // Create blob URL for immediate use

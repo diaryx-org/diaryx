@@ -60,6 +60,9 @@ max payload size (`SNAPSHOT_UPLOAD_MAX_BYTES`, default 1 GiB).
 - Completing an upload now triggers immediate workspace attachment-ref
   reconciliation, so newly completed blobs become downloadable without waiting
   for another workspace metadata edit.
+- Init/complete upload handlers canonicalize `attachment_path` against
+  `entry_path` before storing/comparing upload sessions, so relative and
+  canonical client path formats resolve to the same workspace attachment path.
 
 For one-part uploads, the handler uses a direct blob `put` path internally and
 skips remote multipart completion/abort calls.

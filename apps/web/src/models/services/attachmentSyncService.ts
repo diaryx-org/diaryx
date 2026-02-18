@@ -276,6 +276,7 @@ async function processUpload(item: UploadQueueItem): Promise<void> {
   );
   const totalParts = Math.max(1, Math.ceil(bytes.byteLength / PART_SIZE_BYTES));
   const init = await auth.initAttachmentUpload(syncContext.authToken, item.workspaceId, {
+    entry_path: item.entryPath,
     attachment_path: item.attachmentPath,
     hash: item.hash,
     size_bytes: item.sizeBytes,
@@ -305,6 +306,7 @@ async function processUpload(item: UploadQueueItem): Promise<void> {
   }
 
   let complete = await auth.completeAttachmentUpload(syncContext.authToken, item.workspaceId, init.upload_id, {
+    entry_path: item.entryPath,
     attachment_path: item.attachmentPath,
     hash: item.hash,
     size_bytes: item.sizeBytes,
@@ -327,6 +329,7 @@ async function processUpload(item: UploadQueueItem): Promise<void> {
     }
 
     complete = await auth.completeAttachmentUpload(syncContext.authToken, item.workspaceId, init.upload_id, {
+      entry_path: item.entryPath,
       attachment_path: item.attachmentPath,
       hash: item.hash,
       size_bytes: item.sizeBytes,

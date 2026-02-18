@@ -56,6 +56,7 @@ export interface UserStorageUsageResponse {
 }
 
 export interface InitAttachmentUploadRequest {
+  entry_path: string;
   attachment_path: string;
   hash: string;
   size_bytes: number;
@@ -72,6 +73,7 @@ export interface InitAttachmentUploadResponse {
 }
 
 export interface CompleteAttachmentUploadRequest {
+  entry_path: string;
   attachment_path: string;
   hash: string;
   size_bytes: number;

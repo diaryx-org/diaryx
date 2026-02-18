@@ -265,7 +265,6 @@
         entryPath,
         canonicalAttachmentPath,
         file,
-        entryRelativePath,
       );
       const blobUrl = URL.createObjectURL(file);
       const isImage = isImageFile(file.name);

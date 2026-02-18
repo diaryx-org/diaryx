@@ -73,6 +73,13 @@ Returns `Response::String(new_path)` if a rename occurred, `Response::Ok` otherw
   This avoids dropping cloud attachment references during frontmatter-driven
   metadata refreshes.
 
+## Attachment Path Resolution Notes
+
+- `command_handler.rs` resolves attachment storage paths via shared normalization
+  for markdown links, root-relative refs, plain relative refs, and plain
+  canonical refs that include the current entry directory. This keeps
+  get/delete/move attachment commands consistent for nested entries.
+
 ## TypeScript Binding Notes
 
 - `ts-rs` is configured with `no-serde-warnings` in `Cargo.toml`.

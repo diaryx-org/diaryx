@@ -56,6 +56,7 @@ describe("authService quota errors", () => {
     const service = createAuthService("http://localhost:3030");
     await expect(
       service.initAttachmentUpload("token", "workspace", {
+        entry_path: "notes/day.md",
         attachment_path: "_attachments/a.png",
         hash: "a".repeat(64),
         size_bytes: 2,
@@ -89,6 +90,7 @@ describe("authService quota errors", () => {
     const service = createAuthService("http://localhost:3030");
     await expect(
       service.completeAttachmentUpload("token", "workspace", "upload-id", {
+        entry_path: "notes/day.md",
         attachment_path: "_attachments/a.png",
         hash: "a".repeat(64),
         size_bytes: 2,

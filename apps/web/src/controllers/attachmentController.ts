@@ -173,7 +173,6 @@ export async function enqueueIncrementalAttachmentUpload(
   entryPath: string,
   attachmentMetadataPath: string,
   file: File,
-  uploadAttachmentPath?: string,
 ): Promise<void> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const hash = await sha256Hex(bytes);
@@ -191,7 +190,7 @@ export async function enqueueIncrementalAttachmentUpload(
   const queueId = enqueueAttachmentUpload({
     workspaceId,
     entryPath,
-    attachmentPath: uploadAttachmentPath ?? attachmentMetadataPath,
+    attachmentPath: attachmentMetadataPath,
     hash,
     mimeType: file.type || getMimeType(file.name),
     sizeBytes: file.size,
@@ -324,7 +323,6 @@ export async function handleAttachmentFileSelect(
       pendingAttachmentPath,
       canonicalAttachmentPath,
       file,
-      entryRelativePath,
     );
 
     // Refresh the entry if it's currently open
@@ -401,7 +399,6 @@ export async function handleEditorFileDrop(
       currentEntry.path,
       canonicalAttachmentPath,
       file,
-      entryRelativePath,
     );
 
     // Refresh the entry to update attachments list

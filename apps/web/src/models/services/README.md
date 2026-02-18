@@ -24,7 +24,7 @@ Business logic services that coordinate between stores and backend.
 | File | Purpose |
 |------|---------|
 | `attachmentService.ts` | Attachment blob URL transform/reverse + link-parser-based attachment path normalization (`canonicalizeLink`/`formatLink`) before reads/retries |
-| `attachmentSyncService.ts` | Incremental/resumable attachment sync queue (multipart upload + missing-blob download), including debounced + delayed follow-up sync-storage usage refresh after successful upload completion. Exposes `onQueueItemStateChange()` for observing queue item state transitions and `isAttachmentSyncEnabled()` for checking if cloud sync is active. |
+| `attachmentSyncService.ts` | Incremental/resumable attachment sync queue (multipart upload + missing-blob download), including debounced + delayed follow-up sync-storage usage refresh after successful upload completion. Upload init/complete requests include `entry_path` and canonical attachment metadata paths to avoid relative/canonical mismatches in server upload sessions. Exposes `onQueueItemStateChange()` for observing queue item state transitions and `isAttachmentSyncEnabled()` for checking if cloud sync is active. |
 | `sitePublishingService.ts` | Sync-server client for workspace site lifecycle, publish triggers, and audience token CRUD (`/api/workspaces/{id}/site*`) with deterministic status/error mapping |
 | `shareService.ts` | Share session management |
 | `toastService.ts` | Toast notification service |

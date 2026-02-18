@@ -31,6 +31,10 @@ both upload and download bootstrap flows.
 - `completeAttachmentUpload(...)`
 - `downloadAttachment(...)`
 
+Init and complete upload requests include both `entry_path` and
+`attachment_path` so the server can canonicalize attachment refs consistently
+before storing and validating resumable upload sessions.
+
 Quota rejections (`413` + `storage_limit_exceeded`) are parsed into
 `AuthError` messages with usage/limit context for UI and queue handling.
 

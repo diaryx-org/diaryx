@@ -451,7 +451,16 @@ format: string, } } | { "type": "GetWorkspaceConfig", "params": {
 /**
  * Path to the workspace root index file.
  */
-root_index_path: string, } } | { "type": "SetWorkspaceConfig", "params": {
+root_index_path: string, } } | { "type": "GenerateFilename", "params": {
+/**
+ * The entry title to convert to a filename.
+ */
+title: string,
+/**
+ * Path to the workspace root index file (to read filename_style config).
+ * If None, uses the default style (preserve).
+ */
+root_index_path: string | null, } } | { "type": "SetWorkspaceConfig", "params": {
 /**
  * Path to the workspace root index file.
  */

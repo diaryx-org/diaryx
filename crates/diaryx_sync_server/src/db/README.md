@@ -37,3 +37,8 @@ The schema includes attachment usage tracking tables:
 `attachment_uploads` is also queried during sync-v2 reconciliation as a fallback
 source of hash/size/mime metadata when a workspace attachment ref is present but
 its synced `BinaryRef.hash` is empty.
+
+`repo.rs` now hard-reconciles `user_attachment_blobs.ref_count` from
+`workspace_attachment_refs` after workspace attachment-ref replacement, which
+prevents long-lived storage-usage drift after large imports, sync mode changes,
+or stale ref-count updates.

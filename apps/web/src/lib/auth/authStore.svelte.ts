@@ -116,11 +116,11 @@ export function getServerUrl(): string | null {
 }
 
 export function getDefaultWorkspace(): Workspace | null {
-  return (
-    state.workspaces.find((w) => w.name === "default") ??
-    state.workspaces[0] ??
-    null
-  );
+  if (state.activeWorkspaceId) {
+    const active = state.workspaces.find((w) => w.id === state.activeWorkspaceId);
+    if (active) return active;
+  }
+  return state.workspaces[0] ?? null;
 }
 
 /**
@@ -259,7 +259,7 @@ export async function initAuth(): Promise<void> {
  *
  * Note: This only saves the URL - it does NOT start sync.
  * Sync is started by setWorkspaceServer() which is called
- * from SyncSetupWizard after authentication completes.
+ * from AddWorkspaceDialog after authentication completes.
  */
 export function setServerUrl(url: string | null): void {
   state.serverUrl = url;
@@ -269,7 +269,7 @@ export function setServerUrl(url: string | null): void {
     authService = createAuthService(url);
     // Note: We intentionally do NOT call setCollaborationServer() here.
     // Sync should only start after authentication completes and user
-    // chooses to sync via SyncSetupWizard.
+    // chooses to sync via AddWorkspaceDialog.
   } else {
     localStorage.removeItem(STORAGE_KEYS.SERVER_URL);
     authService = null;
@@ -436,7 +436,7 @@ export async function refreshUserStorageUsage(): Promise<void> {
 }
 
 /**
- * Explicitly enable sync. Called by SyncSetupWizard after workspace initialization.
+ * Explicitly enable sync. Called by AddWorkspaceDialog after workspace initialization.
  * This is the only way sync gets enabled — signing in alone does not enable it.
  */
 export function enableSync(): void {
@@ -620,6 +620,7 @@ export async function deleteServerWorkspace(workspaceId: string): Promise<void> 
   if (!authService || !token) throw new Error("Not authenticated");
   await authService.deleteWorkspace(token, workspaceId);
   await refreshUserInfo();
+  await refreshUserStorageUsage();
 }
 
 // ============================================================================
@@ -815,6 +816,7 @@ export async function uploadWorkspaceSnapshot(
   snapshot: Blob,
   mode: "replace" | "merge" = "replace",
   includeAttachments = true,
+  onUploadProgress?: (uploadedBytes: number, totalBytes: number) => void,
 ): Promise<{ files_imported: number } | null> {
   const token = getToken();
   const url = state.serverUrl;
@@ -827,6 +829,7 @@ export async function uploadWorkspaceSnapshot(
       snapshot,
       mode,
       includeAttachments,
+      onUploadProgress,
     );
     await refreshUserStorageUsage();
     return result;

@@ -66,8 +66,8 @@
 
     const currentWorkspaceId = getCurrentWorkspaceId();
     if (!currentWorkspaceId) {
-      // Legacy fallback: if selection is unavailable, use auth sync state.
-      return true;
+      // Be conservative: unknown workspace selection should never force server import.
+      return false;
     }
 
     const localWorkspace = getLocalWorkspace(currentWorkspaceId);
@@ -121,6 +121,14 @@
     if (status !== undefined) {
       importStatusText = status;
     }
+  }
+
+  function formatBytes(bytes: number): string {
+    if (bytes <= 0) return "0 B";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+    const value = bytes / Math.pow(1024, index);
+    return `${value.toFixed(value < 10 && index > 0 ? 1 : 0)} ${units[index]}`;
   }
 
   /**
@@ -260,7 +268,22 @@
 
     // Step 2: Upload ZIP to server
     setImportProgress(30, "Uploading to sync server...");
-    const result = await uploadWorkspaceSnapshot(workspace.id, file, mode, true);
+    const result = await uploadWorkspaceSnapshot(
+      workspace.id,
+      file,
+      mode,
+      true,
+      (uploadedBytes, totalBytes) => {
+        const ratio = totalBytes > 0 ? uploadedBytes / totalBytes : 0;
+        const percent = 30 + ratio * 32;
+        setImportProgress(
+          percent,
+          totalBytes > 0
+            ? `Uploading to sync server (${formatBytes(uploadedBytes)} / ${formatBytes(totalBytes)})...`
+            : "Uploading to sync server...",
+        );
+      },
+    );
     if (!result) throw new Error("Upload failed — server returned no result");
 
     console.log(`[Import] Server imported ${result.files_imported} files`);
@@ -314,6 +337,15 @@
    */
   async function importLocally(file: File) {
     const backend = await getBackend();
+    const currentWorkspaceId = getCurrentWorkspaceId();
+    const localWorkspace = currentWorkspaceId
+      ? getLocalWorkspace(currentWorkspaceId)
+      : null;
+    if (localWorkspace?.isLocal) {
+      // Defensive: ensure no stale sync transport remains connected for local-only workspaces.
+      disconnectWorkspace();
+      await setWorkspaceId(null);
+    }
     const workspaceDir = await resolveImportWorkspaceDir(backend);
     setImportProgress(8, "Preparing local import...");
 

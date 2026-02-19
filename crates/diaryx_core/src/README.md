@@ -10,6 +10,7 @@ contents:
   - "[README](/crates/diaryx_core/src/publish/README.md)"
   - "[README](/crates/diaryx_core/src/utils/README.md)"
   - "[README](/crates/diaryx_core/src/workspace/README.md)"
+  - "[README](/crates/diaryx_core/src/import/README.md)"
 attachments:
   - "[lib.rs](/crates/diaryx_core/src/lib.rs)"
   - "[backup.rs](/crates/diaryx_core/src/backup.rs)"

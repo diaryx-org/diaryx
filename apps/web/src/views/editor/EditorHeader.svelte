@@ -51,7 +51,7 @@
     /** Navigate to the next day's entry */
     onNextDay?: () => void;
     /** Open sync setup wizard (for sync indicator) */
-    onOpenWizard?: () => void;
+    onAddWorkspace?: () => void;
   }
 
   let {
@@ -72,7 +72,7 @@
     onOpenCommandPalette,
     onPrevDay,
     onNextDay,
-    onOpenWizard,
+    onAddWorkspace,
   }: Props = $props();
 
   // Focus mode: header is invisible when both sidebars are closed
@@ -218,7 +218,7 @@
   <!-- Right side: actions -->
   <div class="flex items-center gap-1 md:gap-2 ml-2 shrink-0">
     <!-- Sync status indicator -->
-    <SyncStatusIndicator onOpenWizard={onOpenWizard} />
+    <SyncStatusIndicator onAddWorkspace={onAddWorkspace} />
 
     {#if readonly}
       <!-- View-only indicator for read-only mode -->

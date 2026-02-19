@@ -139,12 +139,89 @@ export class AuthService {
     }
   }
 
+  private parseJsonString(raw: string | null | undefined): unknown | null {
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+
   private formatQuotaMessage(
     payload: StorageLimitExceededErrorResponse,
   ): string {
     const usedMb = (payload.used_bytes / 1024 / 1024).toFixed(1);
     const limitMb = (payload.limit_bytes / 1024 / 1024).toFixed(1);
     return `${payload.message} (${usedMb} MB / ${limitMb} MB)`;
+  }
+
+  private uploadWorkspaceSnapshotWithProgress(
+    authToken: string,
+    url: string,
+    snapshot: Blob,
+    onUploadProgress: (uploadedBytes: number, totalBytes: number) => void,
+  ): Promise<{ files_imported: number }> {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", url);
+      xhr.setRequestHeader("Authorization", `Bearer ${authToken}`);
+      xhr.setRequestHeader("Content-Type", "application/zip");
+      xhr.responseType = "text";
+
+      xhr.upload.onprogress = (event: ProgressEvent<EventTarget>) => {
+        const total = event.lengthComputable ? event.total : snapshot.size;
+        onUploadProgress(event.loaded, total);
+      };
+
+      xhr.onerror = () => {
+        reject(new AuthError("Failed to upload snapshot", 0));
+      };
+
+      xhr.onabort = () => {
+        reject(new AuthError("Snapshot upload canceled", 0));
+      };
+
+      xhr.onload = () => {
+        const status = xhr.status;
+        const rawResponse =
+          typeof xhr.response === "string" ? xhr.response : xhr.responseText;
+        const parsed = this.parseJsonString(rawResponse);
+
+        if (status >= 200 && status < 300) {
+          if (
+            parsed &&
+            typeof parsed === "object" &&
+            "files_imported" in parsed
+          ) {
+            resolve(parsed as { files_imported: number });
+            return;
+          }
+          reject(new AuthError("Invalid snapshot upload response", status, parsed));
+          return;
+        }
+
+        if (
+          status === 413 &&
+          parsed &&
+          typeof parsed === "object" &&
+          (parsed as any).error === "storage_limit_exceeded"
+        ) {
+          reject(
+            new AuthError(
+              this.formatQuotaMessage(parsed as StorageLimitExceededErrorResponse),
+              status,
+              parsed,
+            ),
+          );
+          return;
+        }
+
+        reject(new AuthError("Failed to upload snapshot", status, parsed));
+      };
+
+      xhr.send(snapshot);
+    });
   }
 
   /**
@@ -395,12 +472,22 @@ export class AuthService {
     snapshot: Blob,
     mode: "replace" | "merge" = "replace",
     includeAttachments = true,
+    onUploadProgress?: (uploadedBytes: number, totalBytes: number) => void,
   ): Promise<{ files_imported: number }> {
     const url = new URL(
       `${this.serverUrl}/api/workspaces/${encodeURIComponent(workspaceId)}/snapshot`,
     );
     url.searchParams.set("mode", mode);
     url.searchParams.set("include_attachments", String(includeAttachments));
+
+    if (onUploadProgress && typeof XMLHttpRequest !== "undefined") {
+      return this.uploadWorkspaceSnapshotWithProgress(
+        authToken,
+        url.toString(),
+        snapshot,
+        onUploadProgress,
+      );
+    }
 
     const response = await fetch(
       url.toString(),

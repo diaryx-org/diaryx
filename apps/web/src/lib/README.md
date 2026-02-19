@@ -27,7 +27,7 @@ attachments:
   - '[NewEntryModal.svelte](/apps/web/src/lib/NewEntryModal.svelte)'
   - '[RightSidebar.svelte](/apps/web/src/lib/RightSidebar.svelte)'
   - '[SettingsDialog.svelte](/apps/web/src/lib/SettingsDialog.svelte)'
-  - '[SyncSetupWizard.svelte](/apps/web/src/lib/SyncSetupWizard.svelte)'
+  - '[AddWorkspaceDialog.svelte](/apps/web/src/lib/AddWorkspaceDialog.svelte)'
   - '[SyncStatusIndicator.svelte](/apps/web/src/lib/SyncStatusIndicator.svelte)'
 exclude:
   - '*.lock'
@@ -55,12 +55,33 @@ Shared libraries, components, and utilities for the web application.
 | `stores/` | Svelte stores |
 | `wasm/` | Built WASM module |
 
-## Sync Setup Progress
+## Add Workspace Dialog
 
-`SyncSetupWizard.svelte` uses staged progress updates during initialization
+`AddWorkspaceDialog.svelte` is the unified workspace creation dialog. It presents
+two orthogonal dimensions:
+
+- **Sync mode** (Local / Remote segmented toggle)
+- **Content source** (From existing workspace / Import from ZIP / Start fresh)
+
+The dialog uses staged progress updates during initialization
 (`upload snapshot` -> `prepare local CRDT` -> `connect` -> `metadata sync`) so
 users see visible forward motion even when backend operations don't emit
 granular file progress for small workspaces.
+
+`WorkspaceSelector.svelte` opens `AddWorkspaceDialog.svelte` from the
+`New workspace` button so workspace initialization always goes through the same
+setup flow instead of inline naming/creation.
+
+Both local and synced workspace creation prompt for a workspace name and
+automatically create a root index file during initialization.
+
+The dialog's local->sync upload path copies local workspace files to the server
+(snapshot upload) and keeps local files on device; it does not delete or move
+local data.
+
+`App.svelte` routes the editor empty-workspace `Initialize workspace` action
+to the same setup flow (`AddWorkspaceDialog.svelte`) instead of exposing separate
+`Create Root Index` and `Import from ZIP` buttons in the editor area.
 
 ## Command Palette Dialog Sequencing
 

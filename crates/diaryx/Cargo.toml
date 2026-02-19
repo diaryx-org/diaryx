@@ -15,7 +15,7 @@ name = "diaryx"
 path = "src/main.rs"
 
 [dependencies]
-diaryx_core = { workspace = true, features = ["markdown", "crdt", "crdt-sqlite", "native-sync", "native-pandoc", "git"] }
+diaryx_core = { workspace = true, features = ["markdown", "crdt", "crdt-sqlite", "native-sync", "native-pandoc", "git", "import-email", "import-dayone", "import-markdown"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 chrono.workspace = true
 serde.workspace = true

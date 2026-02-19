@@ -113,11 +113,11 @@ struct UploadedBlob {
 }
 
 #[derive(Debug, Clone)]
-struct SnapshotBinaryEntry {
-    bytes: Vec<u8>,
+struct SnapshotBinaryEntryMeta {
+    archive_index: usize,
     hash: String,
+    size_bytes: u64,
     mime_type: String,
-    key: String,
 }
 
 fn normalize_workspace_path(path: &str) -> Option<String> {
@@ -577,12 +577,16 @@ impl WorkspaceStore {
         }
 
         let mut blobs_by_path: HashMap<String, UploadedBlob> = HashMap::new();
-        let mut binary_entries: Vec<SnapshotBinaryEntry> = Vec::new();
+        let mut binary_entries: Vec<SnapshotBinaryEntryMeta> = Vec::new();
 
         if include_attachments {
+            // Two-pass attachment import:
+            // 1) Scan zip entries to compute hash/size for quota checks.
+            // 2) Re-open only unique binaries and upload one-by-one.
+            // This avoids keeping all attachment bytes resident in memory.
             let mut unique_hash_sizes: HashMap<String, u64> = HashMap::new();
             for i in 0..archive.len() {
-                let Some((name, bytes, hash, mime_type, key)) = ({
+                let Some((name, hash, size_bytes, mime_type)) = ({
                     let mut entry = archive.by_index(i)?;
                     if entry.is_dir() {
                         None
@@ -600,30 +604,29 @@ impl WorkspaceStore {
                         } else {
                             let mut bytes = Vec::new();
                             entry.read_to_end(&mut bytes)?;
+                            let size_bytes = bytes.len() as u64;
                             let hash = sha256_hex(&bytes);
                             let mime_type = mime_for_path(&name);
-                            let key = blob_store.blob_key(user_id, &hash);
-                            Some((name, bytes, hash, mime_type, key))
+                            Some((name, hash, size_bytes, mime_type))
                         }
                     }
                 }) else {
                     continue;
                 };
 
-                let bytes_len = bytes.len() as u64;
-                unique_hash_sizes.entry(hash.clone()).or_insert(bytes_len);
-                binary_entries.push(SnapshotBinaryEntry {
-                    bytes,
+                unique_hash_sizes.entry(hash.clone()).or_insert(size_bytes);
+                binary_entries.push(SnapshotBinaryEntryMeta {
+                    archive_index: i,
                     hash: hash.clone(),
+                    size_bytes,
                     mime_type: mime_type.clone(),
-                    key: key.clone(),
                 });
 
                 blobs_by_path.insert(
                     name,
                     UploadedBlob {
                         hash,
-                        size_bytes: bytes_len,
+                        size_bytes,
                         mime_type,
                     },
                 );
@@ -651,19 +654,27 @@ impl WorkspaceStore {
                 if !uploaded_hashes.insert(entry.hash.clone()) {
                     continue;
                 }
+                let bytes = {
+                    let mut zip_entry = archive.by_index(entry.archive_index)?;
+                    let mut bytes = Vec::new();
+                    zip_entry.read_to_end(&mut bytes)?;
+                    bytes
+                };
+
+                let key = blob_store.blob_key(user_id, &entry.hash);
                 // Avoid HEAD/exists checks against R2 here. Some bucket policies
                 // allow PutObject but reject HeadObject, which would fail imports.
                 // Since keys are content-addressed by SHA-256, put is idempotent.
                 blob_store
-                    .put(&entry.key, &entry.bytes, &entry.mime_type)
+                    .put(&key, &bytes, &entry.mime_type)
                     .await
                     .map_err(SnapshotError::Blob)?;
 
                 repo.upsert_blob(
                     user_id,
                     &entry.hash,
-                    &entry.key,
-                    entry.bytes.len() as u64,
+                    &key,
+                    entry.size_bytes,
                     &entry.mime_type,
                 )?;
             }

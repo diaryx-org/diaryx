@@ -53,6 +53,8 @@ Workspace rename/move operations now prefer non-lossy index updates:
 
 - Parent `contents` updates add the new canonical reference before removing the old one.
 - Same-parent renames skip unnecessary `part_of` rewrites.
+- Index renames update `part_of` for children discovered from the index `contents`
+  list (including nested child paths), instead of only same-directory markdown files.
 - Cleanup failures when removing old `contents` references are logged as warnings instead of silently ignored.
 
 This reduces transient states where a renamed child disappears from workspace trees.

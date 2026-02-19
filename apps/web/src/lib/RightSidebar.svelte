@@ -76,7 +76,7 @@
     onHistoryRestore?: () => void;
     // Share props
     onBeforeHost?: (audience: string | null) => Promise<void>;
-    onOpenSyncWizard?: () => void;
+    onAddWorkspace?: () => void;
     onOpenEntry?: (path: string) => Promise<void>;
     // API for share tab
     api?: Api | null;
@@ -103,7 +103,7 @@
     rustApi = null,
     onHistoryRestore,
     onBeforeHost,
-    onOpenSyncWizard,
+    onAddWorkspace,
     onOpenEntry,
     api = null,
     requestedTab = null,
@@ -1220,7 +1220,7 @@
       <!-- Share Tab -->
       <ShareTab
         {onBeforeHost}
-        {onOpenSyncWizard}
+        {onAddWorkspace}
         {onOpenEntry}
         {api}
         triggerStart={triggerStartSession}

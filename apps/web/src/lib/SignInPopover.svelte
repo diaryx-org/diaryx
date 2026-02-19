@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
@@ -35,11 +36,11 @@
 
   interface Props {
     onOpenAccountSettings?: () => void;
-    onOpenSyncWizard?: () => void;
+    onAddWorkspace?: () => void;
     onClose?: () => void;
   }
 
-  let { onOpenAccountSettings, onOpenSyncWizard, onClose }: Props = $props();
+  let { onOpenAccountSettings, onAddWorkspace, onClose }: Props = $props();
 
   let authState = $derived(getAuthState());
   let syncEnabled = $derived(collaborationStore.collaborationEnabled);
@@ -76,7 +77,8 @@
       email = "";
       if (getAuthState().workspaces.length > 0 && !syncEnabled) {
         onClose?.();
-        onOpenSyncWizard?.();
+        await tick();
+        onAddWorkspace?.();
       }
     } catch (e) {
       error = e instanceof Error ? e.message : "Passkey authentication failed";
@@ -169,10 +171,11 @@
       await verifyMagicLink(token.trim());
       verificationSent = false;
       email = "";
-      // Auto-open sync wizard for returning users with server workspaces
+      // Auto-open add workspace dialog for returning users with server workspaces
       if (getAuthState().workspaces.length > 0 && !syncEnabled) {
         onClose?.();
-        onOpenSyncWizard?.();
+        await tick();
+        onAddWorkspace?.();
       }
     } catch (e) {
       error = e instanceof Error ? e.message : "Verification failed";
@@ -202,7 +205,7 @@
     <div class="space-y-3">
       <div class="text-sm font-medium truncate">{authState.user.email}</div>
 
-      {#if !syncEnabled && onOpenSyncWizard}
+      {#if !syncEnabled && onAddWorkspace}
         <div class="space-y-2 p-2.5 rounded-md bg-primary/5 border border-primary/20">
           <p class="text-xs text-muted-foreground">
             Set up sync to access your notes across devices.
@@ -211,7 +214,7 @@
             variant="default"
             size="sm"
             class="w-full"
-            onclick={() => { onClose?.(); onOpenSyncWizard?.(); }}
+            onclick={async () => { onClose?.(); await tick(); onAddWorkspace?.(); }}
           >
             <Server class="size-3.5 mr-1.5" />
             Set Up Sync
@@ -368,13 +371,14 @@
 
             <VerificationCodeInput
               {email}
-              onVerified={() => {
+              onVerified={async () => {
                 verificationSent = false;
                 stopMagicLinkDetection();
                 email = "";
                 if (getAuthState().workspaces.length > 0 && !syncEnabled) {
                   onClose?.();
-                  onOpenSyncWizard?.();
+                  await tick();
+                  onAddWorkspace?.();
                 }
               }}
               onError={(msg) => { error = msg; }}

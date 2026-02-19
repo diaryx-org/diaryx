@@ -54,7 +54,7 @@
     onToggleCollapse: () => void;
     onOpenSettings: () => void;
     onOpenAccountSettings: () => void;
-    onOpenSyncWizard: () => void;
+    onAddWorkspace: () => void;
     onMoveEntry: (fromPath: string, toParentPath: string) => void;
     onCreateChildEntry: (parentPath: string) => void;
     onDeleteEntry: (path: string) => void;
@@ -88,7 +88,7 @@
     onToggleCollapse,
     onOpenSettings,
     onOpenAccountSettings,
-    onOpenSyncWizard,
+    onAddWorkspace,
     onMoveEntry,
     onCreateChildEntry,
     onDeleteEntry,
@@ -1030,6 +1030,7 @@
     <WorkspaceSelector
       onSwitchStart={onWorkspaceSwitchStart}
       onSwitchComplete={onWorkspaceSwitchComplete}
+      onAddWorkspace={onAddWorkspace}
     />
   </div>
 
@@ -1238,7 +1239,7 @@
       <Popover.Content side="top" align="start" class="w-auto p-3">
         <SignInPopover
           onOpenAccountSettings={() => { profilePopoverOpen = false; onOpenAccountSettings(); }}
-          onOpenSyncWizard={() => { profilePopoverOpen = false; onOpenSyncWizard(); }}
+          onAddWorkspace={async () => { profilePopoverOpen = false; await tick(); onAddWorkspace(); }}
           onClose={() => { profilePopoverOpen = false; }}
         />
       </Popover.Content>

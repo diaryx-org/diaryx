@@ -61,10 +61,10 @@
 
   interface Props {
     /** Callback to open the sync setup wizard */
-    onOpenWizard?: () => void;
+    onAddWorkspace?: () => void;
   }
 
-  let { onOpenWizard }: Props = $props();
+  let { onAddWorkspace }: Props = $props();
 
   // Auth state
   let authState = $derived(getAuthState());
@@ -224,7 +224,7 @@
       email = "";
       // Auto-open sync wizard for returning users with server workspaces
       if (getAuthState().workspaces.length > 0 && !syncEnabled) {
-        onOpenWizard?.();
+        onAddWorkspace?.();
       }
     } catch (e) {
       error = e instanceof Error ? e.message : "Verification failed";
@@ -316,7 +316,7 @@
       </div>
 
       <!-- Sync Setup Prompt (when signed in but sync not enabled) -->
-      {#if !syncEnabled && onOpenWizard}
+      {#if !syncEnabled && onAddWorkspace}
         <div class="space-y-2 p-3 rounded-md bg-primary/5 border border-primary/20">
           <p class="text-xs text-muted-foreground">
             Signed in. Set up sync to access your notes across devices.
@@ -325,7 +325,7 @@
             variant="default"
             size="sm"
             class="w-full"
-            onclick={onOpenWizard}
+            onclick={onAddWorkspace}
           >
             <Server class="size-4 mr-2" />
             Set Up Sync
@@ -603,7 +603,7 @@
                 stopMagicLinkDetection();
                 email = "";
                 if (getAuthState().workspaces.length > 0 && !syncEnabled) {
-                  onOpenWizard?.();
+                  onAddWorkspace?.();
                 }
               }}
               onError={(msg) => { error = msg; }}

@@ -155,6 +155,9 @@ Attachment reconciliation notes:
   a Y update they are stored unchanged; Y-sync frame stripping is only attempted
   as fallback when raw decode fails. This avoids false-positive stripping of
   valid raw updates.
+- Snapshot ZIP import with `include_attachments=true` uses a two-pass attachment
+  path: first pass computes hash/size for quota checks, second pass uploads
+  unique blobs one-by-one. This keeps memory usage bounded for large imports.
 
 ## Future Work
 

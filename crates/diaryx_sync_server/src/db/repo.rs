@@ -1313,6 +1313,53 @@ impl AuthRepo {
         .optional()
     }
 
+    fn reconcile_user_blob_ref_counts(
+        conn: &Connection,
+        user_id: &str,
+        now: i64,
+    ) -> Result<(), rusqlite::Error> {
+        // Backfill metadata rows for any workspace refs that do not yet have a blob row.
+        conn.execute(
+            "INSERT INTO user_attachment_blobs
+             (user_id, blob_hash, r2_key, size_bytes, mime_type, ref_count, soft_deleted_at, created_at, updated_at)
+             SELECT ?, war.blob_hash, '', MAX(war.size_bytes), MAX(war.mime_type), 0, NULL, ?, ?
+             FROM workspace_attachment_refs war
+             JOIN user_workspaces uw ON uw.id = war.workspace_id
+             LEFT JOIN user_attachment_blobs uab
+               ON uab.user_id = ? AND uab.blob_hash = war.blob_hash
+             WHERE uw.user_id = ? AND uab.blob_hash IS NULL
+             GROUP BY war.blob_hash",
+            params![user_id, now, now, user_id, user_id],
+        )?;
+
+        // Hard reconcile ref counts from current workspace refs to prevent drift.
+        conn.execute(
+            "UPDATE user_attachment_blobs
+             SET ref_count = (
+                   SELECT COUNT(*)
+                   FROM workspace_attachment_refs war
+                   JOIN user_workspaces uw ON uw.id = war.workspace_id
+                   WHERE uw.user_id = ? AND war.blob_hash = user_attachment_blobs.blob_hash
+                 ),
+                 updated_at = ?
+             WHERE user_id = ?",
+            params![user_id, now, user_id],
+        )?;
+
+        conn.execute(
+            "UPDATE user_attachment_blobs
+             SET soft_deleted_at = CASE
+                   WHEN ref_count = 0 THEN COALESCE(soft_deleted_at, ?)
+                   ELSE NULL
+                 END,
+                 updated_at = ?
+             WHERE user_id = ?",
+            params![now, now, user_id],
+        )?;
+
+        Ok(())
+    }
+
     /// Replace all attachment refs for a workspace and reconcile blob ref counts.
     pub fn replace_workspace_attachment_refs(
         &self,
@@ -1444,6 +1491,8 @@ impl AuthRepo {
                 params![now, now, user_id, blob_hash],
             )?;
         }
+
+        Self::reconcile_user_blob_ref_counts(&tx, &user_id, now)?;
 
         tx.commit()?;
         Ok(())
@@ -2356,6 +2405,33 @@ mod tests {
 
         let due = repo.list_soft_deleted_blobs_due(i64::MAX).unwrap();
         assert!(!due.is_empty());
+    }
+
+    #[test]
+    fn test_replace_workspace_refs_reconciles_stale_blob_counts() {
+        let repo = setup_test_db();
+        let user_id = repo
+            .get_or_create_user("blob-reconcile-test@example.com")
+            .unwrap();
+        let workspace_id = repo.get_or_create_workspace(&user_id, "default").unwrap();
+
+        repo.upsert_blob(&user_id, "hash-a", "key-a", 512, "image/png")
+            .unwrap();
+
+        // Simulate stale ref_count drift where metadata says blob is in use
+        // even though workspace refs are empty.
+        repo.inc_blob_ref(&user_id, "hash-a").unwrap();
+        let usage = repo.get_user_storage_usage(&user_id).unwrap();
+        assert_eq!(usage.used_bytes, 512);
+        assert_eq!(usage.blob_count, 1);
+
+        // Any workspace ref replacement should hard-reconcile user ref counts.
+        repo.replace_workspace_attachment_refs(&workspace_id, &[])
+            .unwrap();
+
+        let usage = repo.get_user_storage_usage(&user_id).unwrap();
+        assert_eq!(usage.used_bytes, 0);
+        assert_eq!(usage.blob_count, 0);
     }
 
     #[test]

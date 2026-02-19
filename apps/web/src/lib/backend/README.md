@@ -41,6 +41,8 @@ The `generated/` directory contains TypeScript types generated from Rust.
 `workerBackendNew.ts` now imports ZIP files via a streaming reader (`@zip.js/zip.js`)
 instead of loading full archives into a single `ArrayBuffer`. This significantly
 reduces peak memory usage for large local imports by processing entries one at a time.
+The import loop also yields periodically to the event loop and throttles progress
+callbacks, improving UI responsiveness during very large imports.
 
 ## Native Sync (Tauri only)
 

@@ -19,5 +19,5 @@ Editor-related view components.
 | File | Purpose |
 |------|---------|
 | `EditorContent.svelte` | Main editor content area |
-| `EditorEmptyState.svelte` | Empty state when no entry selected; for empty workspaces it offers both `Create Root Index` and `Import from ZIP` actions (ZIP action opens the import file picker directly) |
+| `EditorEmptyState.svelte` | Empty state when no entry selected; for empty workspaces it shows a single `Initialize workspace` action that opens the setup flow |
 | `EditorHeader.svelte` | Editor header with title and actions |

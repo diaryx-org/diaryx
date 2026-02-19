@@ -1,6 +1,6 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import * as Popover from "$lib/components/ui/popover";
-  import { Button } from "$lib/components/ui/button";
   import {
     ChevronsUpDown,
     Check,
@@ -13,7 +13,6 @@
     getAuthState,
     getWorkspaces,
     getWorkspaceLimit,
-    createServerWorkspace,
     downloadWorkspaceSnapshot,
   } from "$lib/auth";
   import {
@@ -22,7 +21,6 @@
     setCurrentWorkspaceId,
     getLocalWorkspaces,
     getWorkspaceStorageType,
-    createLocalWorkspace,
   } from "$lib/storage/localWorkspaceRegistry.svelte";
   import type { StorageType } from "$lib/backend/storageType";
   import { switchWorkspace } from "$lib/crdt/workspaceCrdtBridge";
@@ -34,16 +32,14 @@
   interface Props {
     onSwitchStart?: () => void;
     onSwitchComplete?: () => void;
+    onAddWorkspace?: () => void;
   }
 
-  let { onSwitchStart, onSwitchComplete }: Props = $props();
+  let { onSwitchStart, onSwitchComplete, onAddWorkspace }: Props = $props();
 
   let open = $state(false);
   let switching = $state(false);
-  let creating = $state(false);
   let downloading = $state<string | null>(null);
-  let newWorkspaceName = $state("");
-  let showCreateInput = $state(false);
 
   // Derived state
   let authState = $derived(getAuthState());
@@ -100,7 +96,6 @@
 
   // Always show selector so users can create new workspaces
   let showSelector = $derived(allWorkspaces.length > 0);
-  let canCreateServer = $derived(authState.isAuthenticated && serverWorkspaces.length < workspaceLimit);
 
   // Current workspace ID (from reactive auth state, updated by switchWorkspace)
   let currentWsId = $derived(authState.activeWorkspaceId);
@@ -207,50 +202,10 @@
     }
   }
 
-  async function handleCreate() {
-    const name = newWorkspaceName.trim();
-    if (!name) return;
-
-    creating = true;
-    try {
-      if (authState.isAuthenticated && canCreateServer) {
-        // Create on server (synced)
-        const ws = await createServerWorkspace(name);
-        newWorkspaceName = "";
-        showCreateInput = false;
-        toast.success(`Workspace "${name}" created`);
-
-        // Immediately switch to the new workspace
-        addLocalWorkspace({ id: ws.id, name: ws.name });
-        await doSwitch(ws.id, ws.name);
-      } else {
-        // Create local-only workspace (no limit)
-        const ws = createLocalWorkspace(name);
-        newWorkspaceName = "";
-        showCreateInput = false;
-        toast.success(`Workspace "${name}" created`);
-        await doSwitch(ws.id, ws.name);
-      }
-    } catch (e: any) {
-      if (e?.statusCode === 403) {
-        toast.error("Synced workspace limit reached");
-      } else if (e?.statusCode === 409) {
-        toast.error("A workspace with that name already exists");
-      } else {
-        toast.error("Failed to create workspace");
-      }
-    } finally {
-      creating = false;
-    }
-  }
-
-  function handleCreateKeydown(e: KeyboardEvent) {
-    if (e.key === "Enter") {
-      handleCreate();
-    } else if (e.key === "Escape") {
-      showCreateInput = false;
-      newWorkspaceName = "";
-    }
+  async function handleCreateWorkspace() {
+    open = false;
+    await tick();
+    onAddWorkspace?.();
   }
 </script>
 
@@ -318,47 +273,14 @@
           </div>
         {/if}
         <div class="p-2 {authState.isAuthenticated ? '' : 'pt-2'}">
-          {#if showCreateInput}
-            <div class="flex items-center gap-1">
-              <input
-                type="text"
-                bind:value={newWorkspaceName}
-                onkeydown={handleCreateKeydown}
-                placeholder="Workspace name"
-                class="flex-1 px-2 py-1 text-sm border rounded-md bg-background"
-                disabled={creating}
-              />
-              <Button
-                variant="ghost"
-                size="sm"
-                onclick={handleCreate}
-                disabled={creating || !newWorkspaceName.trim()}
-                class="h-7 px-2"
-              >
-                {#if creating}
-                  <Loader2 class="size-3.5 animate-spin" />
-                {:else}
-                  Add
-                {/if}
-              </Button>
-            </div>
-            {#if authState.isAuthenticated && canCreateServer}
-              <p class="text-[10px] text-muted-foreground mt-1 px-1">Creates a synced workspace</p>
-            {:else if authState.isAuthenticated && authState.tier !== "plus"}
-              <p class="text-[10px] text-muted-foreground mt-1 px-1">Creates a local workspace — <a href="#billing" class="underline" onclick={(e) => { e.preventDefault(); open = false; document.querySelector('[data-settings-tab="billing"]')?.dispatchEvent(new Event('click')); }}>upgrade to Plus</a> to sync</p>
-            {:else if authState.isAuthenticated}
-              <p class="text-[10px] text-muted-foreground mt-1 px-1">Creates a local workspace (synced limit reached)</p>
-            {/if}
-          {:else}
-            <button
-              type="button"
-              class="flex items-center gap-2 w-full px-2 py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-accent rounded-md transition-colors"
-              onclick={() => { showCreateInput = true; }}
-            >
-              <Plus class="size-3.5" />
-              New workspace
-            </button>
-          {/if}
+          <button
+            type="button"
+            class="flex items-center gap-2 w-full px-2 py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-accent rounded-md transition-colors"
+            onclick={handleCreateWorkspace}
+          >
+            <Plus class="size-3.5" />
+            New workspace
+          </button>
         </div>
       </div>
     </Popover.Content>

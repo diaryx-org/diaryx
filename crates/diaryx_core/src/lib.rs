@@ -64,6 +64,14 @@ pub mod crdt;
 #[cfg(feature = "native-pandoc")]
 pub mod pandoc;
 
+/// Import external formats into Diaryx entries (requires `import-email`, `import-dayone`, or `import-markdown` feature)
+#[cfg(any(
+    feature = "import-email",
+    feature = "import-dayone",
+    feature = "import-markdown"
+))]
+pub mod import;
+
 /// Cloud storage module for bidirectional file synchronization
 pub mod cloud;
 

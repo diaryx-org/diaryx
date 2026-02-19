@@ -23,11 +23,11 @@
   import { getServerUrl, getAuthState, createCheckoutSession } from '$lib/auth';
 
   interface Props {
-    onOpenSyncWizard?: () => void;
+    onAddWorkspace?: () => void;
     api: Api | null;
   }
 
-  let { onOpenSyncWizard, api }: Props = $props();
+  let { onAddWorkspace, api }: Props = $props();
 
   const slugRegex = /^[a-z0-9-]{3,64}$/;
 
@@ -205,8 +205,8 @@
   }
 
   function handleOpenSyncSetup() {
-    if (onOpenSyncWizard) {
-      onOpenSyncWizard();
+    if (onAddWorkspace) {
+      onAddWorkspace();
       return;
     }
     showInfo('Open Sync settings to complete setup before publishing.');

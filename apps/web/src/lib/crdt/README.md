@@ -97,7 +97,7 @@ example, during reconnect/setup transitions), `workspaceCrdtBridge` queues the
 local updates and flushes them after connect so local saves are not dropped.
 
 For snapshot bootstrap flows (`load_server`, and `sync_local` after successful
-snapshot upload), `SyncSetupWizard` explicitly discards queued pre-connect local
+snapshot upload), `AddWorkspaceDialog` explicitly discards queued pre-connect local
 updates before opening the WebSocket. This prevents replaying stale bootstrap
 create/delete/body events on top of already-imported snapshot state.
 

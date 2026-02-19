@@ -43,7 +43,7 @@
     /** Tab to show when the dialog opens */
     initialTab?: string;
     /** Callback to open the sync setup wizard */
-    onOpenSyncWizard?: () => void;
+    onAddWorkspace?: () => void;
   }
 
   let {
@@ -56,7 +56,7 @@
     focusMode = $bindable(true),
     workspacePath = null,
     initialTab,
-    onOpenSyncWizard,
+    onAddWorkspace,
   }: Props = $props();
 
   const mobileState = getMobileState();
@@ -147,13 +147,13 @@
 
     <Tabs.Content value="sync">
       <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
-        <SyncSettings onOpenWizard={onOpenSyncWizard} />
+        <SyncSettings {onAddWorkspace} />
       </div>
     </Tabs.Content>
 
     <Tabs.Content value="account">
       <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
-        <AccountSettings onOpenWizard={onOpenSyncWizard} />
+        <AccountSettings {onAddWorkspace} />
         <WorkspaceManagement />
       </div>
     </Tabs.Content>

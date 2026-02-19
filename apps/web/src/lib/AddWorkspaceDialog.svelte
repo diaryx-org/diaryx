@@ -1,16 +1,15 @@
 <script lang="ts">
   /**
-   * SyncSetupWizard - Unified sync setup wizard
+   * AddWorkspaceDialog - Workspace creation dialog
+   *
+   * Two orthogonal dimensions:
+   * - Sync Mode: Local (this device only) or Remote (syncs to server)
+   * - Content Source: From existing workspace, Import from ZIP, or Start fresh
    *
    * Screens:
-   * 1. Sign In - Email + auth (server URL in Advanced dropdown)
-   * 2. Options  - Context-aware picker (no auto-download):
-   *    - Download server workspace (shown when server has workspaces)
-   *    - Upload local workspace (shown when local workspaces exist)
-   *    - Create new workspace (always shown)
-   *    - Create local workspace (always shown)
-   *
-   * Options are intelligently pre-selected based on what exists.
+   * - options (default) — name input, sync mode toggle, content source picker
+   * - auth — triggered when selecting Remote mode without authentication
+   * - upgrade — shown when authenticated but on free tier
    */
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
@@ -61,6 +60,7 @@
     Plus,
     Settings2,
     Fingerprint,
+    Cloud,
   } from "@lucide/svelte";
   import VerificationCodeInput from "$lib/components/VerificationCodeInput.svelte";
   import { toast } from "svelte-sonner";
@@ -96,7 +96,7 @@
 
   // Screen tracking
   type Screen = 'auth' | 'upgrade' | 'options';
-  let screen = $state<Screen>('auth');
+  let screen = $state<Screen>('options');
 
   // Auth screen state
   let email = $state("");
@@ -115,11 +115,14 @@
   let verificationSent = $state(false);
   let devLink = $state<string | null>(null);
 
-  // Options screen state — unified picker
-  type PostAuthAction = 'upload_local' | 'download_server' | 'create_new' | 'import_zip' | 'create_local';
-  let postAuthAction = $state<PostAuthAction>('upload_local');
-  let selectedLocalWorkspaceId = $state<string | null>(null);
-  let selectedServerWorkspaceId = $state<string | null>(null);
+  // Options screen state — two dimensions
+  type SyncMode = 'local' | 'remote';
+  type ContentSource = 'existing_workspace' | 'import_zip' | 'start_fresh';
+
+  let syncMode = $state<SyncMode>('local');
+  let contentSource = $state<ContentSource>('start_fresh');
+  let selectedSourceWorkspaceId = $state<string | null>(null);
+  let selectedSourceIsServer = $state(false);
   let newWorkspaceName = $state("");
 
   // Import from ZIP state
@@ -162,12 +165,93 @@
   // Derived: local workspaces for picker
   let localWorkspaces = $derived(getLocalWorkspaces());
 
-  // Skip auth screen if user is already signed in (e.g. opened from Sync settings)
+  // Derived: available workspaces for "From existing workspace" content source
+  let availableSourceWorkspaces = $derived.by(() => {
+    const result: Array<{ id: string; name: string; isServer: boolean }> = [];
+    // Server workspaces shown in both modes
+    for (const ws of serverWorkspacesList) {
+      result.push({ id: ws.id, name: ws.name, isServer: true });
+    }
+    // Local workspaces only shown in Remote mode (in Local mode they already exist)
+    if (syncMode === 'remote') {
+      for (const ws of localWorkspaces) {
+        if (!serverWorkspacesList.some(s => s.id === ws.id)) {
+          result.push({ id: ws.id, name: ws.name, isServer: false });
+        }
+      }
+    }
+    return result;
+  });
+
+  // Derived: whether the name input is read-only (auto-filled from selected workspace)
+  let nameReadonly = $derived(
+    contentSource === 'existing_workspace' && selectedSourceWorkspaceId !== null
+  );
+
+  // Initialize dialog state when opened
   $effect(() => {
-    if (open && isAuthenticated() && screen === 'auth') {
-      handlePostAuth().then((s) => { screen = s; });
+    if (open) {
+      initializeDialog();
     }
   });
+
+  /**
+   * Set up initial state when the dialog opens.
+   * Auto-detects the best defaults based on auth state and available workspaces.
+   */
+  function initializeDialog() {
+    error = null;
+    isInitializing = false;
+    importProgress = 0;
+    progressDetail = null;
+    syncStatusText = null;
+    importZipFile = null;
+    verificationSent = false;
+    newWorkspaceName = getNextLocalWorkspaceName();
+
+    if (isAuthenticated()) {
+      const authState = getAuthState();
+      serverWorkspacesList = getWorkspaces();
+
+      if (authState.tier === 'plus') {
+        if (serverWorkspacesList.length > 0) {
+          // Server has workspaces — default to Remote + From existing
+          syncMode = 'remote';
+          contentSource = 'existing_workspace';
+          selectedSourceIsServer = true;
+          const preferred = (
+            authState.activeWorkspaceId
+              ? serverWorkspacesList.find(w => w.id === authState.activeWorkspaceId)
+              : null
+          ) ?? serverWorkspacesList[0];
+          selectedSourceWorkspaceId = preferred.id;
+          newWorkspaceName = preferred.name;
+        } else if (localWorkspaces.length > 0) {
+          // No server workspaces, but local ones exist — default to Remote + From existing (local)
+          syncMode = 'remote';
+          contentSource = 'existing_workspace';
+          selectedSourceIsServer = false;
+          selectedSourceWorkspaceId = localWorkspaces[0].id;
+          newWorkspaceName = localWorkspaces[0].name;
+        } else {
+          // Nothing exists — default to Local + Start fresh
+          syncMode = 'local';
+          contentSource = 'start_fresh';
+        }
+      } else {
+        // Free tier — default to Local
+        syncMode = 'local';
+        contentSource = 'start_fresh';
+      }
+    } else {
+      // Not authenticated — default to Local + Start fresh
+      syncMode = 'local';
+      contentSource = 'start_fresh';
+      serverWorkspacesList = [];
+    }
+
+    screen = 'options';
+  }
 
   // Get a sensible default device name based on platform
   function getDefaultDeviceName(): string {
@@ -336,7 +420,7 @@
 
   /**
    * Populate the options screen after authentication.
-   * Never auto-starts initialization — always shows the options screen.
+   * Sets syncMode to 'remote' and pre-selects content source.
    */
   async function handlePostAuth(): Promise<Screen> {
     // Guard: if sync is already set up and server has workspaces, skip
@@ -353,58 +437,115 @@
     }
 
     const serverWs = getWorkspaces();
-    const localWs = getLocalWorkspaces();
-
     serverWorkspacesList = serverWs;
 
-    // Always populate local workspace selection (needed if user picks "upload")
-    selectedLocalWorkspaceId = getCurrentWorkspaceId() ?? localWs[0]?.id ?? null;
+    // User just authenticated — set to Remote mode
+    syncMode = 'remote';
 
     // Pre-select the most sensible default
     if (serverWs.length > 0) {
-      // Server has workspaces — pre-select download
-      postAuthAction = 'download_server';
+      contentSource = 'existing_workspace';
+      selectedSourceIsServer = true;
       const preferredServerWorkspace = (
         authState.activeWorkspaceId
           ? serverWs.find(w => w.id === authState.activeWorkspaceId)
           : null
       ) ?? serverWs[0];
-      selectedServerWorkspaceId = preferredServerWorkspace.id;
-    } else if (localWs.length > 0) {
-      // No server workspaces, but local ones exist — pre-select upload
-      postAuthAction = 'upload_local';
+      selectedSourceWorkspaceId = preferredServerWorkspace.id;
+      newWorkspaceName = preferredServerWorkspace.name;
+    } else if (localWorkspaces.length > 0) {
+      contentSource = 'existing_workspace';
+      selectedSourceIsServer = false;
+      selectedSourceWorkspaceId = localWorkspaces[0].id;
+      newWorkspaceName = localWorkspaces[0].name;
     } else {
-      // Nothing exists — default to creating a new local workspace.
-      postAuthAction = 'create_local';
+      contentSource = 'start_fresh';
+      newWorkspaceName = getNextLocalWorkspaceName();
     }
-
-    // Default name for create-local/create-synced actions.
-    newWorkspaceName = getNextLocalWorkspaceName();
 
     return 'options';
   }
 
   /**
-   * Handle all initialization actions based on user selection.
+   * Handle sync mode toggle. Triggers auth flow if switching to Remote
+   * without being authenticated.
+   */
+  function handleSyncModeChange(newMode: string) {
+    if (newMode === 'remote' && !isAuthenticated()) {
+      syncMode = 'remote';
+      screen = 'auth';
+      return;
+    }
+
+    if (newMode === 'remote' && isAuthenticated()) {
+      const auth = getAuthState();
+      if (auth.tier !== 'plus') {
+        syncMode = 'remote';
+        screen = 'upgrade';
+        return;
+      }
+      serverWorkspacesList = getWorkspaces();
+    }
+
+    syncMode = newMode as SyncMode;
+
+    // Reset invalid selection when switching to local
+    // (local workspaces are hidden in Local mode since they already exist)
+    if (syncMode === 'local' && contentSource === 'existing_workspace' && !selectedSourceIsServer) {
+      contentSource = 'start_fresh';
+      selectedSourceWorkspaceId = null;
+      selectedSourceIsServer = false;
+      newWorkspaceName = getNextLocalWorkspaceName();
+    }
+  }
+
+  /**
+   * Select a source workspace from the "From existing workspace" picker.
+   */
+  function selectSourceWorkspace(ws: { id: string; name: string; isServer: boolean }) {
+    contentSource = 'existing_workspace';
+    selectedSourceWorkspaceId = ws.id;
+    selectedSourceIsServer = ws.isServer;
+    newWorkspaceName = ws.name;
+  }
+
+  /**
+   * Get the submit button text based on current syncMode + contentSource.
+   */
+  function getSubmitButtonText(): string {
+    if (syncMode === 'local') {
+      switch (contentSource) {
+        case 'start_fresh': return 'Create Workspace';
+        case 'import_zip': return 'Import Workspace';
+        case 'existing_workspace': return 'Download Workspace';
+      }
+    } else {
+      switch (contentSource) {
+        case 'start_fresh': return 'Create & Sync';
+        case 'import_zip': return 'Import & Sync';
+        case 'existing_workspace':
+          return selectedSourceIsServer ? 'Download & Sync' : 'Upload & Sync';
+      }
+    }
+    return 'Create Workspace';
+  }
+
+  /**
+   * Handle all initialization actions based on syncMode + contentSource.
    */
   async function handleInitialize() {
-    if (postAuthAction === 'upload_local' && !selectedLocalWorkspaceId) {
-      error = "Please select a workspace to upload";
+    if (contentSource === 'existing_workspace' && !selectedSourceWorkspaceId) {
+      error = "Please select a workspace";
       return;
     }
 
-    if (postAuthAction === 'download_server' && !selectedServerWorkspaceId) {
-      error = "Please select a workspace to download";
-      return;
-    }
-
-    if (postAuthAction === 'import_zip' && !importZipFile) {
+    if (contentSource === 'import_zip' && !importZipFile) {
       error = "Please select a ZIP file to import";
       return;
     }
 
     if (
-      (postAuthAction === 'create_local' || postAuthAction === 'create_new')
+      (contentSource === 'start_fresh' || contentSource === 'import_zip')
       && !newWorkspaceName.trim()
     ) {
       error = "Please enter a workspace name";
@@ -416,20 +557,40 @@
     importProgress = 0;
 
     try {
-      if (postAuthAction === 'create_local') {
-        await handleCreateLocalWorkspace();
-        return;
-      } else if (postAuthAction === 'download_server') {
-        await handleDownloadServer();
-      } else if (postAuthAction === 'upload_local') {
-        await handleUploadLocal();
-      } else if (postAuthAction === 'import_zip') {
-        await handleImportZip();
+      if (syncMode === 'local') {
+        switch (contentSource) {
+          case 'start_fresh':
+            await handleCreateLocalWorkspace();
+            break;
+          case 'import_zip':
+            await handleImportZipLocal();
+            break;
+          case 'existing_workspace':
+            await handleDownloadServerLocal();
+            break;
+        }
       } else {
-        await handleCreateNew();
+        switch (contentSource) {
+          case 'start_fresh':
+            await handleCreateNew();
+            break;
+          case 'import_zip':
+            await handleImportZip();
+            break;
+          case 'existing_workspace':
+            if (selectedSourceIsServer) {
+              await handleDownloadServer();
+            } else {
+              await handleUploadLocal({
+                forceCreateServerWorkspace: true,
+                localWorkspaceId: selectedSourceWorkspaceId!,
+              });
+            }
+            break;
+        }
       }
     } catch (e) {
-      console.error("[SyncWizard] Initialization error:", e);
+      console.error("[AddWorkspace] Initialization error:", e);
       cleanupSyncSubscriptions();
       if (e instanceof Error) {
         error = e.message || "Unknown error";
@@ -464,13 +625,6 @@
   }
 
   function getPreferredServerWorkspace(): { id: string; name: string } | null {
-    if (selectedServerWorkspaceId) {
-      const selected = serverWorkspacesList.find(w => w.id === selectedServerWorkspaceId);
-      if (selected) {
-        return selected;
-      }
-    }
-
     const activeWorkspaceId = getAuthState().activeWorkspaceId;
     if (activeWorkspaceId) {
       const active = serverWorkspacesList.find(w => w.id === activeWorkspaceId);
@@ -495,14 +649,6 @@
     const currentWorkspaceName = currentWorkspace?.name?.trim();
     if (currentWorkspaceName) {
       return currentWorkspaceName;
-    }
-
-    const selectedLocalWorkspace = selectedLocalWorkspaceId
-      ? getLocalWorkspaces().find(w => w.id === selectedLocalWorkspaceId)
-      : null;
-    const selectedLocalName = selectedLocalWorkspace?.name?.trim();
-    if (selectedLocalName) {
-      return selectedLocalName;
     }
 
     const firstLocalName = getLocalWorkspaces()[0]?.name?.trim();
@@ -561,10 +707,110 @@
   }
 
   /**
-   * Download a server workspace to this device.
+   * Download a server workspace to this device (one-time copy, no sync).
+   */
+  async function handleDownloadServerLocal() {
+    const serverWs = serverWorkspacesList.find(w => w.id === selectedSourceWorkspaceId);
+    if (!serverWs) throw new Error("No server workspace selected");
+
+    const localWs = createLocalWorkspace(serverWs.name);
+    await switchWorkspace(localWs.id, localWs.name);
+
+    const backend = await getBackend();
+    const workspaceDir = backend.getWorkspacePath()
+      .replace(/\/index\.md$/, '')
+      .replace(/\/README\.md$/, '');
+
+    syncStatusText = "Downloading workspace...";
+    progressMode = 'bytes';
+
+    try {
+      const snapshot = await downloadWorkspaceSnapshot(serverWs.id, true);
+      if (snapshot && snapshot.size > 100) {
+        const snapshotFile = new File(
+          [snapshot],
+          `diaryx-snapshot-${serverWs.id}.zip`,
+          { type: "application/zip" },
+        );
+
+        syncStatusText = "Importing files...";
+        const result = await backend.importFromZip(
+          snapshotFile,
+          workspaceDir,
+          (uploaded, total) => {
+            importProgress = total > 0 ? Math.round((uploaded / total) * 100) : 0;
+            progressDetail = total > 0
+              ? `${formatBytes(uploaded)} of ${formatBytes(total)}`
+              : null;
+          },
+        );
+
+        if (result.success && result.files_imported > 0) {
+          console.log(`[AddWorkspace] Downloaded ${result.files_imported} files`);
+        }
+      }
+    } catch (e) {
+      console.warn("[AddWorkspace] Snapshot download/import error:", e);
+    }
+
+    await ensureRootIndexForCurrentWorkspace(serverWs.name);
+
+    toast.success("Workspace downloaded", {
+      description: `"${serverWs.name}" is ready on this device.`,
+    });
+
+    handleClose();
+    onComplete?.();
+  }
+
+  /**
+   * Import a ZIP file as a local-only workspace (no sync).
+   */
+  async function handleImportZipLocal() {
+    if (!importZipFile) throw new Error("No ZIP file selected");
+
+    const wsName = resolveCreationWorkspaceName(false);
+    const localWs = createLocalWorkspace(wsName);
+    await switchWorkspace(localWs.id, localWs.name);
+
+    const backend = await getBackend();
+    const workspaceDir = backend.getWorkspacePath()
+      .replace(/\/index\.md$/, '')
+      .replace(/\/README\.md$/, '');
+
+    syncStatusText = "Importing ZIP...";
+    progressMode = 'bytes';
+
+    const result = await backend.importFromZip(
+      importZipFile,
+      workspaceDir,
+      (uploaded, total) => {
+        importProgress = total > 0 ? Math.round((uploaded / total) * 100) : 0;
+        progressDetail = total > 0
+          ? `${formatBytes(uploaded)} of ${formatBytes(total)}`
+          : null;
+      },
+    );
+
+    if (!result.success) {
+      throw new Error(result.error || "Failed to import ZIP");
+    }
+
+    await ensureRootIndexForCurrentWorkspace(localWs.name);
+
+    toast.success("Import complete", {
+      description: `Imported ${result.files_imported} files.`,
+    });
+
+    handleClose();
+    onComplete?.();
+  }
+
+  /**
+   * Download a server workspace to this device and enable sync.
    */
   async function handleDownloadServer() {
-    const serverWs = serverWorkspacesList.find(w => w.id === selectedServerWorkspaceId);
+    const serverWs = serverWorkspacesList.find(w => w.id === selectedSourceWorkspaceId);
     if (!serverWs) throw new Error("No server workspace selected");
 
     const workspaceId = serverWs.id;
@@ -589,7 +835,7 @@
 
     // Step 2: Tombstone old CRDT entries
     const tombstoned = await markAllCrdtFilesAsDeleted();
-    console.log(`[SyncWizard] Tombstoned ${tombstoned} local CRDT entries`);
+    console.log(`[AddWorkspace] Tombstoned ${tombstoned} local CRDT entries`);
 
     // Step 3: Download and import server snapshot
     syncStatusText = "Downloading workspace...";
@@ -614,11 +860,11 @@
         );
 
         if (result.success && result.files_imported > 0) {
-          console.log(`[SyncWizard] Downloaded ${result.files_imported} files`);
+          console.log(`[AddWorkspace] Downloaded ${result.files_imported} files`);
         }
       }
     } catch (e) {
-      console.warn("[SyncWizard] Snapshot download/import error:", e);
+      console.warn("[AddWorkspace] Snapshot download/import error:", e);
     }
 
     suppressSyncProgress = false;
@@ -628,7 +874,7 @@
     try {
       await api.initializeWorkspaceCrdt(workspacePath);
     } catch (e) {
-      console.log("[SyncWizard] CRDT init error (continuing):", e);
+      console.log("[AddWorkspace] CRDT init error (continuing):", e);
     }
 
     // Step 5: Connect WebSocket
@@ -642,7 +888,7 @@
     importProgress = 80;
     const syncResult = await waitForInitialSync(30000);
     if (!syncResult) {
-      console.warn("[SyncWizard] Metadata sync timed out, continuing in background");
+      console.warn("[AddWorkspace] Metadata sync timed out, continuing in background");
     }
 
     importProgress = 100;
@@ -675,7 +921,7 @@
     subscribeSyncProgress();
 
     // Determine workspace name from selected local workspace
-    const localWorkspaceId = options?.localWorkspaceId ?? selectedLocalWorkspaceId ?? undefined;
+    const localWorkspaceId = options?.localWorkspaceId;
     const selectedLocal = localWorkspaceId
       ? getLocalWorkspaces().find(w => w.id === localWorkspaceId)
       : null;
@@ -692,7 +938,7 @@
         throw new Error("No synced workspace available");
       }
       workspaceId = existing.id;
-      console.log(`[SyncWizard] Uploading to existing server workspace: ${existing.name} (${workspaceId})`);
+      console.log(`[AddWorkspace] Uploading to existing server workspace: ${existing.name} (${workspaceId})`);
     } else {
       syncStatusText = "Creating workspace on server...";
       let serverWs;
@@ -751,7 +997,7 @@
           throw new Error("Snapshot upload failed");
         }
 
-        console.log(`[SyncWizard] Snapshot upload complete (${result.files_imported} files)`);
+        console.log(`[AddWorkspace] Snapshot upload complete (${result.files_imported} files)`);
         if (snapshot.attachmentReadFailures > 0) {
           toast.warning("Some attachments were skipped", {
             description: `${snapshot.attachmentReadFailures} attachment file(s) could not be included in the snapshot.`,
@@ -782,7 +1028,7 @@
     const syncResult = await waitForInitialSync(30000);
 
     if (!syncResult) {
-      console.warn("[SyncWizard] Metadata sync timed out, continuing in background");
+      console.warn("[AddWorkspace] Metadata sync timed out, continuing in background");
       toast.info("Sync continuing in background", {
         description: "Check the sync indicator in the header for progress.",
       });
@@ -823,7 +1069,7 @@
         importProgress = 100;
       }
     } catch (e) {
-      console.warn("[SyncWizard] Body sync error (continuing anyway):", e);
+      console.warn("[AddWorkspace] Body sync error (continuing anyway):", e);
     }
 
     if (importProgress < 100) importProgress = 100;
@@ -852,7 +1098,6 @@
     await switchWorkspace(localWs.id, localWs.name);
     await ensureRootIndexForCurrentWorkspace(localWs.name);
 
-    selectedLocalWorkspaceId = localWs.id;
     await handleUploadLocal({
       forceCreateServerWorkspace: true,
       localWorkspaceId: localWs.id,
@@ -885,7 +1130,7 @@
       }
       workspaceId = existing.id;
       workspaceName = existing.name;
-      console.log(`[SyncWizard] Importing ZIP to existing server workspace: ${existing.name} (${workspaceId})`);
+      console.log(`[AddWorkspace] Importing ZIP to existing server workspace: ${existing.name} (${workspaceId})`);
     } else {
       setStageProgress(5, "Creating workspace on server...");
       let serverWs;
@@ -929,7 +1174,7 @@
     );
     if (!uploadResult) throw new Error("Upload failed — server returned no result");
 
-    console.log(`[SyncWizard] Server imported ${uploadResult.files_imported} files from ZIP`);
+    console.log(`[AddWorkspace] Server imported ${uploadResult.files_imported} files from ZIP`);
     setStageProgress(35, "Server import complete", `${uploadResult.files_imported} files`);
 
     // Step 3: Apply ZIP locally so this device is ready before sync connects.
@@ -953,7 +1198,7 @@
     }
 
     if (localImportResult.files_imported > 0) {
-      console.log(`[SyncWizard] Applied ${localImportResult.files_imported} files locally`);
+      console.log(`[AddWorkspace] Applied ${localImportResult.files_imported} files locally`);
     }
 
     suppressSyncProgress = false;
@@ -966,7 +1211,7 @@
       try {
         await api.initializeWorkspaceCrdt(workspacePath);
       } catch (e) {
-        console.log("[SyncWizard] CRDT init error (continuing):", e);
+        console.log("[AddWorkspace] CRDT init error (continuing):", e);
       }
     }
 
@@ -980,7 +1225,7 @@
     setStageProgress(88, "Syncing metadata...");
     const syncResult = await waitForInitialSync(30000);
     if (!syncResult) {
-      console.warn("[SyncWizard] Metadata sync timed out, continuing in background");
+      console.warn("[AddWorkspace] Metadata sync timed out, continuing in background");
     }
 
     importProgress = 100;
@@ -1015,7 +1260,7 @@
 
     unsubscribeStatus = onSyncStatus((status, statusError) => {
       if (status === 'error' && statusError) {
-        console.warn("[SyncWizard] Sync error:", statusError);
+        console.warn("[AddWorkspace] Sync error:", statusError);
       }
     });
   }
@@ -1067,10 +1312,14 @@
     onOpenChange?.(false);
   }
 
-  // Go back to auth screen
+  // Go back from auth/upgrade to options
   function handleBack() {
-    if (screen === 'options' || screen === 'upgrade') {
-      screen = 'auth';
+    if (screen === 'auth') {
+      screen = 'options';
+      syncMode = 'local';
+      error = null;
+    } else if (screen === 'upgrade') {
+      screen = 'options';
       error = null;
     }
   }
@@ -1115,16 +1364,16 @@
       collectFilePaths(tree, files);
       if (files.length === 0) return;
 
-      console.log(`[SyncWizard] Clearing ${files.length} local file(s) before download`);
+      console.log(`[AddWorkspace] Clearing ${files.length} local file(s) before download`);
       for (const path of files) {
         try {
           await api.deleteFile(path);
         } catch (e) {
-          console.warn(`[SyncWizard] Failed to delete ${path}:`, e);
+          console.warn(`[AddWorkspace] Failed to delete ${path}:`, e);
         }
       }
     } catch (e) {
-      console.warn("[SyncWizard] Failed to clear local workspace:", e);
+      console.warn("[AddWorkspace] Failed to clear local workspace:", e);
     }
   }
 
@@ -1152,10 +1401,10 @@
           Sync Requires Plus
         {:else if isInitializing}
           <Loader2 class="size-5 animate-spin" />
-          Setting Up Sync
+          Adding Workspace
         {:else}
-          <Settings2 class="size-5" />
-          Set Up Sync
+          <Plus class="size-5" />
+          Add Workspace
         {/if}
       </Dialog.Title>
       <Dialog.Description>
@@ -1163,20 +1412,16 @@
           {#if verificationSent}
             Check your email and click the sign-in link.
           {:else}
-            Enter your email to sync across devices.
+            Enter your email to enable remote sync.
           {/if}
         {:else if screen === 'upgrade'}
           Upgrade your account to enable sync.
         {:else if isInitializing}
           {syncStatusText ?? "Setting up..."}
-        {:else if serverWorkspacesList.length > 0 && localWorkspaces.length > 0}
-          Your workspace was found on the server. Download it, or upload your local data instead.
-        {:else if serverWorkspacesList.length > 0}
-          Your workspace was found on the server.
-        {:else if localWorkspaces.length > 0}
-          No data found on the server. Upload your local workspace or start fresh.
+        {:else if syncMode === 'remote'}
+          Create a workspace that syncs across devices.
         {:else}
-          You're signed in. Set up sync now, or create a local-only workspace.
+          Create a workspace on this device.
         {/if}
       </Dialog.Description>
     </Dialog.Header>
@@ -1190,7 +1435,7 @@
         </div>
       {/if}
 
-      <!-- Screen 1: Authentication -->
+      <!-- Screen: Authentication -->
       {#if screen === 'auth'}
         {#if !verificationSent}
           <!-- Email input -->
@@ -1355,7 +1600,8 @@
             class="w-full text-sm text-muted-foreground hover:text-foreground transition-colors py-1"
             onclick={() => {
               screen = 'options';
-              postAuthAction = 'create_local';
+              syncMode = 'local';
+              contentSource = 'start_fresh';
               if (!newWorkspaceName.trim()) {
                 newWorkspaceName = getNextLocalWorkspaceName();
               }
@@ -1366,7 +1612,7 @@
         </div>
       {/if}
 
-      <!-- Screen 2: Options -->
+      <!-- Screen: Options -->
       {#if screen === 'options'}
         {#if isInitializing}
           <!-- Progress bar during initialization -->
@@ -1394,226 +1640,195 @@
             </p>
           </div>
         {:else}
-          <!-- Unified workspace picker -->
-          <div class="space-y-3">
-            <!-- Server workspaces (download) -->
-            {#if serverWorkspacesList.length > 0}
-              <div class="space-y-2">
-                <p class="text-xs font-medium text-muted-foreground">Download from server</p>
-                <div class="space-y-1.5 max-h-32 overflow-y-auto">
-                  {#each serverWorkspacesList as ws (ws.id)}
-                    <button
-                      type="button"
-                      class="w-full text-left p-3 rounded-lg border-2 transition-colors {postAuthAction === 'download_server' && selectedServerWorkspaceId === ws.id ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
-                      onclick={() => { postAuthAction = 'download_server'; selectedServerWorkspaceId = ws.id; }}
-                    >
-                      <div class="flex items-start gap-3">
-                        <div class="mt-0.5">
-                          <Download class="size-5 {postAuthAction === 'download_server' && selectedServerWorkspaceId === ws.id ? 'text-primary' : 'text-muted-foreground'}" />
-                        </div>
-                        <div>
-                          <div class="font-medium text-sm">{ws.name}</div>
-                          <div class="text-xs text-muted-foreground mt-0.5">
-                            Download from server to this device
-                          </div>
-                        </div>
-                      </div>
-                    </button>
-                  {/each}
-                </div>
+          <div class="space-y-4">
+            <!-- Workspace Name -->
+            <div class="space-y-2">
+              <Label for="workspace-name" class="text-sm">Workspace Name</Label>
+              <Input
+                id="workspace-name"
+                bind:value={newWorkspaceName}
+                placeholder="My Workspace"
+                disabled={nameReadonly}
+              />
+            </div>
+
+            <!-- Sync Mode Toggle -->
+            <div class="space-y-2">
+              <Label class="text-sm">Sync Mode</Label>
+              <div class="flex rounded-lg bg-muted p-[3px]">
+                <button
+                  type="button"
+                  class="flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-all flex items-center justify-center gap-1.5
+                    {syncMode === 'local'
+                      ? 'bg-background shadow-sm text-foreground'
+                      : 'text-muted-foreground hover:text-foreground'}"
+                  onclick={() => handleSyncModeChange('local')}
+                >
+                  <HardDrive class="size-3.5" />
+                  Local
+                </button>
+                <button
+                  type="button"
+                  class="flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-all flex items-center justify-center gap-1.5
+                    {syncMode === 'remote'
+                      ? 'bg-background shadow-sm text-foreground'
+                      : 'text-muted-foreground hover:text-foreground'}"
+                  onclick={() => handleSyncModeChange('remote')}
+                >
+                  <Cloud class="size-3.5" />
+                  Remote
+                </button>
               </div>
-            {/if}
+            </div>
 
-            <!-- Upload local workspace -->
-            {#if localWorkspaces.length > 0}
-              <div class="space-y-2">
-                {#if serverWorkspacesList.length > 0}
-                  <p class="text-xs font-medium text-muted-foreground">Or copy from this device</p>
-                {/if}
-
-                {#if localWorkspaces.length === 1}
-                  <!-- Single local workspace — show as one card -->
-                  <button
-                    type="button"
-                    class="w-full text-left p-3 rounded-lg border-2 transition-colors {postAuthAction === 'upload_local' ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
-                    onclick={() => { postAuthAction = 'upload_local'; selectedLocalWorkspaceId = localWorkspaces[0].id; }}
-                  >
-                    <div class="flex items-start gap-3">
-                      <div class="mt-0.5">
-                        <Upload class="size-5 {postAuthAction === 'upload_local' ? 'text-primary' : 'text-muted-foreground'}" />
-                      </div>
-                      <div>
-                        <div class="font-medium text-sm">Create synced workspace from "{localWorkspaces[0].name}"</div>
-                        <div class="text-xs text-muted-foreground mt-0.5">
-                          Copy this local workspace to the server and start syncing (local files stay on this device)
-                        </div>
+            <!-- Content Source -->
+            <div class="space-y-2">
+              <!-- From existing workspace -->
+              {#if availableSourceWorkspaces.length > 0}
+                <button
+                  type="button"
+                  class="w-full text-left p-3 rounded-lg border-2 transition-colors {contentSource === 'existing_workspace' ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
+                  onclick={() => {
+                    contentSource = 'existing_workspace';
+                    if (!selectedSourceWorkspaceId && availableSourceWorkspaces.length > 0) {
+                      selectSourceWorkspace(availableSourceWorkspaces[0]);
+                    }
+                  }}
+                >
+                  <div class="flex items-start gap-3">
+                    <div class="mt-0.5">
+                      <Download class="size-5 {contentSource === 'existing_workspace' ? 'text-primary' : 'text-muted-foreground'}" />
+                    </div>
+                    <div>
+                      <div class="font-medium text-sm">From existing workspace</div>
+                      <div class="text-xs text-muted-foreground mt-0.5">
+                        {#if syncMode === 'local'}
+                          Download a one-time copy from the server
+                        {:else if selectedSourceWorkspaceId && !selectedSourceIsServer}
+                          Upload local workspace to server and sync
+                        {:else}
+                          Download from server and keep in sync
+                        {/if}
                       </div>
                     </div>
-                  </button>
-                {:else}
-                  <!-- Multiple local workspaces — expandable picker -->
-                  <button
-                    type="button"
-                    class="w-full text-left p-3 rounded-lg border-2 transition-colors {postAuthAction === 'upload_local' ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
-                    onclick={() => { postAuthAction = 'upload_local'; }}
-                  >
-                    <div class="flex items-start gap-3">
-                      <div class="mt-0.5">
-                        <Upload class="size-5 {postAuthAction === 'upload_local' ? 'text-primary' : 'text-muted-foreground'}" />
-                      </div>
-                      <div>
-                        <div class="font-medium text-sm">
-                          Create synced workspace from local workspace
-                        </div>
-                        <div class="text-xs text-muted-foreground mt-0.5">
-                          {#if postAuthAction === 'upload_local' && selectedLocalWorkspaceId}
-                            Copy "{localWorkspaces.find(w => w.id === selectedLocalWorkspaceId)?.name ?? 'workspace'}" to the server and start syncing
+                  </div>
+                </button>
+
+                {#if contentSource === 'existing_workspace'}
+                  <div class="pl-8 space-y-1.5 max-h-32 overflow-y-auto">
+                    {#each availableSourceWorkspaces as ws (ws.id)}
+                      <button
+                        type="button"
+                        class="w-full text-left p-2 rounded-md border transition-colors {selectedSourceWorkspaceId === ws.id ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
+                        onclick={() => selectSourceWorkspace(ws)}
+                      >
+                        <div class="flex items-center gap-2">
+                          {#if ws.isServer}
+                            <Cloud class="size-3.5 {selectedSourceWorkspaceId === ws.id ? 'text-primary' : 'text-muted-foreground'}" />
                           {:else}
-                            Choose which local workspace to copy to the server
+                            <HardDrive class="size-3.5 {selectedSourceWorkspaceId === ws.id ? 'text-primary' : 'text-muted-foreground'}" />
+                          {/if}
+                          <span class="text-sm truncate">{ws.name}</span>
+                          {#if ws.isServer}
+                            <span class="text-[10px] px-1 py-0.5 rounded bg-muted text-muted-foreground shrink-0">server</span>
+                          {:else}
+                            <span class="text-[10px] px-1 py-0.5 rounded bg-muted text-muted-foreground shrink-0">local</span>
                           {/if}
                         </div>
-                      </div>
-                    </div>
-                  </button>
-
-                  {#if postAuthAction === 'upload_local'}
-                    <div class="pl-8 space-y-1.5 max-h-32 overflow-y-auto">
-                      {#each localWorkspaces as ws (ws.id)}
-                        <button
-                          type="button"
-                          class="w-full text-left p-2 rounded-md border transition-colors {selectedLocalWorkspaceId === ws.id ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
-                          onclick={() => { selectedLocalWorkspaceId = ws.id; }}
-                        >
-                          <div class="flex items-center gap-2">
-                            <HardDrive class="size-3.5 {selectedLocalWorkspaceId === ws.id ? 'text-primary' : 'text-muted-foreground'}" />
-                            <span class="text-sm truncate">{ws.name}</span>
-                          </div>
-                        </button>
-                      {/each}
-                    </div>
-                  {/if}
+                      </button>
+                    {/each}
+                  </div>
                 {/if}
-              </div>
-            {/if}
+              {/if}
 
-            <!-- Create new workspace -->
-            <button
-              type="button"
-              class="w-full text-left p-3 rounded-lg border-2 transition-colors {postAuthAction === 'create_new' ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
-              onclick={() => {
-                postAuthAction = 'create_new';
-                if (!newWorkspaceName.trim()) {
+              <!-- Import from ZIP -->
+              <input
+                type="file"
+                accept=".zip"
+                class="hidden"
+                bind:this={importZipFileInput}
+                onchange={(e) => {
+                  const input = e.target as HTMLInputElement;
+                  const file = input.files?.[0];
+                  if (file) {
+                    importZipFile = file;
+                    contentSource = 'import_zip';
+                    selectedSourceWorkspaceId = null;
+                    selectedSourceIsServer = false;
+                    if (!newWorkspaceName.trim()) {
+                      newWorkspaceName = getNextLocalWorkspaceName();
+                    }
+                  }
+                  input.value = "";
+                }}
+              />
+              <button
+                type="button"
+                class="w-full text-left p-3 rounded-lg border-2 transition-colors {contentSource === 'import_zip' ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
+                onclick={() => {
+                  if (importZipFile) {
+                    contentSource = 'import_zip';
+                    selectedSourceWorkspaceId = null;
+                    selectedSourceIsServer = false;
+                  } else {
+                    importZipFileInput?.click();
+                  }
+                }}
+              >
+                <div class="flex items-start gap-3">
+                  <div class="mt-0.5">
+                    <Upload class="size-5 {contentSource === 'import_zip' ? 'text-primary' : 'text-muted-foreground'}" />
+                  </div>
+                  <div>
+                    <div class="font-medium text-sm">
+                      {#if importZipFile}
+                        Import "{importZipFile.name}"
+                      {:else}
+                        Import from ZIP
+                      {/if}
+                    </div>
+                    <div class="text-xs text-muted-foreground mt-0.5">
+                      {#if importZipFile}
+                        <!-- svelte-ignore node_invalid_placement_ssr -->
+                        <span
+                          role="button"
+                          tabindex="0"
+                          class="text-primary hover:underline cursor-pointer"
+                          onclick={(e: MouseEvent) => { e.stopPropagation(); importZipFileInput?.click(); }}
+                          onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter') { e.stopPropagation(); importZipFileInput?.click(); } }}
+                        >Change file</span>
+                      {:else}
+                        Import a workspace from a ZIP backup
+                      {/if}
+                    </div>
+                  </div>
+                </div>
+              </button>
+
+              <!-- Start fresh -->
+              <button
+                type="button"
+                class="w-full text-left p-3 rounded-lg border-2 transition-colors {contentSource === 'start_fresh' ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
+                onclick={() => {
+                  contentSource = 'start_fresh';
+                  selectedSourceWorkspaceId = null;
+                  selectedSourceIsServer = false;
                   newWorkspaceName = getNextLocalWorkspaceName();
-                }
-              }}
-            >
-              <div class="flex items-start gap-3">
-                <div class="mt-0.5">
-                  <Plus class="size-5 {postAuthAction === 'create_new' ? 'text-primary' : 'text-muted-foreground'}" />
-                </div>
-                <div>
-                  <div class="font-medium text-sm">Create new synced workspace</div>
-                  <div class="text-xs text-muted-foreground mt-0.5">
-                    Create a named synced workspace with a root index file
+                }}
+              >
+                <div class="flex items-start gap-3">
+                  <div class="mt-0.5">
+                    <Plus class="size-5 {contentSource === 'start_fresh' ? 'text-primary' : 'text-muted-foreground'}" />
+                  </div>
+                  <div>
+                    <div class="font-medium text-sm">Start fresh</div>
+                    <div class="text-xs text-muted-foreground mt-0.5">
+                      Create an empty workspace with a root index file
+                    </div>
                   </div>
                 </div>
-              </div>
-            </button>
-
-            <!-- Import from ZIP -->
-            <input
-              type="file"
-              accept=".zip"
-              class="hidden"
-              bind:this={importZipFileInput}
-              onchange={(e) => {
-                const input = e.target as HTMLInputElement;
-                const file = input.files?.[0];
-                if (file) {
-                  importZipFile = file;
-                  postAuthAction = 'import_zip';
-                }
-                input.value = "";
-              }}
-            />
-            <button
-              type="button"
-              class="w-full text-left p-3 rounded-lg border-2 transition-colors {postAuthAction === 'import_zip' ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
-              onclick={() => {
-                if (importZipFile) {
-                  postAuthAction = 'import_zip';
-                } else {
-                  importZipFileInput?.click();
-                }
-              }}
-            >
-              <div class="flex items-start gap-3">
-                <div class="mt-0.5">
-                  <Upload class="size-5 {postAuthAction === 'import_zip' ? 'text-primary' : 'text-muted-foreground'}" />
-                </div>
-                <div>
-                  <div class="font-medium text-sm">
-                    {#if importZipFile}
-                      Import "{importZipFile.name}"
-                    {:else}
-                      Import from ZIP backup
-                    {/if}
-                  </div>
-                  <div class="text-xs text-muted-foreground mt-0.5">
-                    {#if importZipFile}
-                      <!-- svelte-ignore node_invalid_placement_ssr -->
-                      <span
-                        role="button"
-                        tabindex="0"
-                        class="text-primary hover:underline cursor-pointer"
-                        onclick={(e: MouseEvent) => { e.stopPropagation(); importZipFileInput?.click(); }}
-                        onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter') { e.stopPropagation(); importZipFileInput?.click(); } }}
-                      >Change file</span> — Upload this ZIP to the server and sync
-                    {:else}
-                      Upload a ZIP export to the server and sync to this device
-                    {/if}
-                  </div>
-                </div>
-              </div>
-            </button>
-
-            <!-- Create local workspace -->
-            <button
-              type="button"
-              class="w-full text-left p-3 rounded-lg border-2 transition-colors {postAuthAction === 'create_local' ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
-              onclick={() => {
-                postAuthAction = 'create_local';
-                if (!newWorkspaceName.trim()) {
-                  newWorkspaceName = getNextLocalWorkspaceName();
-                }
-              }}
-            >
-              <div class="flex items-start gap-3">
-                <div class="mt-0.5">
-                  <HardDrive class="size-5 {postAuthAction === 'create_local' ? 'text-primary' : 'text-muted-foreground'}" />
-                </div>
-                <div>
-                  <div class="font-medium text-sm">Create local workspace</div>
-                  <div class="text-xs text-muted-foreground mt-0.5">
-                    Create a named local workspace with a root index file
-                  </div>
-                </div>
-              </div>
-            </button>
-
-            {#if postAuthAction === 'create_new' || postAuthAction === 'create_local'}
-              <div class="pl-8 space-y-1.5">
-                <Label for="new-workspace-name" class="text-xs text-muted-foreground">
-                  Workspace Name
-                </Label>
-                <Input
-                  id="new-workspace-name"
-                  bind:value={newWorkspaceName}
-                  placeholder="Workspace name"
-                />
-              </div>
-            {/if}
-
+              </button>
+            </div>
           </div>
         {/if}
       {/if}
@@ -1621,20 +1836,27 @@
 
     <!-- Footer with navigation buttons -->
     <div class="flex justify-between pt-4 border-t">
-      {#if (screen === 'options' || screen === 'upgrade') && !isInitializing}
+      <!-- Left side: Back / Change Email -->
+      {#if screen === 'auth' && verificationSent && !devLink}
+        <Button variant="ghost" size="sm" onclick={() => { verificationSent = false; stopMagicLinkDetection(); }}>
+          <ArrowLeft class="size-4 mr-1" />
+          Change Email
+        </Button>
+      {:else if screen === 'auth' && !verificationSent}
         <Button variant="ghost" size="sm" onclick={handleBack}>
           <ArrowLeft class="size-4 mr-1" />
           Back
         </Button>
-      {:else if screen === 'auth' && verificationSent && !devLink}
-        <Button variant="ghost" size="sm" onclick={() => { verificationSent = false; stopMagicLinkDetection(); }}>
+      {:else if screen === 'upgrade' && !isInitializing}
+        <Button variant="ghost" size="sm" onclick={handleBack}>
           <ArrowLeft class="size-4 mr-1" />
-          Change Email
+          Back
         </Button>
       {:else}
         <div></div>
       {/if}
 
+      <!-- Right side: Action buttons -->
       {#if screen === 'auth'}
         {#if !verificationSent}
           <div class="flex items-center gap-2">
@@ -1671,14 +1893,10 @@
             Waiting for verification...
           </div>
         {/if}
-      {:else if !isInitializing}
+      {:else if screen === 'options' && !isInitializing}
         <Button onclick={handleInitialize}>
-          {#if postAuthAction === 'create_local'}
-            Create Local Workspace
-          {:else if postAuthAction === 'create_new'}
-            Create Synced Workspace
-          {:else}
-            Start Syncing
+          {getSubmitButtonText()}
+          {#if syncMode === 'remote'}
             <ArrowRight class="size-4 ml-1" />
           {/if}
         </Button>

@@ -247,6 +247,52 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             .flatten()
     }
 
+    /// Collect direct child file paths from an index's `contents` entries.
+    ///
+    /// Paths are resolved using the same link parsing rules as other workspace
+    /// operations, with `self.link_format` used as the hint for ambiguous paths.
+    async fn collect_index_content_children(&self, index_path: &Path) -> Vec<PathBuf> {
+        let mut children = Vec::new();
+        let mut seen = HashSet::new();
+
+        let index = match self.parse_index(index_path).await {
+            Ok(index) => index,
+            Err(e) => {
+                log::warn!(
+                    "collect_index_content_children: failed to parse '{}': {}",
+                    index_path.display(),
+                    e
+                );
+                return children;
+            }
+        };
+
+        let index_canonical = self.get_canonical_path(index_path);
+        let index_canonical_path = Path::new(&index_canonical);
+
+        for raw_child in index.frontmatter.contents_list() {
+            let parsed = link_parser::parse_link(raw_child);
+            let child_canonical = link_parser::to_canonical_with_link_format(
+                &parsed,
+                index_canonical_path,
+                Some(self.link_format),
+            );
+
+            if !seen.insert(child_canonical.clone()) {
+                continue;
+            }
+
+            let child_path = if let Some(root) = &self.root_path {
+                root.join(&child_canonical)
+            } else {
+                PathBuf::from(&child_canonical)
+            };
+            children.push(child_path);
+        }
+
+        children
+    }
+
     /// Format a link for frontmatter based on configured link format.
     ///
     /// # Arguments
@@ -2198,6 +2244,8 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         let is_root = self.is_root_index(path).await;
 
         if is_index && is_root {
+            let children_paths = self.collect_index_content_children(path).await;
+
             // Root index files live at the workspace root (e.g. README.md).
             // There is no containing subdirectory to rename, so just rename the file in place.
             let parent = path.parent().ok_or_else(|| DiaryxError::InvalidPath {
@@ -2223,28 +2271,27 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             // Update children's part_of to point to the renamed root index
             let new_path_canonical = self.get_canonical_path(&new_path);
             let new_title = self.resolve_title(&new_path_canonical).await;
-            if let Ok(children) = self.fs.list_md_files(parent).await {
-                for child in children {
-                    if child == new_path {
-                        continue;
-                    }
-                    let part_of_value = if self.root_path.is_some() {
-                        let child_canonical = self.get_canonical_path(&child);
-                        self.format_link_sync(&new_path_canonical, &new_title, &child_canonical)
-                    } else {
-                        use crate::path_utils::relative_path_from_file_to_target;
-                        relative_path_from_file_to_target(&child, &new_path)
-                    };
-                    if let Err(e) = self
-                        .set_frontmatter_property(&child, "part_of", Value::String(part_of_value))
-                        .await
-                    {
-                        log::warn!(
-                            "rename_entry: failed to update child part_of for '{}': {}",
-                            child.display(),
-                            e
-                        );
-                    }
+            for child_path in &children_paths {
+                if child_path == &new_path || !self.fs.exists(child_path).await {
+                    continue;
+                }
+
+                let part_of_value = if self.root_path.is_some() {
+                    let child_canonical = self.get_canonical_path(child_path);
+                    self.format_link_sync(&new_path_canonical, &new_title, &child_canonical)
+                } else {
+                    use crate::path_utils::relative_path_from_file_to_target;
+                    relative_path_from_file_to_target(child_path, &new_path)
+                };
+                if let Err(e) = self
+                    .set_frontmatter_property(child_path, "part_of", Value::String(part_of_value))
+                    .await
+                {
+                    log::warn!(
+                        "rename_entry: failed to update child part_of for '{}': {}",
+                        child_path.display(),
+                        e
+                    );
                 }
             }
 
@@ -2265,6 +2312,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     path: path.to_path_buf(),
                     message: "Directory has no parent".to_string(),
                 })?;
+            let children_paths_before_rename = self.collect_index_content_children(path).await;
 
             // Get new directory name from the filename (strip .md extension)
             let new_dir_name = new_filename.trim_end_matches(".md");
@@ -2288,8 +2336,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             // Create new directory
             self.fs.create_dir_all(&new_dir_path).await?;
 
-            // Move all files from old directory to new directory and track children
-            let mut children_paths: Vec<PathBuf> = Vec::new();
+            // Move all files/directories from old directory to new directory.
             if let Ok(files) = self.fs.list_files(current_dir).await {
                 for file in files {
                     let file_name = file.file_name().unwrap_or_default();
@@ -2300,30 +2347,51 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                         self.fs.move_file(&file, &new_file_path).await?;
                     } else {
                         self.fs.move_file(&file, &new_path).await?;
-                        children_paths.push(new_path);
                     }
                 }
             }
 
-            // Update all children's part_of to point to new index
-            // Update children's part_of to point to renamed parent
+            // Update part_of for all listed children, including nested entries.
             let new_file_canonical = self.get_canonical_path(&new_file_path);
             let new_file_title = self.resolve_title(&new_file_canonical).await;
-            for child_path in &children_paths {
+            let mut rewritten_child_paths = HashSet::new();
+            for child_path_before in &children_paths_before_rename {
+                let rewritten_child_path = if child_path_before.starts_with(current_dir) {
+                    match child_path_before.strip_prefix(current_dir) {
+                        Ok(relative) => new_dir_path.join(relative),
+                        Err(_) => child_path_before.clone(),
+                    }
+                } else {
+                    child_path_before.clone()
+                };
+
+                if !rewritten_child_paths.insert(rewritten_child_path.clone()) {
+                    continue;
+                }
+                if rewritten_child_path == new_file_path
+                    || !self.fs.exists(&rewritten_child_path).await
+                {
+                    continue;
+                }
+
                 let part_of_value = if self.root_path.is_some() {
-                    let child_canonical = self.get_canonical_path(child_path);
+                    let child_canonical = self.get_canonical_path(&rewritten_child_path);
                     self.format_link_sync(&new_file_canonical, &new_file_title, &child_canonical)
                 } else {
                     use crate::path_utils::relative_path_from_file_to_target;
-                    relative_path_from_file_to_target(child_path, &new_file_path)
+                    relative_path_from_file_to_target(&rewritten_child_path, &new_file_path)
                 };
                 if let Err(e) = self
-                    .set_frontmatter_property(child_path, "part_of", Value::String(part_of_value))
+                    .set_frontmatter_property(
+                        &rewritten_child_path,
+                        "part_of",
+                        Value::String(part_of_value),
+                    )
                     .await
                 {
                     log::warn!(
                         "rename_entry: failed to update child part_of for '{}': {}",
-                        child_path.display(),
+                        rewritten_child_path.display(),
                         e
                     );
                 }
@@ -3170,6 +3238,94 @@ mod tests {
         assert!(
             part_of_str.contains("My Site.md"),
             "Expected part_of to contain 'My Site.md', got '{}'",
+            part_of_str
+        );
+    }
+
+    #[test]
+    fn test_rename_root_index_updates_nested_child_part_of() {
+        let fs = InMemoryFileSystem::new();
+        let root = PathBuf::from("/ws");
+        fs.create_dir_all(Path::new("/ws/Section")).unwrap();
+        fs.write_file(
+            Path::new("/ws/README.md"),
+            "---\ntitle: Root\ncontents:\n  - \"[Section](/Section/section.md)\"\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("/ws/Section/section.md"),
+            "---\ntitle: Section\npart_of: \"[Root](/README.md)\"\n---\n",
+        )
+        .unwrap();
+
+        let async_fs = SyncToAsyncFs::new(fs.clone());
+        let ws = Workspace::with_link_format(async_fs, root, LinkFormat::MarkdownRoot);
+
+        let renamed =
+            block_on_test(ws.rename_entry(Path::new("/ws/README.md"), "Home.md")).unwrap();
+        assert_eq!(renamed, PathBuf::from("/ws/Home.md"));
+
+        let part_of = block_on_test(
+            ws.get_frontmatter_property(Path::new("/ws/Section/section.md"), "part_of"),
+        )
+        .unwrap();
+        let part_of_str = part_of.unwrap();
+        let part_of_str = part_of_str.as_str().unwrap();
+        assert!(
+            part_of_str.contains("/Home.md"),
+            "Expected part_of to contain '/Home.md', got '{}'",
+            part_of_str
+        );
+        assert!(
+            !part_of_str.contains("/README.md"),
+            "Expected part_of to no longer reference README.md, got '{}'",
+            part_of_str
+        );
+    }
+
+    #[test]
+    fn test_rename_index_updates_nested_child_part_of() {
+        let fs = InMemoryFileSystem::new();
+        let root = PathBuf::from("/ws");
+        fs.create_dir_all(Path::new("/ws/Section/Sub")).unwrap();
+        fs.write_file(
+            Path::new("/ws/README.md"),
+            "---\ntitle: Root\ncontents:\n  - \"[Section](/Section/Section.md)\"\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("/ws/Section/Section.md"),
+            "---\ntitle: Section\npart_of: \"[Root](/README.md)\"\ncontents:\n  - \"[Sub](/Section/Sub/sub.md)\"\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("/ws/Section/Sub/sub.md"),
+            "---\ntitle: Sub\npart_of: \"[Section](/Section/Section.md)\"\n---\n",
+        )
+        .unwrap();
+
+        let async_fs = SyncToAsyncFs::new(fs.clone());
+        let ws = Workspace::with_link_format(async_fs, root, LinkFormat::MarkdownRoot);
+
+        let renamed =
+            block_on_test(ws.rename_entry(Path::new("/ws/Section/Section.md"), "Renamed.md"))
+                .unwrap();
+        assert_eq!(renamed, PathBuf::from("/ws/Renamed/Renamed.md"));
+
+        let part_of = block_on_test(
+            ws.get_frontmatter_property(Path::new("/ws/Renamed/Sub/sub.md"), "part_of"),
+        )
+        .unwrap();
+        let part_of_str = part_of.unwrap();
+        let part_of_str = part_of_str.as_str().unwrap();
+        assert!(
+            part_of_str.contains("/Renamed/Renamed.md"),
+            "Expected part_of to contain '/Renamed/Renamed.md', got '{}'",
+            part_of_str
+        );
+        assert!(
+            !part_of_str.contains("/Section/Section.md"),
+            "Expected part_of to no longer reference '/Section/Section.md', got '{}'",
             part_of_str
         );
     }

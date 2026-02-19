@@ -562,6 +562,12 @@ export class WorkerBackendNew implements Backend {
       let filesImported = 0;
       let filesSkipped = 0;
       let processedWeight = 0;
+      const now = () =>
+        (typeof performance !== 'undefined' && typeof performance.now === 'function')
+          ? performance.now()
+          : Date.now();
+      let lastProgressEmitAt = now();
+      let lastYieldAt = lastProgressEmitAt;
 
       const entryWeights = files.map((entry) => {
         const sizeGuess = entry.uncompressedSize || entry.compressedSize || 0;
@@ -609,7 +615,20 @@ export class WorkerBackendNew implements Backend {
 
         if (onProgress && totalWeight > 0) {
           processedWeight = Math.min(totalWeight, processedWeight + entryWeights[i]);
-          onProgress(processedWeight, totalWeight);
+          const tick = now();
+          const shouldEmit =
+            processedWeight >= totalWeight || tick - lastProgressEmitAt >= 120;
+          if (shouldEmit) {
+            onProgress(processedWeight, totalWeight);
+            lastProgressEmitAt = tick;
+          }
+        }
+
+        // Keep the main thread responsive during very large imports.
+        const tick = now();
+        if (tick - lastYieldAt >= 20) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+          lastYieldAt = now();
         }
       }
 

@@ -53,10 +53,15 @@ max payload size (`SNAPSHOT_UPLOAD_MAX_BYTES`, default 1 GiB).
 Snapshot import ignores hidden/system ZIP metadata entries (for example
 `__MACOSX/**`, `.DS_Store`, and `._*` sidecar files) so macOS-generated archives
 do not fail markdown parsing.
+Attachment-enabled imports process binaries in a two-pass flow (hash/size scan,
+then one-by-one blob uploads) to avoid buffering all attachment payloads in
+memory at once.
 
 `api.rs` also serves per-user attachment usage at:
 
 - `GET /api/user/storage` — returns used bytes/blob count for synced attachment blobs.
+- `GET /api/user/has-data` — reports whether the user has synced files across
+  any workspace (aggregated file count).
 - `POST /api/workspaces/{workspace_id}/attachments/uploads` — initialize/resume multipart attachment upload.
 - `PUT /api/workspaces/{workspace_id}/attachments/uploads/{upload_id}/parts/{part_no}` — upload one part.
 - `POST /api/workspaces/{workspace_id}/attachments/uploads/{upload_id}/complete` — finalize multipart upload.

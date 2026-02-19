@@ -8,7 +8,7 @@
    * - Syncing (yellow dot with animation)
    * - Disconnected/Error (red dot)
    *
-   * Click opens a popover with details; "Manage sync" opens the SyncSetupWizard.
+   * Click opens a popover with details; "Manage sync" opens the AddWorkspaceDialog.
    * The popover closes automatically when the wizard is opened.
    */
   import { Button } from "$lib/components/ui/button";
@@ -25,10 +25,10 @@
   } from "@lucide/svelte";
 
   interface Props {
-    onOpenWizard?: () => void;
+    onAddWorkspace?: () => void;
   }
 
-  let { onOpenWizard }: Props = $props();
+  let { onAddWorkspace }: Props = $props();
 
   // Reactive state from stores
   // Use effectiveSyncStatus which considers BOTH metadata AND body sync
@@ -107,7 +107,7 @@
 
   function handleOpenWizard() {
     popoverOpen = false;
-    onOpenWizard?.();
+    onAddWorkspace?.();
   }
 </script>
 

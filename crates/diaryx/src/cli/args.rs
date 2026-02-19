@@ -298,6 +298,13 @@ pub enum Commands {
         command: SyncCommands,
     },
 
+    /// Import data from external formats
+    #[command(alias = "imp")]
+    Import {
+        #[command(subcommand)]
+        command: ImportCommands,
+    },
+
     /// Create a git snapshot of the current workspace state
     Commit {
         /// Commit message (auto-generated if not provided)
@@ -1019,5 +1026,63 @@ pub enum SyncCommands {
         /// Show current sync configuration
         #[arg(long)]
         show: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ImportCommands {
+    /// Import emails from .eml files, directories of .eml files, or .mbox archives
+    Email {
+        /// Source: .eml file, directory of .eml files, or .mbox file
+        source: PathBuf,
+
+        /// Base folder for imported emails (default: "emails")
+        #[arg(short, long, default_value = "emails")]
+        folder: String,
+
+        /// Show what would be done without writing
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Print each email as it's processed
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Import entries from a Day One Journal.json export
+    DayOne {
+        /// Path to Journal.json
+        source: PathBuf,
+
+        /// Base folder for imported entries (default: "journal")
+        #[arg(short, long, default_value = "journal")]
+        folder: String,
+
+        /// Show what would be done without writing
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Print each entry as it's processed
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Import a directory of markdown files (Obsidian, Logseq, Bear, iA Writer, etc.)
+    /// Preserves directory structure — each subdirectory becomes an index file
+    Markdown {
+        /// Path to directory of markdown files
+        source: PathBuf,
+
+        /// Base folder name in workspace (default: source directory name)
+        #[arg(short, long)]
+        folder: Option<String>,
+
+        /// Show what would be done without writing
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Print each file as it's processed
+        #[arg(short, long)]
+        verbose: bool,
     },
 }

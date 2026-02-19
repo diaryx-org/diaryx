@@ -21,7 +21,7 @@ export type BodySyncStatus = 'idle' | 'syncing' | 'synced';
 
 function getInitialServerUrl(): string | null {
   if (typeof window !== 'undefined') {
-    // Check canonical key first (used by auth store / SyncSetupWizard)
+    // Check canonical key first (used by auth store / AddWorkspaceDialog)
     const canonical = localStorage.getItem('diaryx_sync_server_url');
     if (canonical) return canonical;
     // Fall back to legacy key for backwards compatibility

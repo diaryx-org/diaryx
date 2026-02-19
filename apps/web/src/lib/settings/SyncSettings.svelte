@@ -8,6 +8,7 @@
    * 3. Authenticated, sync enabled → sync status display
    */
   import { Button } from "$lib/components/ui/button";
+  import { Progress } from "$lib/components/ui/progress";
   import { Server, Wifi, WifiOff, Loader2, RefreshCw, Database } from "@lucide/svelte";
   import {
     getAuthState,
@@ -17,15 +18,16 @@
     refreshUserStorageUsage,
   } from "$lib/auth";
   import { getStorageUsageState, getUsageSummary } from "./syncSettingsLogic";
+  import { getSyncActionStatus } from "./syncActionStatusStore.svelte";
   import { collaborationStore } from "@/models/stores/collaborationStore.svelte";
   import { onMount } from "svelte";
 
   interface Props {
-    /** Callback to open the sync setup wizard */
-    onOpenWizard?: () => void;
+    /** Callback to open the add workspace dialog */
+    onAddWorkspace?: () => void;
   }
 
-  let { onOpenWizard }: Props = $props();
+  let { onAddWorkspace }: Props = $props();
 
   // Get auth state reactively
   let authState = $derived(getAuthState());
@@ -37,6 +39,7 @@
   let storageUsage = $derived(getStorageUsage());
   let storageUsageState = $derived(getStorageUsageState(storageUsage));
   let usageSummary = $derived(getUsageSummary(storageUsage, formatBytes));
+  let syncActionStatus = $derived(getSyncActionStatus());
   let isRefreshingUsage = $state(false);
 
   // Get server URL for display
@@ -82,6 +85,29 @@
     Sync your workspace across devices with our cloud server.
   </p>
 
+  {#if syncActionStatus.message}
+    <div
+      class="rounded-md border p-2 space-y-2 {syncActionStatus.tone === 'error'
+        ? 'border-destructive/40 bg-destructive/5'
+        : syncActionStatus.tone === 'success'
+          ? 'border-green-500/40 bg-green-500/5'
+          : 'bg-muted/50'}"
+    >
+      <p
+        class="text-xs {syncActionStatus.tone === 'error'
+          ? 'text-destructive'
+          : syncActionStatus.tone === 'success'
+            ? 'text-green-700 dark:text-green-300'
+            : 'text-muted-foreground'}"
+      >
+        {syncActionStatus.message}
+      </p>
+      {#if syncActionStatus.active}
+        <Progress value={syncActionStatus.progress} class="h-1.5" />
+      {/if}
+    </div>
+  {/if}
+
   {#if authState.isAuthenticated && isEnabled}
     <!-- State 3: Authenticated + sync enabled → show status -->
     <div class="space-y-3">
@@ -119,12 +145,12 @@
         <span class="text-sm text-muted-foreground">Sync not configured on this device</span>
       </div>
 
-      {#if onOpenWizard}
+      {#if onAddWorkspace}
         <Button
           variant="default"
           size="sm"
           class="w-full"
-          onclick={onOpenWizard}
+          onclick={onAddWorkspace}
         >
           <Server class="size-4 mr-2" />
           Set Up Sync

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, tick } from "svelte";
   import { getBackend, isTauri } from "./lib/backend";
   import { createApi, type Api } from "./lib/backend/api";
   import type { JsonValue } from "./lib/backend/generated/serde_json/JsonValue";
@@ -27,9 +27,8 @@
   import NewEntryModal from "./lib/NewEntryModal.svelte";
   import CommandPalette from "./lib/CommandPalette.svelte";
   import SettingsDialog from "./lib/SettingsDialog.svelte";
-  import ImportSettings from "./lib/settings/ImportSettings.svelte";
   import ExportDialog from "./lib/ExportDialog.svelte";
-  import SyncSetupWizard from "./lib/SyncSetupWizard.svelte";
+  import AddWorkspaceDialog from "./lib/AddWorkspaceDialog.svelte";
   import ImagePreviewDialog from "./lib/ImagePreviewDialog.svelte";
   import MarkdownPreviewDialog from "./lib/MarkdownPreviewDialog.svelte";
     import EditorHeader from "./views/editor/EditorHeader.svelte";
@@ -144,17 +143,14 @@
   let requestedSidebarTab: "properties" | "history" | "share" | null = $state(null);
   let triggerStartSession = $state(false);
 
-  // Sync setup wizard
-  let showSyncWizard = $state(false);
+  // Add workspace dialog
+  let showAddWorkspace = $state(false);
 
   // Welcome screen (shown when no workspaces exist)
   let showWelcomeScreen = $state(false);
 
   // Settings dialog initial tab (for opening to a specific tab)
   let settingsInitialTab = $state<string | undefined>(undefined);
-  let importSettingsLauncher = $state<{
-    openImportFilePicker: () => void;
-  } | null>(null);
 
   // Workspace state - proxied from workspaceStore
   let tree = $derived(workspaceStore.tree);
@@ -822,7 +818,7 @@
       // The wizard auto-detects Scenario C (server has workspaces) and runs without
       // user interaction, downloading the server workspace and enabling sync.
       if (isAuthenticated() && getWorkspaces().length > 0 && !isSyncEnabled()) {
-        showSyncWizard = true;
+        showAddWorkspace = true;
       }
 
       // Add swipe gestures for mobile:
@@ -1226,32 +1222,9 @@
     }
   }
 
-  // Create root index for an empty workspace (from EditorEmptyState)
-  async function handleCreateRootIndex() {
-    if (!api) return;
-    try {
-      const wsId = getCurrentWorkspaceId();
-      const localWs = wsId ? getLocalWorkspace(wsId) : null;
-      const wsName = localWs?.name ?? "My Workspace";
-      await api.createWorkspace(".", wsName);
-      await refreshTree();
-      if (tree) {
-        workspaceStore.expandNode(tree.path);
-        await openEntry(tree.path);
-      }
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
-    }
-  }
-
-  // Open ZIP import flow from empty workspace (with settings-tab fallback).
-  function handleImportFromZipInEmptyWorkspace() {
-    if (importSettingsLauncher?.openImportFilePicker) {
-      importSettingsLauncher.openImportFilePicker();
-      return;
-    }
-    settingsInitialTab = "data";
-    showSettingsDialog = true;
+  // Open the unified workspace setup flow from an empty workspace.
+  function handleInitializeEmptyWorkspace() {
+    showAddWorkspace = true;
   }
 
   // Handle welcome screen completion — re-run initialization
@@ -1294,9 +1267,9 @@
     }
   }
 
-  // Handle sign-in from welcome screen — open sync wizard
+  // Handle sign-in from welcome screen — open add workspace dialog
   function handleWelcomeSignIn() {
-    showSyncWizard = true;
+    showAddWorkspace = true;
   }
 
   async function handleDailyEntry() {
@@ -1855,15 +1828,6 @@
   onReorderFootnotes={handleReorderFootnotes}
 />
 
-<!-- Settings Dialog -->
-<div class="hidden" aria-hidden="true">
-  <ImportSettings
-    bind:this={importSettingsLauncher}
-    workspacePath={tree?.path}
-    launcherOnly={true}
-  />
-</div>
-
 <SettingsDialog
   bind:open={showSettingsDialog}
   bind:showUnlinkedFiles
@@ -1874,9 +1838,10 @@
   bind:focusMode
   workspacePath={tree?.path}
   initialTab={settingsInitialTab}
-  onOpenSyncWizard={() => {
+  onAddWorkspace={async () => {
     showSettingsDialog = false;
-    showSyncWizard = true;
+    await tick();
+    showAddWorkspace = true;
   }}
 />
 
@@ -1888,12 +1853,12 @@
   onOpenChange={(open) => (showExportDialog = open)}
 />
 
-<!-- Sync Setup Wizard -->
-<SyncSetupWizard
-  bind:open={showSyncWizard}
-  onOpenChange={(open) => showSyncWizard = open}
+<!-- Add Workspace Dialog -->
+<AddWorkspaceDialog
+  bind:open={showAddWorkspace}
+  onOpenChange={(open) => showAddWorkspace = open}
   onComplete={async () => {
-    showSyncWizard = false;
+    showAddWorkspace = false;
     if (showWelcomeScreen) {
       // Came from the welcome screen — dismiss it and re-initialize
       await handleWelcomeComplete("", "");
@@ -1932,7 +1897,7 @@
     onToggleCollapse={toggleLeftSidebar}
     onOpenSettings={() => { settingsInitialTab = undefined; showSettingsDialog = true; }}
     onOpenAccountSettings={() => { settingsInitialTab = "account"; showSettingsDialog = true; }}
-    onOpenSyncWizard={() => { showSyncWizard = true; }}
+    onAddWorkspace={() => { showAddWorkspace = true; }}
     onMoveEntry={handleMoveEntry}
     onCreateChildEntry={handleCreateChildEntry}
     onDeleteEntry={handleDeleteEntry}
@@ -1993,7 +1958,7 @@
         onOpenCommandPalette={uiStore.openCommandPalette}
         onPrevDay={handlePrevDay}
         onNextDay={handleNextDay}
-        onOpenWizard={() => (showSyncWizard = true)}
+        onAddWorkspace={() => (showAddWorkspace = true)}
       />
 
       <EditorContent
@@ -2018,8 +1983,7 @@
         onToggleLeftSidebar={toggleLeftSidebar}
         onOpenCommandPalette={uiStore.openCommandPalette}
         hasWorkspaceTree={!!tree && tree.path !== '.'}
-        onCreateRootIndex={handleCreateRootIndex}
-        onImportFromZip={handleImportFromZipInEmptyWorkspace}
+        onInitializeWorkspace={handleInitializeEmptyWorkspace}
       />
     {/if}
   </main>
@@ -2046,7 +2010,7 @@
       }
     }}
     onBeforeHost={async (audience) => await handlePopulateCrdtBeforeHost(audience)}
-    onOpenSyncWizard={() => { showSyncWizard = true; }}
+    onAddWorkspace={() => { showAddWorkspace = true; }}
     onOpenEntry={async (path) => await openEntry(path)}
     {api}
     requestedTab={requestedSidebarTab}

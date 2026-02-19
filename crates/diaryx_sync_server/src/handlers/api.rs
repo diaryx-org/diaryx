@@ -1402,21 +1402,14 @@ async fn check_user_has_data(
         .get_user_workspaces(&auth.user.id)
         .unwrap_or_default();
 
-    // Look for the default workspace
-    let default_ws = workspaces.into_iter().find(|w| w.name == "default");
+    let total_file_count: usize = workspaces
+        .iter()
+        .map(|ws| state.sync_v2.store.get_file_count(&ws.id))
+        .sum();
 
-    if let Some(ws) = default_ws {
-        let count = state.sync_v2.store.get_file_count(&ws.id);
-        return Json(UserHasDataResponse {
-            has_data: count > 0,
-            file_count: count,
-        });
-    }
-
-    // No workspace found - user has no data
     Json(UserHasDataResponse {
-        has_data: false,
-        file_count: 0,
+        has_data: total_file_count > 0,
+        file_count: total_file_count,
     })
 }
 

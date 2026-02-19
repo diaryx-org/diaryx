@@ -21,6 +21,9 @@ mod git;
 /// `diaryx_core` export with audience filtering
 mod export;
 
+/// Import from external formats (email, etc.)
+mod import;
+
 /// normalize command changes filenames to slug
 mod normalize;
 
@@ -252,6 +255,11 @@ pub fn run_cli() {
 
         Commands::Sync { command } => {
             sync::handle_sync_command(command, cli.workspace);
+            true
+        }
+
+        Commands::Import { command } => {
+            import::handle_import_command(command, cli.workspace);
             true
         }
 

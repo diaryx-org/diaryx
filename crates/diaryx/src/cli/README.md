@@ -25,6 +25,7 @@ attachments:
 - '[util.rs](/crates/diaryx/src/cli/util.rs)'
 - '[workspace.rs](/crates/diaryx/src/cli/workspace.rs)'
 - '[git.rs](/crates/diaryx/src/cli/git.rs)'
+- '[import.rs](/crates/diaryx/src/cli/import.rs)'
 exclude:
 - '*.lock'
 ---
@@ -37,5 +38,10 @@ In the Diaryx CLI, this module provides the majority of the functionality.
 - `diaryx commit` — Snapshot workspace state as a git commit and compact CRDT storage.
 Options: `--message <msg>`, `--skip-validation`.
 - `diaryx log` — Show git commit history. Options: `--count <n>` (default: 20).
+
+## Import Commands
+
+- `diaryx import email <source>` — Import `.eml` files, directories of `.eml` files, or `.mbox` archives.
+  Options: `--folder <name>` (default: "emails"), `--dry-run`, `--verbose`.
 
 &nbsp;

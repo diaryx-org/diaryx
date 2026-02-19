@@ -13,6 +13,50 @@ import * as Comlink from 'comlink';
 import type { BackendEventType, BackendEventListener } from './interface';
 import type { StorageType } from './storageType';
 
+const COMMON_ATTACHMENT_RE =
+  /\.(png|jpg|jpeg|gif|svg|pdf|webp|heic|heif|mp3|mp4|wav|mov|docx?|xlsx?|pptx?)$/i;
+
+function isHiddenOrSystemSegment(part: string): boolean {
+  return (
+    part.startsWith('.') ||
+    part === '__MACOSX' ||
+    part === 'Thumbs.db' ||
+    part === 'desktop.ini' ||
+    part.startsWith('._')
+  );
+}
+
+function shouldSkipZipPath(path: string): boolean {
+  return path
+    .split('/')
+    .some((part) => isHiddenOrSystemSegment(part));
+}
+
+function detectCommonRootPrefix(fileNames: string[]): string {
+  const candidates = fileNames.filter((name) => !shouldSkipZipPath(name));
+  if (candidates.length === 0) {
+    return '';
+  }
+
+  let sharedRoot: string | null = null;
+  for (const name of candidates) {
+    const firstSlash = name.indexOf('/');
+    if (firstSlash <= 0) {
+      return '';
+    }
+    const root = name.substring(0, firstSlash);
+    if (sharedRoot === null) {
+      sharedRoot = root;
+      continue;
+    }
+    if (sharedRoot !== root) {
+      return '';
+    }
+  }
+
+  return sharedRoot ? `${sharedRoot}/` : '';
+}
+
 // We'll dynamically import the WASM module
 let backend: any | null = null;
 
@@ -765,6 +809,119 @@ const workerApi = {
   async syncBodyFiles(files: string[]): Promise<void> {
     if (!syncClient) return;
     await syncClient.syncBodyFiles(files);
+  },
+
+  // =========================================================================
+  // ZIP Import (runs entirely in worker — no main-thread decompression)
+  // =========================================================================
+
+  async importFromZip(
+    file: File,
+    workspacePath?: string,
+    onProgress?: (bytesUploaded: number, totalBytes: number) => void,
+  ): Promise<{ success: boolean; files_imported: number; files_skipped: number }> {
+    const {
+      ZipReader,
+      BlobReader,
+      TextWriter,
+      Uint8ArrayWriter,
+    } = await import('@zip.js/zip.js');
+
+    let workspace: string;
+    if (workspacePath) {
+      workspace = workspacePath;
+    } else {
+      try {
+        workspace = await workerApi.getDefaultWorkspacePath();
+      } catch {
+        workspace = '.';
+      }
+    }
+
+    const zipReader = new ZipReader(new BlobReader(file));
+
+    try {
+      const entries = await zipReader.getEntries();
+      const files = entries.filter((entry) => !entry.directory);
+      const commonPrefix = detectCommonRootPrefix(files.map((entry) => entry.filename));
+
+      let filesImported = 0;
+      let filesSkipped = 0;
+      let processedWeight = 0;
+      const now = () =>
+        (typeof performance !== 'undefined' && typeof performance.now === 'function')
+          ? performance.now()
+          : Date.now();
+      let lastProgressEmitAt = now();
+
+      const entryWeights = files.map((entry) => {
+        const sizeGuess = entry.uncompressedSize || entry.compressedSize || 0;
+        return sizeGuess > 0 ? sizeGuess : 1;
+      });
+      const totalWeight = entryWeights.reduce((sum, weight) => sum + weight, 0);
+
+      for (let i = 0; i < files.length; i++) {
+        const entry = files[i];
+        let fileName = entry.filename;
+
+        if (commonPrefix && fileName.startsWith(commonPrefix)) {
+          fileName = fileName.substring(commonPrefix.length);
+          if (fileName === '') {
+            continue;
+          }
+        }
+
+        if (shouldSkipZipPath(fileName)) {
+          filesSkipped++;
+          continue;
+        }
+
+        const isMarkdown = fileName.endsWith('.md');
+        const isAttachment = COMMON_ATTACHMENT_RE.test(fileName);
+        if (!isMarkdown && !isAttachment) {
+          filesSkipped++;
+          continue;
+        }
+
+        const filePath = `${workspace}/${fileName}`;
+        try {
+          if (isMarkdown) {
+            const content = await entry.getData!(new TextWriter());
+            await workerApi.writeFile(filePath, content as string);
+          } else {
+            const data = await entry.getData!(new Uint8ArrayWriter());
+            await workerApi.writeBinary(filePath, data as Uint8Array);
+          }
+          filesImported++;
+        } catch (e) {
+          filesSkipped++;
+          console.warn(`[Import] Failed to import ${filePath}:`, e);
+        }
+
+        if (onProgress && totalWeight > 0) {
+          processedWeight = Math.min(totalWeight, processedWeight + entryWeights[i]);
+          const tick = now();
+          const shouldEmit =
+            processedWeight >= totalWeight || tick - lastProgressEmitAt >= 120;
+          if (shouldEmit) {
+            onProgress(processedWeight, totalWeight);
+            lastProgressEmitAt = tick;
+          }
+        }
+      }
+
+      if (onProgress) {
+        onProgress(totalWeight, totalWeight);
+      }
+
+      return {
+        success: true,
+        files_imported: filesImported,
+        files_skipped: filesSkipped,
+      };
+    } finally {
+      await zipReader.close();
+    }
   },
 
   // Generic method call for any other operations (fallback to native)

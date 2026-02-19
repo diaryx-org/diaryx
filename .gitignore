@@ -8,3 +8,4 @@ result
 workspaces
 .direnv
 .zig-cache
+*.zip

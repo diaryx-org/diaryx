@@ -138,6 +138,20 @@ fn normalize_workspace_path(path: &str) -> Option<String> {
     }
 }
 
+fn should_skip_snapshot_entry(path: &str) -> bool {
+    Path::new(path).components().any(|component| {
+        let Component::Normal(part) = component else {
+            return false;
+        };
+        let part = part.to_string_lossy();
+        part.starts_with('.')
+            || part == "__MACOSX"
+            || part == "Thumbs.db"
+            || part == "desktop.ini"
+            || part.starts_with("._")
+    })
+}
+
 fn normalize_attachment_path(file_path: &str, raw_attachment_path: &str) -> Option<String> {
     fn normalize_attachment_path_once(
         file_path: &str,
@@ -573,6 +587,10 @@ impl WorkspaceStore {
                     if entry.is_dir() {
                         None
                     } else {
+                        if should_skip_snapshot_entry(entry.name()) {
+                            continue;
+                        }
+
                         let Some(name) = normalize_workspace_path(entry.name()) else {
                             continue;
                         };
@@ -657,6 +675,10 @@ impl WorkspaceStore {
         for i in 0..archive.len() {
             let mut entry = archive.by_index(i)?;
             if entry.is_dir() {
+                continue;
+            }
+
+            if should_skip_snapshot_entry(entry.name()) {
                 continue;
             }
 
@@ -886,7 +908,10 @@ impl WorkspaceStore {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_attachment_paths_from_markdown, normalize_attachment_path};
+    use super::{
+        extract_attachment_paths_from_markdown, normalize_attachment_path,
+        should_skip_snapshot_entry,
+    };
 
     #[test]
     fn normalize_attachment_path_handles_markdown_root_links() {
@@ -936,5 +961,17 @@ mod tests {
                 "_attachments/b c.jpg".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn should_skip_snapshot_entry_ignores_macos_sidecars() {
+        assert!(should_skip_snapshot_entry("__MACOSX/._contribute.md"));
+        assert!(should_skip_snapshot_entry(
+            "__MACOSX/_attachments/._image.png"
+        ));
+        assert!(should_skip_snapshot_entry(".DS_Store"));
+        assert!(should_skip_snapshot_entry("docs/.hidden.md"));
+        assert!(!should_skip_snapshot_entry("contribute.md"));
+        assert!(!should_skip_snapshot_entry("_attachments/diaryx-icon.svg"));
     }
 }

@@ -55,3 +55,14 @@ Settings panel components for the settings dialog.
 - configured sync server URL
 - a "Synced Storage" section with used bytes, blob count, and used/limit summary from `/api/user/storage`
 - warning/over-limit states when nearing or exceeding per-user attachment quota
+
+`ImportSettings.svelte` behavior:
+
+- routes import through the sync server only for authenticated, sync-enabled,
+  server-backed workspaces; local-only workspaces import locally even when signed in
+- resolves the workspace directory from backend state (not only the current tree
+  root), so replace imports can clear existing files even when the tree root is `.`
+- ignores macOS metadata entries (such as `__MACOSX`) when stripping a common
+  top-level ZIP folder, preventing nested-root imports
+- emits `import:complete`; the app forces a full tree refresh after import so
+  left-sidebar tree state updates immediately

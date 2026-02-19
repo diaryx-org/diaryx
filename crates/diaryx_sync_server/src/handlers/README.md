@@ -50,6 +50,9 @@ The `GET /auth/me` response includes `workspace_limit`, `tier`, `published_site_
 Snapshot endpoints support `include_attachments=true|false` query params.
 Snapshot uploads also support `mode=replace|merge` and enforce a configurable
 max payload size (`SNAPSHOT_UPLOAD_MAX_BYTES`, default 1 GiB).
+Snapshot import ignores hidden/system ZIP metadata entries (for example
+`__MACOSX/**`, `.DS_Store`, and `._*` sidecar files) so macOS-generated archives
+do not fail markdown parsing.
 
 `api.rs` also serves per-user attachment usage at:
 

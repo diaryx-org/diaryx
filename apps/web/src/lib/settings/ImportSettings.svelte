@@ -9,6 +9,7 @@
   import { Button } from "$lib/components/ui/button";
   import * as Dialog from "$lib/components/ui/dialog";
   import { Checkbox } from "$lib/components/ui/checkbox";
+  import type { Backend } from "$lib/backend/interface";
   import { Upload, Loader2, Check, AlertCircle, AlertTriangle } from "@lucide/svelte";
   import { getBackend } from "../backend";
   import {
@@ -18,6 +19,10 @@
     getCurrentWorkspace,
     getServerUrl,
   } from "$lib/auth";
+  import {
+    getCurrentWorkspaceId,
+    getLocalWorkspace,
+  } from "$lib/storage/localWorkspaceRegistry.svelte";
   import {
     disconnectWorkspace,
     waitForInitialSync,
@@ -49,11 +54,110 @@
   // Reference to hidden file input
   let fileInputRef: HTMLInputElement | null = $state(null);
 
-  // Derived: is sync currently active?
-  let syncActive = $derived(isSyncEnabled() && isAuthenticated());
+  // Derived: sync import path is only active for authenticated, sync-enabled,
+  // server-backed workspaces. Local-only workspaces should import locally.
+  let syncActive = $derived.by(() => {
+    if (!isSyncEnabled() || !isAuthenticated()) {
+      return false;
+    }
+
+    const currentWorkspaceId = getCurrentWorkspaceId();
+    if (!currentWorkspaceId) {
+      // Legacy fallback: if selection is unavailable, use auth sync state.
+      return true;
+    }
+
+    const localWorkspace = getLocalWorkspace(currentWorkspaceId);
+    if (localWorkspace?.isLocal) {
+      return false;
+    }
+
+    const serverWorkspace = getCurrentWorkspace();
+    if (!serverWorkspace) {
+      return false;
+    }
+
+    return serverWorkspace.id === currentWorkspaceId;
+  });
 
   function triggerFileInput() {
     fileInputRef?.click();
+  }
+
+  /**
+   * Resolve a workspace directory from either an index file path or directory.
+   * Returns "." for current workspace root when path is empty/relative root.
+   */
+  function toWorkspaceDir(path: string | null | undefined): string | null {
+    if (!path) return null;
+
+    const trimmed = path.trim();
+    if (!trimmed) return null;
+
+    const normalized = trimmed.replace(/[\\/]+$/, "");
+    if (!normalized || normalized === ".") return ".";
+
+    if (normalized.endsWith(".md")) {
+      const lastSlash = Math.max(normalized.lastIndexOf("/"), normalized.lastIndexOf("\\"));
+      return lastSlash >= 0 ? normalized.substring(0, lastSlash) || "." : ".";
+    }
+
+    return normalized;
+  }
+
+  async function discoverWorkspaceDir(
+    backend: Backend & { getDefaultWorkspacePath?: () => Promise<string> },
+  ): Promise<string | null> {
+    if (backend.getDefaultWorkspacePath) {
+      try {
+        const discovered = toWorkspaceDir(await backend.getDefaultWorkspacePath());
+        if (discovered && discovered !== ".") {
+          return discovered;
+        }
+      } catch {
+        // Fall through to command-based discovery.
+      }
+    }
+
+    try {
+      const response = await backend.execute({
+        type: "FindRootIndex",
+        params: { directory: "." },
+      });
+      if (
+        response &&
+        typeof response === "object" &&
+        (response as { type?: string }).type === "String"
+      ) {
+        const rootPath = (response as { data?: unknown }).data;
+        if (typeof rootPath !== "string") {
+          return null;
+        }
+        const rootDir = toWorkspaceDir(rootPath);
+        if (rootDir && rootDir !== ".") {
+          return rootDir;
+        }
+      }
+    } catch {
+      // Ignore discovery errors and fall back to backend defaults.
+    }
+
+    return null;
+  }
+
+  /**
+   * Prefer explicit workspace path when it points to a concrete directory.
+   * Fall back to backend discovery. Returns null when unknown.
+   */
+  async function resolveImportWorkspaceDir(
+    backend: Backend & { getDefaultWorkspacePath?: () => Promise<string> },
+  ): Promise<string | null> {
+    const fromProp = toWorkspaceDir(workspacePath);
+    const fromBackend = toWorkspaceDir(backend.getWorkspacePath());
+
+    if (fromProp && fromProp !== ".") return fromProp;
+    if (fromBackend) return fromBackend;
+    return await discoverWorkspaceDir(backend);
   }
 
   function handleFileSelected(event: Event) {
@@ -126,6 +230,21 @@
     const serverUrl = getServerUrl();
     disconnectWorkspace();
 
+    if (deleteExisting) {
+      importStatusText = "Applying imported snapshot locally...";
+      try {
+        const backend = await getBackend();
+        const workspaceDir = await resolveImportWorkspaceDir(backend);
+        if (workspaceDir) {
+          await backend.execute({ type: 'ClearDirectory', params: { path: workspaceDir } });
+        } else {
+          console.warn("[Import] Could not resolve workspace root for local clear; skipping clear step");
+        }
+      } catch (e) {
+        console.warn("[Import] Failed to clear local workspace before resync:", e);
+      }
+    }
+
     await setWorkspaceId(workspace.id);
     if (serverUrl) {
       await setWorkspaceServer(serverUrl);
@@ -153,9 +272,7 @@
    */
   async function importLocally(file: File) {
     const backend = await getBackend();
-    const workspaceDir = workspacePath
-      ? workspacePath.substring(0, workspacePath.lastIndexOf("/"))
-      : undefined;
+    const workspaceDir = await resolveImportWorkspaceDir(backend);
 
     // Delete existing files if requested
     if (deleteExisting && workspaceDir) {
@@ -168,7 +285,7 @@
 
     const result = await backend.importFromZip(
       file,
-      workspaceDir,
+      workspaceDir ?? undefined,
       (uploaded, total) => {
         if (uploaded % (10 * 1024 * 1024) < 1024 * 1024) {
           console.log(

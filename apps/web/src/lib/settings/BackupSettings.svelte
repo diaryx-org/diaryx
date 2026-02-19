@@ -57,6 +57,7 @@
       } else {
         // Web: Use workspace tree + file reads to build zip
         const api = createApi(backend);
+        const { addFilesToZip } = await import("./zipUtils");
 
         // Get workspace directory from index path
         const workspaceDir = workspacePath.substring(
@@ -71,60 +72,12 @@
         const JSZip = (await import("jszip")).default;
         const zip = new JSZip();
 
-        // Helper to recursively collect files from tree
-        async function addFilesToZip(
-          node: { path: string; children?: { path: string; children?: unknown[] }[] },
-          basePath: string,
-        ): Promise<number> {
-          let count = 0;
+        const reader = {
+          readText: (path: string) => api.readFile(path),
+          readBinary: (path: string) => (backend as any).readBinary(path) as Promise<Uint8Array>,
+        };
 
-          // Skip hidden files/directories
-          const name = node.path.split("/").pop() || "";
-          if (name.startsWith(".")) {
-            return 0;
-          }
-
-          if (node.children && node.children.length > 0) {
-            // It's a directory - recurse into children
-            for (const child of node.children) {
-              count += await addFilesToZip(child as typeof node, basePath);
-            }
-          } else {
-            // It's a file - add to zip
-            const relativePath =
-              node.path.startsWith(basePath + "/")
-                ? node.path.substring(basePath.length + 1)
-                : node.path;
-
-            try {
-              // Determine if it's a text or binary file
-              const ext = node.path.split(".").pop()?.toLowerCase() || "";
-              const textExts = ["md", "txt", "json", "yaml", "yml", "toml"];
-
-              if (textExts.includes(ext)) {
-                const content = await api.readFile(node.path);
-                zip.file(relativePath, content);
-                count++;
-              } else {
-                // Binary file - use backend.execute or cast to any for readBinary
-                const backendAny = backend as unknown as {
-                  readBinary: (path: string) => Promise<Uint8Array>;
-                };
-                if (typeof backendAny.readBinary === "function") {
-                  const data = await backendAny.readBinary(node.path);
-                  zip.file(relativePath, data, { binary: true });
-                  count++;
-                }
-              }
-            } catch (e) {
-              console.warn(`[Export] Failed to read ${node.path}:`, e);
-            }
-          }
-
-          return count;
-        }
-
-        const fileCount = await addFilesToZip(tree, workspaceDir);
+        const fileCount = await addFilesToZip(zip, tree, workspaceDir, reader);
 
         const blob = await zip.generateAsync({ type: "blob" });
         const url = URL.createObjectURL(blob);

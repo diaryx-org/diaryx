@@ -1466,7 +1466,13 @@
 
   // Handle import:complete event from ImportSettings
   function handleImportComplete() {
-    debouncedRefreshTree();
+    // Force a fresh tree replacement after import so removed nodes aren't
+    // preserved by merge heuristics from the pre-import tree.
+    workspaceStore.setTree(null);
+    void (async () => {
+      await refreshTree();
+      debouncedRefreshTree();
+    })();
   }
 
   // Debounced version of refreshTree to prevent rapid refreshes during sync

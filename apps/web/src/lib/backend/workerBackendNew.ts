@@ -488,8 +488,9 @@ export class WorkerBackendNew implements Backend {
     workspacePath?: string,
     onProgress?: (bytesUploaded: number, totalBytes: number) => void,
   ): Promise<any> => {
-    // Use JSZip to extract the zip on the main thread
     const JSZip = (await import('jszip')).default;
+    const { importFilesFromZip } = await import('../settings/zipUtils');
+
     const arrayBuffer = await file.arrayBuffer();
     const zip = await JSZip.loadAsync(arrayBuffer);
 
@@ -505,96 +506,16 @@ export class WorkerBackendNew implements Backend {
       }
     }
 
-    const fileNames = Object.keys(zip.files);
-    const totalFiles = fileNames.length;
-    let filesImported = 0;
-    let filesSkipped = 0;
-
-    // Detect common root directory prefix to strip
-    // This handles zips that have a single root folder containing all files
-    const nonDirFiles = fileNames.filter(name => !zip.files[name].dir);
-    let commonPrefix = '';
-    if (nonDirFiles.length > 0) {
-      // Get the first path component of the first file
-      const firstFile = nonDirFiles[0];
-      const firstSlash = firstFile.indexOf('/');
-      if (firstSlash > 0) {
-        const potentialPrefix = firstFile.substring(0, firstSlash + 1);
-        // Check if all non-directory files share this prefix
-        const allSharePrefix = nonDirFiles.every(name => name.startsWith(potentialPrefix));
-        if (allSharePrefix) {
-          commonPrefix = potentialPrefix;
-        }
-      }
-    }
-
-    for (let i = 0; i < fileNames.length; i++) {
-      let fileName = fileNames[i];
-      const zipEntry = zip.files[fileName];
-
-      // Strip common root directory prefix if detected
-      if (commonPrefix && fileName.startsWith(commonPrefix)) {
-        fileName = fileName.substring(commonPrefix.length);
-        // Skip if this was just the root directory itself
-        if (fileName === '') {
-          continue;
-        }
-      }
-
-      // Skip directories
-      if (zipEntry.dir) {
-        continue;
-      }
-
-      // Skip hidden files and system files
-      const shouldSkip = fileName
-        .split('/')
-        .some(part => part.startsWith('.') || part === 'Thumbs.db' || part === 'desktop.ini');
-
-      if (shouldSkip) {
-        filesSkipped++;
-        continue;
-      }
-
-      // Determine if it's a text file (markdown) or binary
-      const isMarkdown = fileName.endsWith('.md');
-      const isBinary = !isMarkdown;
-
-      // Only import markdown and common binary attachments
-      const isCommonAttachment = /\.(png|jpg|jpeg|gif|svg|pdf|webp|heic|heif|mp3|mp4|wav|mov|docx?|xlsx?|pptx?)$/i.test(fileName);
-
-      if (!isMarkdown && !isCommonAttachment) {
-        filesSkipped++;
-        continue;
-      }
-
-      const filePath = `${workspace}/${fileName}`;
-
-      try {
-        if (isBinary) {
-          const data = await zipEntry.async('uint8array');
-          await this.remote!.writeBinary(filePath, data);
-        } else {
-          const content = await zipEntry.async('string');
-          await this.remote!.writeFile(filePath, content);
-        }
-        filesImported++;
-      } catch (e) {
-        console.warn(`[Import] Failed to write ${filePath}:`, e);
-        filesSkipped++;
-      }
-
-      // Report progress
-      if (onProgress) {
-        onProgress(i + 1, totalFiles);
-      }
-    }
-
-    return {
-      success: true,
-      files_imported: filesImported,
-      files_skipped: filesSkipped,
-    };
+    const remote = this.remote!;
+    return importFilesFromZip(
+      zip,
+      workspace,
+      {
+        writeText: (path, content) => remote.writeFile(path, content),
+        writeBinary: (path, data) => remote.writeBinary(path, data),
+      },
+      onProgress,
+    );
   };
 }
 

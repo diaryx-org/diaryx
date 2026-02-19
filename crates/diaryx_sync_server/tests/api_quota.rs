@@ -6,9 +6,10 @@ use axum::{
 use diaryx_core::crdt::{BinaryRef, FileMetadata, WorkspaceCrdt};
 use diaryx_sync_server::{
     auth::AuthExtractor,
-    blob_store::InMemoryBlobStore,
+    blob_store::{BlobStore, InMemoryBlobStore},
     db::{AuthRepo, WorkspaceAttachmentRefRecord, init_database},
     handlers::api::{ApiState, api_routes},
+    rate_limit::RateLimiter,
     sync_v2::{SyncV2Server, SyncV2State},
 };
 use rusqlite::Connection;
@@ -20,6 +21,7 @@ fn setup() -> (
     Router,
     Arc<AuthRepo>,
     Arc<SyncV2State>,
+    Arc<InMemoryBlobStore>,
     String,
     String,
     String,
@@ -51,25 +53,35 @@ fn setup() -> (
     let sync_v2_server = SyncV2Server::new(repo.clone(), workspaces_dir);
     let sync_v2_state = Arc::new(sync_v2_server.state());
 
+    let blob_store = Arc::new(InMemoryBlobStore::new("diaryx-sync".to_string()));
     let api_state = ApiState {
         repo: repo.clone(),
         sync_v2: sync_v2_state.clone(),
-        blob_store: Arc::new(InMemoryBlobStore::new("diaryx-sync".to_string())),
+        blob_store: blob_store.clone(),
         snapshot_upload_max_bytes: 1024 * 1024 * 1024,
         attachment_incremental_sync_enabled: true,
         admin_secret: None,
+        rate_limiter: RateLimiter::new(),
     };
 
     let app = Router::new()
         .nest("/api", api_routes(api_state))
         .layer(Extension(AuthExtractor::new(repo.clone())));
 
-    (app, repo, sync_v2_state, user_id, workspace_id, token)
+    (
+        app,
+        repo,
+        sync_v2_state,
+        blob_store,
+        user_id,
+        workspace_id,
+        token,
+    )
 }
 
 #[tokio::test]
 async fn init_upload_rejects_when_over_user_limit() {
-    let (app, repo, _sync_v2_state, user_id, workspace_id, token) = setup();
+    let (app, repo, _sync_v2_state, _blob_store, user_id, workspace_id, token) = setup();
     repo.set_user_attachment_limit(&user_id, Some(10))
         .expect("set tiny limit");
 
@@ -103,8 +115,120 @@ async fn init_upload_rejects_when_over_user_limit() {
 }
 
 #[tokio::test]
+async fn init_upload_does_not_short_circuit_for_placeholder_blob_metadata() {
+    let (app, repo, _sync_v2_state, _blob_store, user_id, workspace_id, token) = setup();
+    let hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    repo.replace_workspace_attachment_refs(
+        &workspace_id,
+        &[WorkspaceAttachmentRefRecord {
+            file_path: "note.md".to_string(),
+            attachment_path: "_attachments/a.png".to_string(),
+            blob_hash: hash.to_string(),
+            size_bytes: 3,
+            mime_type: "image/png".to_string(),
+        }],
+    )
+    .expect("seed placeholder blob metadata");
+
+    let (existing_key, _, _) = repo
+        .get_user_blob(&user_id, hash)
+        .expect("lookup blob metadata")
+        .expect("blob row exists");
+    assert!(
+        existing_key.is_empty(),
+        "placeholder blob metadata should have empty r2_key"
+    );
+
+    let body = serde_json::json!({
+      "entry_path": "note.md",
+      "attachment_path": "_attachments/a.png",
+      "hash": hash,
+      "size_bytes": 3,
+      "mime_type": "image/png",
+      "part_size": 8 * 1024 * 1024,
+      "total_parts": 1
+    });
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!(
+            "/api/workspaces/{}/attachments/uploads",
+            workspace_id
+        ))
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {}", token))
+        .body(Body::from(body.to_string()))
+        .expect("request");
+
+    let response = app.clone().oneshot(request).await.expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let json: Value = serde_json::from_slice(&bytes).expect("json");
+    assert_eq!(json["status"], "uploading");
+    assert!(
+        json["upload_id"].as_str().is_some(),
+        "expected upload_id when placeholder metadata cannot be reused"
+    );
+}
+
+#[tokio::test]
+async fn init_upload_short_circuits_only_when_blob_object_exists() {
+    let (app, repo, _sync_v2_state, blob_store, user_id, workspace_id, token) = setup();
+    let hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let key = blob_store.blob_key(&user_id, hash);
+    blob_store
+        .put(&key, b"abc", "image/png")
+        .await
+        .expect("seed blob object");
+    repo.upsert_blob(&user_id, hash, &key, 3, "image/png")
+        .expect("seed blob metadata");
+
+    let body = serde_json::json!({
+      "entry_path": "note.md",
+      "attachment_path": "_attachments/a.png",
+      "hash": hash,
+      "size_bytes": 3,
+      "mime_type": "image/png",
+      "part_size": 8 * 1024 * 1024,
+      "total_parts": 1
+    });
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!(
+            "/api/workspaces/{}/attachments/uploads",
+            workspace_id
+        ))
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {}", token))
+        .body(Body::from(body.to_string()))
+        .expect("request");
+
+    let response = app.clone().oneshot(request).await.expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let json: Value = serde_json::from_slice(&bytes).expect("json");
+    assert_eq!(json["status"], "already_exists");
+    assert!(
+        json["upload_id"].is_null(),
+        "already_exists should not allocate upload_id"
+    );
+
+    let fallback = repo
+        .get_latest_completed_attachment_upload(&workspace_id, "_attachments/a.png")
+        .expect("lookup completed upload fallback")
+        .expect("completed upload fallback exists");
+    assert_eq!(fallback.blob_hash, hash);
+}
+
+#[tokio::test]
 async fn storage_endpoint_reports_limit_and_over_limit() {
-    let (app, repo, _sync_v2_state, user_id, workspace_id, token) = setup();
+    let (app, repo, _sync_v2_state, _blob_store, user_id, workspace_id, token) = setup();
     repo.set_user_attachment_limit(&user_id, Some(100))
         .expect("set limit");
     repo.upsert_blob(&user_id, "hash-a", "r2-key-a", 200, "image/png")
@@ -141,7 +265,7 @@ async fn storage_endpoint_reports_limit_and_over_limit() {
 
 #[tokio::test]
 async fn complete_upload_reconciles_workspace_refs() {
-    let (app, repo, sync_v2_state, _user_id, workspace_id, token) = setup();
+    let (app, repo, sync_v2_state, _blob_store, _user_id, workspace_id, token) = setup();
 
     // Seed workspace metadata with an attachment ref that has no hash yet.
     let storage = sync_v2_state
@@ -248,7 +372,7 @@ async fn complete_upload_reconciles_workspace_refs() {
 
 #[tokio::test]
 async fn delete_workspace_cleans_dirty_state_and_local_storage_artifacts() {
-    let (app, _repo, sync_v2_state, _user_id, workspace_id, token) = setup();
+    let (app, _repo, sync_v2_state, _blob_store, _user_id, workspace_id, token) = setup();
 
     let storage = sync_v2_state
         .storage_cache

@@ -69,6 +69,9 @@ do not fail markdown parsing.
 - `already_exists` init responses now also persist a completed
   attachment-path→hash lookup session so reconciliation can still backfill refs
   for frontmatter/body paths that do not yet carry explicit hash metadata.
+- `already_exists` now requires both blob metadata and a verifiable blob object;
+  placeholder metadata rows (for example rows with empty `r2_key` created during
+  ref reconciliation) no longer short-circuit uploads.
 
 For one-part uploads, the handler uses a direct blob `put` path internally and
 skips remote multipart completion/abort calls.

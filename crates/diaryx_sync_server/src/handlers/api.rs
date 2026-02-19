@@ -875,29 +875,64 @@ async fn init_attachment_upload(
     // unnecessary multipart lifecycle overhead.
     let use_direct_put = total_parts == 1;
 
-    if let Ok(Some((_key, _size, _mime))) = state.repo.get_user_blob(&auth.user.id, &body.hash) {
-        if let Err(err) = record_existing_blob_path_mapping(
-            &state,
-            &workspace_id,
-            &auth.user.id,
-            &body.hash,
-            &attachment_path,
-            &body.mime_type,
-            body.size_bytes,
-        ) {
-            error!(
-                "Failed to record existing blob upload mapping for workspace={} attachment_path={}: {}",
-                workspace_id, attachment_path, err
-            );
+    let existing_blob = match state.repo.get_user_blob(&auth.user.id, &body.hash) {
+        Ok(row) => row,
+        Err(err) => {
+            error!("Attachment blob metadata lookup failed: {}", err);
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
-        return Json(InitAttachmentUploadResponse {
-            upload_id: None,
-            status: "already_exists".to_string(),
-            part_size,
-            uploaded_parts: vec![],
-        })
-        .into_response();
+    };
+    if let Some((existing_key, _existing_size, _existing_mime)) = existing_blob {
+        let can_reuse_existing_blob = if existing_key.trim().is_empty() {
+            warn!(
+                "Attachment upload init found blob metadata with empty key; forcing re-upload (workspace={}, hash={})",
+                workspace_id, body.hash
+            );
+            false
+        } else {
+            match state.blob_store.exists(&existing_key).await {
+                Ok(true) => true,
+                Ok(false) => {
+                    warn!(
+                        "Attachment upload init found blob metadata but missing object; forcing re-upload (workspace={}, key={})",
+                        workspace_id, existing_key
+                    );
+                    false
+                }
+                Err(err) => {
+                    warn!(
+                        "Attachment upload init failed to verify existing blob object; forcing re-upload (workspace={}, key={}, err={})",
+                        workspace_id, existing_key, err
+                    );
+                    false
+                }
+            }
+        };
+
+        if can_reuse_existing_blob {
+            if let Err(err) = record_existing_blob_path_mapping(
+                &state,
+                &workspace_id,
+                &auth.user.id,
+                &body.hash,
+                &attachment_path,
+                &body.mime_type,
+                body.size_bytes,
+            ) {
+                error!(
+                    "Failed to record existing blob upload mapping for workspace={} attachment_path={}: {}",
+                    workspace_id, attachment_path, err
+                );
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+            return Json(InitAttachmentUploadResponse {
+                upload_id: None,
+                status: "already_exists".to_string(),
+                part_size,
+                uploaded_parts: vec![],
+            })
+            .into_response();
+        }
     }
     let limit_bytes = match state
         .repo

@@ -36,6 +36,12 @@ Backend abstraction layer supporting both WASM and Tauri environments.
 
 The `generated/` directory contains TypeScript types generated from Rust.
 
+## ZIP Import Memory Use
+
+`workerBackendNew.ts` now imports ZIP files via a streaming reader (`@zip.js/zip.js`)
+instead of loading full archives into a single `ArrayBuffer`. This significantly
+reduces peak memory usage for large local imports by processing entries one at a time.
+
 ## Native Sync (Tauri only)
 
 The `TauriBackend` provides native sync methods that use the Rust sync client:

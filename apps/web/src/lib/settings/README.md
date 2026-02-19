@@ -64,5 +64,10 @@ Settings panel components for the settings dialog.
   root), so replace imports can clear existing files even when the tree root is `.`
 - ignores macOS metadata entries (such as `__MACOSX`) when stripping a common
   top-level ZIP folder, preventing nested-root imports
+- performs local ZIP extraction with a streaming reader to reduce peak memory
+  usage on large imports
+- shows import progress with a percent + progress bar (callback-driven for local
+  imports and staged progress for sync-server imports), including launcher-mode
+  imports opened from empty-workspace actions
 - emits `import:complete`; the app forces a full tree refresh after import so
   left-sidebar tree state updates immediately

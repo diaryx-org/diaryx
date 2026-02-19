@@ -9,7 +9,7 @@
    */
 
   import { Button } from "$lib/components/ui/button";
-  import { PanelLeft, Menu, Search, FolderPlus } from "@lucide/svelte";
+  import { PanelLeft, Menu, Search, FolderPlus, Upload } from "@lucide/svelte";
 
   interface Props {
     leftSidebarCollapsed: boolean;
@@ -17,6 +17,7 @@
     onOpenCommandPalette: () => void;
     hasWorkspaceTree?: boolean;
     onCreateRootIndex?: () => void;
+    onImportFromZip?: () => void;
   }
 
   let {
@@ -25,6 +26,7 @@
     onOpenCommandPalette,
     hasWorkspaceTree = true,
     onCreateRootIndex,
+    onImportFromZip,
   }: Props = $props();
 </script>
 
@@ -77,10 +79,18 @@
       <p class="text-muted-foreground mb-4">
         A root index organizes your workspace into a navigable hierarchy.
       </p>
-      <Button onclick={onCreateRootIndex} class="gap-2">
-        <FolderPlus class="size-4" />
-        Create Root Index
-      </Button>
+      <div class="flex flex-col sm:flex-row gap-2 justify-center">
+        <Button onclick={onCreateRootIndex} class="gap-2">
+          <FolderPlus class="size-4" />
+          Create Root Index
+        </Button>
+        {#if onImportFromZip}
+          <Button variant="outline" onclick={onImportFromZip} class="gap-2">
+            <Upload class="size-4" />
+            Import from ZIP
+          </Button>
+        {/if}
+      </div>
     {:else}
       <h2 class="text-2xl font-semibold text-foreground mb-2">
         Welcome to Diaryx

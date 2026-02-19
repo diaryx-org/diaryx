@@ -27,6 +27,7 @@
   import NewEntryModal from "./lib/NewEntryModal.svelte";
   import CommandPalette from "./lib/CommandPalette.svelte";
   import SettingsDialog from "./lib/SettingsDialog.svelte";
+  import ImportSettings from "./lib/settings/ImportSettings.svelte";
   import ExportDialog from "./lib/ExportDialog.svelte";
   import SyncSetupWizard from "./lib/SyncSetupWizard.svelte";
   import ImagePreviewDialog from "./lib/ImagePreviewDialog.svelte";
@@ -151,6 +152,9 @@
 
   // Settings dialog initial tab (for opening to a specific tab)
   let settingsInitialTab = $state<string | undefined>(undefined);
+  let importSettingsLauncher = $state<{
+    openImportFilePicker: () => void;
+  } | null>(null);
 
   // Workspace state - proxied from workspaceStore
   let tree = $derived(workspaceStore.tree);
@@ -1240,6 +1244,16 @@
     }
   }
 
+  // Open ZIP import flow from empty workspace (with settings-tab fallback).
+  function handleImportFromZipInEmptyWorkspace() {
+    if (importSettingsLauncher?.openImportFilePicker) {
+      importSettingsLauncher.openImportFilePicker();
+      return;
+    }
+    settingsInitialTab = "data";
+    showSettingsDialog = true;
+  }
+
   // Handle welcome screen completion — re-run initialization
   async function handleWelcomeComplete(_id: string, _name: string) {
     showWelcomeScreen = false;
@@ -1842,6 +1856,14 @@
 />
 
 <!-- Settings Dialog -->
+<div class="hidden" aria-hidden="true">
+  <ImportSettings
+    bind:this={importSettingsLauncher}
+    workspacePath={tree?.path}
+    launcherOnly={true}
+  />
+</div>
+
 <SettingsDialog
   bind:open={showSettingsDialog}
   bind:showUnlinkedFiles
@@ -1997,6 +2019,7 @@
         onOpenCommandPalette={uiStore.openCommandPalette}
         hasWorkspaceTree={!!tree && tree.path !== '.'}
         onCreateRootIndex={handleCreateRootIndex}
+        onImportFromZip={handleImportFromZipInEmptyWorkspace}
       />
     {/if}
   </main>

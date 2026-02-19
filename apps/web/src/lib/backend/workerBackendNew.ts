@@ -20,6 +20,50 @@ import { BackendEventEmitter } from './eventEmitter';
 import type { WorkerApi } from './wasmWorkerNew';
 import { getStorageType, type StorageType } from './storageType';
 
+const COMMON_ATTACHMENT_RE =
+  /\.(png|jpg|jpeg|gif|svg|pdf|webp|heic|heif|mp3|mp4|wav|mov|docx?|xlsx?|pptx?)$/i;
+
+function isHiddenOrSystemSegment(part: string): boolean {
+  return (
+    part.startsWith('.') ||
+    part === '__MACOSX' ||
+    part === 'Thumbs.db' ||
+    part === 'desktop.ini' ||
+    part.startsWith('._')
+  );
+}
+
+function shouldSkipZipPath(path: string): boolean {
+  return path
+    .split('/')
+    .some((part) => isHiddenOrSystemSegment(part));
+}
+
+function detectCommonRootPrefix(fileNames: string[]): string {
+  const candidates = fileNames.filter((name) => !shouldSkipZipPath(name));
+  if (candidates.length === 0) {
+    return '';
+  }
+
+  let sharedRoot: string | null = null;
+  for (const name of candidates) {
+    const firstSlash = name.indexOf('/');
+    if (firstSlash <= 0) {
+      return '';
+    }
+    const root = name.substring(0, firstSlash);
+    if (sharedRoot === null) {
+      sharedRoot = root;
+      continue;
+    }
+    if (sharedRoot !== root) {
+      return '';
+    }
+  }
+
+  return sharedRoot ? `${sharedRoot}/` : '';
+}
+
 export class WorkerBackendNew implements Backend {
   private worker: Worker | null = null;
   private remote: Comlink.Remote<WorkerApi> | null = null;
@@ -488,11 +532,12 @@ export class WorkerBackendNew implements Backend {
     workspacePath?: string,
     onProgress?: (bytesUploaded: number, totalBytes: number) => void,
   ): Promise<any> => {
-    const JSZip = (await import('jszip')).default;
-    const { importFilesFromZip } = await import('../settings/zipUtils');
-
-    const arrayBuffer = await file.arrayBuffer();
-    const zip = await JSZip.loadAsync(arrayBuffer);
+    const {
+      ZipReader,
+      BlobReader,
+      TextWriter,
+      Uint8ArrayWriter,
+    } = await import('@zip.js/zip.js');
 
     // Get workspace path (fallback to '.' if no workspace exists yet)
     let workspace: string;
@@ -507,15 +552,79 @@ export class WorkerBackendNew implements Backend {
     }
 
     const remote = this.remote!;
-    return importFilesFromZip(
-      zip,
-      workspace,
-      {
-        writeText: (path, content) => remote.writeFile(path, content),
-        writeBinary: (path, data) => remote.writeBinary(path, data),
-      },
-      onProgress,
-    );
+    const zipReader = new ZipReader(new BlobReader(file));
+
+    try {
+      const entries = await zipReader.getEntries();
+      const files = entries.filter((entry) => !entry.directory);
+      const commonPrefix = detectCommonRootPrefix(files.map((entry) => entry.filename));
+
+      let filesImported = 0;
+      let filesSkipped = 0;
+      let processedWeight = 0;
+
+      const entryWeights = files.map((entry) => {
+        const sizeGuess = entry.uncompressedSize || entry.compressedSize || 0;
+        return sizeGuess > 0 ? sizeGuess : 1;
+      });
+      const totalWeight = entryWeights.reduce((sum, weight) => sum + weight, 0);
+
+      for (let i = 0; i < files.length; i++) {
+        const entry = files[i];
+        let fileName = entry.filename;
+
+        if (commonPrefix && fileName.startsWith(commonPrefix)) {
+          fileName = fileName.substring(commonPrefix.length);
+          if (fileName === '') {
+            continue;
+          }
+        }
+
+        if (shouldSkipZipPath(fileName)) {
+          filesSkipped++;
+          continue;
+        }
+
+        const isMarkdown = fileName.endsWith('.md');
+        const isAttachment = COMMON_ATTACHMENT_RE.test(fileName);
+        if (!isMarkdown && !isAttachment) {
+          filesSkipped++;
+          continue;
+        }
+
+        const filePath = `${workspace}/${fileName}`;
+        try {
+          if (isMarkdown) {
+            const content = await entry.getData!(new TextWriter());
+            await remote.writeFile(filePath, content as string);
+          } else {
+            const data = await entry.getData!(new Uint8ArrayWriter());
+            await remote.writeBinary(filePath, data as Uint8Array);
+          }
+          filesImported++;
+        } catch (e) {
+          filesSkipped++;
+          console.warn(`[Import] Failed to import ${filePath}:`, e);
+        }
+
+        if (onProgress && totalWeight > 0) {
+          processedWeight = Math.min(totalWeight, processedWeight + entryWeights[i]);
+          onProgress(processedWeight, totalWeight);
+        }
+      }
+
+      if (onProgress) {
+        onProgress(totalWeight, totalWeight);
+      }
+
+      return {
+        success: true,
+        files_imported: filesImported,
+        files_skipped: filesSkipped,
+      };
+    } finally {
+      await zipReader.close();
+    }
   };
 }
 

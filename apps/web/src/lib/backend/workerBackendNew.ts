@@ -527,6 +527,10 @@ export class WorkerBackendNew implements Backend {
     return this.remote!.syncUnfocusFiles(files);
   }
 
+  async syncBodyFiles(files: string[]): Promise<void> {
+    return this.remote!.syncBodyFiles(files);
+  }
+
   importFromZip = async (
     file: File,
     workspacePath?: string,

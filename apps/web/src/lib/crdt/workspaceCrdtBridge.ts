@@ -1724,9 +1724,11 @@ export async function ensureBodySync(filePath: string): Promise<void> {
   return _ensureBodySyncImpl(filePath);
 }
 
-async function _ensureBodySyncImpl(_filePath: string): Promise<void> {
-  // Body sync is now automatic via SyncSession in Rust.
-  // All body files are synced after the workspace handshake completes.
+async function _ensureBodySyncImpl(filePath: string): Promise<void> {
+  if (!unifiedSyncTransport) return;
+  if (!unifiedSyncTransport.isWorkspaceSynced) return;
+  await unifiedSyncTransport.focus([filePath]);
+  await unifiedSyncTransport.requestBodySync([filePath]);
 }
 
 /**

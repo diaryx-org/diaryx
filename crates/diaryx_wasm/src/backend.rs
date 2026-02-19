@@ -354,17 +354,14 @@ thread_local! {
 /// to the WASM-specific WasmCallbackRegistry (which holds JS functions).
 fn create_event_bridge() -> Arc<dyn Fn(&FileSystemEvent) + Send + Sync> {
     Arc::new(|event: &FileSystemEvent| {
-        // Log SendSyncMessage events at warn level so they show up
         if matches!(event, FileSystemEvent::SendSyncMessage { .. }) {
-            log::warn!(
-                "[EventBridge] DEBUG: Forwarding SendSyncMessage event to WASM_EVENT_REGISTRY"
-            );
+            log::trace!("[EventBridge] Forwarding SendSyncMessage event to WASM_EVENT_REGISTRY");
         }
         WASM_EVENT_REGISTRY.with(|reg| {
             if let Some(registry) = reg.borrow().as_ref() {
                 registry.emit(event);
             } else {
-                log::warn!("[EventBridge] DEBUG: WASM_EVENT_REGISTRY is None!");
+                log::warn!("[EventBridge] WASM_EVENT_REGISTRY is None!");
             }
         });
     })

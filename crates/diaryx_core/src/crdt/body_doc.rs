@@ -170,14 +170,14 @@ impl BodyDoc {
     pub fn set_sync_callback(&self, callback: SyncCallback) {
         let doc_name = self.doc_name.read().unwrap().clone();
         if self._update_subscription.read().unwrap().is_some() {
-            log::warn!(
-                "[BodyDoc] DEBUG set_sync_callback: observer ALREADY registered for '{}', skipping",
+            log::trace!(
+                "[BodyDoc] set_sync_callback: observer ALREADY registered for '{}', skipping",
                 doc_name
             );
             return;
         }
-        log::warn!(
-            "[BodyDoc] DEBUG set_sync_callback: REGISTERING observer for '{}'",
+        log::trace!(
+            "[BodyDoc] set_sync_callback: REGISTERING observer for '{}'",
             doc_name
         );
 
@@ -198,8 +198,8 @@ impl BodyDoc {
 
                 // Skip if this is a remote update (we don't want to echo it back)
                 if applying_remote.load(Ordering::SeqCst) {
-                    log::warn!(
-                        "[BodyDoc] DEBUG Observer: SKIPPING remote update for '{}', update_len={}",
+                    log::trace!(
+                        "[BodyDoc] Observer: SKIPPING remote update for '{}', update_len={}",
                         current_doc_name,
                         event.update.len()
                     );
@@ -207,8 +207,8 @@ impl BodyDoc {
                 }
 
                 // Emit sync message with the update bytes
-                log::warn!(
-                    "[BodyDoc] DEBUG Observer: FIRING for '{}', update_len={}",
+                log::trace!(
+                    "[BodyDoc] Observer: FIRING for '{}', update_len={}",
                     current_doc_name,
                     event.update.len()
                 );
@@ -270,8 +270,8 @@ impl BodyDoc {
     pub fn set_body(&self, content: &str) -> StorageResult<()> {
         let doc_name = self.doc_name.read().unwrap().clone();
         let has_observer = self._update_subscription.read().unwrap().is_some();
-        log::warn!(
-            "[BodyDoc] DEBUG set_body: doc='{}', content_len={}, has_observer={}",
+        log::trace!(
+            "[BodyDoc] set_body: doc='{}', content_len={}, has_observer={}",
             doc_name,
             content.len(),
             has_observer
@@ -285,20 +285,18 @@ impl BodyDoc {
 
         // If content is the same, no-op
         if current == content {
-            log::warn!(
-                "[BodyDoc] DEBUG set_body: UNCHANGED doc='{}', both_len={}",
+            log::trace!(
+                "[BodyDoc] set_body: UNCHANGED doc='{}', both_len={}",
                 doc_name,
                 content.len()
             );
             return Ok(());
         }
-        log::warn!(
-            "[BodyDoc] DEBUG set_body: CHANGED doc='{}', current_len={}, new_len={}, current_preview='{}', new_preview='{}'",
+        log::trace!(
+            "[BodyDoc] set_body: CHANGED doc='{}', current_len={}, new_len={}",
             doc_name,
             current.len(),
             content.len(),
-            current.chars().take(80).collect::<String>(),
-            content.chars().take(80).collect::<String>()
         );
 
         // Calculate minimal diff using byte offsets.

@@ -146,10 +146,16 @@ export class UnifiedSyncTransport {
         await this.drainAndSend();
       }
 
-      // Resend focus list after reconnect
-      if (this.focusedFiles.size > 0 && backend.syncFocusFiles) {
-        await backend.syncFocusFiles(Array.from(this.focusedFiles));
-        await this.drainAndSend();
+      // Resend focus list and re-request body sync after reconnect
+      if (this.focusedFiles.size > 0) {
+        if (backend.syncFocusFiles) {
+          await backend.syncFocusFiles(Array.from(this.focusedFiles));
+          await this.drainAndSend();
+        }
+        if (backend.syncBodyFiles) {
+          await backend.syncBodyFiles(Array.from(this.focusedFiles));
+          await this.drainAndSend();
+        }
       }
     };
 
@@ -289,6 +295,18 @@ export class UnifiedSyncTransport {
     const backend = this.options.backend;
     if (this.isConnected && backend.syncFocusFiles) {
       await backend.syncFocusFiles(filePaths);
+      await this.drainAndSend();
+    }
+  }
+
+  /**
+   * Request body sync for specific files (lazy sync on demand).
+   * Call this when opening a file to trigger its body doc sync.
+   */
+  async requestBodySync(filePaths: string[]): Promise<void> {
+    const backend = this.options.backend;
+    if (this.isConnected && backend.syncBodyFiles) {
+      await backend.syncBodyFiles(filePaths);
       await this.drainAndSend();
     }
   }

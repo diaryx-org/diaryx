@@ -759,6 +759,14 @@ const workerApi = {
     syncClient.unfocusFiles(files);
   },
 
+  /**
+   * Request body sync for specific files (lazy sync on demand).
+   */
+  async syncBodyFiles(files: string[]): Promise<void> {
+    if (!syncClient) return;
+    await syncClient.syncBodyFiles(files);
+  },
+
   // Generic method call for any other operations (fallback to native)
   async call(method: string, args: unknown[]): Promise<unknown> {
     const b = getBackend();

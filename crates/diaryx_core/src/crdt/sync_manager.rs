@@ -161,8 +161,8 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         event_callback: Arc<dyn Fn(&FileSystemEvent) + Send + Sync>,
     ) {
         let sync_callback = Arc::new(move |doc_name: &str, update: &[u8]| {
-            log::warn!(
-                "[SyncManager] DEBUG Body observer callback: doc='{}', update_len={}",
+            log::debug!(
+                "[SyncManager] Body observer callback: doc='{}', update_len={}",
                 doc_name,
                 update.len()
             );
@@ -605,6 +605,45 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         log::debug!("[SyncManager] Closed body sync for: {}", doc_name);
     }
 
+    /// Unload a body doc from memory to free RAM.
+    ///
+    /// Saves the doc to storage first, then evicts it from the in-memory cache.
+    /// Clears tracking state (last_known_content, last_sent_body_sv, last_synced_body_svs)
+    /// but does NOT clear `body_synced` — the doc was synced, just evicted.
+    ///
+    /// The doc will be reloaded from storage on next access (get_or_create).
+    pub fn unload_body_doc(&self, doc_name: &str) {
+        let doc_name = normalize_sync_path(doc_name);
+
+        // Save to storage before evicting
+        if let Err(e) = self.body_manager.save(&doc_name) {
+            log::warn!(
+                "[SyncManager] Failed to save body doc before unload '{}': {:?}",
+                doc_name,
+                e
+            );
+        }
+
+        // Evict from in-memory cache
+        self.body_manager.unload(&doc_name);
+
+        // Clear tracking state (but NOT body_synced)
+        {
+            let mut content = self.last_known_content.write().unwrap();
+            content.remove(&doc_name);
+        }
+        {
+            let mut sv_map = self.last_sent_body_sv.write().unwrap();
+            sv_map.remove(&doc_name);
+        }
+        {
+            let mut synced_svs = self.last_synced_body_svs.write().unwrap();
+            synced_svs.remove(&doc_name);
+        }
+
+        log::debug!("[SyncManager] Unloaded body doc: {}", doc_name);
+    }
+
     /// Handle an incoming WebSocket message for body sync.
     ///
     /// Returns a `BodySyncResult` containing:
@@ -765,6 +804,12 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
             let new_sv = body_doc.encode_state_vector();
             let mut sv_map = self.last_sent_body_sv.write().unwrap();
             sv_map.insert(doc_name.clone(), new_sv);
+        }
+
+        // Unload unfocused body docs after sync to free memory.
+        // Focused docs stay in memory for fast access during editing.
+        if !self.is_file_focused(&doc_name) {
+            self.unload_body_doc(&doc_name);
         }
 
         Ok(BodySyncResult {

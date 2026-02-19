@@ -557,6 +557,8 @@ export interface Backend {
   syncFocusFiles?(files: string[]): Promise<void>;
   /** Send unfocus messages. */
   syncUnfocusFiles?(files: string[]): Promise<void>;
+  /** Request body sync for specific files (lazy sync on demand). */
+  syncBodyFiles?(files: string[]): Promise<void>;
 }
 
 // ============================================================================

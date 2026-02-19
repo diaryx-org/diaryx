@@ -64,6 +64,7 @@
   } from "@lucide/svelte";
   import VerificationCodeInput from "$lib/components/VerificationCodeInput.svelte";
   import { toast } from "svelte-sonner";
+  import { untrack } from "svelte";
   import { getBackend, createApi } from "./backend";
   import type { TreeNode } from "$lib/backend/interface";
   import {
@@ -191,7 +192,7 @@
   // Initialize dialog state when opened
   $effect(() => {
     if (open) {
-      initializeDialog();
+      untrack(() => initializeDialog());
     }
   });
 
@@ -768,6 +769,7 @@
    */
   async function handleImportZipLocal() {
     if (!importZipFile) throw new Error("No ZIP file selected");
+    const zipFile = importZipFile;
 
     const wsName = resolveCreationWorkspaceName(false);
     const localWs = createLocalWorkspace(wsName);
@@ -782,7 +784,7 @@
     progressMode = 'bytes';
 
     const result = await backend.importFromZip(
-      importZipFile,
+      zipFile,
       workspaceDir,
       (uploaded, total) => {
         importProgress = total > 0 ? Math.round((uploaded / total) * 100) : 0;
@@ -1110,6 +1112,7 @@
    */
   async function handleImportZip() {
     if (!importZipFile) throw new Error("No ZIP file selected");
+    const zipFile = importZipFile;
 
     const backend = await getBackend();
     const api = createApi(backend);
@@ -1154,7 +1157,7 @@
 
     const uploadResult = await uploadWorkspaceSnapshot(
       workspaceId,
-      importZipFile,
+      zipFile,
       'replace',
       true,
       (uploadedBytes, totalBytes) => {
@@ -1181,7 +1184,7 @@
     setStageProgress(40, "Applying ZIP locally...");
     progressMode = 'bytes';
     const localImportResult = await backend.importFromZip(
-      importZipFile,
+      zipFile,
       workspaceDir,
       (uploaded, total) => {
         if (total > 0) {

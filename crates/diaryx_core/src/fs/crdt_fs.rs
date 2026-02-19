@@ -417,8 +417,8 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
     /// to prevent stale state from being merged with new content.
     async fn update_crdt_for_file_internal(&self, path: &Path, content: &str, is_new_file: bool) {
         if !self.is_enabled() {
-            log::warn!(
-                "[CrdtFs] DEBUG: update_crdt_for_file_internal SKIPPED (disabled) path={:?}",
+            log::trace!(
+                "[CrdtFs] update_crdt_for_file_internal SKIPPED (disabled) path={:?}",
                 path
             );
             return;
@@ -426,7 +426,7 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
 
         // Skip CRDT update if this is a sync write (prevents feedback loops)
         if self.is_sync_write_in_progress(path) {
-            log::warn!("CrdtFs: Skipping CRDT update for sync write: {:?}", path);
+            log::trace!("CrdtFs: Skipping CRDT update for sync write: {:?}", path);
             return;
         }
 
@@ -442,8 +442,8 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
             return;
         }
 
-        log::warn!(
-            "[CrdtFs] DEBUG: update_crdt_for_file_internal RUNNING: path='{}', is_new_file={}, content_len={}",
+        log::debug!(
+            "[CrdtFs] update_crdt_for_file_internal: path='{}', is_new_file={}, content_len={}",
             path_str,
             is_new_file,
             content.len()
@@ -499,20 +499,16 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
         }
 
         // Update workspace CRDT with the doc_key (doc_id or path)
-        log::warn!("[CrdtFs] DEBUG: BEFORE set_file: doc_key={}", doc_key);
+        log::trace!("[CrdtFs] BEFORE set_file: doc_key={}", doc_key);
         if let Err(e) = self.workspace_crdt.set_file(&doc_key, metadata.clone()) {
             log::warn!("[CrdtFs] set_file FAILED: {}: {}", doc_key, e);
         } else {
-            log::warn!("[CrdtFs] DEBUG: set_file SUCCESS: doc_key={}", doc_key);
+            log::trace!("[CrdtFs] set_file SUCCESS: doc_key={}", doc_key);
         }
 
         // Update body doc using the same key
         let body = frontmatter::extract_body(content);
-        log::warn!(
-            "[CrdtFs] DEBUG: body extracted, len={}, preview='{}'",
-            body.len(),
-            body.chars().take(50).collect::<String>()
-        );
+        log::trace!("[CrdtFs] body extracted, len={}", body.len(),);
 
         // For new files, delete any stale storage and create a fresh doc
         // to prevent concatenation with old content from deleted files

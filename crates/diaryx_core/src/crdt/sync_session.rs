@@ -88,6 +88,11 @@ pub enum IncomingEvent {
         /// The raw sync message bytes.
         data: Vec<u8>,
     },
+    /// Request body sync for specific files (lazy sync on demand).
+    SyncBodyFiles {
+        /// File paths to sync body docs for.
+        file_paths: Vec<String>,
+    },
 }
 
 /// Actions returned by `SyncSession::process()` for the platform layer to execute.
@@ -142,8 +147,8 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
         let normalized = normalize_sync_path(path);
         let mut pending = self.pending_body_docs.lock().unwrap();
         let was_present = pending.remove(&normalized);
-        log::warn!(
-            "[SyncSession] DEBUG mark_body_ready: path='{}', was_pending={}, remaining={}",
+        log::debug!(
+            "[SyncSession] mark_body_ready: path='{}', was_pending={}, remaining={}",
             normalized,
             was_present,
             pending.len()
@@ -158,8 +163,8 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
         let pending_preview: Vec<_> = pending.iter().take(5).cloned().collect();
         drop(pending);
         let mut emitted = self.synced_emitted.lock().unwrap();
-        log::warn!(
-            "[SyncSession] DEBUG maybe_emit_synced: metadata_ready={}, pending_empty={}, pending_count={}, emitted={}, preview={:?}",
+        log::debug!(
+            "[SyncSession] maybe_emit_synced: metadata_ready={}, pending_empty={}, pending_count={}, emitted={}, preview={:?}",
             metadata_ready,
             pending_empty,
             pending_count,
@@ -237,20 +242,27 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
 
     /// Audit sync integrity and requeue missing body syncs when needed.
     ///
-    /// This is a lightweight self-heal pass that checks:
-    /// - Active workspace files vs pending/synced body docs
-    /// - Active workspace files vs on-disk presence (when write_to_disk=true)
+    /// This is a lightweight self-heal pass that checks focused files:
+    /// - Focused files vs pending/synced body docs
+    /// - Focused files vs on-disk presence (when write_to_disk=true)
     ///
     /// If drift is detected, it requeues body SyncStep1 for the affected files.
+    /// Only audits focused files to avoid eagerly syncing all body docs.
     async fn audit_and_reconcile_integrity(&self) -> Vec<SessionAction> {
         let mut actions = Vec::new();
-        let active_paths = self.sync_manager.get_all_file_paths();
-        if active_paths.is_empty() {
-            self.pending_body_docs.lock().unwrap().clear();
+        let focused_paths = self.sync_manager.get_focused_files();
+        if focused_paths.is_empty() {
             return actions;
         }
 
-        let active_set: HashSet<String> = active_paths.iter().cloned().collect();
+        // Verify focused files are still in the workspace
+        let active_set: HashSet<String> =
+            self.sync_manager.get_all_file_paths().into_iter().collect();
+        let focused_paths: Vec<String> = focused_paths
+            .into_iter()
+            .filter(|p| active_set.contains(p))
+            .collect();
+
         {
             // Drop pending entries for files that are no longer active.
             let mut pending = self.pending_body_docs.lock().unwrap();
@@ -261,7 +273,7 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
         let mut unloaded_paths = Vec::new();
         let mut missing_disk_paths = Vec::new();
 
-        for path in &active_paths {
+        for path in &focused_paths {
             if !self.sync_manager.is_body_synced(path) {
                 unsynced_paths.push(path.clone());
             }
@@ -275,8 +287,8 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
 
         if !missing_disk_paths.is_empty() || !unloaded_paths.is_empty() {
             log::warn!(
-                "[SyncSession] Integrity audit: active={}, unsynced={}, unloaded={}, missing_disk={}",
-                active_paths.len(),
+                "[SyncSession] Integrity audit: focused={}, unsynced={}, unloaded={}, missing_disk={}",
+                focused_paths.len(),
                 unsynced_paths.len(),
                 unloaded_paths.len(),
                 missing_disk_paths.len()
@@ -315,6 +327,7 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
             IncomingEvent::SnapshotImported => self.handle_snapshot_imported().await,
             IncomingEvent::Disconnected => self.handle_disconnected(),
             IncomingEvent::LocalUpdate { doc_id, data } => self.handle_local_update(&doc_id, &data),
+            IncomingEvent::SyncBodyFiles { file_paths } => self.handle_sync_body_files(&file_paths),
         }
     }
 
@@ -445,6 +458,24 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
         vec![SessionAction::SendBinary(framed)]
     }
 
+    fn handle_sync_body_files(&self, file_paths: &[String]) -> Vec<SessionAction> {
+        let current_state = {
+            let state = self.state.lock().unwrap();
+            state.clone()
+        };
+
+        if current_state != SessionState::Active {
+            log::debug!("[SyncSession] Dropping SyncBodyFiles (not active)");
+            return Vec::new();
+        }
+
+        log::info!(
+            "[SyncSession] SyncBodyFiles: {} files requested",
+            file_paths.len()
+        );
+        self.queue_body_sync_step1_for_paths(file_paths, false, false)
+    }
+
     // =========================================================================
     // Handshake Protocol
     // =========================================================================
@@ -570,13 +601,6 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
                             }));
                         }
 
-                        // Ensure body sync is started for newly discovered files after
-                        // workspace metadata is applied.
-                        let file_paths = self.sync_manager.get_all_file_paths();
-                        let mut body_actions =
-                            self.queue_body_sync_step1_for_paths(&file_paths, false, false);
-                        actions.append(&mut body_actions);
-
                         let mut heal_actions = self.audit_and_reconcile_integrity().await;
                         actions.append(&mut heal_actions);
 
@@ -680,7 +704,10 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
     // State Transitions
     // =========================================================================
 
-    /// Transition to Active state: emit Syncing, send body SyncStep1 for all files.
+    /// Transition to Active state: emit Syncing, set metadata ready.
+    ///
+    /// Body sync is NOT started eagerly — it happens on demand when the client
+    /// calls `SyncBodyFiles` for the files it actually needs.
     async fn transition_to_active(&self) -> Vec<SessionAction> {
         let mut actions = Vec::new();
 
@@ -696,15 +723,10 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
         // Compatibility fallback for servers that don't emit explicit sync_complete.
         self.set_metadata_ready();
 
-        // Send body SyncStep1 for all known files
-        let file_paths = self.sync_manager.get_all_file_paths();
-        log::warn!(
-            "[SyncSession] DEBUG transition_to_active: {} file paths to sync: {:?}",
-            file_paths.len(),
-            file_paths.iter().take(10).collect::<Vec<_>>()
+        log::info!(
+            "[SyncSession] transition_to_active: {} file paths in workspace (body sync is lazy)",
+            self.sync_manager.get_all_file_paths().len()
         );
-        let mut body_actions = self.queue_body_sync_step1_for_paths(&file_paths, true, true);
-        actions.append(&mut body_actions);
 
         actions
     }
@@ -800,8 +822,36 @@ mod tests {
     }
 
     #[test]
-    fn test_join_bootstrap_dedupes_aliases_and_skips_temp_files() {
+    fn test_transition_to_active_does_not_send_body_sync() {
         let (session, _manager, workspace) = create_test_session("ws-join", false);
+
+        workspace
+            .set_file("./README.md", test_file_metadata("README.md", "Readme"))
+            .unwrap();
+        workspace
+            .set_file(
+                "notes/new-entry.md",
+                test_file_metadata("new-entry.md", "New Entry"),
+            )
+            .unwrap();
+
+        block_on(session.process(IncomingEvent::Connected));
+        let actions = block_on(session.process(IncomingEvent::BinaryMessage(
+            framed_workspace_message("ws-join", SyncMessage::SyncStep1(vec![])),
+        )));
+
+        // Body sync is lazy — no body SyncStep1 should be sent on transition
+        let targets = body_sync_step1_targets(&actions);
+        assert!(
+            targets.is_empty(),
+            "Expected no body SyncStep1, got {:?}",
+            targets
+        );
+    }
+
+    #[test]
+    fn test_sync_body_files_dedupes_aliases_and_skips_synced() {
+        let (session, _manager, workspace) = create_test_session("ws-body", false);
 
         workspace
             .set_file("./README.md", test_file_metadata("README.md", "Readme"))
@@ -815,26 +865,59 @@ mod tests {
                 test_file_metadata("new-entry.md", "New Entry"),
             )
             .unwrap();
-        workspace
-            .set_file(
-                "notes/new-entry.md.tmp",
-                test_file_metadata("new-entry.md.tmp", "Temp"),
-            )
-            .unwrap();
 
+        // Enter active state
         block_on(session.process(IncomingEvent::Connected));
-        let actions = block_on(session.process(IncomingEvent::BinaryMessage(
-            framed_workspace_message("ws-join", SyncMessage::SyncStep1(vec![])),
-        )));
+        block_on(
+            session.process(IncomingEvent::BinaryMessage(framed_workspace_message(
+                "ws-body",
+                SyncMessage::SyncStep1(vec![]),
+            ))),
+        );
+
+        // Request body sync for specific files
+        let actions = block_on(session.process(IncomingEvent::SyncBodyFiles {
+            file_paths: vec![
+                "./README.md".to_string(),
+                "/README.md".to_string(),
+                "notes/new-entry.md".to_string(),
+            ],
+        }));
 
         let mut targets = body_sync_step1_targets(&actions);
         targets.sort();
-
         assert_eq!(targets, vec!["README.md", "notes/new-entry.md"]);
+
+        // Requesting the same files again should produce no new targets (already pending)
+        let actions2 = block_on(session.process(IncomingEvent::SyncBodyFiles {
+            file_paths: vec!["README.md".to_string(), "notes/new-entry.md".to_string()],
+        }));
+        let targets2 = body_sync_step1_targets(&actions2);
+        assert!(
+            targets2.is_empty(),
+            "Expected no duplicates, got {:?}",
+            targets2
+        );
     }
 
     #[test]
-    fn test_workspace_update_during_join_queues_new_body_sync() {
+    fn test_sync_body_files_ignored_when_not_active() {
+        let (session, _manager, workspace) = create_test_session("ws-inactive", false);
+
+        workspace
+            .set_file("test.md", test_file_metadata("test.md", "Test"))
+            .unwrap();
+
+        // Session is in AwaitingConnect state — SyncBodyFiles should be dropped
+        let actions = block_on(session.process(IncomingEvent::SyncBodyFiles {
+            file_paths: vec!["test.md".to_string()],
+        }));
+        let targets = body_sync_step1_targets(&actions);
+        assert!(targets.is_empty());
+    }
+
+    #[test]
+    fn test_workspace_update_does_not_eagerly_sync_bodies() {
         let (session, _manager, _workspace) = create_test_session("ws-rename", false);
 
         // Enter active sync state.
@@ -859,41 +942,26 @@ mod tests {
         )));
         let targets = body_sync_step1_targets(&actions);
 
-        assert!(targets.contains(&"renamed.md".to_string()));
+        // No eager body sync — must be requested via SyncBodyFiles
+        assert!(
+            targets.is_empty(),
+            "Expected no body SyncStep1, got {:?}",
+            targets
+        );
     }
 
     #[test]
-    fn test_reconnect_requeues_body_bootstrap_without_duplicates() {
-        let (session, _manager, workspace) = create_test_session("ws-reconnect", false);
-        workspace
-            .set_file(
-                "reconnect.md",
-                test_file_metadata("reconnect.md", "Reconnect"),
-            )
-            .unwrap();
-
-        block_on(session.process(IncomingEvent::Connected));
-        let first_actions = block_on(session.process(IncomingEvent::BinaryMessage(
-            framed_workspace_message("ws-reconnect", SyncMessage::SyncStep1(vec![])),
-        )));
-        let first_targets = body_sync_step1_targets(&first_actions);
-        assert_eq!(first_targets, vec!["reconnect.md"]);
-
-        block_on(session.process(IncomingEvent::Disconnected));
-        block_on(session.process(IncomingEvent::Connected));
-        let second_actions = block_on(session.process(IncomingEvent::BinaryMessage(
-            framed_workspace_message("ws-reconnect", SyncMessage::SyncStep1(vec![])),
-        )));
-        let second_targets = body_sync_step1_targets(&second_actions);
-        assert_eq!(second_targets, vec!["reconnect.md"]);
-    }
-
-    #[test]
-    fn test_integrity_audit_requeues_when_disk_missing() {
+    fn test_integrity_audit_only_checks_focused_files() {
         let (session, manager, workspace) = create_test_session("ws-heal", true);
         workspace
             .set_file("heal.md", test_file_metadata("heal.md", "Heal"))
             .unwrap();
+        workspace
+            .set_file("other.md", test_file_metadata("other.md", "Other"))
+            .unwrap();
+
+        // Focus on heal.md only
+        manager.add_focused_files(&["heal.md".to_string()]);
 
         // Mark body as synced without writing to disk.
         let msg = SyncMessage::SyncStep1(vec![]).encode();
@@ -904,7 +972,21 @@ mod tests {
         let actions = block_on(session.audit_and_reconcile_integrity());
         let targets = body_sync_step1_targets(&actions);
 
+        // Only heal.md should be requeued (focused), not other.md
         assert!(targets.contains(&"heal.md".to_string()));
+        assert!(!targets.contains(&"other.md".to_string()));
         assert!(!manager.is_body_synced("heal.md"));
+    }
+
+    #[test]
+    fn test_integrity_audit_empty_when_no_focused_files() {
+        let (session, _manager, workspace) = create_test_session("ws-nofocus", true);
+        workspace
+            .set_file("file.md", test_file_metadata("file.md", "File"))
+            .unwrap();
+
+        // No files focused — audit should return empty
+        let actions = block_on(session.audit_and_reconcile_integrity());
+        assert!(actions.is_empty());
     }
 }

@@ -488,4 +488,45 @@ impl WasmSyncClient {
         });
         self.outgoing_text.borrow_mut().push_back(msg.to_string());
     }
+
+    /// Request body sync for specific files (lazy sync on demand).
+    ///
+    /// Sends SyncBodyFiles event through the session to initiate body
+    /// SyncStep1 for just the requested files, rather than all files.
+    #[wasm_bindgen(js_name = "syncBodyFiles")]
+    pub fn sync_body_files(&self, file_paths: Vec<String>) -> Promise {
+        let session_ptr =
+            &self.session as *const SyncSession<EventEmittingFs<CrdtFs<StorageBackend>>>;
+        let outgoing_binary = &self.outgoing_binary as *const RefCell<VecDeque<Vec<u8>>>;
+        let outgoing_text = &self.outgoing_text as *const RefCell<VecDeque<String>>;
+        let events = &self.events as *const RefCell<VecDeque<String>>;
+
+        future_to_promise(async move {
+            let session = unsafe { &*session_ptr };
+            let actions = session
+                .process(IncomingEvent::SyncBodyFiles { file_paths })
+                .await;
+            let outgoing_binary = unsafe { &*outgoing_binary };
+            let outgoing_text = unsafe { &*outgoing_text };
+            let events = unsafe { &*events };
+
+            for action in actions {
+                match action {
+                    SessionAction::SendBinary(data) => {
+                        outgoing_binary.borrow_mut().push_back(data);
+                    }
+                    SessionAction::SendText(text) => {
+                        outgoing_text.borrow_mut().push_back(text);
+                    }
+                    SessionAction::Emit(event) => {
+                        if let Ok(json) = serde_json::to_string(&event) {
+                            events.borrow_mut().push_back(json);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(JsValue::UNDEFINED)
+        })
+    }
 }

@@ -13,6 +13,8 @@ use diaryx_core::crdt::{
 };
 use diaryx_core::link_parser;
 pub use diaryx_sync::storage::StorageCache;
+use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -112,10 +114,12 @@ struct UploadedBlob {
     mime_type: String,
 }
 
-#[derive(Debug, Clone)]
-struct SnapshotBinaryEntryMeta {
-    archive_index: usize,
+/// Represents a unique blob to upload after ZIP scanning.
+/// Built inside `spawn_blocking`, consumed by parallel upload phase.
+#[derive(Debug)]
+struct BlobUploadJob {
     hash: String,
+    bytes: Vec<u8>,
     size_bytes: u64,
     mime_type: String,
 }
@@ -540,6 +544,14 @@ impl WorkspaceStore {
     ///
     /// If `include_attachments` is true, binary entries are uploaded to blob
     /// storage and attachment metadata is patched with hash/size/mime.
+    ///
+    /// Optimizations over naive approach:
+    /// - Single-pass ZIP scan: binary entries are read once, hashed, and cached
+    ///   in memory (deduped by SHA-256). No second decompression pass.
+    /// - Parallel blob uploads: up to 8 concurrent `blob_store.put()` calls
+    ///   via `FuturesUnordered`.
+    /// - `spawn_blocking`: all synchronous ZIP I/O, SHA-256 hashing, and CRDT
+    ///   population run off the async runtime.
     pub async fn import_snapshot_zip_from_path(
         &self,
         workspace_id: &str,
@@ -560,84 +572,34 @@ impl WorkspaceStore {
             .map_err(|e| SnapshotError::Storage(e.to_string()))?;
         let body_docs = BodyDocManager::new(storage.clone());
 
-        let file = std::fs::File::open(zip_path)?;
-        let mut archive = zip::ZipArchive::new(file)?;
+        // Move all synchronous ZIP I/O and CRDT operations into a blocking task
+        // to avoid starving the async runtime during CPU-bound decompression/hashing.
+        let zip_path_owned = zip_path.to_path_buf();
+        let workspace_id_owned = workspace_id.to_string();
 
-        if mode == SnapshotImportMode::Replace {
-            storage.clear_file_index()?;
+        let (blob_upload_jobs, files_imported, workspace_refs) =
+            tokio::task::spawn_blocking(move || {
+                import_snapshot_blocking(
+                    &zip_path_owned,
+                    &workspace_id_owned,
+                    mode,
+                    include_attachments,
+                    &storage,
+                    &workspace,
+                    &body_docs,
+                )
+            })
+            .await
+            .map_err(|e| SnapshotError::Storage(format!("Blocking task failed: {}", e)))??;
 
-            let existing: Vec<String> = workspace
-                .list_files()
-                .into_iter()
-                .map(|(path, _)| path)
-                .collect();
-            for path in existing {
-                let _ = workspace.delete_file(&path);
-            }
-        }
-
-        let mut blobs_by_path: HashMap<String, UploadedBlob> = HashMap::new();
-        let mut binary_entries: Vec<SnapshotBinaryEntryMeta> = Vec::new();
-
-        if include_attachments {
-            // Two-pass attachment import:
-            // 1) Scan zip entries to compute hash/size for quota checks.
-            // 2) Re-open only unique binaries and upload one-by-one.
-            // This avoids keeping all attachment bytes resident in memory.
-            let mut unique_hash_sizes: HashMap<String, u64> = HashMap::new();
-            for i in 0..archive.len() {
-                let Some((name, hash, size_bytes, mime_type)) = ({
-                    let mut entry = archive.by_index(i)?;
-                    if entry.is_dir() {
-                        None
-                    } else {
-                        if should_skip_snapshot_entry(entry.name()) {
-                            continue;
-                        }
-
-                        let Some(name) = normalize_workspace_path(entry.name()) else {
-                            continue;
-                        };
-
-                        if name.ends_with(".md") {
-                            None
-                        } else {
-                            let mut bytes = Vec::new();
-                            entry.read_to_end(&mut bytes)?;
-                            let size_bytes = bytes.len() as u64;
-                            let hash = sha256_hex(&bytes);
-                            let mime_type = mime_for_path(&name);
-                            Some((name, hash, size_bytes, mime_type))
-                        }
-                    }
-                }) else {
-                    continue;
-                };
-
-                unique_hash_sizes.entry(hash.clone()).or_insert(size_bytes);
-                binary_entries.push(SnapshotBinaryEntryMeta {
-                    archive_index: i,
-                    hash: hash.clone(),
-                    size_bytes,
-                    mime_type: mime_type.clone(),
-                });
-
-                blobs_by_path.insert(
-                    name,
-                    UploadedBlob {
-                        hash,
-                        size_bytes,
-                        mime_type,
-                    },
-                );
-            }
-
+        // Quota check — fast SQLite lookups, done outside spawn_blocking
+        if include_attachments && !blob_upload_jobs.is_empty() {
             let used_bytes = repo.get_user_storage_usage(user_id)?.used_bytes;
             let limit_bytes = repo.get_effective_user_attachment_limit(user_id)?;
             let mut net_new_bytes = 0u64;
-            for (hash, size) in unique_hash_sizes {
-                if repo.get_user_blob(user_id, &hash)?.is_none() {
-                    net_new_bytes = net_new_bytes.saturating_add(size);
+            for job in &blob_upload_jobs {
+                if repo.get_user_blob(user_id, &job.hash)?.is_none() {
+                    net_new_bytes = net_new_bytes.saturating_add(job.size_bytes);
                 }
             }
             let projected = used_bytes.saturating_add(net_new_bytes);
@@ -649,114 +611,39 @@ impl WorkspaceStore {
                 });
             }
 
-            let mut uploaded_hashes = HashSet::new();
-            for entry in &binary_entries {
-                if !uploaded_hashes.insert(entry.hash.clone()) {
-                    continue;
-                }
-                let bytes = {
-                    let mut zip_entry = archive.by_index(entry.archive_index)?;
-                    let mut bytes = Vec::new();
-                    zip_entry.read_to_end(&mut bytes)?;
-                    bytes
-                };
+            // Parallel blob uploads — up to 8 concurrent network requests.
+            // Keys are content-addressed by SHA-256 so put is idempotent;
+            // no HEAD/exists check needed (some R2 policies reject HeadObject).
+            const MAX_CONCURRENT_UPLOADS: usize = 8;
+            let mut upload_futs = FuturesUnordered::new();
 
-                let key = blob_store.blob_key(user_id, &entry.hash);
-                // Avoid HEAD/exists checks against R2 here. Some bucket policies
-                // allow PutObject but reject HeadObject, which would fail imports.
-                // Since keys are content-addressed by SHA-256, put is idempotent.
-                blob_store
-                    .put(&key, &bytes, &entry.mime_type)
-                    .await
-                    .map_err(SnapshotError::Blob)?;
+            for job in blob_upload_jobs {
+                let key = blob_store.blob_key(user_id, &job.hash);
+                let hash = job.hash;
+                let size_bytes = job.size_bytes;
+                let mime_type = job.mime_type;
+                let bytes = job.bytes;
 
-                repo.upsert_blob(
-                    user_id,
-                    &entry.hash,
-                    &key,
-                    entry.size_bytes,
-                    &entry.mime_type,
-                )?;
-            }
-        }
+                upload_futs.push(async move {
+                    blob_store
+                        .put(&key, &bytes, &mime_type)
+                        .await
+                        .map_err(SnapshotError::Blob)?;
+                    Ok::<_, SnapshotError>((hash, key, size_bytes, mime_type))
+                });
 
-        let mut files_imported = 0usize;
-        let mut workspace_refs: Vec<WorkspaceAttachmentRefRecord> = Vec::new();
-
-        for i in 0..archive.len() {
-            let mut entry = archive.by_index(i)?;
-            if entry.is_dir() {
-                continue;
-            }
-
-            if should_skip_snapshot_entry(entry.name()) {
-                continue;
-            }
-
-            let name = match normalize_workspace_path(entry.name()) {
-                Some(v) => v,
-                None => continue,
-            };
-
-            if !name.ends_with(".md") {
-                continue;
-            }
-
-            let mut content = String::new();
-            entry
-                .read_to_string(&mut content)
-                .map_err(|e| SnapshotError::Parse(format!("Failed reading {}: {}", name, e)))?;
-
-            let (mut metadata, body) =
-                parse_snapshot_markdown(&name, &content).map_err(SnapshotError::Parse)?;
-
-            let now = Utc::now().timestamp_millis();
-            for attachment in &mut metadata.attachments {
-                let Some(normalized_attachment_path) =
-                    normalize_attachment_path(&name, &attachment.path)
-                else {
-                    continue;
-                };
-                attachment.path = normalized_attachment_path.clone();
-
-                if include_attachments
-                    && let Some(blob) = blobs_by_path.get(&normalized_attachment_path)
-                {
-                    attachment.hash = blob.hash.clone();
-                    attachment.size = blob.size_bytes;
-                    attachment.mime_type = blob.mime_type.clone();
-                    attachment.uploaded_at = Some(now);
-                }
-
-                if !attachment.hash.is_empty() {
-                    workspace_refs.push(WorkspaceAttachmentRefRecord {
-                        file_path: name.clone(),
-                        attachment_path: normalized_attachment_path,
-                        blob_hash: attachment.hash.clone(),
-                        size_bytes: attachment.size,
-                        mime_type: if attachment.mime_type.is_empty() {
-                            "application/octet-stream".to_string()
-                        } else {
-                            attachment.mime_type.clone()
-                        },
-                    });
+                // Drain one completed upload before adding more when at capacity
+                if upload_futs.len() >= MAX_CONCURRENT_UPLOADS {
+                    let (hash, key, size_bytes, mime_type) = upload_futs.next().await.unwrap()?;
+                    repo.upsert_blob(user_id, &hash, &key, size_bytes, &mime_type)?;
                 }
             }
 
-            workspace.set_file(&name, metadata.clone())?;
-            let body_key = format!("body:{}/{}", workspace_id, name);
-            body_docs.get_or_create(&body_key).set_body(&body)?;
-
-            // Populate file_index for v2 file manifest handshake
-            storage.update_file_index(
-                &name,
-                metadata.title.as_deref(),
-                metadata.part_of.as_deref(),
-                metadata.deleted,
-                metadata.modified_at,
-            )?;
-
-            files_imported += 1;
+            // Drain remaining in-flight uploads
+            while let Some(result) = upload_futs.next().await {
+                let (hash, key, size_bytes, mime_type) = result?;
+                repo.upsert_blob(user_id, &hash, &key, size_bytes, &mime_type)?;
+            }
         }
 
         if include_attachments {
@@ -915,6 +802,156 @@ impl WorkspaceStore {
         repo.replace_workspace_attachment_refs(workspace_id, &refs)?;
         Ok(refs.len())
     }
+}
+
+/// Synchronous inner routine for `import_snapshot_zip_from_path`.
+///
+/// Runs inside `spawn_blocking` so that ZIP decompression, SHA-256 hashing,
+/// and CRDT population don't block the async runtime.
+///
+/// Returns `(blob_upload_jobs, files_imported, workspace_attachment_refs)`.
+fn import_snapshot_blocking(
+    zip_path: &Path,
+    workspace_id: &str,
+    mode: SnapshotImportMode,
+    include_attachments: bool,
+    storage: &diaryx_core::crdt::SqliteStorage,
+    workspace: &WorkspaceCrdt,
+    body_docs: &BodyDocManager,
+) -> Result<(Vec<BlobUploadJob>, usize, Vec<WorkspaceAttachmentRefRecord>), SnapshotError> {
+    let file = std::fs::File::open(zip_path)?;
+    let mut archive = zip::ZipArchive::new(file)?;
+
+    if mode == SnapshotImportMode::Replace {
+        storage.clear_file_index()?;
+
+        let existing: Vec<String> = workspace
+            .list_files()
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect();
+        for path in existing {
+            let _ = workspace.delete_file(&path);
+        }
+    }
+
+    // Single pass over ZIP entries: read each entry exactly once.
+    // Binary files are hashed and cached in memory (deduped by SHA-256).
+    // Markdown files are collected for deferred processing (needs complete blobs_by_path).
+    let mut unique_blob_bytes: HashMap<String, (Vec<u8>, u64, String)> = HashMap::new();
+    let mut blobs_by_path: HashMap<String, UploadedBlob> = HashMap::new();
+    let mut markdown_entries: Vec<(String, String)> = Vec::new();
+
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i)?;
+        if entry.is_dir() {
+            continue;
+        }
+        if should_skip_snapshot_entry(entry.name()) {
+            continue;
+        }
+        let Some(name) = normalize_workspace_path(entry.name()) else {
+            continue;
+        };
+
+        if name.ends_with(".md") {
+            let mut content = String::new();
+            entry
+                .read_to_string(&mut content)
+                .map_err(|e| SnapshotError::Parse(format!("Failed reading {}: {}", name, e)))?;
+            markdown_entries.push((name, content));
+        } else if include_attachments {
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes)?;
+            let size_bytes = bytes.len() as u64;
+            let hash = sha256_hex(&bytes);
+            let mime_type = mime_for_path(&name);
+
+            blobs_by_path.insert(
+                name,
+                UploadedBlob {
+                    hash: hash.clone(),
+                    size_bytes,
+                    mime_type: mime_type.clone(),
+                },
+            );
+
+            // Cache unique blobs by hash — deduplicates identical files
+            unique_blob_bytes
+                .entry(hash)
+                .or_insert((bytes, size_bytes, mime_type));
+        }
+    }
+
+    // Process markdown entries — needs blobs_by_path to be fully populated
+    let mut files_imported = 0usize;
+    let mut workspace_refs: Vec<WorkspaceAttachmentRefRecord> = Vec::new();
+
+    for (name, content) in &markdown_entries {
+        let (mut metadata, body) =
+            parse_snapshot_markdown(name, content).map_err(SnapshotError::Parse)?;
+
+        let now = Utc::now().timestamp_millis();
+        for attachment in &mut metadata.attachments {
+            let Some(normalized_attachment_path) =
+                normalize_attachment_path(name, &attachment.path)
+            else {
+                continue;
+            };
+            attachment.path = normalized_attachment_path.clone();
+
+            if include_attachments
+                && let Some(blob) = blobs_by_path.get(&normalized_attachment_path)
+            {
+                attachment.hash = blob.hash.clone();
+                attachment.size = blob.size_bytes;
+                attachment.mime_type = blob.mime_type.clone();
+                attachment.uploaded_at = Some(now);
+            }
+
+            if !attachment.hash.is_empty() {
+                workspace_refs.push(WorkspaceAttachmentRefRecord {
+                    file_path: name.clone(),
+                    attachment_path: normalized_attachment_path,
+                    blob_hash: attachment.hash.clone(),
+                    size_bytes: attachment.size,
+                    mime_type: if attachment.mime_type.is_empty() {
+                        "application/octet-stream".to_string()
+                    } else {
+                        attachment.mime_type.clone()
+                    },
+                });
+            }
+        }
+
+        workspace.set_file(name, metadata.clone())?;
+        let body_key = format!("body:{}/{}", workspace_id, name);
+        body_docs.get_or_create(&body_key).set_body(&body)?;
+
+        // Populate file_index for v2 file manifest handshake
+        storage.update_file_index(
+            name,
+            metadata.title.as_deref(),
+            metadata.part_of.as_deref(),
+            metadata.deleted,
+            metadata.modified_at,
+        )?;
+
+        files_imported += 1;
+    }
+
+    // Build blob upload jobs from unique cached bytes
+    let blob_upload_jobs: Vec<BlobUploadJob> = unique_blob_bytes
+        .into_iter()
+        .map(|(hash, (bytes, size_bytes, mime_type))| BlobUploadJob {
+            hash,
+            bytes,
+            size_bytes,
+            mime_type,
+        })
+        .collect();
+
+    Ok((blob_upload_jobs, files_imported, workspace_refs))
 }
 
 #[cfg(test)]

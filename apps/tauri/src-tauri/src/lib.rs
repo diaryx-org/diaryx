@@ -97,6 +97,11 @@ pub fn run() {
             commands::start_guest_mode,
             commands::end_guest_mode,
             commands::is_guest_mode,
+            // CrdtFs Control
+            commands::set_crdt_enabled,
+            commands::is_crdt_enabled,
+            // Workspace Reinitialization
+            commands::reinitialize_workspace,
             // WebSocket Sync
             commands::start_websocket_sync,
             commands::stop_websocket_sync,

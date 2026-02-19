@@ -47,7 +47,7 @@ targets:
         Release:
           SWIFT_OPTIMIZATION_LEVEL: "-O"
     entitlements:
-      path: Diaryx/Diaryx.entitlements
+      path: Diaryx/macOS.entitlements
       properties:
         com.apple.security.app-sandbox: true
         com.apple.security.files.user-selected.read-write: true

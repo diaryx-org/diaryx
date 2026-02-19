@@ -61,16 +61,22 @@
     Settings2,
     Fingerprint,
     Cloud,
+    FolderOpen,
   } from "@lucide/svelte";
   import VerificationCodeInput from "$lib/components/VerificationCodeInput.svelte";
   import { toast } from "svelte-sonner";
   import { untrack } from "svelte";
   import { getBackend, createApi } from "./backend";
+  import { isTauri } from "$lib/backend/interface";
   import type { TreeNode } from "$lib/backend/interface";
   import {
     buildWorkspaceSnapshotUploadBlob,
     findWorkspaceRootPath,
   } from "$lib/settings/workspaceSnapshotUpload";
+  import {
+    isStorageTypeSupported,
+    storeWorkspaceFileSystemHandle,
+  } from "$lib/backend/storageType";
   import {
     waitForInitialSync,
     onSyncProgress,
@@ -118,7 +124,7 @@
 
   // Options screen state — two dimensions
   type SyncMode = 'local' | 'remote';
-  type ContentSource = 'existing_workspace' | 'import_zip' | 'start_fresh';
+  type ContentSource = 'existing_workspace' | 'import_zip' | 'start_fresh' | 'open_folder';
 
   let syncMode = $state<SyncMode>('local');
   let contentSource = $state<ContentSource>('start_fresh');
@@ -129,6 +135,14 @@
   // Import from ZIP state
   let importZipFile = $state<File | null>(null);
   let importZipFileInput = $state<HTMLInputElement | null>(null);
+
+  // Open folder state
+  let selectedFolderPath = $state<string | null>(null);
+  let selectedFolderHandle = $state<FileSystemDirectoryHandle | null>(null);
+  let selectedFolderName = $state<string | null>(null);
+
+  // Tauri workspace path (only shown on Tauri)
+  let workspacePath = $state('');
 
   // Server workspaces list (populated after auth)
   let serverWorkspacesList = $state<Array<{ id: string; name: string }>>([]);
@@ -189,6 +203,69 @@
     contentSource === 'existing_workspace' && selectedSourceWorkspaceId !== null
   );
 
+  // Derived: whether to show the "Open existing folder" option
+  let showOpenFolder = $derived(isTauri() || isStorageTypeSupported('filesystem-access'));
+
+  // Tauri: compute default workspace path from name
+  $effect(() => {
+    if (isTauri() && newWorkspaceName.trim()) {
+      untrack(async () => {
+        // Only auto-compute if path is empty or was auto-computed
+        try {
+          const backend = await getBackend();
+          const appPaths = backend.getAppPaths?.();
+          const docDir = typeof appPaths?.document_dir === 'string' ? appPaths.document_dir : '';
+          if (!workspacePath || (docDir && workspacePath.startsWith(docDir))) {
+            workspacePath = docDir
+              ? `${docDir}/${newWorkspaceName.trim()}`
+              : newWorkspaceName.trim();
+          }
+        } catch {
+          // Backend not ready yet — skip
+        }
+      });
+    }
+  });
+
+  /** Open a native folder picker for workspace location (Tauri only). */
+  async function browseFolder() {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const folder = await open({ directory: true, title: 'Select Workspace Location' });
+      if (folder) workspacePath = folder as string;
+    } catch (e) {
+      console.warn('[AddWorkspaceDialog] Browse folder error:', e);
+    }
+  }
+
+  /** Open a folder picker for the "Open existing folder" content source. */
+  async function openFolderPicker() {
+    try {
+      if (isTauri()) {
+        const { open } = await import('@tauri-apps/plugin-dialog');
+        const folder = await open({ directory: true, title: 'Open Existing Folder' });
+        if (folder) {
+          selectedFolderPath = folder as string;
+          const segments = (folder as string).replace(/[/\\]+$/, '').split(/[/\\]/);
+          selectedFolderName = segments[segments.length - 1] || 'Folder';
+          newWorkspaceName = selectedFolderName;
+          contentSource = 'open_folder';
+        }
+      } else {
+        const handle = await (window as any).showDirectoryPicker();
+        selectedFolderHandle = handle;
+        selectedFolderName = handle.name;
+        newWorkspaceName = handle.name;
+        contentSource = 'open_folder';
+      }
+    } catch (e: any) {
+      // User cancelled the picker — ignore AbortError
+      if (e?.name !== 'AbortError') {
+        console.warn('[AddWorkspaceDialog] Folder picker error:', e);
+      }
+    }
+  }
+
   // Initialize dialog state when opened
   $effect(() => {
     if (open) {
@@ -207,6 +284,9 @@
     progressDetail = null;
     syncStatusText = null;
     importZipFile = null;
+    selectedFolderPath = null;
+    selectedFolderHandle = null;
+    selectedFolderName = null;
     verificationSent = false;
     newWorkspaceName = getNextLocalWorkspaceName();
 
@@ -519,6 +599,7 @@
         case 'start_fresh': return 'Create Workspace';
         case 'import_zip': return 'Import Workspace';
         case 'existing_workspace': return 'Download Workspace';
+        case 'open_folder': return 'Open Workspace';
       }
     } else {
       switch (contentSource) {
@@ -526,6 +607,7 @@
         case 'import_zip': return 'Import & Sync';
         case 'existing_workspace':
           return selectedSourceIsServer ? 'Download & Sync' : 'Upload & Sync';
+        case 'open_folder': return 'Open & Sync';
       }
     }
     return 'Create Workspace';
@@ -545,8 +627,13 @@
       return;
     }
 
+    if (contentSource === 'open_folder' && !selectedFolderPath && !selectedFolderHandle) {
+      error = "Please select a folder";
+      return;
+    }
+
     if (
-      (contentSource === 'start_fresh' || contentSource === 'import_zip')
+      (contentSource === 'start_fresh' || contentSource === 'import_zip' || contentSource === 'open_folder')
       && !newWorkspaceName.trim()
     ) {
       error = "Please enter a workspace name";
@@ -569,6 +656,9 @@
           case 'existing_workspace':
             await handleDownloadServerLocal();
             break;
+          case 'open_folder':
+            await handleOpenFolder();
+            break;
         }
       } else {
         switch (contentSource) {
@@ -587,6 +677,9 @@
                 localWorkspaceId: selectedSourceWorkspaceId!,
               });
             }
+            break;
+          case 'open_folder':
+            await handleOpenFolderRemote();
             break;
         }
       }
@@ -694,7 +787,7 @@
 
   async function handleCreateLocalWorkspace() {
     const wsName = resolveCreationWorkspaceName(false);
-    const localWs = createLocalWorkspace(wsName);
+    const localWs = createLocalWorkspace(wsName, undefined, isTauri() && workspacePath ? workspacePath : undefined);
 
     await switchWorkspace(localWs.id, localWs.name);
     await ensureRootIndexForCurrentWorkspace(localWs.name);
@@ -708,13 +801,93 @@
   }
 
   /**
+   * Open an existing folder as a local workspace.
+   */
+  async function handleOpenFolder() {
+    const wsName = resolveCreationWorkspaceName(false);
+
+    if (isTauri()) {
+      if (!selectedFolderPath) throw new Error("No folder selected");
+      const localWs = createLocalWorkspace(wsName, undefined, selectedFolderPath);
+      await switchWorkspace(localWs.id, localWs.name);
+    } else {
+      if (!selectedFolderHandle) throw new Error("No folder selected");
+      const localWs = createLocalWorkspace(wsName, 'filesystem-access');
+      await storeWorkspaceFileSystemHandle(localWs.id, selectedFolderHandle);
+      await switchWorkspace(localWs.id, localWs.name);
+    }
+
+    await ensureRootIndexForCurrentWorkspace(wsName);
+
+    // Re-initialize CRDT from the filesystem now that the root index exists.
+    // switchWorkspace's initializeWorkspaceCrdt ran before ensureRootIndex created
+    // the root, so the CRDT may be missing the workspace structure.
+    const backend = await getBackend();
+    const api = createApi(backend);
+    const rootPath = await findWorkspaceRootPath(api, backend);
+    if (rootPath) {
+      try {
+        await api.initializeWorkspaceCrdt(rootPath);
+      } catch (e) {
+        console.warn('[AddWorkspace] CRDT re-init after open folder:', e);
+      }
+    }
+
+    toast.success("Workspace opened", {
+      description: `"${wsName}" is ready.`,
+    });
+
+    handleClose();
+    onComplete?.();
+  }
+
+  /**
+   * Open an existing folder as a workspace and sync it to the server.
+   */
+  async function handleOpenFolderRemote() {
+    const wsName = resolveCreationWorkspaceName(true);
+
+    if (isTauri()) {
+      if (!selectedFolderPath) throw new Error("No folder selected");
+      const localWs = createLocalWorkspace(wsName, undefined, selectedFolderPath);
+      await switchWorkspace(localWs.id, localWs.name);
+    } else {
+      if (!selectedFolderHandle) throw new Error("No folder selected");
+      const localWs = createLocalWorkspace(wsName, 'filesystem-access');
+      await storeWorkspaceFileSystemHandle(localWs.id, selectedFolderHandle);
+      await switchWorkspace(localWs.id, localWs.name);
+    }
+
+    await ensureRootIndexForCurrentWorkspace(wsName);
+
+    // Re-initialize CRDT with the root index (same rationale as handleOpenFolder)
+    const backend = await getBackend();
+    const api = createApi(backend);
+    const rootPath = await findWorkspaceRootPath(api, backend);
+    if (rootPath) {
+      try {
+        await api.initializeWorkspaceCrdt(rootPath);
+      } catch (e) {
+        console.warn('[AddWorkspace] CRDT re-init after open folder remote:', e);
+      }
+    }
+
+    const currentLocalId = getCurrentWorkspaceId();
+    await handleUploadLocal({
+      forceCreateServerWorkspace: true,
+      localWorkspaceId: currentLocalId!,
+      workspaceNameOverride: wsName,
+    });
+  }
+
+  /**
    * Download a server workspace to this device (one-time copy, no sync).
    */
   async function handleDownloadServerLocal() {
     const serverWs = serverWorkspacesList.find(w => w.id === selectedSourceWorkspaceId);
     if (!serverWs) throw new Error("No server workspace selected");
 
-    const localWs = createLocalWorkspace(serverWs.name);
+    const localWs = createLocalWorkspace(serverWs.name, undefined, isTauri() && workspacePath ? workspacePath : undefined);
     await switchWorkspace(localWs.id, localWs.name);
 
     const backend = await getBackend();
@@ -772,7 +945,7 @@
     const zipFile = importZipFile;
 
     const wsName = resolveCreationWorkspaceName(false);
-    const localWs = createLocalWorkspace(wsName);
+    const localWs = createLocalWorkspace(wsName, undefined, isTauri() && workspacePath ? workspacePath : undefined);
     await switchWorkspace(localWs.id, localWs.name);
 
     const backend = await getBackend();
@@ -1095,7 +1268,7 @@
    */
   async function handleCreateNew() {
     const workspaceName = resolveCreationWorkspaceName(true);
-    const localWs = createLocalWorkspace(workspaceName);
+    const localWs = createLocalWorkspace(workspaceName, undefined, isTauri() && workspacePath ? workspacePath : undefined);
 
     await switchWorkspace(localWs.id, localWs.name);
     await ensureRootIndexForCurrentWorkspace(localWs.name);
@@ -1424,7 +1597,7 @@
         {:else if syncMode === 'remote'}
           Create a workspace that syncs across devices.
         {:else}
-          Create a workspace on this device.
+          Create a workspace on this device.<br/>You can change the name later.
         {/if}
       </Dialog.Description>
     </Dialog.Header>
@@ -1655,6 +1828,20 @@
               />
             </div>
 
+            <!-- Workspace Location (Tauri only, hidden for open_folder since folder IS the location) -->
+            {#if isTauri() && contentSource !== 'open_folder'}
+              <div class="space-y-2">
+                <Label class="text-sm">Location</Label>
+                <div class="flex gap-2">
+                  <Input bind:value={workspacePath} class="flex-1 font-mono text-xs" />
+                  <Button variant="outline" size="sm" onclick={browseFolder}>
+                    <FolderOpen class="size-4 mr-1" />
+                    Browse
+                  </Button>
+                </div>
+              </div>
+            {/if}
+
             <!-- Sync Mode Toggle -->
             <div class="space-y-2">
               <Label class="text-sm">Sync Mode</Label>
@@ -1807,6 +1994,52 @@
                   </div>
                 </div>
               </button>
+
+              <!-- Open existing folder -->
+              {#if showOpenFolder}
+                <button
+                  type="button"
+                  class="w-full text-left p-3 rounded-lg border-2 transition-colors {contentSource === 'open_folder' ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
+                  onclick={() => {
+                    if (selectedFolderName) {
+                      contentSource = 'open_folder';
+                      selectedSourceWorkspaceId = null;
+                      selectedSourceIsServer = false;
+                    } else {
+                      openFolderPicker();
+                    }
+                  }}
+                >
+                  <div class="flex items-start gap-3">
+                    <div class="mt-0.5">
+                      <FolderOpen class="size-5 {contentSource === 'open_folder' ? 'text-primary' : 'text-muted-foreground'}" />
+                    </div>
+                    <div>
+                      <div class="font-medium text-sm">
+                        {#if selectedFolderName}
+                          Open "{selectedFolderName}"
+                        {:else}
+                          Open existing folder
+                        {/if}
+                      </div>
+                      <div class="text-xs text-muted-foreground mt-0.5">
+                        {#if selectedFolderName}
+                          <!-- svelte-ignore node_invalid_placement_ssr -->
+                          <span
+                            role="button"
+                            tabindex="0"
+                            class="text-primary hover:underline cursor-pointer"
+                            onclick={(e: MouseEvent) => { e.stopPropagation(); openFolderPicker(); }}
+                            onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter') { e.stopPropagation(); openFolderPicker(); } }}
+                          >Change folder</span>
+                        {:else}
+                          Use an existing folder of markdown files
+                        {/if}
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              {/if}
 
               <!-- Start fresh -->
               <button

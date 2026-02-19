@@ -8,8 +8,12 @@
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
+use chrono::NaiveDate;
+use diaryx_core::config::Config;
+use diaryx_core::entry::DiaryxAppSync;
 use diaryx_core::frontmatter;
 use diaryx_core::fs::{AsyncFileSystem, RealFileSystem, SyncToAsyncFs};
+use diaryx_core::search::{SearchQuery, Searcher};
 use diaryx_core::workspace::{TreeNode, Workspace};
 use indexmap::IndexMap;
 use serde_yaml::Value;
@@ -100,6 +104,56 @@ pub enum FrontmatterValue {
         /// The string items.
         values: Vec<String>,
     },
+}
+
+/// A single match within a file from a workspace search.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct SearchMatchData {
+    /// 1-based line number where the match occurs.
+    pub line_number: u32,
+    /// Full content of the matching line.
+    pub line_content: String,
+    /// 0-based byte offset of the match start within the line.
+    pub match_start: u32,
+    /// 0-based byte offset of the match end (exclusive) within the line.
+    pub match_end: u32,
+}
+
+/// A file that matched a workspace search query.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FileSearchResultData {
+    /// Workspace-relative path to the matching file.
+    pub path: String,
+    /// Title from frontmatter, if present.
+    pub title: Option<String>,
+    /// Individual matches within the file.
+    pub matches: Vec<SearchMatchData>,
+}
+
+/// Aggregated results of a workspace search.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct SearchResultsData {
+    /// Files that contained matches.
+    pub files: Vec<FileSearchResultData>,
+    /// Total number of files that were searched.
+    pub files_searched: u32,
+}
+
+/// Workspace configuration data.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct WorkspaceConfigData {
+    /// Link format for part_of/contents references.
+    pub link_format: String,
+    /// Subfolder for daily entries (e.g. "Daily").
+    pub daily_entry_folder: Option<String>,
+    /// Filename generation style.
+    pub filename_style: String,
+    /// Whether to sync title frontmatter to the first H1 heading.
+    pub sync_title_to_heading: bool,
+    /// Whether to auto-update the "updated" timestamp on save.
+    pub auto_update_timestamp: bool,
+    /// Whether to auto-rename files when the title changes.
+    pub auto_rename_to_title: bool,
 }
 
 impl FrontmatterValue {
@@ -538,6 +592,148 @@ impl DiaryxAppleWorkspace {
         std::fs::write(&full, content).map_err(|e| {
             DiaryxAppleError::Core(format!("Failed to save entry '{}': {e}", full.display()))
         })
+    }
+
+    // ---- Phase 4: New APIs ----
+
+    /// Full-text search across all markdown files in the workspace.
+    pub fn search_workspace(&self, query: String) -> Result<SearchResultsData, DiaryxAppleError> {
+        let searcher = Searcher::new(self.fs.clone());
+        let sq = SearchQuery::content(&query);
+        let results =
+            futures_lite::future::block_on(searcher.search_workspace(&self.workspace_root, &sq))
+                .map_err(|e| DiaryxAppleError::Core(format!("Search failed: {e}")))?;
+
+        Ok(SearchResultsData {
+            files_searched: results.files_searched as u32,
+            files: results
+                .files
+                .into_iter()
+                .map(|f| {
+                    let path = f
+                        .path
+                        .strip_prefix(&self.workspace_root)
+                        .unwrap_or(&f.path)
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    FileSearchResultData {
+                        path,
+                        title: f.title,
+                        matches: f
+                            .matches
+                            .into_iter()
+                            .map(|m| SearchMatchData {
+                                line_number: m.line_number as u32,
+                                line_content: m.line_content,
+                                match_start: m.match_start as u32,
+                                match_end: m.match_end as u32,
+                            })
+                            .collect(),
+                    }
+                })
+                .collect(),
+        })
+    }
+
+    /// Get workspace configuration from the root index file.
+    pub fn get_workspace_config(&self) -> Result<WorkspaceConfigData, DiaryxAppleError> {
+        let ws = self.make_workspace()?;
+        let root_index =
+            futures_lite::future::block_on(ws.find_root_index_in_dir(&self.workspace_root))
+                .map_err(|e| DiaryxAppleError::Core(format!("Failed to find root index: {e}")))?
+                .ok_or_else(|| {
+                    DiaryxAppleError::Core("No root index found in workspace".to_string())
+                })?;
+
+        let config = futures_lite::future::block_on(ws.get_workspace_config(&root_index))
+            .map_err(|e| DiaryxAppleError::Core(format!("Failed to read workspace config: {e}")))?;
+
+        Ok(WorkspaceConfigData {
+            link_format: format!("{:?}", config.link_format),
+            daily_entry_folder: config.daily_entry_folder,
+            filename_style: format!("{:?}", config.filename_style),
+            sync_title_to_heading: config.sync_title_to_heading,
+            auto_update_timestamp: config.auto_update_timestamp,
+            auto_rename_to_title: config.auto_rename_to_title,
+        })
+    }
+
+    /// Set a workspace configuration field by name.
+    ///
+    /// Valid fields: `link_format`, `daily_entry_folder`, `filename_style`,
+    /// `sync_title_to_heading`, `auto_update_timestamp`, `auto_rename_to_title`.
+    pub fn set_workspace_config_field(
+        &self,
+        field: String,
+        value: String,
+    ) -> Result<(), DiaryxAppleError> {
+        let ws = self.make_workspace()?;
+        let root_index =
+            futures_lite::future::block_on(ws.find_root_index_in_dir(&self.workspace_root))
+                .map_err(|e| DiaryxAppleError::Core(format!("Failed to find root index: {e}")))?
+                .ok_or_else(|| {
+                    DiaryxAppleError::Core("No root index found in workspace".to_string())
+                })?;
+
+        futures_lite::future::block_on(ws.set_workspace_config_field(&root_index, &field, &value))
+            .map_err(|e| {
+                DiaryxAppleError::Core(format!("Failed to set config field '{field}': {e}"))
+            })
+    }
+
+    /// Get or create today's daily entry.
+    ///
+    /// If `date_string` is provided (format: `YYYY-MM-DD`), uses that date.
+    /// Otherwise uses today's date. Returns the workspace-relative path.
+    pub fn get_or_create_daily_entry(
+        &self,
+        date_string: Option<String>,
+    ) -> Result<String, DiaryxAppleError> {
+        let date = if let Some(ds) = &date_string {
+            NaiveDate::parse_from_str(ds, "%Y-%m-%d")
+                .map_err(|e| DiaryxAppleError::Core(format!("Invalid date format '{ds}': {e}")))?
+        } else {
+            chrono::Local::now().date_naive()
+        };
+
+        // Build a Config pointing at this workspace
+        let ws = self.make_workspace()?;
+        let daily_entry_folder =
+            futures_lite::future::block_on(ws.find_root_index_in_dir(&self.workspace_root))
+                .ok()
+                .flatten()
+                .and_then(|root_path| {
+                    futures_lite::future::block_on(ws.get_workspace_config(&root_path))
+                        .ok()
+                        .and_then(|c| c.daily_entry_folder)
+                });
+
+        let config = Config::with_options(
+            self.workspace_root.clone(),
+            daily_entry_folder,
+            None,
+            None,
+            None,
+        );
+
+        let app = DiaryxAppSync::new(RealFileSystem);
+        let path = app
+            .ensure_dated_entry(&date, &config)
+            .map_err(|e| DiaryxAppleError::Core(format!("Failed to create daily entry: {e}")))?;
+
+        self.to_relative(&path)
+    }
+
+    /// Duplicate an entry (leaf or index) and return the new workspace-relative path.
+    pub fn duplicate_entry(&self, path: String) -> Result<String, DiaryxAppleError> {
+        let rel = Self::validated_relative_path(&path)?;
+        let abs = self.workspace_root.join(&rel);
+        let ws = self.make_workspace()?;
+
+        let new_path = futures_lite::future::block_on(ws.duplicate_entry(&abs))
+            .map_err(|e| DiaryxAppleError::Core(format!("Failed to duplicate entry: {e}")))?;
+
+        self.to_relative(&new_path)
     }
 }
 

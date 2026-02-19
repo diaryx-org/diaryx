@@ -307,6 +307,48 @@ final class RustWorkspaceBackend: WorkspaceBackend {
         }
     }
 
+    // MARK: - Extended APIs (Phase 4)
+
+    func searchWorkspace(query: String) throws -> SearchResultsData {
+        do {
+            return try inner.searchWorkspace(query: query)
+        } catch {
+            throw wrapRustError(error)
+        }
+    }
+
+    func getWorkspaceConfig() throws -> WorkspaceConfigData {
+        do {
+            return try inner.getWorkspaceConfig()
+        } catch {
+            throw wrapRustError(error)
+        }
+    }
+
+    func setWorkspaceConfigField(field: String, value: String) throws {
+        do {
+            try inner.setWorkspaceConfigField(field: field, value: value)
+        } catch {
+            throw wrapRustError(error)
+        }
+    }
+
+    func getOrCreateDailyEntry(dateString: String?) throws -> String {
+        do {
+            return try inner.getOrCreateDailyEntry(dateString: dateString)
+        } catch {
+            throw wrapRustError(error)
+        }
+    }
+
+    func duplicateEntry(path: String) throws -> String {
+        do {
+            return try inner.duplicateEntry(path: path)
+        } catch {
+            throw wrapRustError(error)
+        }
+    }
+
     private static func convertTreeNode(_ node: TreeNodeData) -> SidebarTreeNode {
         SidebarTreeNode(
             name: node.name,

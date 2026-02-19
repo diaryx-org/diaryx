@@ -22,6 +22,7 @@ required-features = ["bindgen"]
 bindgen = ["uniffi/cli"]
 
 [dependencies]
+chrono = "0.4"
 diaryx_core.workspace = true
 futures-lite = "2"
 indexmap.workspace = true

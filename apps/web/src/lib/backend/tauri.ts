@@ -125,7 +125,11 @@ export class TauriBackend implements Backend {
   private syncEventCallbacks = new Set<SyncEventCallback>();
   private syncEventUnlisteners: UnlistenFn[] = [];
 
-  async init(): Promise<void> {
+  async init(
+    _storageTypeOverride?: string,
+    workspaceId?: string,
+    _workspaceName?: string,
+  ): Promise<void> {
     // Step 1: Dynamically import Tauri API
     console.log("[TauriBackend] Step 1: Importing Tauri API...");
     let tauriCore;
@@ -147,14 +151,43 @@ export class TauriBackend implements Backend {
       );
     }
 
-    // Step 2: Call initialize_app command
-    console.log("[TauriBackend] Step 2: Calling initialize_app...");
+    // Step 2: Initialize workspace
+    console.log("[TauriBackend] Step 2: Initializing workspace...");
     try {
-      const result = await this.invoke<AppPaths>("initialize_app");
-      console.log("[TauriBackend] Step 2 complete: initialize_app returned");
-      this.appPaths = result;
+      if (workspaceId) {
+        // Switching to a specific workspace — look up its filesystem path
+        const { getLocalWorkspaces } = await import(
+          "$lib/storage/localWorkspaceRegistry.svelte"
+        );
+        const registry = getLocalWorkspaces();
+        const ws = registry.find((w) => w.id === workspaceId);
+        const workspacePath = ws?.path;
+
+        if (workspacePath) {
+          console.log(
+            "[TauriBackend] Reinitializing for workspace path:",
+            workspacePath,
+          );
+          const result = await this.invoke<AppPaths>("reinitialize_workspace", {
+            workspacePath,
+          });
+          this.appPaths = result;
+        } else {
+          // No path stored (first launch or web-style workspace) — use default
+          console.log(
+            "[TauriBackend] No workspace path found, using default init",
+          );
+          const result = await this.invoke<AppPaths>("initialize_app");
+          this.appPaths = result;
+        }
+      } else {
+        // Default initialization
+        const result = await this.invoke<AppPaths>("initialize_app");
+        this.appPaths = result;
+      }
+      console.log("[TauriBackend] Step 2 complete: workspace initialized");
     } catch (e) {
-      console.error("[TauriBackend] Step 2 failed: initialize_app error:", e);
+      console.error("[TauriBackend] Step 2 failed: initialization error:", e);
       throw new BackendError(
         `Failed to initialize app: ${this.formatError(e)}`,
         "InitializeAppError",
@@ -235,16 +268,16 @@ export class TauriBackend implements Backend {
    * Callers should use api.findRootIndex() to resolve directories to actual root files.
    */
   getWorkspacePath(): string {
-    // Use config's default_workspace if available - return as-is
-    // (could be directory like "/Users/.../journal" or file like "/Users/.../journal/README.md")
-    if (this.config?.default_workspace) {
-      return this.config.default_workspace;
-    }
-    // Fall back to app paths - return the directory, caller will find root file
+    // Prefer appPaths.default_workspace — this is set by both initialize_app
+    // and reinitialize_workspace, so it always reflects the current workspace.
     if (this.appPaths?.default_workspace) {
       return this.appPaths.default_workspace;
     }
-    // Last resort fallback (for WASM/web, this is handled differently)
+    // Fall back to config's default_workspace
+    if (this.config?.default_workspace) {
+      return this.config.default_workspace;
+    }
+    // Last resort fallback
     return "workspace/index.md";
   }
 
@@ -463,6 +496,25 @@ export class TauriBackend implements Backend {
   }
 
   // --------------------------------------------------------------------------
+  // CrdtFs Control
+  // --------------------------------------------------------------------------
+
+  /**
+   * Enable or disable CRDT updates on the decorated filesystem.
+   * When enabled, file writes will populate CRDTs for sync.
+   */
+  async setCrdtEnabled(enabled: boolean): Promise<void> {
+    await this.getInvoke()("set_crdt_enabled", { enabled });
+  }
+
+  /**
+   * Check if CRDT updates are currently enabled.
+   */
+  async isCrdtEnabled(): Promise<boolean> {
+    return await this.getInvoke()<boolean>("is_crdt_enabled", {});
+  }
+
+  // --------------------------------------------------------------------------
   // Native Sync (Tauri-specific)
   // --------------------------------------------------------------------------
 
@@ -471,7 +523,7 @@ export class TauriBackend implements Backend {
    * Always true for Tauri.
    */
   hasNativeSync(): boolean {
-    return false;
+    return true;
   }
 
   /**

@@ -400,8 +400,6 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
     _initialSyncComplete = false;
     _initialSyncResolvers = [];
 
-    const workspaceDocName = _workspaceId ? `${_workspaceId}:workspace` : 'workspace';
-
     // Check if backend supports native sync (Tauri)
     if (_backend.hasNativeSync?.() && _backend.startSync) {
       // Use _serverUrl (WebSocket URL) for native sync - Rust client expects wss:// scheme
@@ -410,7 +408,9 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
       // Set up event listener for native sync events
       if (_backend.onSyncEvent) {
         _nativeSyncUnsubscribe = _backend.onSyncEvent((event: SyncEvent) => {
-          handleNativeSyncEvent(event);
+          handleNativeSyncEvent(event).catch(e => {
+            console.error('[WorkspaceCrdtBridge] Native sync event handler error:', e);
+          });
         });
       }
 
@@ -419,7 +419,8 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
 
       try {
         _nativeSyncActive = true;
-        await _backend.startSync(_serverUrl!, workspaceDocName, getToken() ?? undefined);
+        // Pass raw workspace ID — SyncClient internally formats it as "workspace:{id}"
+        await _backend.startSync(_serverUrl!, _workspaceId!, getToken() ?? undefined);
         console.log('[WorkspaceCrdtBridge] Native sync started successfully');
       } catch (e) {
         console.error('[WorkspaceCrdtBridge] Native sync failed to start:', e);
@@ -499,7 +500,7 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
 /**
  * Handle native sync events from Tauri.
  */
-function handleNativeSyncEvent(event: SyncEvent): void {
+async function handleNativeSyncEvent(event: SyncEvent): Promise<void> {
 
   switch (event.type) {
     case 'status-changed':
@@ -508,6 +509,13 @@ function handleNativeSyncEvent(event: SyncEvent): void {
       const metadataConnected = event.status.metadata === 'connected';
       const bodyConnected = event.status.body === 'connected';
       const isConnecting = event.status.metadata === 'connecting' || event.status.body === 'connecting';
+
+      // When metadata first connects — match browser's onWorkspaceSynced behavior
+      if (metadataConnected && !_initialSyncComplete) {
+        if (_backend?.setCrdtEnabled) await _backend.setCrdtEnabled(true);
+        markInitialSyncComplete();
+        updateFileIndexFromCrdt();
+      }
 
       // Update body sync status based on native sync state
       if (bodyConnected) {
@@ -1088,23 +1096,24 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
         // Ensure CRDT storage bridge is initialized before sync connects.
         await _backend.setupCrdtStorage?.();
 
-        const workspaceDocName = _workspaceId ? `${_workspaceId}:workspace` : 'workspace';
-
         // Check if backend supports native sync (Tauri)
         if (_backend.hasNativeSync?.() && _backend.startSync) {
           // Use _serverUrl (WebSocket URL) for native sync - Rust client expects wss:// scheme
-          console.log('[WorkspaceCrdtBridge] Using native sync during init (Tauri):', _serverUrl, 'docName:', workspaceDocName);
+          console.log('[WorkspaceCrdtBridge] Using native sync during init (Tauri):', _serverUrl, 'workspaceId:', _workspaceId);
 
           // Set up event listener for native sync events
           if (_backend.onSyncEvent) {
             _nativeSyncUnsubscribe = _backend.onSyncEvent((event: SyncEvent) => {
-              handleNativeSyncEvent(event);
+              handleNativeSyncEvent(event).catch(e => {
+                console.error('[WorkspaceCrdtBridge] Native sync event handler error:', e);
+              });
             });
           }
 
           try {
             _nativeSyncActive = true;
-            await _backend.startSync(_serverUrl!, workspaceDocName, getToken() ?? undefined);
+            // Pass raw workspace ID — SyncClient internally formats it as "workspace:{id}"
+            await _backend.startSync(_serverUrl!, _workspaceId!, getToken() ?? undefined);
             console.log('[WorkspaceCrdtBridge] Native sync started successfully (init)');
           } catch (e) {
             console.error('[WorkspaceCrdtBridge] Native sync failed to start (init):', e);

@@ -24,6 +24,8 @@ export interface LocalWorkspace {
   isLocal: boolean;
   /** Storage backend for this workspace. Undefined = inherit global default. */
   storageType?: import('$lib/backend/storageType').StorageType;
+  /** Tauri only: real filesystem path for this workspace. Undefined for web (OPFS). */
+  path?: string;
   /** When this workspace was first created/downloaded to this device */
   downloadedAt: number;
   /** When the user last opened this workspace */
@@ -236,13 +238,14 @@ export function setWorkspaceIsLocal(id: string, isLocal: boolean): void {
  * Create a new local-only workspace (no server required).
  * Returns the created workspace entry.
  */
-export function createLocalWorkspace(name: string, storageType?: StorageType): LocalWorkspace {
+export function createLocalWorkspace(name: string, storageType?: StorageType, path?: string): LocalWorkspace {
   const id = `local-${crypto.randomUUID()}`;
   const ws: LocalWorkspace = {
     id,
     name,
     isLocal: true,
     storageType: storageType ?? getStorageType(),
+    ...(path ? { path } : {}),
     downloadedAt: Date.now(),
     lastOpenedAt: Date.now(),
   };

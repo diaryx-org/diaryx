@@ -16,7 +16,69 @@ attachments:
 
 # Diaryx Apple App
 
-`apps/apple` contains the native SwiftUI app that embeds a TipTap editor inside `WKWebView`.
+`apps/apple` contains the native SwiftUI app for macOS and iOS. It embeds a TipTap editor inside `WKWebView` and supports multi-workspace, settings, and a command palette.
+
+## Architecture
+
+### App Structure
+
+```
+DiaryxApp.swift           — App entry point, injects AppState + AppSettings
+Views/RootView.swift      — Routes between WelcomeView and WorkspaceView
+ContentView.swift         — WorkspaceView: sidebar + editor + inspector
+State/AppState.swift      — @Observable: workspace registry, active view
+State/WorkspaceState.swift — @Observable: per-workspace state + actions
+State/AppSettings.swift   — @Observable: theme preference
+State/WorkspaceRegistryEntry.swift — Codable workspace metadata
+```
+
+### View Hierarchy
+
+```
+RootView
+├── WelcomeView           — Recent workspaces, create/open
+└── WorkspaceView
+    ├── SidebarView       — File tree with drag-and-drop
+    │   ├── FileTreeRow   — Recursive tree node with context menu
+    │   ├── NewEntrySheet
+    │   ├── RenameSheet
+    │   └── AddChildSheet
+    ├── EditorDetailView  — TipTap WKWebView wrapper
+    ├── MetadataSidebar   — Read-only frontmatter inspector
+    └── CommandPaletteView — Cmd+K command/file/content search
+```
+
+### Platform Abstraction
+
+`EditorWebView.swift` uses `#if os(iOS)` / `#else` to provide:
+- iOS: `UIViewRepresentable` wrapping `WKWebView`
+- macOS: `NSViewRepresentable` wrapping `WKWebView`
+
+The shared `Coordinator` handles `WKScriptMessageHandler` and `WKNavigationDelegate` across both platforms. External URL opening uses platform-specific APIs (`UIApplication.shared.open` vs `NSWorkspace.shared.open`).
+
+## Multi-Workspace
+
+`AppState` manages a registry of workspaces persisted to `UserDefaults` as JSON.
+
+- **macOS**: Workspaces can be opened from any folder via `NSOpenPanel`. Security-scoped bookmarks maintain sandbox access across launches.
+- **iOS**: Workspaces are created in the app's Documents directory.
+
+The `WorkspacePicker` dropdown in the toolbar allows quick switching between registered workspaces.
+
+## Command Palette
+
+Activated via Cmd+K (macOS) or the magnifying glass toolbar button (iOS). Features:
+
+- **Commands**: Daily Entry, New Entry, Duplicate, Rename, Delete, Add Child, Refresh Tree
+- **Files**: Client-side filtering of the file tree by name/path
+- **Content**: Full-text search via the Rust search API (debounced 200ms)
+
+## Settings
+
+- **macOS**: Native Settings scene (Cmd+,)
+- **iOS**: Pushed from gear icon
+- **App settings**: Theme (system/light/dark)
+- **Workspace settings**: Filename style, link format, daily entry folder, auto-rename, auto-timestamp, sync title to heading
 
 ## Editor Bridge
 
@@ -28,98 +90,34 @@ The JavaScript bridge (`apps/apple/editor-bundle/src/main.ts`) exposes:
 - `editorBridge.getJSON(): string`
 - `editorBridge.setEditable(editable: boolean)`
 
-Compatibility aliases are also kept for existing Swift call sites:
-
-- `editorBridge.setContent(markdown: string)` -> `setMarkdown`
-- `editorBridge.getContent()` -> `getMarkdown`
-
-## Markdown Handling
-
-Markdown is parsed/serialized through TipTap's `@tiptap/markdown` extension.
-The Apple editor bundle does not use `marked` for markdown-to-HTML conversion.
-
 ## Workspace Backend Abstraction
 
-`ContentView` now consumes a `WorkspaceBackend` protocol instead of directly reading/writing files.
+`WorkspaceView` consumes a `WorkspaceBackend` protocol:
 
-- `WorkspaceBackendFactory.openWorkspace(at:)` — open an existing workspace
-- `WorkspaceBackendFactory.createWorkspace(at:)` — create a new workspace directory
-- `WorkspaceBackend.listEntries()` — flat list of all entries
-- `WorkspaceBackend.buildFileTree()` → `SidebarTreeNode` — recursive directory tree (used by sidebar)
-- `WorkspaceBackend.getEntry(id:)` — returns `WorkspaceEntryData` with `body`, `metadata`, and raw `markdown`
-- `WorkspaceBackend.saveEntry(id:markdown:)` — save raw markdown
-- `WorkspaceBackend.saveEntryBody(id:body:)` — save body only, preserving frontmatter
-- `WorkspaceBackend.createEntry(path:markdown:)` — create a new markdown file (with parent dirs)
-- `WorkspaceBackend.createFolder(path:)` — create a subfolder
+- `listEntries()`, `getEntry(id:)`, `saveEntry(id:markdown:)`, `saveEntryBody(id:body:)`
+- `createEntry(path:markdown:)`, `createFolder(path:)`, `buildFileTree()`
+- Hierarchy: `createChildEntry`, `moveEntry`, `attachAndMoveEntryToParent`, `convertToIndex/Leaf`, `renameEntry`, `deleteEntry`
+- Extended (Rust only): `searchWorkspace`, `getWorkspaceConfig`, `setWorkspaceConfigField`, `getOrCreateDailyEntry`, `duplicateEntry`
 
-### Hierarchy Manipulation
-
-The backend also supports workspace hierarchy operations (Rust backend only):
-
-- `createChildEntry(parentPath:title:)` → `CreateChildResultData` — add a child (auto-converts leaf parent to index)
-- `moveEntry(fromPath:toPath:)` — move an entry
-- `attachAndMoveEntryToParent(entryPath:parentPath:)` → `String` — reparent with frontmatter link updates
-- `convertToIndex(path:)` / `convertToLeaf(path:)` → `String` — toggle leaf/index
-- `setFrontmatterProperty(path:key:value:)` / `removeFrontmatterProperty(path:key:)` — edit frontmatter
-- `renameEntry(path:newFilename:)` → `String` — rename a file
-- `deleteEntry(path:)` — delete an entry
-
-Two implementations are provided:
-
-- `LocalWorkspaceBackend` — pure-Swift `FileManager` I/O (no Rust dependency). Hierarchy operations throw `.rustBackendUnavailable`.
-- `RustWorkspaceBackend` — wraps the `diaryx_apple` UniFFI bindings, delegating to `diaryx_core`
-
-Backend selection is controlled by `DIARYX_APPLE_BACKEND`:
-
-- `rust` (default) — uses `RustWorkspaceBackend` via UniFFI
-- `local` — uses `LocalWorkspaceBackend`
-
-## File Tree Sidebar
-
-The left sidebar displays a collapsible tree built from the workspace's `contents`/`part_of` hierarchy — the same tree-building logic used by the web app's LeftSidebar (`diaryx_core::Workspace::build_tree()`). If the workspace has a root index file (a `.md` with `contents` but no `part_of`), the tree follows frontmatter references. Otherwise it falls back to `build_filesystem_tree()` for plain directory structure. The `RustWorkspaceBackend` delegates to the core Rust tree builder, while `LocalWorkspaceBackend` implements a filesystem-based fallback in pure Swift.
-
-## Context Menu
-
-Right-clicking any node in the file tree sidebar shows a context menu with hierarchy operations:
-
-- **Add Child** — creates a child entry under the node (auto-converts leaf to index folder)
-- **Rename...** — opens a sheet to rename the file
-- **Delete** — deletes the entry with a confirmation dialog (warns about folder contents)
-
-These operations require the Rust backend (`RustWorkspaceBackend`). The local-only backend does not support hierarchy manipulation.
-
-## Drag and Drop
-
-Files and folders in the sidebar support drag-and-drop for reparenting:
-
-- **Drag a file onto a folder** — moves the file into the folder, updating `contents`/`part_of` frontmatter links
-- **Drag a file onto another file** — the target is auto-converted to a folder (index), and the dragged file becomes a child
-
-Both operations use `attachAndMoveEntryToParent` from `diaryx_core`, which handles leaf-to-index conversion, bidirectional frontmatter link updates, and file relocation.
-
-## Metadata Inspector
-
-The right sidebar shows a read-only view of YAML frontmatter fields parsed from the current file. Toggle it with the toolbar button (sidebar.trailing icon) or hide it completely when not needed.
-
-- Scalar values (title, date, draft) display as plain text
-- Array values (tags, audience) display as bulleted lists
-- Files without frontmatter show an empty state
-- Editing in the TipTap editor only saves the body; frontmatter is preserved automatically via `saveEntryBody()`
+Two implementations:
+- `RustWorkspaceBackend` — wraps `diaryx_apple` UniFFI bindings
+- `LocalWorkspaceBackend` — pure-Swift `FileManager` fallback
 
 ## Building
 
 ```bash
-./setup.sh          # builds editor bundle, Rust library + UniFFI bindings, then generates Xcode project
+./setup.sh          # builds editor bundle, Rust library + UniFFI bindings
 open Diaryx.xcodeproj
 ```
 
-To rebuild just the Rust library and bindings:
+To rebuild just the Rust library:
 
 ```bash
-./build-rust.sh             # release build (default)
-./build-rust.sh debug       # debug build
+./build-rust.sh                # release, all platforms (macOS + iOS + iOS Sim)
+./build-rust.sh debug          # debug, all platforms
+./build-rust.sh release mac    # release, macOS only (faster)
 ```
 
 `build-rust.sh` produces:
-- `diaryx_apple.xcframework/` — static XCFramework linked by Xcode
-- `Diaryx/Generated/diaryx_apple.swift` — generated Swift bindings (compiled as source)
+- `diaryx_apple.xcframework/` — static XCFramework (1 or 3 platform slices)
+- `Diaryx/Generated/diaryx_apple.swift` — generated Swift bindings

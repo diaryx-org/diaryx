@@ -106,6 +106,32 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     // Path Conversion Helpers (Phase 1)
     // =========================================================================
 
+    /// Resolve a workspace-relative path against the workspace root (if set).
+    ///
+    /// This is needed for direct `self.fs()` calls that bypass `EntryOps`,
+    /// e.g. attachment file operations.
+    fn resolve_fs_path<P: AsRef<Path>>(&self, path: P) -> PathBuf {
+        match self.workspace_root() {
+            Some(root) => root.join(path),
+            None => path.as_ref().to_path_buf(),
+        }
+    }
+
+    /// Strip the workspace root from a path if present, returning a workspace-relative path.
+    ///
+    /// On Tauri, entry paths from the frontend may be absolute OS paths (e.g.,
+    /// `/Users/.../workspace/diaryx.md`). Functions like `resolve_attachment_storage_path`
+    /// expect workspace-relative paths, so we strip the workspace root prefix first.
+    fn to_workspace_relative(&self, path: &str) -> String {
+        if let Some(root) = self.workspace_root() {
+            let p = Path::new(path);
+            if let Ok(relative) = p.strip_prefix(&root) {
+                return relative.to_string_lossy().to_string();
+            }
+        }
+        path.to_string()
+    }
+
     /// Get the canonical path from a storage path.
     /// Delegates to sync_manager if available, otherwise returns the path unchanged.
     #[cfg(feature = "crdt")]
@@ -2175,12 +2201,16 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             } => {
                 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
+                let entry_path = self.to_workspace_relative(&entry_path);
                 let entry = PathBuf::from(&entry_path);
                 let entry_dir = entry.parent().unwrap_or_else(|| Path::new("."));
                 let attachments_dir = entry_dir.join("_attachments");
 
+                // Resolve against workspace root for direct fs operations
+                let resolved_attachments_dir = self.resolve_fs_path(&attachments_dir);
+
                 // Create _attachments directory if needed
-                self.fs().create_dir_all(&attachments_dir).await?;
+                self.fs().create_dir_all(&resolved_attachments_dir).await?;
 
                 // Decode base64 data
                 let data = STANDARD.decode(&data_base64).map_err(|e| {
@@ -2188,7 +2218,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 })?;
 
                 // Write file
-                let dest_path = attachments_dir.join(&filename);
+                let dest_path = resolved_attachments_dir.join(&filename);
                 self.fs()
                     .write_binary(&dest_path, &data)
                     .await
@@ -2226,7 +2256,9 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 entry_path,
                 attachment_path,
             } => {
-                let full_path = resolve_attachment_storage_path(&entry_path, &attachment_path);
+                let entry_path = self.to_workspace_relative(&entry_path);
+                let rel_path = resolve_attachment_storage_path(&entry_path, &attachment_path);
+                let full_path = self.resolve_fs_path(&rel_path);
 
                 // Delete the file if it exists
                 if self.fs().exists(&full_path).await {
@@ -2250,7 +2282,9 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 entry_path,
                 attachment_path,
             } => {
-                let full_path = resolve_attachment_storage_path(&entry_path, &attachment_path);
+                let entry_path = self.to_workspace_relative(&entry_path);
+                let rel_path = resolve_attachment_storage_path(&entry_path, &attachment_path);
+                let full_path = self.resolve_fs_path(&rel_path);
 
                 let data =
                     self.fs()
@@ -2270,16 +2304,19 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 attachment_path,
                 new_filename,
             } => {
+                let source_entry_path = self.to_workspace_relative(&source_entry_path);
+                let target_entry_path = self.to_workspace_relative(&target_entry_path);
                 // Resolve source attachment path from the link/path reference.
-                let source_attachment_path =
+                let source_rel_path =
                     resolve_attachment_storage_path(&source_entry_path, &attachment_path);
+                let source_attachment_path = self.resolve_fs_path(&source_rel_path);
 
                 // Get the original filename
-                let original_filename = source_attachment_path
+                let original_filename = source_rel_path
                     .file_name()
                     .and_then(|n| n.to_str())
                     .ok_or_else(|| DiaryxError::InvalidPath {
-                        path: source_attachment_path.clone(),
+                        path: source_rel_path.clone(),
                         message: "Could not extract filename".to_string(),
                     })?;
 
@@ -2290,7 +2327,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 let target_entry = PathBuf::from(&target_entry_path);
                 let target_dir = target_entry.parent().unwrap_or_else(|| Path::new("."));
                 let target_attachments_dir = target_dir.join("_attachments");
-                let target_attachment_path = target_attachments_dir.join(final_filename);
+                let target_attachment_path =
+                    self.resolve_fs_path(target_attachments_dir.join(final_filename));
 
                 // Check for collision at destination
                 if self.fs().exists(&target_attachment_path).await {
@@ -2311,7 +2349,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     })?;
 
                 // Create target _attachments directory if needed
-                self.fs().create_dir_all(&target_attachments_dir).await?;
+                let resolved_target_attachments_dir = self.resolve_fs_path(&target_attachments_dir);
+                self.fs()
+                    .create_dir_all(&resolved_target_attachments_dir)
+                    .await?;
 
                 // Write to target location
                 self.fs()

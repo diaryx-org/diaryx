@@ -2087,6 +2087,7 @@ dependencies = [
 name = "diaryx_apple"
 version = "1.0.1"
 dependencies = [
+ "chrono",
  "diaryx_core",
  "futures-lite 2.6.1",
  "indexmap 2.13.0",

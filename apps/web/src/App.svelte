@@ -508,7 +508,7 @@
       const currentWsId = getCurrentWorkspaceId();
 
       if (!defaultWorkspace && (localWsList.length === 0 || !currentWsId)) {
-        // No workspaces exist — show welcome screen instead of initializing
+        // No workspaces exist — show welcome screen
         showWelcomeScreen = true;
         entryStore.setLoading(false);
         return;
@@ -905,6 +905,7 @@
     // Clear UI state
     entryStore.setCurrentEntry(null);
     workspaceStore.setTree(null);
+    workspaceStore.setValidationResult(null);
     entryStore.setLoading(true);
   }
 
@@ -913,8 +914,9 @@
     const newBackend = await getBackend();
     workspaceStore.setBackend(newBackend);
     rustApi = new RustCrdtApi(newBackend);
-    // Refresh tree from new workspace
+    // Refresh tree and validation from new workspace
     await refreshTree();
+    await runValidation();
     entryStore.setLoading(false);
   }
 
@@ -1265,11 +1267,6 @@
     } finally {
       entryStore.setLoading(false);
     }
-  }
-
-  // Handle sign-in from welcome screen — open add workspace dialog
-  function handleWelcomeSignIn() {
-    showAddWorkspace = true;
   }
 
   async function handleDailyEntry() {
@@ -1877,8 +1874,7 @@
 
 {#if showWelcomeScreen}
   <WelcomeScreen
-    onWorkspaceCreated={handleWelcomeComplete}
-    onSignIn={handleWelcomeSignIn}
+    onGetStarted={() => { showAddWorkspace = true; }}
   />
 {:else}
 <div class="flex h-dvh bg-background overflow-hidden pt-[env(safe-area-inset-top)]">

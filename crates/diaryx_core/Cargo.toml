@@ -52,7 +52,7 @@ html-to-markdown-rs = { version = "2", optional = true }
 
 # Native sync dependencies (native-sync feature)
 tokio = { version = "1", features = ["sync", "time", "macros", "rt"], optional = true }
-tokio-tungstenite = { version = "0.26", optional = true }
+tokio-tungstenite = { version = "0.26", optional = true, features = ["rustls-tls-webpki-roots"] }
 url = { version = "2", optional = true }
 futures-util = { version = "0.3", optional = true }
 async-trait = { version = "0.1", optional = true }

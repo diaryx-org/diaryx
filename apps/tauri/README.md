@@ -91,6 +91,10 @@ The validation system checks workspace link integrity and can automatically fix 
 | Backup         | `backup_workspace`, `restore_workspace`, `backup_to_s3`, `backup_to_google_drive` |
 | Import         | `import_from_zip`, `pick_and_import_zip`                                          |
 
+## Sync Transport
+
+The Tauri app uses `SyncClient` from `diaryx_core` with `TokioConnector` (tokio-tungstenite + rustls) for WebSocket sync. `SyncClient` is generic over `TransportConnector`, allowing the transport to be swapped for platform-specific implementations (e.g., Apple's `URLSessionWebSocketTask` on iOS via a custom connector).
+
 ## Platform Support
 
 - macOS (Intel and Apple Silicon)

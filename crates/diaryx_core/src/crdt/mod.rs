@@ -64,4 +64,6 @@ pub use sync_types::{SyncEvent, SyncSessionConfig, SyncStatus};
 #[cfg(all(not(target_arch = "wasm32"), feature = "native-sync"))]
 pub use sync_client::{ReconnectConfig, SyncClient, SyncClientConfig, SyncEventHandler, SyncStats};
 #[cfg(all(not(target_arch = "wasm32"), feature = "native-sync"))]
-pub use transport::{SyncTransport, TransportError, WsMessage};
+pub use tokio_transport::{TokioConnector, TokioTransport};
+#[cfg(all(not(target_arch = "wasm32"), feature = "native-sync"))]
+pub use transport::{SyncTransport, TransportConnector, TransportError, WsMessage};

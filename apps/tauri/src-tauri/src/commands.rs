@@ -2883,7 +2883,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use diaryx_core::crdt::{
     ReconnectConfig, SyncClient, SyncClientConfig, SyncEvent, SyncEventHandler,
-    SyncStatus as WsSyncStatus,
+    SyncStatus as WsSyncStatus, TokioConnector,
 };
 
 /// State for WebSocket sync connections (V2 protocol).
@@ -3024,7 +3024,7 @@ pub async fn start_websocket_sync<R: Runtime>(
         connected: connected.clone(),
     });
 
-    let client = SyncClient::new(config, sync_manager, event_handler);
+    let client = SyncClient::new(config, sync_manager, event_handler, TokioConnector);
     let task_running = running.clone();
 
     // Spawn the background sync loop

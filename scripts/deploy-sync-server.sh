@@ -4,6 +4,9 @@ set -euo pipefail
 BINARY="/home/adammharris/diaryx/target/release/diaryx_sync_server"
 NEW_BINARY="/tmp/diaryx-deploy/diaryx_sync_server"
 
+# Ensure target directory exists
+mkdir -p "$(dirname "${BINARY}")"
+
 # Backup current binary
 if [ -f "${BINARY}" ]; then
   cp "${BINARY}" "${BINARY}.bak"

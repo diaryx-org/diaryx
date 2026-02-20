@@ -3,11 +3,11 @@
 /**
  * Why a file was excluded
  */
-export type ExclusionReason = { "AudienceMismatch": {
+export type ExclusionReason = { "AudienceMismatch": { 
 /**
  * What audiences are intended to view the document
  */
-file_audience: Array<string>,
+file_audience: Array<string>, 
 /**
  * What audiences were requested for the export
  */

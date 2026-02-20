@@ -4,19 +4,19 @@ import type { JsonValue } from "../serde_json/JsonValue";
 /**
  * Data for a single diary entry.
  */
-export type EntryData = {
+export type EntryData = { 
 /**
  * Path to the entry.
  */
-path: string,
+path: string, 
 /**
  * Title from frontmatter.
  */
-title: string | null,
+title: string | null, 
 /**
  * All frontmatter properties.
  */
-frontmatter: { [key in string]?: JsonValue },
+frontmatter: { [key in string]?: JsonValue }, 
 /**
  * Body content (after frontmatter).
  */

@@ -189,6 +189,24 @@ final class AppState {
         }
         #endif
 
+        // For app-managed workspaces, resolve relative to the current Documents
+        // directory. On iOS the container UUID changes between reinstalls, so the
+        // stored absolute path can go stale.
+        if entry.storageType == .appDocuments {
+            let docsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            let name = URL(fileURLWithPath: entry.path).lastPathComponent
+            let resolved = docsDir.appendingPathComponent(name)
+
+            // Update stored path if the container moved
+            if resolved.path != entry.path,
+               let idx = workspaceRegistry.firstIndex(where: { $0.id == entry.id }) {
+                workspaceRegistry[idx].path = resolved.path
+                saveRegistry()
+            }
+
+            return resolved
+        }
+
         return URL(fileURLWithPath: entry.path)
     }
 }

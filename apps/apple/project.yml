@@ -3,13 +3,14 @@ options:
   bundleIdPrefix: com.diaryx
   deploymentTarget:
     macOS: "14.0"
+    iOS: "17.0"
   xcodeVersion: "16.0"
   createIntermediateGroups: true
 
 targets:
   Diaryx:
     type: application
-    platform: macOS
+    supportedDestinations: [macOS, iOS]
     sources:
       - path: Diaryx
         type: group
@@ -31,24 +32,23 @@ targets:
         basedOnDependencyAnalysis: false
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.diaryx.macos
+        PRODUCT_BUNDLE_IDENTIFIER: com.diaryx.app
         INFOPLIST_KEY_CFBundleDisplayName: Diaryx
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.productivity"
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         SWIFT_VERSION: "6.0"
         GENERATE_INFOPLIST_FILE: YES
-        MACOSX_DEPLOYMENT_TARGET: "14.0"
         CODE_SIGN_STYLE: Automatic
         PRODUCT_NAME: Diaryx
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: 1
+        "CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]": Diaryx/iOS.entitlements
+        "CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]": Diaryx/iOS.entitlements
+        "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": Diaryx/macOS.entitlements
       configs:
         Debug:
           SWIFT_OPTIMIZATION_LEVEL: "-Onone"
         Release:
           SWIFT_OPTIMIZATION_LEVEL: "-O"
-    entitlements:
-      path: Diaryx/macOS.entitlements
-      properties:
-        com.apple.security.app-sandbox: true
-        com.apple.security.files.user-selected.read-write: true
-        com.apple.security.network.client: true

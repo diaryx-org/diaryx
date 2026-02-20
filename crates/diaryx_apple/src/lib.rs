@@ -11,6 +11,7 @@ use std::sync::Arc;
 use chrono::NaiveDate;
 use diaryx_core::config::Config;
 use diaryx_core::entry::DiaryxAppSync;
+use diaryx_core::error::DiaryxError;
 use diaryx_core::frontmatter;
 use diaryx_core::fs::{AsyncFileSystem, RealFileSystem, SyncToAsyncFs};
 use diaryx_core::search::{SearchQuery, Searcher};
@@ -755,12 +756,8 @@ pub fn create_workspace(
 ) -> Result<Arc<DiaryxAppleWorkspace>, DiaryxAppleError> {
     let root = PathBuf::from(&workspace_path);
 
-    if root.exists() {
-        if !root.is_dir() {
-            return Err(DiaryxAppleError::WorkspaceNotDirectory(workspace_path));
-        }
-        // Already exists as a directory — just open it
-        return DiaryxAppleWorkspace::new(workspace_path);
+    if root.exists() && !root.is_dir() {
+        return Err(DiaryxAppleError::WorkspaceNotDirectory(workspace_path));
     }
 
     std::fs::create_dir_all(&root).map_err(|e| {
@@ -770,7 +767,27 @@ pub fn create_workspace(
         ))
     })?;
 
-    DiaryxAppleWorkspace::new(workspace_path)
+    let workspace = DiaryxAppleWorkspace::new(workspace_path)?;
+
+    // Bootstrap a default root index when none exists yet.
+    let title = root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("Workspace")
+        .to_string();
+    let ws = Workspace::new(SyncToAsyncFs::new(RealFileSystem));
+    match futures_lite::future::block_on(ws.init_workspace(
+        &root,
+        Some(title.as_str()),
+        Some("A diaryx workspace"),
+    )) {
+        Ok(_) | Err(DiaryxError::WorkspaceAlreadyExists(_)) => Ok(workspace),
+        Err(e) => Err(DiaryxAppleError::Core(format!(
+            "Failed to initialize workspace '{}': {e}",
+            root.display()
+        ))),
+    }
 }
 
 impl DiaryxAppleWorkspace {
@@ -850,6 +867,48 @@ impl DiaryxAppleWorkspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_create_workspace_initializes_root_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_root = dir.path().join("default-space");
+
+        let ws = create_workspace(workspace_root.to_string_lossy().into_owned()).unwrap();
+        assert_eq!(
+            PathBuf::from(ws.workspace_root()),
+            workspace_root,
+            "Workspace handle should point at requested root"
+        );
+
+        let readme_path = workspace_root.join("README.md");
+        assert!(readme_path.exists(), "README.md should be bootstrapped");
+
+        let content = std::fs::read_to_string(readme_path).unwrap();
+        assert!(content.contains("title: default-space"));
+        assert!(content.contains("contents: []"));
+    }
+
+    #[test]
+    fn test_create_workspace_keeps_existing_root_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_root = dir.path().join("existing-root");
+        std::fs::create_dir_all(&workspace_root).unwrap();
+
+        let existing_root = workspace_root.join("index.md");
+        let existing_content = "---\ntitle: Existing Root\ncontents: []\n---\n\n# Existing Root\n";
+        std::fs::write(&existing_root, existing_content).unwrap();
+
+        create_workspace(workspace_root.to_string_lossy().into_owned()).unwrap();
+
+        assert!(
+            !workspace_root.join("README.md").exists(),
+            "Existing root index should prevent README bootstrap"
+        );
+        assert_eq!(
+            std::fs::read_to_string(existing_root).unwrap(),
+            existing_content
+        );
+    }
 
     #[test]
     fn test_yaml_value_to_string_scalar() {

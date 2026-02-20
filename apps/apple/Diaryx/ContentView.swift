@@ -10,53 +10,15 @@ struct WorkspaceView: View {
         NavigationSplitView {
             sidebar
         } detail: {
-            EditorDetailView(
-                selectedPath: workspace.selectedPath,
-                loadedMarkdown: workspace.loadedMarkdown,
-                onContentChanged: { markdown in
-                    workspace.editorContent = markdown
-                    workspace.isDirty = true
-                    workspace.scheduleSave()
-                },
-                onLinkClicked: { workspace.handleLinkClick($0) }
-            )
+            detail
         }
         .inspector(isPresented: $workspace.showInspector) {
             MetadataSidebar(metadata: workspace.currentMetadata)
                 .inspectorColumnWidth(min: 200, ideal: 260, max: 400)
         }
-        .navigationTitle(workspace.selectedDisplayName)
         .focusedSceneValue(\.saveAction, SaveAction(save: {
             workspace.saveFile(path: workspace.selectedPath, content: workspace.editorContent)
         }))
-        .toolbar {
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    showCommandPalette.toggle()
-                } label: {
-                    Label("Command Palette", systemImage: "magnifyingglass")
-                }
-                .help("Command Palette (Cmd+K)")
-            }
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    workspace.showInspector.toggle()
-                } label: {
-                    Label("Inspector", systemImage: "sidebar.trailing")
-                }
-                .help("Toggle metadata inspector")
-            }
-            #if os(macOS)
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    appState.switchToWelcome()
-                } label: {
-                    Label("Workspaces", systemImage: "square.grid.2x2")
-                }
-                .help("Switch workspace")
-            }
-            #endif
-        }
         #if os(macOS)
         .overlay {
             if showCommandPalette {
@@ -113,6 +75,72 @@ struct WorkspaceView: View {
                         Button("Done") { showCommandPalette = false }
                     }
                 }
+            }
+        }
+        #endif
+    }
+
+    // MARK: - Detail
+
+    @ViewBuilder
+    private var detail: some View {
+        EditorDetailView(
+            selectedPath: workspace.selectedPath,
+            loadedMarkdown: workspace.loadedMarkdown,
+            onContentChanged: { markdown in
+                workspace.editorContent = markdown
+                workspace.isDirty = true
+                workspace.scheduleSave()
+            },
+            onLinkClicked: { workspace.handleLinkClick($0) }
+        )
+        .navigationTitle(workspace.selectedDisplayName)
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    showCommandPalette.toggle()
+                } label: {
+                    Label("Command Palette", systemImage: "magnifyingglass")
+                }
+                Button {
+                    workspace.showInspector.toggle()
+                } label: {
+                    Label("Inspector", systemImage: "sidebar.trailing")
+                }
+                Button {
+                    appState.switchToWelcome()
+                } label: {
+                    Label("Workspaces", systemImage: "square.grid.2x2")
+                }
+            }
+        }
+        #else
+        .toolbar {
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    showCommandPalette.toggle()
+                } label: {
+                    Label("Command Palette", systemImage: "magnifyingglass")
+                }
+                .help("Command Palette (Cmd+K)")
+            }
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    workspace.showInspector.toggle()
+                } label: {
+                    Label("Inspector", systemImage: "sidebar.trailing")
+                }
+                .help("Toggle metadata inspector")
+            }
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    appState.switchToWelcome()
+                } label: {
+                    Label("Workspaces", systemImage: "square.grid.2x2")
+                }
+                .help("Switch workspace")
             }
         }
         #endif

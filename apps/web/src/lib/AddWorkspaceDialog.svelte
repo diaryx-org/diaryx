@@ -68,7 +68,6 @@
   import { untrack } from "svelte";
   import { getBackend, createApi } from "./backend";
   import { isTauri } from "$lib/backend/interface";
-  import type { TreeNode } from "$lib/backend/interface";
   import {
     buildWorkspaceSnapshotUploadBlob,
     findWorkspaceRootPath,
@@ -86,7 +85,6 @@
     switchWorkspace,
     getAllFiles,
     proactivelySyncBodies,
-    markAllCrdtFilesAsDeleted,
   } from "$lib/crdt/workspaceCrdtBridge";
 
   interface Props {
@@ -1001,27 +999,24 @@
 
     const workspaceId = serverWs.id;
 
+    // Create a new local workspace and switch to it before operating
+    const localWs = createLocalWorkspace(serverWs.name, undefined, isTauri() && workspacePath ? workspacePath : undefined);
+    await switchWorkspace(localWs.id, localWs.name);
+
     const backend = await getBackend();
     const api = createApi(backend);
     const workspaceDir = backend.getWorkspacePath()
       .replace(/\/index\.md$/, '')
       .replace(/\/README\.md$/, '');
 
-    let workspacePath: string;
+    let workspacePath_: string;
     try {
-      workspacePath = await api.findRootIndex(workspaceDir);
+      workspacePath_ = await api.findRootIndex(workspaceDir);
     } catch {
-      workspacePath = `${workspaceDir}/index.md`;
+      workspacePath_ = `${workspaceDir}/index.md`;
     }
 
-    // Step 1: Clear local workspace
-    syncStatusText = "Preparing workspace...";
     suppressSyncProgress = true;
-    await clearLocalWorkspace(api, workspaceDir);
-
-    // Step 2: Tombstone old CRDT entries
-    const tombstoned = await markAllCrdtFilesAsDeleted();
-    console.log(`[AddWorkspace] Tombstoned ${tombstoned} local CRDT entries`);
 
     // Step 3: Download and import server snapshot
     syncStatusText = "Downloading workspace...";
@@ -1058,7 +1053,7 @@
     // Step 4: Initialize CRDT from downloaded files
     syncStatusText = "Initializing...";
     try {
-      await api.initializeWorkspaceCrdt(workspacePath);
+      await api.initializeWorkspaceCrdt(workspacePath_);
     } catch (e) {
       console.log("[AddWorkspace] CRDT init error (continuing):", e);
     }
@@ -1080,7 +1075,7 @@
     importProgress = 100;
 
     // Step 7: Register workspace locally & enable sync
-    registerWorkspaceLocally(workspaceId, serverWs.name);
+    registerWorkspaceLocally(workspaceId, serverWs.name, localWs.id);
     enableSync();
 
     toast.success("Sync setup complete", {
@@ -1298,6 +1293,11 @@
     if (!importZipFile) throw new Error("No ZIP file selected");
     const zipFile = importZipFile;
 
+    // Create a new local workspace and switch to it before operating
+    const wsName = resolveCreationWorkspaceName(true);
+    const localWs = createLocalWorkspace(wsName, undefined, isTauri() && workspacePath ? workspacePath : undefined);
+    await switchWorkspace(localWs.id, localWs.name);
+
     const backend = await getBackend();
     const api = createApi(backend);
 
@@ -1392,11 +1392,11 @@
 
     // Step 4: Initialize CRDT from downloaded files
     setStageProgress(68, "Initializing workspace...");
-    const workspacePath = await findWorkspaceRootPath(api, backend);
+    const wsRootPath = await findWorkspaceRootPath(api, backend);
 
-    if (workspacePath) {
+    if (wsRootPath) {
       try {
-        await api.initializeWorkspaceCrdt(workspacePath);
+        await api.initializeWorkspaceCrdt(wsRootPath);
       } catch (e) {
         console.log("[AddWorkspace] CRDT init error (continuing):", e);
       }
@@ -1418,7 +1418,7 @@
     importProgress = 100;
 
     // Step 7: Register workspace locally & enable sync
-    registerWorkspaceLocally(workspaceId, workspaceName);
+    registerWorkspaceLocally(workspaceId, workspaceName, localWs.id);
     enableSync();
 
     toast.success("Import complete", {
@@ -1532,36 +1532,6 @@
     syncStatusText = status;
     progressDetail = detail ?? null;
     progressMode = null;
-  }
-
-  function collectFilePaths(node: TreeNode, paths: string[]) {
-    if (!node.children || node.children.length === 0) {
-      paths.push(node.path);
-      return;
-    }
-    for (const child of node.children) {
-      collectFilePaths(child, paths);
-    }
-  }
-
-  async function clearLocalWorkspace(api: ReturnType<typeof createApi>, workspaceDir: string) {
-    try {
-      const tree = await api.getFilesystemTree(workspaceDir, true);
-      const files: string[] = [];
-      collectFilePaths(tree, files);
-      if (files.length === 0) return;
-
-      console.log(`[AddWorkspace] Clearing ${files.length} local file(s) before download`);
-      for (const path of files) {
-        try {
-          await api.deleteFile(path);
-        } catch (e) {
-          console.warn(`[AddWorkspace] Failed to delete ${path}:`, e);
-        }
-      }
-    } catch (e) {
-      console.warn("[AddWorkspace] Failed to clear local workspace:", e);
-    }
   }
 
   // Cleanup on destroy

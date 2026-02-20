@@ -21,7 +21,7 @@ It exposes a small UniFFI-friendly API to support incremental migration of `apps
 ## API Surface
 
 - `open_workspace(path)` — open an existing workspace directory
-- `create_workspace(path)` — create a new workspace directory (with parents) and return a handle
+- `create_workspace(path)` — create/open a workspace directory, and initialize `README.md` root index when no root index exists
 - `DiaryxAppleWorkspace.list_entries()` → `Vec<EntrySummary>`
 - `DiaryxAppleWorkspace.get_entry(id)` → `EntryData` (includes `body`, `metadata`, and raw `markdown`)
 - `DiaryxAppleWorkspace.save_entry(id, markdown)` — save raw markdown (including frontmatter)
@@ -77,6 +77,7 @@ The `apps/apple/build-rust.sh` script automates this and packages the output int
 ## Notes
 
 - This crate intentionally starts thin and coarse-grained.
+- `create_workspace()` bootstraps a default Diaryx root index through `diaryx_core::workspace::init_workspace` when the target directory has no root index yet.
 - `get_entry()` uses `diaryx_core::frontmatter::parse_or_empty()` to split content into body and metadata.
 - `save_entry_body()` reads the existing file, preserves frontmatter, and writes back with the new body.
 - `save_entry()` / `save_entry_body()` write directly to the target file path instead of creating parent directories first, which avoids extra sandbox permission checks when editing existing files on macOS.

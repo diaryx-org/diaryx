@@ -8,6 +8,28 @@ struct CreateWorkspaceSheet: View {
     @State private var selectedURL: URL?
 
     var body: some View {
+        #if os(iOS)
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("Workspace name", text: $name)
+                } footer: {
+                    Text("A root index file will be created with this title.")
+                }
+            }
+            .navigationTitle("New Workspace")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Create") { createWorkspace() }
+                        .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
+        #else
         VStack(spacing: 16) {
             Text("New Workspace")
                 .font(.headline)
@@ -15,7 +37,6 @@ struct CreateWorkspaceSheet: View {
             TextField("Workspace name", text: $name)
                 .textFieldStyle(.roundedBorder)
 
-            #if os(macOS)
             HStack {
                 if let url = selectedURL {
                     Text(url.path)
@@ -36,11 +57,6 @@ struct CreateWorkspaceSheet: View {
                 }
                 .buttonStyle(.bordered)
             }
-            #else
-            Text("Workspace will be created in the app's Documents folder.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-            #endif
 
             HStack {
                 Button("Cancel", role: .cancel) {
@@ -57,6 +73,7 @@ struct CreateWorkspaceSheet: View {
         }
         .padding()
         .frame(minWidth: 380)
+        #endif
     }
 
     private func createWorkspace() {

@@ -24,6 +24,7 @@ attachments:
 - '[release.toml](/release.toml)'
 - '[Cargo.toml](/Cargo.toml)'
 ---
+
 # Diaryx
 
 Diaryx is software for personal writing, designed to embed standardized metadata into markdown files, which leads to a wide range of emergent benefits:

@@ -80,11 +80,15 @@ struct CommandPaletteView: View {
                 }
                 .padding(.vertical, 4)
             }
+            #if os(macOS)
             .frame(maxHeight: 400)
+            #endif
         }
+        #if os(macOS)
         .frame(width: 500)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.2), radius: 20, y: 10)
+        #endif
         .onChange(of: query) { _, newQuery in
             debounceSearch(newQuery)
         }

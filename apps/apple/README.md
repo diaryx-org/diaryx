@@ -36,7 +36,7 @@ State/WorkspaceRegistryEntry.swift — Codable workspace metadata
 
 ```
 RootView
-├── WelcomeView           — Recent workspaces, create/open
+├── WelcomeView           — Hero + recent workspaces + quick create/open actions
 └── WorkspaceView
     ├── SidebarView       — File tree with drag-and-drop
     │   ├── FileTreeRow   — Recursive tree node with context menu
@@ -62,8 +62,20 @@ The shared `Coordinator` handles `WKScriptMessageHandler` and `WKNavigationDeleg
 
 - **macOS**: Workspaces can be opened from any folder via `NSOpenPanel`. Security-scoped bookmarks maintain sandbox access across launches.
 - **iOS**: Workspaces are created in the app's Documents directory.
+- **Default workspace**: Welcome includes a one-tap "Create Default Workspace" action that creates/opens an app-managed `Documents/Diaryx` workspace.
 
 The `WorkspacePicker` dropdown in the toolbar allows quick switching between registered workspaces.
+
+## Default Workspace Bootstrap (Rust Backend)
+
+When using `RustWorkspaceBackend`, creating a workspace now bootstraps a root index file if none exists in the target directory:
+
+- Calls `diaryx_apple::create_workspace(path)`
+- Ensures the directory exists
+- Initializes a Diaryx root (`README.md` with `contents: []`) via `diaryx_core::workspace::init_workspace`
+- Leaves existing root-index-based workspaces unchanged
+
+This means a newly created workspace opens with a valid Diaryx structure immediately, instead of an empty folder.
 
 ## Command Palette
 

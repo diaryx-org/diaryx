@@ -6,101 +6,196 @@ struct WelcomeView: View {
     @State private var showCreateSheet = false
 
     var body: some View {
-        VStack(spacing: 24) {
-            Spacer()
+        ZStack {
+            background
 
-            Image(systemName: "book.closed.fill")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 64, height: 64)
-                .foregroundStyle(.tint)
+            ScrollView {
+                VStack(spacing: 24) {
+                    heroCard
 
-            Text("Diaryx")
-                .font(.largeTitle.bold())
+                    if appState.workspaceRegistry.isEmpty {
+                        emptyStateCard
+                    } else {
+                        recentWorkspacesCard
+                    }
 
-            Text("Your local-first journal and knowledge base")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-
-            if appState.workspaceRegistry.isEmpty {
-                emptyState
-            } else {
-                recentWorkspaces
+                    actionCard
+                }
+                .frame(maxWidth: 760)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 36)
             }
-
-            Spacer()
-
-            actionButtons
-                .padding(.bottom, 24)
+            .scrollIndicators(.hidden)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $showCreateSheet) {
             CreateWorkspaceSheet()
         }
     }
 
-    // MARK: - Sections
+    // MARK: - Layout Sections
 
     @ViewBuilder
-    private var emptyState: some View {
-        VStack(spacing: 8) {
-            Text("No workspaces yet")
-                .font(.headline)
-                .foregroundStyle(.secondary)
-            Text("Create a new workspace to get started.")
-                .font(.subheadline)
-                .foregroundStyle(.tertiary)
-        }
-        .padding(.top, 16)
+    private var background: some View {
+        LinearGradient(
+            colors: [
+                Color(red: 0.93, green: 0.97, blue: 0.98),
+                Color(red: 0.99, green: 0.94, blue: 0.88),
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+        .ignoresSafeArea()
+
+        Circle()
+            .fill(Color.accentColor.opacity(0.16))
+            .frame(width: 420, height: 420)
+            .blur(radius: 50)
+            .offset(x: -220, y: -300)
+            .allowsHitTesting(false)
+
+        Circle()
+            .fill(Color.cyan.opacity(0.16))
+            .frame(width: 360, height: 360)
+            .blur(radius: 55)
+            .offset(x: 250, y: 280)
+            .allowsHitTesting(false)
     }
 
     @ViewBuilder
-    private var recentWorkspaces: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Recent Workspaces")
-                .font(.headline)
-                .padding(.horizontal, 4)
+    private var heroCard: some View {
+        HStack(alignment: .top, spacing: 16) {
+            Image(systemName: "book.pages.fill")
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(Color.white)
+                .frame(width: 56, height: 56)
+                .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
-            List {
-                ForEach(appState.workspaceRegistry) { entry in
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Diaryx")
+                    .font(.largeTitle.bold())
+                Text("Local-first writing with structured Markdown metadata.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(24)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(.white.opacity(0.45), lineWidth: 1)
+        }
+    }
+
+    @ViewBuilder
+    private var emptyStateCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("No workspaces yet", systemImage: "folder.badge.questionmark")
+                .font(.headline)
+            Text("Create a default workspace instantly, or set up a custom one.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    @ViewBuilder
+    private var recentWorkspacesCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Recent Workspaces")
+                    .font(.headline)
+                Spacer()
+                Text("\(recentEntries.count)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(.white.opacity(0.4), in: Capsule())
+            }
+
+            ForEach(Array(recentEntries.enumerated()), id: \.element.id) { index, entry in
+                Button {
+                    appState.openWorkspace(entry: entry)
+                } label: {
                     WorkspaceRow(entry: entry)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            appState.openWorkspace(entry: entry)
-                        }
-                        .contextMenu {
-                            Button("Remove from List", role: .destructive) {
-                                appState.removeWorkspace(id: entry.id)
-                            }
-                        }
+                }
+                .buttonStyle(.plain)
+                .contextMenu {
+                    Button("Remove from List", role: .destructive) {
+                        appState.removeWorkspace(id: entry.id)
+                    }
+                }
+
+                if index < recentEntries.count - 1 {
+                    Divider()
                 }
             }
-            .listStyle(.inset)
-            .frame(maxWidth: 400)
-            .frame(maxHeight: 300)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .padding(20)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(.white.opacity(0.35), lineWidth: 1)
         }
     }
 
     @ViewBuilder
-    private var actionButtons: some View {
-        HStack(spacing: 12) {
-            Button {
-                showCreateSheet = true
-            } label: {
-                Label("New Workspace", systemImage: "plus")
-            }
-            .buttonStyle(.borderedProminent)
+    private var actionCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Get Started")
+                .font(.headline)
 
-            #if os(macOS)
-            Button {
-                openExistingFolder()
-            } label: {
-                Label("Open Folder", systemImage: "folder")
+            Text("Use the default workspace path, or customize location and name.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            ViewThatFits {
+                HStack(spacing: 10) {
+                    newWorkspaceButton
+                    #if os(macOS)
+                    openFolderButton
+                    #endif
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    newWorkspaceButton
+                    #if os(macOS)
+                    openFolderButton
+                    #endif
+                }
             }
-            .buttonStyle(.bordered)
-            #endif
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    private var newWorkspaceButton: some View {
+        Button {
+            showCreateSheet = true
+        } label: {
+            Label("New Workspace", systemImage: "plus")
+        }
+        .buttonStyle(.borderedProminent)
+    }
+
+    #if os(macOS)
+    private var openFolderButton: some View {
+        Button {
+            openExistingFolder()
+        } label: {
+            Label("Open Folder", systemImage: "folder")
+        }
+        .buttonStyle(.bordered)
+    }
+    #endif
+
+    private var recentEntries: [WorkspaceRegistryEntry] {
+        Array(appState.workspaceRegistry.prefix(8))
     }
 
     // MARK: - Actions
@@ -129,27 +224,31 @@ private struct WorkspaceRow: View {
     let entry: WorkspaceRegistryEntry
 
     var body: some View {
-        HStack {
-            Image(systemName: entry.storageType == .folder ? "folder" : "doc.text")
+        HStack(spacing: 12) {
+            Image(systemName: entry.storageType == .folder ? "folder.fill" : "internaldrive.fill")
+                .font(.headline)
                 .foregroundStyle(.secondary)
-                .frame(width: 24)
+                .frame(width: 26)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.name)
-                    .font(.body)
+                    .font(.body.weight(.medium))
+                    .lineLimit(1)
+
                 Text(entry.path)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
 
-            Spacer()
+            Spacer(minLength: 12)
 
             Text(entry.lastOpenedAt, style: .relative)
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
+        .contentShape(Rectangle())
         .padding(.vertical, 4)
     }
 }

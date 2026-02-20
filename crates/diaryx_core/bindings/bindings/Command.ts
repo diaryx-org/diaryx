@@ -10,485 +10,485 @@ import type { ValidationResult } from "./ValidationResult";
  *
  * Commands are serializable for cross-runtime usage (WASM, IPC, etc.).
  */
-export type Command = { "type": "GetEntry", "params": { 
+export type Command = { "type": "GetEntry", "params": {
 /**
  * Path to the entry file.
  */
-path: string, } } | { "type": "SaveEntry", "params": { 
+path: string, } } | { "type": "SaveEntry", "params": {
 /**
  * Path to the entry file.
  */
-path: string, 
+path: string,
 /**
  * New markdown content.
  */
-content: string, 
+content: string,
 /**
  * Optional workspace root index path for reading workspace config.
  * When provided, `auto_update_timestamp` from workspace config is respected.
  */
-root_index_path: string | null, } } | { "type": "CreateEntry", "params": { 
+root_index_path: string | null, } } | { "type": "CreateEntry", "params": {
 /**
  * Path where the entry should be created.
  */
-path: string, 
+path: string,
 /**
  * Optional creation options.
  */
-options: CreateEntryOptions, } } | { "type": "DeleteEntry", "params": { 
+options: CreateEntryOptions, } } | { "type": "DeleteEntry", "params": {
 /**
  * Path to the entry to delete.
  */
-path: string, 
+path: string,
 /**
  * If true, perform a hard delete (remove from filesystem).
  * If false (default), perform a soft delete (mark as deleted in CRDT).
  */
-hard_delete: boolean, } } | { "type": "MoveEntry", "params": { 
+hard_delete: boolean, } } | { "type": "MoveEntry", "params": {
 /**
  * Existing path to the entry file.
  */
-from: string, 
+from: string,
 /**
  * New path for the entry file.
  */
-to: string, } } | { "type": "RenameEntry", "params": { 
+to: string, } } | { "type": "RenameEntry", "params": {
 /**
  * Path to the entry to rename.
  */
-path: string, 
+path: string,
 /**
  * New filename (e.g., "new-name.md").
  */
-new_filename: string, } } | { "type": "DuplicateEntry", "params": { 
+new_filename: string, } } | { "type": "DuplicateEntry", "params": {
 /**
  * Path to the entry to duplicate.
  */
-path: string, } } | { "type": "ConvertToIndex", "params": { 
+path: string, } } | { "type": "ConvertToIndex", "params": {
 /**
  * Path to the leaf file to convert.
  */
-path: string, } } | { "type": "ConvertToLeaf", "params": { 
+path: string, } } | { "type": "ConvertToLeaf", "params": {
 /**
  * Path to the index file to convert.
  */
-path: string, } } | { "type": "CreateChildEntry", "params": { 
+path: string, } } | { "type": "CreateChildEntry", "params": {
 /**
  * Path to the parent entry.
  */
-parent_path: string, } } | { "type": "AttachEntryToParent", "params": { 
+parent_path: string, } } | { "type": "AttachEntryToParent", "params": {
 /**
  * Path to the entry to attach.
  */
-entry_path: string, 
+entry_path: string,
 /**
  * Path to the parent index file.
  */
-parent_path: string, } } | { "type": "EnsureDailyEntry", "params": { 
+parent_path: string, } } | { "type": "EnsureDailyEntry", "params": {
 /**
  * Workspace path (directory containing the workspace root index).
  */
-workspace_path: string, 
+workspace_path: string,
 /**
  * Optional subfolder for daily entries (e.g., "Daily" or "Journal/Daily").
  * If not provided, entries are created in the workspace root.
  */
-daily_entry_folder: string | null, 
+daily_entry_folder: string | null,
 /**
  * Optional template name to use for new entries.
  * Falls back to "daily" built-in template if not provided.
  */
-template: string | null, } } | { "type": "GetAdjacentDailyEntry", "params": { 
+template: string | null, } } | { "type": "GetAdjacentDailyEntry", "params": {
 /**
  * Path to the current daily entry.
  */
-path: string, 
+path: string,
 /**
  * Direction: "prev" for previous day, "next" for next day.
  */
-direction: string, } } | { "type": "IsDailyEntry", "params": { 
+direction: string, } } | { "type": "IsDailyEntry", "params": {
 /**
  * Path to check.
  */
-path: string, } } | { "type": "FindRootIndex", "params": { 
+path: string, } } | { "type": "FindRootIndex", "params": {
 /**
  * Directory to search in.
  */
-directory: string, } } | { "type": "GetWorkspaceTree", "params": { 
+directory: string, } } | { "type": "GetWorkspaceTree", "params": {
 /**
  * Optional path to a specific workspace.
  */
-path: string | null, 
+path: string | null,
 /**
  * Optional maximum depth to traverse.
  */
-depth: number | null, } } | { "type": "GetFilesystemTree", "params": { 
+depth: number | null, } } | { "type": "GetFilesystemTree", "params": {
 /**
  * Optional path to the workspace directory.
  */
-path: string | null, 
+path: string | null,
 /**
  * Whether to include hidden files.
  */
-show_hidden: boolean, 
+show_hidden: boolean,
 /**
  * Optional maximum depth to traverse.
  */
-depth: number | null, } } | { "type": "CreateWorkspace", "params": { 
+depth: number | null, } } | { "type": "CreateWorkspace", "params": {
 /**
  * Path where the workspace should be created.
  */
-path: string | null, 
+path: string | null,
 /**
  * Name of the workspace.
  */
-name: string | null, } } | { "type": "GetFrontmatter", "params": { 
+name: string | null, } } | { "type": "GetFrontmatter", "params": {
 /**
  * Path to the entry file.
  */
-path: string, } } | { "type": "SetFrontmatterProperty", "params": { 
+path: string, } } | { "type": "SetFrontmatterProperty", "params": {
 /**
  * Path to the entry file.
  */
-path: string, 
+path: string,
 /**
  * Property key.
  */
-key: string, 
+key: string,
 /**
  * Property value.
  */
-value: JsonValue, 
+value: JsonValue,
 /**
  * Optional workspace root index path for reading workspace config.
  * When provided, `sync_title_to_heading` is respected for title changes.
  */
-root_index_path: string | null, } } | { "type": "RemoveFrontmatterProperty", "params": { 
+root_index_path: string | null, } } | { "type": "RemoveFrontmatterProperty", "params": {
 /**
  * Path to the entry file.
  */
-path: string, 
+path: string,
 /**
  * Property key to remove.
  */
-key: string, } } | { "type": "SearchWorkspace", "params": { 
+key: string, } } | { "type": "SearchWorkspace", "params": {
 /**
  * Search pattern.
  */
-pattern: string, 
+pattern: string,
 /**
  * Search options.
  */
-options: SearchOptions, } } | { "type": "ValidateWorkspace", "params": { 
+options: SearchOptions, } } | { "type": "ValidateWorkspace", "params": {
 /**
  * Optional path to workspace.
  */
-path: string | null, } } | { "type": "ValidateFile", "params": { 
+path: string | null, } } | { "type": "ValidateFile", "params": {
 /**
  * Path to the file to validate.
  */
-path: string, } } | { "type": "FixBrokenPartOf", "params": { 
+path: string, } } | { "type": "FixBrokenPartOf", "params": {
 /**
  * Path to the file with the broken reference.
  */
-path: string, } } | { "type": "FixBrokenContentsRef", "params": { 
+path: string, } } | { "type": "FixBrokenContentsRef", "params": {
 /**
  * Path to the index file.
  */
-index_path: string, 
+index_path: string,
 /**
  * The broken reference to remove.
  */
-target: string, } } | { "type": "FixBrokenAttachment", "params": { 
+target: string, } } | { "type": "FixBrokenAttachment", "params": {
 /**
  * Path to the file with the broken attachment.
  */
-path: string, 
+path: string,
 /**
  * The broken attachment reference.
  */
-attachment: string, } } | { "type": "FixNonPortablePath", "params": { 
+attachment: string, } } | { "type": "FixNonPortablePath", "params": {
 /**
  * Path to the file.
  */
-path: string, 
+path: string,
 /**
  * Property name.
  */
-property: string, 
+property: string,
 /**
  * Current value.
  */
-old_value: string, 
+old_value: string,
 /**
  * New value.
  */
-new_value: string, } } | { "type": "FixUnlistedFile", "params": { 
+new_value: string, } } | { "type": "FixUnlistedFile", "params": {
 /**
  * Path to the index file.
  */
-index_path: string, 
+index_path: string,
 /**
  * Path to the file to add.
  */
-file_path: string, } } | { "type": "FixOrphanBinaryFile", "params": { 
+file_path: string, } } | { "type": "FixOrphanBinaryFile", "params": {
 /**
  * Path to the index file.
  */
-index_path: string, 
+index_path: string,
 /**
  * Path to the binary file.
  */
-file_path: string, } } | { "type": "FixMissingPartOf", "params": { 
+file_path: string, } } | { "type": "FixMissingPartOf", "params": {
 /**
  * Path to the file missing part_of.
  */
-file_path: string, 
+file_path: string,
 /**
  * Path to the index file to reference.
  */
-index_path: string, } } | { "type": "FixAll", "params": { 
+index_path: string, } } | { "type": "FixAll", "params": {
 /**
  * The validation result to fix.
  */
-validation_result: ValidationResult, } } | { "type": "FixCircularReference", "params": { 
+validation_result: ValidationResult, } } | { "type": "FixCircularReference", "params": {
 /**
  * Path to the file to edit.
  */
-file_path: string, 
+file_path: string,
 /**
  * The part_of value to remove.
  */
-part_of_value: string, } } | { "type": "GetAvailableParentIndexes", "params": { 
+part_of_value: string, } } | { "type": "GetAvailableParentIndexes", "params": {
 /**
  * Path to the file that needs a parent.
  */
-file_path: string, 
+file_path: string,
 /**
  * Workspace root to limit scope.
  */
-workspace_root: string, } } | { "type": "GetAvailableAudiences", "params": { 
+workspace_root: string, } } | { "type": "GetAvailableAudiences", "params": {
 /**
  * Root path to scan.
  */
-root_path: string, } } | { "type": "PlanExport", "params": { 
+root_path: string, } } | { "type": "PlanExport", "params": {
 /**
  * Root path.
  */
-root_path: string, 
+root_path: string,
 /**
  * Target audience.
  */
-audience: string, } } | { "type": "ExportToMemory", "params": { 
+audience: string, } } | { "type": "ExportToMemory", "params": {
 /**
  * Root path.
  */
-root_path: string, 
+root_path: string,
 /**
  * Target audience.
  */
-audience: string, } } | { "type": "ExportToHtml", "params": { 
+audience: string, } } | { "type": "ExportToHtml", "params": {
 /**
  * Root path.
  */
-root_path: string, 
+root_path: string,
 /**
  * Target audience.
  */
-audience: string, } } | { "type": "ExportBinaryAttachments", "params": { 
+audience: string, } } | { "type": "ExportBinaryAttachments", "params": {
 /**
  * Root path.
  */
-root_path: string, 
+root_path: string,
 /**
  * Target audience.
  */
-audience: string, } } | { "type": "ListTemplates", "params": { 
+audience: string, } } | { "type": "ListTemplates", "params": {
 /**
  * Optional workspace path.
  */
-workspace_path: string | null, } } | { "type": "GetTemplate", "params": { 
+workspace_path: string | null, } } | { "type": "GetTemplate", "params": {
 /**
  * Template name.
  */
-name: string, 
+name: string,
 /**
  * Optional workspace path.
  */
-workspace_path: string | null, } } | { "type": "SaveTemplate", "params": { 
+workspace_path: string | null, } } | { "type": "SaveTemplate", "params": {
 /**
  * Template name.
  */
-name: string, 
+name: string,
 /**
  * Template content.
  */
-content: string, 
+content: string,
 /**
  * Workspace path.
  */
-workspace_path: string, } } | { "type": "DeleteTemplate", "params": { 
+workspace_path: string, } } | { "type": "DeleteTemplate", "params": {
 /**
  * Template name.
  */
-name: string, 
+name: string,
 /**
  * Workspace path.
  */
-workspace_path: string, } } | { "type": "GetAttachments", "params": { 
+workspace_path: string, } } | { "type": "GetAttachments", "params": {
 /**
  * Path to the entry file.
  */
-path: string, } } | { "type": "UploadAttachment", "params": { 
+path: string, } } | { "type": "UploadAttachment", "params": {
 /**
  * Path to the entry file.
  */
-entry_path: string, 
+entry_path: string,
 /**
  * Filename for the attachment.
  */
-filename: string, 
+filename: string,
 /**
  * Base64 encoded data.
  */
-data_base64: string, } } | { "type": "DeleteAttachment", "params": { 
+data_base64: string, } } | { "type": "DeleteAttachment", "params": {
 /**
  * Path to the entry file.
  */
-entry_path: string, 
+entry_path: string,
 /**
  * Path to the attachment.
  */
-attachment_path: string, } } | { "type": "GetAttachmentData", "params": { 
+attachment_path: string, } } | { "type": "GetAttachmentData", "params": {
 /**
  * Path to the entry file.
  */
-entry_path: string, 
+entry_path: string,
 /**
  * Path to the attachment.
  */
-attachment_path: string, } } | { "type": "MoveAttachment", "params": { 
+attachment_path: string, } } | { "type": "MoveAttachment", "params": {
 /**
  * Path to the source entry file.
  */
-source_entry_path: string, 
+source_entry_path: string,
 /**
  * Path to the target entry file.
  */
-target_entry_path: string, 
+target_entry_path: string,
 /**
  * Relative path to the attachment (e.g., "_attachments/image.png").
  */
-attachment_path: string, 
+attachment_path: string,
 /**
  * Optional new filename (for handling collisions).
  */
-new_filename: string | null, } } | { "type": "GetAncestorAttachments", "params": { 
+new_filename: string | null, } } | { "type": "GetAncestorAttachments", "params": {
 /**
  * Path to the entry file.
  */
-path: string, } } | { "type": "FileExists", "params": { 
+path: string, } } | { "type": "FileExists", "params": {
 /**
  * Path to check.
  */
-path: string, } } | { "type": "ReadFile", "params": { 
+path: string, } } | { "type": "ReadFile", "params": {
 /**
  * Path to read.
  */
-path: string, } } | { "type": "WriteFile", "params": { 
+path: string, } } | { "type": "WriteFile", "params": {
 /**
  * Path to write.
  */
-path: string, 
+path: string,
 /**
  * Content to write.
  */
-content: string, } } | { "type": "DeleteFile", "params": { 
+content: string, } } | { "type": "DeleteFile", "params": {
 /**
  * Path to delete.
  */
-path: string, } } | { "type": "ClearDirectory", "params": { 
+path: string, } } | { "type": "ClearDirectory", "params": {
 /**
  * Path to the directory to clear.
  */
-path: string, } } | { "type": "WriteFileWithMetadata", "params": { 
+path: string, } } | { "type": "WriteFileWithMetadata", "params": {
 /**
  * Path to the file to write.
  */
-path: string, 
+path: string,
 /**
  * File metadata to write as frontmatter.
  */
-metadata: JsonValue, 
+metadata: JsonValue,
 /**
  * Body content (markdown after frontmatter).
  */
-body: string, } } | { "type": "UpdateFileMetadata", "params": { 
+body: string, } } | { "type": "UpdateFileMetadata", "params": {
 /**
  * Path to the file to update.
  */
-path: string, 
+path: string,
 /**
  * File metadata to write as frontmatter.
  */
-metadata: JsonValue, 
+metadata: JsonValue,
 /**
  * Optional new body content. If not provided, existing body is preserved.
  */
-body: string | null, } } | { "type": "GetStorageUsage" } | { "type": "GetLinkFormat", "params": { 
+body: string | null, } } | { "type": "GetStorageUsage" } | { "type": "GetLinkFormat", "params": {
 /**
  * Path to the workspace root index file.
  */
-root_index_path: string, } } | { "type": "SetLinkFormat", "params": { 
+root_index_path: string, } } | { "type": "SetLinkFormat", "params": {
 /**
  * Path to the workspace root index file.
  */
-root_index_path: string, 
+root_index_path: string,
 /**
  * The link format to set (one of: markdown_root, markdown_relative, plain_relative, plain_canonical).
  */
-format: string, } } | { "type": "GetWorkspaceConfig", "params": { 
+format: string, } } | { "type": "GetWorkspaceConfig", "params": {
 /**
  * Path to the workspace root index file.
  */
-root_index_path: string, } } | { "type": "GenerateFilename", "params": { 
+root_index_path: string, } } | { "type": "GenerateFilename", "params": {
 /**
  * The entry title to convert to a filename.
  */
-title: string, 
+title: string,
 /**
  * Path to the workspace root index file (to read filename_style config).
  * If None, uses the default style (preserve).
  */
-root_index_path: string | null, } } | { "type": "SetWorkspaceConfig", "params": { 
+root_index_path: string | null, } } | { "type": "SetWorkspaceConfig", "params": {
 /**
  * Path to the workspace root index file.
  */
-root_index_path: string, 
+root_index_path: string,
 /**
  * Field name to set (e.g., "filename_style", "public_audience").
  */
-field: string, 
+field: string,
 /**
  * Value to set (stored as a string in frontmatter).
  */
-value: string, } } | { "type": "ConvertLinks", "params": { 
+value: string, } } | { "type": "ConvertLinks", "params": {
 /**
  * Path to the workspace root index file.
  */
-root_index_path: string, 
+root_index_path: string,
 /**
  * The target link format.
  */
-format: string, 
+format: string,
 /**
  * Optional specific file path to convert (if None, converts entire workspace).
  */
-path: string | null, 
+path: string | null,
 /**
  * If true, only report what would be changed without modifying files.
  */
-dry_run: boolean, } } | { "type": "LinkParser", "params": { 
+dry_run: boolean, } } | { "type": "LinkParser", "params": {
 /**
  * The link parser operation to execute.
  */

@@ -4,51 +4,51 @@ import type { LinkFormat } from "./LinkFormat";
 /**
  * Link parser operation selector.
  */
-export type LinkParserOperation = { "type": "parse", "params": { 
+export type LinkParserOperation = { "type": "parse", "params": {
 /**
  * Link string to parse.
  */
-link: string, } } | { "type": "to_canonical", "params": { 
+link: string, } } | { "type": "to_canonical", "params": {
 /**
  * Link string to resolve.
  */
-link: string, 
+link: string,
 /**
  * Canonical path of the file containing the link.
  */
-current_file_path: string, 
+current_file_path: string,
 /**
  * Optional hint for resolving ambiguous links.
  */
-link_format_hint: LinkFormat | null, } } | { "type": "format", "params": { 
+link_format_hint: LinkFormat | null, } } | { "type": "format", "params": {
 /**
  * Canonical target path.
  */
-canonical_path: string, 
+canonical_path: string,
 /**
  * Display title.
  */
-title: string, 
+title: string,
 /**
  * Output format.
  */
-format: LinkFormat, 
+format: LinkFormat,
 /**
  * Canonical path of the file containing the link.
  */
-from_canonical_path: string, } } | { "type": "convert", "params": { 
+from_canonical_path: string, } } | { "type": "convert", "params": {
 /**
  * Original link string.
  */
-link: string, 
+link: string,
 /**
  * Desired output format.
  */
-target_format: LinkFormat, 
+target_format: LinkFormat,
 /**
  * Canonical path of the file containing the link.
  */
-current_file_path: string, 
+current_file_path: string,
 /**
  * Optional hint for interpreting ambiguous source links.
  */

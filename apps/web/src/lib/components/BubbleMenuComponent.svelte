@@ -9,6 +9,7 @@
   import HighlightColorPicker from "./HighlightColorPicker.svelte";
   import BlockStylePicker from "./BlockStylePicker.svelte";
   import MoreStylesPicker from "./MoreStylesPicker.svelte";
+  import TableControlsPicker from "./TableControlsPicker.svelte";
   import LinkInsertPopover from "./LinkInsertPopover.svelte";
   import type { HighlightColor } from "$lib/extensions/ColoredHighlightMark";
   import type { Api } from "$lib/backend/api";
@@ -67,12 +68,14 @@
   let highlightOpen = $state(false);
   let linkPopoverOpen = $state(false);
   let moreStylesOpen = $state(false);
+  let tableControlsOpen = $state(false);
 
   function closeAllDropdowns() {
     blockStyleOpen = false;
     highlightOpen = false;
     linkPopoverOpen = false;
     moreStylesOpen = false;
+    tableControlsOpen = false;
   }
 
   function handleLink() {
@@ -135,6 +138,10 @@
 >
   {#if !isInTable}
     <BlockStylePicker {editor} bind:open={blockStyleOpen} onOpen={() => { closeAllDropdowns(); }} />
+  {/if}
+
+  {#if isInTable}
+    <TableControlsPicker {editor} bind:open={tableControlsOpen} onOpen={() => { closeAllDropdowns(); }} />
   {/if}
 
   {#if !isInCodeBlock}

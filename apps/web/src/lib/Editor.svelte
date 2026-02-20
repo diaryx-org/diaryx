@@ -343,6 +343,9 @@
               // Must have focus
               if (!view.hasFocus()) return false;
 
+              // Show table controls when cursor is in a table (even without selection)
+              if (ed.isActive("table")) return true;
+
               // Must have a selection (not just cursor)
               const { empty } = state.selection;
               if (empty) return false;
@@ -870,6 +873,20 @@
 
   :global(.editor-content tr:hover td) {
     background: color-mix(in oklch, var(--muted) 50%, transparent);
+  }
+
+  :global(.editor-content .selectedCell) {
+    background: color-mix(in oklch, var(--primary) 15%, transparent);
+  }
+
+  :global(.editor-content .column-resize-handle) {
+    background-color: var(--primary);
+    bottom: -2px;
+    pointer-events: none;
+    position: absolute;
+    right: -2px;
+    top: 0;
+    width: 4px;
   }
 
   /* Colored highlight mark styles */

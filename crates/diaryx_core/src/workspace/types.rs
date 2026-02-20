@@ -74,6 +74,36 @@ where
     }
 }
 
+/// Deserializes a value that should be a Vec<String>, but may be a bare string.
+/// - Array of strings: returned as-is
+/// - String: wrapped in a single-element vec
+/// - Null/None: returns None
+fn deserialize_vec_string_lenient<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: Option<Value> = Option::deserialize(deserializer)?;
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => Ok(Some(vec![s])),
+        Some(Value::Sequence(seq)) => {
+            let strings = seq
+                .into_iter()
+                .filter_map(|v| match v {
+                    Value::String(s) => Some(s),
+                    Value::Number(n) => Some(n.to_string()),
+                    Value::Bool(b) => Some(b.to_string()),
+                    _ => None,
+                })
+                .collect();
+            Ok(Some(strings))
+        }
+        Some(Value::Number(n)) => Ok(Some(vec![n.to_string()])),
+        Some(Value::Bool(b)) => Ok(Some(vec![b.to_string()])),
+        _ => Ok(None),
+    }
+}
+
 /// Represents an index file's frontmatter
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IndexFrontmatter {
@@ -101,7 +131,11 @@ pub struct IndexFrontmatter {
     /// If absent, inherits from parent; if at root with no audience, excluded from
     /// audience-specific exports. Use `public_audience` in workspace config to
     /// designate which audience tag means "publishable".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_vec_string_lenient"
+    )]
     pub audience: Option<Vec<String>>,
 
     /// List of paths to attachment files (images, documents, etc.) relative to this file.
@@ -430,6 +464,24 @@ mod tests {
 
         let resolved = index.resolve_path("../parent.md");
         assert_eq!(resolved, PathBuf::from("A/parent.md"));
+    }
+
+    #[test]
+    fn test_audience_bare_string_deserialized_as_vec() {
+        // audience: private (bare string) should become vec!["private"]
+        let yaml = "audience: private\n";
+        let fm: IndexFrontmatter = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(fm.audience, Some(vec!["private".to_string()]));
+    }
+
+    #[test]
+    fn test_audience_array_deserialized_normally() {
+        let yaml = "audience:\n  - family\n  - private\n";
+        let fm: IndexFrontmatter = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            fm.audience,
+            Some(vec!["family".to_string(), "private".to_string()])
+        );
     }
 
     #[test]

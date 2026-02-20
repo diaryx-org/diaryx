@@ -164,12 +164,17 @@ export class TauriBackend implements Backend {
         const workspacePath = ws?.path;
 
         if (workspacePath) {
+          // Only create CRDT storage for remote (server-assigned) workspace IDs
+          const needsCrdt = !workspaceId.startsWith('local-');
           console.log(
             "[TauriBackend] Reinitializing for workspace path:",
             workspacePath,
+            "needs_crdt:",
+            needsCrdt,
           );
           const result = await this.invoke<AppPaths>("reinitialize_workspace", {
             workspacePath,
+            needsCrdt,
           });
           this.appPaths = result;
         } else {
@@ -498,6 +503,24 @@ export class TauriBackend implements Backend {
   // --------------------------------------------------------------------------
   // CrdtFs Control
   // --------------------------------------------------------------------------
+
+  /**
+   * Lazily initialize CRDT storage for the current workspace.
+   * Called before sync connects if the workspace was initially created
+   * without CRDT (local-only) and is later promoted to remote.
+   */
+  async setupCrdtStorage(): Promise<void> {
+    if (this.appPaths?.crdt_initialized) return; // Already set up
+    const workspacePath = this.getWorkspacePath()
+      .replace(/\/index\.md$/, '')
+      .replace(/\/README\.md$/, '');
+    console.log("[TauriBackend] Lazily initializing CRDT storage for:", workspacePath);
+    const result = await this.getInvoke()<AppPaths>("reinitialize_workspace", {
+      workspacePath,
+      needsCrdt: true,
+    });
+    this.appPaths = result;
+  }
 
   /**
    * Enable or disable CRDT updates on the decorated filesystem.

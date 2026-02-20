@@ -1090,8 +1090,9 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
       fileChangeCallbacks.add(options.onFileChange);
     }
 
-    // Connect sync if we have a workspaceId (authenticated mode, not local-only)
-    if (_workspaceId) {
+    // Connect sync if we have a server-assigned workspace ID (not local-only)
+    const isRemoteWorkspace = _workspaceId && !_workspaceId.startsWith('local-');
+    if (isRemoteWorkspace) {
       if (serverUrl && rustApi && _backend) {
         // Ensure CRDT storage bridge is initialized before sync connects.
         await _backend.setupCrdtStorage?.();
@@ -1297,20 +1298,25 @@ export async function switchWorkspace(
   const newRustApi = new RustCrdtApi(backend);
 
   // 9. Find workspace root in the new storage
-  let workspacePath: string;
+  let workspacePath: string | null;
   try {
-    const root = await api.findRootIndex('.');
-    workspacePath = root ?? '.';
+    // Use workspace path from backend when available (Tauri), fall back to '.'
+    const searchDir = backend.getWorkspacePath?.()?.replace(/\/(index|README)\.md$/, '') ?? '.';
+    workspacePath = await api.findRootIndex(searchDir);
   } catch {
-    workspacePath = '.';
+    workspacePath = null;
   }
 
-  // 10. Initialize CRDT from filesystem
-  try {
-    const result = await api.initializeWorkspaceCrdt(workspacePath);
-    console.log('[WorkspaceCrdtBridge] CRDT initialized for new workspace:', result);
-  } catch (e) {
-    console.warn('[WorkspaceCrdtBridge] Failed to initialize CRDT from filesystem:', e);
+  // 10. Initialize CRDT from filesystem (only if a root index exists)
+  if (workspacePath) {
+    try {
+      const result = await api.initializeWorkspaceCrdt(workspacePath);
+      console.log('[WorkspaceCrdtBridge] CRDT initialized for new workspace:', result);
+    } catch (e) {
+      console.warn('[WorkspaceCrdtBridge] Failed to initialize CRDT from filesystem:', e);
+    }
+  } else {
+    console.log('[WorkspaceCrdtBridge] Skipping CRDT init — workspace is empty (no root index)');
   }
 
   // 11. Set workspace ID and reconnect

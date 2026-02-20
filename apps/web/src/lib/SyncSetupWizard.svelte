@@ -542,7 +542,15 @@
     if (existingRoot) {
       return;
     }
-    await api.createWorkspace(".", workspaceName);
+    const workspaceDir = backend.getWorkspacePath()
+      .replace(/\/index\.md$/, '')
+      .replace(/\/README\.md$/, '');
+    try {
+      await api.createWorkspace(workspaceDir, workspaceName);
+    } catch (e) {
+      if (e instanceof Error && e.message.includes('already exists')) return;
+      throw e;
+    }
   }
 
   async function handleCreateLocalWorkspace() {

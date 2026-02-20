@@ -160,8 +160,11 @@
       const api = createApi(backend);
 
       // Create workspace structure
+      const workspaceDir = backend.getWorkspacePath()
+        .replace(/\/index\.md$/, '')
+        .replace(/\/README\.md$/, '');
       try {
-        await api.createWorkspace(".", ws.name);
+        await api.createWorkspace(workspaceDir, ws.name);
       } catch {
         // May already exist
       }

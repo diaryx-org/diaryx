@@ -1206,13 +1206,17 @@
 
   // Initialize an empty workspace with a root index
   async function handleInitializeWorkspace() {
-    if (!api) return;
+    if (!api || !backend) return;
     try {
       // Get workspace name from local registry
       const wsId = getCurrentWorkspaceId();
       const localWs = wsId ? getLocalWorkspace(wsId) : null;
       const wsName = localWs?.name ?? "My Journal";
-      await api.createWorkspace(".", wsName);
+      // Use the actual workspace directory, not "." (which is CWD on Tauri)
+      const workspaceDir = backend.getWorkspacePath()
+        .replace(/\/index\.md$/, '')
+        .replace(/\/README\.md$/, '');
+      await api.createWorkspace(workspaceDir, wsName);
       await refreshTree();
       // Open the newly created root index
       if (tree) {
@@ -1229,29 +1233,17 @@
     showAddWorkspace = true;
   }
 
-  // Handle welcome screen completion — re-run initialization
+  // Handle welcome screen completion — backend already initialized by switchWorkspace
   async function handleWelcomeComplete(_id: string, _name: string) {
     showWelcomeScreen = false;
     entryStore.setLoading(true);
 
     try {
-      const wsId = getCurrentWorkspaceId();
-      const localWs = wsId ? getLocalWorkspace(wsId) : null;
-      if (!localWs) return;
-
-      const backendInstance = await getBackend(localWs.id, localWs.name, getWorkspaceStorageType(localWs.id));
-      workspaceStore.setBackend(backendInstance);
-
-      const apiInstance = createApi(backendInstance);
-      setBackendApi(apiInstance);
-      setBackend(backendInstance);
-
-      cleanupEventSubscription = initEventSubscription(backendInstance);
-      rustApi = new RustCrdtApi(backendInstance);
-
-      if (!workspaceCrdtDisabled) {
-        await setupWorkspaceCrdt();
-      }
+      // Backend already initialized by switchWorkspace (via AddWorkspaceDialog).
+      // Just refresh UI state.
+      const newBackend = await getBackend();
+      workspaceStore.setBackend(newBackend);
+      rustApi = new RustCrdtApi(newBackend);
 
       await refreshTree();
 

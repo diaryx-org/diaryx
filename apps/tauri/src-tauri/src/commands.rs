@@ -2786,10 +2786,13 @@ pub async fn is_crdt_enabled<R: Runtime>(app: AppHandle<R>) -> Result<bool, Seri
 pub async fn reinitialize_workspace<R: Runtime>(
     app: AppHandle<R>,
     workspace_path: String,
+    needs_crdt: Option<bool>,
 ) -> Result<AppPaths, SerializableError> {
+    let needs_crdt = needs_crdt.unwrap_or(true);
     log::info!(
-        "[reinitialize_workspace] Reinitializing for workspace: {}",
-        workspace_path
+        "[reinitialize_workspace] Reinitializing for workspace: {} (needs_crdt: {})",
+        workspace_path,
+        needs_crdt,
     );
 
     // 1. Stop any running sync
@@ -2812,40 +2815,48 @@ pub async fn reinitialize_workspace<R: Runtime>(
         path: Some(ws_path.clone()),
     })?;
 
-    // 4. Initialize CRDT storage
-    let crdt_dir = ws_path.join(".diaryx");
-    std::fs::create_dir_all(&crdt_dir).map_err(|e| SerializableError {
-        kind: "IoError".to_string(),
-        message: format!("Failed to create CRDT directory: {}", e),
-        path: Some(crdt_dir.clone()),
-    })?;
-    let db_path = crdt_dir.join("crdt.db");
-    let storage = Arc::new(
-        SqliteStorage::open(&db_path).map_err(|e| SerializableError {
-            kind: "CrdtError".to_string(),
-            message: format!("Failed to open CRDT storage: {:?}", e),
-            path: Some(db_path.clone()),
-        })?,
-    );
-
-    // 5. Build DecoratedFs
-    let base_fs = SyncToAsyncFs::new(RealFileSystem);
-    let decorated = DecoratedFsBuilder::new(base_fs)
-        .with_crdt(Arc::clone(&storage) as Arc<dyn CrdtStorage>)
-        .crdt_enabled(false)
-        .build_with_load()
-        .map_err(|e| SerializableError {
-            kind: "CrdtError".to_string(),
-            message: format!("Failed to build DecoratedFs: {:?}", e),
-            path: None,
+    // 4. Initialize CRDT storage (only if needed for sync)
+    let storage: Option<Arc<SqliteStorage>> = if needs_crdt {
+        let crdt_dir = ws_path.join(".diaryx");
+        std::fs::create_dir_all(&crdt_dir).map_err(|e| SerializableError {
+            kind: "IoError".to_string(),
+            message: format!("Failed to create CRDT directory: {}", e),
+            path: Some(crdt_dir.clone()),
         })?;
+        let db_path = crdt_dir.join("crdt.db");
+        Some(Arc::new(SqliteStorage::open(&db_path).map_err(|e| {
+            SerializableError {
+                kind: "CrdtError".to_string(),
+                message: format!("Failed to open CRDT storage: {:?}", e),
+                path: Some(db_path.clone()),
+            }
+        })?))
+    } else {
+        None
+    };
+
+    // 5. Build DecoratedFs (with or without CRDT)
+    let base_fs = SyncToAsyncFs::new(RealFileSystem);
+    let mut builder = DecoratedFsBuilder::new(base_fs);
+    if let Some(ref s) = storage {
+        builder = builder.with_crdt(Arc::clone(s) as Arc<dyn CrdtStorage>);
+    }
+    let decorated =
+        builder
+            .crdt_enabled(false)
+            .build_with_load()
+            .map_err(|e| SerializableError {
+                kind: "CrdtError".to_string(),
+                message: format!("Failed to build DecoratedFs: {:?}", e),
+                path: None,
+            })?;
 
     // 6. Update CrdtState
     {
         *acquire_lock(&state.workspace_path)? = Some(ws_path.clone());
     }
     {
-        *acquire_lock(&state.storage)? = Some(storage);
+        *acquire_lock(&state.storage)? = storage.map(|s| s as Arc<dyn CrdtStorage>);
     }
     {
         *acquire_lock(&state.decorated_fs)? = Some(decorated);
@@ -2859,7 +2870,7 @@ pub async fn reinitialize_workspace<R: Runtime>(
         default_workspace: ws_path,
         config_path: paths.config_path,
         is_mobile: paths.is_mobile,
-        crdt_initialized: true,
+        crdt_initialized: needs_crdt,
         crdt_error: None,
     })
 }

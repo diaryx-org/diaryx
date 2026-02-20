@@ -782,7 +782,18 @@
     if (existingRoot) {
       return;
     }
-    await api.createWorkspace(".", workspaceName);
+    // Use the actual workspace directory from the backend, not "." which
+    // resolves to the process CWD on Tauri (wrong directory).
+    const workspaceDir = backend.getWorkspacePath()
+      .replace(/\/index\.md$/, '')
+      .replace(/\/README\.md$/, '');
+    try {
+      await api.createWorkspace(workspaceDir, workspaceName);
+    } catch (e) {
+      // If the workspace already has a root index, that's fine
+      if (e instanceof Error && e.message.includes('already exists')) return;
+      throw e;
+    }
   }
 
   async function handleCreateLocalWorkspace() {

@@ -64,6 +64,7 @@ export const DrawingBlock = Node.create<DrawingBlockOptions>({
       alt: { default: "" },
       width: { default: 600 },
       height: { default: 300 },
+      attachmentPath: { default: "" },
     };
   },
 
@@ -120,6 +121,7 @@ export const DrawingBlock = Node.create<DrawingBlockOptions>({
             alt: attrs.alt as string,
             width: attrs.width as number,
             height: attrs.height as number,
+            attachmentPath: (attrs.attachmentPath as string) || "",
             readonly: !editor.isEditable,
             entryPath,
             api,

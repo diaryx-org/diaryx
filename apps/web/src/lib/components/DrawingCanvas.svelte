@@ -42,6 +42,7 @@
     height: number;
     entryPath: string;
     api: Api | null;
+    existingFilename?: string;
     onSave: (result: {
       blobUrl: string;
       attachmentPath: string;
@@ -51,7 +52,7 @@
     onCancel: () => void;
   }
 
-  let { src, width, height, entryPath, api, onSave, onCancel }: Props =
+  let { src, width, height, entryPath, api, existingFilename, onSave, onCancel }: Props =
     $props();
 
   // =========================================================================
@@ -261,6 +262,8 @@
   }
 
   function handlePointerDown(event: PointerEvent) {
+    event.preventDefault();
+
     if (activeTool === "eraser") {
       handleEraserDown(event);
       return;
@@ -317,6 +320,7 @@
   // =========================================================================
 
   function handleEraserDown(event: PointerEvent) {
+    event.preventDefault();
     isDrawing = true;
     const point = getPointerPos(event);
     eraseAt(point[0], point[1]);
@@ -441,8 +445,8 @@
     };
 
     return [
-      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${canvasWidth} ${canvasHeight}" data-diaryx-drawing="1">`,
-      `  <rect width="100%" height="100%" fill="transparent" />`,
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${canvasWidth} ${canvasHeight}" width="${canvasWidth}" height="${canvasHeight}" data-diaryx-drawing="1">`,
+      `  <rect width="100%" height="100%" fill="white" />`,
       bgGroup,
       paths,
       `  <metadata>${JSON.stringify(metadata)}</metadata>`,
@@ -460,9 +464,10 @@
       const bytes = new Uint8Array(encoder.encode(svgString));
       const dataBase64 = bytesToBase64(bytes);
 
-      // Generate a filename
-      const timestamp = Date.now().toString(36);
-      const filename = `drawing-${timestamp}.svg`;
+      // Reuse existing filename when editing, otherwise generate a new one
+      const filename = existingFilename
+        ? existingFilename
+        : `drawing-${Date.now().toString(36)}.svg`;
 
       // Upload as attachment
       const attachmentPath = await api.uploadAttachment(
@@ -672,6 +677,7 @@
     onpointermove={handlePointerMove}
     onpointerup={handlePointerUp}
     onpointerleave={handlePointerUp}
+    ondragstart={(e) => e.preventDefault()}
   >
     <!-- Background -->
     <rect width="100%" height="100%" fill="white" />

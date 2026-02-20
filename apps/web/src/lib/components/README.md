@@ -13,7 +13,6 @@ attachments:
   - '[FloatingMenuComponent.svelte](/apps/web/src/lib/components/FloatingMenuComponent.svelte)'
   - '[HighlightColorPicker.svelte](/apps/web/src/lib/components/HighlightColorPicker.svelte)'
   - '[MoreStylesPicker.svelte](/apps/web/src/lib/components/MoreStylesPicker.svelte)'
-  - '[TableControlsPicker.svelte](/apps/web/src/lib/components/TableControlsPicker.svelte)'
   - '[TemplateEditorDialog.svelte](/apps/web/src/lib/components/TemplateEditorDialog.svelte)'
 exclude:
   - '*.lock'
@@ -36,7 +35,6 @@ Reusable Svelte components for the editor and UI.
 | `FloatingMenuComponent.svelte` | TipTap floating menu |
 | `HighlightColorPicker.svelte` | Text highlight color picker |
 | `MoreStylesPicker.svelte` | Overflow formatting menu (strikethrough, inline code, spoiler) |
-| `TableControlsPicker.svelte` | Table controls dropdown (add/remove rows/columns, toggle headers, merge/split cells, delete table) |
 | `TemplateEditorDialog.svelte` | Template editing dialog |
 
 ## UI Components

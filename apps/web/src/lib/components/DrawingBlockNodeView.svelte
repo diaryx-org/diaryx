@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Pencil } from "@lucide/svelte";
   import type { Api } from "$lib/backend/api";
+  import { getPathForBlobUrl } from "@/models/services/attachmentService";
   import DrawingCanvas from "./DrawingCanvas.svelte";
 
   interface Props {
@@ -8,6 +9,7 @@
     alt: string;
     width: number;
     height: number;
+    attachmentPath: string;
     readonly: boolean;
     entryPath: string;
     api: Api | null;
@@ -23,6 +25,7 @@
     alt,
     width,
     height,
+    attachmentPath,
     readonly,
     entryPath,
     api,
@@ -31,6 +34,17 @@
   }: Props = $props();
 
   let editing = $state(false);
+
+  // Derive filename from attachmentPath (persisted in node attrs),
+  // from src when it's a relative path, or via reverse blob URL lookup
+  // (needed after reload when transformAttachmentPaths already converted
+  // the markdown path to a blob URL before the editor parsed it).
+  let existingFilename = $derived(
+    (attachmentPath
+      || (!src.startsWith("blob:") ? src : "")
+      || (src.startsWith("blob:") ? getPathForBlobUrl(src) ?? "" : "")
+    ).split("/").pop() || ""
+  );
 
   // Auto-open the canvas for new drawings (no src yet)
   $effect(() => {
@@ -55,6 +69,7 @@
       alt,
       width: result.svgWidth,
       height: result.svgHeight,
+      attachmentPath: result.attachmentPath,
     });
     onDrawingSave?.({
       blobUrl: result.blobUrl,
@@ -76,6 +91,7 @@
       {height}
       {entryPath}
       {api}
+      existingFilename={existingFilename || undefined}
       onSave={handleSave}
       onCancel={handleCancel}
     />
@@ -85,6 +101,8 @@
         src={src}
         alt={alt || "Drawing"}
         class="drawing-block-image"
+        width={width}
+        height={height}
         draggable="false"
       />
       {#if !readonly}

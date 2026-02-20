@@ -305,6 +305,16 @@ export function getBlobUrl(originalPath: string): string | undefined {
 }
 
 /**
+ * Reverse-lookup: get the original attachment path for a blob URL.
+ */
+export function getPathForBlobUrl(blobUrl: string): string | undefined {
+  for (const [path, url] of blobUrlMap.entries()) {
+    if (url === blobUrl) return path;
+  }
+  return undefined;
+}
+
+/**
  * Track a blob URL for an attachment path.
  * Use this when creating blob URLs externally (e.g., for file uploads).
  */

@@ -5,11 +5,13 @@
     Italic,
     Link as LinkIcon,
     Unlink,
+    RemoveFormatting,
+    Columns2,
+    Trash2,
   } from "@lucide/svelte";
   import HighlightColorPicker from "./HighlightColorPicker.svelte";
   import BlockStylePicker from "./BlockStylePicker.svelte";
   import MoreStylesPicker from "./MoreStylesPicker.svelte";
-  import TableControlsPicker from "./TableControlsPicker.svelte";
   import LinkInsertPopover from "./LinkInsertPopover.svelte";
   import type { HighlightColor } from "$lib/extensions/ColoredHighlightMark";
   import type { Api } from "$lib/backend/api";
@@ -68,14 +70,12 @@
   let highlightOpen = $state(false);
   let linkPopoverOpen = $state(false);
   let moreStylesOpen = $state(false);
-  let tableControlsOpen = $state(false);
 
   function closeAllDropdowns() {
     blockStyleOpen = false;
     highlightOpen = false;
     linkPopoverOpen = false;
     moreStylesOpen = false;
-    tableControlsOpen = false;
   }
 
   function handleLink() {
@@ -136,12 +136,47 @@
     e.preventDefault();
   }}
 >
-  {#if !isInTable}
-    <BlockStylePicker {editor} bind:open={blockStyleOpen} onOpen={() => { closeAllDropdowns(); }} />
-  {/if}
-
   {#if isInTable}
-    <TableControlsPicker {editor} bind:open={tableControlsOpen} onOpen={() => { closeAllDropdowns(); }} />
+    <button
+      type="button"
+      class="toolbar-button"
+      onmousedown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        editor?.chain().focus().toggleHeaderRow().run();
+      }}
+      title="Toggle header row"
+    >
+      <RemoveFormatting class="size-4" />
+    </button>
+
+    <button
+      type="button"
+      class="toolbar-button"
+      onmousedown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        editor?.chain().focus().toggleHeaderColumn().run();
+      }}
+      title="Toggle header column"
+    >
+      <Columns2 class="size-4" />
+    </button>
+
+    <button
+      type="button"
+      class="toolbar-button destructive"
+      onmousedown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        editor?.chain().focus().deleteTable().run();
+      }}
+      title="Delete table"
+    >
+      <Trash2 class="size-4" />
+    </button>
+  {:else}
+    <BlockStylePicker {editor} bind:open={blockStyleOpen} onOpen={() => { closeAllDropdowns(); }} />
   {/if}
 
   {#if !isInCodeBlock}
@@ -260,6 +295,15 @@
   .toolbar-button.active {
     background: var(--accent);
     color: var(--accent-foreground);
+  }
+
+  .toolbar-button.destructive {
+    color: var(--destructive, oklch(0.577 0.245 27.325));
+  }
+
+  .toolbar-button.destructive:hover {
+    background: var(--destructive, oklch(0.577 0.245 27.325));
+    color: white;
   }
 
   .link-button-wrapper {

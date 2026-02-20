@@ -6,6 +6,7 @@ attachments:
   - '[AttachmentExtension.ts](/apps/web/src/lib/extensions/AttachmentExtension.ts)'
   - '[AttachmentPickerNode.ts](/apps/web/src/lib/extensions/AttachmentPickerNode.ts)'
   - '[ColoredHighlightMark.ts](/apps/web/src/lib/extensions/ColoredHighlightMark.ts)'
+  - '[DrawingBlock.ts](/apps/web/src/lib/extensions/DrawingBlock.ts)'
   - '[SpoilerMark.ts](/apps/web/src/lib/extensions/SpoilerMark.ts)'
 exclude:
   - '*.lock'
@@ -22,4 +23,5 @@ Custom TipTap editor extensions.
 | `AttachmentExtension.ts` | Attachment node extension |
 | `AttachmentPickerNode.ts` | Attachment picker node view |
 | `ColoredHighlightMark.ts` | Colored text highlight mark |
+| `DrawingBlock.ts` | Freehand drawing block (SVG attachment) |
 | `SpoilerMark.ts` | Spoiler/hidden text mark |

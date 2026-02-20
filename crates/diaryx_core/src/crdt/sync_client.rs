@@ -27,7 +27,9 @@
 //!     }
 //! }
 //!
-//! let client = SyncClient::new(config, sync_manager, Arc::new(MyHandler));
+//! use diaryx_core::crdt::TokioConnector;
+//!
+//! let client = SyncClient::new(config, sync_manager, Arc::new(MyHandler), TokioConnector);
 //! client.run_persistent(running).await;
 //! ```
 
@@ -38,8 +40,7 @@ use super::sync::{format_body_doc_id, format_workspace_doc_id};
 use super::sync_manager::RustSyncManager;
 use super::sync_session::{IncomingEvent, SessionAction, SyncSession};
 use super::sync_types::{SyncEvent, SyncSessionConfig, SyncStatus};
-use super::tokio_transport::TokioTransport;
-use super::transport::{SyncTransport, TransportError, WsMessage};
+use super::transport::{SyncTransport, TransportConnector, TransportError, WsMessage};
 use crate::fs::{AsyncFileSystem, FileSystemEvent};
 
 /// Configuration for the sync client.
@@ -102,19 +103,25 @@ pub struct SyncStats {
 /// Wraps `SyncSession` and handles the WebSocket transport lifecycle
 /// including connection, reconnection, and outgoing message channel.
 /// Protocol logic is delegated to the shared `SyncSession`.
-pub struct SyncClient<FS: AsyncFileSystem> {
+///
+/// Generic over `C: TransportConnector` to allow different WebSocket
+/// backends (e.g., `TokioConnector` for native, or a platform-specific
+/// connector for iOS using `URLSessionWebSocketTask`).
+pub struct SyncClient<FS: AsyncFileSystem, C: TransportConnector> {
     config: SyncClientConfig,
     sync_manager: Arc<RustSyncManager<FS>>,
     handler: Arc<dyn SyncEventHandler>,
     session: SyncSession<FS>,
+    connector: C,
 }
 
-impl<FS: AsyncFileSystem + 'static> SyncClient<FS> {
+impl<FS: AsyncFileSystem + 'static, C: TransportConnector + 'static> SyncClient<FS, C> {
     /// Create a new sync client.
     pub fn new(
         config: SyncClientConfig,
         sync_manager: Arc<RustSyncManager<FS>>,
         handler: Arc<dyn SyncEventHandler>,
+        connector: C,
     ) -> Self {
         let session_config = SyncSessionConfig {
             workspace_id: config.workspace_id.clone(),
@@ -126,6 +133,7 @@ impl<FS: AsyncFileSystem + 'static> SyncClient<FS> {
             sync_manager,
             handler,
             session,
+            connector,
         }
     }
 
@@ -147,7 +155,7 @@ impl<FS: AsyncFileSystem + 'static> SyncClient<FS> {
     async fn execute_actions(
         &self,
         actions: Vec<SessionAction>,
-        transport: &mut TokioTransport,
+        transport: &mut C::Transport,
     ) -> Result<(), TransportError> {
         for action in actions {
             match action {
@@ -247,7 +255,7 @@ impl<FS: AsyncFileSystem + 'static> SyncClient<FS> {
             });
 
             // Connect
-            let mut transport = match TokioTransport::connect(&ws_url).await {
+            let mut transport = match self.connector.connect(&ws_url).await {
                 Ok(t) => {
                     log::info!("[SyncClient] Connected to {}", ws_url);
                     attempt = 0; // Reset backoff on success
@@ -303,7 +311,7 @@ impl<FS: AsyncFileSystem + 'static> SyncClient<FS> {
         use std::collections::HashSet;
 
         let ws_url = self.build_ws_url();
-        let mut transport = TokioTransport::connect(&ws_url).await?;
+        let mut transport = self.connector.connect(&ws_url).await?;
 
         // Use a one-shot session config (write_to_disk = false for push)
         let one_shot_session = SyncSession::new(
@@ -470,7 +478,7 @@ impl<FS: AsyncFileSystem + 'static> SyncClient<FS> {
     /// Feeds transport messages into `SyncSession::process()` and executes actions.
     async fn run_session(
         &self,
-        transport: &mut TokioTransport,
+        transport: &mut C::Transport,
         outgoing_rx: &mut tokio::sync::mpsc::UnboundedReceiver<(String, Vec<u8>)>,
         running: &Arc<AtomicBool>,
     ) -> Result<(), TransportError> {

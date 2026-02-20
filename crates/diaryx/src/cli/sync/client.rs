@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use diaryx_core::config::Config;
 use diaryx_core::crdt::{
     BodyDocManager, ReconnectConfig, RustSyncManager, SyncClient, SyncClientConfig, SyncEvent,
-    SyncEventHandler, SyncHandler, SyncStatus, WorkspaceCrdt,
+    SyncEventHandler, SyncHandler, SyncStatus, TokioConnector, WorkspaceCrdt,
 };
 use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
 
@@ -338,7 +338,7 @@ pub fn handle_start(config: &Config, workspace_root: &Path) {
         },
     };
 
-    let client = SyncClient::new(client_config, sync_manager, Arc::new(CliEventHandler));
+    let client = SyncClient::new(client_config, sync_manager, Arc::new(CliEventHandler), TokioConnector);
 
     // Set up shutdown flag
     let running = Arc::new(AtomicBool::new(true));
@@ -439,7 +439,7 @@ pub fn handle_push(config: &Config, workspace_root: &Path) {
         },
     };
 
-    let client = SyncClient::new(client_config, sync_manager, Arc::new(CliEventHandler));
+    let client = SyncClient::new(client_config, sync_manager, Arc::new(CliEventHandler), TokioConnector);
 
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
 
@@ -513,6 +513,7 @@ pub fn handle_pull(config: &Config, workspace_root: &Path) {
         client_config,
         Arc::clone(&sync_manager),
         Arc::new(CliEventHandler),
+        TokioConnector,
     );
 
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");

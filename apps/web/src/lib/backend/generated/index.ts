@@ -47,6 +47,9 @@ export type { AncestorAttachmentsResult } from './AncestorAttachmentsResult';
 // Storage types
 export type { StorageInfo } from './StorageInfo';
 
+// Import types
+export type { ImportResult } from './ImportResult';
+
 // CRDT types
 export type { CrdtHistoryEntry } from './CrdtHistoryEntry';
 export type { ChangeType } from './ChangeType';

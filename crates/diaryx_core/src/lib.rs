@@ -64,12 +64,11 @@ pub mod crdt;
 #[cfg(feature = "native-pandoc")]
 pub mod pandoc;
 
-/// Import external formats into Diaryx entries (requires `import-email`, `import-dayone`, or `import-markdown` feature)
-#[cfg(any(
-    feature = "import-email",
-    feature = "import-dayone",
-    feature = "import-markdown"
-))]
+/// Import external formats into Diaryx entries.
+///
+/// The base types ([`import::ImportedEntry`], [`import::ImportResult`], etc.) and
+/// the [`import::orchestrate`] module are always available. Format-specific parsers
+/// require feature flags: `import-email`, `import-dayone`, `import-markdown`.
 pub mod import;
 
 /// Cloud storage module for bidirectional file synchronization

@@ -4,6 +4,7 @@ description: Import external formats into Diaryx entries
 part_of: '[README](/crates/diaryx_core/src/README.md)'
 attachments:
   - '[mod.rs](/crates/diaryx_core/src/import/mod.rs)'
+  - '[orchestrate.rs](/crates/diaryx_core/src/import/orchestrate.rs)'
   - '[email.rs](/crates/diaryx_core/src/import/email.rs)'
   - '[dayone.rs](/crates/diaryx_core/src/import/dayone.rs)'
   - '[markdown.rs](/crates/diaryx_core/src/import/markdown.rs)'
@@ -26,13 +27,16 @@ Import external data formats into Diaryx workspace entries. Each format is featu
 ## Files
 
 - `mod.rs` — Common types: `ImportedEntry`, `ImportedAttachment`, `ImportOptions`, `ImportResult`
+- `orchestrate.rs` — Shared async orchestration for writing entries into a workspace (used by CLI, WASM, and Tauri)
 - `email.rs` — `.eml` and `.mbox` parsing via `mailparse` / `mbox-reader`
 - `dayone.rs` — Day One `Journal.json` parsing via `serde_json`
 - `markdown.rs` — Markdown file parsing (frontmatter extraction, title/date detection)
 
 ## Architecture
 
-Parsers are pure functions that return `ImportedEntry` values with no filesystem I/O. The CLI handler (`crates/diaryx/src/cli/import.rs`) is responsible for reading source files, writing entries to disk, and building the workspace index hierarchy.
+Parsers are pure functions that return `ImportedEntry` values with no filesystem I/O. The `orchestrate` module provides async functions that write parsed entries into the workspace using the `AsyncFileSystem` trait, building the date-based folder hierarchy with proper `part_of`/`contents` frontmatter links. This module is shared across all frontends (CLI, WASM, Tauri). The `ImportEntries` command in the unified Command API delegates to this orchestration.
+
+After writing entries, the orchestration grafts the import folder's root index into the existing workspace hierarchy by adding it to the workspace root's `contents` and setting `part_of` on the import root. This ensures imported entries are immediately visible in the sidebar.
 
 ### Email Import
 

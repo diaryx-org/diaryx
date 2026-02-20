@@ -4,13 +4,19 @@
 //! into [`ImportedEntry`] values. The parsers are pure functions — they do no
 //! filesystem I/O — so callers (CLI, WASM, etc.) decide how to persist results.
 //!
+//! The [`orchestrate`] submodule provides async orchestration for writing parsed
+//! entries into a workspace, building the date-based folder hierarchy with proper
+//! `part_of`/`contents` links.
+//!
 //! # Feature flags
 //!
 //! Each format lives behind its own feature flag:
 //!
-//! | Format | Feature          | Crate dependencies                              |
-//! |--------|------------------|-------------------------------------------------|
-//! | Email  | `import-email`   | `mailparse`, `mbox-reader`, `html-to-markdown-rs` |
+//! | Format   | Feature          | Crate dependencies                                |
+//! |----------|------------------|---------------------------------------------------|
+//! | Email    | `import-email`   | `mailparse`, `mbox-reader`, `html-to-markdown-rs` |
+//! | Day One  | `import-dayone`  | *(none — pure JSON parsing)*                      |
+//! | Markdown | `import-markdown`| *(none — uses `frontmatter` crate module)*        |
 
 #[cfg(feature = "import-email")]
 pub mod email;
@@ -21,9 +27,14 @@ pub mod dayone;
 #[cfg(feature = "import-markdown")]
 pub mod markdown;
 
+pub mod orchestrate;
+
 use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// A single imported entry ready to be written to the workspace.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportedEntry {
     /// Entry title (e.g. email subject).
     pub title: String,
@@ -38,6 +49,7 @@ pub struct ImportedEntry {
 }
 
 /// A binary attachment extracted during import.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportedAttachment {
     /// Suggested filename (from Content-Disposition or generated).
     pub filename: String,
@@ -48,6 +60,7 @@ pub struct ImportedAttachment {
 }
 
 /// Options controlling import behavior.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportOptions {
     /// Base folder name for imported entries (default: `"emails"`).
     pub base_folder: String,
@@ -62,6 +75,8 @@ impl Default for ImportOptions {
 }
 
 /// Summary of an import operation.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
 pub struct ImportResult {
     /// Number of entries successfully imported.
     pub imported: usize,

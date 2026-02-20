@@ -4,7 +4,7 @@ import type { AncestorAttachmentEntry } from "./AncestorAttachmentEntry";
 /**
  * Result of GetAncestorAttachments command.
  */
-export type AncestorAttachmentsResult = {
+export type AncestorAttachmentsResult = { 
 /**
  * Attachments from current entry and all ancestors.
  * Ordered from current entry first, then ancestors (closest to root).

@@ -12,6 +12,7 @@ attachments:
   - '[DisplaySettings.svelte](/apps/web/src/lib/settings/DisplaySettings.svelte)'
   - '[FormattingSettings.svelte](/apps/web/src/lib/settings/FormattingSettings.svelte)'
   - '[GoogleDriveSettings.svelte](/apps/web/src/lib/settings/GoogleDriveSettings.svelte)'
+  - '[FormatImportSettings.svelte](/apps/web/src/lib/settings/FormatImportSettings.svelte)'
   - '[ImportSettings.svelte](/apps/web/src/lib/settings/ImportSettings.svelte)'
   - '[LinkSettings.svelte](/apps/web/src/lib/settings/LinkSettings.svelte)'
   - '[S3BackupSettings.svelte](/apps/web/src/lib/settings/S3BackupSettings.svelte)'
@@ -43,7 +44,8 @@ Settings panel components for the settings dialog.
 | `DisplaySettings.svelte` | Display preferences |
 | `FormattingSettings.svelte` | Text formatting options |
 | `GoogleDriveSettings.svelte` | Google Drive integration |
-| `ImportSettings.svelte` | Import from file |
+| `FormatImportSettings.svelte` | Import from Day One or Markdown formats (uses WASM parsers + ImportEntries command) |
+| `ImportSettings.svelte` | Import from file (raw ZIP extraction) |
 | `LinkSettings.svelte` | Link format settings (workspace config) |
 | `S3BackupSettings.svelte` | S3 backup configuration |
 | `StorageSettings.svelte` | Storage backend settings |

@@ -502,6 +502,20 @@ pub enum Command {
         body: Option<String>,
     },
 
+    // === Import ===
+    /// Import pre-parsed entries into the workspace.
+    ///
+    /// Takes a JSON-serialized array of [`ImportedEntry`] values and writes them
+    /// into the workspace, building the date-based folder hierarchy with proper
+    /// `part_of`/`contents` frontmatter links. Also grafts the import folder's
+    /// root index into the existing workspace hierarchy.
+    ImportEntries {
+        /// JSON-serialized `Vec<ImportedEntry>`.
+        entries_json: String,
+        /// Base folder name for the imported entries (e.g. "emails", "journal").
+        folder: String,
+    },
+
     // === Storage ===
     /// Get storage usage information.
     GetStorageUsage,
@@ -1145,6 +1159,9 @@ pub enum Response {
 
     /// Link parser operation result.
     LinkParserResult(LinkParserResult),
+
+    /// Import result response.
+    ImportResult(crate::import::ImportResult),
 
     /// Binary data response (for CRDT state vectors, updates).
     #[cfg(feature = "crdt")]

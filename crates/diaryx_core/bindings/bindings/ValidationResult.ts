@@ -5,15 +5,15 @@ import type { ValidationWarning } from "./ValidationWarning";
 /**
  * Result of validating a workspace.
  */
-export type ValidationResult = {
+export type ValidationResult = { 
 /**
  * Validation errors (broken references)
  */
-errors: Array<ValidationError>,
+errors: Array<ValidationError>, 
 /**
  * Validation warnings (orphans, cycles)
  */
-warnings: Array<ValidationWarning>,
+warnings: Array<ValidationWarning>, 
 /**
  * Number of files checked
  */

@@ -35,6 +35,8 @@
   import { SpoilerMark } from "./extensions/SpoilerMark";
   // Custom extension for raw HTML blocks
   import { HtmlBlock } from "./extensions/HtmlBlock";
+  // Custom extension for inline drawing blocks
+  import { DrawingBlock } from "./extensions/DrawingBlock";
   // Custom extension for markdown footnotes
   import { FootnoteRef, preprocessFootnotes, appendFootnoteDefinitions } from "./extensions/FootnoteRef";
   import type { Api } from "$lib/backend/api";
@@ -208,6 +210,11 @@
       FootnoteRef,
       // Raw HTML block extension
       HtmlBlock.configure({
+        entryPath,
+        api,
+      }),
+      // Inline drawing block extension
+      DrawingBlock.configure({
         entryPath,
         api,
       }),

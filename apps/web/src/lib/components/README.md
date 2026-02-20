@@ -8,6 +8,8 @@ attachments:
   - '[AttachmentPicker.svelte](/apps/web/src/lib/components/AttachmentPicker.svelte)'
   - '[AttachmentPickerNodeView.svelte](/apps/web/src/lib/components/AttachmentPickerNodeView.svelte)'
   - '[BubbleMenuComponent.svelte](/apps/web/src/lib/components/BubbleMenuComponent.svelte)'
+  - '[DrawingBlockNodeView.svelte](/apps/web/src/lib/components/DrawingBlockNodeView.svelte)'
+  - '[DrawingCanvas.svelte](/apps/web/src/lib/components/DrawingCanvas.svelte)'
   - '[FloatingMenuComponent.svelte](/apps/web/src/lib/components/FloatingMenuComponent.svelte)'
   - '[HighlightColorPicker.svelte](/apps/web/src/lib/components/HighlightColorPicker.svelte)'
   - '[MoreStylesPicker.svelte](/apps/web/src/lib/components/MoreStylesPicker.svelte)'
@@ -29,6 +31,8 @@ Reusable Svelte components for the editor and UI.
 | `AttachmentPicker.svelte` | Attachment selection dialog (normalizes ancestor/upload refs via backend link parser before thumbnail reads and insertion) |
 | `AttachmentPickerNodeView.svelte` | Inline attachment node (same link-parser normalization path as dialog picker) |
 | `BubbleMenuComponent.svelte` | TipTap bubble menu |
+| `DrawingBlockNodeView.svelte` | Drawing block node view (view mode + edit overlay) |
+| `DrawingCanvas.svelte` | Freehand drawing editor with perfect-freehand |
 | `FloatingMenuComponent.svelte` | TipTap floating menu |
 | `HighlightColorPicker.svelte` | Text highlight color picker |
 | `MoreStylesPicker.svelte` | Overflow formatting menu (strikethrough, inline code, spoiler) |

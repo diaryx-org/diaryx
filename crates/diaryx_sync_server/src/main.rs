@@ -143,6 +143,7 @@ async fn main() {
         attachment_incremental_sync_enabled: config.attachment_incremental_sync_enabled,
         admin_secret: config.admin_secret.clone(),
         rate_limiter: rate_limiter.clone(),
+        data_dir: data_dir.to_path_buf(),
     };
 
     let sessions_state = diaryx_sync_server::handlers::sessions::SessionsState {

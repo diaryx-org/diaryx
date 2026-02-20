@@ -10,6 +10,7 @@ use diaryx_sync_server::{
     db::{AuthRepo, init_database},
     handlers::sites::{SitesState, site_routes},
     publish::new_publish_lock,
+    rate_limit::RateLimiter,
     sync_v2::{SyncV2Server, SyncV2State},
 };
 use rusqlite::Connection;
@@ -69,6 +70,7 @@ fn setup() -> (
         sites_base_url: "https://sites.example.com".to_string(),
         publish_lock: new_publish_lock(),
         kv_client: None,
+        rate_limiter: RateLimiter::new(),
     };
 
     let app = Router::new()

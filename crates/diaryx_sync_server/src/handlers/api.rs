@@ -32,6 +32,10 @@ pub struct ApiState {
     pub attachment_incremental_sync_enabled: bool,
     pub admin_secret: Option<String>,
     pub rate_limiter: RateLimiter,
+    /// Directory on the real filesystem for temporary files (snapshot uploads).
+    /// Using this instead of `std::env::temp_dir()` avoids writing to tmpfs,
+    /// which consumes RAM on systems where /tmp is memory-backed.
+    pub data_dir: PathBuf,
 }
 
 /// Server status response
@@ -528,7 +532,7 @@ async fn upload_workspace_snapshot(
     };
     let include_attachments = query.include_attachments.unwrap_or(true);
 
-    let temp_path = std::env::temp_dir().join(format!(
+    let temp_path = state.data_dir.join(format!(
         "diaryx-snapshot-{}-{}.zip",
         workspace_id,
         uuid::Uuid::new_v4()

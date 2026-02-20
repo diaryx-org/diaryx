@@ -62,6 +62,7 @@ fn setup() -> (
         attachment_incremental_sync_enabled: true,
         admin_secret: None,
         rate_limiter: RateLimiter::new(),
+        data_dir: std::env::temp_dir(),
     };
 
     let app = Router::new()

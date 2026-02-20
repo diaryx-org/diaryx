@@ -4,6 +4,8 @@
 
 /// Date parsing and path generation utilities.
 pub mod date;
+/// Workspace naming, URL normalization, and publishing slug validation.
+pub mod naming;
 /// Path calculation utilities for relative paths.
 pub mod path;
 

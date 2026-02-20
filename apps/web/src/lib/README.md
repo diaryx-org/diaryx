@@ -55,6 +55,15 @@ Shared libraries, components, and utilities for the web application.
 | `stores/` | Svelte stores |
 | `wasm/` | Built WASM module |
 
+## Validation
+
+Workspace naming, URL normalization, and publishing slug validation live in
+`diaryx_core::utils::naming` (Rust) and are exposed to the frontend via
+Commands (`ValidateWorkspaceName`, `ValidatePublishingSlug`,
+`NormalizeServerUrl`, `ToWebSocketSyncUrl`). The typed wrappers are in
+`backend/api.ts`. Frontend components call these instead of duplicating
+validation logic locally.
+
 ## Add Workspace Dialog
 
 `AddWorkspaceDialog.svelte` is the unified workspace creation dialog. It presents

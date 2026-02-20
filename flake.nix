@@ -80,6 +80,8 @@
               "aarch64-apple-darwin"
               "x86_64-unknown-linux-gnu"
               "wasm32-unknown-unknown"
+              "aarch64-apple-ios"
+              "aarch64-apple-ios-sim"
             ];
             extensions = [ "rust-src" "rust-analyzer" ];
           };

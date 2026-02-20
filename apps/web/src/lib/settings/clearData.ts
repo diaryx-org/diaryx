@@ -6,14 +6,22 @@
 
 import { getLocalWorkspaces, getWorkspaceStorageType } from "$lib/storage/localWorkspaceRegistry.svelte";
 import { clearWorkspaceFileSystemHandle } from "$lib/backend/storageType";
+import { isTauri } from "$lib/backend";
 
 /**
  * Delete a single workspace's data based on its storage type.
+ * - Tauri: no-op — files live on the real filesystem and belong to the user
  * - OPFS: deletes the OPFS directory (by ID and name)
  * - IndexedDB: deletes the workspace's IndexedDB database
  * - File System Access: clears the stored handle (user's files stay on disk)
  */
 export async function deleteLocalWorkspaceData(workspaceId: string, workspaceName?: string): Promise<void> {
+  if (isTauri()) {
+    // Tauri workspaces point at real folders on disk — never delete user files.
+    console.log(`[ClearData] Tauri workspace ${workspaceId}: removing reference only (files stay on disk)`);
+    return;
+  }
+
   const storageType = getWorkspaceStorageType(workspaceId);
 
   switch (storageType) {

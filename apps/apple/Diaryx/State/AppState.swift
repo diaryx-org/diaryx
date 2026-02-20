@@ -5,7 +5,7 @@ enum ActiveView {
     case workspace(WorkspaceState)
 }
 
-@Observable
+@Observable @MainActor
 final class AppState {
     private let backendFactory: any WorkspaceBackendFactory = AppBackends.makeDefaultFactory()
 

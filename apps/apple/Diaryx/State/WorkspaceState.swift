@@ -1,6 +1,6 @@
 import SwiftUI
 
-@Observable
+@Observable @MainActor
 final class WorkspaceState {
     let registryEntry: WorkspaceRegistryEntry
     private(set) var backend: (any WorkspaceBackend)?

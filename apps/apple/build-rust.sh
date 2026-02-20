@@ -15,6 +15,31 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
+# Ensure rustup-managed toolchain is visible (needed under Nix)
+export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.local/share/rustup}"
+export CARGO_HOME="${CARGO_HOME:-$HOME/.local/share/cargo}"
+
+# Resolve Xcode SDK paths directly from the filesystem (xcrun fails under Nix)
+XCODE_DEV="/Applications/Xcode.app/Contents/Developer"
+IPHONEOS_SDK="$XCODE_DEV/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
+IPHONESIM_SDK="$XCODE_DEV/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk"
+MACOS_SDK="$XCODE_DEV/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
+XCODE_CLANG="$XCODE_DEV/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+
+# iOS device
+export CC_aarch64_apple_ios="$XCODE_CLANG"
+export CARGO_TARGET_AARCH64_APPLE_IOS_LINKER="$XCODE_CLANG"
+export CARGO_TARGET_AARCH64_APPLE_IOS_RUSTFLAGS="-C link-arg=-isysroot -C link-arg=$IPHONEOS_SDK"
+export SDKROOT_IPHONEOS="$IPHONEOS_SDK"
+
+# iOS simulator
+export CC_aarch64_apple_ios_sim="$XCODE_CLANG"
+export CARGO_TARGET_AARCH64_APPLE_IOS_SIM_LINKER="$XCODE_CLANG"
+export CARGO_TARGET_AARCH64_APPLE_IOS_SIM_RUSTFLAGS="-C link-arg=-isysroot -C link-arg=$IPHONESIM_SDK"
+
+# macOS (in case Nix interferes here too)
+export SDKROOT="$MACOS_SDK"
+
 PROFILE="${1:-release}"
 PLATFORM="${2:-all}"
 PROFILE_DIR="$PROFILE"

@@ -35,6 +35,7 @@ struct PaletteCommand: Identifiable {
     }
 }
 
+@MainActor
 struct CommandRegistry {
     static let commands: [PaletteCommand] = [
         // General

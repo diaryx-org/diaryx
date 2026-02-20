@@ -2,7 +2,7 @@
 title: Diaryx Monorepo
 description: README/repo for the Diaryx project
 author: adammharris
-version: v1.0.1
+version: v1.1.0
 updated: 2026-01-10T13:50:20-05:00
 contents:
 - '[AGENTS](/AGENTS.md)'

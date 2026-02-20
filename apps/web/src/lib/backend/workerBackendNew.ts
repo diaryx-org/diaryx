@@ -455,8 +455,16 @@ export class WorkerBackendNew implements Backend {
     return this.remote!.syncOnBinaryMessage(data);
   }
 
+  async syncOnBinaryMessages(messages: Uint8Array[]): Promise<void> {
+    return this.remote!.syncOnBinaryMessages(messages);
+  }
+
   async syncOnTextMessage(text: string): Promise<void> {
     return this.remote!.syncOnTextMessage(text);
+  }
+
+  async syncOnTextMessages(messages: string[]): Promise<void> {
+    return this.remote!.syncOnTextMessages(messages);
   }
 
   async syncOnDisconnected(): Promise<void> {

@@ -9,8 +9,8 @@ use diaryx_core::frontmatter;
 use crate::cli::CliDiaryxAppSync;
 use crate::cli::sync::CrdtContext;
 use crate::cli::util::{
-    canonicalize_frontmatter_reference, detect_workspace_link_format, load_config,
-    parse_link_format, resolve_paths,
+    apply_workspace_config, canonicalize_frontmatter_reference, detect_workspace_link_format,
+    load_config, parse_link_format, resolve_paths,
 };
 use crate::editor::launch_editor;
 
@@ -144,7 +144,7 @@ fn sync_to_crdt(workspace_root: &Path, file_path: &Path, original_content: &str)
 /// Returns true on success, false on error
 pub fn handle_today(app: &CliDiaryxAppSync, template: Option<String>) -> bool {
     let config = match load_config() {
-        Some(c) => c,
+        Some(c) => apply_workspace_config(c),
         None => return false,
     };
 
@@ -191,7 +191,7 @@ pub fn handle_today(app: &CliDiaryxAppSync, template: Option<String>) -> bool {
 /// Returns true on success, false on error
 pub fn handle_yesterday(app: &CliDiaryxAppSync, template: Option<String>) -> bool {
     let config = match load_config() {
-        Some(c) => c,
+        Some(c) => apply_workspace_config(c),
         None => return false,
     };
 
@@ -244,7 +244,7 @@ pub fn handle_yesterday(app: &CliDiaryxAppSync, template: Option<String>) -> boo
 /// Returns true on success, false on error
 pub fn handle_open(app: &CliDiaryxAppSync, path_or_date: &str) -> bool {
     let config = match load_config() {
-        Some(c) => c,
+        Some(c) => apply_workspace_config(c),
         None => return false,
     };
 

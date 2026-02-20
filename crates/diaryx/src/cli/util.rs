@@ -905,6 +905,30 @@ pub fn load_config() -> Option<Config> {
     }
 }
 
+/// Merge workspace-level config into the file-based Config.
+///
+/// Reads the workspace root index and applies `daily_entry_folder` from the
+/// workspace config. Workspace config takes priority; the global config value
+/// is only used as a fallback when the workspace doesn't set it.
+pub fn apply_workspace_config(mut config: Config) -> Config {
+    let fs = SyncToAsyncFs::new(RealFileSystem);
+    let ws = Workspace::new(fs);
+
+    let root_index = block_on(ws.find_root_index_in_dir(&config.default_workspace))
+        .ok()
+        .flatten();
+
+    if let Some(root_index) = root_index {
+        if let Ok(ws_cfg) = block_on(ws.get_workspace_config(&root_index)) {
+            if ws_cfg.daily_entry_folder.is_some() {
+                config.daily_entry_folder = ws_cfg.daily_entry_folder;
+            }
+        }
+    }
+
+    config
+}
+
 /// Format a YAML value for display
 pub fn format_value(value: &Value) -> String {
     match value {

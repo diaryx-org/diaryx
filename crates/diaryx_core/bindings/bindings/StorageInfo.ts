@@ -3,15 +3,15 @@
 /**
  * Information about storage usage.
  */
-export type StorageInfo = {
+export type StorageInfo = { 
 /**
  * Bytes used.
  */
-used: bigint,
+used: bigint, 
 /**
  * Storage limit (if any).
  */
-limit: bigint | null,
+limit: bigint | null, 
 /**
  * Attachment size limit.
  */

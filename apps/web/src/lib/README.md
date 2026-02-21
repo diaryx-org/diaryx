@@ -101,3 +101,13 @@ when a command opens another modal (for example, `New Entry`).
 `NewEntryModal.svelte` also guards its parent-picker root expansion effect so it
 does not continuously rewrite `pickerExpanded`. This avoids reactive update-loop
 errors that can leave overlapping dialogs/focus traps on screen.
+
+## Sidebar Tree Performance
+
+`LeftSidebar.svelte` pre-groups validation errors by path for O(1) row lookups
+instead of scanning the full error list per rendered node. This keeps folder
+expand/collapse interactions responsive in larger workspaces.
+
+The tree renderer also deduplicates children by `path` before keyed rendering,
+so duplicate references from upstream data do not crash Svelte keyed `each`
+blocks.

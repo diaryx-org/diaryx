@@ -35,6 +35,10 @@
   import { SpoilerMark } from "./extensions/SpoilerMark";
   // Custom extension for raw HTML blocks
   import { HtmlBlock } from "./extensions/HtmlBlock";
+  // Custom extension for inline drawing blocks
+  import { DrawingBlock } from "./extensions/DrawingBlock";
+  // Custom extension for Notion-style inline table controls
+  import { TableControls } from "./extensions/TableControls";
   // Custom extension for markdown footnotes
   import { FootnoteRef, preprocessFootnotes, appendFootnoteDefinitions } from "./extensions/FootnoteRef";
   import type { Api } from "$lib/backend/api";
@@ -200,14 +204,99 @@
           class: "editor-image",
         },
       }),
-      Table.configure({ resizable: false }),
+      Table.configure({ resizable: false }).extend({
+        // Custom markdown renderer/parser that fixes upstream issues:
+        // 1. Empty cells emit &nbsp; (from Paragraph's renderMarkdown)
+        // 2. No-header tables emit an extra empty header row on roundtrip
+        // 3. Header-disabled state is lost on roundtrip (markdown always has a header row)
+        //    Solved by prefixing the first cell with U+200B when headers are disabled;
+        //    the parser detects this and creates tableCell instead of tableHeader.
+        renderMarkdown: (node: any, h: any) => {
+          if (!node?.content?.length) return '';
+          const rows: { text: string; isHeader: boolean }[][] = [];
+          for (const rowNode of node.content) {
+            const cells: { text: string; isHeader: boolean }[] = [];
+            for (const cellNode of rowNode.content ?? []) {
+              const raw = cellNode.content ? h.renderChildren(cellNode.content) : '';
+              const text = (raw || '').replace(/&nbsp;/g, '').replace(/\s+/g, ' ').trim();
+              cells.push({ text, isHeader: cellNode.type === 'tableHeader' });
+            }
+            rows.push(cells);
+          }
+          const colCount = rows.reduce((m: number, r: any[]) => Math.max(m, r.length), 0);
+          if (!colCount) return '';
+          const colW = new Array(colCount).fill(3);
+          for (const r of rows) for (let i = 0; i < colCount; i++) colW[i] = Math.max(colW[i], (r[i]?.text || '').length);
+          const pad = (s: string, w: number) => s + ' '.repeat(Math.max(0, w - s.length));
+          const hasHeader = rows[0]?.some(c => c.isHeader);
+          const headerRow = rows[0] ?? [];
+          const headerTexts = headerRow.map((c, i) => pad(c.text, colW[i]));
+          // When headers are disabled, prefix first cell with U+200B as a marker
+          if (!hasHeader && headerTexts.length > 0) {
+            headerTexts[0] = '\u200B' + headerTexts[0];
+            // Recalculate first column width to account for the marker
+            colW[0] = Math.max(colW[0], headerTexts[0].length);
+          }
+          let out = '\n';
+          out += `| ${headerTexts.join(' | ')} |\n`;
+          out += `| ${colW.map((w: number) => '-'.repeat(w)).join(' | ')} |\n`;
+          for (const r of rows.slice(1)) {
+            out += `| ${new Array(colCount).fill(0).map((_: any, i: number) => pad(r[i]?.text || '', colW[i])).join(' | ')} |\n`;
+          }
+          return out;
+        },
+        parseMarkdown: (token: any, h: any) => {
+          const rows = [];
+          // Detect the U+200B marker in the first header cell to determine
+          // whether this table had headers disabled.
+          let noHeader = false;
+          if (token.header?.length) {
+            const firstCellRaw = token.header[0]?.text ?? '';
+            if (firstCellRaw.startsWith('\u200B')) {
+              noHeader = true;
+              // Strip the marker from the token text so it doesn't appear in content
+              token.header[0].text = firstCellRaw.slice(1);
+              // Also strip from the raw tokens array if present
+              if (token.header[0].tokens?.length) {
+                const firstToken = token.header[0].tokens[0];
+                if (firstToken.type === 'text' && firstToken.text?.startsWith('\u200B')) {
+                  firstToken.text = firstToken.text.slice(1);
+                  firstToken.raw = firstToken.raw?.replace('\u200B', '') ?? firstToken.raw;
+                }
+              }
+            }
+          }
+          if (token.header) {
+            const cellType = noHeader ? 'tableCell' : 'tableHeader';
+            const headerCells = token.header.map((cell: any) =>
+              h.createNode(cellType, {}, [{ type: 'paragraph', content: h.parseInline(cell.tokens) }])
+            );
+            rows.push(h.createNode('tableRow', {}, headerCells));
+          }
+          if (token.rows) {
+            for (const row of token.rows) {
+              const bodyCells = row.map((cell: any) =>
+                h.createNode('tableCell', {}, [{ type: 'paragraph', content: h.parseInline(cell.tokens) }])
+              );
+              rows.push(h.createNode('tableRow', {}, bodyCells));
+            }
+          }
+          return h.createNode('table', undefined, rows);
+        },
+      }),
       TableRow,
       TableHeader,
       TableCell,
+      TableControls,
       // Footnote extension
       FootnoteRef,
       // Raw HTML block extension
       HtmlBlock.configure({
+        entryPath,
+        api,
+      }),
+      // Inline drawing block extension
+      DrawingBlock.configure({
         entryPath,
         api,
       }),
@@ -342,6 +431,9 @@
 
               // Must have focus
               if (!view.hasFocus()) return false;
+
+              // Show in tables for header toggle / delete table controls
+              if (ed.isActive("table")) return true;
 
               // Must have a selection (not just cursor)
               const { empty } = state.selection;
@@ -870,6 +962,164 @@
 
   :global(.editor-content tr:hover td) {
     background: color-mix(in oklch, var(--muted) 50%, transparent);
+  }
+
+  :global(.editor-content .selectedCell) {
+    background: color-mix(in oklch, var(--primary) 15%, transparent);
+  }
+
+  :global(.editor-content .column-resize-handle) {
+    background-color: var(--primary);
+    bottom: -2px;
+    pointer-events: none;
+    position: absolute;
+    right: -2px;
+    top: 0;
+    width: 4px;
+  }
+
+  /* Table controls overlay (Notion-style grips + add buttons) */
+  :global(.table-controls-container) {
+    position: absolute;
+    top: 0;
+    left: 0;
+    pointer-events: none;
+    z-index: 10;
+  }
+
+  :global(.table-grip),
+  :global(.table-add-btn),
+  :global(.table-grip-popover) {
+    pointer-events: auto;
+  }
+
+  :global(.table-grip) {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--popover);
+    color: var(--muted-foreground);
+    cursor: pointer;
+    padding: 0;
+    opacity: 0;
+    transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+  }
+
+  /* Show grips when hovering the table area or when a grip is active */
+  :global(.table-controls-container:hover .table-grip),
+  :global(.table-grip.active) {
+    opacity: 1;
+  }
+
+  :global(.table-grip:hover) {
+    background: var(--accent);
+    color: var(--accent-foreground);
+    opacity: 1;
+  }
+
+  :global(.table-grip.active) {
+    background: color-mix(in oklch, var(--primary) 15%, var(--popover));
+    color: var(--primary);
+    border-color: var(--primary);
+  }
+
+  :global(.table-add-btn) {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 1px dashed var(--border);
+    background: var(--popover);
+    color: var(--muted-foreground);
+    cursor: pointer;
+    padding: 0;
+    opacity: 0;
+    transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  }
+
+  :global(.table-controls-container:hover .table-add-btn) {
+    opacity: 1;
+  }
+
+  :global(.table-add-btn:hover) {
+    background: var(--primary);
+    color: white;
+    border-color: var(--primary);
+    border-style: solid;
+    opacity: 1;
+  }
+
+  :global(.table-grip-popover) {
+    display: flex;
+    flex-direction: column;
+    padding: 4px;
+    background: var(--popover);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow:
+      0 10px 15px -3px rgba(0, 0, 0, 0.1),
+      0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    z-index: 100;
+    min-width: max-content;
+    animation: tablePopoverFadeIn 0.12s ease;
+  }
+
+  @keyframes tablePopoverFadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  :global(.table-grip-popover-item) {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 4px;
+    background: transparent;
+    border: none;
+    color: var(--foreground);
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.1s ease;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  :global(.table-grip-popover-item:hover) {
+    background: var(--accent);
+    color: var(--accent-foreground);
+  }
+
+  :global(.table-grip-popover-item.destructive) {
+    color: var(--destructive, oklch(0.577 0.245 27.325));
+  }
+
+  :global(.table-grip-popover-item.destructive:hover) {
+    background: var(--destructive, oklch(0.577 0.245 27.325));
+    color: white;
+  }
+
+  :global(.table-grip-popover-item.disabled) {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  :global(.table-grip-popover-item.disabled:hover) {
+    background: transparent;
+    color: var(--foreground);
   }
 
   /* Colored highlight mark styles */

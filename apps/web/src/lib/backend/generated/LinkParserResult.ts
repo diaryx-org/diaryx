@@ -1,0 +1,1 @@
+../../../../../../crates/diaryx_core/bindings/bindings/LinkParserResult.ts

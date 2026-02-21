@@ -25,7 +25,7 @@ Controller logic for UI actions, mediating between views and models.
 | `commandPaletteController.ts` | Command palette actions |
 | `entryController.ts` | Entry creation, editing, deletion, and frontmatter-safe property updates (normalizes `Map` frontmatter before merges/removals). Title changes delegate rename logic to the Rust backend (`SetFrontmatterProperty` handler reads workspace config for `auto_rename_to_title` and `filename_style`). |
 | `linkController.ts` | Link handling and navigation |
-| `workspaceController.ts` | Workspace operations |
+| `workspaceController.ts` | Workspace operations (tree refresh, lazy child loading, validation). |
 
 ## Sync-time tree refresh behavior
 

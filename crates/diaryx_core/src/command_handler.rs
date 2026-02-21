@@ -390,7 +390,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     ///     println!("Title: {:?}", entry.title);
     /// }
     /// ```
-    pub async fn execute(&self, command: Command) -> Result<Response> {
+    pub async fn execute(&self, mut command: Command) -> Result<Response> {
+        command.normalize_paths(|p| self.to_workspace_relative(p));
         match command {
             // === Entry Operations ===
             Command::GetEntry { path } => {
@@ -431,7 +432,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 // Read auto_update_timestamp from workspace config if root_index_path provided
                 let auto_update = if let Some(ref rip) = root_index_path {
                     let ws = self.workspace().inner();
-                    ws.get_workspace_config(Path::new(rip))
+                    let resolved_root_index_path = self.resolve_fs_path(rip);
+                    ws.get_workspace_config(&resolved_root_index_path)
                         .await
                         .map(|c| c.auto_update_timestamp)
                         .unwrap_or(true)
@@ -561,7 +563,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     let ws_config = self
                         .workspace()
                         .inner()
-                        .get_workspace_config(Path::new(rip))
+                        .get_workspace_config(&self.resolve_fs_path(rip))
                         .await
                         .unwrap_or_default();
 
@@ -580,7 +582,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         let new_stem = apply_filename_style(new_title, &ws_config.filename_style);
                         let new_filename = format!("{}.md", new_stem);
 
-                        let entry_path = PathBuf::from(&path);
+                        let entry_path = self.resolve_fs_path(&path);
                         let ws = self.workspace().inner();
                         let is_index = ws.is_index_file(&entry_path).await;
                         let is_root = ws.is_root_index(&entry_path).await;
@@ -698,16 +700,18 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
             Command::GetWorkspaceTree { path, depth } => {
                 let root_path = path.unwrap_or_else(|| "workspace/index.md".to_string());
+                let resolved_root_path = self.resolve_fs_path(&root_path);
                 log::info!(
-                    "[CommandHandler] GetWorkspaceTree called: path={}, depth={:?}",
+                    "[CommandHandler] GetWorkspaceTree called: path={}, resolved_path={}, depth={:?}",
                     root_path,
+                    resolved_root_path.display(),
                     depth
                 );
                 let tree = self
                     .workspace()
                     .inner()
                     .build_tree_with_depth(
-                        Path::new(&root_path),
+                        &resolved_root_path,
                         depth.map(|d| d as usize),
                         &mut std::collections::HashSet::new(),
                     )
@@ -744,27 +748,30 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     path: PathBuf::new(),
                     message: "ValidateWorkspace requires a root index path".to_string(),
                 })?;
+                let resolved_root_path = self.resolve_fs_path(&root_path);
                 // Use depth limit of 2 to match tree view (TREE_INITIAL_DEPTH in App.svelte)
                 // This significantly improves performance for large workspaces
                 let result = self
                     .validate()
-                    .validate_workspace(Path::new(&root_path), Some(2))
+                    .validate_workspace(&resolved_root_path, Some(2))
                     .await?;
                 // Include computed metadata for frontend display
                 Ok(Response::ValidationResult(result.with_metadata()))
             }
 
             Command::ValidateFile { path } => {
-                let result = self.validate().validate_file(Path::new(&path)).await?;
+                let resolved_path = self.resolve_fs_path(&path);
+                let result = self.validate().validate_file(&resolved_path).await?;
                 // Include computed metadata for frontend display
                 Ok(Response::ValidationResult(result.with_metadata()))
             }
 
             Command::FixBrokenPartOf { path } => {
+                let resolved_path = self.resolve_fs_path(&path);
                 let result = self
                     .validate()
                     .fixer()
-                    .fix_broken_part_of(Path::new(&path))
+                    .fix_broken_part_of(&resolved_path)
                     .await;
 
                 #[cfg(feature = "crdt")]
@@ -779,10 +786,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             }
 
             Command::FixBrokenContentsRef { index_path, target } => {
+                let resolved_index_path = self.resolve_fs_path(&index_path);
                 let result = self
                     .validate()
                     .fixer()
-                    .fix_broken_contents_ref(Path::new(&index_path), &target)
+                    .fix_broken_contents_ref(&resolved_index_path, &target)
                     .await;
 
                 #[cfg(feature = "crdt")]
@@ -817,9 +825,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 let workspace_path = options
                     .workspace_path
                     .unwrap_or_else(|| "workspace/index.md".to_string());
+                let resolved_workspace_path = self.resolve_fs_path(&workspace_path);
                 let results = self
                     .search()
-                    .search_workspace(Path::new(&workspace_path), &query)
+                    .search_workspace(&resolved_workspace_path, &query)
                     .await?;
                 Ok(Response::SearchResults(results))
             }
@@ -829,16 +838,18 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 root_path,
                 audience,
             } => {
+                let resolved_root_path = self.resolve_fs_path(&root_path);
                 let plan = self
                     .export()
-                    .plan_export(Path::new(&root_path), &audience, Path::new("/tmp/export"))
+                    .plan_export(&resolved_root_path, &audience, Path::new("/tmp/export"))
                     .await?;
                 Ok(Response::ExportPlan(plan))
             }
 
             // === File System Operations ===
             Command::FileExists { path } => {
-                let exists = self.fs().exists(Path::new(&path)).await;
+                let resolved_path = self.resolve_fs_path(&path);
+                let exists = self.fs().exists(&resolved_path).await;
                 Ok(Response::Bool(exists))
             }
 
@@ -848,20 +859,22 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             }
 
             Command::WriteFile { path, content } => {
+                let resolved_path = self.resolve_fs_path(&path);
                 self.fs()
-                    .write_file(Path::new(&path), &content)
+                    .write_file(&resolved_path, &content)
                     .await
                     .map_err(|e| DiaryxError::FileWrite {
-                        path: PathBuf::from(&path),
+                        path: resolved_path.clone(),
                         source: e,
                     })?;
                 Ok(Response::Ok)
             }
 
             Command::DeleteFile { path } => {
-                self.fs().delete_file(Path::new(&path)).await.map_err(|e| {
+                let resolved_path = self.resolve_fs_path(&path);
+                self.fs().delete_file(&resolved_path).await.map_err(|e| {
                     DiaryxError::FileWrite {
-                        path: PathBuf::from(&path),
+                        path: resolved_path,
                         source: e,
                     }
                 })?;
@@ -869,12 +882,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             }
 
             Command::ClearDirectory { path } => {
-                self.fs().clear_dir(Path::new(&path)).await.map_err(|e| {
-                    DiaryxError::FileWrite {
-                        path: PathBuf::from(&path),
+                let resolved_path = self.resolve_fs_path(&path);
+                self.fs()
+                    .clear_dir(&resolved_path)
+                    .await
+                    .map_err(|e| DiaryxError::FileWrite {
+                        path: resolved_path,
                         source: e,
-                    }
-                })?;
+                    })?;
                 Ok(Response::Ok)
             }
 
@@ -883,9 +898,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 metadata,
                 body,
             } => {
+                let resolved_path = self.resolve_fs_path(&path);
                 crate::metadata_writer::write_file_with_metadata(
                     self.fs(),
-                    Path::new(&path),
+                    &resolved_path,
                     &metadata,
                     &body,
                 )
@@ -898,9 +914,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 metadata,
                 body,
             } => {
+                let resolved_path = self.resolve_fs_path(&path);
                 crate::metadata_writer::update_file_metadata(
                     self.fs(),
-                    Path::new(&path),
+                    &resolved_path,
                     &metadata,
                     body.as_deref(),
                 )
@@ -921,14 +938,16 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 let ws = self.workspace().inner();
                 let mut entries = Vec::new();
                 let mut visited = HashSet::new();
-                let mut current_path = PathBuf::from(&path);
+                let mut current_path = self.resolve_fs_path(&path);
 
                 // Get workspace root for resolving workspace-relative paths
-                let workspace_root = current_path
-                    .parent()
-                    .and_then(|p| p.parent())
-                    .unwrap_or(Path::new("."))
-                    .to_path_buf();
+                let workspace_root = self.workspace_root().unwrap_or_else(|| {
+                    current_path
+                        .parent()
+                        .and_then(|p| p.parent())
+                        .unwrap_or(Path::new("."))
+                        .to_path_buf()
+                });
 
                 // Try to get link format from workspace config
                 let link_format = ws
@@ -997,7 +1016,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 // Resolve template: workspace config link → built-in "note"
                 let content = if let Some(ref rip) = options.root_index_path {
-                    let workspace_root_path = PathBuf::from(rip);
+                    let workspace_root_path = self.resolve_fs_path(rip);
                     let ws_config = self
                         .workspace()
                         .inner()
@@ -1028,11 +1047,12 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 };
 
                 // CrdtFs.create_new extracts metadata from frontmatter automatically
+                let resolved_path = self.resolve_fs_path(&path);
                 self.fs()
-                    .create_new(Path::new(&path), &content)
+                    .create_new(&resolved_path, &content)
                     .await
                     .map_err(|e| DiaryxError::FileWrite {
-                        path: path_buf.clone(),
+                        path: resolved_path.clone(),
                         source: e,
                     })?;
 
@@ -1086,8 +1106,9 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             } => {
                 // Use Workspace::delete_entry which handles contents cleanup
                 // CrdtFs.delete_file marks as deleted and updates parent contents automatically
+                let resolved_path = self.resolve_fs_path(&path);
                 let ws = self.workspace().inner();
-                ws.delete_entry(Path::new(&path)).await?;
+                ws.delete_entry(&resolved_path).await?;
 
                 // Delete body doc CRDT and emit sync
                 #[cfg(feature = "crdt")]
@@ -1116,8 +1137,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 }
 
                 // Use Workspace::move_entry which handles contents/part_of updates
+                let resolved_from = self.resolve_fs_path(&from);
+                let resolved_to = self.resolve_fs_path(&to);
                 let ws = self.workspace().inner();
-                ws.move_entry(Path::new(&from), Path::new(&to)).await?;
+                ws.move_entry(&resolved_from, &resolved_to).await?;
 
                 // Migrate body doc CRDT to new path
                 #[cfg(feature = "crdt")]
@@ -1136,7 +1159,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             }
 
             Command::RenameEntry { path, new_filename } => {
-                let from_path = PathBuf::from(&path);
+                let from_path = self.resolve_fs_path(&path);
 
                 // Use rename_entry which handles both leaf files and index files
                 // (directory rename + children migration + part_of/contents updates)
@@ -1179,8 +1202,9 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             Command::DuplicateEntry { path } => {
                 // workspace.duplicate_entry uses fs.write_file which goes through CrdtFs
                 // CrdtFs extracts metadata from frontmatter automatically
+                let resolved_path = self.resolve_fs_path(&path);
                 let ws = self.workspace().inner();
-                let new_path = ws.duplicate_entry(Path::new(&path)).await?;
+                let new_path = ws.duplicate_entry(&resolved_path).await?;
                 let new_path_str = new_path.to_string_lossy().to_string();
 
                 // CrdtFs handles CRDT updates automatically via write_file hooks.
@@ -1272,6 +1296,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
             Command::CreateChildEntry { parent_path } => {
                 let ws = self.workspace().inner();
+                let resolved_parent_path = self.resolve_fs_path(&parent_path);
                 // workspace.create_child_entry_with_result:
                 // 1. Converts parent to index if needed (moves parent.md to parent/parent.md)
                 // 2. Creates child file with frontmatter (title, part_of)
@@ -1279,7 +1304,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 // 4. Returns detailed result with both child and (possibly new) parent paths
                 // All file writes go through CrdtFs which extracts metadata from frontmatter
                 let result = ws
-                    .create_child_entry_with_result(Path::new(&parent_path), None)
+                    .create_child_entry_with_result(&resolved_parent_path, None)
                     .await?;
 
                 // CrdtFs handles CRDT updates automatically via create_new and write_file hooks.
@@ -1314,12 +1339,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             } => {
                 // workspace.attach_and_move_entry_to_parent uses move operations via CrdtFs
                 // CrdtFs handles: marking old deleted, creating new entry, updating parent contents
+                let resolved_entry_path = self.resolve_fs_path(&entry_path);
+                let resolved_parent_path = self.resolve_fs_path(&parent_path);
                 let ws = self.workspace().inner();
                 let new_path = ws
-                    .attach_and_move_entry_to_parent(
-                        Path::new(&entry_path),
-                        Path::new(&parent_path),
-                    )
+                    .attach_and_move_entry_to_parent(&resolved_entry_path, &resolved_parent_path)
                     .await?;
                 let new_path_str = new_path.to_string_lossy().to_string();
 
@@ -1365,7 +1389,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 use chrono::Local;
 
                 // workspace_path is the root index file (e.g., "workspace/README.md")
-                let workspace_root_path = PathBuf::from(&workspace_path);
+                let workspace_root_path = self.resolve_fs_path(&workspace_path);
                 let workspace_dir = workspace_root_path
                     .parent()
                     .map(|p| p.to_path_buf())
@@ -1584,10 +1608,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
             // === Validation Fix Operations ===
             Command::FixBrokenAttachment { path, attachment } => {
+                let resolved_path = self.resolve_fs_path(&path);
                 let result = self
                     .validate()
                     .fixer()
-                    .fix_broken_attachment(Path::new(&path), &attachment)
+                    .fix_broken_attachment(&resolved_path, &attachment)
                     .await;
 
                 #[cfg(feature = "crdt")]
@@ -1610,10 +1635,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 old_value,
                 new_value,
             } => {
+                let resolved_path = self.resolve_fs_path(&path);
                 let result = self
                     .validate()
                     .fixer()
-                    .fix_non_portable_path(Path::new(&path), &property, &old_value, &new_value)
+                    .fix_non_portable_path(&resolved_path, &property, &old_value, &new_value)
                     .await;
 
                 #[cfg(feature = "crdt")]
@@ -1634,10 +1660,12 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 index_path,
                 file_path,
             } => {
+                let resolved_index_path = self.resolve_fs_path(&index_path);
+                let resolved_file_path = self.resolve_fs_path(&file_path);
                 let result = self
                     .validate()
                     .fixer()
-                    .fix_unlisted_file(Path::new(&index_path), Path::new(&file_path))
+                    .fix_unlisted_file(&resolved_index_path, &resolved_file_path)
                     .await;
 
                 #[cfg(feature = "crdt")]
@@ -1655,10 +1683,12 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 index_path,
                 file_path,
             } => {
+                let resolved_index_path = self.resolve_fs_path(&index_path);
+                let resolved_file_path = self.resolve_fs_path(&file_path);
                 let result = self
                     .validate()
                     .fixer()
-                    .fix_orphan_binary_file(Path::new(&index_path), Path::new(&file_path))
+                    .fix_orphan_binary_file(&resolved_index_path, &resolved_file_path)
                     .await;
 
                 #[cfg(feature = "crdt")]
@@ -1679,10 +1709,12 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 file_path,
                 index_path,
             } => {
+                let resolved_file_path = self.resolve_fs_path(&file_path);
+                let resolved_index_path = self.resolve_fs_path(&index_path);
                 let result = self
                     .validate()
                     .fixer()
-                    .fix_missing_part_of(Path::new(&file_path), Path::new(&index_path))
+                    .fix_missing_part_of(&resolved_file_path, &resolved_index_path)
                     .await;
 
                 #[cfg(feature = "crdt")]
@@ -1725,10 +1757,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 file_path,
                 part_of_value,
             } => {
+                let resolved_file_path = self.resolve_fs_path(&file_path);
                 let result = self
                     .validate()
                     .fixer()
-                    .fix_circular_reference(Path::new(&file_path), &part_of_value)
+                    .fix_circular_reference(&resolved_file_path, &part_of_value)
                     .await;
 
                 #[cfg(feature = "crdt")]
@@ -1751,8 +1784,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             } => {
                 // Find all index files between the file and the workspace root
                 let ws = self.workspace().inner();
-                let file = Path::new(&file_path);
-                let root_index = Path::new(&workspace_root);
+                let resolved_file_path = self.resolve_fs_path(&file_path);
+                let resolved_workspace_root = self.resolve_fs_path(&workspace_root);
+                let file = resolved_file_path.as_path();
+                let root_index = resolved_workspace_root.as_path();
                 let root_dir = root_index.parent().unwrap_or(root_index);
 
                 let mut parents = Vec::new();
@@ -1810,16 +1845,17 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 let ws = self.workspace().inner();
                 let mut audiences = std::collections::HashSet::new();
                 let mut visited = std::collections::HashSet::new();
+                let resolved_root_path = self.resolve_fs_path(&root_path);
 
                 // Get workspace root for resolving paths
-                let workspace_root = Path::new(&root_path)
+                let workspace_root = resolved_root_path
                     .parent()
                     .unwrap_or(Path::new("."))
                     .to_path_buf();
 
                 // Get link format from workspace config
                 let link_format = ws
-                    .get_workspace_config(Path::new(&root_path))
+                    .get_workspace_config(&resolved_root_path)
                     .await
                     .map(|c| c.link_format)
                     .ok();
@@ -1874,7 +1910,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 collect_audiences(
                     &ws,
-                    Path::new(&root_path),
+                    &resolved_root_path,
                     &mut audiences,
                     &mut visited,
                     &workspace_root,
@@ -1896,9 +1932,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     root_path,
                     audience
                 );
+                let resolved_root_path = self.resolve_fs_path(&root_path);
                 let plan = self
                     .export()
-                    .plan_export(Path::new(&root_path), &audience, Path::new("/tmp/export"))
+                    .plan_export(&resolved_root_path, &audience, Path::new("/tmp/export"))
                     .await?;
 
                 log::debug!(
@@ -1930,9 +1967,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 audience,
             } => {
                 // Plan the export first
+                let resolved_root_path = self.resolve_fs_path(&root_path);
                 let plan = self
                     .export()
-                    .plan_export(Path::new(&root_path), &audience, Path::new("/tmp/export"))
+                    .plan_export(&resolved_root_path, &audience, Path::new("/tmp/export"))
                     .await?;
 
                 // Read each included file and convert path extension
@@ -1957,7 +1995,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 audience: _,
             } => {
                 // Collect all non-hidden binary files from workspace
-                let root_index = Path::new(&root_path);
+                let resolved_root_path = self.resolve_fs_path(&root_path);
+                let root_index = resolved_root_path.as_path();
                 let root_dir = root_index.parent().unwrap_or(root_index);
 
                 log::info!(
@@ -2201,7 +2240,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             } => {
                 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
-                let entry_path = self.to_workspace_relative(&entry_path);
                 let entry = PathBuf::from(&entry_path);
                 let entry_dir = entry.parent().unwrap_or_else(|| Path::new("."));
                 let attachments_dir = entry_dir.join("_attachments");
@@ -2256,7 +2294,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 entry_path,
                 attachment_path,
             } => {
-                let entry_path = self.to_workspace_relative(&entry_path);
                 let rel_path = resolve_attachment_storage_path(&entry_path, &attachment_path);
                 let full_path = self.resolve_fs_path(&rel_path);
 
@@ -2282,7 +2319,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 entry_path,
                 attachment_path,
             } => {
-                let entry_path = self.to_workspace_relative(&entry_path);
                 let rel_path = resolve_attachment_storage_path(&entry_path, &attachment_path);
                 let full_path = self.resolve_fs_path(&rel_path);
 
@@ -2304,8 +2340,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 attachment_path,
                 new_filename,
             } => {
-                let source_entry_path = self.to_workspace_relative(&source_entry_path);
-                let target_entry_path = self.to_workspace_relative(&target_entry_path);
                 // Resolve source attachment path from the link/path reference.
                 let source_rel_path =
                     resolve_attachment_storage_path(&source_entry_path, &attachment_path);
@@ -3558,7 +3592,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             // === Workspace Configuration Commands ===
             Command::GetLinkFormat { root_index_path } => {
                 let ws = self.workspace().inner();
-                let format = ws.get_link_format(Path::new(&root_index_path)).await?;
+                let resolved_root_index_path = self.resolve_fs_path(&root_index_path);
+                let format = ws.get_link_format(&resolved_root_index_path).await?;
                 Ok(Response::LinkFormat(format))
             }
 
@@ -3583,14 +3618,16 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 };
 
                 let ws = self.workspace().inner();
-                ws.set_link_format(Path::new(&root_index_path), link_format)
+                let resolved_root_index_path = self.resolve_fs_path(&root_index_path);
+                ws.set_link_format(&resolved_root_index_path, link_format)
                     .await?;
                 Ok(Response::Ok)
             }
 
             Command::GetWorkspaceConfig { root_index_path } => {
                 let ws = self.workspace().inner();
-                let config = ws.get_workspace_config(Path::new(&root_index_path)).await?;
+                let resolved_root_index_path = self.resolve_fs_path(&root_index_path);
+                let config = ws.get_workspace_config(&resolved_root_index_path).await?;
                 Ok(Response::WorkspaceConfig(config))
             }
 
@@ -3603,7 +3640,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 let style = if let Some(ref root_path) = root_index_path {
                     let ws = self.workspace().inner();
-                    let config = ws.get_workspace_config(Path::new(root_path)).await?;
+                    let resolved_root_path = self.resolve_fs_path(root_path);
+                    let config = ws.get_workspace_config(&resolved_root_path).await?;
                     config.filename_style
                 } else {
                     FilenameStyle::default()
@@ -3618,7 +3656,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 value,
             } => {
                 let ws = self.workspace().inner();
-                ws.set_workspace_config_field(Path::new(&root_index_path), &field, &value)
+                let resolved_root_index_path = self.resolve_fs_path(&root_index_path);
+                ws.set_workspace_config_field(&resolved_root_index_path, &field, &value)
                     .await?;
                 Ok(Response::Ok)
             }
@@ -3645,11 +3684,15 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     }
                 };
 
+                let resolved_root_index_path = self.resolve_fs_path(&root_index_path);
+                let resolved_specific_path = path
+                    .as_deref()
+                    .map(|p| self.resolve_fs_path(p).to_string_lossy().to_string());
                 let result = self
                     .convert_workspace_links(
-                        Path::new(&root_index_path),
+                        &resolved_root_index_path,
                         target_format,
-                        path.as_deref(),
+                        resolved_specific_path.as_deref(),
                         dry_run,
                     )
                     .await?;
@@ -4407,6 +4450,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 mod tests {
     use super::*;
     use crate::crdt::BinaryRef;
+    use crate::fs::{InMemoryFileSystem, SyncToAsyncFs};
+    use futures_lite::future::block_on;
 
     // =========================================================================
     // normalize_contents_path tests
@@ -4587,6 +4632,96 @@ mod tests {
         assert_eq!(correct_result, "Archive/Archived documents.md");
         assert!(!correct_result.contains('['));
         assert!(!correct_result.contains('<'));
+    }
+
+    #[test]
+    fn test_get_workspace_tree_resolves_normalized_relative_path_with_workspace_root() {
+        block_on(async {
+            let fs = SyncToAsyncFs::new(InMemoryFileSystem::new());
+            let diaryx = Diaryx::new(fs);
+
+            let workspace_root = PathBuf::from("/workspace");
+            diaryx.set_workspace_root(workspace_root.clone());
+
+            let root_path = workspace_root.join("diaryx.md");
+            let child_path = workspace_root.join("child.md");
+
+            diaryx
+                .fs()
+                .write_file(
+                    &root_path,
+                    "---\ntitle: Root\nlink_format: markdown_root\ncontents:\n  - \"[Child](/child.md)\"\n---\n\n# Root\n",
+                )
+                .await
+                .unwrap();
+            diaryx
+                .fs()
+                .write_file(&child_path, "---\ntitle: Child\n---\n\n# Child\n")
+                .await
+                .unwrap();
+
+            let response = diaryx
+                .execute(Command::GetWorkspaceTree {
+                    path: Some(root_path.to_string_lossy().to_string()),
+                    depth: Some(2),
+                })
+                .await
+                .unwrap();
+
+            match response {
+                Response::Tree(tree) => {
+                    assert_eq!(tree.path, root_path);
+                    assert_eq!(tree.children.len(), 1);
+                    assert_eq!(tree.children[0].path, child_path);
+                }
+                other => panic!("Expected Response::Tree, got {:?}", other),
+            }
+        });
+    }
+
+    #[test]
+    fn test_validate_workspace_resolves_normalized_relative_path_with_workspace_root() {
+        block_on(async {
+            let fs = SyncToAsyncFs::new(InMemoryFileSystem::new());
+            let diaryx = Diaryx::new(fs);
+
+            let workspace_root = PathBuf::from("/workspace");
+            diaryx.set_workspace_root(workspace_root.clone());
+
+            let root_path = workspace_root.join("diaryx.md");
+            let child_path = workspace_root.join("child.md");
+
+            diaryx
+                .fs()
+                .write_file(
+                    &root_path,
+                    "---\ntitle: Root\nlink_format: markdown_root\ncontents:\n  - \"[Child](/child.md)\"\n---\n\n# Root\n",
+                )
+                .await
+                .unwrap();
+            diaryx
+                .fs()
+                .write_file(
+                    &child_path,
+                    "---\ntitle: Child\npart_of: \"[Root](/diaryx.md)\"\n---\n\n# Child\n",
+                )
+                .await
+                .unwrap();
+
+            let response = diaryx
+                .execute(Command::ValidateWorkspace {
+                    path: Some(root_path.to_string_lossy().to_string()),
+                })
+                .await
+                .unwrap();
+
+            match response {
+                Response::ValidationResult(result) => {
+                    assert!(result.errors.is_empty());
+                }
+                other => panic!("Expected Response::ValidationResult, got {:?}", other),
+            }
+        });
     }
 
     #[test]

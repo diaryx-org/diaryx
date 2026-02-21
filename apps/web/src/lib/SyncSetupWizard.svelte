@@ -35,6 +35,7 @@
   } from "$lib/auth";
   import {
     getLocalWorkspaces,
+    getLocalWorkspace,
     getCurrentWorkspaceId,
     addLocalWorkspace,
     setCurrentWorkspaceId,
@@ -1021,7 +1022,12 @@
     if (currentLocalId && currentLocalId.startsWith('local-')) {
       promoteLocalWorkspace(currentLocalId, serverWorkspaceId);
     } else {
-      addLocalWorkspace({ id: serverWorkspaceId, name });
+      // Preserve the filesystem path from the current workspace (Tauri).
+      // Without this, the new workspace entry has no path and the Tauri backend
+      // falls back to the default workspace directory on next startup, which may
+      // point to a different workspace's files.
+      const currentWs = currentLocalId ? getLocalWorkspace(currentLocalId) : null;
+      addLocalWorkspace({ id: serverWorkspaceId, name, path: currentWs?.path });
     }
 
     setCurrentWorkspaceId(serverWorkspaceId);

@@ -89,6 +89,14 @@ export class UnifiedSyncTransport {
   /** Files this client is currently focused on */
   private focusedFiles = new Set<string>();
 
+  // -- Message batching state --
+  /** Buffered binary messages waiting to be flushed. */
+  private pendingBinaryMessages: Uint8Array[] = [];
+  /** Buffered text messages waiting to be flushed. */
+  private pendingTextMessages: string[] = [];
+  /** Whether a flush is already scheduled for this microtask/tick. */
+  private flushScheduled = false;
+
   constructor(options: UnifiedSyncTransportOptions) {
     this.options = options;
   }
@@ -159,25 +167,25 @@ export class UnifiedSyncTransport {
       }
     };
 
-    this.ws.onmessage = async (event) => {
+    this.ws.onmessage = (event) => {
       if (this.destroyed) return;
 
       // Successfully received a message — reset reconnect backoff
       this.reconnectAttempts = 0;
 
+      // Buffer the message and schedule a batched flush.
+      // All messages arriving in the same event-loop tick are collected
+      // and sent to the worker in a single Comlink round-trip, reducing
+      // queue contention that blocks interactive calls like getWorkspaceTree.
       if (typeof event.data === "string") {
-        // Text message (JSON control message) → inject into Rust
-        if (backend.syncOnTextMessage) {
-          await backend.syncOnTextMessage(event.data);
-          await this.drainAndSend();
-        }
+        this.pendingTextMessages.push(event.data);
       } else {
-        // Binary message (sync protocol) → inject into Rust
-        const data = new Uint8Array(event.data as ArrayBuffer);
-        if (backend.syncOnBinaryMessage) {
-          await backend.syncOnBinaryMessage(data);
-          await this.drainAndSend();
-        }
+        this.pendingBinaryMessages.push(new Uint8Array(event.data as ArrayBuffer));
+      }
+
+      if (!this.flushScheduled) {
+        this.flushScheduled = true;
+        setTimeout(() => this.flushPendingMessages(), 0);
       }
     };
 
@@ -246,6 +254,8 @@ export class UnifiedSyncTransport {
     }
 
     this.focusedFiles.clear();
+    this.pendingBinaryMessages = [];
+    this.pendingTextMessages = [];
   }
 
   /**
@@ -327,6 +337,61 @@ export class UnifiedSyncTransport {
       await backend.syncUnfocusFiles(actuallyFocused);
       await this.drainAndSend();
     }
+  }
+
+  // =========================================================================
+  // Internal: Message batching
+  // =========================================================================
+
+  /**
+   * Flush all buffered WebSocket messages to the worker in batched calls.
+   * Reduces 2N Comlink round-trips (N messages × inject + drain) to just 2-3
+   * (one batch-inject for binary, one for text, one drain).
+   */
+  private async flushPendingMessages(): Promise<void> {
+    this.flushScheduled = false;
+
+    // Snapshot and clear the buffers so new messages arriving during the
+    // async flush get queued into the next batch.
+    const binaryBatch = this.pendingBinaryMessages;
+    const textBatch = this.pendingTextMessages;
+    this.pendingBinaryMessages = [];
+    this.pendingTextMessages = [];
+
+    if (binaryBatch.length === 0 && textBatch.length === 0) return;
+
+    const backend = this.options.backend;
+
+    // Inject binary messages
+    if (binaryBatch.length > 0) {
+      if (binaryBatch.length === 1 && backend.syncOnBinaryMessage) {
+        await backend.syncOnBinaryMessage(binaryBatch[0]);
+      } else if (backend.syncOnBinaryMessages) {
+        await backend.syncOnBinaryMessages(binaryBatch);
+      } else if (backend.syncOnBinaryMessage) {
+        // Fallback: send one at a time (e.g. Tauri backend)
+        for (const msg of binaryBatch) {
+          await backend.syncOnBinaryMessage(msg);
+        }
+      }
+    }
+
+    // Inject text messages
+    if (textBatch.length > 0) {
+      if (textBatch.length === 1 && backend.syncOnTextMessage) {
+        await backend.syncOnTextMessage(textBatch[0]);
+      } else if (backend.syncOnTextMessages) {
+        await backend.syncOnTextMessages(textBatch);
+      } else if (backend.syncOnTextMessage) {
+        // Fallback: send one at a time (e.g. Tauri backend)
+        for (const msg of textBatch) {
+          await backend.syncOnTextMessage(msg);
+        }
+      }
+    }
+
+    // Single drain for the entire batch
+    await this.drainAndSend();
   }
 
   // =========================================================================

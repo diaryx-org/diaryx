@@ -28,7 +28,7 @@ struct TestNode {
 impl TestNode {
     fn new() -> Self {
         let base = SyncToAsyncFs::new(InMemoryFileSystem::new());
-        let decorated = DecoratedFsBuilder::new(base).build();
+        let decorated = DecoratedFsBuilder::new(base).crdt_enabled(true).build();
         let fs = decorated.fs.clone();
         let base_fs = decorated.base_fs().clone();
         let workspace_crdt = Arc::clone(&decorated.workspace_crdt);

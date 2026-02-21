@@ -119,7 +119,6 @@ function mergeTree(oldNode: TreeNode | null, newNode: TreeNode | null): TreeNode
 
   if (oldHasRealChildren && newHasOnlyPlaceholders) {
     // Keep old children - they were loaded via lazy loading and shouldn't be lost
-    console.log('[mergeTree] Preserving loaded children for:', oldNode.path);
     if (!nodeChanged) {
       return oldNode; // Nothing changed, keep old node entirely
     }
@@ -194,11 +193,8 @@ function mergeTree(oldNode: TreeNode | null, newNode: TreeNode | null): TreeNode
       if (!siblingInNewTree) {
         // This child was loaded via lazy loading but not in new tree's depth
         // No siblings were fetched, so it might still exist behind placeholders
-        console.log('[mergeTree] Preserving lazy-loaded child:', oldChild.path);
         mergedChildren.push(oldChild);
         childrenChanged = true;
-      } else {
-        console.log('[mergeTree] NOT preserving (sibling exists in new tree):', oldChild.path);
       }
     }
   }
@@ -286,19 +282,6 @@ export function getWorkspaceStore() {
 
     // Tree management
     setTree(newTree: TreeNode | null) {
-      // Debug: log expanded nodes and tree paths
-      console.log('[WorkspaceStore] setTree called');
-      console.log('[WorkspaceStore] expandedNodes:', [...expandedNodes]);
-      if (newTree) {
-        const paths: string[] = [];
-        function collectPaths(node: TreeNode) {
-          paths.push(node.path);
-          node.children.forEach(collectPaths);
-        }
-        collectPaths(newTree);
-        console.log('[WorkspaceStore] tree paths:', paths);
-      }
-
       // Merge new tree into existing tree to preserve unchanged nodes
       // This prevents unnecessary re-renders and maintains DOM stability
       tree = mergeTree(tree, newTree);
@@ -308,34 +291,38 @@ export function getWorkspaceStore() {
     updateSubtree(nodePath: string, subtree: TreeNode) {
       if (!tree) return;
 
-      // Recursively find and update the node, preserving unchanged parts
-      function findAndMerge(node: TreeNode): TreeNode {
+      // Recursively find and update the target branch, preserving unchanged parts.
+      // Stop traversal as soon as the target node is found to avoid full-tree walks
+      // on every folder expansion in large workspaces.
+      function findAndMerge(node: TreeNode): [TreeNode, boolean] {
         if (node.path === nodePath) {
           // Found the target node - merge the subtree children
-          return mergeTree(node, subtree) ?? node;
+          return [mergeTree(node, subtree) ?? node, true];
         }
 
-        // Check if any child paths could contain the target
-        let childrenChanged = false;
-        const updatedChildren: TreeNode[] = [];
-        for (const child of node.children) {
-          const updated = findAndMerge(child);
-          if (updated !== child) {
-            childrenChanged = true;
+        for (let i = 0; i < node.children.length; i++) {
+          const child = node.children[i];
+          const [updatedChild, found] = findAndMerge(child);
+
+          if (!found) continue;
+
+          // Target was found under this child. Rebuild only if that child changed.
+          if (updatedChild === child) {
+            return [node, true];
           }
-          updatedChildren.push(updated);
+
+          const updatedChildren = node.children.slice();
+          updatedChildren[i] = updatedChild;
+          return [{ ...node, children: updatedChildren }, true];
         }
 
-        // If no children changed, return the original node
-        if (!childrenChanged) {
-          return node;
-        }
-
-        // Return new node with updated children
-        return { ...node, children: updatedChildren };
+        return [node, false];
       }
 
-      tree = findAndMerge(tree);
+      const [updatedTree, found] = findAndMerge(tree);
+      if (found) {
+        tree = updatedTree;
+      }
     },
 
     /**
@@ -348,14 +335,12 @@ export function getWorkspaceStore() {
 
     // Node expansion
     toggleNode(path: string) {
-      console.log('[WorkspaceStore] toggleNode:', path);
       if (expandedNodes.has(path)) {
         expandedNodes.delete(path);
       } else {
         expandedNodes.add(path);
       }
       expandedNodes = new Set(expandedNodes); // Trigger reactivity
-      console.log('[WorkspaceStore] expandedNodes after toggle:', [...expandedNodes]);
     },
 
     expandNode(path: string) {
@@ -380,12 +365,7 @@ export function getWorkspaceStore() {
      * not directory paths. We need to find ancestor nodes in the tree.
      */
     revealPath(filePath: string) {
-      console.log('[WorkspaceStore] revealPath called with:', filePath);
-
-      if (!tree) {
-        console.log('[WorkspaceStore] revealPath - no tree loaded');
-        return;
-      }
+      if (!tree) return;
 
       // Find all ancestor nodes in the tree that contain the target file
       const ancestorPaths: string[] = [];
@@ -416,16 +396,12 @@ export function getWorkspaceStore() {
 
       findAncestors(tree, filePath);
 
-      console.log('[WorkspaceStore] revealPath - ancestor node paths to expand:', ancestorPaths);
-      console.log('[WorkspaceStore] revealPath - current expandedNodes:', [...expandedNodes]);
-
       // Expand all ancestor nodes
       if (ancestorPaths.length > 0) {
         for (const path of ancestorPaths) {
           expandedNodes.add(path);
         }
         expandedNodes = new Set(expandedNodes); // Trigger reactivity
-        console.log('[WorkspaceStore] revealPath - expandedNodes after:', [...expandedNodes]);
       }
     },
 

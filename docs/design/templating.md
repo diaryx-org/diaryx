@@ -43,7 +43,7 @@ Links:
 
 The filename is: {{ filename }}
 
-{{#if viewable_by_public}}
+{{#if (contains audience "public")}}
 Hello public audience!
 {{/if}}
 ```
@@ -52,19 +52,58 @@ Hello public audience!
 
 ### Separation from Creation-Time Templates
 
-The existing `template.rs` handles creation-time substitution (when running `diaryx create` or `diaryx today`). Render-time templating is a separate system:
+The existing `template.rs` handles creation-time substitution (when running `diaryx create` or `diaryx today`). Render-time templating is a separate system, but the two share the `{{ }}` syntax and coexist naturally through **context-based separation**:
+
+- **Creation-time** templates live in **template files** (`~/.config/diaryx/templates/daily.md`, etc.). They are processed once by `TemplateManager` when creating a new entry, and their variables (`{{timestamp}}`, `{{date}}`, etc.) are resolved and written into the resulting file. The template syntax is gone from the output.
+- **Render-time** templates live in **entry files** (the actual journal entries). They are processed on every view/publish, and their variables come from the entry's own frontmatter.
+
+These two systems never collide because an entry file is never run through `TemplateManager` after creation — by then, all creation-time variables have already been resolved. The same `{{ }}` syntax is fine for both because they operate at different stages on different files.
 
 | | Creation-time (existing `template.rs`) | Render-time (new) |
 |---|---|---|
 | **When** | `diaryx create`, `diaryx today` | Every view/publish |
+| **Operates on** | Template files (`templates/*.md`) | Entry files |
 | **Variables** | Date/time, title, filename | Frontmatter values + virtual props |
 | **Syntax** | `{{variable}}` (string replace) | `{{variable}}`, `{{#each}}`, `{{#if}}` |
 | **Persisted in file** | No (resolved before writing) | Yes (raw syntax stored) |
 | **Engine** | Custom string replacement | `handlebars` crate |
 
+No special prefixes or delimiters are needed to distinguish the two systems.
+
 ### Template Engine
 
 Use the `handlebars` crate (pure Rust, WASM-compatible). The Handlebars syntax (`{{#each}}`, `{{#if}}`, `{{this}}`) matches the desired syntax exactly.
+
+### Template Context
+
+The template context for render-time is built from two sources:
+
+1. **Frontmatter properties** — all key-value pairs from the entry's YAML frontmatter are available as template variables. No explicit "input variable" declarations are needed; the frontmatter *is* the contract. If a variable is referenced in the body but missing from frontmatter, Handlebars renders it as empty (or leaves it as-is, depending on error handling strategy — see Open Design Questions).
+2. **Virtual properties** — a small set of computed values derived from file metadata (see Phase 1.3).
+
+### Custom Helpers
+
+Two custom Handlebars helpers are registered:
+
+#### `contains` — General-purpose array membership test
+
+```handlebars
+{{#if (contains audience "public")}}
+This content is for the public!
+{{/if}}
+```
+
+Works with any array property, not just `audience`. This replaces the earlier idea of auto-generating magic boolean variables like `viewable_by_public`. The `contains` helper is explicit, composable, and self-documenting.
+
+#### `for-audience` — Domain-specific sugar (optional)
+
+```handlebars
+{{#for-audience "public"}}
+This content is for the public!
+{{/for-audience}}
+```
+
+Equivalent to `{{#if (contains audience "public")}}` but more concise. Maps directly to the editor's "audience block" UI widget (see Phase 4.2). This helper is Diaryx-specific and optional — `contains` is the underlying mechanism.
 
 ### Rendering Pipeline
 
@@ -73,9 +112,8 @@ Read file
   → Parse frontmatter (existing)
   → Build template context:
       1. All frontmatter key-value pairs
-      2. Virtual properties (filename, path, etc.)
-      3. Computed booleans (viewable_by_<audience>, has_<property>)
-  → Render body through Handlebars engine
+      2. Virtual properties (filename, filepath, etc.)
+  → Render body through Handlebars engine (with contains/for-audience helpers)
   → Pass rendered markdown to display/publish pipeline
 ```
 
@@ -136,17 +174,27 @@ Properties computed from file metadata, not stored in frontmatter:
 | `filepath` | Workspace-relative path | `notes/hello-world.md` |
 | `extension` | File extension | `md` |
 
-#### 1.4 Computed Booleans
+#### 1.4 Custom Helpers Registration
 
-Auto-generated from array properties:
+Register the `contains` helper (and optionally `for-audience`) on the Handlebars instance:
 
-- `audience: [friends, family, public]` generates:
-  - `viewable_by_friends: true`
-  - `viewable_by_family: true`
-  - `viewable_by_public: true`
-- General pattern: for any array property `foo` with value `bar`, generate `has_foo_bar: true`
+```rust
+impl BodyTemplateRenderer {
+    pub fn new() -> Self {
+        let mut handlebars = Handlebars::new();
 
-The naming convention for `audience` specifically uses `viewable_by_` as a special case, since "audience" has semantic meaning in Diaryx.
+        // {{#if (contains array "value")}}
+        handlebars.register_helper("contains", Box::new(contains_helper));
+
+        // {{#for-audience "public"}}...{{/for-audience}}
+        handlebars.register_helper("for-audience", Box::new(for_audience_helper));
+
+        Self { handlebars }
+    }
+}
+```
+
+The `contains` helper checks if a `serde_json::Value::Array` contains a given string value. The `for-audience` helper is sugar that checks `(contains audience "<arg>")`.
 
 #### 1.5 Integration Points
 
@@ -178,9 +226,9 @@ let html_body = self.markdown_to_html(&rendered_body);
 
 #### 2.2 Audience-Aware Rendering
 
-When publishing with `PublishOptions.audience`, pass the target audience to the template context so `{{#if viewable_by_public}}` blocks resolve correctly based on the publish target, not just the entry's own audience list.
+When publishing with `PublishOptions.audience`, pass the target audience into the template context. This allows `{{#if (contains audience "public")}}` and `{{#for-audience "public"}}` blocks to resolve based on the publish target.
 
-This enables a powerful pattern: an entry can contain content that only appears when published for a specific audience.
+This enables a powerful pattern: an entry can contain content that only appears when published for a specific audience. The `contains` helper naturally supports this — if the publish context overrides or filters the `audience` array, conditional blocks respond accordingly.
 
 ### Phase 3: WASM Bindings
 
@@ -243,7 +291,8 @@ Three new extensions following existing patterns:
 - Optional: audience-aware coloring (e.g., "public only" gets a distinct style)
 
 ##### AudienceBlock (specialized wrapper)
-- Sugar for `{{#if viewable_by_<audience>}}`
+- Sugar for `{{#for-audience "public"}}...{{/for-audience}}`
+- Serializes to markdown as `{{#for-audience "<name>"}}...{{/for-audience}}`
 - UI: colored sidebar border indicating audience
 - Toolbar button to wrap selected content in an audience block
 - Audience selector dropdown
@@ -258,8 +307,8 @@ All extensions should follow the patterns documented in `apps/web/docs/tiptap-cu
 Add toolbar/menu items for:
 - **Insert variable**: dropdown of available frontmatter properties + virtual props
 - **Insert each block**: select an array property, insert `{{#each}}`/`{{/each}}` skeleton
-- **Insert if block**: select a boolean/computed property, insert `{{#if}}`/`{{/if}}` skeleton
-- **Wrap in audience block**: select audience tag, wrap selection in `{{#if viewable_by_<audience>}}`
+- **Insert if block**: select a condition, insert `{{#if}}`/`{{/if}}` skeleton (supports subexpressions like `(contains audience "public")`)
+- **Wrap in audience block**: select audience tag, wrap selection in `{{#for-audience "<name>"}}`/`{{/for-audience}}`
 
 ### Phase 5: CLI Integration
 
@@ -283,7 +332,7 @@ Template rendering is automatic during publish (Phase 2). No CLI changes needed 
 
 #### 6.1 Built-in Template Enhancements
 
-Consider updating built-in templates to demonstrate the new syntax:
+Consider updating built-in creation-time templates to scaffold entries that are ready for render-time templating — e.g., adding an empty `audience: []` field so users can fill it in and use `{{#if (contains audience ...)}}` blocks immediately:
 
 ```markdown
 ---
@@ -296,33 +345,36 @@ audience: []
 
 ```
 
-Note: Creation-time `{{title}}` (resolved at create) and render-time `{{ title }}` (resolved at view) use the same syntax but are processed at different times. If both systems are active on the same file, creation-time runs first and resolves its variables, leaving any remaining `{{ }}` expressions for render-time.
-
-To avoid ambiguity, consider using a different delimiter for render-time templates, e.g., `{{% title %}}` or `{{ =title }}`. However, this adds complexity and may not be worth it since creation-time templates are only processed once (at file creation) and their variables are always resolved.
+Note: The `{{title}}` here is a creation-time variable — it gets resolved to a concrete value when the entry is created. The resulting entry file contains no template syntax unless the user adds it.
 
 #### 6.2 Documentation
 
-- Update `crates/diaryx_core/src/template.rs` module docs to reference the new system
+- Update `crates/diaryx_core/src/template.rs` module docs to reference the new render-time system
 - Add template syntax reference to user documentation
 - Update `apps/web/docs/tiptap-custom-extensions.md` with the new extension patterns
+- Document the `contains` and `for-audience` helpers with examples
+
+## Resolved Design Decisions
+
+### Delimiter Collision
+
+**Decision**: Context-based separation, no syntax changes. Creation-time templates operate on template files; render-time templates operate on entry files. The same `{{ }}` syntax is used by both and they never collide because they run at different stages on different files. No special prefixes, delimiters, or opt-in flags are needed.
+
+### Audience Filtering
+
+**Decision**: Use a `contains` Handlebars helper instead of auto-generated magic boolean variables. `{{#if (contains audience "public")}}` is explicit and works with any array property. The `for-audience` block helper is optional syntactic sugar for the common case.
+
+### Input Variable Declarations
+
+**Decision**: Not needed. Frontmatter keys *are* the template variables. The Handlebars convention (missing variable = empty) is the contract. The template expressions in the body are self-documenting — you can see exactly which frontmatter keys an entry expects.
 
 ## Open Design Questions
 
-### 1. Delimiter Collision
-
-Both creation-time and render-time templates use `{{ }}`. Options:
-
-- **A. No change** — Creation-time always resolves first; anything left is render-time. Works because creation-time variables (`{{timestamp}}`, `{{date}}`) don't overlap with frontmatter keys.
-- **B. Different delimiters** — Render-time uses `{{% %}}` or `{{{ }}}`. More explicit but unfamiliar syntax.
-- **C. Opt-in flag** — Add a frontmatter property `template: true` to enable render-time templating on a per-file basis.
-
-**Recommendation**: Option A (no change) with Option C as a safety measure. Only render templates in files that have `template: true` or contain recognized template block syntax (`{{#each}}`, `{{#if}}`).
-
-### 2. Escaping
+### 1. Escaping
 
 How should users include literal `{{ }}` in their content? Handlebars uses `\{{ }}` for escaping. This should be documented.
 
-### 3. Error Handling
+### 2. Error Handling
 
 What happens when a template references a nonexistent variable?
 
@@ -332,21 +384,21 @@ What happens when a template references a nonexistent variable?
 
 **Recommendation**: Option B (leave as-is) for graceful degradation. Files with template syntax are still readable even without the template engine.
 
-### 4. Security
+### 3. Security
 
 Handlebars supports custom helpers and partials. Should we limit what's available?
 
-**Recommendation**: Start with a locked-down renderer — no custom helpers, no partials, no file includes. Only allow built-in Handlebars features (`#each`, `#if`, `#unless`, `#with`, `this`, `@index`, `@first`, `@last`). This prevents any template injection concerns.
+**Recommendation**: Start with a locked-down renderer — no user-defined helpers, no partials, no file includes. Only allow built-in Handlebars features (`#each`, `#if`, `#unless`, `#with`, `this`, `@index`, `@first`, `@last`) plus the registered `contains` and `for-audience` helpers. This prevents any template injection concerns.
 
-### 5. Performance
+### 4. Performance
 
 Template rendering adds a processing step. Considerations:
 
 - Cache rendered output per file hash + frontmatter hash
-- Only render files that contain template syntax (quick regex check)
+- Only render files that contain template syntax (quick regex check via `has_templates()`)
 - For the editor: debounce re-rendering on frontmatter changes
 
-### 6. CRDT Interaction
+### 5. CRDT Interaction
 
 When using CRDT sync, template syntax is part of the document text. Rendering happens on each client independently. No CRDT changes needed since the raw template syntax is what gets synced, not the rendered output.
 

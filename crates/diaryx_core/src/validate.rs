@@ -16,6 +16,7 @@ use std::path::{Component, Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::entry::{has_non_portable_chars, sanitize_filename};
 use crate::error::Result;
 use crate::fs::{AsyncFileSystem, is_temp_file};
 use crate::link_parser::{self, LinkFormat};
@@ -321,6 +322,16 @@ pub enum ValidationWarning {
         /// The non-markdown file that was referenced
         target: String,
     },
+    /// A filename contains characters that are not portable across platforms.
+    /// Chrome's File System Access API rejects these even on macOS/Linux.
+    NonPortableFilename {
+        /// The file with the non-portable filename
+        file: PathBuf,
+        /// Description of the problematic character(s)
+        reason: String,
+        /// Suggested sanitized filename
+        suggested_filename: String,
+    },
 }
 
 impl ValidationWarning {
@@ -336,6 +347,7 @@ impl ValidationWarning {
             Self::OrphanBinaryFile { .. } => "Binary file not attached",
             Self::MissingPartOf { .. } => "Missing part_of reference",
             Self::InvalidContentsRef { .. } => "Non-markdown file in contents",
+            Self::NonPortableFilename { .. } => "Non-portable filename",
         }
     }
 
@@ -371,6 +383,7 @@ impl ValidationWarning {
             } => suggested_file.is_some() && suggested_remove_part_of.is_some(),
             Self::MultipleIndexes { .. } => false,
             Self::InvalidContentsRef { .. } => false,
+            Self::NonPortableFilename { .. } => true,
         }
     }
 
@@ -385,6 +398,7 @@ impl ValidationWarning {
             Self::NonPortablePath { file, .. } => Some(file),
             Self::MultipleIndexes { directory, .. } => Some(directory),
             Self::InvalidContentsRef { index, .. } => Some(index),
+            Self::NonPortableFilename { file, .. } => Some(file),
         }
     }
 
@@ -852,6 +866,19 @@ impl<FS: AsyncFileSystem> Validator<FS> {
         ctx.visited.insert(normalized);
         ctx.result.files_checked += 1;
 
+        // Check filename for non-portable characters
+        if let Some(filename) = path.file_name().and_then(|n| n.to_str())
+            && let Some(reason) = has_non_portable_chars(filename)
+        {
+            ctx.result
+                .warnings
+                .push(ValidationWarning::NonPortableFilename {
+                    file: path.to_path_buf(),
+                    reason,
+                    suggested_filename: sanitize_filename(filename),
+                });
+        }
+
         // Try to parse as index (with link format hint for proper path resolution)
         if let Ok(index) = self.ws.parse_index_with_hint(path, ctx.link_format).await {
             let dir = index.directory().unwrap_or_else(|| Path::new(""));
@@ -1017,6 +1044,19 @@ impl<FS: AsyncFileSystem> Validator<FS> {
         }
 
         result.files_checked = 1;
+
+        // Check filename for non-portable characters
+        if let Some(filename) = path.file_name().and_then(|n| n.to_str())
+            && let Some(reason) = has_non_portable_chars(filename)
+        {
+            result
+                .warnings
+                .push(ValidationWarning::NonPortableFilename {
+                    file: path.clone(),
+                    reason,
+                    suggested_filename: sanitize_filename(filename),
+                });
+        }
 
         // Try to find the workspace root by looking for a root index in parent directories
         // Fall back to the file's parent directory if not found
@@ -1796,6 +1836,25 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
         }
     }
 
+    /// Rename a file with a non-portable filename to a sanitized version.
+    pub async fn fix_non_portable_filename(
+        &self,
+        file: &Path,
+        suggested_filename: &str,
+    ) -> FixResult {
+        let ws = Workspace::new(&self.fs);
+        match ws.rename_entry(file, suggested_filename).await {
+            Ok(new_path) => FixResult::success(format!(
+                "Renamed '{}' -> '{}'",
+                file.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default(),
+                new_path.display()
+            )),
+            Err(e) => FixResult::failure(format!("Failed to rename {}: {}", file.display(), e)),
+        }
+    }
+
     /// Add an unlisted file to an index's contents.
     pub async fn fix_unlisted_file(&self, index: &Path, file: &Path) -> FixResult {
         let formatted = self.format_link(file, index).await;
@@ -2072,6 +2131,14 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
                     None
                 }
             }
+            ValidationWarning::NonPortableFilename {
+                file,
+                suggested_filename,
+                ..
+            } => Some(
+                self.fix_non_portable_filename(file, suggested_filename)
+                    .await,
+            ),
             // These cannot be auto-fixed
             ValidationWarning::MultipleIndexes { .. } => None,
             ValidationWarning::InvalidContentsRef { .. } => None,

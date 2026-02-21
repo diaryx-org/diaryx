@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from "svelte";
   import { isTauri, type TreeNode, type EntryData, type ValidationResultWithMeta, type ValidationErrorWithMeta, type ValidationWarningWithMeta, type Api } from "./backend";
+  import type { FixResult } from "./backend/generated";
   import { Button } from "$lib/components/ui/button";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import * as Kbd from "$lib/components/ui/kbd";
@@ -161,6 +162,22 @@
     return node.children.some((child) => child.name.startsWith("... ("));
   }
 
+  // Render guard: filter placeholders and dedupe by path so keyed each blocks
+  // never receive duplicate keys.
+  function getRenderableChildren(node: TreeNode): TreeNode[] {
+    const seen = new Set<string>();
+    const children: TreeNode[] = [];
+
+    for (const child of node.children) {
+      if (child.name.startsWith('... (')) continue;
+      if (seen.has(child.path)) continue;
+      seen.add(child.path);
+      children.push(child);
+    }
+
+    return children;
+  }
+
   // Handle expand with lazy loading
   async function handleToggleNode(path: string, node: TreeNode) {
     // If node is being expanded and has unloaded children, load them first
@@ -266,6 +283,7 @@
         return files && files.length > 0 ? files[0] : null;
       }
       case 'NonPortablePath':
+      case 'NonPortableFilename':
         return warning.file ?? null;
       case 'MultipleIndexes':
         return warning.directory ?? null;
@@ -588,7 +606,7 @@
     if (!api) return;
 
     try {
-      let result;
+      let result: FixResult | undefined;
       switch (warning.type) {
         case 'OrphanBinaryFile': {
           const w = warning as { file: string; suggested_index?: string | null };
@@ -648,6 +666,16 @@
             result = await api.fixCircularReference(w.suggested_file, w.suggested_remove_part_of);
           } else {
             toast.error('Cannot auto-fix this circular reference. Manually edit one of the files involved.');
+            return;
+          }
+          break;
+        }
+        case 'NonPortableFilename': {
+          const w = warning as { file: string; suggested_filename: string };
+          const newPath = await api.renameEntry(w.file, w.suggested_filename);
+          if (newPath) {
+            toast.success(`Renamed to ${w.suggested_filename}`);
+            onValidationFix?.();
             return;
           }
           break;
@@ -920,20 +948,35 @@
     }
   }
 
+  // Group validation errors by file path once, so each rendered row can do O(1)
+  // lookups instead of scanning the full errors list.
+  let validationErrorsByPath = $derived.by(() => {
+    const map = new Map<string, ValidationErrorWithMeta[]>();
+    if (!validationResult) return map;
+
+    for (const error of validationResult.errors) {
+      const path = getErrorAssociatedPath(error);
+      if (!path) continue;
+
+      const existing = map.get(path);
+      if (existing) {
+        existing.push(error);
+      } else {
+        map.set(path, [error]);
+      }
+    }
+
+    return map;
+  });
+
   // Check if a file has validation errors
   function hasValidationError(path: string): boolean {
-    if (!validationResult) return false;
-    return validationResult.errors.some(
-      (err) => getErrorAssociatedPath(err) === path,
-    );
+    return validationErrorsByPath.has(path);
   }
 
   // Get validation errors for a specific path
   function getValidationErrors(path: string): ValidationErrorWithMeta[] {
-    if (!validationResult) return [];
-    return validationResult.errors.filter(
-      (err) => getErrorAssociatedPath(err) === path,
-    );
+    return validationErrorsByPath.get(path) ?? [];
   }
 
   // Get human-readable description for a validation error
@@ -1694,7 +1737,7 @@
 
         {#if node.children.length > 0 && expandedNodes.has(node.path)}
           <div class="mt-0.5" role="group">
-            {#each node.children.filter(c => !c.name.startsWith('... (')) as child (child.path)}
+            {#each getRenderableChildren(node) as child (child.path)}
               {@render treeNode(child, depth + 1)}
             {/each}
           </div>

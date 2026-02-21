@@ -1041,6 +1041,311 @@ pub enum Command {
     },
 }
 
+impl Command {
+    /// Normalize all path fields to workspace-relative paths.
+    ///
+    /// This ensures commands work correctly regardless of whether paths are
+    /// absolute OS paths (as sent by Tauri) or already workspace-relative
+    /// (as sent by WASM). The normalizer should strip the workspace root
+    /// prefix from absolute paths; it is a no-op for already-relative paths.
+    pub fn normalize_paths(&mut self, normalizer: impl Fn(&str) -> String) {
+        match self {
+            // --- Variants with a single `path` field ---
+            Command::GetEntry { path }
+            | Command::DeleteEntry { path, .. }
+            | Command::RenameEntry { path, .. }
+            | Command::DuplicateEntry { path }
+            | Command::ConvertToIndex { path }
+            | Command::ConvertToLeaf { path }
+            | Command::GetAdjacentDailyEntry { path, .. }
+            | Command::IsDailyEntry { path }
+            | Command::GetFrontmatter { path }
+            | Command::RemoveFrontmatterProperty { path, .. }
+            | Command::ValidateFile { path }
+            | Command::FixBrokenPartOf { path }
+            | Command::FixBrokenAttachment { path, .. }
+            | Command::FixNonPortablePath { path, .. }
+            | Command::GetAttachments { path }
+            | Command::GetAncestorAttachments { path }
+            | Command::FileExists { path }
+            | Command::ReadFile { path }
+            | Command::WriteFile { path, .. }
+            | Command::DeleteFile { path }
+            | Command::ClearDirectory { path }
+            | Command::WriteFileWithMetadata { path, .. }
+            | Command::UpdateFileMetadata { path, .. } => {
+                *path = normalizer(path);
+            }
+
+            // --- Variants with `path` as Option<String> (file paths, not directories) ---
+            Command::GetWorkspaceTree { path, .. } | Command::ValidateWorkspace { path } => {
+                if let Some(p) = path {
+                    *p = normalizer(p);
+                }
+            }
+
+            // --- Workspace directory paths — NOT normalized (stripping would yield "") ---
+            Command::GetFilesystemTree { .. } | Command::CreateWorkspace { .. } => {}
+
+            // --- Variants with path + optional root_index_path ---
+            Command::SaveEntry {
+                path,
+                root_index_path,
+                ..
+            } => {
+                *path = normalizer(path);
+                if let Some(rip) = root_index_path {
+                    *rip = normalizer(rip);
+                }
+            }
+
+            Command::CreateEntry { path, options } => {
+                *path = normalizer(path);
+                if let Some(rip) = &mut options.root_index_path {
+                    *rip = normalizer(rip);
+                }
+            }
+
+            Command::SetFrontmatterProperty {
+                path,
+                root_index_path,
+                ..
+            } => {
+                *path = normalizer(path);
+                if let Some(rip) = root_index_path {
+                    *rip = normalizer(rip);
+                }
+            }
+
+            // --- Entry pair paths ---
+            Command::MoveEntry { from, to } => {
+                *from = normalizer(from);
+                *to = normalizer(to);
+            }
+
+            Command::CreateChildEntry { parent_path } => {
+                *parent_path = normalizer(parent_path);
+            }
+
+            Command::AttachEntryToParent {
+                entry_path,
+                parent_path,
+            } => {
+                *entry_path = normalizer(entry_path);
+                *parent_path = normalizer(parent_path);
+            }
+
+            Command::EnsureDailyEntry { workspace_path, .. } => {
+                *workspace_path = normalizer(workspace_path);
+            }
+
+            // --- Workspace directory paths — NOT normalized ---
+            Command::FindRootIndex { .. } => {}
+
+            // --- Search ---
+            Command::SearchWorkspace { options, .. } => {
+                if let Some(wp) = &mut options.workspace_path {
+                    *wp = normalizer(wp);
+                }
+            }
+
+            // --- Fix commands ---
+            Command::FixBrokenContentsRef { index_path, .. } => {
+                *index_path = normalizer(index_path);
+            }
+
+            Command::FixUnlistedFile {
+                index_path,
+                file_path,
+            }
+            | Command::FixOrphanBinaryFile {
+                index_path,
+                file_path,
+            }
+            | Command::FixMissingPartOf {
+                file_path,
+                index_path,
+            } => {
+                *index_path = normalizer(index_path);
+                *file_path = normalizer(file_path);
+            }
+
+            Command::FixCircularReference { file_path, .. } => {
+                *file_path = normalizer(file_path);
+            }
+
+            Command::GetAvailableParentIndexes {
+                file_path,
+                workspace_root,
+            } => {
+                *file_path = normalizer(file_path);
+                *workspace_root = normalizer(workspace_root);
+            }
+
+            Command::FixAll { .. } => {}
+
+            // --- Export ---
+            Command::GetAvailableAudiences { root_path }
+            | Command::PlanExport { root_path, .. }
+            | Command::ExportToMemory { root_path, .. }
+            | Command::ExportToHtml { root_path, .. }
+            | Command::ExportBinaryAttachments { root_path, .. } => {
+                *root_path = normalizer(root_path);
+            }
+
+            // --- Templates (workspace_path is a directory, joins with _templates) ---
+            Command::ListTemplates { .. }
+            | Command::GetTemplate { .. }
+            | Command::SaveTemplate { .. }
+            | Command::DeleteTemplate { .. } => {}
+
+            // --- Attachments (entry_path only; attachment_path is a link ref) ---
+            Command::UploadAttachment { entry_path, .. }
+            | Command::DeleteAttachment { entry_path, .. }
+            | Command::GetAttachmentData { entry_path, .. } => {
+                *entry_path = normalizer(entry_path);
+            }
+
+            Command::MoveAttachment {
+                source_entry_path,
+                target_entry_path,
+                ..
+            } => {
+                *source_entry_path = normalizer(source_entry_path);
+                *target_entry_path = normalizer(target_entry_path);
+            }
+
+            // --- Storage ---
+            Command::GetStorageUsage => {}
+
+            // --- Workspace configuration ---
+            Command::GetLinkFormat { root_index_path }
+            | Command::SetLinkFormat {
+                root_index_path, ..
+            }
+            | Command::GetWorkspaceConfig { root_index_path }
+            | Command::SetWorkspaceConfig {
+                root_index_path, ..
+            } => {
+                *root_index_path = normalizer(root_index_path);
+            }
+
+            Command::GenerateFilename {
+                root_index_path, ..
+            } => {
+                if let Some(rip) = root_index_path {
+                    *rip = normalizer(rip);
+                }
+            }
+
+            Command::ConvertLinks {
+                root_index_path,
+                path,
+                ..
+            } => {
+                *root_index_path = normalizer(root_index_path);
+                if let Some(p) = path {
+                    *p = normalizer(p);
+                }
+            }
+
+            // --- Link parser (normalize path fields inside the operation) ---
+            Command::LinkParser { operation } => match operation {
+                LinkParserOperation::Parse { .. } => {}
+                LinkParserOperation::ToCanonical {
+                    current_file_path, ..
+                } => {
+                    *current_file_path = normalizer(current_file_path);
+                }
+                LinkParserOperation::Format {
+                    canonical_path,
+                    from_canonical_path,
+                    ..
+                } => {
+                    *canonical_path = normalizer(canonical_path);
+                    *from_canonical_path = normalizer(from_canonical_path);
+                }
+                LinkParserOperation::Convert {
+                    current_file_path, ..
+                } => {
+                    *current_file_path = normalizer(current_file_path);
+                }
+            },
+
+            // --- CRDT commands with filesystem path fields ---
+            #[cfg(feature = "crdt")]
+            Command::InitializeWorkspaceCrdt { .. } => {
+                // workspace_path can be a file or directory; handler has its own logic
+            }
+
+            #[cfg(feature = "crdt")]
+            Command::GetFileHistory { file_path, .. } => {
+                *file_path = normalizer(file_path);
+            }
+
+            #[cfg(feature = "crdt")]
+            Command::GetCrdtFile { path } | Command::SetCrdtFile { path, .. } => {
+                *path = normalizer(path);
+            }
+
+            #[cfg(feature = "crdt")]
+            Command::TrackContent { path, .. }
+            | Command::IsEcho { path, .. }
+            | Command::ClearTrackedContent { path } => {
+                *path = normalizer(path);
+            }
+
+            // --- CRDT commands without filesystem paths (doc_name, binary data, etc.) ---
+            #[cfg(feature = "crdt")]
+            Command::GetSyncState { .. }
+            | Command::ApplyRemoteUpdate { .. }
+            | Command::GetMissingUpdates { .. }
+            | Command::GetFullState { .. }
+            | Command::GetHistory { .. }
+            | Command::RestoreVersion { .. }
+            | Command::GetVersionDiff { .. }
+            | Command::GetStateAt { .. }
+            | Command::ListCrdtFiles { .. }
+            | Command::SaveCrdtState { .. }
+            | Command::GetBodyContent { .. }
+            | Command::SetBodyContent { .. }
+            | Command::ResetBodyDoc { .. }
+            | Command::GetBodySyncState { .. }
+            | Command::GetBodyFullState { .. }
+            | Command::ApplyBodyUpdate { .. }
+            | Command::GetBodyMissingUpdates { .. }
+            | Command::SaveBodyDoc { .. }
+            | Command::SaveAllBodyDocs
+            | Command::ListLoadedBodyDocs
+            | Command::UnloadBodyDoc { .. }
+            | Command::CreateSyncStep1 { .. }
+            | Command::HandleSyncMessage { .. }
+            | Command::CreateUpdateMessage { .. }
+            | Command::ConfigureSyncHandler { .. }
+            | Command::ApplyRemoteWorkspaceUpdateWithEffects { .. }
+            | Command::ApplyRemoteBodyUpdateWithEffects { .. }
+            | Command::GetStoragePath { .. }
+            | Command::GetCanonicalPath { .. }
+            | Command::HandleWorkspaceSyncMessage { .. }
+            | Command::HandleCrdtState { .. }
+            | Command::CreateWorkspaceSyncStep1
+            | Command::CreateWorkspaceUpdate { .. }
+            | Command::InitBodySync { .. }
+            | Command::CloseBodySync { .. }
+            | Command::HandleBodySyncMessage { .. }
+            | Command::CreateBodySyncStep1 { .. }
+            | Command::CreateBodyUpdate { .. }
+            | Command::IsSyncComplete
+            | Command::IsWorkspaceSynced
+            | Command::IsBodySynced { .. }
+            | Command::MarkSyncComplete
+            | Command::GetActiveSyncs
+            | Command::ResetSyncState
+            | Command::TriggerWorkspaceSync => {}
+        }
+    }
+}
+
 // ============================================================================
 // Result Types
 // ============================================================================

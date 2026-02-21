@@ -28,4 +28,4 @@ Svelte stores for reactive application state.
 | `sitePublishingStore.svelte.ts` | Publishing state for default workspace site configuration, publish actions, and token lifecycle |
 | `shareSessionStore.svelte.ts` | Share session state |
 | `uiStore.svelte.ts` | UI state (sidebars, dialogs) |
-| `workspaceStore.svelte.ts` | Workspace tree state |
+| `workspaceStore.svelte.ts` | Workspace tree state. Lazy subtree updates short-circuit as soon as the target node is found, avoiding full-tree traversal on folder expansion in large workspaces. |

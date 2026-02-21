@@ -707,6 +707,38 @@ fn handle_validate(
                         index.display()
                     );
                 }
+                ValidationWarning::NonPortableFilename {
+                    file,
+                    reason,
+                    suggested_filename,
+                } => {
+                    if fix {
+                        let fix_result =
+                            block_on(fixer.fix_non_portable_filename(file, suggested_filename));
+                        if fix_result.success {
+                            println!(
+                                "  ✓ Fixed: Renamed '{}' -> '{}'",
+                                file.display(),
+                                suggested_filename
+                            );
+                            fixed_count += 1;
+                        } else {
+                            println!(
+                                "  ⚠ Non-portable filename: {} ({}, suggested: '{}') (failed to fix)",
+                                file.display(),
+                                reason,
+                                suggested_filename
+                            );
+                        }
+                    } else {
+                        println!(
+                            "  ⚠ Non-portable filename: {} ({}, suggested: '{}')",
+                            file.display(),
+                            reason,
+                            suggested_filename
+                        );
+                    }
+                }
             }
         }
     }
@@ -1192,6 +1224,38 @@ fn report_and_fix_validation(
                         target,
                         index.display()
                     );
+                }
+                ValidationWarning::NonPortableFilename {
+                    file,
+                    reason,
+                    suggested_filename,
+                } => {
+                    if fix {
+                        let fix_result =
+                            block_on(fixer.fix_non_portable_filename(file, suggested_filename));
+                        if fix_result.success {
+                            println!(
+                                "  ✓ Fixed: Renamed '{}' -> '{}'",
+                                file.display(),
+                                suggested_filename
+                            );
+                            fixed_count += 1;
+                        } else {
+                            println!(
+                                "  ⚠ Non-portable filename: {} ({}, suggested: '{}') (failed to fix)",
+                                file.display(),
+                                reason,
+                                suggested_filename
+                            );
+                        }
+                    } else {
+                        println!(
+                            "  ⚠ Non-portable filename: {} ({}, suggested: '{}')",
+                            file.display(),
+                            reason,
+                            suggested_filename
+                        );
+                    }
                 }
             }
         }

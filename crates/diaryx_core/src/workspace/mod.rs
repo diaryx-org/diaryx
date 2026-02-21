@@ -978,6 +978,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         let mut children = Vec::new();
         let contents = index.frontmatter.contents_list();
         let child_count = contents.len();
+        let mut seen_child_paths = HashSet::new();
 
         log::debug!(
             "[build_tree] Processing {}: contents={:?}, workspace_root={:?}",
@@ -1018,6 +1019,17 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     absolute_child_path,
                     exists
                 );
+
+                // Guard against duplicate entries in `contents` that resolve to
+                // the same path. Duplicates can crash keyed UI rendering and do
+                // not add useful information to the tree.
+                if !seen_child_paths.insert(absolute_child_path.clone()) {
+                    log::debug!(
+                        "[build_tree] Skipping duplicate child path: {:?}",
+                        absolute_child_path
+                    );
+                    continue;
+                }
 
                 // Only include if the file exists
                 if exists {
@@ -3065,6 +3077,25 @@ mod tests {
         assert_eq!(index.frontmatter.title, Some("Test".to_string()));
         assert!(index.frontmatter.is_index());
         assert!(index.body.contains("Body content"));
+    }
+
+    #[test]
+    fn test_build_tree_deduplicates_duplicate_contents_refs() {
+        let fs = InMemoryFileSystem::new();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents:\n  - child.md\n  - child.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(Path::new("child.md"), "---\ntitle: Child\n---\n")
+            .unwrap();
+
+        let async_fs = SyncToAsyncFs::new(fs);
+        let ws = Workspace::new(async_fs);
+
+        let tree = block_on_test(ws.build_tree(Path::new("README.md"))).unwrap();
+        assert_eq!(tree.children.len(), 1);
+        assert_eq!(tree.children[0].path, PathBuf::from("child.md"));
     }
 
     #[test]

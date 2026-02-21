@@ -163,6 +163,11 @@
       const workspaceDir = backend.getWorkspacePath()
         .replace(/\/index\.md$/, '')
         .replace(/\/README\.md$/, '');
+
+      // Update registry with the resolved filesystem path (Tauri)
+      if (workspaceDir && workspaceDir !== '.') {
+        addLocalWorkspace({ id: ws.id, name: ws.name, path: workspaceDir });
+      }
       try {
         await api.createWorkspace(workspaceDir, ws.name);
       } catch {

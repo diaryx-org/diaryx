@@ -207,7 +207,7 @@ impl<FS: AsyncFileSystem> DecoratedFsBuilder<FS> {
 
     /// Set whether CRDT updates should be enabled initially.
     ///
-    /// Default: `true`
+    /// Default: `false`
     pub fn crdt_enabled(mut self, enabled: bool) -> Self {
         self.crdt_enabled = enabled;
         self

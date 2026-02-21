@@ -1039,6 +1039,41 @@ pub enum Command {
         /// The link parser operation to execute.
         operation: LinkParserOperation,
     },
+
+    // ==================== Naming / URL Validation Commands ====================
+    /// Validate and normalize a workspace name for creation.
+    ///
+    /// Checks that the name is non-empty and unique among existing local
+    /// and (optionally) server workspace names. Returns the trimmed name.
+    ValidateWorkspaceName {
+        /// The workspace name to validate.
+        name: String,
+        /// Existing local workspace names (for uniqueness check).
+        existing_local_names: Vec<String>,
+        /// Existing server workspace names (optional, for sync uniqueness check).
+        #[serde(default)]
+        existing_server_names: Option<Vec<String>>,
+    },
+
+    /// Validate a publishing site slug.
+    ///
+    /// Must be 3–64 characters of lowercase letters, digits, or hyphens.
+    ValidatePublishingSlug {
+        /// The slug to validate.
+        slug: String,
+    },
+
+    /// Normalize a server URL (trim whitespace, add `https://` if no scheme).
+    NormalizeServerUrl {
+        /// The URL to normalize.
+        url: String,
+    },
+
+    /// Convert an HTTP(S) URL to a WebSocket sync URL (`/sync2`).
+    ToWebSocketSyncUrl {
+        /// The HTTP URL to convert.
+        url: String,
+    },
 }
 
 impl Command {

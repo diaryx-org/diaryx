@@ -29,8 +29,6 @@
 
   let { onAddWorkspace, api }: Props = $props();
 
-  const slugRegex = /^[a-z0-9-]{3,64}$/;
-
   let site = $derived(sitePublishingStore.site);
   let publishedAudiences = $derived(sitePublishingStore.audiences);
   let tokens = $derived(sitePublishingStore.tokens);
@@ -112,18 +110,20 @@
     return new Date(value * 1000).toLocaleString();
   }
 
-  function validateSlug(value: string): boolean {
-    if (!slugRegex.test(value)) {
-      slugError = 'Use 3-64 lowercase letters, numbers, or hyphens.';
+  async function validateSlug(value: string): Promise<boolean> {
+    try {
+      await api?.validatePublishingSlug(value);
+      slugError = null;
+      return true;
+    } catch (e) {
+      slugError = e instanceof Error ? e.message : 'Use 3-64 lowercase letters, numbers, or hyphens.';
       return false;
     }
-    slugError = null;
-    return true;
   }
 
   async function handleCreateSite() {
     const trimmedSlug = slug.trim();
-    if (!validateSlug(trimmedSlug)) return;
+    if (!(await validateSlug(trimmedSlug))) return;
 
     const created = await sitePublishingStore.create({
       slug: trimmedSlug,

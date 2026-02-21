@@ -31,6 +31,12 @@ pub enum DiaryxError {
     /// Used during the async filesystem refactor for features that aren't yet migrated.
     #[error("Unsupported operation: {0}")]
     Unsupported(String),
+
+    /// Validation error with a human-readable message.
+    ///
+    /// Used by naming/URL validation commands when input doesn't pass checks.
+    #[error("{0}")]
+    Validation(String),
     /// General error for any kind of I/O issue not otherwise documented here.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -226,6 +232,7 @@ impl From<&DiaryxError> for SerializableError {
             DiaryxError::TemplateAlreadyExists(_) => "TemplateAlreadyExists",
             DiaryxError::InvalidPath { .. } => "InvalidPath",
             DiaryxError::Unsupported(_) => "Unsupported",
+            DiaryxError::Validation(_) => "Validation",
             #[cfg(feature = "crdt")]
             DiaryxError::Crdt(_) => "Crdt",
             #[cfg(all(feature = "crdt-sqlite", not(target_arch = "wasm32")))]

@@ -3765,6 +3765,40 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 Ok(Response::LinkParserResult(result))
             }
+
+            // ── Naming / URL Validation ──────────────────────────────────
+
+            Command::ValidateWorkspaceName {
+                name,
+                existing_local_names,
+                existing_server_names,
+            } => {
+                use crate::utils::naming;
+                naming::validate_workspace_name(
+                    &name,
+                    &existing_local_names,
+                    existing_server_names.as_deref(),
+                )
+                .map(Response::String)
+                .map_err(|msg| DiaryxError::Validation(msg))
+            }
+
+            Command::ValidatePublishingSlug { slug } => {
+                use crate::utils::naming;
+                naming::validate_publishing_slug(&slug)
+                    .map(|()| Response::Ok)
+                    .map_err(|msg| DiaryxError::Validation(msg))
+            }
+
+            Command::NormalizeServerUrl { url } => {
+                use crate::utils::naming;
+                Ok(Response::String(naming::normalize_server_url(&url)))
+            }
+
+            Command::ToWebSocketSyncUrl { url } => {
+                use crate::utils::naming;
+                Ok(Response::String(naming::to_websocket_sync_url(&url)))
+            }
         }
     }
 

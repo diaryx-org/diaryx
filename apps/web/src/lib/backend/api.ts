@@ -749,6 +749,65 @@ export function createApi(backend: Backend) {
     },
 
     // =========================================================================
+    // Naming / URL Validation
+    // =========================================================================
+
+    /**
+     * Validate and normalize a workspace name for creation.
+     * Checks non-empty and uniqueness against local/server names.
+     * Returns the trimmed name on success, throws on validation failure.
+     */
+    async validateWorkspaceName(
+      name: string,
+      existingLocalNames: string[],
+      existingServerNames?: string[],
+    ): Promise<string> {
+      const response = await backend.execute({
+        type: 'ValidateWorkspaceName',
+        params: {
+          name,
+          existing_local_names: existingLocalNames,
+          existing_server_names: existingServerNames ?? null,
+        },
+      } as any);
+      return expectResponse(response, 'String').data;
+    },
+
+    /**
+     * Validate a publishing site slug.
+     * Must be 3–64 lowercase letters, digits, or hyphens.
+     * Throws on validation failure.
+     */
+    async validatePublishingSlug(slug: string): Promise<void> {
+      await backend.execute({
+        type: 'ValidatePublishingSlug',
+        params: { slug },
+      } as any);
+    },
+
+    /**
+     * Normalize a server URL: trim whitespace, add https:// if no scheme.
+     */
+    async normalizeServerUrl(url: string): Promise<string> {
+      const response = await backend.execute({
+        type: 'NormalizeServerUrl',
+        params: { url },
+      } as any);
+      return expectResponse(response, 'String').data;
+    },
+
+    /**
+     * Convert an HTTP(S) URL to a WebSocket sync URL (appends /sync2).
+     */
+    async toWebSocketSyncUrl(url: string): Promise<string> {
+      const response = await backend.execute({
+        type: 'ToWebSocketSyncUrl',
+        params: { url },
+      } as any);
+      return expectResponse(response, 'String').data;
+    },
+
+    // =========================================================================
     // Storage
     // =========================================================================
 

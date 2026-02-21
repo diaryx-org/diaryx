@@ -370,16 +370,15 @@
 
   // Validate and apply server URL
   async function validateServer(): Promise<boolean> {
-    let url = serverUrl.trim();
+    const backend = await getBackend();
+    const api = createApi(backend);
+
+    let url = await api.normalizeServerUrl(serverUrl);
     if (!url) {
       error = "Please enter a server URL";
       return false;
     }
-
-    if (!url.startsWith("http://") && !url.startsWith("https://")) {
-      url = "https://" + url;
-      serverUrl = url;
-    }
+    serverUrl = url;
 
     isValidatingServer = true;
     error = null;
@@ -395,7 +394,7 @@
       }
 
       setServerUrl(url);
-      collaborationStore.setServerUrl(toWebSocketUrl(url));
+      collaborationStore.setServerUrl(await api.toWebSocketSyncUrl(url));
       collaborationStore.setSyncStatus('idle');
 
       return true;
@@ -713,10 +712,6 @@
     return `${base} ${index}`;
   }
 
-  function normalizeWorkspaceName(name: string): string {
-    return name.trim().toLowerCase();
-  }
-
   function getPreferredServerWorkspace(): { id: string; name: string } | null {
     const activeWorkspaceId = getAuthState().activeWorkspaceId;
     if (activeWorkspaceId) {
@@ -752,26 +747,12 @@
     return getNextLocalWorkspaceName();
   }
 
-  function resolveCreationWorkspaceName(requireServerUnique: boolean): string {
-    const workspaceName = newWorkspaceName.trim();
-    if (!workspaceName) {
-      throw new Error("Please enter a workspace name");
-    }
-
-    const normalized = normalizeWorkspaceName(workspaceName);
-
-    if (getLocalWorkspaces().some(ws => normalizeWorkspaceName(ws.name) === normalized)) {
-      throw new Error("A local workspace with that name already exists");
-    }
-
-    if (
-      requireServerUnique
-      && serverWorkspacesList.some(ws => normalizeWorkspaceName(ws.name) === normalized)
-    ) {
-      throw new Error("A synced workspace with that name already exists");
-    }
-
-    return workspaceName;
+  async function resolveCreationWorkspaceName(requireServerUnique: boolean): Promise<string> {
+    const backend = await getBackend();
+    const api = createApi(backend);
+    const localNames = getLocalWorkspaces().map(ws => ws.name);
+    const serverNames = requireServerUnique ? serverWorkspacesList.map(ws => ws.name) : undefined;
+    return api.validateWorkspaceName(newWorkspaceName, localNames, serverNames);
   }
 
   async function ensureRootIndexForCurrentWorkspace(workspaceName: string): Promise<void> {
@@ -796,7 +777,7 @@
   }
 
   async function handleCreateLocalWorkspace() {
-    const wsName = resolveCreationWorkspaceName(false);
+    const wsName = await resolveCreationWorkspaceName(false);
     const localWs = createLocalWorkspace(wsName, undefined, isTauri() && workspacePath ? workspacePath : undefined);
 
     await switchWorkspace(localWs.id, localWs.name);
@@ -814,7 +795,7 @@
    * Open an existing folder as a local workspace.
    */
   async function handleOpenFolder() {
-    const wsName = resolveCreationWorkspaceName(false);
+    const wsName = await resolveCreationWorkspaceName(false);
 
     if (isTauri()) {
       if (!selectedFolderPath) throw new Error("No folder selected");
@@ -855,7 +836,7 @@
    * Open an existing folder as a workspace and sync it to the server.
    */
   async function handleOpenFolderRemote() {
-    const wsName = resolveCreationWorkspaceName(true);
+    const wsName = await resolveCreationWorkspaceName(true);
 
     if (isTauri()) {
       if (!selectedFolderPath) throw new Error("No folder selected");
@@ -954,7 +935,7 @@
     if (!importZipFile) throw new Error("No ZIP file selected");
     const zipFile = importZipFile;
 
-    const wsName = resolveCreationWorkspaceName(false);
+    const wsName = await resolveCreationWorkspaceName(false);
     const localWs = createLocalWorkspace(wsName, undefined, isTauri() && workspacePath ? workspacePath : undefined);
     await switchWorkspace(localWs.id, localWs.name);
 
@@ -1274,7 +1255,7 @@
    * workspace from that local content.
    */
   async function handleCreateNew() {
-    const workspaceName = resolveCreationWorkspaceName(true);
+    const workspaceName = await resolveCreationWorkspaceName(true);
     const localWs = createLocalWorkspace(workspaceName, undefined, isTauri() && workspacePath ? workspacePath : undefined);
 
     await switchWorkspace(localWs.id, localWs.name);
@@ -1295,7 +1276,7 @@
     const zipFile = importZipFile;
 
     // Create a new local workspace and switch to it before operating
-    const wsName = resolveCreationWorkspaceName(true);
+    const wsName = await resolveCreationWorkspaceName(true);
     const localWs = createLocalWorkspace(wsName, undefined, isTauri() && workspacePath ? workspacePath : undefined);
     await switchWorkspace(localWs.id, localWs.name);
 
@@ -1515,14 +1496,6 @@
       screen = 'options';
       error = null;
     }
-  }
-
-  // Convert HTTP URL to WebSocket URL
-  function toWebSocketUrl(httpUrl: string): string {
-    return httpUrl
-      .replace(/^https:\/\//, "wss://")
-      .replace(/^http:\/\//, "ws://")
-      + "/sync2";
   }
 
   function formatBytes(bytes: number): string {

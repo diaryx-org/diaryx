@@ -3112,6 +3112,124 @@ pub struct WebSocketSyncStatusResponse {
     pub running: bool,
 }
 
+// ============================================================================
+// HTTP Proxy (iOS CORS bypass)
+// ============================================================================
+
+/// Response from the proxy_fetch command.
+#[derive(Debug, Serialize)]
+pub struct ProxyFetchResponse {
+    pub status: u16,
+    pub status_text: String,
+    pub headers: HashMap<String, String>,
+    pub body_base64: String,
+}
+
+/// Make an HTTP request natively, bypassing CORS restrictions.
+///
+/// On iOS, WKWebView enforces CORS and blocks requests from tauri://localhost
+/// to external origins. This command uses reqwest to make the request natively.
+#[tauri::command]
+pub async fn proxy_fetch(
+    url: String,
+    method: String,
+    headers: HashMap<String, String>,
+    body_base64: Option<String>,
+    timeout_ms: Option<u64>,
+) -> Result<ProxyFetchResponse, SerializableError> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+
+    let client = reqwest::Client::new();
+
+    let req_method =
+        reqwest::Method::from_bytes(method.as_bytes()).map_err(|e| SerializableError {
+            kind: "RequestError".to_string(),
+            message: format!("Invalid HTTP method '{}': {}", method, e),
+            path: None,
+        })?;
+
+    let mut builder = client.request(req_method, &url);
+
+    // Set timeout
+    if let Some(ms) = timeout_ms {
+        builder = builder.timeout(std::time::Duration::from_millis(ms));
+    }
+
+    // Set headers
+    let mut header_map = HeaderMap::new();
+    for (key, value) in &headers {
+        let name = HeaderName::from_bytes(key.as_bytes()).map_err(|e| SerializableError {
+            kind: "RequestError".to_string(),
+            message: format!("Invalid header name '{}': {}", key, e),
+            path: None,
+        })?;
+        let val = HeaderValue::from_str(value).map_err(|e| SerializableError {
+            kind: "RequestError".to_string(),
+            message: format!("Invalid header value for '{}': {}", key, e),
+            path: None,
+        })?;
+        header_map.insert(name, val);
+    }
+    builder = builder.headers(header_map);
+
+    // Set body
+    if let Some(b64) = body_base64 {
+        let body_bytes = STANDARD.decode(&b64).map_err(|e| SerializableError {
+            kind: "RequestError".to_string(),
+            message: format!("Invalid base64 body: {}", e),
+            path: None,
+        })?;
+        builder = builder.body(body_bytes);
+    }
+
+    // Send request
+    let response = builder.send().await.map_err(|e| {
+        let kind = if e.is_timeout() {
+            "TimeoutError"
+        } else if e.is_connect() {
+            "ConnectionError"
+        } else {
+            "NetworkError"
+        };
+        SerializableError {
+            kind: kind.to_string(),
+            message: format!("{}", e),
+            path: None,
+        }
+    })?;
+
+    // Read response
+    let status = response.status().as_u16();
+    let status_text = response
+        .status()
+        .canonical_reason()
+        .unwrap_or("")
+        .to_string();
+
+    let mut resp_headers = HashMap::new();
+    for (name, value) in response.headers() {
+        if let Ok(v) = value.to_str() {
+            resp_headers.insert(name.as_str().to_string(), v.to_string());
+        }
+    }
+
+    let body_bytes = response.bytes().await.map_err(|e| SerializableError {
+        kind: "NetworkError".to_string(),
+        message: format!("Failed to read response body: {}", e),
+        path: None,
+    })?;
+
+    let body_base64 = STANDARD.encode(&body_bytes);
+
+    Ok(ProxyFetchResponse {
+        status,
+        status_text,
+        headers: resp_headers,
+        body_base64,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -5,6 +5,7 @@
  */
 
 import { getToken, getServerUrl, getCurrentWorkspace } from '$lib/auth';
+import { proxyFetch } from '$lib/backend/proxyFetch';
 
 // ============================================================================
 // Types
@@ -48,7 +49,7 @@ async function apiFetch<T>(
   const base = getApiBase();
   if (!base) throw new Error('Not authenticated or no workspace');
 
-  const response = await fetch(
+  const response = await proxyFetch(
     `${base.serverUrl}/api/workspaces/${encodeURIComponent(base.workspaceId)}${path}`,
     {
       ...options,

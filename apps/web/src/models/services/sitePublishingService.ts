@@ -3,6 +3,7 @@
  */
 
 import { getToken, getServerUrl } from '$lib/auth';
+import { proxyFetch } from '$lib/backend/proxyFetch';
 
 // ============================================================================
 // Types
@@ -181,7 +182,7 @@ async function apiFetch<T>(workspaceId: string, path: string, options?: RequestI
     });
   }
 
-  const response = await fetch(
+  const response = await proxyFetch(
     `${base.serverUrl}/api/workspaces/${encodeURIComponent(base.workspaceId)}${path}`,
     {
       ...options,

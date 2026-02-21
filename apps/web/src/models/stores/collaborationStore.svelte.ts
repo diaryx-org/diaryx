@@ -5,8 +5,6 @@
  * including Y.Doc, provider, connection status, and server configuration.
  */
 
-import type { Doc as YDoc } from 'yjs';
-import type { HocuspocusProvider } from '@hocuspocus/provider';
 
 // ============================================================================
 // Types
@@ -39,9 +37,7 @@ function getInitialServerUrl(): string | null {
 // ============================================================================
 
 class CollaborationStore {
-  // Y.js document and provider
-  currentYDoc = $state<YDoc | null>(null);
-  currentProvider = $state<HocuspocusProvider | null>(null);
+
   currentCollaborationPath = $state<string | null>(null);
 
   // Connection status
@@ -83,34 +79,18 @@ class CollaborationStore {
     return this.syncStatus;
   });
 
-  // Y.Doc management
-  setYDoc(ydoc: YDoc | null) {
-    this.currentYDoc = ydoc;
-  }
-
-  setProvider(provider: HocuspocusProvider | null) {
-    this.currentProvider = provider;
-  }
 
   setCollaborationPath(path: string | null) {
     this.currentCollaborationPath = path;
   }
 
   // Set all collaboration state at once
-  setCollaborationSession(
-    ydoc: YDoc | null,
-    provider: HocuspocusProvider | null,
-    path: string | null
-  ) {
-    this.currentYDoc = ydoc;
-    this.currentProvider = provider;
+  setCollaborationSession(path: string | null) {
     this.currentCollaborationPath = path;
   }
 
   // Clear collaboration session
   clearCollaborationSession() {
-    this.currentYDoc = null;
-    this.currentProvider = null;
     this.currentCollaborationPath = null;
   }
 

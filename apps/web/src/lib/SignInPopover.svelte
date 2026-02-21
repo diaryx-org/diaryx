@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { proxyFetch } from "$lib/backend/proxyFetch";
   import { tick } from "svelte";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -108,7 +109,7 @@
     isValidating = true;
     error = null;
     try {
-      const resp = await fetch(`${url}/health`, { method: "GET", signal: AbortSignal.timeout(5000) });
+      const resp = await proxyFetch(`${url}/health`, { method: "GET", timeout_ms: 5000 });
       if (!resp.ok) throw new Error("Server returned an error");
       setServerUrl(url);
       return true;

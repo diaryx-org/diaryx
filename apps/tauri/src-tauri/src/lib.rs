@@ -148,6 +148,8 @@ pub fn run() {
             commands::start_websocket_sync,
             commands::stop_websocket_sync,
             commands::get_websocket_sync_status,
+            // HTTP Proxy (iOS CORS bypass)
+            commands::proxy_fetch,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

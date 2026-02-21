@@ -13,43 +13,7 @@ describe('collaborationStore', () => {
     store.setServerUrl(null)
   })
 
-  describe('Y.js document management', () => {
-    it('should initialize with null Y.Doc', () => {
-      expect(store.currentYDoc).toBeNull()
-    })
 
-    it('should set Y.Doc', () => {
-      const mockYDoc = { guid: 'test-doc' }
-      store.setYDoc(mockYDoc as any)
-      expect(store.currentYDoc).toStrictEqual(mockYDoc)
-    })
-
-    it('should clear Y.Doc', () => {
-      const mockYDoc = { guid: 'test-doc' }
-      store.setYDoc(mockYDoc as any)
-      store.setYDoc(null)
-      expect(store.currentYDoc).toBeNull()
-    })
-  })
-
-  describe('provider management', () => {
-    it('should initialize with null provider', () => {
-      expect(store.currentProvider).toBeNull()
-    })
-
-    it('should set provider', () => {
-      const mockProvider = { on: () => {} }
-      store.setProvider(mockProvider as any)
-      expect(store.currentProvider).toStrictEqual(mockProvider)
-    })
-
-    it('should clear provider', () => {
-      const mockProvider = { on: () => {} }
-      store.setProvider(mockProvider as any)
-      store.setProvider(null)
-      expect(store.currentProvider).toBeNull()
-    })
-  })
 
   describe('collaboration path', () => {
     it('should initialize with null path', () => {
@@ -69,27 +33,18 @@ describe('collaborationStore', () => {
   })
 
   describe('collaboration session', () => {
-    it('should set collaboration session with all parameters', () => {
-      const mockYDoc = { guid: 'test-doc' }
-      const mockProvider = { on: () => {} }
+    it('should set collaboration session with path', () => {
       const path = 'workspace/entry.md'
 
-      store.setCollaborationSession(mockYDoc as any, mockProvider as any, path)
+      store.setCollaborationSession(path)
 
-      expect(store.currentYDoc).toStrictEqual(mockYDoc)
-      expect(store.currentProvider).toStrictEqual(mockProvider)
       expect(store.currentCollaborationPath).toBe(path)
     })
 
     it('should clear collaboration session', () => {
-      const mockYDoc = { guid: 'test-doc' }
-      const mockProvider = { on: () => {} }
-
-      store.setCollaborationSession(mockYDoc as any, mockProvider as any, 'path')
+      store.setCollaborationSession('path')
       store.clearCollaborationSession()
 
-      expect(store.currentYDoc).toBeNull()
-      expect(store.currentProvider).toBeNull()
       expect(store.currentCollaborationPath).toBeNull()
     })
   })

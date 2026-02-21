@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { proxyFetch } from "$lib/backend/proxyFetch";
   /**
    * AddWorkspaceDialog - Workspace creation dialog
    *
@@ -384,9 +385,9 @@
     error = null;
 
     try {
-      const response = await fetch(`${url}/health`, {
+      const response = await proxyFetch(`${url}/health`, {
         method: "GET",
-        signal: AbortSignal.timeout(5000),
+        timeout_ms: 5000,
       });
 
       if (!response.ok) {

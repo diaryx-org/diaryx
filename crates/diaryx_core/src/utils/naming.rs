@@ -31,17 +31,19 @@ pub fn validate_workspace_name(
 
     let normalized = normalize_workspace_name(trimmed);
 
-    if existing_local.iter().any(|n| normalize_workspace_name(n) == normalized) {
+    if existing_local
+        .iter()
+        .any(|n| normalize_workspace_name(n) == normalized)
+    {
         return Err("A local workspace with that name already exists".into());
     }
 
-    if let Some(server_names) = existing_server {
-        if server_names
+    if let Some(server_names) = existing_server
+        && server_names
             .iter()
             .any(|n| normalize_workspace_name(n) == normalized)
-        {
-            return Err("A synced workspace with that name already exists".into());
-        }
+    {
+        return Err("A synced workspace with that name already exists".into());
     }
 
     Ok(trimmed.to_string())

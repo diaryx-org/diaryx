@@ -1307,6 +1307,12 @@ impl Command {
                 }
             },
 
+            // --- Naming / URL Validation Commands ---
+            Command::ValidateWorkspaceName { .. }
+            | Command::ValidatePublishingSlug { .. }
+            | Command::NormalizeServerUrl { .. }
+            | Command::ToWebSocketSyncUrl { .. } => {}
+
             // --- CRDT commands with filesystem path fields ---
             #[cfg(feature = "crdt")]
             Command::InitializeWorkspaceCrdt { .. } => {

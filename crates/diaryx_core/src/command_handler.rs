@@ -3767,7 +3767,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             }
 
             // ── Naming / URL Validation ──────────────────────────────────
-
             Command::ValidateWorkspaceName {
                 name,
                 existing_local_names,
@@ -3780,14 +3779,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     existing_server_names.as_deref(),
                 )
                 .map(Response::String)
-                .map_err(|msg| DiaryxError::Validation(msg))
+                .map_err(DiaryxError::Validation)
             }
 
             Command::ValidatePublishingSlug { slug } => {
                 use crate::utils::naming;
                 naming::validate_publishing_slug(&slug)
                     .map(|()| Response::Ok)
-                    .map_err(|msg| DiaryxError::Validation(msg))
+                    .map_err(DiaryxError::Validation)
             }
 
             Command::NormalizeServerUrl { url } => {

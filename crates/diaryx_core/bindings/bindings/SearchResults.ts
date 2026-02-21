@@ -4,11 +4,11 @@ import type { FileSearchResult } from "./FileSearchResult";
 /**
  * Aggregated search results
  */
-export type SearchResults = { 
+export type SearchResults = {
 /**
  * Results per file (only files with matches)
  */
-files: Array<FileSearchResult>, 
+files: Array<FileSearchResult>,
 /**
  * Total number of files searched
  */

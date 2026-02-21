@@ -3,11 +3,11 @@
 /**
  * A binary file with its path and data.
  */
-export type BinaryExportFile = { 
+export type BinaryExportFile = {
 /**
  * Relative path.
  */
-path: string, 
+path: string,
 /**
  * Binary data.
  */

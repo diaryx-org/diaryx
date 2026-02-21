@@ -108,6 +108,9 @@
   function destroyEditor() {
     editor?.destroy();
     editor = null;
+    if (typeof globalThis !== 'undefined') {
+      (globalThis as any).__diaryx_tiptapEditor = null;
+    }
   }
 
   function createEditor() {
@@ -466,6 +469,7 @@
       onUpdate: ({ editor }) => {
         if (onchange && !isUpdatingContent) {
           const markdown = appendFootnoteDefinitions(editor);
+          lastSyncedContent = markdown;
           onchange(markdown);
         }
       },
@@ -522,6 +526,10 @@
         },
       },
     });
+
+    if (typeof globalThis !== 'undefined') {
+      (globalThis as any).__diaryx_tiptapEditor = editor;
+    }
   }
 
   export function getMarkdown(): string | undefined {

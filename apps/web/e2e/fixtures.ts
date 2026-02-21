@@ -64,25 +64,19 @@ export class EditorHelper {
   }
 
   async undo(): Promise<void> {
-    // Use programmatic undo which is more reliable than keyboard shortcuts in tests
-    await this.editor.evaluate(() => {
-      const win = window as unknown as { tiptapEditor?: { commands?: { undo: () => void } } }
-      if (win.tiptapEditor?.commands?.undo) {
-        win.tiptapEditor.commands.undo()
-      } else {
-        document.execCommand('undo')
+    await this.page.evaluate(() => {
+      const editor = (globalThis as any).__diaryx_tiptapEditor
+      if (editor) {
+        editor.commands.undo()
       }
     })
   }
 
   async redo(): Promise<void> {
-    // Use programmatic redo which is more reliable than keyboard shortcuts in tests
-    await this.editor.evaluate(() => {
-      const win = window as unknown as { tiptapEditor?: { commands?: { redo: () => void } } }
-      if (win.tiptapEditor?.commands?.redo) {
-        win.tiptapEditor.commands.redo()
-      } else {
-        document.execCommand('redo')
+    await this.page.evaluate(() => {
+      const editor = (globalThis as any).__diaryx_tiptapEditor
+      if (editor) {
+        editor.commands.redo()
       }
     })
   }
@@ -128,6 +122,12 @@ async function handleWelcomeScreenIfNeeded(page: Page, timeoutMs: number): Promi
 
   // If the welcome screen appeared, complete it
   if (await welcomeHeading.isVisible().catch(() => false)) {
+    // Click "Get Started" to open the AddWorkspaceDialog
+    const getStartedButton = page.getByRole('button', { name: 'Get Started' })
+    await expect(getStartedButton).toBeVisible({ timeout: 5000 })
+    await getStartedButton.click()
+
+    // Click "Create Workspace" in the AddWorkspaceDialog
     const createButton = page.getByRole('button', { name: 'Create Workspace' })
     await expect(createButton).toBeVisible({ timeout: 5000 })
     await createButton.click()

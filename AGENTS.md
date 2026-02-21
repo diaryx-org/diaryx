@@ -127,5 +127,3 @@ Read these files directly when needed:
 
 - CI/workflows: `.github/workflows/*.yml`
 - Pre-commit config: `.pre-commit-config.yaml`
-
-&nbsp;

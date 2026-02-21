@@ -1,0 +1,11 @@
+[target.aarch64-apple-ios]
+linker = "/usr/bin/clang"
+rustflags = [
+  "-C", "link-arg=-fuse-ld=/usr/bin/ld"
+]
+
+[target.aarch64-apple-ios-sim]
+linker = "/usr/bin/clang"
+rustflags = [
+  "-C", "link-arg=-fuse-ld=/usr/bin/ld"
+]

@@ -15,7 +15,7 @@
   let { onGetStarted }: Props = $props();
 </script>
 
-<div class="flex items-center justify-center min-h-dvh bg-background px-4">
+<div class="flex items-center justify-center min-h-full bg-background px-4">
   <div class="w-full max-w-sm space-y-6">
     <div class="text-center space-y-4">
       <img src="/icon.png" alt="Diaryx" class="size-16 mx-auto" />

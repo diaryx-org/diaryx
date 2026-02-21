@@ -3,6 +3,7 @@ import type { Backend } from "$lib/backend/interface";
 import type { BinaryRef } from "$lib/backend/generated";
 import { AuthError, createAuthService } from "$lib/auth/authService";
 import { refreshUserStorageUsage } from "$lib/auth/authStore.svelte";
+import { generateUUID } from "$lib/utils";
 
 const QUEUE_STORAGE_KEY = "diaryx_attachment_sync_queue_v1";
 const PART_SIZE_BYTES = 8 * 1024 * 1024;
@@ -541,7 +542,7 @@ export function indexAttachmentRefs(entryPath: string, attachments: BinaryRef[],
 export function enqueueAttachmentUpload(job: UploadJobInput): string {
   const ts = nowMs();
   return upsertQueueItem({
-    id: crypto.randomUUID(),
+    id: generateUUID(),
     kind: "upload",
     state: "pending",
     workspaceId: job.workspaceId,
@@ -560,7 +561,7 @@ export function enqueueAttachmentUpload(job: UploadJobInput): string {
 export function enqueueAttachmentDownload(job: DownloadJobInput): void {
   const ts = nowMs();
   upsertQueueItem({
-    id: crypto.randomUUID(),
+    id: generateUUID(),
     kind: "download",
     state: "pending",
     workspaceId: job.workspaceId,

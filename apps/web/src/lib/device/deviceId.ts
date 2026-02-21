@@ -5,6 +5,8 @@
  * for tracking which device made changes in the history.
  */
 
+import { generateUUID } from '$lib/utils';
+
 const DEVICE_ID_KEY = 'diaryx-device-id';
 const DEVICE_NAME_KEY = 'diaryx-device-name';
 
@@ -15,7 +17,7 @@ const DEVICE_NAME_KEY = 'diaryx-device-name';
 export function getDeviceId(): string {
   let id = localStorage.getItem(DEVICE_ID_KEY);
   if (!id) {
-    id = crypto.randomUUID();
+    id = generateUUID();
     localStorage.setItem(DEVICE_ID_KEY, id);
   }
   return id;

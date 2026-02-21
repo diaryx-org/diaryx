@@ -6,6 +6,7 @@
  */
 
 import type { Backend } from '../backend/interface';
+import { generateUUID } from '$lib/utils';
 import type {
   CrdtHistoryEntry,
   FileDiff,
@@ -224,7 +225,7 @@ export class RustCrdtApi {
   async createFile(metadata: FileMetadata): Promise<string> {
     // For now, we generate the UUID on the client side and use setFile
     // In the future, this could be a dedicated command on the Rust side
-    const docId = crypto.randomUUID();
+    const docId = generateUUID();
     await this.setFile(docId, metadata);
     console.log('[RustCrdtApi] createFile: generated doc_id', docId);
     return docId;

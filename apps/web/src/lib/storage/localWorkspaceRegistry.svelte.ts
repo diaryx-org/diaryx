@@ -10,6 +10,7 @@
  */
 
 import { getStorageType, type StorageType } from '$lib/backend/storageType';
+import { generateUUID } from '$lib/utils';
 
 // ============================================================================
 // Types
@@ -243,7 +244,7 @@ export function setWorkspaceIsLocal(id: string, isLocal: boolean): void {
  * Returns the created workspace entry.
  */
 export function createLocalWorkspace(name: string, storageType?: StorageType, path?: string): LocalWorkspace {
-  const id = `local-${crypto.randomUUID()}`;
+  const id = `local-${generateUUID()}`;
   const ws: LocalWorkspace = {
     id,
     name,

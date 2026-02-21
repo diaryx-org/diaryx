@@ -1,11 +1,11 @@
 <script lang="ts">
   /**
    * MainLayout - The main application layout container
-   * 
+   *
    * Provides the flex container structure for left sidebar, main content, and right sidebar.
    * This is a slot-based layout component.
    */
-  
+
   import type { Snippet } from 'svelte';
 
   interface Props {
@@ -23,7 +23,7 @@
   }: Props = $props();
 </script>
 
-<div class="flex h-screen bg-background overflow-hidden">
+<div class="flex h-full bg-background overflow-hidden">
   {#if leftSidebar}
     {@render leftSidebar()}
   {/if}

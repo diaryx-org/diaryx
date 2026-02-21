@@ -998,13 +998,13 @@
 {/if}
 
 <aside
-  class="flex flex-col h-screen border-r border-border bg-sidebar text-sidebar-foreground transition-all duration-300 ease-in-out
+  class="flex flex-col h-full border-r border-border bg-sidebar text-sidebar-foreground transition-all duration-300 ease-in-out
     {collapsed ? 'w-0 opacity-0 overflow-hidden md:w-0' : 'w-72'}
     fixed md:relative z-40 md:z-auto"
 >
   <!-- Header -->
   <div
-    class="flex items-center justify-between px-4 py-4 border-b border-sidebar-border shrink-0"
+    class="flex items-center justify-between px-4 py-4 border-b border-sidebar-border shrink-0 pt-[calc(env(safe-area-inset-top)+1rem)]"
   >
     <a
       href="/"
@@ -1261,7 +1261,7 @@
   {/if}
 
   <!-- Profile Footer -->
-  <div class="border-t border-sidebar-border shrink-0">
+  <div class="border-t border-sidebar-border shrink-0 pb-[env(safe-area-inset-bottom)]">
     <Popover.Root bind:open={profilePopoverOpen}>
       <Popover.Trigger
         class="w-full flex items-center gap-2.5 px-4 py-3 hover:bg-sidebar-accent active:bg-sidebar-accent transition-colors text-left"

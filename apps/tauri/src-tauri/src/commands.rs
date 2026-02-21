@@ -2809,6 +2809,24 @@ pub async fn reinitialize_workspace<R: Runtime>(
 
     // 3. Ensure workspace directory exists
     let ws_path = PathBuf::from(&workspace_path);
+
+    // On iOS, the sandbox container UUID changes between launches, so stored
+    // absolute paths become invalid. Re-resolve by extracting the workspace
+    // folder name and joining it to the current document_dir.
+    #[cfg(target_os = "ios")]
+    let ws_path = {
+        let paths = get_platform_paths(&app)?;
+        if ws_path.is_absolute() {
+            if let Some(name) = ws_path.file_name() {
+                paths.document_dir.join(name)
+            } else {
+                paths.default_workspace
+            }
+        } else {
+            paths.document_dir.join(&ws_path)
+        }
+    };
+
     std::fs::create_dir_all(&ws_path).map_err(|e| SerializableError {
         kind: "IoError".to_string(),
         message: format!("Failed to create workspace directory: {}", e),

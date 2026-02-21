@@ -36,8 +36,7 @@ body {
   html,
   body,
   #app {
-    height: 100dvh;
-    max-height: 100dvh;
+    min-height: 100dvh;
   }
 }
 
@@ -153,6 +152,12 @@ body {
 @layer base {
   * {
     @apply border-border outline-ring/50;
+  }
+  html {
+    /* Explicit background on html ensures the CSS canvas (which extends into
+       iOS safe areas with viewport-fit=cover) is painted with the correct
+       color, preventing a blank gap at the bottom on iOS WKWebView. */
+    @apply bg-background;
   }
   body {
     @apply bg-background text-foreground;

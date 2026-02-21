@@ -1,0 +1,7 @@
+{
+  "name": "diaryx-tauri",
+  "private": true,
+  "scripts": {
+    "tauri": "CC_aarch64_apple_ios=/usr/bin/clang CXX_aarch64_apple_ios=/usr/bin/clang++ AR_aarch64_apple_ios=/usr/bin/ar CARGO_TARGET_AARCH64_APPLE_IOS_LINKER=/usr/bin/clang CC_aarch64_apple_ios_sim=/usr/bin/clang CXX_aarch64_apple_ios_sim=/usr/bin/clang++ AR_aarch64_apple_ios_sim=/usr/bin/ar CARGO_TARGET_AARCH64_APPLE_IOS_SIM_LINKER=/usr/bin/clang CC_aarch64_apple_darwin=/usr/bin/clang CXX_aarch64_apple_darwin=/usr/bin/clang++ AR_aarch64_apple_darwin=/usr/bin/ar CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=/usr/bin/clang cargo tauri"
+  }
+}

@@ -1869,7 +1869,7 @@
     onGetStarted={() => { showAddWorkspace = true; }}
   />
 {:else}
-<div class="flex h-dvh bg-background overflow-hidden pt-[env(safe-area-inset-top)]">
+<div class="flex h-full bg-background overflow-hidden">
   <!-- Left Sidebar -->
   <LeftSidebar
     {tree}
@@ -1926,7 +1926,7 @@
   />
 
   <!-- Main Content Area -->
-  <main class="flex-1 flex flex-col overflow-hidden min-w-0 relative">
+  <main class="flex-1 flex flex-col overflow-hidden min-w-0 relative pt-[env(safe-area-inset-top)]">
     {#if currentEntry}
       <EditorHeader
         title={getEntryTitle(currentEntry)}

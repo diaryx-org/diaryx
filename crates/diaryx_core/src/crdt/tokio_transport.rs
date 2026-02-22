@@ -5,7 +5,7 @@
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-use super::transport::{SyncTransport, TransportError, WsMessage};
+use super::transport::{SyncTransport, TransportConnector, TransportError, WsMessage};
 
 type WsStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -69,5 +69,17 @@ impl SyncTransport for TokioTransport {
             .close(None)
             .await
             .map_err(|e| TransportError::Other(e.to_string()))
+    }
+}
+
+/// Connector that creates `TokioTransport` connections via `tokio-tungstenite`.
+pub struct TokioConnector;
+
+#[async_trait::async_trait]
+impl TransportConnector for TokioConnector {
+    type Transport = TokioTransport;
+
+    async fn connect(&self, url: &str) -> Result<Self::Transport, TransportError> {
+        TokioTransport::connect(url).await
     }
 }

@@ -1,0 +1,8 @@
+[default]
+description = "Allows all IAP commands"
+permissions = [
+    "allow-get-products",
+    "allow-purchase",
+    "allow-restore-purchases",
+    "allow-get-subscription-status",
+]

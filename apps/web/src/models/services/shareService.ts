@@ -17,6 +17,7 @@ import { createApi, type Api } from '$lib/backend/api';
 import { isTauri, type Backend } from '$lib/backend/interface';
 import type { TauriBackend } from '$lib/backend/tauri';
 import { getToken } from '$lib/auth/authStore.svelte';
+import { proxyFetch } from '$lib/backend/proxyFetch';
 
 // ============================================================================
 // Types
@@ -179,7 +180,7 @@ export async function createShareSession(workspaceId: string, readOnly: boolean 
       throw new Error('Authentication required to create a session');
     }
 
-    const response = await fetch(`${baseUrl}/api/sessions`, {
+    const response = await proxyFetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -324,7 +325,7 @@ export async function joinShareSession(joinCode: string): Promise<string> {
   const baseUrl = getBaseServerUrl();
   let sessionInfo: { workspace_id: string; read_only: boolean };
   try {
-    const resp = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(normalizedCode)}`);
+    const resp = await proxyFetch(`${baseUrl}/api/sessions/${encodeURIComponent(normalizedCode)}`);
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({ error: 'Session not found' }));
       throw new Error(err.error || 'Session not found');
@@ -398,7 +399,7 @@ export async function endShareSession(): Promise<void> {
     if (token) {
       const baseUrl = getBaseServerUrl();
       try {
-        await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(joinCode)}`, {
+        await proxyFetch(`${baseUrl}/api/sessions/${encodeURIComponent(joinCode)}`, {
           method: 'DELETE',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -491,7 +492,7 @@ export async function setSessionReadOnly(readOnly: boolean): Promise<void> {
 
   const baseUrl = getBaseServerUrl();
   try {
-    const response = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(joinCode)}`, {
+    const response = await proxyFetch(`${baseUrl}/api/sessions/${encodeURIComponent(joinCode)}`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',

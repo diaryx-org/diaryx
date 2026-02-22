@@ -58,3 +58,18 @@ Workspace rename/move operations now prefer non-lossy index updates:
 - Cleanup failures when removing old `contents` references are logged as warnings instead of silently ignored.
 
 This reduces transient states where a renamed child disappears from workspace trees.
+
+## Non-Portable Filename Validation
+
+Validation detects filenames containing characters that are not portable across platforms. Chrome's File System Access API (used by the web frontend) rejects these characters even on macOS/Linux, applying Windows-level restrictions:
+
+- **Anywhere in filename:** `"`, `*`, `/`, `\`, `:`, `<`, `>`, `?`, `|`, control characters (U+0000-U+001F, U+007F)
+- **At start/end of filename stem:** `.`, `~`, whitespace
+
+Files with non-portable filenames produce a `NonPortableFilename` warning with a suggested sanitized filename. The `Preserve` filename style also strips these characters when generating new filenames.
+
+## Duplicate Contents Entries
+
+Tree building now deduplicates child paths per index when `contents` includes
+the same target more than once. This prevents duplicate `TreeNode.path` values
+from propagating to clients and avoids keyed-render crashes in UIs.

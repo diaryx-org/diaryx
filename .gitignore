@@ -9,3 +9,6 @@ workspaces
 .direnv
 .zig-cache
 *.zip
+*.html
+**/*.build
+**/.tauri

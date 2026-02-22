@@ -1,10 +1,12 @@
 pub mod api;
+pub mod apple;
 pub mod auth;
 pub mod sessions;
 pub mod sites;
 pub mod stripe;
 
 pub use api::api_routes;
+pub use apple::apple_iap_routes;
 pub use auth::auth_routes;
 pub use sessions::session_routes;
 pub use sites::site_routes;

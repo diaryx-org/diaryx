@@ -426,14 +426,22 @@ on all platforms without feature gates.
 
 ### Native (CLI, Tauri)
 
-`SyncClient` (requires `native-sync` feature) wraps `SyncSession` with tokio
-WebSocket transport, reconnection with exponential backoff, and ping/keepalive.
+`SyncClient` (requires `native-sync` feature) wraps `SyncSession` with a
+pluggable WebSocket transport, reconnection with exponential backoff, and
+ping/keepalive.
+
+`SyncClient` is generic over `C: TransportConnector`, allowing different
+WebSocket backends. The built-in `TokioConnector` uses `tokio-tungstenite`
+with rustls TLS. Custom connectors can be implemented for platform-specific
+networking (e.g., Apple's `URLSessionWebSocketTask` on iOS).
 
 Frontends implement `SyncEventHandler` to receive status changes, progress
 updates, and file change notifications.
 
 ```rust,ignore
-use diaryx_core::crdt::{SyncClient, SyncClientConfig, SyncEvent, SyncEventHandler};
+use diaryx_core::crdt::{
+    SyncClient, SyncClientConfig, SyncEvent, SyncEventHandler, TokioConnector,
+};
 
 struct MyHandler;
 impl SyncEventHandler for MyHandler {
@@ -453,13 +461,46 @@ let config = SyncClientConfig {
     reconnect: Default::default(),
 };
 
-let client = SyncClient::new(config, sync_manager, Arc::new(MyHandler));
+let client = SyncClient::new(config, sync_manager, Arc::new(MyHandler), TokioConnector);
 
 // Persistent sync with reconnection (Tauri, CLI `sync start`)
 client.run_persistent(running).await;
 
 // One-shot push/pull (CLI `sync push`, `sync pull`)
 let stats = client.run_one_shot().await?;
+```
+
+#### Custom Transport
+
+To use a different WebSocket backend, implement `TransportConnector` and
+`SyncTransport`:
+
+```rust,ignore
+use diaryx_core::crdt::{TransportConnector, SyncTransport, TransportError, WsMessage};
+
+struct MyConnector;
+
+#[async_trait::async_trait]
+impl TransportConnector for MyConnector {
+    type Transport = MyTransport;
+    async fn connect(&self, url: &str) -> Result<MyTransport, TransportError> {
+        // ... establish connection
+    }
+}
+
+struct MyTransport { /* ... */ }
+
+#[async_trait::async_trait]
+impl SyncTransport for MyTransport {
+    async fn send_binary(&mut self, data: Vec<u8>) -> Result<(), TransportError> { /* ... */ }
+    async fn send_text(&mut self, text: String) -> Result<(), TransportError> { /* ... */ }
+    async fn send_ping(&mut self) -> Result<(), TransportError> { /* ... */ }
+    async fn recv(&mut self) -> Option<Result<WsMessage, TransportError>> { /* ... */ }
+    async fn close(&mut self) -> Result<(), TransportError> { /* ... */ }
+}
+
+// Then use with SyncClient:
+let client = SyncClient::new(config, sync_manager, handler, MyConnector);
 ```
 
 ### WASM (Web)

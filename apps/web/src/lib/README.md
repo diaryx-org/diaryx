@@ -55,6 +55,15 @@ Shared libraries, components, and utilities for the web application.
 | `stores/` | Svelte stores |
 | `wasm/` | Built WASM module |
 
+## Validation
+
+Workspace naming, URL normalization, and publishing slug validation live in
+`diaryx_core::utils::naming` (Rust) and are exposed to the frontend via
+Commands (`ValidateWorkspaceName`, `ValidatePublishingSlug`,
+`NormalizeServerUrl`, `ToWebSocketSyncUrl`). The typed wrappers are in
+`backend/api.ts`. Frontend components call these instead of duplicating
+validation logic locally.
+
 ## Add Workspace Dialog
 
 `AddWorkspaceDialog.svelte` is the unified workspace creation dialog. It presents
@@ -92,3 +101,13 @@ when a command opens another modal (for example, `New Entry`).
 `NewEntryModal.svelte` also guards its parent-picker root expansion effect so it
 does not continuously rewrite `pickerExpanded`. This avoids reactive update-loop
 errors that can leave overlapping dialogs/focus traps on screen.
+
+## Sidebar Tree Performance
+
+`LeftSidebar.svelte` pre-groups validation errors by path for O(1) row lookups
+instead of scanning the full error list per rendered node. This keeps folder
+expand/collapse interactions responsive in larger workspaces.
+
+The tree renderer also deduplicates children by `path` before keyed rendering,
+so duplicate references from upstream data do not crash Svelte keyed `each`
+blocks.

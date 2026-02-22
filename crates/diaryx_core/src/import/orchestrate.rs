@@ -73,7 +73,7 @@ pub async fn write_entries<FS: AsyncFileSystem>(
         let mut entry_path = month_dir.join(&filename);
 
         // Handle filename collisions.
-        entry_path = deduplicate_path(entry_path, &mut used_paths);
+        entry_path = deduplicate_path(entry_path, &used_paths);
         used_paths.insert(entry_path.clone());
 
         // Compute canonical paths for hierarchy tracking.
@@ -292,11 +292,7 @@ async fn write_index_hierarchy<FS: AsyncFileSystem>(
 /// 1. Find the workspace root index (the file with `contents` but no `part_of`).
 /// 2. Add the import folder's index to the workspace root's `contents` if not already present.
 /// 3. Set `part_of` on the import folder's index pointing back to the workspace root.
-async fn graft_into_workspace<FS: AsyncFileSystem>(
-    fs: &FS,
-    workspace_root: &Path,
-    folder: &str,
-) {
+async fn graft_into_workspace<FS: AsyncFileSystem>(fs: &FS, workspace_root: &Path, folder: &str) {
     let ws = Workspace::new(fs);
     let ws_root_index = match ws.find_root_index_in_dir(workspace_root).await {
         Ok(Some(path)) => path,
@@ -312,72 +308,72 @@ async fn graft_into_workspace<FS: AsyncFileSystem>(
     let import_title = capitalize(folder);
 
     // Step 1: Add to workspace root's contents.
-    if let Ok(ws_root_content) = fs.read_to_string(&ws_root_index).await {
-        if let Ok(parsed) = frontmatter::parse_or_empty(&ws_root_content) {
-            let mut fm = parsed.frontmatter;
+    if let Ok(ws_root_content) = fs.read_to_string(&ws_root_index).await
+        && let Ok(parsed) = frontmatter::parse_or_empty(&ws_root_content)
+    {
+        let mut fm = parsed.frontmatter;
 
-            // Check if already listed in contents.
-            let already_listed = fm
-                .get("contents")
-                .and_then(|v| v.as_sequence())
-                .map(|seq| {
-                    seq.iter().any(|item| {
-                        item.as_str()
-                            .map(|s| s.contains(&import_index_canonical))
-                            .unwrap_or(false)
-                    })
+        // Check if already listed in contents.
+        let already_listed = fm
+            .get("contents")
+            .and_then(|v| v.as_sequence())
+            .map(|seq| {
+                seq.iter().any(|item| {
+                    item.as_str()
+                        .map(|s| s.contains(&import_index_canonical))
+                        .unwrap_or(false)
                 })
-                .unwrap_or(false);
+            })
+            .unwrap_or(false);
 
-            if !already_listed {
-                let link = Value::String(format_link(&import_index_canonical, &import_title));
-                match fm.get_mut("contents") {
-                    Some(Value::Sequence(seq)) => {
-                        seq.push(link);
-                    }
-                    _ => {
-                        fm.insert("contents".to_string(), Value::Sequence(vec![link]));
-                    }
+        if !already_listed {
+            let link = Value::String(format_link(&import_index_canonical, &import_title));
+            match fm.get_mut("contents") {
+                Some(Value::Sequence(seq)) => {
+                    seq.push(link);
                 }
+                _ => {
+                    fm.insert("contents".to_string(), Value::Sequence(vec![link]));
+                }
+            }
 
-                if let Ok(updated) = frontmatter::serialize(&fm, &parsed.body) {
-                    let _ = fs.write_file(&ws_root_index, &updated).await;
-                }
+            if let Ok(updated) = frontmatter::serialize(&fm, &parsed.body) {
+                let _ = fs.write_file(&ws_root_index, &updated).await;
             }
         }
     }
 
     // Step 2: Set part_of on the import folder's root index.
-    if let Ok(import_content) = fs.read_to_string(&import_index_path).await {
-        if let Ok(parsed) = frontmatter::parse_or_empty(&import_content) {
-            let mut fm = parsed.frontmatter;
+    if let Ok(import_content) = fs.read_to_string(&import_index_path).await
+        && let Ok(parsed) = frontmatter::parse_or_empty(&import_content)
+    {
+        let mut fm = parsed.frontmatter;
 
-            if !fm.contains_key("part_of") {
-                let ws_root_canonical = canonical_path(workspace_root, &ws_root_index);
-                let ws_root_title = fm_title_or_filename(&ws_root_index);
+        if !fm.contains_key("part_of") {
+            let ws_root_canonical = canonical_path(workspace_root, &ws_root_index);
+            let ws_root_title = fm_title_or_filename(&ws_root_index);
 
-                // Read the workspace root's title from its frontmatter if available.
-                let ws_title = fs
-                    .read_to_string(&ws_root_index)
-                    .await
-                    .ok()
-                    .and_then(|c| frontmatter::parse_or_empty(&c).ok())
-                    .and_then(|p| {
-                        p.frontmatter
-                            .get("title")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string())
-                    })
-                    .unwrap_or(ws_root_title);
+            // Read the workspace root's title from its frontmatter if available.
+            let ws_title = fs
+                .read_to_string(&ws_root_index)
+                .await
+                .ok()
+                .and_then(|c| frontmatter::parse_or_empty(&c).ok())
+                .and_then(|p| {
+                    p.frontmatter
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                })
+                .unwrap_or(ws_root_title);
 
-                fm.insert(
-                    "part_of".to_string(),
-                    Value::String(format_link(&ws_root_canonical, &ws_title)),
-                );
+            fm.insert(
+                "part_of".to_string(),
+                Value::String(format_link(&ws_root_canonical, &ws_title)),
+            );
 
-                if let Ok(updated) = frontmatter::serialize(&fm, &parsed.body) {
-                    let _ = fs.write_file(&import_index_path, &updated).await;
-                }
+            if let Ok(updated) = frontmatter::serialize(&fm, &parsed.body) {
+                let _ = fs.write_file(&import_index_path, &updated).await;
             }
         }
     }
@@ -512,6 +508,6 @@ fn capitalize(s: &str) -> String {
 fn fm_title_or_filename(path: &Path) -> String {
     path.file_stem()
         .and_then(|s| s.to_str())
-        .map(|s| crate::entry::prettify_filename(s))
+        .map(crate::entry::prettify_filename)
         .unwrap_or_else(|| "Index".to_string())
 }

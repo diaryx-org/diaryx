@@ -11,6 +11,43 @@ use commands::{CrdtState, GuestModeState, WebSocketSyncState};
 /// Cloud backup targets (S3, Google Drive, etc.)
 mod cloud;
 
+/// Configure the iOS WKWebView to render edge-to-edge, extending content into
+/// safe areas. Without this, the webview stops at the bottom safe area boundary,
+/// leaving a visible gap above the home indicator.
+///
+/// Sets `scrollView.contentInsetAdjustmentBehavior = .never` via ObjC runtime,
+/// which makes `viewport-fit=cover` and `env(safe-area-inset-*)` work correctly.
+#[cfg(target_os = "ios")]
+fn setup_ios_edge_to_edge(app: &tauri::App) {
+    use tauri::Manager;
+
+    unsafe extern "C" {
+        fn sel_registerName(name: *const std::ffi::c_char) -> *const std::ffi::c_void;
+        fn objc_msgSend(
+            obj: *const std::ffi::c_void,
+            sel: *const std::ffi::c_void,
+            ...
+        ) -> *const std::ffi::c_void;
+    }
+
+    if let Some(webview) = app.get_webview_window("main") {
+        let _ = webview.with_webview(move |wv| unsafe {
+            let wkwebview = wv.inner() as *const std::ffi::c_void;
+
+            // wkwebview.scrollView
+            let scroll_view_sel =
+                sel_registerName(b"scrollView\0".as_ptr() as *const std::ffi::c_char);
+            let scroll_view = objc_msgSend(wkwebview, scroll_view_sel);
+
+            // scrollView.contentInsetAdjustmentBehavior = .never (rawValue 2)
+            let set_behavior_sel = sel_registerName(
+                b"setContentInsetAdjustmentBehavior:\0".as_ptr() as *const std::ffi::c_char,
+            );
+            objc_msgSend(scroll_view, set_behavior_sel, 2isize);
+        });
+    }
+}
+
 /// Run function used by Tauri clients. Builds Tauri plugins and invokable commands.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -21,7 +58,7 @@ pub fn run() {
 
     log::info!("Starting Diaryx application...");
 
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         // Stronghold plugin for secure credential storage
         .plugin(
             tauri_plugin_stronghold::Builder::new(|password| {
@@ -44,13 +81,26 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_google_auth::init())
+        .plugin(tauri_plugin_google_auth::init());
+
+    // Apple IAP plugin — only included with `--features iap` (for App Store builds)
+    #[cfg(feature = "iap")]
+    {
+        builder = builder.plugin(tauri_plugin_iap::init());
+    }
+
+    builder
         // CRDT state for version history and sync
         .manage(CrdtState::new())
         // Guest mode state for share sessions
         .manage(GuestModeState::new())
         // WebSocket sync state
         .manage(WebSocketSyncState::new())
+        .setup(|_app| {
+            #[cfg(target_os = "ios")]
+            setup_ios_edge_to_edge(_app);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             // ============================================================
             // UNIFIED COMMAND API - All operations go through execute()
@@ -106,6 +156,8 @@ pub fn run() {
             commands::start_websocket_sync,
             commands::stop_websocket_sync,
             commands::get_websocket_sync_status,
+            // HTTP Proxy (iOS CORS bypass)
+            commands::proxy_fetch,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

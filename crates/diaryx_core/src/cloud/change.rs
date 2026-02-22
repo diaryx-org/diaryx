@@ -154,6 +154,14 @@ pub enum SyncAction {
         /// Conflict information
         info: ConflictInfo,
     },
+    /// Clean up a manifest entry without any file operation.
+    ///
+    /// Used when both local and remote have deleted the same file -
+    /// neither side has it, so we just remove the stale manifest entry.
+    ManifestCleanup {
+        /// Path to remove from manifest
+        path: String,
+    },
 }
 
 impl SyncAction {
@@ -164,6 +172,7 @@ impl SyncAction {
             SyncAction::Download { path, .. } => path,
             SyncAction::Delete { path, .. } => path,
             SyncAction::Conflict { info } => &info.path,
+            SyncAction::ManifestCleanup { path } => path,
         }
     }
 
@@ -223,7 +232,13 @@ pub fn detect_conflicts(
 /// Compute sync actions from local and remote changes.
 ///
 /// This function determines what operations need to be performed to sync,
-/// handling conflicts appropriately.
+/// handling conflicts appropriately. It also handles cross-deletion scenarios:
+///
+/// - **Local delete + remote modify**: Local deletion takes precedence. The file
+///   is deleted from remote (no download).
+/// - **Local modify + remote delete**: Local modification takes precedence. The
+///   file is uploaded to remote (no local delete).
+/// - **Both sides deleted**: No action needed; manifest cleanup only.
 pub fn compute_sync_actions(
     local_changes: &[LocalChange],
     remote_changes: &[RemoteChange],
@@ -231,6 +246,23 @@ pub fn compute_sync_actions(
     let conflicts = detect_conflicts(local_changes, remote_changes);
     let conflict_paths: std::collections::HashSet<String> =
         conflicts.iter().map(|c| c.path.clone()).collect();
+
+    // Build sets for cross-deletion handling
+    let locally_deleted: std::collections::HashSet<String> = local_changes
+        .iter()
+        .filter_map(|c| match c {
+            LocalChange::Deleted { path } => Some(path.clone()),
+            _ => None,
+        })
+        .collect();
+
+    let remotely_deleted: std::collections::HashSet<String> = remote_changes
+        .iter()
+        .filter_map(|c| match c {
+            RemoteChange::Deleted { path } => Some(path.clone()),
+            _ => None,
+        })
+        .collect();
 
     let mut actions = Vec::new();
 
@@ -247,18 +279,29 @@ pub fn compute_sync_actions(
 
         match change {
             LocalChange::Created { path, .. } | LocalChange::Modified { path, .. } => {
+                // Local create/modify always generates an upload.
+                // If the file was remotely deleted, we still upload to preserve
+                // local modifications (local wins).
                 actions.push(SyncAction::Upload { path: path.clone() });
             }
             LocalChange::Deleted { path } => {
-                actions.push(SyncAction::Delete {
-                    path: path.clone(),
-                    direction: SyncDirection::Upload, // Delete from remote
-                });
+                if remotely_deleted.contains(path) {
+                    // Both sides deleted - no action needed.
+                    // Emit a ManifestCleanup action so the manifest entry is removed.
+                    actions.push(SyncAction::ManifestCleanup { path: path.clone() });
+                } else {
+                    // Normal local deletion or local delete + remote modify:
+                    // delete from remote (local deletion takes precedence).
+                    actions.push(SyncAction::Delete {
+                        path: path.clone(),
+                        direction: SyncDirection::Upload,
+                    });
+                }
             }
         }
     }
 
-    // Process remote changes (excluding conflicts)
+    // Process remote changes (excluding conflicts and cross-deletion paths)
     for change in remote_changes {
         if conflict_paths.contains(change.path()) {
             continue;
@@ -266,15 +309,34 @@ pub fn compute_sync_actions(
 
         match change {
             RemoteChange::Created { info } | RemoteChange::Modified { info, .. } => {
+                if locally_deleted.contains(&info.path) {
+                    // File was modified/created remotely but deleted locally.
+                    // Local deletion takes precedence - skip download.
+                    continue;
+                }
                 actions.push(SyncAction::Download {
                     path: info.path.clone(),
                     remote_info: info.clone(),
                 });
             }
             RemoteChange::Deleted { path } => {
+                if locally_deleted.contains(path) {
+                    // Both sides deleted - already handled above as ManifestCleanup.
+                    continue;
+                }
+                // Check if the file was locally modified/created - if so, skip
+                // the remote delete (local modification takes precedence).
+                let locally_changed = local_changes.iter().any(|c| match c {
+                    LocalChange::Created { path: p, .. }
+                    | LocalChange::Modified { path: p, .. } => p == path,
+                    _ => false,
+                });
+                if locally_changed {
+                    continue;
+                }
                 actions.push(SyncAction::Delete {
                     path: path.clone(),
-                    direction: SyncDirection::Download, // Delete from local
+                    direction: SyncDirection::Download,
                 });
             }
         }
@@ -381,5 +443,181 @@ mod tests {
         // Should only have conflict action, no upload/download for the conflicting file
         assert_eq!(actions.len(), 1);
         assert!(actions[0].is_conflict());
+    }
+
+    #[test]
+    fn test_local_delete_suppresses_remote_download() {
+        // File deleted locally but modified remotely - local delete should win,
+        // no download should be generated (this was causing resurrected files).
+        let local = vec![LocalChange::Deleted {
+            path: "deleted.md".to_string(),
+        }];
+        let remote = vec![RemoteChange::Modified {
+            info: make_remote_info("deleted.md"),
+            previous_version: Some("old-etag".to_string()),
+        }];
+
+        let actions = compute_sync_actions(&local, &remote);
+
+        // Should only have a delete-from-remote action, NO download
+        let deletes: Vec<_> = actions
+            .iter()
+            .filter(|a| matches!(a, SyncAction::Delete { .. }))
+            .collect();
+        let downloads: Vec<_> = actions.iter().filter(|a| a.is_download()).collect();
+
+        assert_eq!(deletes.len(), 1, "Should have exactly one delete action");
+        assert_eq!(
+            downloads.len(),
+            0,
+            "Should NOT download a locally-deleted file"
+        );
+
+        if let SyncAction::Delete { direction, .. } = &deletes[0] {
+            assert_eq!(
+                *direction,
+                SyncDirection::Upload,
+                "Should delete from remote"
+            );
+        }
+    }
+
+    #[test]
+    fn test_local_modify_suppresses_remote_delete() {
+        // File modified locally but deleted remotely - local modification should win,
+        // no local delete should be generated.
+        let local = vec![LocalChange::Modified {
+            path: "modified.md".to_string(),
+            content_hash: "new_hash".to_string(),
+            modified_at: 2000,
+            previous_hash: "old_hash".to_string(),
+        }];
+        let remote = vec![RemoteChange::Deleted {
+            path: "modified.md".to_string(),
+        }];
+
+        let actions = compute_sync_actions(&local, &remote);
+
+        // Should only have an upload action, NO local delete
+        let uploads: Vec<_> = actions.iter().filter(|a| a.is_upload()).collect();
+        let deletes: Vec<_> = actions
+            .iter()
+            .filter(|a| matches!(a, SyncAction::Delete { .. }))
+            .collect();
+
+        assert_eq!(uploads.len(), 1, "Should upload the locally modified file");
+        assert_eq!(
+            deletes.len(),
+            0,
+            "Should NOT delete a locally-modified file"
+        );
+    }
+
+    #[test]
+    fn test_both_sides_deleted_produces_manifest_cleanup() {
+        // File deleted on both local and remote - should produce a ManifestCleanup,
+        // not conflicting delete actions that would fail.
+        let local = vec![LocalChange::Deleted {
+            path: "gone.md".to_string(),
+        }];
+        let remote = vec![RemoteChange::Deleted {
+            path: "gone.md".to_string(),
+        }];
+
+        let actions = compute_sync_actions(&local, &remote);
+
+        // Should only have a ManifestCleanup, no Delete actions
+        let cleanups: Vec<_> = actions
+            .iter()
+            .filter(|a| matches!(a, SyncAction::ManifestCleanup { .. }))
+            .collect();
+        let deletes: Vec<_> = actions
+            .iter()
+            .filter(|a| matches!(a, SyncAction::Delete { .. }))
+            .collect();
+
+        assert_eq!(cleanups.len(), 1, "Should have one manifest cleanup");
+        assert_eq!(deletes.len(), 0, "Should have no delete actions");
+    }
+
+    #[test]
+    fn test_mixed_changes_with_cross_deletions() {
+        // Complex scenario: multiple files with various change combinations
+        let local = vec![
+            LocalChange::Created {
+                path: "new_local.md".to_string(),
+                content_hash: "h1".to_string(),
+                modified_at: 1000,
+            },
+            LocalChange::Deleted {
+                path: "deleted_both_sides.md".to_string(),
+            },
+            LocalChange::Deleted {
+                path: "deleted_local_modified_remote.md".to_string(),
+            },
+            LocalChange::Modified {
+                path: "modified_local_deleted_remote.md".to_string(),
+                content_hash: "new".to_string(),
+                modified_at: 2000,
+                previous_hash: "old".to_string(),
+            },
+        ];
+        let remote = vec![
+            RemoteChange::Created {
+                info: make_remote_info("new_remote.md"),
+            },
+            RemoteChange::Deleted {
+                path: "deleted_both_sides.md".to_string(),
+            },
+            RemoteChange::Modified {
+                info: make_remote_info("deleted_local_modified_remote.md"),
+                previous_version: None,
+            },
+            RemoteChange::Deleted {
+                path: "modified_local_deleted_remote.md".to_string(),
+            },
+        ];
+
+        let actions = compute_sync_actions(&local, &remote);
+
+        // Expected actions:
+        // 1. Upload "new_local.md" (new local file)
+        // 2. ManifestCleanup "deleted_both_sides.md" (both deleted)
+        // 3. Delete "deleted_local_modified_remote.md" from remote (local delete wins)
+        // 4. Upload "modified_local_deleted_remote.md" (local modify wins)
+        // 5. Download "new_remote.md" (new remote file)
+        let uploads: Vec<_> = actions
+            .iter()
+            .filter(|a| a.is_upload())
+            .map(|a| a.path())
+            .collect();
+        let downloads: Vec<_> = actions
+            .iter()
+            .filter(|a| a.is_download())
+            .map(|a| a.path())
+            .collect();
+        let deletes: Vec<_> = actions
+            .iter()
+            .filter(|a| matches!(a, SyncAction::Delete { .. }))
+            .map(|a| a.path())
+            .collect();
+        let cleanups: Vec<_> = actions
+            .iter()
+            .filter(|a| matches!(a, SyncAction::ManifestCleanup { .. }))
+            .map(|a| a.path())
+            .collect();
+
+        assert_eq!(uploads.len(), 2);
+        assert!(uploads.contains(&"new_local.md"));
+        assert!(uploads.contains(&"modified_local_deleted_remote.md"));
+
+        assert_eq!(downloads.len(), 1);
+        assert!(downloads.contains(&"new_remote.md"));
+
+        assert_eq!(deletes.len(), 1);
+        assert!(deletes.contains(&"deleted_local_modified_remote.md"));
+
+        assert_eq!(cleanups.len(), 1);
+        assert!(cleanups.contains(&"deleted_both_sides.md"));
     }
 }

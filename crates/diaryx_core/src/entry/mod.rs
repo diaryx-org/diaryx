@@ -26,7 +26,10 @@
 mod helpers;
 
 // Re-export helper functions
-pub use helpers::{apply_filename_style, prettify_filename, slugify, slugify_title};
+pub use helpers::{
+    apply_filename_style, has_non_portable_chars, prettify_filename, sanitize_filename, slugify,
+    slugify_title,
+};
 
 use crate::config::Config;
 use crate::date::{date_to_path, parse_date};

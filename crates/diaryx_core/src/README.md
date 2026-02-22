@@ -24,6 +24,7 @@ attachments:
   - "[link_parser.rs](/crates/diaryx_core/src/link_parser.rs)"
   - "[metadata_writer.rs](/crates/diaryx_core/src/metadata_writer.rs)"
   - "[search.rs](/crates/diaryx_core/src/search.rs)"
+  - "[body_template.rs](/crates/diaryx_core/src/body_template.rs)"
   - "[template.rs](/crates/diaryx_core/src/template.rs)"
   - "[test_utils.rs](/crates/diaryx_core/src/test_utils.rs)"
   - "[validate.rs](/crates/diaryx_core/src/validate.rs)"
@@ -51,7 +52,8 @@ This directory contains the source code for the core Diaryx library.
 | `link_parser.rs`     | Parse markdown links                                   |
 | `metadata_writer.rs` | Write frontmatter metadata (temp + backup safe writes) |
 | `search.rs`          | Search functionality                                   |
-| `template.rs`        | Template management                                    |
+| `body_template.rs`   | Render-time body templating via Handlebars (`templating` feature) |
+| `template.rs`        | Creation-time template management                      |
 | `test_utils.rs`      | Feature-gated test utilities                           |
 | `validate.rs`        | Workspace validation and fixing                        |
 
@@ -80,6 +82,16 @@ Returns `Response::String(new_path)` if a rename occurred, `Response::Ok` otherw
   for markdown links, root-relative refs, plain relative refs, and plain
   canonical refs that include the current entry directory. This keeps
   get/delete/move attachment commands consistent for nested entries.
+
+## Command Path Resolution Notes
+
+- `execute()` normalizes command path fields to workspace-relative values when a
+  workspace root is configured.
+- Handlers that call `Workspace`, `Validator`, exporter/search root APIs, or
+  raw filesystem methods must resolve those normalized values back to
+  filesystem paths via `resolve_fs_path(...)` before reading/writing disk.
+- This preserves cross-platform behavior for Tauri absolute inputs while
+  keeping canonical workspace-relative command semantics for sync/link logic.
 
 ## TypeScript Binding Notes
 

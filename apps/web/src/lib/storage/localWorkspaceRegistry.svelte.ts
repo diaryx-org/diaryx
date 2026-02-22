@@ -10,6 +10,7 @@
  */
 
 import { getStorageType, type StorageType } from '$lib/backend/storageType';
+import { generateUUID } from '$lib/utils';
 
 // ============================================================================
 // Types
@@ -135,7 +136,7 @@ export function setWorkspaceStorageType(id: string, type: StorageType): void {
  * Register a workspace as locally available.
  * If it already exists, updates the name.
  */
-export function addLocalWorkspace(ws: { id: string; name: string; isLocal?: boolean; storageType?: StorageType }): void {
+export function addLocalWorkspace(ws: { id: string; name: string; isLocal?: boolean; storageType?: StorageType; path?: string }): void {
   const list = [...registryState];
   const existing = list.find(w => w.id === ws.id);
   if (existing) {
@@ -146,12 +147,16 @@ export function addLocalWorkspace(ws: { id: string; name: string; isLocal?: bool
     if (ws.storageType !== undefined) {
       existing.storageType = ws.storageType;
     }
+    if (ws.path !== undefined) {
+      existing.path = ws.path;
+    }
   } else {
     list.push({
       id: ws.id,
       name: ws.name,
       isLocal: ws.isLocal ?? false,
       storageType: ws.storageType,
+      ...(ws.path ? { path: ws.path } : {}),
       downloadedAt: Date.now(),
       lastOpenedAt: Date.now(),
     });
@@ -239,7 +244,7 @@ export function setWorkspaceIsLocal(id: string, isLocal: boolean): void {
  * Returns the created workspace entry.
  */
 export function createLocalWorkspace(name: string, storageType?: StorageType, path?: string): LocalWorkspace {
-  const id = `local-${crypto.randomUUID()}`;
+  const id = `local-${generateUUID()}`;
   const ws: LocalWorkspace = {
     id,
     name,

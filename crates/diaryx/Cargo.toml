@@ -15,7 +15,7 @@ name = "diaryx"
 path = "src/main.rs"
 
 [dependencies]
-diaryx_core = { workspace = true, features = ["markdown", "crdt", "crdt-sqlite", "native-sync", "native-pandoc", "git", "import-email", "import-dayone", "import-markdown"] }
+diaryx_core = { workspace = true, features = ["markdown", "crdt", "crdt-sqlite", "native-sync", "native-pandoc", "git", "import-email", "import-dayone", "import-markdown", "templating"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 chrono.workspace = true
 serde.workspace = true
@@ -29,10 +29,7 @@ pathdiff = "0.2"
 base64 = "0.22"
 futures-lite = "2.3"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "signal"] }
-tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
-futures-util = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
-url = "2.5"
 urlencoding = "2.1"
 log = "0.4"
 env_logger = "0.11"

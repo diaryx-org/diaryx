@@ -163,7 +163,7 @@ fn run_crdt_scenario<FS: AsyncFileSystem + Clone + Send + Sync>(
     base: FS,
     root: PathBuf,
 ) -> BackendSnapshot {
-    let decorated = DecoratedFsBuilder::new(base).build();
+    let decorated = DecoratedFsBuilder::new(base).crdt_enabled(true).build();
     let fs = decorated.fs.clone();
     let workspace_crdt = Arc::clone(&decorated.workspace_crdt);
     let body_docs = Arc::clone(&decorated.body_doc_manager);

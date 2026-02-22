@@ -12,6 +12,7 @@
     Paperclip,
     Code,
     Table2,
+    Pencil,
   } from "@lucide/svelte";
 
   interface Props {
@@ -119,6 +120,10 @@
     onSelect(() =>
       editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
     );
+  }
+
+  function handleDrawing() {
+    onSelect(() => editor.commands.insertDrawingBlock());
   }
 
   function handleAttachment() {
@@ -253,6 +258,15 @@
     >
       <Table2 class="size-4" />
       <span>Table</span>
+    </button>
+    <button
+      type="button"
+      onclick={(e) => handleMenuItemClick(e, handleDrawing)}
+      class="menu-item"
+      title="Drawing"
+    >
+      <Pencil class="size-4" />
+      <span>Drawing</span>
     </button>
   </div>
 

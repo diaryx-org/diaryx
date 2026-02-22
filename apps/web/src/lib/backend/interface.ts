@@ -543,8 +543,12 @@ export interface Backend {
   syncOnConnected?(): Promise<void>;
   /** Inject a binary WebSocket message. */
   syncOnBinaryMessage?(data: Uint8Array): Promise<void>;
+  /** Inject a batch of binary WebSocket messages (single Comlink round-trip). */
+  syncOnBinaryMessages?(messages: Uint8Array[]): Promise<void>;
   /** Inject a text WebSocket message. */
   syncOnTextMessage?(text: string): Promise<void>;
+  /** Inject a batch of text WebSocket messages (single Comlink round-trip). */
+  syncOnTextMessages?(messages: string[]): Promise<void>;
   /** Notify disconnected. */
   syncOnDisconnected?(): Promise<void>;
   /** Notify snapshot imported. */

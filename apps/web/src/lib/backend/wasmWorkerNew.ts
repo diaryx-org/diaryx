@@ -730,11 +730,33 @@ const workerApi = {
   },
 
   /**
+   * Inject a batch of binary WebSocket messages into the sync client.
+   * More efficient than individual calls across the Comlink boundary.
+   */
+  async syncOnBinaryMessages(messages: Uint8Array[]): Promise<void> {
+    if (!syncClient) throw new Error('Sync client not created');
+    for (const msg of messages) {
+      await syncClient.onBinaryMessage(msg);
+    }
+  },
+
+  /**
    * Inject a text WebSocket message into the sync client.
    */
   async syncOnTextMessage(text: string): Promise<void> {
     if (!syncClient) throw new Error('Sync client not created');
     await syncClient.onTextMessage(text);
+  },
+
+  /**
+   * Inject a batch of text WebSocket messages into the sync client.
+   * More efficient than individual calls across the Comlink boundary.
+   */
+  async syncOnTextMessages(messages: string[]): Promise<void> {
+    if (!syncClient) throw new Error('Sync client not created');
+    for (const msg of messages) {
+      await syncClient.onTextMessage(msg);
+    }
   },
 
   /**

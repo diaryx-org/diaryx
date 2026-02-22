@@ -371,6 +371,10 @@ impl<P: CloudSyncProvider> SyncEngine<P> {
                     self.manifest.remove_file(&path);
                     deleted += 1;
                 }
+                SyncAction::ManifestCleanup { path } => {
+                    // Both sides deleted this file - just clean up the manifest entry
+                    self.manifest.remove_file(&path);
+                }
                 SyncAction::Conflict { .. } => {
                     // Already handled above
                 }
@@ -639,6 +643,13 @@ impl<P: CloudSyncProvider> SyncEngine<P> {
                 self.manifest.remove_file(path);
                 deleted += 1;
                 completed += 1;
+            }
+        }
+
+        // Process manifest-only cleanups (both sides deleted)
+        for action in &actions {
+            if let SyncAction::ManifestCleanup { path } = action {
+                self.manifest.remove_file(path);
             }
         }
 

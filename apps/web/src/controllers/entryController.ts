@@ -265,6 +265,8 @@ export async function ensureDailyEntry(
 
 /**
  * Delete an entry.
+ *
+ * Callers are responsible for showing a confirmation dialog before calling this.
  */
 export async function deleteEntry(
   api: Api,
@@ -272,11 +274,6 @@ export async function deleteEntry(
   currentEntryPath: string | null,
   onSuccess?: () => Promise<void>
 ): Promise<boolean> {
-  const confirm = window.confirm(
-    `Are you sure you want to delete "${path.split('/').pop()?.replace('.md', '')}"?`
-  );
-  if (!confirm) return false;
-
   try {
     await api.deleteEntry(path);
 
@@ -537,11 +534,13 @@ export async function duplicateEntry(
  * Delete an entry with CRDT sync support.
  * Note: CRDT sync (soft delete) is now handled by Rust DeleteEntry command.
  *
+ * Callers are responsible for showing a confirmation dialog before calling this.
+ *
  * @param api - API instance
  * @param path - Path of the entry to delete
  * @param currentEntryPath - Path of the currently open entry (to clear if same)
  * @param onSuccess - Callback after successful deletion (e.g., refresh tree)
- * @returns True if deletion was confirmed and completed
+ * @returns True if deletion completed successfully
  */
 export async function deleteEntryWithSync(
   api: Api,
@@ -549,11 +548,6 @@ export async function deleteEntryWithSync(
   currentEntryPath: string | null,
   onSuccess?: () => Promise<void>
 ): Promise<boolean> {
-  const confirm = window.confirm(
-    `Are you sure you want to delete "${path.split('/').pop()?.replace('.md', '')}"?`
-  );
-  if (!confirm) return false;
-
   try {
     // Close body sync bridge for the deleted file
     closeBodySync(path);

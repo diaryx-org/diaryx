@@ -46,6 +46,19 @@ impl fmt::Display for TransportError {
 
 impl std::error::Error for TransportError {}
 
+/// Factory for creating transport connections.
+///
+/// Separates connection establishment from the transport's send/recv lifecycle,
+/// allowing `SyncClient` to be generic over the transport implementation.
+#[async_trait::async_trait]
+pub trait TransportConnector: Send + Sync {
+    /// The transport type produced by this connector.
+    type Transport: SyncTransport;
+
+    /// Establish a new WebSocket connection to the given URL.
+    async fn connect(&self, url: &str) -> Result<Self::Transport, TransportError>;
+}
+
 /// Async WebSocket transport trait.
 ///
 /// Implementations provide the actual WebSocket connectivity. The `SyncClient`

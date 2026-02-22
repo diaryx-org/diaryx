@@ -339,12 +339,14 @@ export class WorkerBackendNew implements Backend {
   ensureDailyEntry = (
     workspacePath: string,
     dailyEntryFolder?: string,
-    template?: string
+    template?: string,
+    date?: string,
   ): Promise<string> =>
     this.remote!.call('ensureDailyEntry', [
       workspacePath,
       dailyEntryFolder,
       template,
+      date,
     ]) as Promise<string>;
 
   getAvailableAudiences = (rootPath: string): Promise<string[]> =>
@@ -455,8 +457,16 @@ export class WorkerBackendNew implements Backend {
     return this.remote!.syncOnBinaryMessage(data);
   }
 
+  async syncOnBinaryMessages(messages: Uint8Array[]): Promise<void> {
+    return this.remote!.syncOnBinaryMessages(messages);
+  }
+
   async syncOnTextMessage(text: string): Promise<void> {
     return this.remote!.syncOnTextMessage(text);
+  }
+
+  async syncOnTextMessages(messages: string[]): Promise<void> {
+    return this.remote!.syncOnTextMessages(messages);
   }
 
   async syncOnDisconnected(): Promise<void> {

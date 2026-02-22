@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-02-16T21:41:33Z
+updated: 2026-02-22T21:56:51Z
 part_of: '[README](/README.md)'
 ---
 # Instructions for AI agents
@@ -127,5 +127,3 @@ Read these files directly when needed:
 
 - CI/workflows: `.github/workflows/*.yml`
 - Pre-commit config: `.pre-commit-config.yaml`
-
-&nbsp;

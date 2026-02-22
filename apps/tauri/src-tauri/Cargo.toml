@@ -43,17 +43,16 @@ rust-argon2 = "3.0.0"
 
 # Cloud backup (Google Drive)
 tauri-plugin-google-auth = "0.3"
+
+# Apple IAP (StoreKit 2) — optional, only for App Store builds
+tauri-plugin-iap = { path = "../../../crates/tauri-plugin-iap", optional = true }
 reqwest = { version = "0.12", features = ["json", "multipart"] }
 dotenvy = "0.15"
-
-# Live sync (WebSocket transport)
-tokio-tungstenite = "0.23"
-futures-util = "0.3"
-url = "2"
 
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+iap = ["dep:tauri-plugin-iap"]
 
 [dev-dependencies]
 tempfile = "3"

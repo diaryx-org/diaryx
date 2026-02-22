@@ -158,22 +158,17 @@ test.describe('Editor Keyboard Navigation', () => {
     await waitForAppReady(page)
     await editorHelper.waitForReady()
 
-    const initialLength = (await editorHelper.editor.textContent())?.length || 0
+    // Wait for async content loading to settle so undo history has a valid base state
+    await page.waitForTimeout(500)
 
     await editorHelper.focus()
     await editorHelper.type('Hello')
     await expect(editorHelper.editor).toContainText('Hello')
 
-    const afterTypingLength = (await editorHelper.editor.textContent())?.length || 0
-    expect(afterTypingLength).toBeGreaterThan(initialLength)
-
     await editorHelper.undo()
 
-    // Wait for undo to take effect
-    await expect(async () => {
-      const afterUndoLength = (await editorHelper.editor.textContent())?.length || 0
-      expect(afterUndoLength).toBeLessThan(afterTypingLength)
-    }).toPass({ timeout: 3000 })
+    // After undo, typed text should be removed
+    await expect(editorHelper.editor).not.toContainText('Hello', { timeout: 3000 })
   })
 
   test('should support redo', async ({ page, editorHelper }) => {
@@ -181,29 +176,18 @@ test.describe('Editor Keyboard Navigation', () => {
     await waitForAppReady(page)
     await editorHelper.waitForReady()
 
-    const initialLength = (await editorHelper.editor.textContent())?.length || 0
+    // Wait for async content loading to settle so undo history has a valid base state
+    await page.waitForTimeout(500)
 
     await editorHelper.focus()
     await editorHelper.type('Test')
-
-    const afterTypingLength = (await editorHelper.editor.textContent())?.length || 0
-    expect(afterTypingLength).toBeGreaterThan(initialLength)
+    await expect(editorHelper.editor).toContainText('Test')
 
     await editorHelper.undo()
-
-    // Wait for undo
-    await expect(async () => {
-      const len = (await editorHelper.editor.textContent())?.length || 0
-      expect(len).toBeLessThan(afterTypingLength)
-    }).toPass({ timeout: 3000 })
+    await expect(editorHelper.editor).not.toContainText('Test', { timeout: 3000 })
 
     await editorHelper.redo()
-
-    // Wait for redo
-    await expect(async () => {
-      const afterRedoLength = (await editorHelper.editor.textContent())?.length || 0
-      expect(afterRedoLength).toBe(afterTypingLength)
-    }).toPass({ timeout: 3000 })
+    await expect(editorHelper.editor).toContainText('Test', { timeout: 3000 })
   })
 })
 

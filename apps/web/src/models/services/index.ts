@@ -10,6 +10,7 @@ export {
   reverseBlobUrlsToAttachmentPaths,
   trackBlobUrl,
   getBlobUrl,
+  getPathForBlobUrl,
   hasBlobUrls,
   computeRelativeAttachmentPath,
 } from './attachmentService';

@@ -102,12 +102,22 @@ test.describe('Workspace Navigation', () => {
 
     await editorHelper.focus()
     await editorHelper.clearContent()
+
+    // Wait for editor to settle after clearing
+    await expect(async () => {
+      const text = await editorHelper.editor.textContent()
+      expect((text || '').trim().length).toBeLessThanOrEqual(1)
+    }).toPass({ timeout: 3000 })
+
     await editorHelper.type('Line 1')
     await page.keyboard.press('Enter')
     await editorHelper.type('Line 2')
 
     await expect(editorHelper.editor).toContainText('Line 1')
     await expect(editorHelper.editor).toContainText('Line 2')
+
+    // Brief wait for editor to render both paragraphs before navigating
+    await page.waitForTimeout(100)
 
     await page.keyboard.press('ArrowUp')
     await page.keyboard.press('End')

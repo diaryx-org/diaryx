@@ -44,6 +44,10 @@ pub mod metadata_writer;
 /// Templates for creating new entries
 pub mod template;
 
+/// Render-time body templating using Handlebars (requires `templating` feature)
+#[cfg(feature = "templating")]
+pub mod body_template;
+
 /// Validate (check workspace link integrity)
 pub mod validate;
 

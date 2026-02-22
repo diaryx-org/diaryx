@@ -37,6 +37,8 @@
   import EditorContent from "./views/editor/EditorContent.svelte";
   import { Toaster } from "$lib/components/ui/sonner";
   import * as Tooltip from "$lib/components/ui/tooltip";
+  import * as Dialog from "$lib/components/ui/dialog";
+  import { Button } from "$lib/components/ui/button";
   import { toast } from "svelte-sonner";
   // Note: Button, icons, and LoadingSpinner are now only used in extracted view components
 
@@ -146,6 +148,13 @@
   // Add workspace dialog
   let showAddWorkspace = $state(false);
 
+  // Delete confirmation dialog state
+  let showDeleteConfirm = $state(false);
+  let pendingDeletePath = $state<string | null>(null);
+  let pendingDeleteName = $derived(
+    pendingDeletePath?.split('/').pop()?.replace('.md', '') ?? ''
+  );
+
   // Welcome screen (shown when no workspaces exist)
   let showWelcomeScreen = $state(false);
 
@@ -175,6 +184,8 @@
 
   // Track whether the current entry is a daily entry (for prev/next navigation)
   let isDailyEntry = $state(false);
+  // Track whether the current daily entry is today's entry (for "Go to Today" button)
+  let isTodayEntry = $state(false);
 
   // Collaboration state - proxied from collaborationStore
   let collaborationEnabled = $derived(collaborationStore.collaborationEnabled);
@@ -1019,6 +1030,15 @@
     // Check if this is a daily entry for prev/next navigation
     if (api) {
       isDailyEntry = await api.isDailyEntry(path);
+      if (isDailyEntry) {
+        // Check if this is today's entry by comparing the filename date to today
+        const filename = path.split('/').pop()?.replace(/\.md$/, '') ?? '';
+        const today = new Date();
+        const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+        isTodayEntry = filename === todayStr;
+      } else {
+        isTodayEntry = false;
+      }
     }
   }
 
@@ -1107,7 +1127,7 @@
         showSettingsDialog = true;
       }
     }
-    // Navigate daily entries with Alt+Left/Right
+    // Navigate daily entries with Alt+Left/Right, go to today with Alt+T
     if (event.altKey && isDailyEntry) {
       if (event.key === "ArrowLeft") {
         event.preventDefault();
@@ -1115,6 +1135,9 @@
       } else if (event.key === "ArrowRight") {
         event.preventDefault();
         handleNextDay();
+      } else if (event.key === "t" && !isTodayEntry) {
+        event.preventDefault();
+        handleGoToToday();
       }
     }
   }
@@ -1274,19 +1297,30 @@
     }
   }
 
-  // Navigate to the previous day's entry
-  async function handlePrevDay() {
-    if (!api || !currentEntry) return;
+  /** Extract YYYY-MM-DD date string from a daily entry path filename. */
+  function extractDateFromPath(path: string): string | null {
+    const filename = path.split('/').pop()?.replace(/\.md$/, '');
+    if (!filename || !/^\d{4}-\d{2}-\d{2}$/.test(filename)) return null;
+    return filename;
+  }
+
+  /** Navigate to an adjacent day, creating the entry if it doesn't exist. */
+  async function navigateToAdjacentDay(direction: 'prev' | 'next') {
+    if (!api || !currentEntry || !tree) return;
     try {
-      const prevPath = await api.getAdjacentDailyEntry(currentEntry.path, 'prev');
-      if (prevPath) {
-        // Check if entry exists before navigating
-        const exists = await api.fileExists(prevPath);
-        if (exists) {
-          await openEntry(prevPath);
-        } else {
-          // Entry doesn't exist - show a subtle notification
-          uiStore.setError("No entry for previous day");
+      const adjPath = await api.getAdjacentDailyEntry(currentEntry.path, direction);
+      if (!adjPath) return;
+
+      const exists = await api.fileExists(adjPath);
+      if (exists) {
+        await openEntry(adjPath);
+      } else {
+        // Create the entry for the adjacent date and navigate to it
+        const dateStr = extractDateFromPath(adjPath);
+        if (dateStr) {
+          const path = await api.ensureDailyEntry(tree.path, undefined, undefined, dateStr);
+          await refreshTree();
+          await openEntry(path);
         }
       }
     } catch (e) {
@@ -1294,21 +1328,23 @@
     }
   }
 
+  // Navigate to the previous day's entry
+  async function handlePrevDay() {
+    await navigateToAdjacentDay('prev');
+  }
+
   // Navigate to the next day's entry
   async function handleNextDay() {
-    if (!api || !currentEntry) return;
+    await navigateToAdjacentDay('next');
+  }
+
+  // Navigate to today's daily entry
+  async function handleGoToToday() {
+    if (!api || !tree) return;
     try {
-      const nextPath = await api.getAdjacentDailyEntry(currentEntry.path, 'next');
-      if (nextPath) {
-        // Check if entry exists before navigating
-        const exists = await api.fileExists(nextPath);
-        if (exists) {
-          await openEntry(nextPath);
-        } else {
-          // Entry doesn't exist - show a subtle notification
-          uiStore.setError("No entry for next day");
-        }
-      }
+      const path = await api.ensureDailyEntry(tree.path, undefined, undefined);
+      await refreshTree();
+      await openEntry(path);
     } catch (e) {
       uiStore.setError(e instanceof Error ? e.message : String(e));
     }
@@ -1354,9 +1390,19 @@
     return newPath;
   }
 
-  // Delete an entry - delegates to controller with sync support
+  // Delete an entry - shows confirmation dialog, then delegates to controller
   async function handleDeleteEntry(path: string) {
     if (!api) return;
+    pendingDeletePath = path;
+    showDeleteConfirm = true;
+  }
+
+  // Called when user confirms deletion in the dialog
+  async function confirmDeleteEntry() {
+    const path = pendingDeletePath;
+    showDeleteConfirm = false;
+    pendingDeletePath = null;
+    if (!api || !path) return;
     const parentPath = workspaceStore.getParentNodePath(path);
     await deleteEntryWithSync(api, path, currentEntry?.path ?? null, async () => {
       await refreshTree();
@@ -1365,6 +1411,12 @@
       }
       await runValidation();
     });
+  }
+
+  // Called when user cancels deletion
+  function cancelDeleteEntry() {
+    showDeleteConfirm = false;
+    pendingDeletePath = null;
   }
 
   // Run workspace validation (delegates to controller)
@@ -1858,6 +1910,22 @@
   }}
 />
 
+<!-- Delete Confirmation Dialog -->
+<Dialog.Root bind:open={showDeleteConfirm} onOpenChange={(open) => { if (!open) cancelDeleteEntry(); }}>
+  <Dialog.Content showCloseButton={false} class="sm:max-w-md">
+    <Dialog.Header>
+      <Dialog.Title>Delete entry</Dialog.Title>
+      <Dialog.Description>
+        Are you sure you want to delete "{pendingDeleteName}"? This action cannot be undone.
+      </Dialog.Description>
+    </Dialog.Header>
+    <Dialog.Footer>
+      <Button variant="outline" onclick={cancelDeleteEntry}>Cancel</Button>
+      <Button variant="destructive" onclick={confirmDeleteEntry}>Delete</Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
+
 <!-- Toast Notifications -->
 <Toaster />
 
@@ -1869,7 +1937,7 @@
     onGetStarted={() => { showAddWorkspace = true; }}
   />
 {:else}
-<div class="flex h-dvh bg-background overflow-hidden pt-[env(safe-area-inset-top)]">
+<div class="flex h-full bg-background overflow-hidden">
   <!-- Left Sidebar -->
   <LeftSidebar
     {tree}
@@ -1926,7 +1994,7 @@
   />
 
   <!-- Main Content Area -->
-  <main class="flex-1 flex flex-col overflow-hidden min-w-0 relative">
+  <main class="flex-1 flex flex-col overflow-hidden min-w-0 relative pt-[env(safe-area-inset-top)]">
     {#if currentEntry}
       <EditorHeader
         title={getEntryTitle(currentEntry)}
@@ -1940,12 +2008,14 @@
         {focusMode}
         readonly={editorReadonly}
         {isDailyEntry}
+        {isTodayEntry}
         onSave={save}
         onToggleLeftSidebar={toggleLeftSidebar}
         onToggleRightSidebar={toggleRightSidebar}
         onOpenCommandPalette={uiStore.openCommandPalette}
         onPrevDay={handlePrevDay}
         onNextDay={handleNextDay}
+        onGoToToday={handleGoToToday}
         onAddWorkspace={() => (showAddWorkspace = true)}
       />
 

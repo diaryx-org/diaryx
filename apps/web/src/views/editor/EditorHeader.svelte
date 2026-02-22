@@ -24,6 +24,7 @@
     Search,
     ChevronLeft,
     ChevronRight,
+    CalendarDays,
   } from "@lucide/svelte";
 
   // Mobile state for hiding keyboard shortcut tooltips
@@ -42,6 +43,8 @@
     readonly?: boolean;
     /** Whether the current entry is a daily entry (shows prev/next navigation) */
     isDailyEntry?: boolean;
+    /** Whether the current daily entry is today's entry */
+    isTodayEntry?: boolean;
     onSave: () => void;
     onToggleLeftSidebar: () => void;
     onToggleRightSidebar: () => void;
@@ -50,6 +53,8 @@
     onPrevDay?: () => void;
     /** Navigate to the next day's entry */
     onNextDay?: () => void;
+    /** Navigate to today's daily entry */
+    onGoToToday?: () => void;
     /** Open sync setup wizard (for sync indicator) */
     onAddWorkspace?: () => void;
   }
@@ -66,12 +71,14 @@
     focusMode = false,
     readonly = false,
     isDailyEntry = false,
+    isTodayEntry = false,
     onSave,
     onToggleLeftSidebar,
     onToggleRightSidebar,
     onOpenCommandPalette,
     onPrevDay,
     onNextDay,
+    onGoToToday,
     onAddWorkspace,
   }: Props = $props();
 
@@ -138,8 +145,8 @@
       </Tooltip.Root>
     {/if}
 
-    <!-- Title and path (conditional based on settings) -->
-    {#if showTitle}
+    <!-- Title and path area -->
+    {#if showTitle || showPath || isDailyEntry}
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-1">
           <!-- Prev day button (only for daily entries) -->
@@ -171,9 +178,11 @@
             </Tooltip.Root>
           {/if}
 
-          <h2 class="text-lg md:text-xl font-semibold text-foreground truncate">
-            {title}
-          </h2>
+          {#if showTitle}
+            <h2 class="text-lg md:text-xl font-semibold text-foreground truncate">
+              {title}
+            </h2>
+          {/if}
 
           <!-- Next day button (only for daily entries) -->
           {#if isDailyEntry && onNextDay}
@@ -197,6 +206,36 @@
                       <Kbd.Root>Alt</Kbd.Root>
                       <span>+</span>
                       <Kbd.Root>→</Kbd.Root>
+                    </Kbd.Group>
+                  </div>
+                </Tooltip.Content>
+              {/if}
+            </Tooltip.Root>
+          {/if}
+
+          <!-- Go to Today button (only for daily entries when not viewing today) -->
+          {#if isDailyEntry && !isTodayEntry && onGoToToday}
+            <Tooltip.Root>
+              <Tooltip.Trigger>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onclick={onGoToToday}
+                  class="h-7 px-2 shrink-0 text-xs"
+                  aria-label="Go to today"
+                >
+                  <CalendarDays class="size-3.5 mr-1" />
+                  Today
+                </Button>
+              </Tooltip.Trigger>
+              {#if !mobileState.isMobile}
+                <Tooltip.Content>
+                  <div class="flex items-center gap-2">
+                    Go to today
+                    <Kbd.Group>
+                      <Kbd.Root>Alt</Kbd.Root>
+                      <span>+</span>
+                      <Kbd.Root>T</Kbd.Root>
                     </Kbd.Group>
                   </div>
                 </Tooltip.Content>

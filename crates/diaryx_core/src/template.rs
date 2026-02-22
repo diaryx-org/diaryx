@@ -1,7 +1,11 @@
-//! Template engine for creating entries with pre-defined structures
+//! Creation-time template engine for creating entries with pre-defined structures.
 //!
 //! Supports simple variable substitution using `{{variable}}` syntax.
 //! Variables can include format specifiers for dates: `{{date:%Y-%m-%d}}`
+//!
+//! This module handles **creation-time** templates that run once when an entry is
+//! created. For **render-time** body templating (Handlebars `{{#each}}`, `{{#if}}`,
+//! custom helpers) that runs on every view/publish, see [`body_template`](crate::body_template).
 
 use chrono::{Local, NaiveDate};
 use indexmap::IndexMap;

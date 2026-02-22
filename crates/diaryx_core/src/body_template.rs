@@ -96,10 +96,7 @@ pub fn build_context(
     }
 
     if let Some(ext) = file_path.extension().and_then(|s| s.to_str()) {
-        map.insert(
-            "extension".to_string(),
-            JsonValue::String(ext.to_string()),
-        );
+        map.insert("extension".to_string(), JsonValue::String(ext.to_string()));
     }
 
     let filepath = if let Some(root) = workspace_root {
@@ -177,10 +174,7 @@ fn yaml_to_json(value: &YamlValue) -> JsonValue {
                 .filter_map(|(k, v)| {
                     let key = match k {
                         YamlValue::String(s) => s.clone(),
-                        other => serde_yaml::to_string(other)
-                            .ok()?
-                            .trim()
-                            .to_string(),
+                        other => serde_yaml::to_string(other).ok()?.trim().to_string(),
                     };
                     Some((key, yaml_to_json(v)))
                 })
@@ -245,10 +239,7 @@ impl HelperDef for ForAudienceHelper {
     ) -> HelperResult {
         let target = h
             .param(0)
-            .ok_or(RenderErrorReason::ParamNotFoundForIndex(
-                "for-audience",
-                0,
-            ))?
+            .ok_or(RenderErrorReason::ParamNotFoundForIndex("for-audience", 0))?
             .value()
             .as_str()
             .ok_or_else(|| {
@@ -263,17 +254,11 @@ impl HelperDef for ForAudienceHelper {
         let audience = ctx.data().get("audience");
 
         let matches = match audience {
-            Some(JsonValue::Array(arr)) => {
-                arr.contains(&JsonValue::String(target.to_string()))
-            }
+            Some(JsonValue::Array(arr)) => arr.contains(&JsonValue::String(target.to_string())),
             _ => false,
         };
 
-        let tmpl = if matches {
-            h.template()
-        } else {
-            h.inverse()
-        };
+        let tmpl = if matches { h.template() } else { h.inverse() };
 
         if let Some(t) = tmpl {
             t.render(r, ctx, rc, out)?;
@@ -409,8 +394,7 @@ audience:
   - friends
 "#,
         );
-        let body =
-            "{{#for-audience \"public\"}}PUBLIC{{else}}PRIVATE{{/for-audience}}";
+        let body = "{{#for-audience \"public\"}}PUBLIC{{else}}PRIVATE{{/for-audience}}";
         let result = render(body, &fm, Path::new("test.md"), None).unwrap();
         assert_eq!(result, "PRIVATE");
     }

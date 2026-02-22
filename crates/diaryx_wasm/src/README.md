@@ -37,3 +37,8 @@ This directory contains the source code for the WASM bindings.
 `backend.rs` keeps `setCrdtEnabled` synchronized between the control-side
 filesystem handle and the command-execution `Diaryx` filesystem handle so guest
 session edits correctly emit CRDT updates after sync bootstrap.
+
+`backend.rs` also exposes import parsing functions (`parseDayOneJson`, `parseMarkdownFile`)
+that take raw file bytes from JavaScript and return parsed entries as JSON. These
+are used by the web UI's `FormatImportSettings` component. The actual entry
+writing is handled by the `ImportEntries` command through `execute()`/`executeJs()`.

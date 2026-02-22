@@ -25,6 +25,7 @@
   import AccountSettings from "./settings/AccountSettings.svelte";
   import BackupSettings from "./settings/BackupSettings.svelte";
   import ImportSettings from "./settings/ImportSettings.svelte";
+  import FormatImportSettings from "./settings/FormatImportSettings.svelte";
   import CloudBackupSettings from "./settings/CloudBackupSettings.svelte";
   import ClearDataSettings from "./settings/ClearDataSettings.svelte";
   import DebugInfo from "./settings/DebugInfo.svelte";
@@ -168,6 +169,7 @@
       <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
         <BackupSettings {workspacePath} />
         <ImportSettings {workspacePath} />
+        <FormatImportSettings {workspacePath} />
         <CloudBackupSettings {workspacePath} />
         <ClearDataSettings />
       </div>

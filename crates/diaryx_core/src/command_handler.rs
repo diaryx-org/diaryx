@@ -1417,9 +1417,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 // Use provided date or default to today
                 let today = if let Some(ref date_str) = date {
-                    chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d").map_err(|_| {
-                        DiaryxError::InvalidDateFormat(date_str.clone())
-                    })?
+                    chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
+                        .map_err(|_| DiaryxError::InvalidDateFormat(date_str.clone()))?
                 } else {
                     Local::now().date_naive()
                 };
@@ -2423,6 +2422,30 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     })?;
 
                 Ok(Response::String(target_rel_path))
+            }
+
+            // === Import Operations ===
+            Command::ImportEntries {
+                entries_json,
+                folder,
+            } => {
+                let entries: Vec<crate::import::ImportedEntry> =
+                    serde_json::from_str(&entries_json).map_err(|e| DiaryxError::InvalidPath {
+                        path: PathBuf::from("<import entries>"),
+                        message: format!("Invalid ImportedEntry JSON: {e}"),
+                    })?;
+
+                let workspace_root = self.workspace_root().unwrap_or_else(|| PathBuf::from("."));
+
+                let result = crate::import::orchestrate::write_entries(
+                    self.fs(),
+                    &workspace_root,
+                    &folder,
+                    &entries,
+                )
+                .await;
+
+                Ok(Response::ImportResult(result))
             }
 
             // === Storage Operations ===

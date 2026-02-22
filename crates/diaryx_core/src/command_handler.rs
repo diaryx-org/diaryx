@@ -1384,6 +1384,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 workspace_path,
                 daily_entry_folder,
                 template,
+                date,
             } => {
                 use crate::config::Config;
                 use chrono::Local;
@@ -1414,8 +1415,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     None, // daily_template (resolved below from workspace config)
                 );
 
-                // Get today's date
-                let today = Local::now().date_naive();
+                // Use provided date or default to today
+                let today = if let Some(ref date_str) = date {
+                    chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d").map_err(|_| {
+                        DiaryxError::InvalidDateFormat(date_str.clone())
+                    })?
+                } else {
+                    Local::now().date_naive()
+                };
 
                 // Ensure index hierarchy exists FIRST - this finds/creates the correct month_dir
                 // which may be named "01", "january", etc. depending on existing structure

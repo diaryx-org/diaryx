@@ -20,4 +20,4 @@ Editor-related view components.
 |------|---------|
 | `EditorContent.svelte` | Main editor content area |
 | `EditorEmptyState.svelte` | Empty state when no entry selected; for empty workspaces it shows a single `Initialize workspace` action that opens the setup flow |
-| `EditorHeader.svelte` | Editor header with title and actions |
+| `EditorHeader.svelte` | Editor header with title, actions, and daily entry navigation (prev/next day, go to today) |

@@ -126,7 +126,7 @@ pub enum Command {
         parent_path: String,
     },
 
-    /// Ensure today's daily entry exists.
+    /// Ensure a daily entry exists for a given date (defaults to today).
     /// Returns the path to the daily entry (created if it didn't exist).
     EnsureDailyEntry {
         /// Workspace path (directory containing the workspace root index).
@@ -139,6 +139,9 @@ pub enum Command {
         /// Falls back to "daily" built-in template if not provided.
         #[serde(default)]
         template: Option<String>,
+        /// Optional ISO date string (YYYY-MM-DD). Defaults to today if not provided.
+        #[serde(default)]
+        date: Option<String>,
     },
 
     /// Get the path to an adjacent daily entry (previous or next day).

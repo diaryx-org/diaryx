@@ -815,6 +815,77 @@ export class AuthService {
   }
 
   // =========================================================================
+  // Apple IAP
+  // =========================================================================
+
+  /**
+   * Verify an Apple StoreKit 2 signed transaction with the server.
+   * On success, the server upgrades the user to Plus tier.
+   */
+  async verifyAppleTransaction(
+    authToken: string,
+    signedTransaction: string,
+    productId: string,
+  ): Promise<{ success: boolean; tier: string }> {
+    const response = await proxyFetch(
+      `${this.serverUrl}/api/apple/verify-receipt`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          signed_transaction: signedTransaction,
+          product_id: productId,
+        }),
+      },
+    );
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new AuthError(
+        data.error || "Failed to verify Apple transaction",
+        response.status,
+      );
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Restore Apple IAP purchases by sending signed transactions to the server.
+   */
+  async restoreApplePurchases(
+    authToken: string,
+    signedTransactions: string[],
+  ): Promise<{ success: boolean; restored_count: number; tier: string }> {
+    const response = await proxyFetch(
+      `${this.serverUrl}/api/apple/restore`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          signed_transactions: signedTransactions,
+        }),
+      },
+    );
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new AuthError(
+        data.error || "Failed to restore Apple purchases",
+        response.status,
+      );
+    }
+
+    return response.json();
+  }
+
+  // =========================================================================
   // Passkeys (WebAuthn)
   // =========================================================================
 

@@ -188,6 +188,29 @@ async fn main() {
         None
     };
 
+    // Create Apple IAP state (if configured)
+    let apple_iap_router = if let Some(apple_config) = config.apple_iap.clone() {
+        info!(
+            "Apple IAP: enabled (bundle_id={}, env={})",
+            apple_config.bundle_id, apple_config.environment
+        );
+        if apple_config.skip_signature_verify {
+            warn!(
+                "⚠️  APPLE_IAP_SKIP_SIGNATURE_VERIFY is enabled — JWS signature verification is DISABLED. Do NOT use in production!"
+            );
+        }
+        let apple_state = diaryx_sync_server::handlers::apple::AppleIapState {
+            repo: repo.clone(),
+            config: apple_config,
+        };
+        Some(diaryx_sync_server::handlers::apple::apple_iap_routes(
+            apple_state,
+        ))
+    } else {
+        info!("Apple IAP: disabled (APPLE_IAP_BUNDLE_ID not set)");
+        None
+    };
+
     // Build CORS layer
     let origins: Vec<_> = config
         .cors_origins
@@ -232,6 +255,11 @@ async fn main() {
     // Stripe billing routes (only if configured)
     if let Some(stripe) = stripe_router {
         app = app.nest("/api", stripe);
+    }
+
+    // Apple IAP routes (only if configured)
+    if let Some(apple) = apple_iap_router {
+        app = app.nest("/api", apple);
     }
 
     let app = app

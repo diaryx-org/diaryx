@@ -650,6 +650,41 @@ export async function createPortalSession(): Promise<string> {
 }
 
 // ============================================================================
+// Apple IAP
+// ============================================================================
+
+/**
+ * Verify an Apple StoreKit 2 signed transaction with the server.
+ * Upgrades to Plus on success and refreshes user info.
+ */
+export async function verifyAppleTransaction(
+  signedTransaction: string,
+  productId: string,
+): Promise<void> {
+  const token = getToken();
+  if (!authService || !token) throw new Error("Not authenticated");
+  await authService.verifyAppleTransaction(token, signedTransaction, productId);
+  await refreshUserInfo();
+}
+
+/**
+ * Restore Apple IAP purchases with the server.
+ * Refreshes user info after restore.
+ */
+export async function restoreApplePurchases(
+  signedTransactions: string[],
+): Promise<{ restored_count: number; tier: string }> {
+  const token = getToken();
+  if (!authService || !token) throw new Error("Not authenticated");
+  const result = await authService.restoreApplePurchases(
+    token,
+    signedTransactions,
+  );
+  await refreshUserInfo();
+  return result;
+}
+
+// ============================================================================
 // Passkeys (WebAuthn)
 // ============================================================================
 

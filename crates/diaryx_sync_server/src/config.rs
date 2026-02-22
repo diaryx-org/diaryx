@@ -46,6 +46,8 @@ pub struct Config {
     pub admin_secret: Option<String>,
     /// Stripe billing configuration (None if STRIPE_SECRET_KEY not set)
     pub stripe: Option<StripeConfig>,
+    /// Apple IAP configuration (None if APPLE_IAP_BUNDLE_ID not set)
+    pub apple_iap: Option<AppleIapConfig>,
 }
 
 /// Stripe billing configuration.
@@ -59,6 +61,17 @@ pub struct StripeConfig {
     pub price_id: String,
     /// Publishable key returned to client (pk_live_... or pk_test_...)
     pub publishable_key: String,
+}
+
+/// Apple IAP configuration.
+#[derive(Debug, Clone)]
+pub struct AppleIapConfig {
+    /// App bundle ID (e.g., org.diaryx.desktop)
+    pub bundle_id: String,
+    /// Environment: "Sandbox" or "Production"
+    pub environment: String,
+    /// Skip JWS signature verification (for local StoreKit testing only)
+    pub skip_signature_verify: bool,
 }
 
 /// Email configuration (Resend HTTP API)
@@ -212,6 +225,21 @@ impl Config {
             }
         };
 
+        let apple_iap = {
+            let bundle_id = env::var("APPLE_IAP_BUNDLE_ID").unwrap_or_default();
+            if bundle_id.is_empty() {
+                None
+            } else {
+                let skip_sig = env::var("APPLE_IAP_SKIP_SIGNATURE_VERIFY").unwrap_or_default();
+                Some(AppleIapConfig {
+                    bundle_id,
+                    environment: env::var("APPLE_IAP_ENVIRONMENT")
+                        .unwrap_or_else(|_| "Sandbox".to_string()),
+                    skip_signature_verify: skip_sig == "true" || skip_sig == "1",
+                })
+            }
+        };
+
         Ok(Config {
             host,
             port,
@@ -234,6 +262,7 @@ impl Config {
             kv_api_token,
             admin_secret,
             stripe,
+            apple_iap,
         })
     }
 
@@ -257,6 +286,11 @@ impl Config {
     /// Check if Stripe billing is configured.
     pub fn is_stripe_configured(&self) -> bool {
         self.stripe.is_some()
+    }
+
+    /// Check if Apple IAP is configured.
+    pub fn is_apple_iap_configured(&self) -> bool {
+        self.apple_iap.is_some()
     }
 
     /// Check if Cloudflare KV is configured for custom domain mappings.

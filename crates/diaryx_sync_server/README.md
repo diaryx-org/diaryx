@@ -72,6 +72,8 @@ cargo run -p diaryx_sync_server
 | `STRIPE_WEBHOOK_SECRET`               | -                                              | Stripe webhook signing secret (whsec_...)                                                                                                   |
 | `STRIPE_PRICE_ID`                     | -                                              | Stripe Price ID for the Plus plan (price_...)                                                                                               |
 | `STRIPE_PUBLISHABLE_KEY`              | -                                              | Stripe publishable key returned to client (pk_live_... or pk_test_...)                                                                      |
+| `APPLE_IAP_BUNDLE_ID`                | -                                              | Apple app bundle ID (e.g., org.diaryx.desktop). Apple IAP endpoints disabled when empty.                                                    |
+| `APPLE_IAP_ENVIRONMENT`              | `Sandbox`                                      | Apple IAP environment: `Sandbox` or `Production`                                                                                            |
 
 
 ## API Endpoints
@@ -329,6 +331,46 @@ GET /api/stripe/config
 ```
 
 Response: `{ "publishable_key": "pk_..." }`
+
+### Billing (Apple IAP)
+
+These endpoints are only available when `APPLE_IAP_BUNDLE_ID` is configured. They verify StoreKit 2 JWS signed transactions using Apple's certificate chain.
+
+#### Verify Transaction
+
+```
+POST /api/apple/verify-receipt
+Authorization: Bearer <session_token>
+Content-Type: application/json
+
+{ "signed_transaction": "<JWS string>", "product_id": "diaryx_plus_monthly" }
+```
+
+Response: `{ "success": true, "tier": "plus" }`
+
+Verifies the JWS signature against Apple Root CA-G3, validates the subscription is active, and upgrades the user to Plus.
+
+#### Restore Purchases
+
+```
+POST /api/apple/restore
+Authorization: Bearer <session_token>
+Content-Type: application/json
+
+{ "signed_transactions": ["<JWS string>", ...] }
+```
+
+Response: `{ "success": true, "restored_count": 1, "tier": "plus" }`
+
+Verifies multiple transactions from a restore flow. Required by App Store Review Guidelines.
+
+#### App Store Server Webhook
+
+```
+POST /api/apple/webhook
+```
+
+Stub endpoint for App Store Server Notifications V2. Currently returns 200 OK.
 
 ### Share Sessions (Live Collaboration)
 

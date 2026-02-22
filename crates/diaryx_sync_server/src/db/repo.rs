@@ -954,6 +954,52 @@ impl AuthRepo {
         Ok(())
     }
 
+    // ===== Apple IAP operations =====
+
+    /// Set the Apple original transaction ID for a user.
+    pub fn set_apple_original_transaction_id(
+        &self,
+        user_id: &str,
+        transaction_id: &str,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE users SET apple_original_transaction_id = ? WHERE id = ?",
+            params![transaction_id, user_id],
+        )?;
+        Ok(())
+    }
+
+    /// Get the Apple original transaction ID for a user.
+    pub fn get_apple_original_transaction_id(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<String>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let result: Option<Option<String>> = conn
+            .query_row(
+                "SELECT apple_original_transaction_id FROM users WHERE id = ?",
+                [user_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(result.flatten())
+    }
+
+    /// Find a user ID by their Apple original transaction ID.
+    pub fn get_user_id_by_apple_transaction_id(
+        &self,
+        transaction_id: &str,
+    ) -> Result<Option<String>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id FROM users WHERE apple_original_transaction_id = ?",
+            [transaction_id],
+            |row| row.get(0),
+        )
+        .optional()
+    }
+
     // ===== Published site operations =====
 
     /// Count published sites owned by a user.

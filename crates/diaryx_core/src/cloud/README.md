@@ -163,7 +163,20 @@ if result.success {
 4. **Upload**: Send local-only changes to remote
 5. **Download**: Fetch remote-only changes to local
 6. **Delete**: Remove files deleted from authoritative side
-7. **Update manifest**: Record new sync state
+7. **Manifest cleanup**: Remove stale entries for files deleted on both sides
+8. **Update manifest**: Record new sync state
+
+### Cross-Deletion Handling
+
+When a file is deleted on one side but changed on the other, the sync engine
+uses a "local wins" policy:
+
+- **Local delete + remote modify**: The local deletion takes precedence.
+  The file is deleted from remote and no download occurs.
+- **Local modify + remote delete**: The local modification takes precedence.
+  The file is uploaded to remote and no local delete occurs.
+- **Both sides deleted**: No file operations needed; only the manifest entry
+  is cleaned up.
 
 ## Progress Tracking
 

@@ -4,15 +4,15 @@ import type { SearchMatch } from "./SearchMatch";
 /**
  * Search results for a single file
  */
-export type FileSearchResult = {
+export type FileSearchResult = { 
 /**
  * Path to the file
  */
-path: string,
+path: string, 
 /**
  * Title from frontmatter (if available)
  */
-title: string | null,
+title: string | null, 
 /**
  * All matches found in this file
  */

@@ -4,11 +4,11 @@ import type { ExclusionReason } from "./ExclusionReason";
 /**
  * A file that was excluded from export
  */
-export type ExcludedFile = {
+export type ExcludedFile = { 
 /**
  * Path to the excluded file
  */
-path: string,
+path: string, 
 /**
  * Reason for exclusion
  */

@@ -3,15 +3,15 @@
 /**
  * A single entry's attachments in the ancestor chain.
  */
-export type AncestorAttachmentEntry = {
+export type AncestorAttachmentEntry = { 
 /**
  * Path to the entry file.
  */
-entry_path: string,
+entry_path: string, 
 /**
  * Title of the entry (from frontmatter).
  */
-entry_title: string | null,
+entry_title: string | null, 
 /**
  * List of attachment paths for this entry.
  */

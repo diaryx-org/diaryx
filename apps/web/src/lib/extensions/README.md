@@ -9,6 +9,7 @@ attachments:
   - '[DrawingBlock.ts](/apps/web/src/lib/extensions/DrawingBlock.ts)'
   - '[SpoilerMark.ts](/apps/web/src/lib/extensions/SpoilerMark.ts)'
   - '[TableControls.ts](/apps/web/src/lib/extensions/TableControls.ts)'
+  - '[TemplateVariable.ts](/apps/web/src/lib/extensions/TemplateVariable.ts)'
 exclude:
   - '*.lock'
 ---
@@ -27,3 +28,4 @@ Custom TipTap editor extensions.
 | `DrawingBlock.ts` | Freehand drawing block (SVG attachment) |
 | `SpoilerMark.ts` | Spoiler/hidden text mark |
 | `TableControls.ts` | Notion-style inline table controls (row/column grips, add buttons) |
+| `TemplateVariable.ts` | Render-time template variable pills (`{{ variable }}`) |

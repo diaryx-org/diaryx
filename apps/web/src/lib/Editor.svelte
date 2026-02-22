@@ -41,6 +41,8 @@
   import { TableControls } from "./extensions/TableControls";
   // Custom extension for markdown footnotes
   import { FootnoteRef, preprocessFootnotes, appendFootnoteDefinitions } from "./extensions/FootnoteRef";
+  // Custom extension for template variables ({{ variable }} syntax)
+  import { TemplateVariable } from "./extensions/TemplateVariable";
   import type { Api } from "$lib/backend/api";
 
   interface Props {
@@ -293,6 +295,8 @@
       TableControls,
       // Footnote extension
       FootnoteRef,
+      // Template variable extension ({{ variable }} pills)
+      TemplateVariable,
       // Raw HTML block extension
       HtmlBlock.configure({
         entryPath,
@@ -911,6 +915,11 @@
 
   :global(.footnote-ref:hover) {
     opacity: 0.8;
+  }
+
+  /* Template variable styles (fallback for renderHTML path) */
+  :global(.template-variable) {
+    display: inline;
   }
 
   /* Spoiler mark styles */

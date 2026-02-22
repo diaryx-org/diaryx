@@ -8,44 +8,44 @@ import type { LinkFormat } from "./LinkFormat";
  * This allows workspace settings to live with the data (local-first philosophy)
  * rather than in separate config files.
  */
-export type WorkspaceConfig = {
+export type WorkspaceConfig = { 
 /**
  * Format for `part_of` and `contents` links.
  * Defaults to MarkdownRoot if not specified.
  */
-link_format: LinkFormat,
+link_format: LinkFormat, 
 /**
  * Subfolder for daily entries (e.g., "Daily" or "Journal/Daily").
  * If not specified, daily entries are created at workspace root.
  */
-daily_entry_folder?: string,
+daily_entry_folder?: string, 
 /**
  * Link to the default template entry for new files (in link_format style).
  * If absent, uses the built-in "note" template.
  */
-default_template?: string,
+default_template?: string, 
 /**
  * Link to the daily entry template (in link_format style).
  * If absent, uses the built-in "daily" template.
  */
-daily_template?: string,
+daily_template?: string, 
 /**
  * When true, setting the `title` frontmatter property also updates the first H1 heading.
  * Unidirectional: title → heading only.
  */
-sync_title_to_heading: boolean,
+sync_title_to_heading: boolean, 
 /**
  * When true, saving content automatically updates the `updated` timestamp.
  */
-auto_update_timestamp: boolean,
+auto_update_timestamp: boolean, 
 /**
  * When true, changing the title automatically renames the file.
  */
-auto_rename_to_title: boolean,
+auto_rename_to_title: boolean, 
 /**
  * How to generate filenames from entry titles.
  */
-filename_style: FilenameStyle,
+filename_style: FilenameStyle, 
 /**
  * Audience tag that designates files for public viewing/publishing.
  * Replaces the old hardcoded "private" magic. Files with this audience tag

@@ -3,19 +3,19 @@
 /**
  * A file to be exported
  */
-export type ExportFile = { 
+export type ExportFile = {
 /**
  * Original path in the workspace
  */
-source_path: string, 
+source_path: string,
 /**
  * Path relative to workspace root
  */
-relative_path: string, 
+relative_path: string,
 /**
  * Destination path
  */
-dest_path: string, 
+dest_path: string,
 /**
  * Contents entries that will be filtered out (if any)
  */

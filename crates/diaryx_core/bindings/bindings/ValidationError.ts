@@ -3,27 +3,27 @@
 /**
  * A validation error indicating a broken reference.
  */
-export type ValidationError = { "type": "BrokenPartOf", 
+export type ValidationError = { "type": "BrokenPartOf",
 /**
  * The file containing the broken reference
  */
-file: string, 
+file: string,
 /**
  * The target path that doesn't exist
  */
-target: string, } | { "type": "BrokenContentsRef", 
+target: string, } | { "type": "BrokenContentsRef",
 /**
  * The index file containing the broken reference
  */
-index: string, 
+index: string,
 /**
  * The target path that doesn't exist
  */
-target: string, } | { "type": "BrokenAttachment", 
+target: string, } | { "type": "BrokenAttachment",
 /**
  * The file containing the broken reference
  */
-file: string, 
+file: string,
 /**
  * The attachment path that doesn't exist
  */

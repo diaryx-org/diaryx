@@ -3,15 +3,15 @@
 /**
  * Information about a template.
  */
-export type TemplateInfo = { 
+export type TemplateInfo = {
 /**
  * Template name.
  */
-name: string, 
+name: string,
 /**
  * Path to template file (None for built-in).
  */
-path: string | null, 
+path: string | null,
 /**
  * Source of the template.
  */

@@ -4,15 +4,15 @@ import type { LinkPathType } from "./LinkPathType";
 /**
  * Parsed link payload.
  */
-export type ParsedLinkResult = { 
+export type ParsedLinkResult = {
 /**
  * Markdown link title (if present).
  */
-title: string | null, 
+title: string | null,
 /**
  * Extracted path component.
  */
-path: string, 
+path: string,
 /**
  * Path classification.
  */

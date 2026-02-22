@@ -4,11 +4,11 @@
  * Binary file path info (without data) for efficient transfer.
  * Use this when you need to list files and fetch data separately.
  */
-export type BinaryFileInfo = { 
+export type BinaryFileInfo = {
 /**
  * Source path (absolute, for reading).
  */
-source_path: string, 
+source_path: string,
 /**
  * Relative path (for zip file structure).
  */

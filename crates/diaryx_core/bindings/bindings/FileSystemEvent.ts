@@ -7,99 +7,99 @@ import type { JsonValue } from "../serde_json/JsonValue";
  * These events capture the semantics of filesystem changes, including both
  * the operation type and relevant metadata for each type of change.
  */
-export type FileSystemEvent = { "type": "FileCreated", 
+export type FileSystemEvent = { "type": "FileCreated",
 /**
  * Path of the created file.
  */
-path: string, 
+path: string,
 /**
  * Frontmatter from the file, if any.
  */
-frontmatter: JsonValue | null, 
+frontmatter: JsonValue | null,
 /**
  * Path of the parent index file, if known.
  */
-parent_path: string | null, } | { "type": "FileDeleted", 
+parent_path: string | null, } | { "type": "FileDeleted",
 /**
  * Path of the deleted file.
  */
-path: string, 
+path: string,
 /**
  * Path of the parent index file, if known.
  */
-parent_path: string | null, } | { "type": "FileRenamed", 
+parent_path: string | null, } | { "type": "FileRenamed",
 /**
  * Original path of the file.
  */
-old_path: string, 
+old_path: string,
 /**
  * New path of the file.
  */
-new_path: string, } | { "type": "FileMoved", 
+new_path: string, } | { "type": "FileMoved",
 /**
  * Path of the file after the move.
  */
-path: string, 
+path: string,
 /**
  * Original parent directory path.
  */
-old_parent: string | null, 
+old_parent: string | null,
 /**
  * New parent directory path.
  */
-new_parent: string | null, } | { "type": "MetadataChanged", 
+new_parent: string | null, } | { "type": "MetadataChanged",
 /**
  * Path of the file.
  */
-path: string, 
+path: string,
 /**
  * New frontmatter values.
  */
-frontmatter: JsonValue, } | { "type": "ContentsChanged", 
+frontmatter: JsonValue, } | { "type": "ContentsChanged",
 /**
  * Path of the file.
  */
-path: string, 
+path: string,
 /**
  * New body content.
  */
-body: string, } | { "type": "SyncStarted", 
+body: string, } | { "type": "SyncStarted",
 /**
  * Document name (e.g., "workspace" or file path for body docs).
  */
-doc_name: string, } | { "type": "SyncCompleted", 
+doc_name: string, } | { "type": "SyncCompleted",
 /**
  * Document name.
  */
-doc_name: string, 
+doc_name: string,
 /**
  * Number of files synced.
  */
-files_synced: number, } | { "type": "SyncStatusChanged", 
+files_synced: number, } | { "type": "SyncStatusChanged",
 /**
  * Status: "idle", "connecting", "syncing", "synced", "error".
  */
-status: string, 
+status: string,
 /**
  * Optional error message when status is "error".
  */
-error: string | null, } | { "type": "SyncProgress", 
+error: string | null, } | { "type": "SyncProgress",
 /**
  * Number of files completed.
  */
-completed: number, 
+completed: number,
 /**
  * Total number of files to sync.
  */
-total: number, } | { "type": "SendSyncMessage", 
+total: number, } | { "type": "SendSyncMessage",
 /**
  * Document name ("workspace" for workspace, file path for body)
  */
-doc_name: string, 
+doc_name: string,
 /**
  * Encoded sync message bytes to send (serialized as array of numbers)
  */
-message: Array<number>, 
+message: Array<number>,
 /**
  * Whether this is a body doc (true) or workspace (false)
  */

@@ -3,11 +3,11 @@
 /**
  * An exported file with its path and content.
  */
-export type ExportedFile = { 
+export type ExportedFile = {
 /**
  * Relative path.
  */
-path: string, 
+path: string,
 /**
  * File content.
  */

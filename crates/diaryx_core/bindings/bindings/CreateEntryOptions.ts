@@ -3,19 +3,19 @@
 /**
  * Options for creating a new entry.
  */
-export type CreateEntryOptions = { 
+export type CreateEntryOptions = {
 /**
  * Title for the entry.
  */
-title: string | null, 
+title: string | null,
 /**
  * Parent to attach to.
  */
-part_of: string | null, 
+part_of: string | null,
 /**
  * Template to use.
  */
-template: string | null, 
+template: string | null,
 /**
  * Optional workspace root index path for reading workspace config.
  * When provided, `default_template` from workspace config is used as fallback.

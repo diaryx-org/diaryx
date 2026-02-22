@@ -3,19 +3,19 @@
 /**
  * Summary of an import operation.
  */
-export type ImportResult = { 
+export type ImportResult = {
 /**
  * Number of entries successfully imported.
  */
-imported: number, 
+imported: number,
 /**
  * Number of entries skipped (e.g. unparseable).
  */
-skipped: number, 
+skipped: number,
 /**
  * Human-readable error messages for skipped entries.
  */
-errors: Array<string>, 
+errors: Array<string>,
 /**
  * Total number of attachments extracted.
  */

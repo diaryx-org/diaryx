@@ -5,15 +5,15 @@ import type { ValidationWarningWithMeta } from "./ValidationWarningWithMeta";
 /**
  * Validation result with computed metadata for frontend display.
  */
-export type ValidationResultWithMeta = { 
+export type ValidationResultWithMeta = {
 /**
  * Validation errors with metadata
  */
-errors: Array<ValidationErrorWithMeta>, 
+errors: Array<ValidationErrorWithMeta>,
 /**
  * Validation warnings with metadata
  */
-warnings: Array<ValidationWarningWithMeta>, 
+warnings: Array<ValidationWarningWithMeta>,
 /**
  * Number of files checked
  */

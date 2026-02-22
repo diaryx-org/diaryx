@@ -7,19 +7,19 @@
  * This struct provides both the new child path and the (possibly new) parent path,
  * allowing the frontend to correctly update the tree and navigation.
  */
-export type CreateChildResult = { 
+export type CreateChildResult = {
 /**
  * Path to the newly created child entry.
  */
-child_path: string, 
+child_path: string,
 /**
  * Current path to the parent entry (may differ from input if converted to index).
  */
-parent_path: string, 
+parent_path: string,
 /**
  * True if the parent was converted from a leaf to an index.
  */
-parent_converted: boolean, 
+parent_converted: boolean,
 /**
  * Original parent path before conversion (only set if parent_converted is true).
  */

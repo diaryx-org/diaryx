@@ -196,14 +196,15 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
             path_to_filename.insert(export_file.source_path.clone(), filename);
         }
 
-        // Second pass: process files
+        // Second pass: process files (with audience-aware template rendering)
         for (idx, export_file) in included.iter().enumerate() {
             if let Some(page) = self
-                .process_file(
+                .process_file_with_audience(
                     &export_file.source_path,
                     idx == 0,
                     &path_to_filename,
                     workspace_root,
+                    Some(audience),
                 )
                 .await?
             {
@@ -247,6 +248,20 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
         path_to_filename: &HashMap<PathBuf, String>,
         workspace_root: &Path,
     ) -> Result<Option<PublishedPage>> {
+        self.process_file_with_audience(path, is_root, path_to_filename, workspace_root, None)
+            .await
+    }
+
+    /// Process a single file into a PublishedPage, optionally with a target audience
+    /// for audience-aware template rendering.
+    async fn process_file_with_audience(
+        &self,
+        path: &Path,
+        is_root: bool,
+        path_to_filename: &HashMap<PathBuf, String>,
+        workspace_root: &Path,
+        _target_audience: Option<&str>,
+    ) -> Result<Option<PublishedPage>> {
         let workspace_dir = workspace_root.parent().unwrap_or(workspace_root);
         let content = match self.fs.read_to_string(path).await {
             Ok(c) => c,
@@ -284,8 +299,33 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
             .build_parent_link(&parsed.frontmatter, path, path_to_filename, workspace_dir)
             .await;
 
+        // Render body templates (if any) before markdown-to-HTML conversion
+        #[cfg(feature = "templating")]
+        let rendered_body = if crate::body_template::has_templates(&parsed.body) {
+            let context = match _target_audience {
+                Some(audience) => crate::body_template::build_publish_context(
+                    &parsed.frontmatter,
+                    path,
+                    Some(workspace_root),
+                    audience,
+                ),
+                None => crate::body_template::build_context(
+                    &parsed.frontmatter,
+                    path,
+                    Some(workspace_root),
+                ),
+            };
+            crate::body_template::BodyTemplateRenderer::new()
+                .render(&parsed.body, &context)
+                .unwrap_or_else(|_| parsed.body.clone())
+        } else {
+            parsed.body.clone()
+        };
+        #[cfg(not(feature = "templating"))]
+        let rendered_body = parsed.body.clone();
+
         // Convert markdown to HTML and transform .md links to .html
-        let html_body = self.markdown_to_html(&parsed.body);
+        let html_body = self.markdown_to_html(&rendered_body);
         let html_body = self.transform_html_links(
             &html_body,
             path,
@@ -299,7 +339,7 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
             dest_filename,
             title,
             html_body,
-            markdown_body: parsed.body,
+            markdown_body: rendered_body,
             contents_links,
             parent_link,
             is_root,

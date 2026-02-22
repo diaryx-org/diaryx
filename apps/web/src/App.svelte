@@ -37,6 +37,8 @@
   import EditorContent from "./views/editor/EditorContent.svelte";
   import { Toaster } from "$lib/components/ui/sonner";
   import * as Tooltip from "$lib/components/ui/tooltip";
+  import * as Dialog from "$lib/components/ui/dialog";
+  import { Button } from "$lib/components/ui/button";
   import { toast } from "svelte-sonner";
   // Note: Button, icons, and LoadingSpinner are now only used in extracted view components
 
@@ -145,6 +147,13 @@
 
   // Add workspace dialog
   let showAddWorkspace = $state(false);
+
+  // Delete confirmation dialog state
+  let showDeleteConfirm = $state(false);
+  let pendingDeletePath = $state<string | null>(null);
+  let pendingDeleteName = $derived(
+    pendingDeletePath?.split('/').pop()?.replace('.md', '') ?? ''
+  );
 
   // Welcome screen (shown when no workspaces exist)
   let showWelcomeScreen = $state(false);
@@ -1354,9 +1363,19 @@
     return newPath;
   }
 
-  // Delete an entry - delegates to controller with sync support
+  // Delete an entry - shows confirmation dialog, then delegates to controller
   async function handleDeleteEntry(path: string) {
     if (!api) return;
+    pendingDeletePath = path;
+    showDeleteConfirm = true;
+  }
+
+  // Called when user confirms deletion in the dialog
+  async function confirmDeleteEntry() {
+    const path = pendingDeletePath;
+    showDeleteConfirm = false;
+    pendingDeletePath = null;
+    if (!api || !path) return;
     const parentPath = workspaceStore.getParentNodePath(path);
     await deleteEntryWithSync(api, path, currentEntry?.path ?? null, async () => {
       await refreshTree();
@@ -1365,6 +1384,12 @@
       }
       await runValidation();
     });
+  }
+
+  // Called when user cancels deletion
+  function cancelDeleteEntry() {
+    showDeleteConfirm = false;
+    pendingDeletePath = null;
   }
 
   // Run workspace validation (delegates to controller)
@@ -1857,6 +1882,22 @@
     }
   }}
 />
+
+<!-- Delete Confirmation Dialog -->
+<Dialog.Root bind:open={showDeleteConfirm} onOpenChange={(open) => { if (!open) cancelDeleteEntry(); }}>
+  <Dialog.Content showCloseButton={false} class="sm:max-w-md">
+    <Dialog.Header>
+      <Dialog.Title>Delete entry</Dialog.Title>
+      <Dialog.Description>
+        Are you sure you want to delete "{pendingDeleteName}"? This action cannot be undone.
+      </Dialog.Description>
+    </Dialog.Header>
+    <Dialog.Footer>
+      <Button variant="outline" onclick={cancelDeleteEntry}>Cancel</Button>
+      <Button variant="destructive" onclick={confirmDeleteEntry}>Delete</Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
 
 <!-- Toast Notifications -->
 <Toaster />

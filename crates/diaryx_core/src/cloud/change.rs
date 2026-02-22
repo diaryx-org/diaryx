@@ -288,9 +288,7 @@ pub fn compute_sync_actions(
                 if remotely_deleted.contains(path) {
                     // Both sides deleted - no action needed.
                     // Emit a ManifestCleanup action so the manifest entry is removed.
-                    actions.push(SyncAction::ManifestCleanup {
-                        path: path.clone(),
-                    });
+                    actions.push(SyncAction::ManifestCleanup { path: path.clone() });
                 } else {
                     // Normal local deletion or local delete + remote modify:
                     // delete from remote (local deletion takes precedence).
@@ -469,10 +467,18 @@ mod tests {
         let downloads: Vec<_> = actions.iter().filter(|a| a.is_download()).collect();
 
         assert_eq!(deletes.len(), 1, "Should have exactly one delete action");
-        assert_eq!(downloads.len(), 0, "Should NOT download a locally-deleted file");
+        assert_eq!(
+            downloads.len(),
+            0,
+            "Should NOT download a locally-deleted file"
+        );
 
         if let SyncAction::Delete { direction, .. } = &deletes[0] {
-            assert_eq!(*direction, SyncDirection::Upload, "Should delete from remote");
+            assert_eq!(
+                *direction,
+                SyncDirection::Upload,
+                "Should delete from remote"
+            );
         }
     }
 
@@ -500,7 +506,11 @@ mod tests {
             .collect();
 
         assert_eq!(uploads.len(), 1, "Should upload the locally modified file");
-        assert_eq!(deletes.len(), 0, "Should NOT delete a locally-modified file");
+        assert_eq!(
+            deletes.len(),
+            0,
+            "Should NOT delete a locally-modified file"
+        );
     }
 
     #[test]

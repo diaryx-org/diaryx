@@ -1,1 +1,0 @@
-../../../../../../crates/diaryx_core/bindings/bindings/LinkFormat.ts

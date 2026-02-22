@@ -1379,4 +1379,67 @@ impl DiaryxBackend {
     pub fn has_native_sync(&self) -> bool {
         false
     }
+
+    // ========================================================================
+    // Import Parsing
+    // ========================================================================
+
+    /// Parse a Day One `Journal.json` file and return entries as JSON.
+    ///
+    /// Takes the raw bytes of a `Journal.json` file and returns a JSON array
+    /// of successfully parsed entries. Parse errors are returned in a separate
+    /// `errors` array.
+    ///
+    /// ## Example
+    /// ```javascript
+    /// const bytes = new Uint8Array(await file.arrayBuffer());
+    /// const result = backend.parseDayOneJson(bytes);
+    /// const { entries, errors } = JSON.parse(result);
+    /// ```
+    #[wasm_bindgen(js_name = "parseDayOneJson")]
+    pub fn parse_dayone_json(&self, bytes: &[u8]) -> std::result::Result<String, JsValue> {
+        let results = diaryx_core::import::dayone::parse_dayone(bytes);
+
+        let mut entries = Vec::new();
+        let mut errors = Vec::new();
+        for result in results {
+            match result {
+                Ok(entry) => entries.push(entry),
+                Err(e) => errors.push(e),
+            }
+        }
+
+        #[derive(serde::Serialize)]
+        struct ParseResult {
+            entries: Vec<diaryx_core::import::ImportedEntry>,
+            errors: Vec<String>,
+        }
+
+        serde_json::to_string(&ParseResult { entries, errors })
+            .map_err(|e| JsValue::from_str(&format!("Failed to serialize parse result: {e}")))
+    }
+
+    /// Parse a single markdown file and return the entry as JSON.
+    ///
+    /// Takes the raw bytes of a `.md` file and its filename, and returns
+    /// a JSON-serialized `ImportedEntry`.
+    ///
+    /// ## Example
+    /// ```javascript
+    /// const bytes = new Uint8Array(await file.arrayBuffer());
+    /// const entryJson = backend.parseMarkdownFile(bytes, file.name);
+    /// const entry = JSON.parse(entryJson);
+    /// ```
+    #[wasm_bindgen(js_name = "parseMarkdownFile")]
+    pub fn parse_markdown_file(
+        &self,
+        bytes: &[u8],
+        filename: &str,
+    ) -> std::result::Result<String, JsValue> {
+        let entry = diaryx_core::import::markdown::parse_markdown_file(bytes, filename)
+            .map_err(|e| JsValue::from_str(&e))?;
+
+        serde_json::to_string(&entry)
+            .map_err(|e| JsValue::from_str(&format!("Failed to serialize entry: {e}")))
+    }
 }

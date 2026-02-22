@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-02-16T21:41:33Z
+updated: 2026-02-22T21:56:51Z
 part_of: '[README](/README.md)'
 ---
 # Instructions for AI agents
@@ -75,8 +75,6 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │       ├── Email module - SMTP email sending for magic links - crates/diaryx_sync_server/src/email/README.md
 │   │       └── Handlers module - HTTP route handlers - crates/diaryx_sync_server/src/handlers/README.md
 │   └── diaryx_sync - crates/diaryx_sync/README.md
-├── docs - Design documents - docs/design/templating.md
-│   └── Templating Design - Render-time Handlebars templating for entry bodies - docs/design/templating.md
 ├── ROADMAP - The plan for future Diaryx features - ROADMAP.md
 └── Scripts - scripts/scripts.md
 ```

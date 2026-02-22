@@ -98,7 +98,11 @@ daily_entry_folder: string | null,
  * Optional template name to use for new entries.
  * Falls back to "daily" built-in template if not provided.
  */
-template: string | null, } } | { "type": "GetAdjacentDailyEntry", "params": { 
+template: string | null, 
+/**
+ * Optional ISO date string (YYYY-MM-DD). Defaults to today if not provided.
+ */
+date: string | null, } } | { "type": "GetAdjacentDailyEntry", "params": { 
 /**
  * Path to the current daily entry.
  */

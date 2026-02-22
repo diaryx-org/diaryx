@@ -339,12 +339,14 @@ export class WorkerBackendNew implements Backend {
   ensureDailyEntry = (
     workspacePath: string,
     dailyEntryFolder?: string,
-    template?: string
+    template?: string,
+    date?: string,
   ): Promise<string> =>
     this.remote!.call('ensureDailyEntry', [
       workspacePath,
       dailyEntryFolder,
       template,
+      date,
     ]) as Promise<string>;
 
   getAvailableAudiences = (rootPath: string): Promise<string[]> =>

@@ -180,11 +180,12 @@ export function createApi(backend: Backend) {
       return expectResponse(response, 'String').data;
     },
 
-    /** Ensure today's daily entry exists. Returns the path to the daily entry. */
+    /** Ensure a daily entry exists for the given date (defaults to today). Returns the path to the daily entry. */
     async ensureDailyEntry(
       workspacePath: string,
       dailyEntryFolder?: string,
-      template?: string
+      template?: string,
+      date?: string,
     ): Promise<string> {
       const response = await backend.execute({
         type: 'EnsureDailyEntry',
@@ -192,6 +193,7 @@ export function createApi(backend: Backend) {
           workspace_path: workspacePath,
           daily_entry_folder: dailyEntryFolder ?? null,
           template: template ?? null,
+          date: date ?? null,
         },
       });
       return expectResponse(response, 'String').data;

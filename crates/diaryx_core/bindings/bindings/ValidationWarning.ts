@@ -89,4 +89,16 @@ index: string,
 /**
  * The non-markdown file that was referenced
  */
-target: string, };
+target: string, } | { "type": "NonPortableFilename",
+/**
+ * The file with the non-portable filename
+ */
+file: string,
+/**
+ * Description of the problematic character(s)
+ */
+reason: string,
+/**
+ * Suggested sanitized filename
+ */
+suggested_filename: string, };

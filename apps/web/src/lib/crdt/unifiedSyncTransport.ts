@@ -17,6 +17,7 @@
  */
 
 import type { Backend } from "../backend/interface";
+import { proxyFetch } from "../backend/proxyFetch";
 
 /**
  * Configuration for the unified sync transport.
@@ -547,7 +548,7 @@ export class UnifiedSyncTransport {
     const authToken = this.options.authToken;
 
     try {
-      const response = await fetch(url, {
+      const response = await proxyFetch(url, {
         headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
       });
 

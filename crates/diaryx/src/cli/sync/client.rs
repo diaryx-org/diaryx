@@ -338,7 +338,12 @@ pub fn handle_start(config: &Config, workspace_root: &Path) {
         },
     };
 
-    let client = SyncClient::new(client_config, sync_manager, Arc::new(CliEventHandler), TokioConnector);
+    let client = SyncClient::new(
+        client_config,
+        sync_manager,
+        Arc::new(CliEventHandler),
+        TokioConnector,
+    );
 
     // Set up shutdown flag
     let running = Arc::new(AtomicBool::new(true));
@@ -439,7 +444,12 @@ pub fn handle_push(config: &Config, workspace_root: &Path) {
         },
     };
 
-    let client = SyncClient::new(client_config, sync_manager, Arc::new(CliEventHandler), TokioConnector);
+    let client = SyncClient::new(
+        client_config,
+        sync_manager,
+        Arc::new(CliEventHandler),
+        TokioConnector,
+    );
 
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
 

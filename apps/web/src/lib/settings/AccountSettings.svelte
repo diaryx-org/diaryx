@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { proxyFetch } from "$lib/backend/proxyFetch";
   /**
    * AccountSettings - Account management settings
    *
@@ -37,6 +38,7 @@
   import SignOutDialog from "$lib/SignOutDialog.svelte";
   import VerificationCodeInput from "$lib/components/VerificationCodeInput.svelte";
   import { isTauri } from "$lib/backend/interface";
+  import { getBackend, createApi } from "$lib/backend";
   import {
     getAuthState,
     logout,
@@ -148,16 +150,17 @@
   // ── Inline sign-in handlers ──
 
   async function validateServer(): Promise<boolean> {
-    let url = serverUrl.trim();
+    const backend = await getBackend();
+    const api = createApi(backend);
+
+    let url = await api.normalizeServerUrl(serverUrl);
     if (!url) { error = "Please enter a server URL"; return false; }
-    if (!url.startsWith("http://") && !url.startsWith("https://")) {
-      url = "https://" + url;
-      serverUrl = url;
-    }
+    serverUrl = url;
+
     isValidating = true;
     error = null;
     try {
-      const resp = await fetch(`${url}/health`, { method: "GET", signal: AbortSignal.timeout(5000) });
+      const resp = await proxyFetch(`${url}/health`, { method: "GET", timeout_ms: 5000 });
       if (!resp.ok) throw new Error("Server returned an error");
       setServerUrl(url);
       return true;

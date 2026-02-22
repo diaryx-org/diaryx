@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { proxyFetch } from "$lib/backend/proxyFetch";
   /**
    * SyncSetupWizard - Unified sync setup wizard
    *
@@ -35,6 +36,7 @@
   } from "$lib/auth";
   import {
     getLocalWorkspaces,
+    getLocalWorkspace,
     getCurrentWorkspaceId,
     addLocalWorkspace,
     setCurrentWorkspaceId,
@@ -206,24 +208,23 @@
 
   // Validate and apply server URL
   async function validateServer(): Promise<boolean> {
-    let url = serverUrl.trim();
+    const backend = await getBackend();
+    const api = createApi(backend);
+
+    let url = await api.normalizeServerUrl(serverUrl);
     if (!url) {
       error = "Please enter a server URL";
       return false;
     }
-
-    if (!url.startsWith("http://") && !url.startsWith("https://")) {
-      url = "https://" + url;
-      serverUrl = url;
-    }
+    serverUrl = url;
 
     isValidatingServer = true;
     error = null;
 
     try {
-      const response = await fetch(`${url}/health`, {
+      const response = await proxyFetch(`${url}/health`, {
         method: "GET",
-        signal: AbortSignal.timeout(5000),
+        timeout_ms: 5000,
       });
 
       if (!response.ok) {
@@ -231,7 +232,7 @@
       }
 
       setServerUrl(url);
-      collaborationStore.setServerUrl(toWebSocketUrl(url));
+      collaborationStore.setServerUrl(await api.toWebSocketSyncUrl(url));
       collaborationStore.setSyncStatus('idle');
 
       return true;
@@ -459,10 +460,6 @@
     return `${base} ${index}`;
   }
 
-  function normalizeWorkspaceName(name: string): string {
-    return name.trim().toLowerCase();
-  }
-
   function getPreferredServerWorkspace(): { id: string; name: string } | null {
     if (selectedServerWorkspaceId) {
       const selected = serverWorkspacesList.find(w => w.id === selectedServerWorkspaceId);
@@ -513,26 +510,12 @@
     return getNextLocalWorkspaceName();
   }
 
-  function resolveCreationWorkspaceName(requireServerUnique: boolean): string {
-    const workspaceName = newWorkspaceName.trim();
-    if (!workspaceName) {
-      throw new Error("Please enter a workspace name");
-    }
-
-    const normalized = normalizeWorkspaceName(workspaceName);
-
-    if (getLocalWorkspaces().some(ws => normalizeWorkspaceName(ws.name) === normalized)) {
-      throw new Error("A local workspace with that name already exists");
-    }
-
-    if (
-      requireServerUnique
-      && serverWorkspacesList.some(ws => normalizeWorkspaceName(ws.name) === normalized)
-    ) {
-      throw new Error("A synced workspace with that name already exists");
-    }
-
-    return workspaceName;
+  async function resolveCreationWorkspaceName(requireServerUnique: boolean): Promise<string> {
+    const backend = await getBackend();
+    const api = createApi(backend);
+    const localNames = getLocalWorkspaces().map(ws => ws.name);
+    const serverNames = requireServerUnique ? serverWorkspacesList.map(ws => ws.name) : undefined;
+    return api.validateWorkspaceName(newWorkspaceName, localNames, serverNames);
   }
 
   async function ensureRootIndexForCurrentWorkspace(workspaceName: string): Promise<void> {
@@ -554,7 +537,7 @@
   }
 
   async function handleCreateLocalWorkspace() {
-    const wsName = resolveCreationWorkspaceName(false);
+    const wsName = await resolveCreationWorkspaceName(false);
     const localWs = createLocalWorkspace(wsName);
 
     await switchWorkspace(localWs.id, localWs.name);
@@ -854,7 +837,7 @@
    * workspace from that local content.
    */
   async function handleCreateNew() {
-    const workspaceName = resolveCreationWorkspaceName(true);
+    const workspaceName = await resolveCreationWorkspaceName(true);
     const localWs = createLocalWorkspace(workspaceName);
 
     await switchWorkspace(localWs.id, localWs.name);
@@ -1040,7 +1023,12 @@
     if (currentLocalId && currentLocalId.startsWith('local-')) {
       promoteLocalWorkspace(currentLocalId, serverWorkspaceId);
     } else {
-      addLocalWorkspace({ id: serverWorkspaceId, name });
+      // Preserve the filesystem path from the current workspace (Tauri).
+      // Without this, the new workspace entry has no path and the Tauri backend
+      // falls back to the default workspace directory on next startup, which may
+      // point to a different workspace's files.
+      const currentWs = currentLocalId ? getLocalWorkspace(currentLocalId) : null;
+      addLocalWorkspace({ id: serverWorkspaceId, name, path: currentWs?.path });
     }
 
     setCurrentWorkspaceId(serverWorkspaceId);
@@ -1081,14 +1069,6 @@
       screen = 'auth';
       error = null;
     }
-  }
-
-  // Convert HTTP URL to WebSocket URL
-  function toWebSocketUrl(httpUrl: string): string {
-    return httpUrl
-      .replace(/^https:\/\//, "wss://")
-      .replace(/^http:\/\//, "ws://")
-      + "/sync2";
   }
 
   function formatBytes(bytes: number): string {

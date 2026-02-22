@@ -81,6 +81,16 @@ Returns `Response::String(new_path)` if a rename occurred, `Response::Ok` otherw
   canonical refs that include the current entry directory. This keeps
   get/delete/move attachment commands consistent for nested entries.
 
+## Command Path Resolution Notes
+
+- `execute()` normalizes command path fields to workspace-relative values when a
+  workspace root is configured.
+- Handlers that call `Workspace`, `Validator`, exporter/search root APIs, or
+  raw filesystem methods must resolve those normalized values back to
+  filesystem paths via `resolve_fs_path(...)` before reading/writing disk.
+- This preserves cross-platform behavior for Tauri absolute inputs while
+  keeping canonical workspace-relative command semantics for sync/link logic.
+
 ## TypeScript Binding Notes
 
 - `ts-rs` is configured with `no-serde-warnings` in `Cargo.toml`.

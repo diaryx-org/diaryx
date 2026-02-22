@@ -5,6 +5,7 @@ part_of: '[README](/crates/diaryx_core/src/README.md)'
 attachments:
   - '[mod.rs](/crates/diaryx_core/src/utils/mod.rs)'
   - '[date.rs](/crates/diaryx_core/src/utils/date.rs)'
+  - '[naming.rs](/crates/diaryx_core/src/utils/naming.rs)'
   - '[path.rs](/crates/diaryx_core/src/utils/path.rs)'
 exclude:
   - '*.lock'
@@ -18,6 +19,7 @@ Utility functions for date parsing and path manipulation.
 
 - `mod.rs` - Module exports
 - `date.rs` - Natural language date parsing with chrono
+- `naming.rs` - Workspace naming, URL normalization, and publishing slug validation
 - `path.rs` - Path utilities (relative paths, normalization)
 
 ## Sync Path Canonicalization

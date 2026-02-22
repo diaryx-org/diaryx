@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { proxyFetch } from "$lib/backend/proxyFetch";
   import { Button } from "$lib/components/ui/button";
   import * as Dialog from "$lib/components/ui/dialog";
   import { Loader2, LogOut } from "@lucide/svelte";
@@ -28,7 +29,7 @@
       const serverUrl = localStorage.getItem('diaryx_sync_server_url');
       if (token && deviceId && serverUrl) {
         try {
-          await fetch(`${serverUrl}/auth/devices/${deviceId}`, {
+          await proxyFetch(`${serverUrl}/auth/devices/${deviceId}`, {
             method: 'DELETE',
             headers: { Authorization: `Bearer ${token}` },
           });

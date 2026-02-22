@@ -1334,7 +1334,9 @@ export async function switchWorkspace(
   });
 
   // 13. Update local workspace registry and reactive state
-  addLocalWorkspace({ id: newWorkspaceId, name: newWorkspaceName });
+  // Include the workspace path so the Tauri backend can find this workspace on restart
+  const wsPath = backend.getWorkspacePath?.()?.replace(/\/(index|README)\.md$/, '');
+  addLocalWorkspace({ id: newWorkspaceId, name: newWorkspaceName, path: wsPath || undefined });
   registrySetCurrentWorkspaceId(newWorkspaceId);
   setActiveWorkspaceId(newWorkspaceId);
 

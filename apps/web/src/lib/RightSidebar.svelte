@@ -551,7 +551,7 @@
 >
   <!-- Header with collapse button -->
   <div
-    class="flex items-center justify-between px-4 py-3 border-b border-sidebar-border shrink-0"
+    class="flex items-center justify-between px-4 py-3 border-b border-sidebar-border shrink-0 pt-[calc(env(safe-area-inset-top)+0.75rem)]"
   >
     <Tooltip.Root>
       <Tooltip.Trigger>
@@ -1231,7 +1231,7 @@
 
   <!-- Footer with path -->
   {#if entry}
-    <div class="px-4 py-3 border-t border-sidebar-border shrink-0">
+    <div class="px-4 py-3 border-t border-sidebar-border shrink-0 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]">
       <p class="text-xs text-muted-foreground truncate" title={entry.path}>
         {entry.path}
       </p>

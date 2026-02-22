@@ -87,7 +87,7 @@
           };
         in
         {
-          default = pkgs.mkShell {
+          default = pkgs.mkShellNoCC {
             packages = with pkgs; [
               rustToolchain
               zig
@@ -101,10 +101,8 @@
               openssl.dev
             ];
 
-            # Fixed: Using apple-sdk_15 directly avoids the legacy 11.0 stub error
-            buildInputs = pkgs.lib.optionals pkgs.stdenv.isDarwin [
-              pkgs.apple-sdk_15
-            ] ++ [ pkgs.openssl ];
+            # Add libiconv for macOS host build scripts
+            buildInputs = [ pkgs.openssl pkgs.libiconv ];
 
             shellHook = ''
               export ZIG_GLOBAL_CACHE_DIR="$PWD/.zig-cache"
@@ -112,6 +110,18 @@
               # Force clean the environment of legacy SDK markers
               unset DEVELOPER_DIR
               unset SDKROOT
+              unset MACOSX_DEPLOYMENT_TARGET
+
+              # Bypass Nix's cc-wrapper for iOS targets because it injects macOS min version flags
+              export CC_aarch64_apple_ios=/usr/bin/clang
+              export CXX_aarch64_apple_ios=/usr/bin/clang++
+              export AR_aarch64_apple_ios=/usr/bin/ar
+              export CARGO_TARGET_AARCH64_APPLE_IOS_LINKER=/usr/bin/clang
+
+              export CC_aarch64_apple_ios_sim=/usr/bin/clang
+              export CXX_aarch64_apple_ios_sim=/usr/bin/clang++
+              export AR_aarch64_apple_ios_sim=/usr/bin/ar
+              export CARGO_TARGET_AARCH64_APPLE_IOS_SIM_LINKER=/usr/bin/clang
 
               echo "Welcome to the Diaryx development environment!"
               echo "Targets enabled: x86_64-linux, aarch64-darwin, wasm32"

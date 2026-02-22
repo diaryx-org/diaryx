@@ -316,7 +316,7 @@
   <!-- Mobile: Use Drawer from top -->
   <Drawer.Root bind:open direction="top">
     <Drawer.Content>
-      <div class="mx-auto w-full max-w-md px-4 pb-4">
+      <div class="mx-auto w-full max-w-md px-4 pb-4 pt-[env(safe-area-inset-top)]">
         <Command.Root class="rounded-lg border-none shadow-none">
           {@render commandContent()}
         </Command.Root>

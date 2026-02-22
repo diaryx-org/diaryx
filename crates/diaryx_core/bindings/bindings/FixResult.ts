@@ -3,11 +3,11 @@
 /**
  * Result of attempting to fix a validation issue.
  */
-export type FixResult = {
+export type FixResult = { 
 /**
  * Whether the fix was successful.
  */
-success: boolean,
+success: boolean, 
 /**
  * Description of what was done (or why it failed).
  */

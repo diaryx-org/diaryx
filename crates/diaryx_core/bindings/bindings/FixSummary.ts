@@ -4,19 +4,19 @@ import type { FixResult } from "./FixResult";
 /**
  * Summary of fix operations performed.
  */
-export type FixSummary = {
+export type FixSummary = { 
 /**
  * Results from fixing errors.
  */
-error_fixes: Array<FixResult>,
+error_fixes: Array<FixResult>, 
 /**
  * Results from fixing warnings.
  */
-warning_fixes: Array<FixResult>,
+warning_fixes: Array<FixResult>, 
 /**
  * Total number of issues fixed.
  */
-total_fixed: number,
+total_fixed: number, 
 /**
  * Total number of fixes that failed.
  */

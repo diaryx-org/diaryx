@@ -3,19 +3,19 @@
 /**
  * Options for searching entries.
  */
-export type SearchOptions = {
+export type SearchOptions = { 
 /**
  * Workspace path to search in.
  */
-workspace_path: string | null,
+workspace_path: string | null, 
 /**
  * Whether to search frontmatter.
  */
-search_frontmatter: boolean,
+search_frontmatter: boolean, 
 /**
  * Specific property to search.
  */
-property: string | null,
+property: string | null, 
 /**
  * Case sensitive search.
  */

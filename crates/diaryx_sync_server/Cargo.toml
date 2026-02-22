@@ -73,6 +73,10 @@ webauthn-rs-proto = "0.5"
 # Stripe billing
 async-stripe = { version = "0.41", default-features = false, features = ["runtime-tokio-hyper-rustls", "checkout", "billing"] }
 
+# Apple IAP (JWS verification)
+jsonwebtoken = "9"
+x509-parser = { version = "0.16", features = ["verify"] }
+
 # Environment
 dotenvy = "0.15"
 

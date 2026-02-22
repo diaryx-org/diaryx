@@ -6,6 +6,7 @@ attachments:
   - '[index.ts](/apps/web/src/lib/settings/index.ts)'
   - '[AccountSettings.svelte](/apps/web/src/lib/settings/AccountSettings.svelte)'
   - '[BackupSettings.svelte](/apps/web/src/lib/settings/BackupSettings.svelte)'
+  - '[BillingSettings.svelte](/apps/web/src/lib/settings/BillingSettings.svelte)'
   - '[ClearDataSettings.svelte](/apps/web/src/lib/settings/ClearDataSettings.svelte)'
   - '[CloudBackupSettings.svelte](/apps/web/src/lib/settings/CloudBackupSettings.svelte)'
   - '[DebugInfo.svelte](/apps/web/src/lib/settings/DebugInfo.svelte)'
@@ -37,6 +38,7 @@ Settings panel components for the settings dialog.
 |------|---------|
 | `AccountSettings.svelte` | Account and login settings |
 | `BackupSettings.svelte` | Local backup settings |
+| `BillingSettings.svelte` | Subscription and billing settings (Stripe + Apple IAP) |
 | `ClearDataSettings.svelte` | Clear data controls |
 | `CloudBackupSettings.svelte` | Cloud backup configuration |
 | `DebugInfo.svelte` | Debug information display |
@@ -103,3 +105,9 @@ Settings panel components for the settings dialog.
   "server is importing" feedback once upload bytes are complete
 - applies the same ZIP locally (instead of re-downloading a snapshot) before
   CRDT initialization, reducing a large network roundtrip during setup
+
+`BillingSettings.svelte` behavior:
+
+- avoids eager Apple IAP product fetch on component mount so opening the
+  settings dialog does not invoke StoreKit automatically (important for
+  simulator/dev builds)

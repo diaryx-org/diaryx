@@ -58,7 +58,7 @@ pub fn run() {
 
     log::info!("Starting Diaryx application...");
 
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         // Stronghold plugin for secure credential storage
         .plugin(
             tauri_plugin_stronghold::Builder::new(|password| {
@@ -81,7 +81,15 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_google_auth::init())
+        .plugin(tauri_plugin_google_auth::init());
+
+    // Apple IAP plugin — only included with `--features iap` (for App Store builds)
+    #[cfg(feature = "iap")]
+    {
+        builder = builder.plugin(tauri_plugin_iap::init());
+    }
+
+    builder
         // CRDT state for version history and sync
         .manage(CrdtState::new())
         // Guest mode state for share sessions

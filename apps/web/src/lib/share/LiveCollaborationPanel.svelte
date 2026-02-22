@@ -32,6 +32,7 @@
   import { workspaceStore } from "@/models/stores/workspaceStore.svelte";
   import { entryStore } from "@/models/stores/entryStore.svelte";
   import { getAuthState, createCheckoutSession } from "$lib/auth";
+  import { openStripeUrl } from "$lib/billing";
   import type { Api } from "$lib/backend/api";
   import { toast } from "svelte-sonner";
 
@@ -306,7 +307,7 @@
             onclick={async () => {
               try {
                 const url = await createCheckoutSession();
-                window.location.href = url;
+                await openStripeUrl(url);
               } catch {
                 toast.error("Failed to start checkout");
               }

@@ -21,6 +21,7 @@
   import { sitePublishingStore } from '@/models/stores/sitePublishingStore.svelte';
   import { showError, showInfo, showSuccess } from '@/models/services/toastService';
   import { getServerUrl, getAuthState, createCheckoutSession } from '$lib/auth';
+  import { openStripeUrl } from '$lib/billing';
 
   interface Props {
     onAddWorkspace?: () => void;
@@ -291,7 +292,7 @@
         onclick={async () => {
           try {
             const url = await createCheckoutSession();
-            window.location.href = url;
+            await openStripeUrl(url);
           } catch {
             // handled by auth layer
           }

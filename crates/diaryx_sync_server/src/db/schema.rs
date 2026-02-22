@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS users (
     tier TEXT NOT NULL DEFAULT 'free',
     published_site_limit INTEGER,
     stripe_customer_id TEXT,
-    stripe_subscription_id TEXT
+    stripe_subscription_id TEXT,
+    apple_original_transaction_id TEXT
 );
 
 -- Devices table (tracks client devices)
@@ -362,6 +363,23 @@ pub fn init_database(conn: &Connection) -> Result<(), rusqlite::Error> {
          ON users(stripe_customer_id) WHERE stripe_customer_id IS NOT NULL;",
     )?;
 
+    // Forward migration: add apple_original_transaction_id column to users table.
+    let has_apple_tx_col: bool = conn
+        .prepare("PRAGMA table_info(users)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|name| name == "apple_original_transaction_id");
+    if !has_apple_tx_col {
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN apple_original_transaction_id TEXT",
+            [],
+        )?;
+    }
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_users_apple_tx \
+         ON users(apple_original_transaction_id) WHERE apple_original_transaction_id IS NOT NULL;",
+    )?;
+
     // Forward migration: add code column to magic_tokens table.
     let has_code_col: bool = conn
         .prepare("PRAGMA table_info(magic_tokens)")?
@@ -458,6 +476,7 @@ mod tests {
         assert!(user_cols.contains(&"published_site_limit".to_string()));
         assert!(user_cols.contains(&"stripe_customer_id".to_string()));
         assert!(user_cols.contains(&"stripe_subscription_id".to_string()));
+        assert!(user_cols.contains(&"apple_original_transaction_id".to_string()));
 
         let site_cols: Vec<String> = conn
             .prepare("PRAGMA table_info(published_sites)")

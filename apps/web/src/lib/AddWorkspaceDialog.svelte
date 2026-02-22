@@ -33,6 +33,7 @@
     getAuthState,
     createCheckoutSession,
   } from "$lib/auth";
+  import { openStripeUrl } from "$lib/billing";
   import {
     getLocalWorkspaces,
     getLocalWorkspace,
@@ -1716,7 +1717,7 @@
               error = null;
               try {
                 const url = await createCheckoutSession();
-                window.location.href = url;
+                await openStripeUrl(url);
               } catch (e) {
                 error = e instanceof Error ? e.message : "Failed to start checkout";
               } finally {

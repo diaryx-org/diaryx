@@ -31,6 +31,29 @@
 
   // Show pill when selected or when there's no resolved value
   let showAsPill = $derived(selected || !hasValue);
+
+  // Parse resolved value into segments of plain text and markdown links
+  type Segment = { type: "text"; text: string } | { type: "link"; text: string; href: string };
+  const LINK_RE = /\[([^\]]+)\]\(([^)]+)\)/g;
+
+  let segments = $derived.by((): Segment[] => {
+    if (!resolvedValue) return [];
+    const result: Segment[] = [];
+    let lastIndex = 0;
+    for (const match of resolvedValue.matchAll(LINK_RE)) {
+      if (match.index > lastIndex) {
+        result.push({ type: "text", text: resolvedValue.slice(lastIndex, match.index) });
+      }
+      result.push({ type: "link", text: match[1], href: match[2] });
+      lastIndex = match.index + match[0].length;
+    }
+    if (lastIndex < resolvedValue.length) {
+      result.push({ type: "text", text: resolvedValue.slice(lastIndex) });
+    }
+    return result;
+  });
+
+  let hasLinks = $derived(segments.some((s) => s.type === "link"));
 </script>
 
 {#if showAsPill}
@@ -42,6 +65,16 @@
   >
     <span class="template-variable-braces">{"{}"}</span>
     <span class="template-variable-name">{selected ? name : `{{ ${name} }}`}</span>
+  </span>
+{:else if hasLinks}
+  <span class="template-variable-resolved" title="Template variable: {name}">
+    {#each segments as segment}
+      {#if segment.type === "link"}
+        <a href={segment.href} class="template-variable-link">{segment.text}</a>
+      {:else}
+        {segment.text}
+      {/if}
+    {/each}
   </span>
 {:else}
   <span class="template-variable-resolved" title="Template variable: {name}">
@@ -99,5 +132,17 @@
     text-decoration: underline dotted;
     text-decoration-color: color-mix(in oklch, var(--primary) 40%, transparent);
     text-underline-offset: 2px;
+  }
+
+  .template-variable-link {
+    color: var(--primary);
+    text-decoration: underline;
+    text-decoration-color: color-mix(in oklch, var(--primary) 40%, transparent);
+    text-underline-offset: 2px;
+    cursor: pointer;
+  }
+
+  .template-variable-link:hover {
+    text-decoration-color: var(--primary);
   }
 </style>

@@ -103,6 +103,12 @@ export const TemplateVariable = Node.create({
       return {
         dom,
         stopEvent(event: Event) {
+          // Let click events on links bubble up to ProseMirror's handleClick
+          // so the linkController can handle navigation properly
+          if (event.type === "click" || event.type === "mousedown") {
+            const target = event.target as HTMLElement;
+            if (target.closest("a")) return false;
+          }
           return dom.contains(event.target as globalThis.Node);
         },
         selectNode() {

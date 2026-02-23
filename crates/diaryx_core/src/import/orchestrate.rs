@@ -33,15 +33,32 @@ use super::{ImportResult, ImportedEntry};
 ///       2024-01-15-title.md (part_of → month)
 /// ```
 ///
-/// After writing entries and indexes, grafts the import folder's root index
-/// into the existing workspace hierarchy so entries appear in the sidebar.
+/// When `parent_path` is given, the folder is created under the parent entry's
+/// directory and grafted into the parent's `contents`. Otherwise it's placed at
+/// the workspace root.
 pub async fn write_entries<FS: AsyncFileSystem>(
     fs: &FS,
     workspace_root: &Path,
     folder: &str,
     entries: &[ImportedEntry],
+    parent_path: Option<&str>,
 ) -> ImportResult {
-    let base_dir = workspace_root.join(folder);
+    // Compute base directory and canonical prefix based on parent_path.
+    let parent_dir = parent_path
+        .and_then(|p| {
+            Path::new(p)
+                .parent()
+                .map(|d| d.to_string_lossy().replace('\\', "/"))
+        })
+        .filter(|d| !d.is_empty());
+
+    let (base_dir, canonical_prefix) = match &parent_dir {
+        Some(dir) => (
+            workspace_root.join(dir).join(folder),
+            format!("{dir}/{folder}"),
+        ),
+        None => (workspace_root.join(folder), folder.to_string()),
+    };
     let mut result = ImportResult {
         imported: 0,
         skipped: 0,
@@ -78,8 +95,8 @@ pub async fn write_entries<FS: AsyncFileSystem>(
 
         // Compute canonical paths for hierarchy tracking.
         let entry_canonical = canonical_path(workspace_root, &entry_path);
-        let month_index_canonical = format!("{folder}/{year}/{month}/{year}_{month}.md");
-        let year_index_canonical = format!("{folder}/{year}/{year}_index.md");
+        let month_index_canonical = format!("{canonical_prefix}/{year}/{month}/{year}_{month}.md");
+        let year_index_canonical = format!("{canonical_prefix}/{year}/{year}_index.md");
 
         // Track: root → years.
         all_years
@@ -153,29 +170,32 @@ pub async fn write_entries<FS: AsyncFileSystem>(
         workspace_root,
         &base_dir,
         folder,
+        &canonical_prefix,
         &all_years,
         &year_to_months,
         &month_to_entries,
     )
     .await;
 
-    // Graft into workspace root so the imported folder is reachable from the sidebar.
-    graft_into_workspace(fs, workspace_root, folder).await;
+    // Graft into the parent entry (or workspace root) so entries appear in the sidebar.
+    graft_into_parent(fs, workspace_root, &canonical_prefix, folder, parent_path).await;
 
     result
 }
 
 /// Write the root, year, and month index files with `contents`/`part_of` links.
+#[allow(clippy::too_many_arguments)]
 async fn write_index_hierarchy<FS: AsyncFileSystem>(
     fs: &FS,
     workspace_root: &Path,
     base_dir: &Path,
     folder: &str,
+    canonical_prefix: &str,
     all_years: &IndexMap<String, String>,
     year_to_months: &IndexMap<String, IndexMap<String, String>>,
     month_to_entries: &IndexMap<String, Vec<String>>,
 ) {
-    let root_index_canonical = format!("{folder}/index.md");
+    let root_index_canonical = format!("{canonical_prefix}/index.md");
 
     // Root index: {folder}/index.md
     let root_index = base_dir.join("index.md");
@@ -287,33 +307,51 @@ async fn write_index_hierarchy<FS: AsyncFileSystem>(
     }
 }
 
-/// Graft the import folder's root index into the existing workspace hierarchy.
+/// Graft the import folder's root index into the parent entry or workspace root.
 ///
-/// 1. Find the workspace root index (the file with `contents` but no `part_of`).
-/// 2. Add the import folder's index to the workspace root's `contents` if not already present.
-/// 3. Set `part_of` on the import folder's index pointing back to the workspace root.
-async fn graft_into_workspace<FS: AsyncFileSystem>(fs: &FS, workspace_root: &Path, folder: &str) {
-    let ws = Workspace::new(fs);
-    let ws_root_index = match ws.find_root_index_in_dir(workspace_root).await {
-        Ok(Some(path)) => path,
-        _ => return, // No workspace root index found; nothing to graft into.
+/// When `parent_path` is given, grafts into that entry. Otherwise falls back to
+/// the workspace root index (the file with `contents` but no `part_of`).
+///
+/// 1. Add the import folder's index to the parent's `contents` if not already present.
+/// 2. Set `part_of` on the import folder's index pointing back to the parent.
+async fn graft_into_parent<FS: AsyncFileSystem>(
+    fs: &FS,
+    workspace_root: &Path,
+    canonical_prefix: &str,
+    folder: &str,
+    parent_path: Option<&str>,
+) {
+    // Resolve the parent entry to graft into.
+    let graft_target = if let Some(pp) = parent_path {
+        let abs = workspace_root.join(pp);
+        if fs.exists(&abs).await {
+            abs
+        } else {
+            return;
+        }
+    } else {
+        // Fall back to workspace root index.
+        let ws = Workspace::new(fs);
+        match ws.find_root_index_in_dir(workspace_root).await {
+            Ok(Some(path)) => path,
+            _ => return,
+        }
     };
 
-    let import_index_path = workspace_root.join(folder).join("index.md");
+    let import_index_path = workspace_root.join(canonical_prefix).join("index.md");
     if !fs.exists(&import_index_path).await {
         return;
     }
 
-    let import_index_canonical = format!("{folder}/index.md");
+    let import_index_canonical = format!("{canonical_prefix}/index.md");
     let import_title = capitalize(folder);
 
-    // Step 1: Add to workspace root's contents.
-    if let Ok(ws_root_content) = fs.read_to_string(&ws_root_index).await
-        && let Ok(parsed) = frontmatter::parse_or_empty(&ws_root_content)
+    // Step 1: Add to parent's contents.
+    if let Ok(parent_content) = fs.read_to_string(&graft_target).await
+        && let Ok(parsed) = frontmatter::parse_or_empty(&parent_content)
     {
         let mut fm = parsed.frontmatter;
 
-        // Check if already listed in contents.
         let already_listed = fm
             .get("contents")
             .and_then(|v| v.as_sequence())
@@ -338,7 +376,7 @@ async fn graft_into_workspace<FS: AsyncFileSystem>(fs: &FS, workspace_root: &Pat
             }
 
             if let Ok(updated) = frontmatter::serialize(&fm, &parsed.body) {
-                let _ = fs.write_file(&ws_root_index, &updated).await;
+                let _ = fs.write_file(&graft_target, &updated).await;
             }
         }
     }
@@ -350,12 +388,11 @@ async fn graft_into_workspace<FS: AsyncFileSystem>(fs: &FS, workspace_root: &Pat
         let mut fm = parsed.frontmatter;
 
         if !fm.contains_key("part_of") {
-            let ws_root_canonical = canonical_path(workspace_root, &ws_root_index);
-            let ws_root_title = fm_title_or_filename(&ws_root_index);
+            let parent_canonical = canonical_path(workspace_root, &graft_target);
 
-            // Read the workspace root's title from its frontmatter if available.
-            let ws_title = fs
-                .read_to_string(&ws_root_index)
+            // Read the parent's title from its frontmatter if available.
+            let parent_title = fs
+                .read_to_string(&graft_target)
                 .await
                 .ok()
                 .and_then(|c| frontmatter::parse_or_empty(&c).ok())
@@ -365,11 +402,11 @@ async fn graft_into_workspace<FS: AsyncFileSystem>(fs: &FS, workspace_root: &Pat
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string())
                 })
-                .unwrap_or(ws_root_title);
+                .unwrap_or_else(|| fm_title_or_filename(&graft_target));
 
             fm.insert(
                 "part_of".to_string(),
-                Value::String(format_link(&ws_root_canonical, &ws_title)),
+                Value::String(format_link(&parent_canonical, &parent_title)),
             );
 
             if let Ok(updated) = frontmatter::serialize(&fm, &parsed.body) {
@@ -425,7 +462,19 @@ fn format_entry(
     }
 
     let yaml = serde_yaml::to_string(&fm).unwrap_or_default();
-    format!("---\n{yaml}---\n{}", entry.body)
+
+    // Resolve _attachments/ references in the body to include the entry stem,
+    // so they point to the correct sibling directory.
+    let body = if !entry.attachments.is_empty() {
+        let entry_stem = entry_path.file_stem().unwrap().to_string_lossy();
+        entry
+            .body
+            .replace("_attachments/", &format!("{entry_stem}/_attachments/"))
+    } else {
+        entry.body.clone()
+    };
+
+    format!("---\n{yaml}---\n{body}")
 }
 
 /// Compute the canonical path (workspace-relative, forward slashes).

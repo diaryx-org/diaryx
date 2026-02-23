@@ -239,10 +239,10 @@ export function createApi(backend: Backend) {
     },
 
     /** Get the workspace tree structure. */
-    async getWorkspaceTree(path?: string, depth?: number): Promise<TreeNode> {
+    async getWorkspaceTree(path?: string, depth?: number, audience?: string): Promise<TreeNode> {
       const response = await backend.execute({
         type: 'GetWorkspaceTree',
-        params: { path: path ?? null, depth: depth ?? null },
+        params: { path: path ?? null, depth: depth ?? null, audience: audience ?? null },
       });
       return expectResponse(response, 'Tree').data;
     },

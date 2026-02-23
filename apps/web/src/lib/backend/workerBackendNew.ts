@@ -276,8 +276,8 @@ export class WorkerBackendNew implements Backend {
   findRootIndex = (dirPath?: string) => this.remote!.findRootIndex(dirPath);
   getDefaultWorkspacePath = () => this.remote!.getDefaultWorkspacePath();
 
-  getWorkspaceTree = (path?: string, depth?: number) =>
-    this.remote!.getWorkspaceTree(path, depth);
+  getWorkspaceTree = (path?: string, depth?: number, audience?: string) =>
+    this.remote!.getWorkspaceTree(path, depth, audience);
   createWorkspace = (path?: string, name?: string) =>
     this.remote!.createWorkspace(path, name);
   getFilesystemTree = (path?: string, showHidden?: boolean) =>
@@ -323,6 +323,12 @@ export class WorkerBackendNew implements Backend {
       .replace(/^-|-$/g, '');
     return slug ? `${slug}.md` : 'untitled.md';
   }
+
+  parseDayOneJson = (bytes: Uint8Array): Promise<string> =>
+    this.remote!.call('parseDayOneJson', [bytes]) as Promise<string>;
+
+  parseMarkdownFile = (bytes: Uint8Array, filename: string): Promise<string> =>
+    this.remote!.call('parseMarkdownFile', [bytes, filename]) as Promise<string>;
 
   attachEntryToParent = (entry: string, parent: string): Promise<string> =>
     this.remote!.call('attachToParent', [entry, parent]) as Promise<string>;

@@ -74,6 +74,7 @@
     onWorkspaceSwitchStart?: () => void;
     onWorkspaceSwitchComplete?: () => void;
     onInitializeWorkspace?: () => void;
+    onSetAudience?: (path: string) => void;
   }
 
   let {
@@ -108,6 +109,7 @@
     onWorkspaceSwitchStart,
     onWorkspaceSwitchComplete,
     onInitializeWorkspace,
+    onSetAudience,
   }: Props = $props();
 
   // Platform detection for keyboard shortcut display
@@ -1311,6 +1313,7 @@
   onRename={onRenameEntry ? handleRenameClick : undefined}
   onDuplicate={onDuplicateEntry ? handleDuplicate : undefined}
   onMoveTo={api ? handleMoveToClick : undefined}
+  onSetAudience={onSetAudience}
 />
 
 <!-- Parent Picker Dialog (for validation fixes) -->
@@ -1774,6 +1777,12 @@
         <ContextMenu.Item onclick={() => handleMoveToClick(node.path)}>
           <FolderInput class="size-4 mr-2" />
           Move to...
+        </ContextMenu.Item>
+      {/if}
+      {#if onSetAudience}
+        <ContextMenu.Item onclick={() => onSetAudience(node.path)}>
+          <CircleUser class="size-4 mr-2" />
+          Set Audience...
         </ContextMenu.Item>
       {/if}
       <ContextMenu.Separator />

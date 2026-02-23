@@ -40,6 +40,9 @@ comrak = { version = "0.49", optional = true }
 git2 = { version = "0.19", optional = true, default-features = false }
 handlebars = { version = "6", optional = true }
 
+# Day One ZIP import (works on all platforms including WASM)
+zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
+
 # Email import (native only, not available in WASM)
 mailparse = { version = "0.16", optional = true }
 mbox-reader = { version = "0.2", optional = true }
@@ -91,8 +94,8 @@ native-pandoc = []
 # Enable email import (.eml and .mbox files)
 import-email = ["dep:mailparse", "dep:mbox-reader", "dep:html-to-markdown-rs"]
 
-# Enable Day One journal import (Journal.json files)
-import-dayone = []
+# Enable Day One journal import (ZIP with media or Journal.json)
+import-dayone = ["dep:zip"]
 
 # Enable markdown directory import (folders of .md files)
 import-markdown = []

@@ -15,6 +15,7 @@
     Pencil,
     Copy,
     FolderInput,
+    CircleUser,
   } from "@lucide/svelte";
 
   interface Props {
@@ -29,6 +30,7 @@
     onRename?: (path: string, name: string) => void;
     onDuplicate?: (path: string) => void;
     onMoveTo?: (path: string) => void;
+    onSetAudience?: (path: string) => void;
   }
 
   let {
@@ -43,6 +45,7 @@
     onRename,
     onDuplicate,
     onMoveTo,
+    onSetAudience,
   }: Props = $props();
 
   // Action handlers that close the sheet after action
@@ -109,6 +112,18 @@
           >
             <FolderInput class="size-5 text-muted-foreground" />
             <span class="text-base">Move to...</span>
+          </button>
+        {/if}
+
+        <!-- Set Audience -->
+        {#if onSetAudience}
+          <button
+            type="button"
+            class="flex items-center gap-4 px-6 py-4 hover:bg-muted active:bg-muted/80 transition-colors text-left"
+            onclick={() => handleAction(() => onSetAudience(nodePath))}
+          >
+            <CircleUser class="size-5 text-muted-foreground" />
+            <span class="text-base">Set Audience...</span>
           </button>
         {/if}
 

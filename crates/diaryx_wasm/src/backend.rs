@@ -58,6 +58,7 @@ use wasm_bindgen_futures::future_to_promise;
 use crate::fsa_fs::FsaFileSystem;
 #[cfg(feature = "browser")]
 use crate::indexeddb_fs::IndexedDbFileSystem;
+use crate::js_async_fs::JsAsyncFileSystem;
 #[cfg(feature = "browser")]
 use crate::opfs_fs::OpfsFileSystem;
 use crate::wasm_sqlite_storage::WasmSqliteStorage;
@@ -78,6 +79,8 @@ pub(crate) enum StorageBackend {
     Fsa(FsaFileSystem),
     /// In-memory filesystem - used for guest mode in share sessions (web only)
     InMemory(SyncToAsyncFs<InMemoryFileSystem>),
+    /// JavaScript-backed filesystem - used for Node.js/Obsidian/Electron integration
+    JsAsync(JsAsyncFileSystem),
 }
 
 impl Clone for StorageBackend {
@@ -90,6 +93,7 @@ impl Clone for StorageBackend {
             #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => StorageBackend::Fsa(fs.clone()),
             StorageBackend::InMemory(fs) => StorageBackend::InMemory(fs.clone()),
+            StorageBackend::JsAsync(fs) => StorageBackend::JsAsync(fs.clone()),
         }
     }
 }
@@ -108,6 +112,7 @@ impl AsyncFileSystem for StorageBackend {
             #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => fs.read_to_string(path),
             StorageBackend::InMemory(fs) => fs.read_to_string(path),
+            StorageBackend::JsAsync(fs) => fs.read_to_string(path),
         }
     }
 
@@ -124,6 +129,7 @@ impl AsyncFileSystem for StorageBackend {
             #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => fs.write_file(path, content),
             StorageBackend::InMemory(fs) => fs.write_file(path, content),
+            StorageBackend::JsAsync(fs) => fs.write_file(path, content),
         }
     }
 
@@ -140,6 +146,7 @@ impl AsyncFileSystem for StorageBackend {
             #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => fs.create_new(path, content),
             StorageBackend::InMemory(fs) => fs.create_new(path, content),
+            StorageBackend::JsAsync(fs) => fs.create_new(path, content),
         }
     }
 
@@ -152,6 +159,7 @@ impl AsyncFileSystem for StorageBackend {
             #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => fs.delete_file(path),
             StorageBackend::InMemory(fs) => fs.delete_file(path),
+            StorageBackend::JsAsync(fs) => fs.delete_file(path),
         }
     }
 
@@ -167,6 +175,7 @@ impl AsyncFileSystem for StorageBackend {
             #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => fs.list_md_files(dir),
             StorageBackend::InMemory(fs) => fs.list_md_files(dir),
+            StorageBackend::JsAsync(fs) => fs.list_md_files(dir),
         }
     }
 
@@ -179,6 +188,7 @@ impl AsyncFileSystem for StorageBackend {
             #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => fs.exists(path),
             StorageBackend::InMemory(fs) => fs.exists(path),
+            StorageBackend::JsAsync(fs) => fs.exists(path),
         }
     }
 
@@ -194,6 +204,7 @@ impl AsyncFileSystem for StorageBackend {
             #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => fs.create_dir_all(path),
             StorageBackend::InMemory(fs) => fs.create_dir_all(path),
+            StorageBackend::JsAsync(fs) => fs.create_dir_all(path),
         }
     }
 
@@ -206,6 +217,7 @@ impl AsyncFileSystem for StorageBackend {
             #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => fs.is_dir(path),
             StorageBackend::InMemory(fs) => fs.is_dir(path),
+            StorageBackend::JsAsync(fs) => fs.is_dir(path),
         }
     }
 
@@ -222,6 +234,7 @@ impl AsyncFileSystem for StorageBackend {
             #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => fs.move_file(from, to),
             StorageBackend::InMemory(fs) => fs.move_file(from, to),
+            StorageBackend::JsAsync(fs) => fs.move_file(from, to),
         }
     }
 
@@ -237,6 +250,7 @@ impl AsyncFileSystem for StorageBackend {
             #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => fs.read_binary(path),
             StorageBackend::InMemory(fs) => fs.read_binary(path),
+            StorageBackend::JsAsync(fs) => fs.read_binary(path),
         }
     }
 
@@ -253,6 +267,7 @@ impl AsyncFileSystem for StorageBackend {
             #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => fs.write_binary(path, content),
             StorageBackend::InMemory(fs) => fs.write_binary(path, content),
+            StorageBackend::JsAsync(fs) => fs.write_binary(path, content),
         }
     }
 
@@ -268,6 +283,7 @@ impl AsyncFileSystem for StorageBackend {
             #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => fs.list_files(dir),
             StorageBackend::InMemory(fs) => fs.list_files(dir),
+            StorageBackend::JsAsync(fs) => fs.list_files(dir),
         }
     }
 
@@ -283,6 +299,7 @@ impl AsyncFileSystem for StorageBackend {
             #[cfg(feature = "browser")]
             StorageBackend::Fsa(fs) => fs.get_modified_time(path),
             StorageBackend::InMemory(fs) => fs.get_modified_time(path),
+            StorageBackend::JsAsync(fs) => fs.get_modified_time(path),
         }
     }
 }
@@ -713,6 +730,111 @@ impl DiaryxBackend {
                 storage_type
             ))),
         }
+    }
+
+    /// Create a new DiaryxBackend backed by JavaScript filesystem callbacks.
+    ///
+    /// This is the primary way to use diaryx from non-browser environments
+    /// (Node.js, Obsidian, Electron). The `callbacks` object must implement
+    /// the `JsFileSystemCallbacks` interface.
+    ///
+    /// ## Example
+    /// ```javascript
+    /// const backend = DiaryxBackend.createFromJsFileSystem({
+    ///   readToString: async (path) => fs.readFile(path, 'utf8'),
+    ///   writeFile: async (path, content) => fs.writeFile(path, content),
+    ///   exists: async (path) => fs.access(path).then(() => true).catch(() => false),
+    ///   // ... other callbacks
+    /// });
+    /// ```
+    #[wasm_bindgen(js_name = "createFromJsFileSystem")]
+    pub fn create_from_js_file_system(
+        callbacks: JsValue,
+    ) -> std::result::Result<DiaryxBackend, JsValue> {
+        let js_fs = JsAsyncFileSystem::new(callbacks);
+        let storage_backend = StorageBackend::JsAsync(js_fs);
+
+        // Create event registries
+        let wasm_event_registry = Rc::new(WasmCallbackRegistry::new());
+        let rust_event_registry = Arc::new(CallbackRegistry::new());
+
+        // Set up thread-local for bridge (safe because WASM is single-threaded)
+        WASM_EVENT_REGISTRY.with(|reg| {
+            *reg.borrow_mut() = Some(Rc::clone(&wasm_event_registry));
+        });
+
+        // Register bridge callback to forward Rust events to JS
+        rust_event_registry.subscribe(create_event_bridge());
+
+        // In-memory storage for CRDT (external FS is the source of truth)
+        let crdt_storage: Arc<dyn CrdtStorage> = Arc::new(MemoryStorage::new());
+
+        // Create shared CRDT instances with event callbacks
+        let workspace_crdt = {
+            let mut crdt = WorkspaceCrdt::new(Arc::clone(&crdt_storage));
+            let registry = Arc::clone(&rust_event_registry);
+            crdt.set_event_callback(Arc::new(move |event| {
+                registry.emit(event);
+            }));
+            Arc::new(crdt)
+        };
+
+        let body_doc_manager = {
+            let manager = BodyDocManager::new(Arc::clone(&crdt_storage));
+            let registry = Arc::clone(&rust_event_registry);
+            manager.set_event_callback(Arc::new(move |event| {
+                registry.emit(event);
+            }));
+            Arc::new(manager)
+        };
+
+        // Build decorator stack: EventEmittingFs<CrdtFs<StorageBackend>>
+        let crdt_fs = CrdtFs::new(
+            storage_backend,
+            Arc::clone(&workspace_crdt),
+            Arc::clone(&body_doc_manager),
+        );
+        let event_fs = EventEmittingFs::with_registry(crdt_fs, Arc::clone(&rust_event_registry));
+        let fs = Rc::new(event_fs);
+
+        // Set up CRDT sync callback to automatically emit sync messages on any CRDT change
+        setup_crdt_sync_callback(&wasm_event_registry);
+
+        // Subscribe to CRDT updates to trigger sync emission
+        let crdt_update_subscription = subscribe_to_crdt_updates(&workspace_crdt);
+
+        // Create SyncHandler and RustSyncManager for sync protocol handling
+        let sync_handler = Arc::new(SyncHandler::new((*fs).clone()));
+        let sync_manager = Arc::new(RustSyncManager::new(
+            Arc::clone(&workspace_crdt),
+            Arc::clone(&body_doc_manager),
+            sync_handler,
+        ));
+
+        // Create shared Diaryx instance with callbacks pre-configured
+        let diaryx = {
+            let d = Diaryx::with_crdt_instances(
+                (*fs).clone(),
+                Arc::clone(&workspace_crdt),
+                Arc::clone(&body_doc_manager),
+            );
+            d.set_sync_event_callback(create_event_bridge());
+            d.set_workspace_root(PathBuf::from(""));
+            d
+        };
+
+        Ok(Self {
+            fs,
+            crdt_storage,
+            workspace_crdt,
+            body_doc_manager,
+            wasm_event_registry,
+            rust_event_registry,
+            crdt_update_subscription: Some(crdt_update_subscription),
+            sync_manager,
+
+            diaryx,
+        })
     }
 
     /// Create a new DiaryxBackend with in-memory storage.
@@ -1384,11 +1506,11 @@ impl DiaryxBackend {
     // Import Parsing
     // ========================================================================
 
-    /// Parse a Day One `Journal.json` file and return entries as JSON.
+    /// Parse a Day One export (ZIP or JSON) and return entries as JSON.
     ///
-    /// Takes the raw bytes of a `Journal.json` file and returns a JSON array
-    /// of successfully parsed entries. Parse errors are returned in a separate
-    /// `errors` array.
+    /// Auto-detects the format: ZIP files (with media directories) have
+    /// attachments populated with binary data. Plain JSON files are parsed
+    /// with empty attachment data (backward compatible).
     ///
     /// ## Example
     /// ```javascript
@@ -1398,12 +1520,12 @@ impl DiaryxBackend {
     /// ```
     #[wasm_bindgen(js_name = "parseDayOneJson")]
     pub fn parse_dayone_json(&self, bytes: &[u8]) -> std::result::Result<String, JsValue> {
-        let results = diaryx_core::import::dayone::parse_dayone(bytes);
+        let result = diaryx_core::import::dayone::parse_dayone_auto(bytes);
 
         let mut entries = Vec::new();
         let mut errors = Vec::new();
-        for result in results {
-            match result {
+        for r in result.entries {
+            match r {
                 Ok(entry) => entries.push(entry),
                 Err(e) => errors.push(e),
             }
@@ -1413,10 +1535,15 @@ impl DiaryxBackend {
         struct ParseResult {
             entries: Vec<diaryx_core::import::ImportedEntry>,
             errors: Vec<String>,
+            journal_name: Option<String>,
         }
 
-        serde_json::to_string(&ParseResult { entries, errors })
-            .map_err(|e| JsValue::from_str(&format!("Failed to serialize parse result: {e}")))
+        serde_json::to_string(&ParseResult {
+            entries,
+            errors,
+            journal_name: result.journal_name,
+        })
+        .map_err(|e| JsValue::from_str(&format!("Failed to serialize parse result: {e}")))
     }
 
     /// Parse a single markdown file and return the entry as JSON.

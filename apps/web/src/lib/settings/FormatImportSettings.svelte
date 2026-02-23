@@ -6,7 +6,7 @@
    * then writes them into the workspace with proper hierarchy links.
    */
   import { Button } from "$lib/components/ui/button";
-  import { Input } from "$lib/components/ui/input";
+  import FilePickerPopover from "$lib/components/FilePickerPopover.svelte";
   import { Label } from "$lib/components/ui/label";
   import * as Select from "$lib/components/ui/select";
   import * as Dialog from "$lib/components/ui/dialog";
@@ -37,8 +37,8 @@
     {
       value: "dayone",
       label: "Day One",
-      description: "Import from a Day One Journal.json export file",
-      accept: ".json",
+      description: "Import from a Day One export (ZIP with media or JSON)",
+      accept: ".json,.zip",
     },
     {
       value: "markdown",
@@ -48,9 +48,12 @@
     },
   ];
 
+  type ImportMode = "folder" | "daily";
+
   // State
   let selectedFormat: ImportFormat = $state("dayone");
-  let folderName: string = $state("journal");
+  let importMode: ImportMode = $state("folder");
+  let selectedParent: { path: string; name: string } | null = $state(null);
   let isImporting: boolean = $state(false);
   let importStatusText: string | null = $state(null);
   let importProgressPercent = $state(0);
@@ -71,15 +74,33 @@
   let parsedEntryCount = $state(0);
   let parseErrorCount = $state(0);
 
+  // Folder name resolved from parsed data (e.g. journal name from Day One ZIP)
+  let resolvedFolderName: string | null = $state(null);
+
   let currentFormatOption = $derived(
     FORMAT_OPTIONS.find((o) => o.value === selectedFormat)!,
   );
 
+  let defaultFolderName = $derived(
+    selectedFormat === "dayone" ? "journal" : "imported",
+  );
+  let folderName = $derived(resolvedFolderName ?? defaultFolderName);
+  let displayPath = $derived.by(() => {
+    const parent = selectedParent;
+    const folder = resolvedFolderName ?? defaultFolderName;
+    return parent ? `${parent.name}/${folder}` : folder;
+  });
+
   function handleFormatChange(value: string | undefined) {
     if (value) {
       selectedFormat = value as ImportFormat;
-      folderName = value === "dayone" ? "journal" : "imported";
       resetState();
+    }
+  }
+
+  function handleModeChange(value: string | undefined) {
+    if (value) {
+      importMode = value as ImportMode;
     }
   }
 
@@ -90,6 +111,7 @@
     importProgressPercent = 0;
     parsedEntryCount = 0;
     parseErrorCount = 0;
+    resolvedFolderName = null;
     showConfirmDialog = false;
   }
 
@@ -155,19 +177,26 @@
       if (selectedFormat === "dayone") {
         const file = selectedFiles[0];
         const bytes = new Uint8Array(await file.arrayBuffer());
-        const resultJson = (backend as unknown as { parseDayOneJson(bytes: Uint8Array): string }).parseDayOneJson(bytes);
+        const resultJson = await (backend as unknown as { parseDayOneJson(bytes: Uint8Array): Promise<string> }).parseDayOneJson(bytes);
         const parsed = JSON.parse(resultJson) as {
           entries: ImportedEntry[];
           errors: string[];
+          journal_name: string | null;
         };
         allEntries = parsed.entries;
         allErrors = parsed.errors;
+        if (parsed.journal_name) {
+          resolvedFolderName = parsed.journal_name
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-|-$/g, "") || null;
+        }
       } else {
         // Markdown: parse each file individually
         for (const file of selectedFiles) {
           try {
             const bytes = new Uint8Array(await file.arrayBuffer());
-            const entryJson = (backend as unknown as { parseMarkdownFile(bytes: Uint8Array, filename: string): string }).parseMarkdownFile(bytes, file.name);
+            const entryJson = await (backend as unknown as { parseMarkdownFile(bytes: Uint8Array, filename: string): Promise<string> }).parseMarkdownFile(bytes, file.name);
             const entry = JSON.parse(entryJson) as ImportedEntry;
             allEntries.push(entry);
           } catch (e) {
@@ -202,6 +231,8 @@
         params: {
           entries_json: entriesJson,
           folder: folderName,
+          parent_path: importMode === "daily" ? null : (selectedParent?.path ?? null),
+          import_mode: importMode === "daily" ? "daily" : null,
         },
       });
 
@@ -307,18 +338,68 @@
       </Select.Root>
     </div>
 
-    <!-- Folder name -->
+    <!-- Destination mode -->
     <div class="space-y-1.5">
-      <Label for="import-folder" class="text-xs text-muted-foreground">
-        Import into folder
+      <Label class="text-xs text-muted-foreground">
+        Destination
       </Label>
-      <Input
-        id="import-folder"
-        bind:value={folderName}
-        placeholder="e.g. journal, imported"
-        class="h-8 text-sm"
-      />
+      <Select.Root
+        type="single"
+        value={importMode}
+        onValueChange={handleModeChange}
+      >
+        <Select.Trigger class="w-full">
+          {importMode === "daily" ? "Daily entries" : "Separate folder"}
+        </Select.Trigger>
+        <Select.Content>
+          <Select.Item value="folder">
+            <div class="flex flex-col gap-0.5">
+              <span>Separate folder</span>
+              <span class="text-xs text-muted-foreground">
+                Create a new folder with its own hierarchy
+              </span>
+            </div>
+          </Select.Item>
+          <Select.Item value="daily">
+            <div class="flex flex-col gap-0.5">
+              <span>Daily entries</span>
+              <span class="text-xs text-muted-foreground">
+                Add as children of your daily entries
+              </span>
+            </div>
+          </Select.Item>
+        </Select.Content>
+      </Select.Root>
     </div>
+
+    <!-- Parent entry picker (folder mode only) -->
+    {#if importMode === "folder"}
+    <div class="space-y-1.5">
+      <Label class="text-xs text-muted-foreground">
+        Import under
+      </Label>
+      <FilePickerPopover
+        onSelect={(file) => { selectedParent = file; }}
+        placeholder="Search entries..."
+      >
+        <Button variant="outline" size="sm" class="w-full justify-start text-sm h-8 font-normal">
+          {#if selectedParent}
+            {selectedParent.name}
+          {:else}
+            Workspace root
+          {/if}
+        </Button>
+      </FilePickerPopover>
+      {#if selectedParent}
+        <button
+          class="text-xs text-muted-foreground hover:text-foreground underline"
+          onclick={() => { selectedParent = null; }}
+        >
+          Reset to workspace root
+        </button>
+      {/if}
+    </div>
+    {/if}
 
     <!-- Select files button -->
     <Button
@@ -387,12 +468,20 @@
         Import {currentFormatOption.label}
       </Dialog.Title>
       <Dialog.Description>
-        {#if selectedFiles.length === 1}
-          Import from <span class="font-medium">{selectedFiles[0].name}</span> into
-          <span class="font-mono text-xs">{folderName}/</span>.
+        {#if importMode === "daily"}
+          {#if selectedFiles.length === 1}
+            Import from <span class="font-medium">{selectedFiles[0].name}</span> as children of daily entries.
+          {:else}
+            Import {selectedFiles.length} files as children of daily entries.
+          {/if}
         {:else}
-          Import {selectedFiles.length} files into
-          <span class="font-mono text-xs">{folderName}/</span>.
+          {#if selectedFiles.length === 1}
+            Import from <span class="font-medium">{selectedFiles[0].name}</span> into
+            <span class="font-mono text-xs">{displayPath}/</span>.
+          {:else}
+            Import {selectedFiles.length} files into
+            <span class="font-mono text-xs">{displayPath}/</span>.
+          {/if}
         {/if}
       </Dialog.Description>
     </Dialog.Header>
@@ -440,14 +529,16 @@
     {:else}
       <div class="space-y-2 py-2">
         <p class="text-sm text-muted-foreground">
-          {#if selectedFormat === "dayone"}
+          {#if importMode === "daily"}
+            Entries will be added as children of your daily entries, organized by date.
+          {:else if selectedFormat === "dayone"}
             Entries will be parsed from Day One's JSON format and organized
-            by date into <span class="font-mono text-xs">{folderName}/</span>.
+            by date into <span class="font-mono text-xs">{displayPath}/</span>.
           {:else}
             {selectedFiles.length} markdown file{selectedFiles.length > 1
               ? "s"
               : ""} will be imported into
-            <span class="font-mono text-xs">{folderName}/</span>.
+            <span class="font-mono text-xs">{displayPath}/</span>.
           {/if}
         </p>
       </div>

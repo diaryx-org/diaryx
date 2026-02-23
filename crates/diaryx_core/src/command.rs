@@ -86,6 +86,19 @@ pub enum Command {
         to: String,
     },
 
+    /// Update workspace hierarchy metadata after an external move.
+    ///
+    /// Unlike `MoveEntry`, this does NOT move the file on the filesystem.
+    /// The file must already exist at `new_path`. Use this when an external
+    /// tool (e.g., Obsidian, VS Code) has already performed the move and you
+    /// need to fix up the `contents`/`part_of` frontmatter.
+    SyncMoveMetadata {
+        /// The file's previous path (before the move).
+        old_path: String,
+        /// The file's current path (after the move).
+        new_path: String,
+    },
+
     /// Rename an entry file.
     RenameEntry {
         /// Path to the entry to rename.
@@ -173,6 +186,8 @@ pub enum Command {
         path: Option<String>,
         /// Optional maximum depth to traverse.
         depth: Option<u32>,
+        /// Optional audience filter. When set, only entries visible to this audience are included.
+        audience: Option<String>,
     },
 
     /// Get the filesystem tree (for "Show All Files" mode).
@@ -517,6 +532,14 @@ pub enum Command {
         entries_json: String,
         /// Base folder name for the imported entries (e.g. "emails", "journal").
         folder: String,
+        /// Optional workspace-relative path to the parent entry (e.g. "personal/personal.md").
+        /// When set, the import folder is placed under the parent's directory and grafted
+        /// into the parent's `contents`. When `None`, grafts into the workspace root.
+        parent_path: Option<String>,
+        /// Import mode: `"folder"` (default) creates a separate folder hierarchy,
+        /// `"daily"` adds entries as children of daily entries in the workspace's
+        /// daily entry hierarchy.
+        import_mode: Option<String>,
     },
 
     // === Storage ===
@@ -1173,6 +1196,11 @@ impl Command {
             Command::MoveEntry { from, to } => {
                 *from = normalizer(from);
                 *to = normalizer(to);
+            }
+
+            Command::SyncMoveMetadata { old_path, new_path } => {
+                *old_path = normalizer(old_path);
+                *new_path = normalizer(new_path);
             }
 
             Command::CreateChildEntry { parent_path } => {

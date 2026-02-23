@@ -218,12 +218,28 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         file_path: &Path,
         fallback_dir: &Path,
     ) -> Option<PathBuf> {
+        self.resolve_part_of_from_dir(file_path, file_path.parent(), fallback_dir)
+            .await
+    }
+
+    /// Like `resolve_part_of_to_path`, but resolves relative `part_of` links
+    /// from `resolve_dir` instead of from `file_path.parent()`.
+    ///
+    /// This is needed by `sync_move_metadata` where the file has already been
+    /// moved to a new location but its `part_of` still contains a relative link
+    /// written for the old location.
+    async fn resolve_part_of_from_dir(
+        &self,
+        file_path: &Path,
+        resolve_dir: Option<&Path>,
+        fallback_dir: &Path,
+    ) -> Option<PathBuf> {
         use crate::path_utils::normalize_path;
 
         if let Ok(Some(Value::String(part_of))) =
             self.get_frontmatter_property(file_path, "part_of").await
         {
-            let file_dir = file_path.parent().unwrap_or_else(|| Path::new(""));
+            let dir = resolve_dir.unwrap_or_else(|| Path::new(""));
             let parsed = link_parser::parse_link(&part_of);
             let resolved = match parsed.path_type {
                 link_parser::PathType::WorkspaceRoot => {
@@ -234,7 +250,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                     }
                 }
                 link_parser::PathType::Relative | link_parser::PathType::Ambiguous => {
-                    normalize_path(&file_dir.join(&parsed.path))
+                    normalize_path(&dir.join(&parsed.path))
                 }
             };
             return Some(resolved);
@@ -1883,30 +1899,19 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
     ///
     /// Returns `Ok(())` if successful. Does nothing if source equals destination.
     pub async fn move_entry(&self, from_path: &Path, to_path: &Path) -> Result<()> {
-        use crate::path_utils::relative_path_from_file_to_target;
-
         // No-op if same path
         if from_path == to_path {
             return Ok(());
         }
 
-        // Get filenames and parent directories before moving
-        let old_parent = from_path.parent().ok_or_else(|| DiaryxError::InvalidPath {
-            path: from_path.to_path_buf(),
-            message: "No parent directory for source path".to_string(),
-        })?;
-        let new_parent = to_path.parent().ok_or_else(|| DiaryxError::InvalidPath {
-            path: to_path.to_path_buf(),
-            message: "No parent directory for destination path".to_string(),
-        })?;
-        let _new_file_name = to_path
+        // Validate destination has a valid filename
+        to_path
             .file_name()
             .and_then(|n| n.to_str())
             .ok_or_else(|| DiaryxError::InvalidPath {
                 path: to_path.to_path_buf(),
                 message: "Invalid destination file name".to_string(),
-            })?
-            .to_string();
+            })?;
 
         // Move the file
         self.fs
@@ -1917,10 +1922,46 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 source: e,
             })?;
 
+        // Update hierarchy metadata (contents/part_of in parent indexes)
+        self.sync_move_metadata(from_path, to_path).await
+    }
+
+    /// Update workspace hierarchy metadata after a file has been moved.
+    ///
+    /// Unlike `move_entry`, this does NOT move the file on the filesystem.
+    /// The file must already exist at `new_path`. This is useful when an
+    /// external tool (e.g., Obsidian, VS Code) has already performed the
+    /// move and you need to fix up the `contents`/`part_of` frontmatter.
+    ///
+    /// This method:
+    /// 1. Resolves the old parent index from the file's `part_of` at `new_path`,
+    ///    using `old_path`'s directory as context for relative link resolution
+    /// 2. Finds the new parent index in `new_path`'s directory
+    /// 3. Adds the entry to the new parent's `contents`
+    /// 4. Updates the entry's `part_of` if the parent changed
+    /// 5. Removes the entry from the old parent's `contents`
+    pub async fn sync_move_metadata(&self, old_path: &Path, new_path: &Path) -> Result<()> {
+        use crate::path_utils::relative_path_from_file_to_target;
+
+        if old_path == new_path {
+            return Ok(());
+        }
+
+        let old_parent = old_path.parent().ok_or_else(|| DiaryxError::InvalidPath {
+            path: old_path.to_path_buf(),
+            message: "No parent directory for source path".to_string(),
+        })?;
+        let new_parent = new_path.parent().ok_or_else(|| DiaryxError::InvalidPath {
+            path: new_path.to_path_buf(),
+            message: "No parent directory for destination path".to_string(),
+        })?;
+
         // Find old parent index by following part_of (the moved file still has its
-        // original part_of at this point). This is more robust than searching by
-        // directory, which fails when the moved file was itself the index in old_parent.
-        let old_index_path = self.resolve_part_of_to_path(to_path, old_parent).await;
+        // original part_of at this point). Resolve relative links from the OLD
+        // directory, since the part_of was written for the old location.
+        let old_index_path = self
+            .resolve_part_of_from_dir(new_path, Some(old_parent), old_parent)
+            .await;
         let new_index_path = self.find_any_index_in_dir(new_parent).await.ok().flatten();
         let same_index_parent = old_index_path
             .as_ref()
@@ -1931,9 +1972,9 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         // if a transient write error occurs during index updates.
         if let Some(new_index_path) = new_index_path.as_ref() {
             // Add with proper formatting
-            let to_path_canonical = self.get_canonical_path(to_path);
-            let title = self.resolve_title(&to_path_canonical).await;
-            self.add_to_index_contents_canonical(new_index_path, &to_path_canonical, &title)
+            let new_path_canonical = self.get_canonical_path(new_path);
+            let title = self.resolve_title(&new_path_canonical).await;
+            self.add_to_index_contents_canonical(new_index_path, &new_path_canonical, &title)
                 .await?;
 
             // Update moved entry's part_of only when parent index actually changes.
@@ -1941,24 +1982,24 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 let part_of_value = if self.root_path.is_some() {
                     let new_index_canonical = self.get_canonical_path(new_index_path);
                     let parent_title = self.resolve_title(&new_index_canonical).await;
-                    self.format_link_sync(&new_index_canonical, &parent_title, &to_path_canonical)
+                    self.format_link_sync(&new_index_canonical, &parent_title, &new_path_canonical)
                 } else {
-                    relative_path_from_file_to_target(to_path, new_index_path)
+                    relative_path_from_file_to_target(new_path, new_index_path)
                 };
-                self.set_frontmatter_property(to_path, "part_of", Value::String(part_of_value))
+                self.set_frontmatter_property(new_path, "part_of", Value::String(part_of_value))
                     .await?;
             }
         }
 
         // Remove from old parent's contents after successful add to avoid lossy updates.
         if let Some(old_index_path) = old_index_path.as_ref() {
-            let from_canonical = self.get_canonical_path(from_path);
+            let from_canonical = self.get_canonical_path(old_path);
             if let Err(e) = self
                 .remove_from_index_contents_canonical(old_index_path, &from_canonical)
                 .await
             {
                 log::warn!(
-                    "move_entry: failed to remove old contents reference '{}' from '{}': {}",
+                    "sync_move_metadata: failed to remove old contents reference '{}' from '{}': {}",
                     from_canonical,
                     old_index_path.display(),
                     e

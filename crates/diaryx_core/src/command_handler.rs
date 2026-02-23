@@ -117,6 +117,75 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         }
     }
 
+    /// Recursively filter a tree to only include nodes visible to the given audience.
+    ///
+    /// Uses the same visibility rules as export: explicit audience takes priority,
+    /// then inherited from parent, case-insensitive matching.
+    async fn filter_tree_by_audience(
+        &self,
+        node: crate::workspace::TreeNode,
+        audience: &str,
+    ) -> crate::workspace::TreeNode {
+        Box::pin(self.filter_tree_node(node, audience, None)).await
+    }
+
+    async fn filter_tree_node(
+        &self,
+        node: crate::workspace::TreeNode,
+        audience: &str,
+        inherited_audience: Option<Vec<String>>,
+    ) -> crate::workspace::TreeNode {
+        // Parse this node's frontmatter to get its audience
+        let node_audience = match self.workspace().inner().parse_index(&node.path).await {
+            Ok(index) => index.frontmatter.audience.clone(),
+            Err(_) => None,
+        };
+
+        // Effective audience for children to inherit
+        let effective_for_children = node_audience.clone().or(inherited_audience);
+
+        // Recursively filter children
+        let mut filtered_children = Vec::new();
+        for child in node.children {
+            // Check visibility of each child
+            let child_audience = match self.workspace().inner().parse_index(&child.path).await {
+                Ok(index) => index.frontmatter.audience.clone(),
+                Err(_) => None,
+            };
+
+            let is_visible = if let Some(ref file_aud) = child_audience {
+                file_aud
+                    .iter()
+                    .any(|a| a.trim().eq_ignore_ascii_case(audience))
+            } else if let Some(ref parent_aud) = effective_for_children {
+                parent_aud
+                    .iter()
+                    .any(|a| a.trim().eq_ignore_ascii_case(audience))
+            } else {
+                // No audience defined anywhere — exclude
+                false
+            };
+
+            if is_visible {
+                let filtered = Box::pin(self.filter_tree_node(
+                    child,
+                    audience,
+                    child_audience.or_else(|| effective_for_children.clone()),
+                ))
+                .await;
+                filtered_children.push(filtered);
+            }
+        }
+
+        crate::workspace::TreeNode {
+            name: node.name,
+            description: node.description,
+            path: node.path,
+            children: filtered_children,
+            properties: node.properties,
+        }
+    }
+
     /// Strip the workspace root from a path if present, returning a workspace-relative path.
     ///
     /// On Tauri, entry paths from the frontend may be absolute OS paths (e.g.,
@@ -698,14 +767,19 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 }
             }
 
-            Command::GetWorkspaceTree { path, depth } => {
+            Command::GetWorkspaceTree {
+                path,
+                depth,
+                audience,
+            } => {
                 let root_path = path.unwrap_or_else(|| "workspace/index.md".to_string());
                 let resolved_root_path = self.resolve_fs_path(&root_path);
                 log::info!(
-                    "[CommandHandler] GetWorkspaceTree called: path={}, resolved_path={}, depth={:?}",
+                    "[CommandHandler] GetWorkspaceTree called: path={}, resolved_path={}, depth={:?}, audience={:?}",
                     root_path,
                     resolved_root_path.display(),
-                    depth
+                    depth,
+                    audience
                 );
                 let tree = self
                     .workspace()
@@ -716,6 +790,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         &mut std::collections::HashSet::new(),
                     )
                     .await?;
+
+                // If an audience filter is specified, prune nodes not visible to that audience
+                let tree = if let Some(ref audience) = audience {
+                    self.filter_tree_by_audience(tree, audience).await
+                } else {
+                    tree
+                };
+
                 log::info!(
                     "[CommandHandler] GetWorkspaceTree result: name={}, children_count={}",
                     tree.name,
@@ -1156,6 +1238,34 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 }
 
                 Ok(Response::String(to))
+            }
+
+            Command::SyncMoveMetadata { old_path, new_path } => {
+                if old_path == new_path {
+                    return Ok(Response::String(new_path));
+                }
+
+                // Use Workspace::sync_move_metadata — file is already at new_path,
+                // only update contents/part_of metadata in parent indexes.
+                let resolved_old = self.resolve_fs_path(&old_path);
+                let resolved_new = self.resolve_fs_path(&new_path);
+                let ws = self.workspace().inner();
+                ws.sync_move_metadata(&resolved_old, &resolved_new).await?;
+
+                // Migrate body doc CRDT to new path
+                #[cfg(feature = "crdt")]
+                if let Some(body_manager) = self.body_doc_manager()
+                    && let Err(e) = body_manager.rename(&old_path, &new_path)
+                {
+                    log::warn!(
+                        "Failed to migrate body doc on sync_move_metadata {} -> {}: {}",
+                        old_path,
+                        new_path,
+                        e
+                    );
+                }
+
+                Ok(Response::String(new_path))
             }
 
             Command::RenameEntry { path, new_filename } => {
@@ -2459,6 +2569,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             Command::ImportEntries {
                 entries_json,
                 folder,
+                parent_path,
+                import_mode,
             } => {
                 let entries: Vec<crate::import::ImportedEntry> =
                     serde_json::from_str(&entries_json).map_err(|e| DiaryxError::InvalidPath {
@@ -2468,15 +2580,21 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 let workspace_root = self.workspace_root().unwrap_or_else(|| PathBuf::from("."));
 
-                let result = crate::import::orchestrate::write_entries(
-                    self.fs(),
-                    &workspace_root,
-                    &folder,
-                    &entries,
-                )
-                .await;
+                if import_mode.as_deref() == Some("daily") {
+                    let result = self.import_entries_daily(&workspace_root, &entries).await?;
+                    Ok(Response::ImportResult(result))
+                } else {
+                    let result = crate::import::orchestrate::write_entries(
+                        self.fs(),
+                        &workspace_root,
+                        &folder,
+                        &entries,
+                        parent_path.as_deref(),
+                    )
+                    .await;
 
-                Ok(Response::ImportResult(result))
+                    Ok(Response::ImportResult(result))
+                }
             }
 
             // === Storage Operations ===
@@ -4085,6 +4203,374 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         Ok((links_converted, modified))
     }
 
+    // ==================== Import Daily Mode ====================
+
+    /// Import entries into the workspace's daily entry hierarchy.
+    ///
+    /// Groups entries by date, then for each date:
+    /// - **Single entry, no existing daily entry**: writes the entry's content
+    ///   directly as the daily entry file (e.g. `2026-02-23.md`).
+    /// - **Multiple entries, or daily entry already exists**: creates child files
+    ///   linked to the daily entry via `part_of`/`contents`.
+    async fn import_entries_daily(
+        &self,
+        workspace_root: &Path,
+        entries: &[crate::import::ImportedEntry],
+    ) -> Result<crate::import::ImportResult> {
+        use crate::config::Config;
+        use crate::entry::slugify;
+        use std::collections::HashSet;
+
+        let mut result = crate::import::ImportResult {
+            imported: 0,
+            skipped: 0,
+            errors: Vec::new(),
+            attachment_count: 0,
+        };
+
+        if entries.is_empty() {
+            return Ok(result);
+        }
+
+        // Find workspace root index to read config
+        let ws = self.workspace().inner();
+        let workspace_root_path = match ws.find_root_index_in_dir(workspace_root).await? {
+            Some(path) => path,
+            None => {
+                result
+                    .errors
+                    .push("Could not find workspace root index".to_string());
+                return Ok(result);
+            }
+        };
+
+        // Read workspace config for daily_entry_folder
+        let ws_cfg = ws.get_workspace_config(&workspace_root_path).await.ok();
+        let daily_entry_folder = ws_cfg.as_ref().and_then(|c| c.daily_entry_folder.clone());
+
+        let workspace_dir = workspace_root_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| workspace_root_path.clone());
+
+        let config = Config::with_options(
+            workspace_dir.clone(),
+            daily_entry_folder.clone(),
+            None,
+            None,
+            None,
+        );
+
+        // Group entries by date so we can detect single-entry days.
+        let mut by_date: IndexMap<chrono::NaiveDate, Vec<&crate::import::ImportedEntry>> =
+            IndexMap::new();
+        for entry in entries {
+            let date = entry
+                .date
+                .map(|dt| dt.date_naive())
+                .unwrap_or_else(|| chrono::Local::now().date_naive());
+            by_date.entry(date).or_default().push(entry);
+        }
+
+        let mut used_paths: HashSet<PathBuf> = HashSet::new();
+
+        for (date, day_entries) in &by_date {
+            // 1. Ensure daily index hierarchy (year/month dirs + indexes)
+            let (month_dir, month_index_path) = match self
+                .ensure_daily_index_hierarchy(
+                    date,
+                    &config,
+                    &workspace_root_path,
+                    daily_entry_folder.as_deref(),
+                )
+                .await
+            {
+                Ok(paths) => paths,
+                Err(e) => {
+                    for entry in day_entries {
+                        result.errors.push(format!(
+                            "Failed to create hierarchy for {}: {e}",
+                            entry.title
+                        ));
+                        result.skipped += 1;
+                    }
+                    continue;
+                }
+            };
+
+            let date_str = date.format("%Y-%m-%d").to_string();
+            let daily_filename = format!("{date_str}.md");
+            let daily_entry_path = month_dir.join(&daily_filename);
+            let daily_already_exists = self.fs().exists(&daily_entry_path).await;
+
+            // Single entry for this date and no existing daily entry →
+            // write content directly as the daily entry.
+            if day_entries.len() == 1 && !daily_already_exists {
+                let entry = day_entries[0];
+                let title = date.format("%B %d, %Y").to_string();
+                let month_index_filename = month_index_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("month_index.md")
+                    .to_string();
+
+                let mut fm = IndexMap::new();
+                fm.insert("title".to_string(), Value::String(title));
+                fm.insert("part_of".to_string(), Value::String(month_index_filename));
+                fm.insert("created".to_string(), Value::String(date_str.clone()));
+
+                // Carry over extra metadata from the imported entry
+                for (key, value) in &entry.metadata {
+                    fm.insert(key.clone(), value.clone());
+                }
+
+                if let Some(dt) = entry.date {
+                    fm.insert("date".to_string(), Value::String(dt.to_rfc3339()));
+                }
+
+                // Attachments list — use daily entry stem for paths
+                let daily_stem = date_str.clone(); // stem of "2026-02-23.md"
+                if !entry.attachments.is_empty() {
+                    let att_list: Vec<Value> = entry
+                        .attachments
+                        .iter()
+                        .map(|a| Value::String(format!("{daily_stem}/_attachments/{}", a.filename)))
+                        .collect();
+                    fm.insert("attachments".to_string(), Value::Sequence(att_list));
+                }
+
+                let yaml = serde_yaml::to_string(&fm).unwrap_or_default();
+
+                let body = if !entry.attachments.is_empty() {
+                    entry
+                        .body
+                        .replace("_attachments/", &format!("{daily_stem}/_attachments/"))
+                } else {
+                    entry.body.clone()
+                };
+
+                let content = format!("---\n{yaml}---\n{body}");
+
+                if let Err(e) = self.fs().write_file(&daily_entry_path, &content).await {
+                    result.errors.push(format!(
+                        "Failed to write {}: {e}",
+                        daily_entry_path.display()
+                    ));
+                    result.skipped += 1;
+                } else {
+                    let _ = self
+                        .add_to_index_contents(&month_index_path, &daily_filename)
+                        .await;
+
+                    // Write attachments
+                    if !entry.attachments.is_empty() {
+                        let attachments_dir = month_dir.join(format!("{daily_stem}/_attachments"));
+                        for att in &entry.attachments {
+                            let att_path = attachments_dir.join(&att.filename);
+                            if let Err(e) = self.fs().create_dir_all(&attachments_dir).await {
+                                result
+                                    .errors
+                                    .push(format!("Failed to create attachment dir: {e}"));
+                                continue;
+                            }
+                            if let Err(e) = self.fs().write_binary(&att_path, &att.data).await {
+                                result
+                                    .errors
+                                    .push(format!("Failed to write attachment: {e}"));
+                                continue;
+                            }
+                            result.attachment_count += 1;
+                        }
+                    }
+
+                    result.imported += 1;
+                }
+
+                continue;
+            }
+
+            // Multiple entries (or daily entry already exists) →
+            // create the daily entry if needed, then add children.
+            if !daily_already_exists {
+                let title = date.format("%B %d, %Y").to_string();
+                let month_index_filename = month_index_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("month_index.md")
+                    .to_string();
+
+                // Try to resolve a daily template
+                let template_content = if let Some(ref cfg) = ws_cfg
+                    && let Some(ref daily_tmpl_link) = cfg.daily_template
+                {
+                    self.resolve_template_from_link(daily_tmpl_link, &workspace_root_path)
+                        .await
+                        .map(|t| t.raw_content)
+                } else {
+                    None
+                };
+                let template_content = if template_content.is_some() {
+                    template_content
+                } else {
+                    let templates_dir = workspace_dir.join("_templates");
+                    let template_path = templates_dir.join("daily.md");
+                    if self.fs().exists(&template_path).await {
+                        self.fs().read_to_string(&template_path).await.ok()
+                    } else {
+                        None
+                    }
+                };
+
+                let content = if let Some(tmpl) = template_content {
+                    tmpl.replace("{{title}}", &title)
+                        .replace("{{date}}", &date_str)
+                        .replace("{{part_of}}", &month_index_filename)
+                } else {
+                    format!(
+                        "---\ntitle: \"{}\"\npart_of: {}\ncreated: {}\n---\n\n## Today\n\n",
+                        title, month_index_filename, date_str
+                    )
+                };
+
+                if let Err(e) = self.fs().create_new(&daily_entry_path, &content).await {
+                    log::warn!(
+                        "Failed to create daily entry {}: {e}",
+                        daily_entry_path.display()
+                    );
+                } else {
+                    let _ = self
+                        .add_to_index_contents(&month_index_path, &daily_filename)
+                        .await;
+                }
+            }
+
+            // Write each entry as a child of the daily entry
+            for entry in day_entries {
+                let slug = slugify(&entry.title);
+                let slug = if slug.is_empty() {
+                    "untitled".to_string()
+                } else {
+                    slug
+                };
+                let entry_filename = format!("{date_str}-{slug}.md");
+                let mut entry_path = month_dir.join(&entry_filename);
+
+                // Handle filename collisions
+                if used_paths.contains(&entry_path) || self.fs().exists(&entry_path).await {
+                    let stem = entry_path
+                        .file_stem()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    let mut counter = 2;
+                    loop {
+                        let candidate = month_dir.join(format!("{stem}-{counter}.md"));
+                        if !used_paths.contains(&candidate) && !self.fs().exists(&candidate).await {
+                            entry_path = candidate;
+                            break;
+                        }
+                        counter += 1;
+                    }
+                }
+                used_paths.insert(entry_path.clone());
+
+                // Build frontmatter
+                let mut fm = IndexMap::new();
+                fm.insert("title".to_string(), Value::String(entry.title.clone()));
+
+                for (key, value) in &entry.metadata {
+                    fm.insert(key.clone(), value.clone());
+                }
+
+                if let Some(dt) = entry.date {
+                    fm.insert("date".to_string(), Value::String(dt.to_rfc3339()));
+                }
+
+                // part_of → daily entry
+                fm.insert("part_of".to_string(), Value::String(daily_filename.clone()));
+
+                // Attachments list in frontmatter
+                if !entry.attachments.is_empty() {
+                    let entry_stem = entry_path
+                        .file_stem()
+                        .unwrap()
+                        .to_string_lossy()
+                        .to_string();
+                    let att_list: Vec<Value> = entry
+                        .attachments
+                        .iter()
+                        .map(|a| Value::String(format!("{entry_stem}/_attachments/{}", a.filename)))
+                        .collect();
+                    fm.insert("attachments".to_string(), Value::Sequence(att_list));
+                }
+
+                let yaml = serde_yaml::to_string(&fm).unwrap_or_default();
+
+                // Resolve attachment references in body
+                let body = if !entry.attachments.is_empty() {
+                    let entry_stem = entry_path.file_stem().unwrap().to_string_lossy();
+                    entry
+                        .body
+                        .replace("_attachments/", &format!("{entry_stem}/_attachments/"))
+                } else {
+                    entry.body.clone()
+                };
+
+                let entry_content = format!("---\n{yaml}---\n{body}");
+
+                // Write entry file
+                if let Err(e) = self.fs().write_file(&entry_path, &entry_content).await {
+                    result
+                        .errors
+                        .push(format!("Failed to write {}: {e}", entry_path.display()));
+                    result.skipped += 1;
+                    continue;
+                }
+
+                // Add entry to daily entry's contents
+                let entry_filename_final = entry_path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string();
+                let _ = self
+                    .add_to_index_contents(&daily_entry_path, &entry_filename_final)
+                    .await;
+
+                // Write attachments
+                if !entry.attachments.is_empty() {
+                    let entry_stem = entry_path
+                        .file_stem()
+                        .unwrap()
+                        .to_string_lossy()
+                        .to_string();
+                    let attachments_dir = month_dir.join(format!("{entry_stem}/_attachments"));
+
+                    for att in &entry.attachments {
+                        let att_path = attachments_dir.join(&att.filename);
+                        if let Err(e) = self.fs().create_dir_all(&attachments_dir).await {
+                            result
+                                .errors
+                                .push(format!("Failed to create attachment dir: {e}"));
+                            continue;
+                        }
+                        if let Err(e) = self.fs().write_binary(&att_path, &att.data).await {
+                            result
+                                .errors
+                                .push(format!("Failed to write attachment: {e}"));
+                            continue;
+                        }
+                        result.attachment_count += 1;
+                    }
+                }
+
+                result.imported += 1;
+            }
+        }
+
+        Ok(result)
+    }
+
     // ==================== Daily Entry Helper Methods ====================
 
     /// Ensure the daily index hierarchy exists for a given date.
@@ -4724,6 +5210,7 @@ mod tests {
                 .execute(Command::GetWorkspaceTree {
                     path: Some(root_path.to_string_lossy().to_string()),
                     depth: Some(2),
+                    audience: None,
                 })
                 .await
                 .unwrap();

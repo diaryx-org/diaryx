@@ -30,6 +30,7 @@
   import ExportDialog from "./lib/ExportDialog.svelte";
   import AddWorkspaceDialog from "./lib/AddWorkspaceDialog.svelte";
   import ImagePreviewDialog from "./lib/ImagePreviewDialog.svelte";
+  import AudienceEditor from "./lib/components/AudienceEditor.svelte";
   import MarkdownPreviewDialog from "./lib/MarkdownPreviewDialog.svelte";
     import EditorHeader from "./views/editor/EditorHeader.svelte";
   import EditorEmptyState from "./views/editor/EditorEmptyState.svelte";
@@ -155,6 +156,11 @@
   // Delete confirmation dialog state
   let showDeleteConfirm = $state(false);
   let pendingDeletePath = $state<string | null>(null);
+
+  // Audience dialog state
+  let showAudienceDialog = $state(false);
+  let audienceDialogPath = $state<string | null>(null);
+  let audienceDialogAudience = $state<string[] | null>(null);
   let pendingDeleteName = $derived(
     pendingDeletePath?.split('/').pop()?.replace('.md', '') ?? ''
   );
@@ -413,6 +419,14 @@
     } else {
       templateContextStore.clear();
     }
+  });
+
+  // Refresh the file tree when the audience preview filter changes
+  $effect(() => {
+    void templateContextStore.previewAudience; // track reactive dependency
+    // Skip the initial run (before workspace is loaded)
+    if (!api || !backend) return;
+    refreshTree();
   });
 
   // Check if we're on desktop and expand sidebars by default
@@ -1433,6 +1447,45 @@
     pendingDeletePath = null;
   }
 
+  // Open audience dialog for a tree entry
+  async function handleSetAudience(path: string) {
+    if (!api) return;
+    try {
+      const entry = await api.getEntry(path);
+      const fm = normalizeFrontmatter(entry.frontmatter);
+      audienceDialogPath = path;
+      audienceDialogAudience = Array.isArray(fm.audience) ? fm.audience : null;
+      showAudienceDialog = true;
+    } catch (e) {
+      console.error("[App] Failed to load entry for audience dialog:", e);
+      toast.error("Failed to load entry");
+    }
+  }
+
+  async function handleAudienceChange(value: string[] | null) {
+    if (!api || !audienceDialogPath) return;
+    try {
+      if (value === null) {
+        // Remove audience property to revert to inheritance
+        await api.setFrontmatterProperty(audienceDialogPath, "audience", null as any, tree?.path);
+      } else {
+        await api.setFrontmatterProperty(audienceDialogPath, "audience", value, tree?.path);
+      }
+      audienceDialogAudience = value;
+      // Refresh tree in case audience filter is active
+      await refreshTree();
+      // If this is the currently open entry, refresh it
+      if (currentEntry?.path === audienceDialogPath) {
+        const refreshed = await api.getEntry(audienceDialogPath);
+        refreshed.frontmatter = normalizeFrontmatter(refreshed.frontmatter);
+        entryStore.setCurrentEntry(refreshed);
+      }
+    } catch (e) {
+      console.error("[App] Failed to update audience:", e);
+      toast.error("Failed to update audience");
+    }
+  }
+
   // Run workspace validation (delegates to controller)
   async function runValidation() {
     if (!api || !backend) return;
@@ -1503,7 +1556,8 @@
   // Wrapper functions that delegate to controllers
   async function refreshTree() {
     if (!api || !backend) return;
-    await refreshTreeController(api, backend, showUnlinkedFiles, showHiddenFiles);
+    const audience = templateContextStore.previewAudience ?? undefined;
+    await refreshTreeController(api, backend, showUnlinkedFiles, showHiddenFiles, audience);
   }
 
   // Handle import:complete event from ImportSettings
@@ -1528,7 +1582,8 @@
 
   async function loadNodeChildren(nodePath: string) {
     if (!api) return;
-    await loadNodeChildrenController(api, nodePath, showUnlinkedFiles, showHiddenFiles);
+    const audience = templateContextStore.previewAudience ?? undefined;
+    await loadNodeChildrenController(api, nodePath, showUnlinkedFiles, showHiddenFiles, audience);
   }
 
   // ========================================================================
@@ -1940,6 +1995,30 @@
   </Dialog.Content>
 </Dialog.Root>
 
+<!-- Audience Dialog -->
+<Dialog.Root bind:open={showAudienceDialog} onOpenChange={(open) => { if (!open) { showAudienceDialog = false; audienceDialogPath = null; } }}>
+  <Dialog.Content class="sm:max-w-sm">
+    <Dialog.Header>
+      <Dialog.Title>Set Audience</Dialog.Title>
+      <Dialog.Description>
+        {audienceDialogPath?.split('/').pop()?.replace('.md', '') ?? ''}
+      </Dialog.Description>
+    </Dialog.Header>
+    <div class="py-2">
+      {#if audienceDialogPath}
+        <AudienceEditor
+          audience={audienceDialogAudience}
+          entryPath={audienceDialogPath}
+          rootPath={tree?.path ?? ""}
+          {api}
+          {rustApi}
+          onChange={handleAudienceChange}
+        />
+      {/if}
+    </div>
+  </Dialog.Content>
+</Dialog.Root>
+
 <!-- Toast Notifications -->
 <Toaster />
 
@@ -1997,6 +2076,7 @@
     onWorkspaceSwitchStart={handleWorkspaceSwitchStart}
     onWorkspaceSwitchComplete={handleWorkspaceSwitchComplete}
     onInitializeWorkspace={handleInitializeWorkspace}
+    onSetAudience={handleSetAudience}
   />
 
   <!-- Hidden file input for attachments (accepts all file types) -->

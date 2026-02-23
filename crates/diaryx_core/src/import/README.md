@@ -21,7 +21,7 @@ Import external data formats into Diaryx workspace entries. Each format is featu
 | Format  | Feature         | Dependencies                                     |
 |---------|-----------------|--------------------------------------------------|
 | Email    | `import-email`    | `mailparse`, `mbox-reader`, `html-to-markdown-rs` |
-| Day One  | `import-dayone`   | _(none — uses `serde_json` already in workspace)_  |
+| Day One  | `import-dayone`   | `zip` (ZIP extraction + media resolution)          |
 | Markdown | `import-markdown` | _(none — uses `frontmatter` + `chrono` already in workspace)_ |
 
 ## Files
@@ -29,7 +29,7 @@ Import external data formats into Diaryx workspace entries. Each format is featu
 - `mod.rs` — Common types: `ImportedEntry`, `ImportedAttachment`, `ImportOptions`, `ImportResult`
 - `orchestrate.rs` — Shared async orchestration for writing entries into a workspace (used by CLI, WASM, and Tauri)
 - `email.rs` — `.eml` and `.mbox` parsing via `mailparse` / `mbox-reader`
-- `dayone.rs` — Day One `Journal.json` parsing via `serde_json`
+- `dayone.rs` — Day One export parsing (ZIP with media or plain JSON)
 - `markdown.rs` — Markdown file parsing (frontmatter extraction, title/date detection)
 
 ## Architecture
@@ -47,9 +47,13 @@ Body extraction prefers `text/plain`; falls back to `text/html` converted to mar
 
 ### Day One Import
 
-- `parse_dayone(bytes)` — Parse a Day One `Journal.json` export into entries
+- `parse_dayone_auto(bytes)` — Auto-detect ZIP vs JSON and parse accordingly
+- `parse_dayone_zip(bytes)` — Parse a Day One ZIP export with full media extraction
+- `parse_dayone(bytes)` — Parse a plain Day One JSON file (attachments will have empty data)
 
-Extracts the title from the first `# heading` in each entry's `text` field, unescapes Day One's markdown escaping (`\.` → `.`, `\!` → `!`, etc.), and collects metadata (tags, location, weather, starred, uuid). Photo/video/audio identifiers are recorded as empty attachments for future media resolution.
+Day One's "Export as JSON" produces a ZIP containing a JSON file (named after the journal) plus media directories (`photos/`, `videos/`, `audios/`, `pdfs/`). `parse_dayone_auto` detects the format by ZIP magic bytes (`PK`) and delegates accordingly.
+
+Extracts the title from the first `# heading` in each entry's `text` field, unescapes Day One's markdown escaping (`\.` → `.`, `\!` → `!`, etc.), and collects metadata (tags, location, weather, starred, uuid). When importing from ZIP, photo/video/audio/PDF binary data is extracted and matched to entries by media identifier.
 
 ### Markdown Directory Import
 

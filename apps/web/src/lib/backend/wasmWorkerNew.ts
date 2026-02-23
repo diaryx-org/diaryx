@@ -511,9 +511,9 @@ const workerApi = {
   // Workspace (uses commands)
   // =========================================================================
 
-  async getWorkspaceTree(workspacePath?: string, depth?: number): Promise<any> {
+  async getWorkspaceTree(workspacePath?: string, depth?: number, audience?: string): Promise<any> {
     const path = workspacePath ?? await this.getDefaultWorkspacePath();
-    return executeAndExtract('GetWorkspaceTree', { path, depth: depth ?? null }, 'Tree');
+    return executeAndExtract('GetWorkspaceTree', { path, depth: depth ?? null, audience: audience ?? null }, 'Tree');
   },
 
   async createWorkspace(path?: string, name?: string): Promise<string> {

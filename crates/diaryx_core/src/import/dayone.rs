@@ -1,16 +1,30 @@
-//! Day One journal import — parse `Journal.json` files into [`ImportedEntry`] values.
+//! Day One journal import — parse Day One exports into [`ImportedEntry`] values.
 //!
-//! Day One exports journals as a single JSON file containing a `metadata` object
-//! and an `entries` array. Each entry has a `text` field with escaped markdown,
-//! a `creationDate`, and optional `location`, `weather`, `tags`, and media arrays.
+//! Day One's "Export as JSON" produces a ZIP file containing a JSON file
+//! (named after the journal) plus media directories (`photos/`, `videos/`,
+//! `audios/`, `pdfs/`). This module handles both ZIP exports (with full
+//! media extraction) and plain JSON files (backward compatible).
 //!
-//! This parser is a pure function (no I/O) — callers provide the raw bytes.
+//! Use [`parse_dayone_auto`] to auto-detect the format, or call
+//! [`parse_dayone`] / [`parse_dayone_zip`] directly.
+
+use std::collections::HashMap;
+use std::io::{Cursor, Read};
 
 use indexmap::IndexMap;
 use serde::Deserialize;
 use serde_yaml::Value;
 
 use super::{ImportedAttachment, ImportedEntry};
+
+/// Result of parsing a Day One export.
+pub struct DayOneParseResult {
+    /// Name of the journal (from ZIP filename, e.g. "Export test").
+    /// `None` for plain JSON imports.
+    pub journal_name: Option<String>,
+    /// One `Result` per entry — callers can skip failures.
+    pub entries: Vec<Result<ImportedEntry, String>>,
+}
 
 /// Top-level Day One JSON structure.
 #[derive(Deserialize)]
@@ -32,6 +46,7 @@ struct DayOneEntry {
     photos: Option<Vec<DayOneMedia>>,
     videos: Option<Vec<DayOneMedia>>,
     audios: Option<Vec<DayOneMedia>>,
+    pdf_attachments: Option<Vec<DayOneMedia>>,
 }
 
 /// Location metadata from Day One.
@@ -51,7 +66,7 @@ struct DayOneWeather {
     temperature_celsius: Option<f64>,
 }
 
-/// A media reference (photo, video, or audio) in a Day One entry.
+/// A media reference (photo, video, audio, or PDF) in a Day One entry.
 #[derive(Deserialize)]
 struct DayOneMedia {
     identifier: Option<String>,
@@ -59,31 +74,195 @@ struct DayOneMedia {
     media_type: Option<String>,
 }
 
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/// Parse a Day One export, auto-detecting ZIP vs JSON by magic bytes.
+///
+/// ZIP files start with `PK` (`0x50 0x4B`). Everything else is treated as JSON.
+pub fn parse_dayone_auto(bytes: &[u8]) -> DayOneParseResult {
+    if bytes.len() >= 2 && bytes[0] == 0x50 && bytes[1] == 0x4B {
+        parse_dayone_zip(bytes)
+    } else {
+        parse_dayone(bytes)
+    }
+}
+
 /// Parse a Day One `Journal.json` file into [`ImportedEntry`] values.
 ///
 /// Returns one `Result` per entry so callers can skip unparseable entries
-/// while still importing the rest.
-pub fn parse_dayone(bytes: &[u8]) -> Vec<Result<ImportedEntry, String>> {
+/// while still importing the rest. Attachments will have empty `data` since
+/// the JSON does not embed binary content — use [`parse_dayone_zip`] for
+/// full media extraction.
+pub fn parse_dayone(bytes: &[u8]) -> DayOneParseResult {
     let journal: DayOneJournal = match serde_json::from_slice(bytes) {
         Ok(j) => j,
-        Err(e) => return vec![Err(format!("Failed to parse Journal.json: {e}"))],
+        Err(e) => {
+            return DayOneParseResult {
+                journal_name: None,
+                entries: vec![Err(format!("Failed to parse Day One JSON: {e}"))],
+            };
+        }
     };
 
-    journal.entries.into_iter().map(convert_entry).collect()
+    DayOneParseResult {
+        journal_name: None,
+        entries: journal
+            .entries
+            .into_iter()
+            .map(|e| convert_entry(e, &HashMap::new()))
+            .collect(),
+    }
 }
 
+/// Parse a Day One ZIP export into [`ImportedEntry`] values.
+///
+/// The ZIP should contain one `.json` file at the root (named after the
+/// journal) and media files under `photos/`, `videos/`, `audios/`, and/or
+/// `pdfs/` directories. Media files are matched to entries by their
+/// identifier (filename stem).
+pub fn parse_dayone_zip(bytes: &[u8]) -> DayOneParseResult {
+    let cursor = Cursor::new(bytes);
+    let mut archive = match zip::ZipArchive::new(cursor) {
+        Ok(a) => a,
+        Err(e) => {
+            return DayOneParseResult {
+                journal_name: None,
+                entries: vec![Err(format!("Failed to open ZIP archive: {e}"))],
+            };
+        }
+    };
+
+    // Step 1: Find the .json file at the root level.
+    // Day One names it after the journal (e.g. "My Journal.json").
+    let mut json_index = None;
+    let mut journal_name: Option<String> = None;
+    for i in 0..archive.len() {
+        let name = match archive.by_index_raw(i) {
+            Ok(e) => e.name().to_string(),
+            Err(_) => continue,
+        };
+        // Root-level .json file: no '/' before the name, ends with .json
+        if !name.contains('/') && name.ends_with(".json") {
+            // Extract journal name from filename (strip .json extension)
+            journal_name = Some(name.trim_end_matches(".json").to_string());
+            json_index = Some(i);
+            break;
+        }
+    }
+
+    let journal_json = match json_index {
+        Some(idx) => {
+            let mut entry = match archive.by_index(idx) {
+                Ok(e) => e,
+                Err(e) => {
+                    return DayOneParseResult {
+                        journal_name,
+                        entries: vec![Err(format!("Failed to read JSON file from ZIP: {e}"))],
+                    };
+                }
+            };
+            let mut buf = Vec::new();
+            if let Err(e) = entry.read_to_end(&mut buf) {
+                return DayOneParseResult {
+                    journal_name,
+                    entries: vec![Err(format!("Failed to read JSON file: {e}"))],
+                };
+            }
+            buf
+        }
+        None => {
+            return DayOneParseResult {
+                journal_name: None,
+                entries: vec![Err(
+                    "ZIP archive does not contain a .json file at the root level".to_string(),
+                )],
+            };
+        }
+    };
+
+    // Step 2: Build media lookup — identifier -> (filename, bytes)
+    let mut media_map: HashMap<String, (String, Vec<u8>)> = HashMap::new();
+    for i in 0..archive.len() {
+        let mut entry = match archive.by_index(i) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        if entry.is_dir() {
+            continue;
+        }
+        let name = entry.name().to_string();
+
+        // Only process files in media directories
+        let is_media = name.starts_with("photos/")
+            || name.starts_with("videos/")
+            || name.starts_with("audios/")
+            || name.starts_with("pdfs/");
+        if !is_media {
+            continue;
+        }
+
+        // Extract identifier (filename stem)
+        let filename = name.rsplit('/').next().unwrap_or(&name);
+        let stem = filename
+            .rsplit_once('.')
+            .map(|(s, _)| s)
+            .unwrap_or(filename);
+
+        let mut data = Vec::new();
+        if entry.read_to_end(&mut data).is_ok() {
+            media_map.insert(stem.to_string(), (filename.to_string(), data));
+        }
+    }
+
+    // Step 3: Parse JSON
+    let journal: DayOneJournal = match serde_json::from_slice(&journal_json) {
+        Ok(j) => j,
+        Err(e) => {
+            return DayOneParseResult {
+                journal_name,
+                entries: vec![Err(format!("Failed to parse Day One JSON: {e}"))],
+            };
+        }
+    };
+
+    // Step 4: Convert entries, resolving media from the map
+    DayOneParseResult {
+        journal_name,
+        entries: journal
+            .entries
+            .into_iter()
+            .map(|e| convert_entry(e, &media_map))
+            .collect(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
 /// Convert a single deserialized Day One entry into an [`ImportedEntry`].
-fn convert_entry(entry: DayOneEntry) -> Result<ImportedEntry, String> {
+///
+/// When `media_map` is non-empty (ZIP path), attachments are populated with
+/// actual binary data. When empty (JSON-only path), attachments have empty data.
+fn convert_entry(
+    entry: DayOneEntry,
+    media_map: &HashMap<String, (String, Vec<u8>)>,
+) -> Result<ImportedEntry, String> {
     let raw_text = entry.text.unwrap_or_default();
     let unescaped = unescape_dayone_markdown(&raw_text);
 
-    let (title, body) = extract_title_and_body(&unescaped);
+    let (parsed_title, body) = extract_title_and_body(&unescaped);
 
     let date = entry
         .creation_date
         .as_deref()
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&chrono::Utc));
+
+    // Derive title: prefer explicit heading, else date + first body line.
+    let title = parsed_title.unwrap_or_else(|| derive_title(date, &body));
 
     let mut metadata = IndexMap::new();
 
@@ -119,13 +298,33 @@ fn convert_entry(entry: DayOneEntry) -> Result<ImportedEntry, String> {
         }
     }
 
-    // Media counts (photos, videos, audios) — record identifiers for future use
+    // Media attachments (photos, videos, audios, PDFs)
     let mut attachments = Vec::new();
-    for media_list in [&entry.photos, &entry.videos, &entry.audios] {
+    for media_list in [
+        &entry.photos,
+        &entry.videos,
+        &entry.audios,
+        &entry.pdf_attachments,
+    ] {
         if let Some(items) = media_list {
             for item in items {
                 let id = item.identifier.clone().unwrap_or_default();
                 let ext = item.media_type.clone().unwrap_or_else(|| "bin".to_string());
+
+                if !id.is_empty() {
+                    if let Some((filename, data)) = media_map.get(&id) {
+                        // Resolved from ZIP — use actual file data
+                        let actual_ext = filename.rsplit_once('.').map(|(_, e)| e).unwrap_or("bin");
+                        attachments.push(ImportedAttachment {
+                            filename: filename.clone(),
+                            content_type: mime_from_extension(actual_ext).to_string(),
+                            data: data.clone(),
+                        });
+                        continue;
+                    }
+                }
+
+                // Fallback: no media map match (JSON-only or missing file)
                 let filename = if id.is_empty() {
                     format!("media.{ext}")
                 } else {
@@ -133,10 +332,28 @@ fn convert_entry(entry: DayOneEntry) -> Result<ImportedEntry, String> {
                 };
                 attachments.push(ImportedAttachment {
                     filename,
-                    content_type: format!("application/octet-stream"),
-                    data: Vec::new(), // Day One JSON doesn't embed binary data
+                    content_type: mime_from_extension(&ext).to_string(),
+                    data: Vec::new(),
                 });
             }
+        }
+    }
+
+    // Replace dayone-moment:// and dayone-moment:/ URLs in the body
+    // with _attachments/FILENAME references.
+    let mut body = body;
+    for att in &attachments {
+        let stem = att
+            .filename
+            .rsplit_once('.')
+            .map(|(s, _)| s)
+            .unwrap_or(&att.filename);
+        // Day One uses dayone-moment://ID or dayone-moment:/ID
+        for pattern in [
+            format!("dayone-moment://{stem}"),
+            format!("dayone-moment:/{stem}"),
+        ] {
+            body = body.replace(&pattern, &format!("_attachments/{}", att.filename));
         }
     }
 
@@ -147,6 +364,29 @@ fn convert_entry(entry: DayOneEntry) -> Result<ImportedEntry, String> {
         metadata,
         attachments,
     })
+}
+
+/// Map a file extension to a MIME content type.
+fn mime_from_extension(ext: &str) -> &'static str {
+    match ext.to_lowercase().as_str() {
+        "jpeg" | "jpg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "heic" => "image/heic",
+        "heif" => "image/heif",
+        "tiff" | "tif" => "image/tiff",
+        "webp" => "image/webp",
+        "mov" => "video/quicktime",
+        "mp4" => "video/mp4",
+        "m4v" => "video/x-m4v",
+        "m4a" => "audio/mp4",
+        "mp3" => "audio/mpeg",
+        "aac" => "audio/aac",
+        "caf" => "audio/x-caf",
+        "wav" => "audio/wav",
+        "pdf" => "application/pdf",
+        _ => "application/octet-stream",
+    }
 }
 
 /// Unescape Day One's markdown escape sequences.
@@ -182,35 +422,58 @@ fn unescape_dayone_markdown(text: &str) -> String {
 
 /// Extract title from the first `# heading` line and return (title, remaining_body).
 ///
-/// If no heading is found, falls back to "Untitled".
-fn extract_title_and_body(text: &str) -> (String, String) {
-    // Look for a `# ` heading at the start of the text
+/// Returns `None` for title when no heading is found or the heading is empty.
+fn extract_title_and_body(text: &str) -> (Option<String>, String) {
     let trimmed = text.trim_start();
 
     if let Some(rest) = trimmed.strip_prefix("# ") {
-        // Find end of heading line
         if let Some(newline_pos) = rest.find('\n') {
             let title = rest[..newline_pos].trim().to_string();
             let body = rest[newline_pos + 1..].to_string();
-            let title = if title.is_empty() {
-                "Untitled".to_string()
-            } else {
-                title
-            };
-            (title, body)
+            (if title.is_empty() { None } else { Some(title) }, body)
         } else {
-            // Entire text is the heading
             let title = rest.trim().to_string();
-            let title = if title.is_empty() {
-                "Untitled".to_string()
-            } else {
-                title
-            };
-            (title, String::new())
+            (
+                if title.is_empty() { None } else { Some(title) },
+                String::new(),
+            )
         }
     } else {
-        ("Untitled".to_string(), text.to_string())
+        (None, text.to_string())
     }
+}
+
+/// Derive a title from the entry date and first non-empty body line.
+///
+/// Produces titles like "2024-01-15 Went to the store today" (truncated to 60 chars).
+fn derive_title(date: Option<chrono::DateTime<chrono::Utc>>, body: &str) -> String {
+    let date_part = date
+        .map(|dt| dt.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| "Undated".to_string());
+
+    let first_line = body
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim();
+
+    if first_line.is_empty() {
+        return date_part;
+    }
+
+    // Truncate to ~60 chars on a word boundary.
+    let truncated = if first_line.len() > 60 {
+        let cut = &first_line[..60];
+        // Try to break on a word boundary.
+        match cut.rfind(' ') {
+            Some(pos) if pos > 30 => format!("{}...", &cut[..pos]),
+            _ => format!("{cut}..."),
+        }
+    } else {
+        first_line.to_string()
+    };
+
+    format!("{date_part} {truncated}")
 }
 
 /// Format location as "City, State, Country", omitting missing parts.
@@ -284,20 +547,32 @@ mod tests {
     #[test]
     fn test_extract_title_and_body() {
         let (title, body) = extract_title_and_body("# My Title\nBody here.");
-        assert_eq!(title, "My Title");
+        assert_eq!(title, Some("My Title".to_string()));
         assert_eq!(body, "Body here.");
 
         let (title, body) = extract_title_and_body("# Just a title");
-        assert_eq!(title, "Just a title");
+        assert_eq!(title, Some("Just a title".to_string()));
         assert_eq!(body, "");
 
         let (title, body) = extract_title_and_body("No heading here.");
-        assert_eq!(title, "Untitled");
+        assert_eq!(title, None);
         assert_eq!(body, "No heading here.");
 
         let (title, body) = extract_title_and_body("# \nBody after empty heading.");
-        assert_eq!(title, "Untitled");
+        assert_eq!(title, None);
         assert_eq!(body, "Body after empty heading.");
+    }
+
+    #[test]
+    fn test_derive_title() {
+        use chrono::TimeZone;
+        let dt = chrono::Utc.with_ymd_and_hms(2020, 1, 15, 0, 0, 0).unwrap();
+        assert_eq!(
+            derive_title(Some(dt), "Went to the store today."),
+            "2020-01-15 Went to the store today."
+        );
+        assert_eq!(derive_title(Some(dt), ""), "2020-01-15");
+        assert_eq!(derive_title(None, "Some text"), "Undated Some text");
     }
 
     #[test]
@@ -374,10 +649,11 @@ mod tests {
             }]
         }"##;
 
-        let results = parse_dayone(json.as_bytes());
-        assert_eq!(results.len(), 1);
+        let result = parse_dayone(json.as_bytes());
+        assert!(result.journal_name.is_none());
+        assert_eq!(result.entries.len(), 1);
 
-        let entry = results.into_iter().next().unwrap().unwrap();
+        let entry = result.entries.into_iter().next().unwrap().unwrap();
         assert_eq!(entry.title, "Hello World");
         assert_eq!(entry.body, "This is a test.");
         assert!(entry.date.is_some());
@@ -409,8 +685,8 @@ mod tests {
             }]
         }"##;
 
-        let results = parse_dayone(json.as_bytes());
-        let entry = results.into_iter().next().unwrap().unwrap();
+        let result = parse_dayone(json.as_bytes());
+        let entry = result.entries.into_iter().next().unwrap().unwrap();
 
         assert_eq!(entry.title, "Tagged Entry");
         assert_eq!(entry.metadata.get("starred").unwrap(), &Value::Bool(true));
@@ -442,8 +718,8 @@ mod tests {
             }]
         }"##;
 
-        let results = parse_dayone(json.as_bytes());
-        let entry = results.into_iter().next().unwrap().unwrap();
+        let result = parse_dayone(json.as_bytes());
+        let entry = result.entries.into_iter().next().unwrap().unwrap();
 
         assert_eq!(entry.title, "Hello.");
         assert_eq!(entry.body, "Body with escapes. And !exclamation!");
@@ -451,9 +727,9 @@ mod tests {
 
     #[test]
     fn test_parse_invalid_json() {
-        let results = parse_dayone(b"not json");
-        assert_eq!(results.len(), 1);
-        assert!(results[0].is_err());
+        let result = parse_dayone(b"not json");
+        assert_eq!(result.entries.len(), 1);
+        assert!(result.entries[0].is_err());
     }
 
     #[test]
@@ -466,9 +742,185 @@ mod tests {
             }]
         }"##;
 
-        let results = parse_dayone(json.as_bytes());
-        let entry = results.into_iter().next().unwrap().unwrap();
-        assert_eq!(entry.title, "Untitled");
+        let result = parse_dayone(json.as_bytes());
+        let entry = result.entries.into_iter().next().unwrap().unwrap();
+        assert_eq!(entry.title, "2020-01-01 Just some text without a heading.");
         assert_eq!(entry.body, "Just some text without a heading.");
+    }
+
+    #[test]
+    fn test_mime_from_extension() {
+        assert_eq!(mime_from_extension("jpeg"), "image/jpeg");
+        assert_eq!(mime_from_extension("jpg"), "image/jpeg");
+        assert_eq!(mime_from_extension("JPG"), "image/jpeg");
+        assert_eq!(mime_from_extension("png"), "image/png");
+        assert_eq!(mime_from_extension("heic"), "image/heic");
+        assert_eq!(mime_from_extension("mov"), "video/quicktime");
+        assert_eq!(mime_from_extension("mp4"), "video/mp4");
+        assert_eq!(mime_from_extension("m4a"), "audio/mp4");
+        assert_eq!(mime_from_extension("pdf"), "application/pdf");
+        assert_eq!(mime_from_extension("xyz"), "application/octet-stream");
+    }
+
+    #[test]
+    fn test_parse_dayone_auto_json() {
+        let json = r##"{
+            "metadata": { "version": "1.0" },
+            "entries": [{
+                "text": "# Auto Test\nPlain JSON.",
+                "creationDate": "2020-01-01T00:00:00Z"
+            }]
+        }"##;
+
+        let result = parse_dayone_auto(json.as_bytes());
+        assert!(result.journal_name.is_none());
+        assert_eq!(result.entries.len(), 1);
+        let entry = result.entries.into_iter().next().unwrap().unwrap();
+        assert_eq!(entry.title, "Auto Test");
+    }
+
+    #[test]
+    fn test_parse_dayone_zip_with_media() {
+        use std::io::Write;
+
+        let journal_json = r##"{
+            "metadata": { "version": "1.0" },
+            "entries": [{
+                "uuid": "TEST123",
+                "text": "# Photo Entry\nA photo.",
+                "creationDate": "2020-06-15T12:00:00Z",
+                "photos": [{ "identifier": "ABCDEF", "type": "jpeg" }]
+            }]
+        }"##;
+
+        let mut buf = Vec::new();
+        {
+            let cursor = Cursor::new(&mut buf);
+            let mut zip = zip::ZipWriter::new(cursor);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("My Journal.json", options).unwrap();
+            zip.write_all(journal_json.as_bytes()).unwrap();
+            zip.start_file("photos/ABCDEF.jpeg", options).unwrap();
+            zip.write_all(b"fake-jpeg-data").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let result = parse_dayone_auto(&buf);
+        assert_eq!(result.journal_name.as_deref(), Some("My Journal"));
+        assert_eq!(result.entries.len(), 1);
+        let entry = result.entries.into_iter().next().unwrap().unwrap();
+        assert_eq!(entry.title, "Photo Entry");
+        assert_eq!(entry.attachments.len(), 1);
+        assert_eq!(entry.attachments[0].filename, "ABCDEF.jpeg");
+        assert_eq!(entry.attachments[0].content_type, "image/jpeg");
+        assert_eq!(entry.attachments[0].data, b"fake-jpeg-data");
+    }
+
+    #[test]
+    fn test_parse_dayone_zip_missing_media() {
+        use std::io::Write;
+
+        let journal_json = r##"{
+            "metadata": { "version": "1.0" },
+            "entries": [{
+                "text": "# Missing Photo\nThe photo file is not in the ZIP.",
+                "creationDate": "2020-01-01T00:00:00Z",
+                "photos": [{ "identifier": "NOTFOUND", "type": "jpeg" }]
+            }]
+        }"##;
+
+        let mut buf = Vec::new();
+        {
+            let cursor = Cursor::new(&mut buf);
+            let mut zip = zip::ZipWriter::new(cursor);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("Journal.json", options).unwrap();
+            zip.write_all(journal_json.as_bytes()).unwrap();
+            zip.finish().unwrap();
+        }
+
+        let result = parse_dayone_auto(&buf);
+        assert_eq!(result.journal_name.as_deref(), Some("Journal"));
+        assert_eq!(result.entries.len(), 1);
+        let entry = result.entries.into_iter().next().unwrap().unwrap();
+        assert_eq!(entry.attachments.len(), 1);
+        assert_eq!(entry.attachments[0].filename, "NOTFOUND.jpeg");
+        assert_eq!(entry.attachments[0].content_type, "image/jpeg");
+        assert!(entry.attachments[0].data.is_empty());
+    }
+
+    #[test]
+    fn test_parse_dayone_zip_no_json() {
+        use std::io::Write;
+
+        let mut buf = Vec::new();
+        {
+            let cursor = Cursor::new(&mut buf);
+            let mut zip = zip::ZipWriter::new(cursor);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("photos/ABC.jpeg", options).unwrap();
+            zip.write_all(b"data").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let result = parse_dayone_auto(&buf);
+        assert!(result.journal_name.is_none());
+        assert_eq!(result.entries.len(), 1);
+        assert!(result.entries[0].is_err());
+        assert!(
+            result.entries[0]
+                .as_ref()
+                .unwrap_err()
+                .contains("does not contain")
+        );
+    }
+
+    #[test]
+    fn test_dayone_moment_url_replacement() {
+        use std::io::Write;
+
+        let journal_json = r##"{
+            "metadata": { "version": "1.0" },
+            "entries": [{
+                "text": "# Test\n![](dayone-moment://ABCDEF)\nSome text.\n![](dayone-moment:/GHIJKL)",
+                "creationDate": "2020-01-01T00:00:00Z",
+                "photos": [
+                    { "identifier": "ABCDEF", "type": "jpeg" },
+                    { "identifier": "GHIJKL", "type": "png" }
+                ]
+            }]
+        }"##;
+
+        let mut buf = Vec::new();
+        {
+            let cursor = Cursor::new(&mut buf);
+            let mut zip = zip::ZipWriter::new(cursor);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("Test.json", options).unwrap();
+            zip.write_all(journal_json.as_bytes()).unwrap();
+            zip.start_file("photos/ABCDEF.jpeg", options).unwrap();
+            zip.write_all(b"jpeg-data").unwrap();
+            zip.start_file("photos/GHIJKL.png", options).unwrap();
+            zip.write_all(b"png-data").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let result = parse_dayone_auto(&buf);
+        let entry = result.entries.into_iter().next().unwrap().unwrap();
+        assert!(
+            entry.body.contains("_attachments/ABCDEF.jpeg"),
+            "body should contain resolved path: {}",
+            entry.body
+        );
+        assert!(
+            entry.body.contains("_attachments/GHIJKL.png"),
+            "body should contain resolved path: {}",
+            entry.body
+        );
+        assert!(
+            !entry.body.contains("dayone-moment"),
+            "body should not contain dayone-moment: {}",
+            entry.body
+        );
     }
 }

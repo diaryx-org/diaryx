@@ -143,7 +143,8 @@ fn handle_import_dayone(
         }
     };
 
-    let entries = collect_results(dayone::parse_dayone(&bytes), verbose);
+    let parsed = dayone::parse_dayone_auto(&bytes);
+    let entries = collect_results(parsed.entries, verbose);
 
     if entries.is_empty() {
         println!("No entries to import.");

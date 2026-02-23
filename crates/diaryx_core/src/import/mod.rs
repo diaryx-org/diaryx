@@ -15,7 +15,7 @@
 //! | Format   | Feature          | Crate dependencies                                |
 //! |----------|------------------|---------------------------------------------------|
 //! | Email    | `import-email`   | `mailparse`, `mbox-reader`, `html-to-markdown-rs` |
-//! | Day One  | `import-dayone`  | *(none — pure JSON parsing)*                      |
+//! | Day One  | `import-dayone`  | `zip` (ZIP extraction + media resolution)         |
 //! | Markdown | `import-markdown`| *(none — uses `frontmatter` crate module)*        |
 
 #[cfg(feature = "import-email")]

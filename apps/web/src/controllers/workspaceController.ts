@@ -63,7 +63,8 @@ export async function refreshTree(
   api: Api,
   backend: Backend,
   showUnlinkedFiles: boolean,
-  showHiddenFiles: boolean
+  showHiddenFiles: boolean,
+  audience?: string
 ): Promise<void> {
   try {
     // Get the workspace directory from the backend
@@ -74,6 +75,7 @@ export async function refreshTree(
 
     if (showUnlinkedFiles) {
       // "Show All Files" mode - use filesystem tree with depth limit
+      // (audience filtering not applicable in filesystem view)
       workspaceStore.setTree(
         await api.getFilesystemTree(workspaceDir, showHiddenFiles, TREE_INITIAL_DEPTH)
       );
@@ -84,7 +86,7 @@ export async function refreshTree(
           await retryTransient(() => api.findRootIndex(workspaceDir), 'findRootIndex')
         ).replace(/^\.\/+/, '');
         const nextTree = await retryTransient(
-          () => api.getWorkspaceTree(rootIndexPath, TREE_INITIAL_DEPTH),
+          () => api.getWorkspaceTree(rootIndexPath, TREE_INITIAL_DEPTH, audience),
           'getWorkspaceTree'
         );
         workspaceStore.setTree(nextTree);
@@ -119,7 +121,8 @@ export async function loadNodeChildren(
   api: Api,
   nodePath: string,
   showUnlinkedFiles: boolean,
-  showHiddenFiles: boolean
+  showHiddenFiles: boolean,
+  audience?: string
 ): Promise<void> {
   try {
     let subtree: TreeNode;
@@ -133,7 +136,7 @@ export async function loadNodeChildren(
       subtree = await api.getFilesystemTree(dirPath, showHiddenFiles, TREE_INITIAL_DEPTH);
     } else {
       // Workspace tree mode - use index file path directly
-      subtree = await api.getWorkspaceTree(nodePath, TREE_INITIAL_DEPTH);
+      subtree = await api.getWorkspaceTree(nodePath, TREE_INITIAL_DEPTH, audience);
     }
 
     // Merge into existing tree

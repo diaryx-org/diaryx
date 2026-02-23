@@ -52,7 +52,15 @@ from: string,
 /**
  * New path for the entry file.
  */
-to: string, } } | { "type": "RenameEntry", "params": {
+to: string, } } | { "type": "SyncMoveMetadata", "params": {
+/**
+ * The file's previous path (before the move).
+ */
+old_path: string,
+/**
+ * The file's current path (after the move).
+ */
+new_path: string, } } | { "type": "RenameEntry", "params": {
 /**
  * Path to the entry to rename.
  */
@@ -126,7 +134,11 @@ path: string | null,
 /**
  * Optional maximum depth to traverse.
  */
-depth: number | null, } } | { "type": "GetFilesystemTree", "params": {
+depth: number | null,
+/**
+ * Optional audience filter. When set, only entries visible to this audience are included.
+ */
+audience: string | null, } } | { "type": "GetFilesystemTree", "params": {
 /**
  * Optional path to the workspace directory.
  */
@@ -447,7 +459,19 @@ entries_json: string,
 /**
  * Base folder name for the imported entries (e.g. "emails", "journal").
  */
-folder: string, } } | { "type": "GetStorageUsage" } | { "type": "InitializeWorkspaceCrdt", "params": {
+folder: string,
+/**
+ * Optional workspace-relative path to the parent entry (e.g. "personal/personal.md").
+ * When set, the import folder is placed under the parent's directory and grafted
+ * into the parent's `contents`. When `None`, grafts into the workspace root.
+ */
+parent_path: string | null,
+/**
+ * Import mode: `"folder"` (default) creates a separate folder hierarchy,
+ * `"daily"` adds entries as children of daily entries in the workspace's
+ * daily entry hierarchy.
+ */
+import_mode: string | null, } } | { "type": "GetStorageUsage" } | { "type": "InitializeWorkspaceCrdt", "params": {
 /**
  * Path to workspace root (directory or root index file).
  */

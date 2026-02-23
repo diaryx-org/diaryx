@@ -360,6 +360,72 @@ CRDT operations use `doc_type` to specify which document to operate on:
 | `body`      | file path | Per-file body content (e.g., `notes/a.md`) |
 
 
+## Node.js / Obsidian / Electron Usage
+
+The `@diaryx/wasm-node` npm package is a build of this crate without browser-specific storage backends. It's published automatically by CI and works in any JavaScript environment that supports WebAssembly.
+
+### Setup
+
+```javascript
+import init, { DiaryxBackend } from '@diaryx/wasm-node';
+import fs from 'fs';
+
+// Load WASM binary and initialize
+const wasmPath = new URL('./diaryx_wasm_bg.wasm', import.meta.url);
+await init(fs.readFileSync(wasmPath));
+
+// Create backend with JavaScript filesystem callbacks
+const backend = DiaryxBackend.createFromJsFileSystem({
+  readToString: (path) => fs.promises.readFile(path, 'utf8'),
+  writeFile: (path, content) => fs.promises.writeFile(path, content),
+  exists: (path) => fs.promises.access(path).then(() => true).catch(() => false),
+  isDir: (path) => fs.promises.stat(path).then(s => s.isDirectory()).catch(() => false),
+  listFiles: (dir) => fs.promises.readdir(dir),
+  listMdFiles: (dir) => fs.promises.readdir(dir).then(f => f.filter(n => n.endsWith('.md'))),
+  createDirAll: (path) => fs.promises.mkdir(path, { recursive: true }),
+  moveFile: (from, to) => fs.promises.rename(from, to),
+  deleteFile: (path) => fs.promises.unlink(path),
+  readBinary: (path) => fs.promises.readFile(path),
+  writeBinary: (path, data) => fs.promises.writeFile(path, data),
+});
+```
+
+### Obsidian Plugin Integration
+
+For Obsidian plugins, bridge the Vault adapter API:
+
+```javascript
+const backend = DiaryxBackend.createFromJsFileSystem({
+  readToString: (path) => app.vault.adapter.read(path),
+  writeFile: (path, content) => app.vault.adapter.write(path, content),
+  exists: (path) => app.vault.adapter.exists(path),
+  isDir: (path) => app.vault.adapter.stat(path).then(s => s?.type === 'folder'),
+  listFiles: (dir) => app.vault.adapter.list(dir).then(r => [...r.files, ...r.folders]),
+  listMdFiles: (dir) => app.vault.adapter.list(dir).then(r => r.files.filter(f => f.endsWith('.md'))),
+  createDirAll: (path) => app.vault.adapter.mkdir(path),
+  moveFile: (from, to) => app.vault.adapter.rename(from, to),
+  deleteFile: (path) => app.vault.adapter.remove(path),
+  readBinary: (path) => app.vault.adapter.readBinary(path),
+  writeBinary: (path, data) => app.vault.adapter.writeBinary(path, data),
+});
+```
+
+### Reacting to External File Moves
+
+When an external tool (Obsidian, VS Code, etc.) has already moved a file, use `SyncMoveMetadata` to update the workspace hierarchy metadata without re-doing the filesystem move:
+
+```javascript
+// Obsidian fires this after a file is moved/renamed
+app.vault.on('rename', async (file, oldPath) => {
+  await backend.executeJs({
+    type: 'SyncMoveMetadata',
+    params: { old_path: oldPath, new_path: file.path }
+  });
+});
+```
+
+This updates `contents` in the old and new parent indexes and `part_of` in the moved file.
+
 ## Error Handling
 
 All methods return `Result<T, JsValue>` for JavaScript interop. Errors are converted to JavaScript exceptions with descriptive messages.

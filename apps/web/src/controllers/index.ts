@@ -45,6 +45,7 @@ export {
   handleFindInFile,
   handleWordCount,
   handleImportFromClipboard,
+  handleImportMarkdownFile,
   handleCopyAsMarkdown,
   handleViewMarkdown,
   handleReorderFootnotes,

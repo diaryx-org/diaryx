@@ -471,7 +471,11 @@ parent_path: string | null,
  * `"daily"` adds entries as children of daily entries in the workspace's
  * daily entry hierarchy.
  */
-import_mode: string | null, } } | { "type": "GetStorageUsage" } | { "type": "InitializeWorkspaceCrdt", "params": {
+import_mode: string | null, } } | { "type": "ImportDirectoryInPlace", "params": {
+/**
+ * Optional subdirectory path to import (defaults to workspace root).
+ */
+path: string | null, } } | { "type": "GetStorageUsage" } | { "type": "InitializeWorkspaceCrdt", "params": {
 /**
  * Path to workspace root (directory or root index file).
  */

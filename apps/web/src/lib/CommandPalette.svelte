@@ -23,6 +23,7 @@
     UserPlus,
     FileSearch,
     ClipboardPaste,
+    FileDown,
     LetterText,
     Code,
     ListOrdered,
@@ -50,6 +51,7 @@
     onFindInFile: () => void;
     onWordCount: () => void;
     onImportFromClipboard: () => void;
+    onImportMarkdownFile: () => void;
     onCopyAsMarkdown: () => void;
     onViewMarkdown: () => void;
     onReorderFootnotes: () => void;
@@ -77,6 +79,7 @@
     onFindInFile,
     onWordCount,
     onImportFromClipboard,
+    onImportMarkdownFile,
     onCopyAsMarkdown,
     onViewMarkdown,
     onReorderFootnotes,
@@ -176,6 +179,11 @@
         <ClipboardPaste class="mr-2 size-4" />
         <span>Import from Clipboard</span>
         <Command.Shortcut>Create entry from clipboard</Command.Shortcut>
+      </Command.Item>
+      <Command.Item onSelect={() => handleCommand(onImportMarkdownFile)}>
+        <FileDown class="mr-2 size-4" />
+        <span>Import Markdown File</span>
+        <Command.Shortcut>Import .md file(s)</Command.Shortcut>
       </Command.Item>
       <Command.Item onSelect={() => handleCommand(onSettings)}>
         <Settings class="mr-2 size-4" />

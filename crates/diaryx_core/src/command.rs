@@ -542,6 +542,17 @@ pub enum Command {
         import_mode: Option<String>,
     },
 
+    /// Convert a directory of markdown files to Diaryx hierarchy format in-place.
+    ///
+    /// Walks the directory tree, detects or creates index files, and adds
+    /// `part_of`/`contents`/`attachments` frontmatter to build the workspace
+    /// hierarchy. This is idempotent — files that already have correct metadata
+    /// are skipped.
+    ImportDirectoryInPlace {
+        /// Optional subdirectory path to import (defaults to workspace root).
+        path: Option<String>,
+    },
+
     // === Storage ===
     /// Get storage usage information.
     GetStorageUsage,
@@ -1357,7 +1368,8 @@ impl Command {
             | Command::ValidatePublishingSlug { .. }
             | Command::NormalizeServerUrl { .. }
             | Command::ToWebSocketSyncUrl { .. }
-            | Command::ImportEntries { .. } => {}
+            | Command::ImportEntries { .. }
+            | Command::ImportDirectoryInPlace { .. } => {}
 
             // --- CRDT commands with filesystem path fields ---
             #[cfg(feature = "crdt")]

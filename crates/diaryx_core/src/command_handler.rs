@@ -2597,6 +2597,15 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 }
             }
 
+            Command::ImportDirectoryInPlace { path } => {
+                let root = path
+                    .map(|p| self.resolve_fs_path(&p))
+                    .unwrap_or_else(|| PathBuf::from(""));
+                let result =
+                    crate::import::directory::import_directory_in_place(self.fs(), &root).await?;
+                Ok(Response::ImportResult(result))
+            }
+
             // === Storage Operations ===
             Command::GetStorageUsage => {
                 // This requires knowledge of the workspace path which we don't have

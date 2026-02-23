@@ -27,6 +27,7 @@ pub mod dayone;
 #[cfg(feature = "import-markdown")]
 pub mod markdown;
 
+pub mod directory;
 pub mod orchestrate;
 
 use indexmap::IndexMap;

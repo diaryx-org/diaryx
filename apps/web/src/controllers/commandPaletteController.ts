@@ -334,6 +334,79 @@ export async function handleImportFromClipboard(
 }
 
 /**
+ * Import markdown files from a file picker.
+ * Files are written to the workspace and attached to the current parent.
+ */
+export async function handleImportMarkdownFile(
+  api: Api,
+  tree: TreeNode | null,
+  currentEntryPath: string | null,
+  refreshTreeFn: () => Promise<void>,
+  openEntryFn: (path: string) => Promise<void>
+): Promise<void> {
+  if (!tree) {
+    toast.error('Workspace not ready');
+    return;
+  }
+
+  // Open file picker for .md files
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.md';
+  input.multiple = true;
+
+  const files = await new Promise<FileList | null>((resolve) => {
+    input.addEventListener('change', () => resolve(input.files));
+    // If the user cancels, the change event won't fire. Use a focus fallback.
+    window.addEventListener('focus', () => setTimeout(() => resolve(null), 300), { once: true });
+    input.click();
+  });
+
+  if (!files || files.length === 0) return;
+
+  try {
+    // Determine the parent directory for the imported files
+    const parentDir = currentEntryPath
+      ? currentEntryPath.replace(/[^/]+\.md$/, '')
+      : tree.path.replace(/[^/]+\.md$/, '');
+
+    let lastPath = '';
+    for (const file of Array.from(files)) {
+      const content = await file.text();
+      const filename = file.name.replace(/[^\w.-]/g, '-');
+      const newPath = `${parentDir}${filename}`;
+
+      // Write the file content
+      await api.saveEntry(newPath, content, tree.path);
+
+      // Attach to parent if we have a current entry that's an index
+      if (currentEntryPath) {
+        try {
+          await api.attachEntryToParent(newPath, currentEntryPath);
+        } catch {
+          // Parent might not be an index — that's ok, file is still written
+        }
+      }
+
+      lastPath = newPath;
+    }
+
+    await refreshTreeFn();
+    if (lastPath) {
+      await openEntryFn(lastPath);
+    }
+
+    toast.success(`Imported ${files.length} file${files.length > 1 ? 's' : ''}`, {
+      description: files.length === 1 ? files[0].name : `${files.length} markdown files`,
+    });
+  } catch (e) {
+    toast.error('Failed to import', {
+      description: e instanceof Error ? e.message : String(e),
+    });
+  }
+}
+
+/**
  * Copy current entry content as markdown.
  */
 export async function handleCopyAsMarkdown(

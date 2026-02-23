@@ -105,6 +105,7 @@
     handleFindInFile,
     handleWordCount as wordCountHandler,
     handleImportFromClipboard as importFromClipboardHandler,
+    handleImportMarkdownFile as importMarkdownFileHandler,
     handleCopyAsMarkdown as copyAsMarkdownHandler,
     handleViewMarkdown as viewMarkdownHandler,
     handleReorderFootnotes as reorderFootnotesHandler,
@@ -1643,6 +1644,11 @@
     await importFromClipboardHandler(api, tree, refreshTree, openEntry);
   }
 
+  async function handleImportMarkdownFile() {
+    if (!api) return;
+    await importMarkdownFileHandler(api, tree, currentEntry?.path ?? null, refreshTree, openEntry);
+  }
+
   async function handleCopyAsMarkdown() {
     await copyAsMarkdownHandler(editorRef, currentEntry);
   }
@@ -1933,6 +1939,7 @@
   onFindInFile={handleFindInFile}
   onWordCount={handleWordCount}
   onImportFromClipboard={handleImportFromClipboard}
+  onImportMarkdownFile={handleImportMarkdownFile}
   onCopyAsMarkdown={handleCopyAsMarkdown}
   onViewMarkdown={handleViewMarkdown}
   onReorderFootnotes={handleReorderFootnotes}

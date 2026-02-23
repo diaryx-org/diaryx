@@ -99,6 +99,28 @@ pub enum Command {
         new_path: String,
     },
 
+    /// Update workspace hierarchy metadata after an external file creation.
+    ///
+    /// The file must already exist at `path`. Finds the nearest parent index
+    /// and adds this file to its `contents`, then sets the file's `part_of`.
+    /// Use this when an external tool (e.g., Obsidian) has created a file
+    /// and you need to integrate it into the hierarchy.
+    SyncCreateMetadata {
+        /// Path to the newly created file.
+        path: String,
+    },
+
+    /// Update workspace hierarchy metadata after an external file deletion.
+    ///
+    /// The file at `path` no longer exists on disk. Finds the nearest parent
+    /// index and removes this file from its `contents`.
+    /// Use this when an external tool (e.g., Obsidian) has deleted a file
+    /// and you need to clean up the hierarchy.
+    SyncDeleteMetadata {
+        /// Path to the deleted file (file no longer exists on disk).
+        path: String,
+    },
+
     /// Rename an entry file.
     RenameEntry {
         /// Path to the entry to rename.
@@ -1139,6 +1161,8 @@ impl Command {
             // --- Variants with a single `path` field ---
             Command::GetEntry { path }
             | Command::DeleteEntry { path, .. }
+            | Command::SyncCreateMetadata { path }
+            | Command::SyncDeleteMetadata { path }
             | Command::RenameEntry { path, .. }
             | Command::DuplicateEntry { path }
             | Command::ConvertToIndex { path }

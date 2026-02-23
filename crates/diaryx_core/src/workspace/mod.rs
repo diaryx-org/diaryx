@@ -468,6 +468,25 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         Ok(found_index)
     }
 
+    /// Find the nearest index file by walking up directories from the given path.
+    ///
+    /// Starting from the parent directory of `path`, searches each directory
+    /// for an index file (via `find_any_index_in_dir`), walking up the tree
+    /// until one is found or the root is reached.
+    pub async fn find_nearest_index(&self, path: &Path) -> Result<Option<PathBuf>> {
+        let mut current = path.parent();
+        while let Some(dir) = current {
+            if let Some(index) = self.find_any_index_in_dir(dir).await? {
+                // Don't return the file itself as its own "nearest index"
+                if index != path {
+                    return Ok(Some(index));
+                }
+            }
+            current = dir.parent();
+        }
+        Ok(None)
+    }
+
     /// Collect all files reachable from an index via `contents` traversal
     /// Returns a list of all files including the index itself and all nested contents
     pub async fn collect_workspace_files(&self, index_path: &Path) -> Result<Vec<PathBuf>> {
@@ -2006,6 +2025,74 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
                 );
             }
         }
+
+        Ok(())
+    }
+
+    /// Update workspace hierarchy metadata after an external file creation.
+    ///
+    /// The file must already exist at `path`. This finds the nearest parent
+    /// index and adds the file to its `contents`, then sets the file's
+    /// `part_of` to point back to that index.
+    ///
+    /// Skips files that already have `part_of` (already attached) or
+    /// `contents` (index files should not be auto-attached).
+    pub async fn sync_create_metadata(&self, path: &Path) -> Result<()> {
+        use crate::path_utils::relative_path_from_file_to_target;
+
+        // Skip if file already has part_of (already in hierarchy)
+        if let Ok(Some(_)) = self.get_frontmatter_property(path, "part_of").await {
+            return Ok(());
+        }
+
+        // Skip if file is an index (has contents property)
+        if self.is_index_file(path).await {
+            return Ok(());
+        }
+
+        // Find nearest parent index
+        let parent_index = match self.find_nearest_index(path).await? {
+            Some(idx) => idx,
+            None => return Ok(()), // No index found, nothing to do
+        };
+
+        // Add to parent index's contents
+        let entry_canonical = self.get_canonical_path(path);
+        let title = self.resolve_title(&entry_canonical).await;
+        self.add_to_index_contents_canonical(&parent_index, &entry_canonical, &title)
+            .await?;
+
+        // Set file's part_of
+        let part_of = if self.root_path.is_some() {
+            let parent_canonical = self.get_canonical_path(&parent_index);
+            let parent_title = self.resolve_title(&parent_canonical).await;
+            self.format_link_sync(&parent_canonical, &parent_title, &entry_canonical)
+        } else {
+            relative_path_from_file_to_target(path, &parent_index)
+        };
+        self.set_frontmatter_property(path, "part_of", Value::String(part_of))
+            .await?;
+
+        Ok(())
+    }
+
+    /// Update workspace hierarchy metadata after an external file deletion.
+    ///
+    /// The file at `path` no longer exists on disk. This finds the nearest
+    /// parent index (by walking up directories) and removes the file from
+    /// its `contents` list.
+    pub async fn sync_delete_metadata(&self, path: &Path) -> Result<()> {
+        // Find nearest parent index by walking up from the deleted file's directory
+        let parent_index = match self.find_nearest_index(path).await? {
+            Some(idx) => idx,
+            None => return Ok(()), // No index found, nothing to do
+        };
+
+        // Remove from parent index's contents
+        let entry_canonical = self.get_canonical_path(path);
+        let _ = self
+            .remove_from_index_contents_canonical(&parent_index, &entry_canonical)
+            .await;
 
         Ok(())
     }

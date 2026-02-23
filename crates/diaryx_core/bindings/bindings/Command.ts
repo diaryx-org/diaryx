@@ -60,7 +60,15 @@ old_path: string,
 /**
  * The file's current path (after the move).
  */
-new_path: string, } } | { "type": "RenameEntry", "params": {
+new_path: string, } } | { "type": "SyncCreateMetadata", "params": {
+/**
+ * Path to the newly created file.
+ */
+path: string, } } | { "type": "SyncDeleteMetadata", "params": {
+/**
+ * Path to the deleted file (file no longer exists on disk).
+ */
+path: string, } } | { "type": "RenameEntry", "params": {
 /**
  * Path to the entry to rename.
  */

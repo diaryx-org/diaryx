@@ -1268,6 +1268,42 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 Ok(Response::String(new_path))
             }
 
+            Command::SyncCreateMetadata { path } => {
+                let resolved_path = self.resolve_fs_path(&path);
+                let ws = self.workspace().inner();
+                ws.sync_create_metadata(&resolved_path).await?;
+
+                #[cfg(feature = "crdt")]
+                {
+                    self.emit_workspace_sync("SyncCreateMetadata");
+
+                    log::debug!(
+                        "[CommandHandler] SyncCreateMetadata: added {} to hierarchy",
+                        path
+                    );
+                }
+
+                Ok(Response::Ok)
+            }
+
+            Command::SyncDeleteMetadata { path } => {
+                let resolved_path = self.resolve_fs_path(&path);
+                let ws = self.workspace().inner();
+                ws.sync_delete_metadata(&resolved_path).await?;
+
+                #[cfg(feature = "crdt")]
+                {
+                    self.emit_workspace_sync("SyncDeleteMetadata");
+
+                    log::debug!(
+                        "[CommandHandler] SyncDeleteMetadata: removed {} from hierarchy",
+                        path
+                    );
+                }
+
+                Ok(Response::Ok)
+            }
+
             Command::RenameEntry { path, new_filename } => {
                 let from_path = self.resolve_fs_path(&path);
 

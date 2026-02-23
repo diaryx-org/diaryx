@@ -46,6 +46,9 @@ tauri-plugin-google-auth = "0.3"
 
 # Apple IAP (StoreKit 2) — optional, only for App Store builds
 tauri-plugin-iap = { path = "../../../crates/tauri-plugin-iap", optional = true }
+
+# Native iOS keyboard toolbar for TipTap editor
+tauri-plugin-editor-toolbar = { path = "../../../crates/tauri-plugin-editor-toolbar" }
 reqwest = { version = "0.12", features = ["json", "multipart"] }
 dotenvy = "0.15"
 

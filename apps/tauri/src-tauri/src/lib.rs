@@ -81,7 +81,9 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_google_auth::init());
+        .plugin(tauri_plugin_google_auth::init())
+        // Native iOS keyboard toolbar for TipTap editor (no-op on desktop)
+        .plugin(tauri_plugin_editor_toolbar::init());
 
     // Apple IAP plugin — only included with `--features iap` (for App Store builds)
     #[cfg(feature = "iap")]

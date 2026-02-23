@@ -2292,6 +2292,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "tauri-plugin-editor-toolbar",
  "tauri-plugin-fs",
  "tauri-plugin-google-auth",
  "tauri-plugin-iap",
@@ -8032,6 +8033,16 @@ dependencies = [
  "tauri-plugin-fs",
  "thiserror 2.0.18",
  "url",
+]
+
+[[package]]
+name = "tauri-plugin-editor-toolbar"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
 ]
 
 [[package]]

@@ -47,6 +47,15 @@
   import { ConditionalBlock } from "./extensions/ConditionalBlock";
   import { getTemplateContextStore } from "./stores/templateContextStore.svelte";
   import type { Api } from "$lib/backend/api";
+  import { isTauri } from "$lib/backend/interface";
+  import { isIOS } from "$lib/hooks/useMobile.svelte";
+  import { workspaceStore } from "@/models/stores/workspaceStore.svelte";
+  import { getLinkFormatStore } from "$lib/stores/linkFormatStore.svelte";
+  import type { TreeNode } from "$lib/backend";
+
+  // On iOS Tauri, a native UIToolbar replaces the web BubbleMenu
+  const useNativeToolbar = isTauri() && isIOS();
+  const nativeLinkFormatStore = useNativeToolbar ? getLinkFormatStore() : null;
 
   interface Props {
     content?: string;
@@ -417,8 +426,8 @@
       );
 
       // Add BubbleMenu extension (for inline formatting when text is selected)
-      // Only show on desktop - mobile uses the bottom InlineToolbar
-      if (bubbleMenuElement) {
+      // On iOS Tauri, a native toolbar replaces this; on other mobile, uses the bottom InlineToolbar
+      if (!useNativeToolbar && bubbleMenuElement) {
         extensions.push(
           BubbleMenu.configure({
             element: bubbleMenuElement,
@@ -542,6 +551,45 @@
     if (typeof globalThis !== 'undefined') {
       (globalThis as any).__diaryx_tiptapEditor = editor;
     }
+
+    // Expose link picker helpers for the native iOS toolbar
+    if (useNativeToolbar) {
+      function flattenTree(node: TreeNode | null): { path: string; name: string }[] {
+        if (!node) return [];
+        const entries: { path: string; name: string }[] = [];
+        function traverse(n: TreeNode) {
+          entries.push({ path: n.path, name: n.name });
+          for (const child of n.children) traverse(child);
+        }
+        traverse(node);
+        return entries;
+      }
+
+      (globalThis as any).__diaryx_nativeToolbar = {
+        getEntries: () => flattenTree(workspaceStore.tree)
+          .filter((e: { path: string }) => e.path !== entryPath),
+        getEntryPath: () => entryPath ?? '',
+        insertRemoteLink: (href: string) => {
+          editor?.chain().focus().setLink({ href }).run();
+        },
+        insertLocalLink: async (path: string, name: string) => {
+          if (api && entryPath) {
+            try {
+              const format = nativeLinkFormatStore?.format ?? 'markdown_relative';
+              const formatted = await api.formatLink(path, name, format, entryPath);
+              const mdMatch = formatted.match(/\[.*?\]\((.*?)\)/);
+              let href = mdMatch ? mdMatch[1] : formatted;
+              if (href.startsWith('<') && href.endsWith('>')) href = href.slice(1, -1);
+              editor?.chain().focus().setLink({ href }).run();
+            } catch {
+              editor?.chain().focus().setLink({ href: path }).run();
+            }
+          } else {
+            editor?.chain().focus().setLink({ href: path }).run();
+          }
+        },
+      };
+    }
   }
 
   export function getMarkdown(): string | undefined {
@@ -650,8 +698,9 @@
       return;
     }
 
-    // In edit mode, wait for menu elements
-    if (!editorInitialized && hasEditorElement && hasFloatingMenu && hasBubbleMenu) {
+    // In edit mode, wait for menu elements (native toolbar replaces BubbleMenu on iOS Tauri)
+    const bubbleMenuReady = useNativeToolbar || hasBubbleMenu;
+    if (!editorInitialized && hasEditorElement && hasFloatingMenu && bubbleMenuReady) {
       if (debugMenus) {
         console.log("[Editor] Menu elements ready, creating editor", {
           floatingMenuElement,
@@ -770,7 +819,8 @@
 {/if}
 
 <!-- BubbleMenu for inline formatting (appears when text is selected) -->
-{#if !readonly}
+<!-- On iOS Tauri, a native UIToolbar above the keyboard replaces this -->
+{#if !readonly && !useNativeToolbar}
   <BubbleMenuComponent {editor} bind:element={bubbleMenuElement} {enableSpoilers} {entryPath} {api} />
 {/if}
 

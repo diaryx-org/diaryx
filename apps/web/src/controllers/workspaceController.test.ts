@@ -45,7 +45,7 @@ describe('workspaceController.refreshTree', () => {
     await promise;
 
     expect(api.findRootIndex).toHaveBeenCalledTimes(2);
-    expect(api.getWorkspaceTree).toHaveBeenCalledWith('README.md', 2);
+    expect(api.getWorkspaceTree).toHaveBeenCalledWith('README.md', 2, undefined);
     expect(setTree).toHaveBeenCalledWith(workspaceTree);
   });
 

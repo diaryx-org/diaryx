@@ -172,7 +172,7 @@ describe('api', () => {
 
       expect(mockBackend.execute).toHaveBeenCalledWith({
         type: 'GetWorkspaceTree',
-        params: { path: null, depth: null },
+        params: { path: null, depth: null, audience: null },
       })
       expect(result).toEqual(mockTree)
     })
@@ -187,7 +187,7 @@ describe('api', () => {
 
       expect(mockBackend.execute).toHaveBeenCalledWith({
         type: 'GetWorkspaceTree',
-        params: { path: 'subdir', depth: 2 },
+        params: { path: 'subdir', depth: 2, audience: null },
       })
     })
   })

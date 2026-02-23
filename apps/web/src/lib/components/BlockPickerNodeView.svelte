@@ -13,6 +13,9 @@
     Code,
     Table2,
     Pencil,
+    Ellipsis,
+    GitBranch,
+    Users,
   } from "@lucide/svelte";
 
   interface Props {
@@ -28,7 +31,7 @@
   let menuElement: HTMLDivElement | undefined = $state();
   let focusedIndex = $state(0);
   let focusableItems: HTMLElement[] = $state([]);
-  let openSubmenu = $state<"heading" | "list" | null>(null);
+  let openSubmenu = $state<"heading" | "list" | "more" | null>(null);
 
   function updateFocusableItems() {
     focusableItems = Array.from(
@@ -75,7 +78,7 @@
     }
   }
 
-  function toggleSubmenu(menu: "heading" | "list", event: MouseEvent | TouchEvent) {
+  function toggleSubmenu(menu: "heading" | "list" | "more", event: MouseEvent | TouchEvent) {
     event.stopPropagation();
     openSubmenu = openSubmenu === menu ? null : menu;
   }
@@ -128,6 +131,28 @@
 
   function handleAttachment() {
     onInsertAttachment?.();
+  }
+
+  function handleIfElse() {
+    const condition = window.prompt("Variable name to check:", "draft");
+    if (!condition) return;
+    onSelect(() =>
+      editor.commands.insertConditionalBlock({
+        helperType: "if",
+        condition: condition.trim(),
+      })
+    );
+  }
+
+  function handleForAudience() {
+    const audience = window.prompt("Audience name:", "public");
+    if (!audience) return;
+    onSelect(() =>
+      editor.commands.insertConditionalBlock({
+        helperType: "for-audience",
+        condition: audience.trim(),
+      })
+    );
   }
 
   function handleMenuItemClick(
@@ -243,15 +268,6 @@
     </button>
     <button
       type="button"
-      onclick={(e) => handleMenuItemClick(e, handleHtmlBlock)}
-      class="menu-item"
-      title="HTML Block"
-    >
-      <Code class="size-4" />
-      <span>HTML</span>
-    </button>
-    <button
-      type="button"
       onclick={(e) => handleMenuItemClick(e, handleTable)}
       class="menu-item"
       title="Table"
@@ -259,15 +275,40 @@
       <Table2 class="size-4" />
       <span>Table</span>
     </button>
-    <button
-      type="button"
-      onclick={(e) => handleMenuItemClick(e, handleDrawing)}
-      class="menu-item"
-      title="Drawing"
-    >
-      <Pencil class="size-4" />
-      <span>Drawing</span>
-    </button>
+  </div>
+
+  <div class="menu-divider"></div>
+
+  <div class="menu-section">
+    <div class="submenu-wrapper">
+      <button
+        type="button"
+        class="menu-item"
+        title="More blocks"
+        onclick={(e) => toggleSubmenu("more", e)}
+        aria-expanded={openSubmenu === "more"}
+      >
+        <Ellipsis class="size-4" />
+        <ChevronDown class="size-3 chevron" />
+      </button>
+      {#if openSubmenu === "more"}
+        <div class="submenu-dropdown">
+          <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleHtmlBlock(); }}>
+            <Code class="size-3.5" /> HTML
+          </button>
+          <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleDrawing(); }}>
+            <Pencil class="size-3.5" /> Drawing
+          </button>
+          <div class="submenu-divider"></div>
+          <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleIfElse(); }}>
+            <GitBranch class="size-3.5" /> If / Else
+          </button>
+          <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleForAudience(); }}>
+            <Users class="size-3.5" /> For Audience
+          </button>
+        </div>
+      {/if}
+    </div>
   </div>
 
   {#if showAttachment}
@@ -334,6 +375,13 @@
     padding: 4px;
     min-width: max-content;
     z-index: 30;
+  }
+
+  .submenu-divider {
+    height: 1px;
+    background: var(--border);
+    margin: 4px 0;
+    opacity: 0.5;
   }
 
   .submenu-item {

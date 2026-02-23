@@ -7,6 +7,7 @@ attachments:
   - '[linkFormatStore.svelte.ts](/apps/web/src/lib/stores/linkFormatStore.svelte.ts)'
   - '[workspaceConfigStore.svelte.ts](/apps/web/src/lib/stores/workspaceConfigStore.svelte.ts)'
   - '[theme.svelte.ts](/apps/web/src/lib/stores/theme.svelte.ts)'
+  - '[templateContextStore.svelte.ts](/apps/web/src/lib/stores/templateContextStore.svelte.ts)'
 exclude:
   - '*.lock'
 ---
@@ -23,6 +24,7 @@ Svelte stores for UI preferences and settings.
 | `linkFormatStore.svelte.ts` | Link format settings (persisted to workspace config) |
 | `workspaceConfigStore.svelte.ts` | Workspace config store (persisted to root index frontmatter) |
 | `theme.svelte.ts` | Theme (light/dark) store |
+| `templateContextStore.svelte.ts` | Template context for live variable resolution in editor |
 
 ## Workspace Config Store
 

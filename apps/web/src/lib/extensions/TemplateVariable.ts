@@ -83,25 +83,39 @@ export const TemplateVariable = Node.create({
       dom.setAttribute("contenteditable", "false");
 
       let currentName = node.attrs.name as string;
+      let isSelected = false;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let svelteComponent: Record<string, any> | null = null;
 
-      function mountComponent(name: string) {
+      function mountComponent(name: string, selected: boolean) {
         svelteComponent = mount(TemplateVariableNodeView, {
           target: dom,
           props: {
             name,
             readonly: !editor.isEditable,
+            selected,
           },
         });
       }
 
-      mountComponent(currentName);
+      mountComponent(currentName, false);
 
       return {
         dom,
         stopEvent(event: Event) {
           return dom.contains(event.target as globalThis.Node);
+        },
+        selectNode() {
+          isSelected = true;
+          if (svelteComponent) unmount(svelteComponent);
+          mountComponent(currentName, true);
+          dom.classList.add("ProseMirror-selectednode");
+        },
+        deselectNode() {
+          isSelected = false;
+          if (svelteComponent) unmount(svelteComponent);
+          mountComponent(currentName, false);
+          dom.classList.remove("ProseMirror-selectednode");
         },
         update(updatedNode) {
           if (updatedNode.type.name !== "templateVariable") return false;
@@ -111,7 +125,7 @@ export const TemplateVariable = Node.create({
             if (svelteComponent) {
               unmount(svelteComponent);
             }
-            mountComponent(newName);
+            mountComponent(newName, isSelected);
           }
           return true;
         },

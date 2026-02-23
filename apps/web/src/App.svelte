@@ -52,6 +52,7 @@
     shareSessionStore
   } from "./models/stores";
   import { getFormattingStore } from "./lib/stores/formattingStore.svelte";
+  import { getTemplateContextStore } from "./lib/stores/templateContextStore.svelte";
 
 
   // Import auth
@@ -63,6 +64,9 @@
 
   // Initialize formatting store
   const formattingStore = getFormattingStore();
+
+  // Initialize template context store (feeds live values to editor template variables)
+  const templateContextStore = getTemplateContextStore();
 
   // Import services
   import {
@@ -398,6 +402,16 @@
   $effect(() => {
     if (!shareSessionStore.isGuest) {
       guestInitialSyncDone = false;
+    }
+  });
+
+  // Sync current entry's frontmatter to the template context store
+  // so template variable NodeViews and conditional block decorations update live
+  $effect(() => {
+    if (currentEntry?.frontmatter) {
+      templateContextStore.setContext(normalizeFrontmatter(currentEntry.frontmatter));
+    } else {
+      templateContextStore.clear();
     }
   });
 

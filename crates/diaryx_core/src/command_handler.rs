@@ -1954,6 +1954,37 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 for included in &plan.included {
                     match self.fs().read_to_string(&included.source_path).await {
                         Ok(content) => {
+                            // When exporting for a specific audience, render body templates
+                            // so {{#for-audience}} blocks resolve. For "all" (*), leave raw.
+                            #[cfg(feature = "templating")]
+                            let content = if audience != "*"
+                                && crate::body_template::has_templates(&content)
+                            {
+                                match crate::frontmatter::parse_or_empty(&content) {
+                                    Ok(parsed) => {
+                                        let context = crate::body_template::build_publish_context(
+                                            &parsed.frontmatter,
+                                            &included.source_path,
+                                            Some(&resolved_root_path),
+                                            &audience,
+                                        );
+                                        let rendered =
+                                            crate::body_template::BodyTemplateRenderer::new()
+                                                .render(&parsed.body, &context)
+                                                .unwrap_or_else(|_| parsed.body.clone());
+                                        // Reconstruct file with original frontmatter + rendered body
+                                        crate::frontmatter::serialize(
+                                            &parsed.frontmatter,
+                                            &rendered,
+                                        )
+                                        .unwrap_or(content)
+                                    }
+                                    Err(_) => content,
+                                }
+                            } else {
+                                content
+                            };
+
                             files.push(crate::command::ExportedFile {
                                 path: included.relative_path.to_string_lossy().to_string(),
                                 content,

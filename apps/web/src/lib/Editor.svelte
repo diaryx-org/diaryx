@@ -43,6 +43,9 @@
   import { FootnoteRef, preprocessFootnotes, appendFootnoteDefinitions } from "./extensions/FootnoteRef";
   // Custom extension for template variables ({{ variable }} syntax)
   import { TemplateVariable } from "./extensions/TemplateVariable";
+  // Custom extension for conditional block markers ({{#if}}, {{#for-audience}}, etc.)
+  import { ConditionalBlock } from "./extensions/ConditionalBlock";
+  import { getTemplateContextStore } from "./stores/templateContextStore.svelte";
   import type { Api } from "$lib/backend/api";
 
   interface Props {
@@ -88,6 +91,9 @@
 
   let element: HTMLDivElement;
   let editor: Editor | null = $state(null);
+
+  // Template context store — used by ConditionalBlock decorations to detect context changes
+  const templateContextStore = getTemplateContextStore();
 
   // FloatingMenu element ref - must exist before editor creation
   let floatingMenuElement: HTMLDivElement | undefined = $state();
@@ -295,8 +301,10 @@
       TableControls,
       // Footnote extension
       FootnoteRef,
-      // Template variable extension ({{ variable }} pills)
+      // Template variable extension ({{ variable }} with live value resolution)
       TemplateVariable,
+      // Conditional block markers ({{#if}}, {{#for-audience}}, {{else}}, {{/if}})
+      ConditionalBlock.configure({ enabled: true }),
       // Raw HTML block extension
       HtmlBlock.configure({
         entryPath,
@@ -709,6 +717,18 @@
     setTimeout(() => {
       isUpdatingContent = false;
     }, 0);
+  });
+
+  // Refresh conditional block decorations when template context changes
+  // (e.g., frontmatter audience edited → active/inactive branch highlights update)
+  $effect(() => {
+    // Access reactive properties to track them as dependencies
+    void templateContextStore.context;
+    void templateContextStore.previewAudience;
+    if (editor) {
+      const tr = editor.state.tr.setMeta("templateContextChanged", true);
+      editor.view.dispatch(tr);
+    }
   });
 </script>
 
@@ -1250,6 +1270,40 @@
     top: -1.4em;
     user-select: none;
     white-space: nowrap;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Conditional block marker styles                                     */
+  /* ------------------------------------------------------------------ */
+
+  :global(.conditional-marker-wrapper) {
+    margin: 4px 0;
+    user-select: none;
+  }
+
+  /* Branch decoration: active (condition matches current context) */
+  :global(.conditional-branch-active) {
+    border-left: 3px solid color-mix(in oklch, var(--primary) 40%, transparent);
+    padding-left: 12px !important;
+    margin-left: -15px;
+  }
+
+  /* Branch decoration: inactive (condition does not match) */
+  :global(.conditional-branch-inactive) {
+    border-left: 3px solid
+      color-mix(in oklch, var(--muted-foreground) 20%, transparent);
+    padding-left: 12px !important;
+    margin-left: -15px;
+    opacity: 0.5;
+  }
+
+  /* Preview mode: hide inactive branches and markers completely */
+  :global(.conditional-branch-hidden) {
+    display: none;
+  }
+
+  :global(.conditional-marker-hidden) {
+    display: none;
   }
 
   /* Mobile-specific styles */

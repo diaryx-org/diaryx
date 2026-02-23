@@ -40,6 +40,7 @@
   } from "@lucide/svelte";
   import { getAuthState } from "./auth";
   import WorkspaceSelector from "./WorkspaceSelector.svelte";
+  import AudienceFilter from "./components/AudienceFilter.svelte";
 
   interface Props {
     tree: TreeNode | null;
@@ -1076,6 +1077,13 @@
       onAddWorkspace={onAddWorkspace}
     />
   </div>
+
+  <!-- Audience Filter -->
+  {#if tree}
+    <div class="px-3 pt-1">
+      <AudienceFilter {api} rootPath={tree.path} />
+    </div>
+  {/if}
 
   <!-- Content Area -->
   <div class="flex-1 overflow-y-auto px-3 pb-3" bind:this={scrollContainer}>

@@ -74,6 +74,7 @@ cargo run -p diaryx_sync_server
 | `STRIPE_PUBLISHABLE_KEY`              | -                                              | Stripe publishable key returned to client (pk_live_... or pk_test_...)                                                                      |
 | `APPLE_IAP_BUNDLE_ID`                | -                                              | Apple app bundle ID (e.g., org.diaryx.desktop). Apple IAP endpoints disabled when empty.                                                    |
 | `APPLE_IAP_ENVIRONMENT`              | `Sandbox`                                      | Apple IAP environment: `Sandbox` or `Production`                                                                                            |
+| `APPLE_IAP_SKIP_SIGNATURE_VERIFY`   | `false`                                        | Skip JWS signature verification (for local StoreKit simulator testing only — **never enable in production**)                                |
 
 
 ## API Endpoints

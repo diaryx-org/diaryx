@@ -33,8 +33,16 @@
     getServerUrl,
     getAuthState,
     createCheckoutSession,
+    verifyAppleTransaction,
+    restoreApplePurchases,
   } from "$lib/auth";
-  import { openStripeUrl } from "$lib/billing";
+  import {
+    getBillingProvider,
+    openStripeUrl,
+    purchasePlus,
+    restoreIapPurchases,
+    getPlusProductId,
+  } from "$lib/billing";
   import {
     getLocalWorkspaces,
     getLocalWorkspace,
@@ -154,6 +162,46 @@
 
   // Upgrade state
   let isUpgrading = $state(false);
+  const billingProvider = getBillingProvider();
+
+  async function handleUpgradeIap() {
+    isUpgrading = true;
+    error = null;
+    try {
+      const userId = getAuthState().user?.id;
+      if (!userId) throw new Error("Not signed in");
+      const result = await purchasePlus(userId);
+      if (!result) return; // user cancelled
+      await verifyAppleTransaction(result.signedTransaction, getPlusProductId());
+      screen = await handlePostAuth();
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      isUpgrading = false;
+    }
+  }
+
+  async function handleRestoreIap() {
+    isUpgrading = true;
+    error = null;
+    try {
+      const transactions = await restoreIapPurchases();
+      if (transactions.length === 0) {
+        error = "No purchases found to restore.";
+        return;
+      }
+      const result = await restoreApplePurchases(transactions);
+      if (result.restored_count === 0) {
+        error = "No active subscriptions found.";
+        return;
+      }
+      screen = await handlePostAuth();
+    } catch (e) {
+      error = e instanceof Error ? e.message : "Failed to restore purchases";
+    } finally {
+      isUpgrading = false;
+    }
+  }
 
   // Error state
   let error = $state<string | null>(null);
@@ -1316,29 +1364,52 @@
               Multi-device sync, live collaboration, and publishing are Plus features.
             </p>
           </div>
-          <Button
-            class="w-full"
-            onclick={async () => {
-              isUpgrading = true;
-              error = null;
-              try {
-                const url = await createCheckoutSession();
-                await openStripeUrl(url);
-              } catch (e) {
-                error = e instanceof Error ? e.message : "Failed to start checkout";
-              } finally {
-                isUpgrading = false;
-              }
-            }}
-            disabled={isUpgrading}
-          >
-            {#if isUpgrading}
-              <Loader2 class="size-4 mr-2 animate-spin" />
-              Loading...
-            {:else}
-              Upgrade to Plus — $5/month
-            {/if}
-          </Button>
+          {#if billingProvider === "apple_iap"}
+            <Button
+              class="w-full"
+              onclick={handleUpgradeIap}
+              disabled={isUpgrading}
+            >
+              {#if isUpgrading}
+                <Loader2 class="size-4 mr-2 animate-spin" />
+                Loading...
+              {:else}
+                Upgrade to Plus — $5/month
+              {/if}
+            </Button>
+            <button
+              type="button"
+              class="w-full text-sm text-muted-foreground hover:text-foreground transition-colors py-1"
+              onclick={handleRestoreIap}
+              disabled={isUpgrading}
+            >
+              Restore Purchases
+            </button>
+          {:else}
+            <Button
+              class="w-full"
+              onclick={async () => {
+                isUpgrading = true;
+                error = null;
+                try {
+                  const url = await createCheckoutSession();
+                  await openStripeUrl(url);
+                } catch (e) {
+                  error = e instanceof Error ? e.message : "Failed to start checkout";
+                } finally {
+                  isUpgrading = false;
+                }
+              }}
+              disabled={isUpgrading}
+            >
+              {#if isUpgrading}
+                <Loader2 class="size-4 mr-2 animate-spin" />
+                Loading...
+              {:else}
+                Upgrade to Plus — $5/month
+              {/if}
+            </Button>
+          {/if}
           <button
             type="button"
             class="w-full text-sm text-muted-foreground hover:text-foreground transition-colors py-1"

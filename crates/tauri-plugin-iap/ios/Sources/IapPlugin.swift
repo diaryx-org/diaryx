@@ -30,13 +30,10 @@ class IapPlugin: Plugin {
     private var simulatorEntitlements: [String: String] = [:]
 
     private var useSimulatorMock: Bool {
-        // Use mock when StoreKit products aren't available (no App Store Connect config).
-        // On simulator: always mock unless DIARYX_IAP_SIMULATOR_REAL=1
-        // On device: mock only in DEBUG builds, unless DIARYX_IAP_REAL=1
+        // Only mock on the simulator. Real devices (including DEBUG builds)
+        // always use real StoreKit so sandbox testing works.
         #if targetEnvironment(simulator)
         return ProcessInfo.processInfo.environment["DIARYX_IAP_SIMULATOR_REAL"] != "1"
-        #elseif DEBUG
-        return ProcessInfo.processInfo.environment["DIARYX_IAP_REAL"] != "1"
         #else
         return false
         #endif
@@ -141,7 +138,10 @@ class IapPlugin: Plugin {
         }
 
         do {
+            let bundleId = Bundle.main.bundleIdentifier ?? "nil"
+            NSLog("[IAP] useSimulatorMock=\(useSimulatorMock), bundleId=\(bundleId), requesting productId=\(args.productId)")
             let products = try await Product.products(for: [args.productId])
+            NSLog("[IAP] Product.products returned \(products.count) product(s): \(products.map { $0.id })")
             guard let product = products.first else {
                 invoke.reject("Product not found: \(args.productId)")
                 return

@@ -369,10 +369,10 @@ fn verify_and_decode_transaction(
         .map_err(|e| format!("Failed to parse leaf certificate: {}", e))?
         .1;
 
-    let public_key_der = leaf_cert.public_key().raw;
+    let public_key_der = leaf_cert.public_key().subject_public_key.data.clone();
 
     // Verify the JWS signature using jsonwebtoken
-    let decoding_key = jsonwebtoken::DecodingKey::from_ec_der(public_key_der);
+    let decoding_key = jsonwebtoken::DecodingKey::from_ec_der(&public_key_der);
     let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::ES256);
     validation.validate_exp = false;
     validation.required_spec_claims.clear();

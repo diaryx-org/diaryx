@@ -31,8 +31,19 @@
   } from "@/models/services/shareService";
   import { workspaceStore } from "@/models/stores/workspaceStore.svelte";
   import { entryStore } from "@/models/stores/entryStore.svelte";
-  import { getAuthState, createCheckoutSession } from "$lib/auth";
-  import { openStripeUrl } from "$lib/billing";
+  import {
+    getAuthState,
+    createCheckoutSession,
+    verifyAppleTransaction,
+    restoreApplePurchases,
+  } from "$lib/auth";
+  import {
+    getBillingProvider,
+    openStripeUrl,
+    purchasePlus,
+    restoreIapPurchases,
+    getPlusProductId,
+  } from "$lib/billing";
   import type { Api } from "$lib/backend/api";
   import { toast } from "svelte-sonner";
 
@@ -59,6 +70,9 @@
   let copied = $state(false);
   let isCreating = $state(false);
   let isJoining = $state(false);
+  let isUpgrading = $state(false);
+  let upgradeError = $state<string | null>(null);
+  const billingProvider = getBillingProvider();
 
   // Pre-session config
   let preSessionReadOnly = $state(false);
@@ -301,20 +315,74 @@
           <p class="text-xs text-muted-foreground">
             Hosting sessions requires Plus.
           </p>
-          <Button
-            variant="outline"
-            size="sm"
-            onclick={async () => {
-              try {
-                const url = await createCheckoutSession();
-                await openStripeUrl(url);
-              } catch {
-                toast.error("Failed to start checkout");
-              }
-            }}
-          >
-            Upgrade to Plus — $5/month
-          </Button>
+          {#if upgradeError}
+            <p class="text-xs text-destructive">{upgradeError}</p>
+          {/if}
+          {#if billingProvider === "apple_iap"}
+            <Button
+              variant="outline"
+              size="sm"
+              onclick={async () => {
+                isUpgrading = true;
+                upgradeError = null;
+                try {
+                  const userId = authState.user?.id;
+                  if (!userId) throw new Error("Not signed in");
+                  const result = await purchasePlus(userId);
+                  if (!result) return;
+                  await verifyAppleTransaction(result.signedTransaction, getPlusProductId());
+                } catch (e) {
+                  upgradeError = e instanceof Error ? e.message : String(e);
+                } finally {
+                  isUpgrading = false;
+                }
+              }}
+              disabled={isUpgrading}
+            >
+              {#if isUpgrading}
+                <Loader2 class="size-4 mr-2 animate-spin" />
+                Loading...
+              {:else}
+                Upgrade to Plus — $5/month
+              {/if}
+            </Button>
+            <button
+              type="button"
+              class="text-xs text-muted-foreground hover:text-foreground transition-colors"
+              onclick={async () => {
+                isUpgrading = true;
+                upgradeError = null;
+                try {
+                  const transactions = await restoreIapPurchases();
+                  if (transactions.length === 0) { upgradeError = "No purchases found to restore."; return; }
+                  const result = await restoreApplePurchases(transactions);
+                  if (result.restored_count === 0) { upgradeError = "No active subscriptions found."; }
+                } catch (e) {
+                  upgradeError = e instanceof Error ? e.message : "Failed to restore purchases";
+                } finally {
+                  isUpgrading = false;
+                }
+              }}
+              disabled={isUpgrading}
+            >
+              Restore Purchases
+            </button>
+          {:else}
+            <Button
+              variant="outline"
+              size="sm"
+              onclick={async () => {
+                try {
+                  const url = await createCheckoutSession();
+                  await openStripeUrl(url);
+                } catch {
+                  toast.error("Failed to start checkout");
+                }
+              }}
+            >
+              Upgrade to Plus — $5/month
+            </Button>
+          {/if}
         </div>
       {:else}
         <Button

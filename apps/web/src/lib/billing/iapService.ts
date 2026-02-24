@@ -6,7 +6,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
-const PRODUCT_ID = "diaryx_plus_monthly";
+const PRODUCT_ID = "diaryx_plus";
 
 export interface IapProduct {
   id: string;

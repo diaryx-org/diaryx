@@ -20,7 +20,8 @@
 //!
 //! This module requires the `crdt` feature to be enabled.
 
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 
 use crate::crdt::{BodyDocManager, CrdtStorage, MemoryStorage, WorkspaceCrdt};
 use crate::fs::AsyncFileSystem;
@@ -127,6 +128,16 @@ impl<FS: AsyncFileSystem> DecoratedFs<FS> {
     /// Get a reference to the EventEmittingFs layer.
     pub fn event_fs(&self) -> &EventEmittingFs<CrdtFs<FS>> {
         &self.fs
+    }
+
+    /// Set the workspace root on the CrdtFs layer for path normalization.
+    pub fn set_workspace_root(&self, root: PathBuf) {
+        self.crdt_fs().set_workspace_root(root);
+    }
+
+    /// Get a shared handle to the CrdtFs workspace root.
+    pub fn workspace_root_handle(&self) -> Arc<RwLock<Option<PathBuf>>> {
+        self.crdt_fs().workspace_root_handle()
     }
 }
 

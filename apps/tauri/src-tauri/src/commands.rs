@@ -256,6 +256,7 @@ pub async fn execute<R: Runtime>(
                     if let Some(ref ws_path) = workspace_path {
                         log::debug!("[execute] Setting workspace root: {:?}", ws_path);
                         d.set_workspace_root(ws_path.clone());
+                        decorated.set_workspace_root(ws_path.clone());
                     }
                     log::debug!("[execute] Created Diaryx with DecoratedFs");
                     Arc::new(d)
@@ -272,6 +273,7 @@ pub async fn execute<R: Runtime>(
                     );
                     if let Some(ref ws_path) = workspace_path {
                         d.set_workspace_root(ws_path.clone());
+                        decorated.set_workspace_root(ws_path.clone());
                     }
                     Arc::new(d)
                 }
@@ -2897,6 +2899,9 @@ pub async fn reinitialize_workspace<R: Runtime>(
             })?;
 
     // 6. Update CrdtState
+    // Set workspace root on CrdtFs so absolute filesystem paths are normalized
+    // to workspace-relative CRDT keys (e.g., README.md instead of /Users/.../README.md)
+    decorated.set_workspace_root(ws_path.clone());
     {
         *acquire_lock(&state.workspace_path)? = Some(ws_path.clone());
     }
@@ -3381,6 +3386,7 @@ mod tests {
                         );
                         if let Some(ref ws) = ws_path {
                             d.set_workspace_root(ws.clone());
+                            decorated.set_workspace_root(ws.clone());
                         }
                         Arc::new(d)
                     } else {

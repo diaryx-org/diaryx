@@ -42,7 +42,7 @@ use crate::crdt::{BodyDocManager, FileMetadata, WorkspaceCrdt};
 use crate::frontmatter;
 use crate::fs::{AsyncFileSystem, BoxFuture};
 use crate::link_parser;
-use crate::path_utils::normalize_sync_path;
+use crate::path_utils::{normalize_sync_path, strip_workspace_root_prefix};
 
 /// A filesystem decorator that automatically updates the CRDT on file operations.
 ///
@@ -85,6 +85,11 @@ pub struct CrdtFs<FS: AsyncFileSystem> {
     /// Paths currently being written from sync (skip CRDT updates entirely).
     /// This prevents feedback loops where remote sync writes trigger new CRDT updates.
     sync_writes_in_progress: RwLock<HashSet<PathBuf>>,
+    /// Workspace root directory for normalizing absolute filesystem paths to
+    /// workspace-relative CRDT keys. On native platforms (iOS/Tauri), filesystem
+    /// paths are absolute (e.g., `/Users/.../workspace/README.md`), but CRDT keys
+    /// must be workspace-relative (e.g., `README.md`).
+    workspace_root: Arc<RwLock<Option<PathBuf>>>,
 }
 
 impl<FS: AsyncFileSystem> CrdtFs<FS> {
@@ -101,16 +106,38 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
             enabled: Arc::new(AtomicBool::new(false)),
             local_writes_in_progress: RwLock::new(HashSet::new()),
             sync_writes_in_progress: RwLock::new(HashSet::new()),
+            workspace_root: Arc::new(RwLock::new(None)),
         }
     }
 
     /// Normalize a path to a canonical form for CRDT storage.
     ///
-    /// Strips leading "./" and "/" prefixes to ensure consistent keys
-    /// across the CRDT. This matches how `InitializeWorkspaceCrdt` derives
-    /// canonical paths from the workspace tree.
-    fn normalize_crdt_path(path: &Path) -> String {
-        normalize_sync_path(&path.to_string_lossy())
+    /// When a workspace root is set, strips the workspace root prefix first
+    /// to convert absolute filesystem paths (e.g., `/Users/.../workspace/README.md`)
+    /// to workspace-relative keys (e.g., `README.md`). Then strips leading "./"
+    /// and "/" prefixes to ensure consistent keys across the CRDT.
+    fn normalize_crdt_path(&self, path: &Path) -> String {
+        let path_str = path.to_string_lossy();
+        if let Some(ref root) = *self.workspace_root.read().unwrap() {
+            if let Some(relative) = strip_workspace_root_prefix(&path_str, root) {
+                return normalize_sync_path(&relative);
+            }
+        }
+        normalize_sync_path(&path_str)
+    }
+
+    /// Set the workspace root directory for path normalization.
+    ///
+    /// On native platforms (iOS/Tauri), filesystem paths are absolute. Setting
+    /// the workspace root allows `normalize_crdt_path` to strip the root prefix
+    /// and produce workspace-relative CRDT keys.
+    pub fn set_workspace_root(&self, root: PathBuf) {
+        *self.workspace_root.write().unwrap() = Some(root);
+    }
+
+    /// Get a shared handle to the workspace root for cross-clone sharing.
+    pub fn workspace_root_handle(&self) -> Arc<RwLock<Option<PathBuf>>> {
+        Arc::clone(&self.workspace_root)
     }
 
     fn is_temp_path(path: &Path) -> bool {
@@ -370,7 +397,7 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
     /// will be triggered explicitly via migrate_to_doc_ids().
     fn path_to_doc_id(&self, path: &Path, _metadata: &FileMetadata) -> Option<String> {
         // Normalize the path to a canonical form for CRDT storage
-        let normalized = Self::normalize_crdt_path(path);
+        let normalized = self.normalize_crdt_path(path);
 
         // For backward compatibility, always use path as the key
         // The doc-ID based system is opt-in via explicit migration
@@ -581,6 +608,7 @@ impl<FS: AsyncFileSystem + Clone> Clone for CrdtFs<FS> {
             enabled: Arc::clone(&self.enabled),
             local_writes_in_progress: RwLock::new(HashSet::new()),
             sync_writes_in_progress: RwLock::new(HashSet::new()),
+            workspace_root: Arc::clone(&self.workspace_root),
         }
     }
 }
@@ -666,7 +694,7 @@ impl<FS: AsyncFileSystem + Send + Sync> AsyncFileSystem for CrdtFs<FS> {
                     return result;
                 }
 
-                let path_str = Self::normalize_crdt_path(path);
+                let path_str = self.normalize_crdt_path(path);
 
                 // Update parent's contents to remove the deleted file
                 self.update_parent_contents(&path_str, None);
@@ -724,8 +752,8 @@ impl<FS: AsyncFileSystem + Send + Sync> AsyncFileSystem for CrdtFs<FS> {
                     return result;
                 }
 
-                let from_str = Self::normalize_crdt_path(from);
-                let to_str = Self::normalize_crdt_path(to);
+                let from_str = self.normalize_crdt_path(from);
+                let to_str = self.normalize_crdt_path(to);
 
                 // Find the doc_id for the file being moved
                 if let Some(doc_id) = self.workspace_crdt.find_by_path(from) {
@@ -950,7 +978,7 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for CrdtFs<FS> {
                     return result;
                 }
 
-                let path_str = Self::normalize_crdt_path(path);
+                let path_str = self.normalize_crdt_path(path);
 
                 // Update parent's contents to remove the deleted file
                 self.update_parent_contents(&path_str, None);
@@ -1008,8 +1036,8 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for CrdtFs<FS> {
                     return result;
                 }
 
-                let from_str = Self::normalize_crdt_path(from);
-                let to_str = Self::normalize_crdt_path(to);
+                let from_str = self.normalize_crdt_path(from);
+                let to_str = self.normalize_crdt_path(to);
 
                 // Find the doc_id for the file being moved
                 if let Some(doc_id) = self.workspace_crdt.find_by_path(from) {

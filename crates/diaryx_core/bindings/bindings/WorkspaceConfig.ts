@@ -10,7 +10,7 @@ import type { LinkFormat } from "./LinkFormat";
  */
 export type WorkspaceConfig = {
 /**
- * Format for `part_of` and `contents` links.
+ * Format for `part_of`, `contents`, and `attachments` links.
  * Defaults to MarkdownRoot if not specified.
  */
 link_format: LinkFormat,

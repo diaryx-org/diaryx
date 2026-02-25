@@ -3,6 +3,6 @@
 /**
  * The format to use when writing links to frontmatter.
  *
- * This controls how `part_of` and `contents` paths are serialized.
+ * This controls how frontmatter link paths are serialized.
  */
 export type LinkFormat = "markdown_root" | "markdown_relative" | "plain_relative" | "plain_canonical";

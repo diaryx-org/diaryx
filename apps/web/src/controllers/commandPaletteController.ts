@@ -202,19 +202,19 @@ export async function handleCreateChildUnderCurrent(
 
 /**
  * Start a share session.
- * Opens right sidebar and triggers session start.
+ * Opens left sidebar and triggers session start.
  */
 export async function handleStartShareSession(
-  setRightSidebarCollapsed: (collapsed: boolean) => void,
-  setRequestedTab: (tab: 'properties' | 'history' | 'share' | null) => void,
+  setLeftSidebarCollapsed: (collapsed: boolean) => void,
+  setRequestedTab: (tab: string | null) => void,
   setTriggerStartSession: (trigger: boolean) => void
 ): Promise<void> {
   if (shareSessionStore.mode !== 'idle') {
     toast.info('Session already active', { description: 'End current session first' });
     return;
   }
-  // Open right sidebar, navigate to share tab, and trigger session start
-  setRightSidebarCollapsed(false);
+  // Open left sidebar, navigate to share tab, and trigger session start
+  setLeftSidebarCollapsed(false);
   setRequestedTab('share');
   // Wait for sidebar to render before triggering session start
   await tick();

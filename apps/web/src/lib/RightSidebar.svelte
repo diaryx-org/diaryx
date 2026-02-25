@@ -42,8 +42,6 @@
   } from "@lucide/svelte";
   import type { Component } from "svelte";
   import VersionDiff from "./history/VersionDiff.svelte";
-  import GitHistoryPanel from "./history/GitHistoryPanel.svelte";
-  import ShareTab from "./share/ShareTab.svelte";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import * as Kbd from "$lib/components/ui/kbd";
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
@@ -71,20 +69,16 @@
     onPreviewAttachment?: (attachmentPath: string) => void;
     attachmentError?: string | null;
     onAttachmentErrorClear?: () => void;
+    // Navigation
+    onOpenEntry?: (path: string) => Promise<void>;
     // History props
     rustApi?: RustCrdtApi | null;
     onHistoryRestore?: () => void;
-    // Share props
-    onBeforeHost?: (audience: string | null) => Promise<void>;
-    onAddWorkspace?: () => void;
-    onOpenEntry?: (path: string) => Promise<void>;
-    // API for share tab
+    // API for properties tab
     api?: Api | null;
-    // External tab/session control
-    requestedTab?: "properties" | "history" | "share" | null;
+    // External tab control
+    requestedTab?: "properties" | "history" | null;
     onRequestedTabConsumed?: () => void;
-    triggerStartSession?: boolean;
-    onTriggerStartSessionConsumed?: () => void;
   }
 
   let {
@@ -100,16 +94,12 @@
     onPreviewAttachment,
     attachmentError = null,
     onAttachmentErrorClear,
+    onOpenEntry,
     rustApi = null,
     onHistoryRestore,
-    onBeforeHost,
-    onAddWorkspace,
-    onOpenEntry,
     api = null,
     requestedTab = null,
     onRequestedTabConsumed,
-    triggerStartSession = false,
-    onTriggerStartSessionConsumed,
   }: Props = $props();
 
   // Detect if current entry is the workspace root index
@@ -118,12 +108,8 @@
   );
 
   // Tab state
-  type TabType = "properties" | "history" | "share";
+  type TabType = "properties" | "history";
   let activeTab: TabType = $state("properties");
-
-  // History sub-tab state
-  type HistorySubTab = "changes" | "snapshots";
-  let historySubTab: HistorySubTab = $state("changes");
 
   // Handle external tab request
   $effect(() => {
@@ -252,9 +238,9 @@
     }
   }
 
-  // Load history when switching to history/changes tab or when entry changes
+  // Load history when switching to history tab or when entry changes
   $effect(() => {
-    if (activeTab === "history" && historySubTab === "changes" && entry && rustApi) {
+    if (activeTab === "history" && entry && rustApi) {
       loadHistory();
     }
   });
@@ -594,13 +580,6 @@
         onclick={() => activeTab = "history"}
       >
         History
-      </button>
-      <button
-        type="button"
-        class="px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === 'share' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-        onclick={() => activeTab = "share"}
-      >
-        Share
       </button>
     </div>
   </div>
@@ -1080,152 +1059,116 @@
         </div>
       {/if}
     {:else if activeTab === "history"}
-      <!-- History Tab -->
-      <!-- History Sub-Tab Control -->
-      <div class="px-3 pt-3 pb-1">
-        <div class="flex items-center gap-1 bg-muted rounded-md p-0.5">
-          <button
-            type="button"
-            class="flex-1 px-2 py-1 text-[11px] font-medium rounded transition-colors {historySubTab === 'changes' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-            onclick={() => historySubTab = "changes"}
-          >
-            Changes
-          </button>
-          <button
-            type="button"
-            class="flex-1 px-2 py-1 text-[11px] font-medium rounded transition-colors {historySubTab === 'snapshots' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-            onclick={() => historySubTab = "snapshots"}
-          >
-            Snapshots
-          </button>
-        </div>
-      </div>
+      <!-- History Tab (CRDT Changes) -->
+      {#if entry}
+        <div class="p-3">
+          <!-- History Header -->
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2 text-xs text-muted-foreground">
+              <History class="size-3.5" />
+              <span class="font-medium">Version History</span>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              class="size-6"
+              onclick={loadHistory}
+              disabled={historyLoading}
+              aria-label="Refresh history"
+            >
+              <RefreshCw class="size-3 {historyLoading ? 'animate-spin' : ''}" />
+            </Button>
+          </div>
 
-      {#if historySubTab === "changes"}
-        <!-- CRDT Changes Sub-Tab -->
-        {#if entry}
-          <div class="p-3">
-            <!-- History Header -->
-            <div class="flex items-center justify-between mb-3">
-              <div class="flex items-center gap-2 text-xs text-muted-foreground">
-                <History class="size-3.5" />
-                <span class="font-medium">Version History</span>
-              </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                class="size-6"
-                onclick={loadHistory}
-                disabled={historyLoading}
-                aria-label="Refresh history"
-              >
-                <RefreshCw class="size-3 {historyLoading ? 'animate-spin' : ''}" />
-              </Button>
+          {#if historyError}
+            <Alert.Root variant="destructive" class="mb-3 py-2">
+              <AlertCircle class="size-4" />
+              <Alert.Description class="text-xs">
+                {historyError}
+              </Alert.Description>
+            </Alert.Root>
+          {/if}
+
+          {#if historyLoading && history.length === 0}
+            <div class="flex items-center justify-center py-8">
+              <RefreshCw class="size-5 animate-spin text-muted-foreground" />
+            </div>
+          {:else if history.length === 0}
+            <div class="flex flex-col items-center justify-center py-8 text-center">
+              <History class="size-8 text-muted-foreground mb-2" />
+              <p class="text-sm text-muted-foreground">No history available</p>
+              <p class="text-xs text-muted-foreground mt-1">
+                Changes will appear here
+              </p>
+            </div>
+          {:else}
+            <!-- History Entries -->
+            <div class="space-y-1">
+              {#each history as historyEntry (historyEntry.update_id)}
+                {@const isSelected = selectedEntry?.update_id === historyEntry.update_id}
+                <div
+                  class="rounded-md cursor-pointer transition-colors {isSelected ? 'bg-accent' : 'hover:bg-muted'}"
+                  role="button"
+                  tabindex="0"
+                  onclick={() => selectHistoryEntry(historyEntry)}
+                  onkeydown={(e) => e.key === 'Enter' && selectHistoryEntry(historyEntry)}
+                >
+                  <div class="flex items-center justify-between p-2">
+                    <div class="flex-1 min-w-0">
+                      <div class="flex items-center gap-2">
+                        <span class="text-sm font-medium text-foreground">
+                          {formatRelativeTime(historyEntry.timestamp)}
+                        </span>
+                        <span class="text-[10px] px-1.5 py-0.5 rounded {getOriginClass(historyEntry.origin)}">
+                          {getOriginLabel(historyEntry)}
+                        </span>
+                      </div>
+                      <div class="text-[10px] text-muted-foreground mt-0.5">
+                        #{historyEntry.update_id.toString()}
+                      </div>
+                    </div>
+                    {#if isSelected}
+                      <Button
+                        variant="default"
+                        size="sm"
+                        class="h-6 text-xs px-2 shrink-0"
+                        onclick={(e) => { e.stopPropagation(); restoreVersion(historyEntry); }}
+                      >
+                        <RotateCcw class="size-3 mr-1" />
+                        Restore
+                      </Button>
+                    {/if}
+                  </div>
+                </div>
+              {/each}
             </div>
 
-            {#if historyError}
-              <Alert.Root variant="destructive" class="mb-3 py-2">
-                <AlertCircle class="size-4" />
-                <Alert.Description class="text-xs">
-                  {historyError}
-                </Alert.Description>
-              </Alert.Root>
-            {/if}
-
-            {#if historyLoading && history.length === 0}
-              <div class="flex items-center justify-center py-8">
-                <RefreshCw class="size-5 animate-spin text-muted-foreground" />
-              </div>
-            {:else if history.length === 0}
-              <div class="flex flex-col items-center justify-center py-8 text-center">
-                <History class="size-8 text-muted-foreground mb-2" />
-                <p class="text-sm text-muted-foreground">No history available</p>
-                <p class="text-xs text-muted-foreground mt-1">
-                  Changes will appear here
-                </p>
-              </div>
-            {:else}
-              <!-- History Entries -->
-              <div class="space-y-1">
-                {#each history as historyEntry (historyEntry.update_id)}
-                  {@const isSelected = selectedEntry?.update_id === historyEntry.update_id}
-                  <div
-                    class="rounded-md cursor-pointer transition-colors {isSelected ? 'bg-accent' : 'hover:bg-muted'}"
-                    role="button"
-                    tabindex="0"
-                    onclick={() => selectHistoryEntry(historyEntry)}
-                    onkeydown={(e) => e.key === 'Enter' && selectHistoryEntry(historyEntry)}
-                  >
-                    <div class="flex items-center justify-between p-2">
-                      <div class="flex-1 min-w-0">
-                        <div class="flex items-center gap-2">
-                          <span class="text-sm font-medium text-foreground">
-                            {formatRelativeTime(historyEntry.timestamp)}
-                          </span>
-                          <span class="text-[10px] px-1.5 py-0.5 rounded {getOriginClass(historyEntry.origin)}">
-                            {getOriginLabel(historyEntry)}
-                          </span>
-                        </div>
-                        <div class="text-[10px] text-muted-foreground mt-0.5">
-                          #{historyEntry.update_id.toString()}
-                        </div>
-                      </div>
-                      {#if isSelected}
-                        <Button
-                          variant="default"
-                          size="sm"
-                          class="h-6 text-xs px-2 shrink-0"
-                          onclick={(e) => { e.stopPropagation(); restoreVersion(historyEntry); }}
-                        >
-                          <RotateCcw class="size-3 mr-1" />
-                          Restore
-                        </Button>
-                      {/if}
-                    </div>
+            <!-- Version Diff -->
+            {#if selectedEntry && (diffs.length > 0 || loadingDiff)}
+              <div class="mt-4 pt-3 border-t border-sidebar-border">
+                <h4 class="text-xs font-medium text-muted-foreground mb-2">Changes in this version</h4>
+                {#if loadingDiff}
+                  <div class="flex items-center justify-center py-4">
+                    <RefreshCw class="size-4 animate-spin text-muted-foreground" />
                   </div>
-                {/each}
+                {:else}
+                  <VersionDiff {diffs} />
+                {/if}
               </div>
-
-              <!-- Version Diff -->
-              {#if selectedEntry && (diffs.length > 0 || loadingDiff)}
-                <div class="mt-4 pt-3 border-t border-sidebar-border">
-                  <h4 class="text-xs font-medium text-muted-foreground mb-2">Changes in this version</h4>
-                  {#if loadingDiff}
-                    <div class="flex items-center justify-center py-4">
-                      <RefreshCw class="size-4 animate-spin text-muted-foreground" />
-                    </div>
-                  {:else}
-                    <VersionDiff {diffs} />
-                  {/if}
-                </div>
-              {/if}
             {/if}
-          </div>
-        {:else}
-          <div
-            class="flex flex-col items-center justify-center py-8 px-4 text-center"
-          >
-            <History class="size-8 text-muted-foreground mb-2" />
-            <p class="text-sm text-muted-foreground">No entry selected</p>
-            <p class="text-xs text-muted-foreground mt-1">
-              Select an entry to view its history
-            </p>
-          </div>
-        {/if}
+          {/if}
+        </div>
       {:else}
-        <!-- Snapshots Sub-Tab (Git History) -->
-        <GitHistoryPanel />
+        <div
+          class="flex flex-col items-center justify-center py-8 px-4 text-center"
+        >
+          <History class="size-8 text-muted-foreground mb-2" />
+          <p class="text-sm text-muted-foreground">No entry selected</p>
+          <p class="text-xs text-muted-foreground mt-1">
+            Select an entry to view its history
+          </p>
+        </div>
       {/if}
-    {:else if activeTab === "share"}
-      <!-- Share Tab -->
-      <ShareTab
-        {onBeforeHost}
-        {onAddWorkspace}
-        {onOpenEntry}
-        {api}
-        triggerStart={triggerStartSession}
-        onTriggerStartConsumed={onTriggerStartSessionConsumed}
-      />
     {/if}
   </div>
 

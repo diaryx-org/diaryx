@@ -111,6 +111,26 @@ when a command opens another modal (for example, `New Entry`).
 does not continuously rewrite `pickerExpanded`. This avoids reactive update-loop
 errors that can leave overlapping dialogs/focus traps on screen.
 
+## Sidebar Layout
+
+The **left sidebar** (`LeftSidebar.svelte`) contains workspace-level concerns:
+- **Files** tab: workspace tree, problems panel
+- **Share** tab: live collaboration and publishing (`ShareTab.svelte`)
+- **Snapshots** tab: git snapshot history (`GitHistoryPanel.svelte`)
+
+The `WorkspaceSelector` and `AudienceFilter` sit above all tabs and are always visible.
+
+The **right sidebar** (`RightSidebar.svelte`) contains file-level concerns:
+- **Props** tab: frontmatter properties, attachments, audience, workspace config
+- **History** tab: CRDT change history for the current file
+
+Share and snapshots were moved from the right sidebar to the left sidebar because
+they are workspace-level operations, not file-level.
+
+Both `LiveCollaborationPanel` and `PublishingPanel` read the selected audience from
+`templateContextStore.previewAudience` (set by the `AudienceFilter` above the tabs)
+instead of having their own audience dropdowns.
+
 ## Sidebar Tree Performance
 
 `LeftSidebar.svelte` pre-groups validation errors by path for O(1) row lookups

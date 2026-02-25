@@ -3,7 +3,6 @@
   import { Input } from "$lib/components/ui/input";
   import * as Alert from "$lib/components/ui/alert";
   import { Switch } from "$lib/components/ui/switch";
-  import NativeSelect from "$lib/components/ui/native-select/native-select.svelte";
   import {
     Users,
     Link,
@@ -45,8 +44,8 @@
     restoreIapPurchases,
     getPlusProductId,
   } from "$lib/billing";
-  import type { Api } from "$lib/backend/api";
   import { toast } from "svelte-sonner";
+  import { getTemplateContextStore } from "$lib/stores/templateContextStore.svelte";
 
   // Props
   interface Props {
@@ -56,15 +55,15 @@
     onBeforeHost?: (audience: string | null) => Promise<void>;
     /** Called to open an entry by path */
     onOpenEntry?: (path: string) => Promise<void>;
-    /** API instance for loading audiences */
-    api: Api | null;
     /** When true, automatically starts a hosting session */
     triggerStart?: boolean;
     /** Called after triggerStart is consumed */
     onTriggerStartConsumed?: () => void;
   }
 
-  let { onSessionStart, onSessionEnd, onBeforeHost, onOpenEntry, api, triggerStart = false, onTriggerStartConsumed }: Props = $props();
+  let { onSessionStart, onSessionEnd, onBeforeHost, onOpenEntry, triggerStart = false, onTriggerStartConsumed }: Props = $props();
+
+  const templateContextStore = getTemplateContextStore();
 
   // Local state
   let joinCodeInput = $state("");
@@ -77,8 +76,6 @@
 
   // Pre-session config
   let preSessionReadOnly = $state(false);
-  let selectedAudience = $state("all");
-  let audiences = $state<string[]>([]);
   let showAdvanced = $state(false);
   let customServerUrl = $state(getShareServerUrl());
 
@@ -99,11 +96,6 @@
     setShareServerUrl(trimmed || null);
   });
 
-  // Load available audiences when component mounts or tree changes
-  $effect(() => {
-    loadAudiences();
-  });
-
   // Handle external trigger to start session
   $effect(() => {
     if (triggerStart && mode === 'idle' && !isCreating) {
@@ -111,21 +103,6 @@
       onTriggerStartConsumed?.();
     }
   });
-
-  async function loadAudiences() {
-    if (!api || !workspaceStore.tree) {
-      audiences = [];
-      return;
-    }
-
-    try {
-      const available = await api.getAvailableAudiences(workspaceStore.tree.path);
-      audiences = available;
-    } catch (e) {
-      console.warn("[ShareTab] Failed to load audiences:", e);
-      audiences = [];
-    }
-  }
 
   // Resolve the current server workspace ID used by session APIs.
   // Share session creation must use a workspace ID that already exists on the server.
@@ -136,7 +113,7 @@
   // Handle creating a session
   async function handleCreateSession() {
     const wsId = getServerWorkspaceId();
-    const audienceToUse = selectedAudience === "all" ? null : selectedAudience;
+    const audienceToUse = templateContextStore.previewAudience;
 
     if (!wsId) {
       const message = "No synced workspace selected for sharing";
@@ -266,18 +243,10 @@
           <Switch bind:checked={preSessionReadOnly} />
         </div>
 
-        <!-- Audience picker (only show if audiences exist) -->
-        {#if audiences.length > 0}
-          <div class="space-y-1.5">
-            <label for="share-audience-select" class="text-xs font-medium text-muted-foreground">
-              Share audience
-            </label>
-            <NativeSelect bind:value={selectedAudience} class="w-full" id="share-audience-select">
-              <option value="all">All files (no filter)</option>
-              {#each audiences as audience}
-                <option value={audience}>{audience}</option>
-              {/each}
-            </NativeSelect>
+        <!-- Audience context (from left sidebar AudienceFilter) -->
+        {#if templateContextStore.previewAudience}
+          <div class="text-xs text-muted-foreground">
+            Audience: <span class="font-medium text-foreground">{templateContextStore.previewAudience}</span>
           </div>
         {/if}
       </div>
@@ -498,7 +467,7 @@
       {#if sessionAudience}
         <div class="flex items-center gap-2 px-3 py-2 rounded-md bg-secondary/50 border border-border">
           <span class="text-xs text-muted-foreground">Sharing:</span>
-          <span class="text-xs font-medium">"{sessionAudience}" audience only</span>
+          <span class="text-xs font-medium">&ldquo;{sessionAudience}&rdquo; audience only</span>
         </div>
       {/if}
 

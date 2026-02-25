@@ -12,12 +12,16 @@ exclude:
 
 # Share
 
-Share sidebar components for real-time collaboration and static-site publishing.
+Share components for real-time collaboration and static-site publishing. These live in the **left sidebar** Share tab (workspace-level concern).
+
+## Audience Selection
+
+Both `LiveCollaborationPanel` and `PublishingPanel` read the audience from the left sidebar's `AudienceFilter` via `templateContextStore.previewAudience` instead of maintaining their own audience dropdowns. This centralises audience selection to one place.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
 | `ShareTab.svelte` | Share top-level sub-tab shell (`Live Collaboration` and `Publishing`) |
-| `LiveCollaborationPanel.svelte` | Existing share-session create/join/host UI (host creation now resolves the active authenticated server workspace ID and never generates ad-hoc IDs) |
-| `PublishingPanel.svelte` | Site publishing setup, publish-now actions, and access-token CRUD; blocks publish when sync setup is not enabled and links directly to Sync Setup wizard |
+| `LiveCollaborationPanel.svelte` | Share-session create/join/host UI; uses `templateContextStore.previewAudience` for audience filtering |
+| `PublishingPanel.svelte` | Site publishing setup, publish-now actions, and access-token CRUD; uses `templateContextStore.previewAudience` for token audience |

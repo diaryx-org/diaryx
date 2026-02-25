@@ -147,8 +147,11 @@
   let exportPath = $derived(uiStore.exportPath);
   let editorRef = $derived(uiStore.editorRef);
 
-  // Right sidebar tab/session control
-  let requestedSidebarTab: "properties" | "history" | "share" | null = $state(null);
+  // Right sidebar tab control
+  let requestedSidebarTab: "properties" | "history" | null = $state(null);
+
+  // Left sidebar tab/session control (share + snapshots are workspace-level)
+  let requestedLeftTab: "files" | "share" | "snapshots" | null = $state(null);
   let triggerStartSession = $state(false);
 
   // Add workspace dialog
@@ -1625,8 +1628,8 @@
 
   async function handleStartShareSession() {
     await startShareSessionHandler(
-      (collapsed) => uiStore.setRightSidebarCollapsed(collapsed),
-      (tab) => { requestedSidebarTab = tab; },
+      (collapsed) => uiStore.setLeftSidebarCollapsed(collapsed),
+      (tab) => { requestedLeftTab = tab as "files" | "share" | "snapshots"; },
       (trigger) => { triggerStartSession = trigger; }
     );
   }
@@ -2084,6 +2087,12 @@
     onWorkspaceSwitchComplete={handleWorkspaceSwitchComplete}
     onInitializeWorkspace={handleInitializeWorkspace}
     onSetAudience={handleSetAudience}
+    onBeforeHost={async (audience) => await handlePopulateCrdtBeforeHost(audience)}
+    onOpenEntry2={async (path) => await openEntry(path)}
+    requestedTab={requestedLeftTab}
+    onRequestedTabConsumed={() => (requestedLeftTab = null)}
+    {triggerStartSession}
+    onTriggerStartSessionConsumed={() => (triggerStartSession = false)}
   />
 
   <!-- Hidden file input for attachments (accepts all file types) -->
@@ -2161,6 +2170,7 @@
     onPreviewAttachment={handlePreviewAttachment}
     {attachmentError}
     onAttachmentErrorClear={() => (attachmentError = null)}
+    onOpenEntry={async (path) => await openEntry(path)}
     {rustApi}
     onHistoryRestore={async () => {
       // Refresh current entry after restore
@@ -2168,14 +2178,9 @@
         await openEntry(currentEntry.path);
       }
     }}
-    onBeforeHost={async (audience) => await handlePopulateCrdtBeforeHost(audience)}
-    onAddWorkspace={() => { showAddWorkspace = true; }}
-    onOpenEntry={async (path) => await openEntry(path)}
     {api}
     requestedTab={requestedSidebarTab}
     onRequestedTabConsumed={() => (requestedSidebarTab = null)}
-    {triggerStartSession}
-    onTriggerStartSessionConsumed={() => (triggerStartSession = false)}
   />
 </div>
 {/if}

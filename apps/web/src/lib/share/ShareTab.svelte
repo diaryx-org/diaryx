@@ -54,7 +54,6 @@
     {onSessionEnd}
     {onBeforeHost}
     {onOpenEntry}
-    {api}
     {triggerStart}
     {onTriggerStartConsumed}
   />

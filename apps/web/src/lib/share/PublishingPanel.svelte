@@ -5,6 +5,7 @@
   import { Switch } from '$lib/components/ui/switch';
   import NativeSelect from '$lib/components/ui/native-select/native-select.svelte';
   import * as Alert from '$lib/components/ui/alert';
+  import { getTemplateContextStore } from '$lib/stores/templateContextStore.svelte';
   import {
     AlertCircle,
     Check,
@@ -17,7 +18,6 @@
     Upload,
   } from '@lucide/svelte';
   import { collaborationStore } from '@/models/stores/collaborationStore.svelte';
-  import { workspaceStore } from '@/models/stores/workspaceStore.svelte';
   import { sitePublishingStore } from '@/models/stores/sitePublishingStore.svelte';
   import { showError, showInfo, showSuccess } from '@/models/services/toastService';
   import {
@@ -42,6 +42,7 @@
 
   let { onAddWorkspace, api }: Props = $props();
 
+  const templateContextStore = getTemplateContextStore();
   const billingProvider = getBillingProvider();
   let isUpgrading = $state(false);
   let upgradeError = $state<string | null>(null);
@@ -74,9 +75,7 @@
   let slugError = $state<string | null>(null);
   let customDomainInput = $state('');
 
-  let tokenAudience = $state('public');
   let tokenExpiresPreset = $state('7d');
-  let availableAudiences = $state<string[]>([]);
 
   let copiedAccessUrl = $state(false);
   let copiedTokenId = $state<string | null>(null);
@@ -104,23 +103,6 @@
     initializedWorkspaceId = defaultWorkspaceId;
     sitePublishingStore.load(defaultWorkspaceId);
   });
-
-  // Load available audiences when site is configured
-  $effect(() => {
-    if (isConfigured && api && workspaceStore.tree) {
-      loadAudiences();
-    }
-  });
-
-  async function loadAudiences() {
-    if (!api || !workspaceStore.tree) return;
-    try {
-      availableAudiences = await api.getAvailableAudiences(workspaceStore.tree.path);
-    } catch (e) {
-      console.warn('[PublishingPanel] Failed to load audiences:', e);
-      availableAudiences = [];
-    }
-  }
 
   function formatUnixTimestamp(value: number | null | undefined): string {
     if (!value) return 'Never';
@@ -183,11 +165,7 @@
   async function handleCreateToken() {
     if (!site) return;
 
-    const audience = tokenAudience.trim().toLowerCase();
-    if (!audience) {
-      showError('Audience is required.', 'Publishing');
-      return;
-    }
+    const audience = templateContextStore.previewAudience ?? 'public';
 
     const expiresIn = tokenExpiresPreset === 'none' ? null : tokenExpiresPreset;
     const created = await sitePublishingStore.createToken({
@@ -585,14 +563,8 @@
         </div>
 
         <div class="space-y-2">
-          <div class="space-y-1.5">
-            <label for="token-audience" class="text-xs font-medium text-muted-foreground">Audience</label>
-            <NativeSelect id="token-audience" bind:value={tokenAudience} class="w-full h-8 text-xs">
-              <option value="public">public</option>
-              {#each availableAudiences.filter(a => a !== 'public') as aud}
-                <option value={aud}>{aud}</option>
-              {/each}
-            </NativeSelect>
+          <div class="text-xs text-muted-foreground">
+            Creating token for: <span class="font-medium text-foreground">{templateContextStore.previewAudience ?? 'public'}</span>
           </div>
 
           <div class="space-y-1.5">

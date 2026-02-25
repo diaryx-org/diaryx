@@ -41,6 +41,9 @@
   import { getAuthState } from "./auth";
   import WorkspaceSelector from "./WorkspaceSelector.svelte";
   import AudienceFilter from "./components/AudienceFilter.svelte";
+  import ShareTab from "./share/ShareTab.svelte";
+  import GitHistoryPanel from "./history/GitHistoryPanel.svelte";
+  import { Share2, History, FolderTree } from "@lucide/svelte";
 
   interface Props {
     tree: TreeNode | null;
@@ -75,6 +78,13 @@
     onWorkspaceSwitchComplete?: () => void;
     onInitializeWorkspace?: () => void;
     onSetAudience?: (path: string) => void;
+    // Share props (workspace-level)
+    onBeforeHost?: (audience: string | null) => Promise<void>;
+    onOpenEntry2?: (path: string) => Promise<void>;
+    requestedTab?: "files" | "share" | "snapshots" | null;
+    onRequestedTabConsumed?: () => void;
+    triggerStartSession?: boolean;
+    onTriggerStartSessionConsumed?: () => void;
   }
 
   let {
@@ -110,6 +120,12 @@
     onWorkspaceSwitchComplete,
     onInitializeWorkspace,
     onSetAudience,
+    onBeforeHost,
+    onOpenEntry2,
+    requestedTab = null,
+    onRequestedTabConsumed,
+    triggerStartSession = false,
+    onTriggerStartSessionConsumed,
   }: Props = $props();
 
   // Platform detection for keyboard shortcut display
@@ -130,6 +146,18 @@
 
   // Auth state for profile icon
   const authState = $derived(getAuthState());
+
+  // Tab state for left sidebar
+  type LeftTab = "files" | "share" | "snapshots";
+  let leftTab: LeftTab = $state("files");
+
+  // Handle external tab request
+  $effect(() => {
+    if (requestedTab && requestedTab !== leftTab) {
+      leftTab = requestedTab;
+      onRequestedTabConsumed?.();
+    }
+  });
 
   // Track which nodes are currently loading children
   let loadingNodes = $state(new Set<string>());
@@ -1087,38 +1115,81 @@
     </div>
   {/if}
 
+  <!-- Tab Bar -->
+  <div class="px-3 pt-2 pb-1 shrink-0">
+    <div class="flex items-center gap-1 bg-muted rounded-md p-0.5">
+      <button
+        type="button"
+        class="flex-1 flex items-center justify-center gap-1.5 px-2 py-1 text-[11px] font-medium rounded transition-colors {leftTab === 'files' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+        onclick={() => (leftTab = 'files')}
+      >
+        <FolderTree class="size-3" />
+        Files
+      </button>
+      <button
+        type="button"
+        class="flex-1 flex items-center justify-center gap-1.5 px-2 py-1 text-[11px] font-medium rounded transition-colors {leftTab === 'share' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+        onclick={() => (leftTab = 'share')}
+      >
+        <Share2 class="size-3" />
+        Share
+      </button>
+      <button
+        type="button"
+        class="flex-1 flex items-center justify-center gap-1.5 px-2 py-1 text-[11px] font-medium rounded transition-colors {leftTab === 'snapshots' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+        onclick={() => (leftTab = 'snapshots')}
+      >
+        <History class="size-3" />
+        Snapshots
+      </button>
+    </div>
+  </div>
+
   <!-- Content Area -->
-  <div class="flex-1 overflow-y-auto px-3 pb-3" bind:this={scrollContainer}>
-    {#if !tree && isLoading}
-      <!-- Loading State - only shown during initial tree load -->
-      <div class="flex items-center justify-center py-8">
-        <Loader2 class="size-6 animate-spin text-muted-foreground" />
-      </div>
-    {:else if tree}
-      {#if tree.path === '.' && tree.children.length === 0}
-        <!-- Empty Workspace State -->
-        <div class="flex flex-col items-center justify-center py-8 text-center gap-3">
-          <Folder class="size-8 text-muted-foreground" />
-          <p class="text-sm text-muted-foreground">This workspace is empty</p>
-          {#if onInitializeWorkspace}
-            <Button variant="outline" size="sm" onclick={onInitializeWorkspace}>
-              <Plus class="size-4 mr-1.5" />
-              Create root index
-            </Button>
-          {/if}
+  <div class="flex-1 overflow-y-auto {leftTab === 'files' ? 'px-3 pb-3' : ''}" bind:this={scrollContainer}>
+    {#if leftTab === "files"}
+      {#if !tree && isLoading}
+        <!-- Loading State - only shown during initial tree load -->
+        <div class="flex items-center justify-center py-8">
+          <Loader2 class="size-6 animate-spin text-muted-foreground" />
         </div>
+      {:else if tree}
+        {#if tree.path === '.' && tree.children.length === 0}
+          <!-- Empty Workspace State -->
+          <div class="flex flex-col items-center justify-center py-8 text-center gap-3">
+            <Folder class="size-8 text-muted-foreground" />
+            <p class="text-sm text-muted-foreground">This workspace is empty</p>
+            {#if onInitializeWorkspace}
+              <Button variant="outline" size="sm" onclick={onInitializeWorkspace}>
+                <Plus class="size-4 mr-1.5" />
+                Create root index
+              </Button>
+            {/if}
+          </div>
+        {:else}
+          <!-- Tree View -->
+          <div class="space-y-0.5" role="tree" aria-label="Workspace entries">
+            {@render treeNode(tree, 0)}
+          </div>
+        {/if}
       {:else}
-        <!-- Tree View -->
-        <div class="space-y-0.5" role="tree" aria-label="Workspace entries">
-          {@render treeNode(tree, 0)}
+        <!-- Empty State -->
+        <div class="flex flex-col items-center justify-center py-8 text-center">
+          <Folder class="size-8 text-muted-foreground mb-2" />
+          <p class="text-sm text-muted-foreground">No workspace found</p>
         </div>
       {/if}
-    {:else}
-      <!-- Empty State -->
-      <div class="flex flex-col items-center justify-center py-8 text-center">
-        <Folder class="size-8 text-muted-foreground mb-2" />
-        <p class="text-sm text-muted-foreground">No workspace found</p>
-      </div>
+    {:else if leftTab === "share"}
+      <ShareTab
+        {onBeforeHost}
+        {onAddWorkspace}
+        onOpenEntry={onOpenEntry2}
+        {api}
+        triggerStart={triggerStartSession}
+        onTriggerStartConsumed={onTriggerStartSessionConsumed}
+      />
+    {:else if leftTab === "snapshots"}
+      <GitHistoryPanel />
     {/if}
   </div>
 

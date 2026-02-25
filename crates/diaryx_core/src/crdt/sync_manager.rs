@@ -381,7 +381,7 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
                 .iter()
                 .filter_map(|path| {
                     let meta = self.workspace_crdt.get_file(path);
-                    meta.and_then(|m| Some((path.clone(), m)))
+                    meta.map(|m| (path.clone(), m))
                 })
                 .collect();
 
@@ -699,20 +699,20 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
                     );
 
                     // Generate SyncStep2 response using body_doc directly
-                    if let Ok(diff) = body_doc.encode_diff(remote_sv) {
-                        if diff.len() > 2 {
-                            // More than just empty update header
-                            let step2 = SyncMessage::SyncStep2(diff).encode();
-                            log::trace!(
-                                "[SyncManager] handle_body_message: doc='{}', sending SyncStep2 response, {} bytes",
-                                doc_name,
-                                step2.len()
-                            );
-                            if let Some(ref mut existing) = response {
-                                existing.extend_from_slice(&step2);
-                            } else {
-                                response = Some(step2);
-                            }
+                    if let Ok(diff) = body_doc.encode_diff(remote_sv)
+                        && diff.len() > 2
+                    {
+                        // More than just empty update header
+                        let step2 = SyncMessage::SyncStep2(diff).encode();
+                        log::trace!(
+                            "[SyncManager] handle_body_message: doc='{}', sending SyncStep2 response, {} bytes",
+                            doc_name,
+                            step2.len()
+                        );
+                        if let Some(ref mut existing) = response {
+                            existing.extend_from_slice(&step2);
+                        } else {
+                            response = Some(step2);
                         }
                     }
                 }

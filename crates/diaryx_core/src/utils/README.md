@@ -36,3 +36,10 @@ Behavior:
 This makes sync keys stable across path aliases (for example `README.md`,
 `./README.md`, and `/README.md`) and avoids duplicate or missed sync state for
 the same logical file.
+
+`path.rs` also includes
+`strip_workspace_root_prefix(path: &str, workspace_root: &Path) -> Option<String>`.
+This helper strips workspace-root prefixes from absolute paths and from the
+corrupted absolute form where the leading slash is missing (for example
+`Users/alice/workspace/README.md`), returning workspace-relative paths when a
+prefix match is found.

@@ -72,6 +72,7 @@ import {
   getWorkspaceStats,
   setBackendApi,
   setBackend,
+  getCanonicalPathForSync,
   startSessionSync,
   stopSessionSync,
   getSessionCode,
@@ -430,6 +431,10 @@ describe('workspaceCrdtBridge', () => {
         message: new Uint8Array([4, 5]),
       })
 
+      // SendSyncMessage handling resolves canonical paths asynchronously.
+      await Promise.resolve()
+      await Promise.resolve()
+
       expect(discardQueuedLocalSyncUpdates('test')).toBe(2)
       expect(discardQueuedLocalSyncUpdates('test-empty')).toBe(0)
 
@@ -469,6 +474,96 @@ describe('workspaceCrdtBridge', () => {
       // Queued update should have been flushed through the transport
       expect(transportMocks.queueLocalUpdate).toHaveBeenCalled()
 
+      cleanup()
+    })
+
+    it('should canonicalize absolute paths using workspace root fallback', async () => {
+      await initWorkspace({
+        rustApi: mockRustApi as any,
+      })
+
+      const backend = {
+        getWorkspacePath: vi.fn(() => '/Users/test/workspace'),
+        execute: vi.fn().mockResolvedValue({
+          type: 'String',
+          data: 'Users/test/workspace/notes/file.md',
+        }),
+      }
+      setBackend(backend as any)
+
+      const canonical = await getCanonicalPathForSync(
+        '/Users/test/workspace/notes/file.md'
+      )
+
+      expect(canonical).toBe('notes/file.md')
+    })
+
+    it('should skip backend canonical-path command for native backends', async () => {
+      await initWorkspace({
+        rustApi: mockRustApi as any,
+      })
+
+      const backend = {
+        hasNativeSync: vi.fn(() => true),
+        getWorkspacePath: vi.fn(() => '/Users/test/workspace'),
+        execute: vi.fn(),
+      }
+      setBackend(backend as any)
+
+      const canonical = await getCanonicalPathForSync(
+        '/Users/test/workspace/notes/file.md'
+      )
+
+      expect(canonical).toBe('notes/file.md')
+      expect(backend.execute).not.toHaveBeenCalled()
+    })
+
+    it('should dedupe repeated body change events with identical content', async () => {
+      await initWorkspace({
+        rustApi: mockRustApi as any,
+      })
+
+      let eventHandler: ((event: any) => void) | null = null
+      const backend = {
+        onFileSystemEvent: vi.fn((cb: (event: any) => void) => {
+          eventHandler = cb
+          return 54
+        }),
+        offFileSystemEvent: vi.fn(),
+      }
+
+      const cleanup = initEventSubscription(backend as any)
+      const bodyCb = vi.fn()
+      const unsubBody = onBodyChange(bodyCb)
+
+      eventHandler!({
+        type: 'ContentsChanged',
+        path: 'note.md',
+        body: 'same body',
+      })
+      eventHandler!({
+        type: 'ContentsChanged',
+        path: 'note.md',
+        body: 'same body',
+      })
+
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(bodyCb).toHaveBeenCalledTimes(1)
+
+      eventHandler!({
+        type: 'ContentsChanged',
+        path: 'note.md',
+        body: 'new body',
+      })
+
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(bodyCb).toHaveBeenCalledTimes(2)
+
+      unsubBody()
       cleanup()
     })
   })

@@ -204,6 +204,7 @@ impl<FS: AsyncFileSystem + 'static, C: TransportConnector + 'static> SyncClient<
         {
             let outgoing_tx = outgoing_tx.clone();
             let ws_id = self.config.workspace_id.clone();
+            let sync_manager = Arc::clone(&self.sync_manager);
             self.sync_manager.set_event_callback(Arc::new(move |event| {
                 if let FileSystemEvent::SendSyncMessage {
                     doc_name,
@@ -213,7 +214,15 @@ impl<FS: AsyncFileSystem + 'static, C: TransportConnector + 'static> SyncClient<
                 } = event
                 {
                     let doc_id = if *is_body {
-                        format_body_doc_id(&ws_id, doc_name)
+                        let canonical = sync_manager.get_canonical_path(doc_name);
+                        if canonical.is_empty() {
+                            log::warn!(
+                                "[SyncClient] Dropping body sync message with empty canonical path (raw='{}')",
+                                doc_name
+                            );
+                            return;
+                        }
+                        format_body_doc_id(&ws_id, &canonical)
                     } else {
                         format_workspace_doc_id(&ws_id)
                     };

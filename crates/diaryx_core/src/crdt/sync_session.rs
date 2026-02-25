@@ -88,7 +88,7 @@ pub enum IncomingEvent {
         /// The raw sync message bytes.
         data: Vec<u8>,
     },
-    /// Request body sync for specific files (lazy sync on demand).
+    /// Request body sync for specific files.
     SyncBodyFiles {
         /// File paths to sync body docs for.
         file_paths: Vec<String>,
@@ -469,6 +469,8 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
             return Vec::new();
         }
 
+        self.sync_manager.add_focused_files(file_paths);
+
         log::info!(
             "[SyncSession] SyncBodyFiles: {} files requested",
             file_paths.len()
@@ -601,6 +603,14 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
                             }));
                         }
 
+                        // Keep body bootstrap aligned with the latest workspace metadata set.
+                        // This picks up newly created/renamed files without waiting for explicit
+                        // on-demand requests from the UI layer.
+                        let all_paths = self.sync_manager.get_all_file_paths();
+                        let mut body_bootstrap =
+                            self.queue_body_sync_step1_for_paths(&all_paths, false, false);
+                        actions.append(&mut body_bootstrap);
+
                         let mut heal_actions = self.audit_and_reconcile_integrity().await;
                         actions.append(&mut heal_actions);
 
@@ -704,10 +714,7 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
     // State Transitions
     // =========================================================================
 
-    /// Transition to Active state: emit Syncing, set metadata ready.
-    ///
-    /// Body sync is NOT started eagerly — it happens on demand when the client
-    /// calls `SyncBodyFiles` for the files it actually needs.
+    /// Transition to Active state: emit Syncing, set metadata ready, and bootstrap body sync.
     async fn transition_to_active(&self) -> Vec<SessionAction> {
         let mut actions = Vec::new();
 
@@ -723,9 +730,14 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
         // Compatibility fallback for servers that don't emit explicit sync_complete.
         self.set_metadata_ready();
 
+        let all_paths = self.sync_manager.get_all_file_paths();
+        let mut body_bootstrap =
+            self.queue_body_sync_step1_for_paths(&all_paths, true, !all_paths.is_empty());
+        actions.append(&mut body_bootstrap);
+
         log::info!(
-            "[SyncSession] transition_to_active: {} file paths in workspace (body sync is lazy)",
-            self.sync_manager.get_all_file_paths().len()
+            "[SyncSession] transition_to_active: {} file paths in workspace (body bootstrap queued)",
+            all_paths.len()
         );
 
         actions
@@ -822,7 +834,7 @@ mod tests {
     }
 
     #[test]
-    fn test_transition_to_active_does_not_send_body_sync() {
+    fn test_transition_to_active_bootstraps_body_sync_for_workspace_files() {
         let (session, _manager, workspace) = create_test_session("ws-join", false);
 
         workspace
@@ -840,17 +852,13 @@ mod tests {
             framed_workspace_message("ws-join", SyncMessage::SyncStep1(vec![])),
         )));
 
-        // Body sync is lazy — no body SyncStep1 should be sent on transition
-        let targets = body_sync_step1_targets(&actions);
-        assert!(
-            targets.is_empty(),
-            "Expected no body SyncStep1, got {:?}",
-            targets
-        );
+        let mut targets = body_sync_step1_targets(&actions);
+        targets.sort();
+        assert_eq!(targets, vec!["README.md", "notes/new-entry.md"]);
     }
 
     #[test]
-    fn test_sync_body_files_dedupes_aliases_and_skips_synced() {
+    fn test_sync_body_files_skips_docs_already_pending_from_bootstrap() {
         let (session, _manager, workspace) = create_test_session("ws-body", false);
 
         workspace
@@ -884,19 +892,12 @@ mod tests {
             ],
         }));
 
-        let mut targets = body_sync_step1_targets(&actions);
-        targets.sort();
-        assert_eq!(targets, vec!["README.md", "notes/new-entry.md"]);
-
-        // Requesting the same files again should produce no new targets (already pending)
-        let actions2 = block_on(session.process(IncomingEvent::SyncBodyFiles {
-            file_paths: vec!["README.md".to_string(), "notes/new-entry.md".to_string()],
-        }));
-        let targets2 = body_sync_step1_targets(&actions2);
+        // Eager bootstrap already queued these docs, so there should be no duplicates.
+        let targets = body_sync_step1_targets(&actions);
         assert!(
-            targets2.is_empty(),
+            targets.is_empty(),
             "Expected no duplicates, got {:?}",
-            targets2
+            targets
         );
     }
 
@@ -917,7 +918,7 @@ mod tests {
     }
 
     #[test]
-    fn test_workspace_update_does_not_eagerly_sync_bodies() {
+    fn test_workspace_update_bootstraps_new_body_docs() {
         let (session, _manager, _workspace) = create_test_session("ws-rename", false);
 
         // Enter active sync state.
@@ -940,14 +941,10 @@ mod tests {
         let actions = block_on(session.process(IncomingEvent::BinaryMessage(
             framed_workspace_message("ws-rename", SyncMessage::Update(update)),
         )));
-        let targets = body_sync_step1_targets(&actions);
+        let mut targets = body_sync_step1_targets(&actions);
+        targets.sort();
 
-        // No eager body sync — must be requested via SyncBodyFiles
-        assert!(
-            targets.is_empty(),
-            "Expected no body SyncStep1, got {:?}",
-            targets
-        );
+        assert_eq!(targets, vec!["renamed.md"]);
     }
 
     #[test]

@@ -78,10 +78,12 @@
   import { toast } from "svelte-sonner";
   import { untrack } from "svelte";
   import { getBackend, createApi } from "./backend";
-  import { isTauri } from "$lib/backend/interface";
+  import { isTauri, type Backend } from "$lib/backend/interface";
+  import type { Api } from "$lib/backend/api";
   import {
     buildWorkspaceSnapshotUploadBlob,
     findWorkspaceRootPath,
+    resolveWorkspaceDir,
   } from "$lib/settings/workspaceSnapshotUpload";
   import {
     isStorageTypeSupported,
@@ -332,6 +334,7 @@
     importProgress = 0;
     progressDetail = null;
     syncStatusText = null;
+    workspacePath = '';
     importZipFile = null;
     selectedFolderPath = null;
     selectedFolderHandle = null;
@@ -805,33 +808,88 @@
     return api.validateWorkspaceName(newWorkspaceName, localNames, serverNames);
   }
 
-  async function ensureRootIndexForCurrentWorkspace(workspaceName: string): Promise<void> {
+  async function resolveWorkspaceDirectoryForCreate(workspaceName: string): Promise<string | undefined> {
+    if (!isTauri()) return undefined;
+
+    const configuredPath = workspacePath.trim();
+    if (configuredPath) {
+      return configuredPath;
+    }
+
+    const trimmedName = workspaceName.trim();
+    if (!trimmedName) return undefined;
+
+    try {
+      const backend = await getBackend();
+      const appPaths = backend.getAppPaths?.();
+      const docDir = typeof appPaths?.document_dir === 'string' ? appPaths.document_dir : '';
+      if (docDir) {
+        return `${docDir}/${trimmedName}`;
+      }
+    } catch (e) {
+      console.warn("[AddWorkspace] Failed to resolve default workspace path:", e);
+    }
+
+    return trimmedName;
+  }
+
+  async function resolveWorkspaceRootPathForUpload(
+    api: Api,
+    backend: Backend,
+    localWorkspaceId?: string,
+  ): Promise<string | null> {
+    if (localWorkspaceId) {
+      const localWorkspace = getLocalWorkspace(localWorkspaceId);
+      const explicitPath = localWorkspace?.path?.trim();
+      if (explicitPath) {
+        try {
+          return await api.findRootIndex(explicitPath);
+        } catch {
+          return null;
+        }
+      }
+    }
+
+    return findWorkspaceRootPath(api, backend);
+  }
+
+  async function ensureRootIndexForCurrentWorkspace(
+    workspaceName: string,
+    workspaceDirOverride?: string,
+  ): Promise<string | null> {
     const backend = await getBackend();
     const api = createApi(backend);
-    const existingRoot = await findWorkspaceRootPath(api, backend);
-    if (existingRoot) {
-      return;
+    const workspaceDir = workspaceDirOverride?.trim() || resolveWorkspaceDir(backend);
+
+    try {
+      return await api.findRootIndex(workspaceDir);
+    } catch {
+      // Continue below and create a root index.
     }
-    // Use the actual workspace directory from the backend, not "." which
-    // resolves to the process CWD on Tauri (wrong directory).
-    const workspaceDir = backend.getWorkspacePath()
-      .replace(/\/index\.md$/, '')
-      .replace(/\/README\.md$/, '');
+
     try {
       await api.createWorkspace(workspaceDir, workspaceName);
     } catch (e) {
       // If the workspace already has a root index, that's fine
-      if (e instanceof Error && e.message.includes('already exists')) return;
-      throw e;
+      if (!(e instanceof Error && e.message.includes('already exists'))) {
+        throw e;
+      }
+    }
+
+    try {
+      return await api.findRootIndex(workspaceDir);
+    } catch {
+      return null;
     }
   }
 
   async function handleCreateLocalWorkspace() {
     const wsName = await resolveCreationWorkspaceName(false);
-    const localWs = createLocalWorkspace(wsName, undefined, isTauri() && workspacePath ? workspacePath : undefined);
+    const wsPath = await resolveWorkspaceDirectoryForCreate(wsName);
+    const localWs = createLocalWorkspace(wsName, undefined, wsPath);
 
     await switchWorkspace(localWs.id, localWs.name);
-    await ensureRootIndexForCurrentWorkspace(localWs.name);
+    await ensureRootIndexForCurrentWorkspace(localWs.name, localWs.path);
 
     toast.success("Local workspace created", {
       description: `"${localWs.name}" is ready on this device.`,
@@ -846,19 +904,20 @@
    */
   async function handleOpenFolder() {
     const wsName = await resolveCreationWorkspaceName(false);
+    let localWs: ReturnType<typeof createLocalWorkspace>;
 
     if (isTauri()) {
       if (!selectedFolderPath) throw new Error("No folder selected");
-      const localWs = createLocalWorkspace(wsName, undefined, selectedFolderPath);
+      localWs = createLocalWorkspace(wsName, undefined, selectedFolderPath);
       await switchWorkspace(localWs.id, localWs.name);
     } else {
       if (!selectedFolderHandle) throw new Error("No folder selected");
-      const localWs = createLocalWorkspace(wsName, 'filesystem-access');
+      localWs = createLocalWorkspace(wsName, 'filesystem-access');
       await storeWorkspaceFileSystemHandle(localWs.id, selectedFolderHandle);
       await switchWorkspace(localWs.id, localWs.name);
     }
 
-    await ensureRootIndexForCurrentWorkspace(wsName);
+    await ensureRootIndexForCurrentWorkspace(wsName, localWs.path);
 
     // Re-initialize CRDT from the filesystem now that the root index exists.
     // switchWorkspace's initializeWorkspaceCrdt ran before ensureRootIndex created
@@ -887,19 +946,20 @@
    */
   async function handleOpenFolderRemote() {
     const wsName = await resolveCreationWorkspaceName(true);
+    let localWs: ReturnType<typeof createLocalWorkspace>;
 
     if (isTauri()) {
       if (!selectedFolderPath) throw new Error("No folder selected");
-      const localWs = createLocalWorkspace(wsName, undefined, selectedFolderPath);
+      localWs = createLocalWorkspace(wsName, undefined, selectedFolderPath);
       await switchWorkspace(localWs.id, localWs.name);
     } else {
       if (!selectedFolderHandle) throw new Error("No folder selected");
-      const localWs = createLocalWorkspace(wsName, 'filesystem-access');
+      localWs = createLocalWorkspace(wsName, 'filesystem-access');
       await storeWorkspaceFileSystemHandle(localWs.id, selectedFolderHandle);
       await switchWorkspace(localWs.id, localWs.name);
     }
 
-    await ensureRootIndexForCurrentWorkspace(wsName);
+    await ensureRootIndexForCurrentWorkspace(wsName, localWs.path);
 
     // Re-initialize CRDT with the root index (same rationale as handleOpenFolder)
     const backend = await getBackend();
@@ -913,10 +973,9 @@
       }
     }
 
-    const currentLocalId = getCurrentWorkspaceId();
     await handleUploadLocal({
       forceCreateServerWorkspace: true,
-      localWorkspaceId: currentLocalId!,
+      localWorkspaceId: localWs.id,
       workspaceNameOverride: wsName,
     });
   }
@@ -928,7 +987,8 @@
     const serverWs = serverWorkspacesList.find(w => w.id === selectedSourceWorkspaceId);
     if (!serverWs) throw new Error("No server workspace selected");
 
-    const localWs = createLocalWorkspace(serverWs.name, undefined, isTauri() && workspacePath ? workspacePath : undefined);
+    const wsPath = await resolveWorkspaceDirectoryForCreate(serverWs.name);
+    const localWs = createLocalWorkspace(serverWs.name, undefined, wsPath);
     await switchWorkspace(localWs.id, localWs.name);
 
     const backend = await getBackend();
@@ -968,7 +1028,7 @@
       console.warn("[AddWorkspace] Snapshot download/import error:", e);
     }
 
-    await ensureRootIndexForCurrentWorkspace(serverWs.name);
+    await ensureRootIndexForCurrentWorkspace(serverWs.name, localWs.path);
 
     toast.success("Workspace downloaded", {
       description: `"${serverWs.name}" is ready on this device.`,
@@ -986,7 +1046,8 @@
     const zipFile = importZipFile;
 
     const wsName = await resolveCreationWorkspaceName(false);
-    const localWs = createLocalWorkspace(wsName, undefined, isTauri() && workspacePath ? workspacePath : undefined);
+    const wsPath = await resolveWorkspaceDirectoryForCreate(wsName);
+    const localWs = createLocalWorkspace(wsName, undefined, wsPath);
     await switchWorkspace(localWs.id, localWs.name);
 
     const backend = await getBackend();
@@ -1012,7 +1073,7 @@
       throw new Error(result.error || "Failed to import ZIP");
     }
 
-    await ensureRootIndexForCurrentWorkspace(localWs.name);
+    await ensureRootIndexForCurrentWorkspace(localWs.name, localWs.path);
 
     toast.success("Import complete", {
       description: `Imported ${result.files_imported} files.`,
@@ -1032,7 +1093,8 @@
     const workspaceId = serverWs.id;
 
     // Create a new local workspace and switch to it before operating
-    const localWs = createLocalWorkspace(serverWs.name, undefined, isTauri() && workspacePath ? workspacePath : undefined);
+    const wsPath = await resolveWorkspaceDirectoryForCreate(serverWs.name);
+    const localWs = createLocalWorkspace(serverWs.name, undefined, wsPath);
     await switchWorkspace(localWs.id, localWs.name);
 
     const backend = await getBackend();
@@ -1129,12 +1191,11 @@
   }) {
     const backend = await getBackend();
     const api = createApi(backend);
-    const workspacePath = await findWorkspaceRootPath(api, backend);
 
     subscribeSyncProgress();
 
     // Determine workspace name from selected local workspace
-    const localWorkspaceId = options?.localWorkspaceId;
+    const localWorkspaceId = options?.localWorkspaceId ?? getCurrentWorkspaceId() ?? undefined;
     const selectedLocal = localWorkspaceId
       ? getLocalWorkspaces().find(w => w.id === localWorkspaceId)
       : null;
@@ -1142,6 +1203,7 @@
     if (!workspaceName) {
       throw new Error("Please select a local workspace with a valid name");
     }
+    const workspacePath = await resolveWorkspaceRootPathForUpload(api, backend, localWorkspaceId);
 
     // Use existing server workspace when allowed, otherwise create one.
     let workspaceId: string;
@@ -1306,10 +1368,11 @@
    */
   async function handleCreateNew() {
     const workspaceName = await resolveCreationWorkspaceName(true);
-    const localWs = createLocalWorkspace(workspaceName, undefined, isTauri() && workspacePath ? workspacePath : undefined);
+    const wsPath = await resolveWorkspaceDirectoryForCreate(workspaceName);
+    const localWs = createLocalWorkspace(workspaceName, undefined, wsPath);
 
     await switchWorkspace(localWs.id, localWs.name);
-    await ensureRootIndexForCurrentWorkspace(localWs.name);
+    await ensureRootIndexForCurrentWorkspace(localWs.name, localWs.path);
 
     await handleUploadLocal({
       forceCreateServerWorkspace: true,
@@ -1327,7 +1390,8 @@
 
     // Create a new local workspace and switch to it before operating
     const wsName = await resolveCreationWorkspaceName(true);
-    const localWs = createLocalWorkspace(wsName, undefined, isTauri() && workspacePath ? workspacePath : undefined);
+    const wsPath = await resolveWorkspaceDirectoryForCreate(wsName);
+    const localWs = createLocalWorkspace(wsName, undefined, wsPath);
     await switchWorkspace(localWs.id, localWs.name);
 
     const backend = await getBackend();

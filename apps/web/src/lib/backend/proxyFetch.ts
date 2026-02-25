@@ -17,6 +17,8 @@ interface ProxyFetchResponse {
   body_base64: string;
 }
 
+const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
+
 /** Extended RequestInit with timeout_ms for health checks. */
 export interface ProxyFetchInit extends RequestInit {
   /** Timeout in milliseconds (passed to reqwest; AbortSignal can't cross IPC). */
@@ -117,8 +119,11 @@ export async function proxyFetch(
     bodyBytes[i] = binaryString.charCodeAt(i);
   }
 
+  // The Fetch Response constructor rejects bodies for null-body statuses.
+  const responseBody = NULL_BODY_STATUSES.has(result.status) ? null : bodyBytes;
+
   // Construct a real Response object
-  return new Response(bodyBytes, {
+  return new Response(responseBody, {
     status: result.status,
     statusText: result.status_text,
     headers: new Headers(result.headers),

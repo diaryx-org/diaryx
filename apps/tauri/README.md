@@ -95,6 +95,10 @@ The validation system checks workspace link integrity and can automatically fix 
 
 The Tauri app uses `SyncClient` from `diaryx_core` with `TokioConnector` (tokio-tungstenite + rustls) for WebSocket sync. `SyncClient` is generic over `TransportConnector`, allowing the transport to be swapped for platform-specific implementations (e.g., Apple's `URLSessionWebSocketTask` on iOS via a custom connector).
 
+When native sync starts, the backend re-applies the current workspace root to
+the shared `Diaryx` instance so sync path canonicalization reliably strips
+absolute workspace prefixes before constructing body document IDs.
+
 ## Apple IAP (In-App Purchases)
 
 The Tauri app includes `tauri-plugin-iap` for StoreKit 2 integration on iOS and macOS (Mac App Store). This enables native subscription purchasing through the App Store.

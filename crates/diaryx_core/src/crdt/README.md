@@ -208,8 +208,14 @@ newly discovered files. This prevents cases where metadata arrives first but
 body bootstrap for those files is never initiated.
 
 All path keys used by sync tracking (`body_synced`, echo maps, focus sets) are
-canonicalized (`./` and leading `/` stripped, slash-normalized). This ensures
+canonicalized (`./` and leading `/` stripped, slash-normalized). When a
+workspace root is known, absolute-path prefixes are also stripped (including
+the malformed form without a leading slash). This ensures
 `README.md`, `./README.md`, and `/README.md` are treated as one logical file.
+
+Native `SyncClient` also canonicalizes outgoing body-doc names from
+`SendSyncMessage` events before framing `body:{workspace_id}/{path}` doc IDs,
+so workspace-absolute filesystem paths cannot fragment sync streams.
 
 Rename reconciliation is now resilient to transient filesystem gaps: if a
 rename is detected from CRDT metadata but both old/new paths are momentarily

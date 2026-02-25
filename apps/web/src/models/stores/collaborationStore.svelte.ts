@@ -32,6 +32,64 @@ function getInitialServerUrl(): string | null {
   return null;
 }
 
+function toReadableErrorMessage(error: unknown, depth = 0): string | null {
+  if (error === null || error === undefined) return null;
+  if (depth > 5) return null;
+
+  if (typeof error === 'string') {
+    const trimmed = error.trim();
+    if (!trimmed) return null;
+    if (trimmed === '[object Object]') return null;
+
+    // Some callers pass stringified objects; try to recover the useful message.
+    if ((trimmed.startsWith('{') || trimmed.startsWith('[')) && trimmed.length < 20_000) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        const parsedMessage = toReadableErrorMessage(parsed, depth + 1);
+        if (parsedMessage) return parsedMessage;
+      } catch {
+        // Fall through and use the original string.
+      }
+    }
+
+    return trimmed;
+  }
+
+  if (error instanceof Error) {
+    return error.message?.trim() || error.name || null;
+  }
+
+  if (typeof error === 'object') {
+    if (Array.isArray(error)) {
+      for (const entry of error) {
+        const entryMessage = toReadableErrorMessage(entry, depth + 1);
+        if (entryMessage) return entryMessage;
+      }
+      return null;
+    }
+
+    const errObj = error as Record<string, unknown>;
+    for (const key of ['message', 'error', 'detail', 'reason', 'description', 'cause']) {
+      const value = errObj[key];
+      const message = toReadableErrorMessage(value, depth + 1);
+      if (message) return message;
+    }
+
+    try {
+      const serialized = JSON.stringify(error);
+      if (serialized && serialized !== '{}' && serialized !== '[]') {
+        return serialized;
+      }
+    } catch {
+      // Ignore and fall through.
+    }
+    return null;
+  }
+
+  const primitive = String(error).trim();
+  return primitive || null;
+}
+
 // ============================================================================
 // Store
 // ============================================================================
@@ -117,30 +175,13 @@ class CollaborationStore {
   }
 
   setSyncError(error: string | null | unknown) {
-    // Defensive string conversion - error might be an object from Rust
     if (error === null || error === undefined) {
       this.syncError = null;
-    } else if (typeof error === 'string') {
-      this.syncError = error;
-    } else if (error instanceof Error) {
-      this.syncError = error.message;
-    } else if (typeof error === 'object') {
-      // Try to extract message from object, fallback to JSON stringify
-      const errObj = error as Record<string, unknown>;
-      if (typeof errObj.message === 'string') {
-        this.syncError = errObj.message;
-      } else if (typeof errObj.error === 'string') {
-        this.syncError = errObj.error;
-      } else {
-        try {
-          this.syncError = JSON.stringify(error);
-        } catch {
-          this.syncError = 'Unknown error';
-        }
-      }
-    } else {
-      this.syncError = String(error);
+      return;
     }
+
+    const readable = toReadableErrorMessage(error);
+    this.syncError = readable ?? 'Unexpected sync error';
     if (this.syncError) {
       this.syncStatus = 'error';
     }

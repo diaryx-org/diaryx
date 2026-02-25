@@ -52,10 +52,9 @@ export async function buildWorkspaceSnapshotUploadBlob(
     detail: "Planning workspace export...",
   });
 
-  const [plan, binaries] = await Promise.all([
-    api.planExport(workspaceRootPath, "*"),
-    api.exportBinaryAttachments(workspaceRootPath, "*"),
-  ]);
+  // Run sequentially — concurrent Tauri IPC calls can deadlock on iOS
+  const plan = await api.planExport(workspaceRootPath, "*");
+  const binaries = await api.exportBinaryAttachments(workspaceRootPath, "*");
 
   const totalFiles = plan.included.length + binaries.length;
 

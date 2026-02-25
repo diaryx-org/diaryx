@@ -29,3 +29,8 @@ Svelte stores for reactive application state.
 | `shareSessionStore.svelte.ts` | Share session state |
 | `uiStore.svelte.ts` | UI state (sidebars, dialogs) |
 | `workspaceStore.svelte.ts` | Workspace tree state. Lazy subtree updates short-circuit as soon as the target node is found, avoiding full-tree traversal on folder expansion in large workspaces. |
+
+`collaborationStore.svelte.ts` normalizes unknown/object-shaped sync errors
+into readable strings (including nested `message`/`error` fields and JSON
+payloads) so UI surfaces like `SyncStatusIndicator` do not display raw
+`[object Object]`.

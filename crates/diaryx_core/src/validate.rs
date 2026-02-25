@@ -20,6 +20,7 @@ use crate::entry::{has_non_portable_chars, sanitize_filename};
 use crate::error::Result;
 use crate::fs::{AsyncFileSystem, is_temp_file};
 use crate::link_parser::{self, LinkFormat};
+use crate::path_utils::{normalize_sync_path, strip_workspace_root_prefix};
 use crate::utils::matches_glob_pattern;
 use crate::utils::path::relative_path_from_file_to_target;
 use crate::workspace::Workspace;
@@ -1611,16 +1612,13 @@ impl<FS: AsyncFileSystem> ValidationFixer<FS> {
     /// Get the canonical (workspace-relative) path for a filesystem path.
     fn get_canonical(&self, path: &Path) -> String {
         let raw = if let Some(ref root) = self.root_path {
-            path.strip_prefix(root)
-                .unwrap_or(path)
-                .to_string_lossy()
-                .replace('\\', "/")
+            let path_string = path.to_string_lossy();
+            strip_workspace_root_prefix(&path_string, root)
+                .unwrap_or_else(|| path_string.to_string())
         } else {
-            path.to_string_lossy().replace('\\', "/")
+            path.to_string_lossy().to_string()
         };
-        // Strip leading ./ or /
-        let trimmed = raw.trim_start_matches("./").trim_start_matches('/');
-        trimmed.to_string()
+        normalize_sync_path(&raw)
     }
 
     /// Read title from a file's frontmatter, falling back to filename stem.
@@ -2391,6 +2389,20 @@ mod tests {
             base,
         );
         assert_eq!(suggested, "../Projects/index.md");
+    }
+
+    #[test]
+    fn test_validation_fixer_get_canonical_strips_corrupted_workspace_prefix() {
+        let fs = make_test_fs();
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let fixer = ValidationFixer::with_link_format(
+            async_fs,
+            PathBuf::from("/Users/test/workspace"),
+            LinkFormat::default(),
+        );
+
+        let canonical = fixer.get_canonical(Path::new("Users/test/workspace/notes/day.md"));
+        assert_eq!(canonical, "notes/day.md");
     }
 
     #[test]

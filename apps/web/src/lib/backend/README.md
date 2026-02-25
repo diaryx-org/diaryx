@@ -76,3 +76,11 @@ The backend command API now exposes Rust `link_parser` operations through
 can use `api.ts` helpers (`runLinkParser`, `parseLink`, `canonicalizeLink`,
 `formatLink`, `convertLink`) to avoid duplicating link parsing logic in
 TypeScript.
+
+## Native HTTP Proxy
+
+`proxyFetch.ts` bridges HTTP through Tauri native networking when running in
+Tauri. The bridge now maps null-body HTTP statuses (`204`, `205`, `304`, and
+other fetch null-body statuses) to `Response` objects with `null` bodies so
+no-content endpoints (for example, `DELETE /api/workspaces/{id}`) do not throw
+`Response cannot have a body with the given status`.

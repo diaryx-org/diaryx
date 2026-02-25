@@ -65,6 +65,12 @@ type TauriBaseFs = SyncToAsyncFs<RealFileSystem>;
 /// Fully decorated filesystem stack: EventEmittingFs<CrdtFs<TauriBaseFs>>.
 type TauriDiaryxFs = EventEmittingFs<CrdtFs<TauriBaseFs>>;
 
+/// Base filesystem type for guest mode (in-memory filesystem wrapped for async).
+type GuestBaseFs = SyncToAsyncFs<InMemoryFileSystem>;
+
+/// Fully decorated filesystem stack for guest mode.
+type GuestDiaryxFs = EventEmittingFs<CrdtFs<GuestBaseFs>>;
+
 /// Global state for CRDT-enabled Diaryx instances.
 ///
 /// This stores the SQLite storage backend shared across all execute() calls,
@@ -104,11 +110,12 @@ impl Default for CrdtState {
     }
 }
 
-/// State for guest mode - holds an in-memory filesystem when active.
+/// State for guest mode - holds an in-memory filesystem and CRDT state when active.
 ///
 /// When a Tauri user joins a share session as a guest, this state holds
-/// the in-memory filesystem that all file operations are routed through.
-/// This prevents guest session files from affecting the user's local workspace.
+/// the in-memory filesystem and CRDT instances that all operations are routed through.
+/// This prevents guest session files from affecting the user's local workspace
+/// while maintaining persistent CRDT state across commands for the session duration.
 pub struct GuestModeState {
     /// Whether guest mode is currently active
     pub active: Mutex<bool>,
@@ -116,6 +123,11 @@ pub struct GuestModeState {
     pub filesystem: Mutex<Option<InMemoryFileSystem>>,
     /// The join code of the current guest session
     pub join_code: Mutex<Option<String>>,
+    /// The decorated filesystem stack for guest mode (CrdtFs + EventEmittingFs).
+    /// Holds shared CRDT instances that persist across commands.
+    pub decorated_fs: Mutex<Option<DecoratedFs<GuestBaseFs>>>,
+    /// Cached Diaryx instance for guest mode.
+    pub diaryx: Mutex<Option<Arc<Diaryx<GuestDiaryxFs>>>>,
 }
 
 impl GuestModeState {
@@ -124,6 +136,8 @@ impl GuestModeState {
             active: Mutex::new(false),
             filesystem: Mutex::new(None),
             join_code: Mutex::new(None),
+            decorated_fs: Mutex::new(None),
+            diaryx: Mutex::new(None),
         }
     }
 }
@@ -190,21 +204,20 @@ pub async fn execute<R: Runtime>(
 
     // Execute command using appropriate filesystem
     let response = if is_guest {
-        // Guest mode: use in-memory filesystem (no CRDT storage for guests)
-        // Clone the filesystem and release the guard before await
-        let mem_fs = {
-            let fs_guard = acquire_lock(&guest_state.filesystem)?;
-            fs_guard
+        // Guest mode: reuse cached Diaryx with persistent in-memory CRDT state
+        let diaryx = {
+            let diaryx_guard = acquire_lock(&guest_state.diaryx)?;
+            diaryx_guard
                 .as_ref()
                 .cloned()
                 .ok_or_else(|| SerializableError {
                     kind: "GuestModeError".to_string(),
-                    message: "Guest mode active but no filesystem initialized".to_string(),
+                    message: "Guest mode active but not initialized (call start_guest_mode first)"
+                        .to_string(),
                     path: None,
                 })?
         };
-        log::debug!("[execute] Using in-memory filesystem (guest mode)");
-        let diaryx = Diaryx::new(SyncToAsyncFs::new(mem_fs));
+        log::trace!("[execute] Using cached guest Diaryx instance");
         diaryx.execute(cmd).await.map_err(|e| {
             log::error!("[execute] Command execution failed: {:?}", e);
             e.to_serializable()
@@ -2677,9 +2690,9 @@ pub async fn resolve_sync_conflict<R: Runtime>(
 
 /// Start guest mode for a share session.
 ///
-/// Creates an in-memory filesystem for all operations. This allows the user
-/// to join a share session without affecting their local workspace files.
-/// All synced files will be stored in memory only.
+/// Creates an in-memory filesystem and CRDT infrastructure for all operations.
+/// This allows the user to join a share session without affecting their local
+/// workspace files. All synced files and CRDT state are stored in memory only.
 #[tauri::command]
 pub async fn start_guest_mode<R: Runtime>(
     app: AppHandle<R>,
@@ -2687,8 +2700,6 @@ pub async fn start_guest_mode<R: Runtime>(
 ) -> Result<(), SerializableError> {
     let guest_state = app.state::<GuestModeState>();
     let mut active = acquire_lock(&guest_state.active)?;
-    let mut filesystem = acquire_lock(&guest_state.filesystem)?;
-    let mut code = acquire_lock(&guest_state.join_code)?;
 
     if *active {
         return Err(SerializableError {
@@ -2698,9 +2709,25 @@ pub async fn start_guest_mode<R: Runtime>(
         });
     }
 
+    // Build DecoratedFs stack with in-memory storage for CRDT persistence
+    let mem_fs = InMemoryFileSystem::new();
+    let base_fs = SyncToAsyncFs::new(mem_fs.clone());
+    let decorated = DecoratedFsBuilder::new(base_fs)
+        .crdt_enabled(false) // Enabled after sync handshake
+        .build();
+
+    // Create and cache a Diaryx instance with shared CRDT instances
+    let diaryx = Diaryx::with_crdt_instances(
+        decorated.fs.clone(),
+        Arc::clone(&decorated.workspace_crdt),
+        Arc::clone(&decorated.body_doc_manager),
+    );
+
     *active = true;
-    *filesystem = Some(InMemoryFileSystem::new());
-    *code = Some(join_code.clone());
+    *acquire_lock(&guest_state.filesystem)? = Some(mem_fs);
+    *acquire_lock(&guest_state.join_code)? = Some(join_code.clone());
+    *acquire_lock(&guest_state.decorated_fs)? = Some(decorated);
+    *acquire_lock(&guest_state.diaryx)? = Some(Arc::new(diaryx));
 
     log::info!("[guest_mode] Started guest mode for session: {}", join_code);
     Ok(())
@@ -2708,21 +2735,21 @@ pub async fn start_guest_mode<R: Runtime>(
 
 /// End guest mode and clear in-memory data.
 ///
-/// This clears the in-memory filesystem and returns the app to normal mode.
-/// All files from the guest session will be discarded.
+/// This clears the in-memory filesystem, CRDT state, and cached Diaryx instance,
+/// returning the app to normal mode. All guest session data will be discarded.
 #[tauri::command]
 pub async fn end_guest_mode<R: Runtime>(app: AppHandle<R>) -> Result<(), SerializableError> {
     let guest_state = app.state::<GuestModeState>();
     let mut active = acquire_lock(&guest_state.active)?;
-    let mut filesystem = acquire_lock(&guest_state.filesystem)?;
-    let mut code = acquire_lock(&guest_state.join_code)?;
 
     let was_active = *active;
-    let join_code = code.clone();
+    let join_code = acquire_lock(&guest_state.join_code)?.clone();
 
-    *filesystem = None;
     *active = false;
-    *code = None;
+    *acquire_lock(&guest_state.join_code)? = None;
+    *acquire_lock(&guest_state.filesystem)? = None;
+    *acquire_lock(&guest_state.diaryx)? = None;
+    *acquire_lock(&guest_state.decorated_fs)? = None;
 
     if was_active {
         log::info!(
@@ -3007,6 +3034,18 @@ pub async fn start_websocket_sync<R: Runtime>(
 
     let crdt_state = app.state::<CrdtState>();
 
+    let workspace_root = {
+        let ws_guard = crdt_state
+            .workspace_path
+            .lock()
+            .map_err(|e| SerializableError {
+                kind: "SyncError".to_string(),
+                message: format!("Failed to acquire workspace_path lock: {}", e),
+                path: None,
+            })?;
+        ws_guard.clone()
+    };
+
     // Extract sync_manager from cached Diaryx instance.
     let sync_manager = {
         let diaryx_guard = crdt_state.diaryx.lock().map_err(|e| SerializableError {
@@ -3014,9 +3053,21 @@ pub async fn start_websocket_sync<R: Runtime>(
             message: format!("Failed to acquire diaryx lock: {}", e),
             path: None,
         })?;
-        diaryx_guard
-            .as_ref()
-            .and_then(|d| d.sync_manager().cloned())
+
+        let diaryx = diaryx_guard.as_ref().ok_or_else(|| SerializableError {
+            kind: "SyncError".to_string(),
+            message: "No sync_manager available - CRDT not initialized".to_string(),
+            path: None,
+        })?;
+
+        // Ensure sync path canonicalization can strip absolute workspace prefixes.
+        if let Some(root) = workspace_root.clone() {
+            diaryx.set_workspace_root(root);
+        }
+
+        diaryx
+            .sync_manager()
+            .cloned()
             .ok_or_else(|| SerializableError {
                 kind: "SyncError".to_string(),
                 message: "No sync_manager available - CRDT not initialized".to_string(),

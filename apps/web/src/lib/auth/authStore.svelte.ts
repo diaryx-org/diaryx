@@ -855,7 +855,9 @@ export async function uploadWorkspaceSnapshot(
 ): Promise<{ files_imported: number } | null> {
   const token = getToken();
   const url = state.serverUrl;
-  if (!token || !url || !authService) return null;
+  if (!token || !url || !authService) {
+    throw new Error("Not authenticated");
+  }
 
   try {
     const result = await authService.uploadWorkspaceSnapshot(
@@ -870,7 +872,8 @@ export async function uploadWorkspaceSnapshot(
     return result;
   } catch (err) {
     console.error("[AuthStore] Failed to upload snapshot:", err);
-    return null;
+    if (err instanceof Error) throw err;
+    throw new Error("Failed to upload snapshot");
   }
 }
 

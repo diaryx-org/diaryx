@@ -29,7 +29,7 @@ use super::types::FileMetadata;
 use crate::error::Result;
 use crate::fs::{AsyncFileSystem, FileSystemEvent};
 use crate::metadata_writer;
-use crate::path_utils::normalize_sync_path;
+use crate::path_utils::{normalize_sync_path, strip_workspace_root_prefix};
 
 /// Configuration for guest mode sync.
 ///
@@ -144,16 +144,12 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
     /// - Strips the workspace root prefix if set (e.g., `/Users/adam/diaryx/README.md` → `README.md`)
     /// - Strips the `guest/{join_code}/` prefix if present for OPFS guests
     pub fn get_canonical_path(&self, storage_path: &str) -> String {
-        use std::path::Path;
-
         // Strip workspace root if set
         let stripped = {
             let wr = self.workspace_root.read().unwrap();
             if let Some(root) = &*wr {
-                Path::new(storage_path)
-                    .strip_prefix(root)
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_else(|_| storage_path.to_string())
+                strip_workspace_root_prefix(storage_path, root)
+                    .unwrap_or_else(|| storage_path.to_string())
             } else {
                 storage_path.to_string()
             }
@@ -907,6 +903,15 @@ mod tests {
 
         // Path without prefix should be returned as-is
         let canonical = handler.get_canonical_path("notes/hello.md");
+        assert_eq!(canonical, "notes/hello.md");
+    }
+
+    #[test]
+    fn test_get_canonical_path_strips_corrupted_workspace_prefix() {
+        let handler = create_test_handler();
+        handler.set_workspace_root(PathBuf::from("/Users/test/diaryx"));
+
+        let canonical = handler.get_canonical_path("Users/test/diaryx/notes/hello.md");
         assert_eq!(canonical, "notes/hello.md");
     }
 

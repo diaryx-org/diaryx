@@ -380,7 +380,7 @@ impl WorkspaceCrdt {
         let mut deduped: HashMap<String, FileMetadata> = HashMap::new();
 
         for (key, value) in self.files_map.iter(&txn) {
-            let path = Self::normalize_file_key(&key.to_string());
+            let path = Self::normalize_file_key(key);
             if crate::fs::is_temp_file(&path) {
                 continue;
             }

@@ -1418,49 +1418,54 @@ impl Command {
                 *path = normalizer(path);
             }
 
-            // --- CRDT commands without filesystem paths (doc_name, binary data, etc.) ---
+            // --- CRDT commands with `doc_name` fields (workspace or body docs) ---
             #[cfg(feature = "crdt")]
-            Command::GetSyncState { .. }
-            | Command::ApplyRemoteUpdate { .. }
-            | Command::GetMissingUpdates { .. }
-            | Command::GetFullState { .. }
-            | Command::GetHistory { .. }
-            | Command::RestoreVersion { .. }
-            | Command::GetVersionDiff { .. }
-            | Command::GetStateAt { .. }
-            | Command::ListCrdtFiles { .. }
-            | Command::SaveCrdtState { .. }
-            | Command::GetBodyContent { .. }
-            | Command::SetBodyContent { .. }
-            | Command::ResetBodyDoc { .. }
-            | Command::GetBodySyncState { .. }
-            | Command::GetBodyFullState { .. }
-            | Command::ApplyBodyUpdate { .. }
-            | Command::GetBodyMissingUpdates { .. }
-            | Command::SaveBodyDoc { .. }
+            Command::GetSyncState { doc_name }
+            | Command::ApplyRemoteUpdate { doc_name, .. }
+            | Command::GetMissingUpdates { doc_name, .. }
+            | Command::GetFullState { doc_name }
+            | Command::GetHistory { doc_name, .. }
+            | Command::RestoreVersion { doc_name, .. }
+            | Command::GetVersionDiff { doc_name, .. }
+            | Command::GetStateAt { doc_name, .. }
+            | Command::SaveCrdtState { doc_name }
+            | Command::GetBodyContent { doc_name }
+            | Command::SetBodyContent { doc_name, .. }
+            | Command::ResetBodyDoc { doc_name }
+            | Command::GetBodySyncState { doc_name }
+            | Command::GetBodyFullState { doc_name }
+            | Command::ApplyBodyUpdate { doc_name, .. }
+            | Command::GetBodyMissingUpdates { doc_name, .. }
+            | Command::SaveBodyDoc { doc_name }
+            | Command::UnloadBodyDoc { doc_name }
+            | Command::CreateSyncStep1 { doc_name }
+            | Command::HandleSyncMessage { doc_name, .. }
+            | Command::CreateUpdateMessage { doc_name, .. }
+            | Command::ApplyRemoteBodyUpdateWithEffects { doc_name, .. }
+            | Command::InitBodySync { doc_name }
+            | Command::CloseBodySync { doc_name }
+            | Command::HandleBodySyncMessage { doc_name, .. }
+            | Command::CreateBodySyncStep1 { doc_name }
+            | Command::CreateBodyUpdate { doc_name, .. }
+            | Command::IsBodySynced { doc_name } => {
+                *doc_name = normalizer(doc_name);
+            }
+
+            // --- CRDT commands without filesystem path fields ---
+            #[cfg(feature = "crdt")]
+            Command::ListCrdtFiles { .. }
             | Command::SaveAllBodyDocs
             | Command::ListLoadedBodyDocs
-            | Command::UnloadBodyDoc { .. }
-            | Command::CreateSyncStep1 { .. }
-            | Command::HandleSyncMessage { .. }
-            | Command::CreateUpdateMessage { .. }
             | Command::ConfigureSyncHandler { .. }
             | Command::ApplyRemoteWorkspaceUpdateWithEffects { .. }
-            | Command::ApplyRemoteBodyUpdateWithEffects { .. }
             | Command::GetStoragePath { .. }
             | Command::GetCanonicalPath { .. }
             | Command::HandleWorkspaceSyncMessage { .. }
             | Command::HandleCrdtState { .. }
             | Command::CreateWorkspaceSyncStep1
             | Command::CreateWorkspaceUpdate { .. }
-            | Command::InitBodySync { .. }
-            | Command::CloseBodySync { .. }
-            | Command::HandleBodySyncMessage { .. }
-            | Command::CreateBodySyncStep1 { .. }
-            | Command::CreateBodyUpdate { .. }
             | Command::IsSyncComplete
             | Command::IsWorkspaceSynced
-            | Command::IsBodySynced { .. }
             | Command::MarkSyncComplete
             | Command::GetActiveSyncs
             | Command::ResetSyncState
@@ -1938,5 +1943,23 @@ mod tests {
         assert!(!opts.search_frontmatter);
         assert!(!opts.case_sensitive);
         assert!(opts.property.is_none());
+    }
+
+    #[cfg(feature = "crdt")]
+    #[test]
+    fn test_normalize_paths_normalizes_body_doc_name() {
+        let mut cmd = Command::SetBodyContent {
+            doc_name: "/workspace/notes/day.md".to_string(),
+            content: "hello".to_string(),
+        };
+
+        cmd.normalize_paths(|p| p.trim_start_matches("/workspace/").to_string());
+
+        match cmd {
+            Command::SetBodyContent { doc_name, .. } => {
+                assert_eq!(doc_name, "notes/day.md");
+            }
+            other => panic!("Expected SetBodyContent, got {:?}", other),
+        }
     }
 }

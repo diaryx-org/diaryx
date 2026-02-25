@@ -70,6 +70,71 @@ pub fn normalize_sync_path(path: &str) -> String {
         .to_string()
 }
 
+/// Strip a workspace root prefix from a path string, returning a workspace-relative path.
+///
+/// Handles both normal absolute paths and the corrupted form where the leading `/`
+/// has already been stripped (for example `Users/alice/workspace/README.md`).
+///
+/// Returns `None` when the path does not belong to the workspace root.
+///
+/// # Example
+/// ```
+/// use diaryx_core::path_utils::strip_workspace_root_prefix;
+/// use std::path::Path;
+///
+/// let root = Path::new("/Users/alice/workspace");
+/// assert_eq!(
+///     strip_workspace_root_prefix("/Users/alice/workspace/notes/day.md", root),
+///     Some("notes/day.md".to_string())
+/// );
+/// assert_eq!(
+///     strip_workspace_root_prefix("Users/alice/workspace/notes/day.md", root),
+///     Some("notes/day.md".to_string())
+/// );
+/// ```
+pub fn strip_workspace_root_prefix(path: &str, workspace_root: &Path) -> Option<String> {
+    if path.is_empty() {
+        return Some(String::new());
+    }
+
+    let path_obj = Path::new(path);
+    if let Ok(relative) = path_obj.strip_prefix(workspace_root) {
+        return Some(relative.to_string_lossy().to_string());
+    }
+
+    let path_norm = path.replace('\\', "/");
+    let root_norm = workspace_root.to_string_lossy().replace('\\', "/");
+    let root_trimmed = root_norm.trim_end_matches('/');
+
+    if root_trimmed.is_empty() {
+        return None;
+    }
+
+    // Support both "/Users/..." and "Users/..." root prefixes.
+    let mut candidates = Vec::with_capacity(3);
+    candidates.push(root_trimmed.to_string());
+    let root_without_leading = root_trimmed.trim_start_matches('/');
+    if root_without_leading != root_trimmed {
+        candidates.push(root_without_leading.to_string());
+    }
+    if !root_trimmed.starts_with('/') {
+        candidates.push(format!("/{}", root_trimmed));
+    }
+
+    for candidate in candidates {
+        if path_norm == candidate {
+            return Some(String::new());
+        }
+
+        let prefix = format!("{candidate}/");
+        if let Some(relative) = path_norm.strip_prefix(&prefix) {
+            return Some(relative.to_string());
+        }
+    }
+
+    None
+}
+
 /// Compute a relative path from a base directory to a target file.
 ///
 /// # Example
@@ -205,5 +270,26 @@ mod tests {
         assert_eq!(normalize_sync_path("./README.md"), "README.md");
         assert_eq!(normalize_sync_path("/README.md"), "README.md");
         assert_eq!(normalize_sync_path(".//nested\\file.md"), "nested/file.md");
+    }
+
+    #[test]
+    fn test_strip_workspace_root_prefix_absolute_path() {
+        let root = Path::new("/Users/test/workspace");
+        let result = strip_workspace_root_prefix("/Users/test/workspace/notes/day.md", root);
+        assert_eq!(result.as_deref(), Some("notes/day.md"));
+    }
+
+    #[test]
+    fn test_strip_workspace_root_prefix_corrupted_absolute_without_leading_slash() {
+        let root = Path::new("/Users/test/workspace");
+        let result = strip_workspace_root_prefix("Users/test/workspace/notes/day.md", root);
+        assert_eq!(result.as_deref(), Some("notes/day.md"));
+    }
+
+    #[test]
+    fn test_strip_workspace_root_prefix_returns_none_for_non_workspace_path() {
+        let root = Path::new("/Users/test/workspace");
+        let result = strip_workspace_root_prefix("/Users/test/other/notes/day.md", root);
+        assert!(result.is_none());
     }
 }

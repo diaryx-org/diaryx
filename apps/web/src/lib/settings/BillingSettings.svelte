@@ -253,6 +253,11 @@
           <RotateCcw class="size-4 mr-2" />
           Restore Purchases
         </Button>
+        <p class="text-[10px] text-muted-foreground/70 text-center leading-tight">
+          {iapPrice}/month. Auto-renews monthly. Cancel anytime in Settings &gt; Apple&nbsp;ID &gt; Subscriptions.
+          <a href="https://diaryx.org/terms" class="underline" target="_blank" rel="noopener">Terms</a> &
+          <a href="https://diaryx.org/privacy" class="underline" target="_blank" rel="noopener">Privacy</a>.
+        </p>
       {:else if isWaitingForCheckout}
         <!-- Waiting for Stripe checkout to complete (Tauri) -->
         <div class="flex flex-col items-center gap-2 p-4 bg-muted/50 rounded-md text-center">

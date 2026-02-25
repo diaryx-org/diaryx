@@ -138,10 +138,7 @@ class IapPlugin: Plugin {
         }
 
         do {
-            let bundleId = Bundle.main.bundleIdentifier ?? "nil"
-            NSLog("[IAP] useSimulatorMock=\(useSimulatorMock), bundleId=\(bundleId), requesting productId=\(args.productId)")
             let products = try await Product.products(for: [args.productId])
-            NSLog("[IAP] Product.products returned \(products.count) product(s): \(products.map { $0.id })")
             guard let product = products.first else {
                 invoke.reject("Product not found: \(args.productId)")
                 return

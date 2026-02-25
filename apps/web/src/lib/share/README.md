@@ -19,5 +19,5 @@ Share sidebar components for real-time collaboration and static-site publishing.
 | File | Purpose |
 |------|---------|
 | `ShareTab.svelte` | Share top-level sub-tab shell (`Live Collaboration` and `Publishing`) |
-| `LiveCollaborationPanel.svelte` | Existing share-session create/join/host UI |
+| `LiveCollaborationPanel.svelte` | Existing share-session create/join/host UI (host creation now resolves the active authenticated server workspace ID and never generates ad-hoc IDs) |
 | `PublishingPanel.svelte` | Site publishing setup, publish-now actions, and access-token CRUD; blocks publish when sync setup is not enabled and links directly to Sync Setup wizard |

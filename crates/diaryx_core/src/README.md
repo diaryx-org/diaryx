@@ -87,6 +87,11 @@ Returns `Response::String(new_path)` if a rename occurred, `Response::Ok` otherw
 
 - `execute()` normalizes command path fields to workspace-relative values when a
   workspace root is configured.
+- CRDT commands with `doc_name` path semantics (for body docs and generic
+  sync-doc operations) are normalized through the same workspace-root stripping
+  logic, so absolute paths do not leak into sync doc IDs.
+- Workspace-root stripping also handles the corrupted absolute form where a
+  leading slash was already removed (for example `Users/.../workspace/file.md`).
 - Handlers that call `Workspace`, `Validator`, exporter/search root APIs, or
   raw filesystem methods must resolve those normalized values back to
   filesystem paths via `resolve_fs_path(...)` before reading/writing disk.

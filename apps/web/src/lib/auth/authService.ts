@@ -3,6 +3,7 @@
  */
 
 import { proxyFetch } from "$lib/backend/proxyFetch";
+import { isTauri } from "$lib/backend/interface";
 
 export interface User {
   id: string;
@@ -199,7 +200,21 @@ export class AuthService {
             resolve(parsed as { files_imported: number });
             return;
           }
-          reject(new AuthError("Invalid snapshot upload response", status, parsed));
+          // Some deployments return an empty 2xx body for imports.
+          resolve({ files_imported: 0 });
+          return;
+        }
+
+        const retryAfter = xhr.getResponseHeader("Retry-After");
+        if (status === 429) {
+          const waitSuffix = retryAfter ? ` Try again in ${retryAfter}s.` : "";
+          reject(
+            new AuthError(
+              `Snapshot upload rate limit exceeded.${waitSuffix}`,
+              status,
+              parsed,
+            ),
+          );
           return;
         }
 
@@ -482,7 +497,8 @@ export class AuthService {
     url.searchParams.set("mode", mode);
     url.searchParams.set("include_attachments", String(includeAttachments));
 
-    if (onUploadProgress && typeof XMLHttpRequest !== "undefined") {
+    // Tauri should use proxyFetch (native HTTP) to avoid WebView/CORS/XHR edge cases.
+    if (onUploadProgress && typeof XMLHttpRequest !== "undefined" && !isTauri()) {
       return this.uploadWorkspaceSnapshotWithProgress(
         authToken,
         url.toString(),
@@ -505,6 +521,15 @@ export class AuthService {
 
     if (!response.ok) {
       const data = await this.parseErrorBody(response);
+      if (response.status === 429) {
+        const retryAfter = response.headers.get("Retry-After");
+        const waitSuffix = retryAfter ? ` Try again in ${retryAfter}s.` : "";
+        throw new AuthError(
+          `Snapshot upload rate limit exceeded.${waitSuffix}`,
+          response.status,
+          data,
+        );
+      }
       if (
         response.status === 413 &&
         data &&
@@ -519,8 +544,15 @@ export class AuthService {
       }
       throw new AuthError("Failed to upload snapshot", response.status, data);
     }
-
-    return response.json();
+    try {
+      const parsed = await response.json();
+      if (parsed && typeof parsed === "object" && "files_imported" in parsed) {
+        return parsed as { files_imported: number };
+      }
+      return { files_imported: 0 };
+    } catch {
+      return { files_imported: 0 };
+    }
   }
 
   /**

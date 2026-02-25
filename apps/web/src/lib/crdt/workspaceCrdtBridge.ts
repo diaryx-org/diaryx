@@ -424,7 +424,7 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
         console.log('[WorkspaceCrdtBridge] Native sync started successfully');
       } catch (e) {
         console.error('[WorkspaceCrdtBridge] Native sync failed to start:', e);
-        notifySyncStatus('error', e instanceof Error ? e.message : String(e));
+        notifySyncStatus('error', e);
         _nativeSyncActive = false;
       }
     } else {
@@ -469,16 +469,7 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
             notifyFileChange(null, null);
           },
           onBodyChanged: (filePath) => {
-            // Body content changed remotely — read from CRDT and notify UI
-            if (rustApi) {
-              rustApi.getBodyContent(filePath).then(content => {
-                if (content) {
-                  notifyBodyChange(filePath, content);
-                }
-              }).catch(e => {
-                console.warn('[WorkspaceCrdtBridge] Failed to get body content:', e);
-              });
-            }
+            void emitBodyChangeFromPath(filePath);
           },
           onProgress: (completed, total) => {
             notifySyncProgress(completed, total);
@@ -553,16 +544,7 @@ async function handleNativeSyncEvent(event: SyncEvent): Promise<void> {
 
     case 'body-changed':
       console.log('[WorkspaceCrdtBridge] Native sync: body changed:', event.path);
-      // The body content is already in the CRDT, fetch it and notify
-      if (rustApi) {
-        rustApi.getBodyContent(event.path).then(content => {
-          if (content) {
-            notifyBodyChange(event.path, content);
-          }
-        }).catch(e => {
-          console.warn('[WorkspaceCrdtBridge] Failed to get body content:', e);
-        });
-      }
+      await emitBodyChangeFromPath(event.path);
       break;
 
     case 'progress':
@@ -750,6 +732,48 @@ function getCanonicalPathFallback(storagePath: string): string {
   return path;
 }
 
+function normalizePathSeparators(path: string): string {
+  return path.replace(/\\/g, '/');
+}
+
+function stripWorkspaceRootPrefixLocal(path: string, workspaceRoot: string): string | null {
+  const normalizedPath = normalizePathSeparators(path);
+  const normalizedRoot = normalizePathSeparators(workspaceRoot).replace(/\/+$/, '');
+
+  if (!normalizedRoot || normalizedRoot === '.') {
+    return null;
+  }
+
+  const candidates = new Set<string>();
+  candidates.add(normalizedRoot);
+
+  const withoutLeadingSlash = normalizedRoot.replace(/^\/+/, '');
+  if (withoutLeadingSlash !== normalizedRoot) {
+    candidates.add(withoutLeadingSlash);
+  } else {
+    candidates.add(`/${normalizedRoot}`);
+  }
+
+  for (const candidate of candidates) {
+    if (normalizedPath === candidate) {
+      return '';
+    }
+
+    const prefix = `${candidate}/`;
+    if (normalizedPath.startsWith(prefix)) {
+      return normalizedPath.slice(prefix.length);
+    }
+  }
+
+  return null;
+}
+
+function normalizeCanonicalPathForSync(path: string): string {
+  const workspacePath = _backend?.getWorkspacePath?.();
+  const stripped = workspacePath ? stripWorkspaceRootPrefixLocal(path, workspacePath) : null;
+  return getCanonicalPathFallback(stripped ?? path);
+}
+
 /**
  * Convert a storage path to canonical form using backend sync-path rules.
  *
@@ -760,14 +784,22 @@ function getCanonicalPathFallback(storagePath: string): string {
  * Falls back to local canonicalization when backend is unavailable.
  */
 export async function getCanonicalPathForSync(storagePath: string): Promise<string> {
+  if (_backend?.hasNativeSync?.()) {
+    // Native/Tauri can run commands against Diaryx instances without SyncHandler
+    // (for example guest-mode in-memory execution). Avoid GetCanonicalPath in
+    // this path to prevent noisy Unsupported("SyncHandler not enabled") logs.
+    return normalizeCanonicalPathForSync(storagePath);
+  }
+
   if (_backend) {
     try {
-      return await syncHelpers.getCanonicalPath(_backend, storagePath);
+      const canonical = await syncHelpers.getCanonicalPath(_backend, storagePath);
+      return normalizeCanonicalPathForSync(canonical);
     } catch (error) {
       console.warn('[WorkspaceCrdtBridge] Backend canonical path failed, using fallback:', error);
     }
   }
-  return getCanonicalPathFallback(storagePath);
+  return normalizeCanonicalPathForSync(storagePath);
 }
 
 /**
@@ -781,14 +813,39 @@ export function getCanonicalPath(storagePath: string): string {
 
 // Session code for share sessions
 let _sessionCode: string | null = null;
+const lastBodyChangeByPath = new Map<string, string>();
+
+async function emitBodyChangeFromPath(path: string): Promise<void> {
+  if (!rustApi) return;
+
+  try {
+    const canonicalPath = await getCanonicalPathForSync(path);
+    const content = await rustApi.getBodyContent(canonicalPath);
+    notifyBodyChange(canonicalPath, content);
+  } catch (e) {
+    console.warn('[WorkspaceCrdtBridge] Failed to get body content:', e);
+  }
+}
 
 /**
  * Notify all body change callbacks.
  */
 function notifyBodyChange(path: string, body: string): void {
+  const canonicalPath = getCanonicalPathFallback(path);
+  if (lastBodyChangeByPath.get(canonicalPath) === body) {
+    return;
+  }
+  lastBodyChangeByPath.set(canonicalPath, body);
+  if (lastBodyChangeByPath.size > 200) {
+    const oldest = lastBodyChangeByPath.keys().next().value;
+    if (oldest) {
+      lastBodyChangeByPath.delete(oldest);
+    }
+  }
+
   for (const callback of bodyChangeCallbacks) {
     try {
-      callback(path, body);
+      callback(canonicalPath, body);
     } catch (error) {
       console.error('[WorkspaceCrdtBridge] Body change callback error:', error);
     }
@@ -919,16 +976,7 @@ export async function startSessionSync(
       shareSessionStore.isGuest ? notifySessionSync() : notifyFileChange(null, null);
     },
     onBodyChanged: (filePath) => {
-      // Body content changed remotely — read from CRDT and notify UI
-      if (rustApi) {
-        rustApi.getBodyContent(filePath).then(content => {
-          if (content) {
-            notifyBodyChange(filePath, content);
-          }
-        }).catch(e => {
-          console.warn('[WorkspaceCrdtBridge] Failed to get body content:', e);
-        });
-      }
+      void emitBodyChangeFromPath(filePath);
     },
     onProgress: (completed, total) => {
       console.log('[WorkspaceCrdtBridge] Session sync progress:', completed, '/', total);
@@ -1155,15 +1203,7 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
               notifyFileChange(null, null);
             },
             onBodyChanged: (filePath) => {
-              if (rustApi) {
-                rustApi.getBodyContent(filePath).then(content => {
-                  if (content) {
-                    notifyBodyChange(filePath, content);
-                  }
-                }).catch(e => {
-                  console.warn('[WorkspaceCrdtBridge] Failed to get body content:', e);
-                });
-              }
+              void emitBodyChangeFromPath(filePath);
             },
             onProgress: (completed, total) => {
               notifySyncProgress(completed, total);
@@ -1224,6 +1264,7 @@ export async function destroyWorkspace(): Promise<void> {
 
   // Clear file locks
   fileLocks.clear();
+  lastBodyChangeByPath.clear();
 
   rustApi = null;
   initialized = false;
@@ -2325,34 +2366,66 @@ export function onSyncStatus(callback: SyncStatusCallback): () => void {
   return () => syncStatusCallbacks.delete(callback);
 }
 
+function toReadableSyncError(error: unknown, depth = 0): string | undefined {
+  if (error === null || error === undefined) return undefined;
+  if (depth > 5) return undefined;
+
+  if (typeof error === 'string') {
+    const trimmed = error.trim();
+    if (!trimmed || trimmed === '[object Object]') return undefined;
+
+    if ((trimmed.startsWith('{') || trimmed.startsWith('[')) && trimmed.length < 20_000) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        const parsedMessage = toReadableSyncError(parsed, depth + 1);
+        if (parsedMessage) return parsedMessage;
+      } catch {
+        // Fall through and return original text.
+      }
+    }
+
+    return trimmed;
+  }
+
+  if (error instanceof Error) {
+    return error.message?.trim() || error.name || undefined;
+  }
+
+  if (typeof error === 'object') {
+    if (Array.isArray(error)) {
+      for (const item of error) {
+        const itemMessage = toReadableSyncError(item, depth + 1);
+        if (itemMessage) return itemMessage;
+      }
+      return undefined;
+    }
+
+    const errObj = error as Record<string, unknown>;
+    for (const key of ['message', 'error', 'detail', 'reason', 'description', 'cause']) {
+      const candidate = toReadableSyncError(errObj[key], depth + 1);
+      if (candidate) return candidate;
+    }
+
+    try {
+      const serialized = JSON.stringify(error);
+      if (serialized && serialized !== '{}' && serialized !== '[]') {
+        return serialized;
+      }
+    } catch {
+      // ignore
+    }
+    return undefined;
+  }
+
+  const primitive = String(error).trim();
+  return primitive || undefined;
+}
+
 /**
  * Notify all sync status callbacks.
  */
 function notifySyncStatus(status: 'idle' | 'connecting' | 'syncing' | 'synced' | 'error', error?: unknown): void {
-  // Convert error to string if it's not already (defensive handling for Rust objects)
-  let errorStr: string | undefined;
-  if (error !== undefined && error !== null) {
-    if (typeof error === 'string') {
-      errorStr = error;
-    } else if (error instanceof Error) {
-      errorStr = error.message;
-    } else if (typeof error === 'object') {
-      const errObj = error as Record<string, unknown>;
-      if (typeof errObj.message === 'string') {
-        errorStr = errObj.message;
-      } else if (typeof errObj.error === 'string') {
-        errorStr = errObj.error;
-      } else {
-        try {
-          errorStr = JSON.stringify(error);
-        } catch {
-          errorStr = 'Unknown error';
-        }
-      }
-    } else {
-      errorStr = String(error);
-    }
-  }
+  const errorStr = toReadableSyncError(error);
 
   // Only log sync status changes when there's an error or significant status change
   if (errorStr || status === 'synced' || status === 'error') {
@@ -2363,6 +2436,8 @@ function notifySyncStatus(status: 'idle' | 'connecting' | 'syncing' | 'synced' |
   collaborationStore.setSyncStatus(status);
   if (errorStr) {
     collaborationStore.setSyncError(errorStr);
+  } else if (status === 'error') {
+    collaborationStore.setSyncError('Unexpected sync error');
   } else if (status === 'synced' || status === 'idle') {
     collaborationStore.setSyncProgress(null); // Clear progress when done
   }
@@ -2607,7 +2682,9 @@ export function initEventSubscription(backend: Backend): () => void {
 
   // Subscribe to filesystem events
   fsEventSubscriptionId = backend.onFileSystemEvent((event: FileSystemEvent) => {
-    handleFileSystemEvent(event);
+    handleFileSystemEvent(event).catch((error) => {
+      console.error('[WorkspaceCrdtBridge] Failed to handle filesystem event:', error, event);
+    });
   });
 
   console.log('[WorkspaceCrdtBridge] Subscribed to filesystem events, id:', fsEventSubscriptionId);
@@ -2628,7 +2705,7 @@ export function initEventSubscription(backend: Backend): () => void {
  * This function processes events and triggers appropriate UI updates
  * and CRDT synchronization.
  */
-function handleFileSystemEvent(event: FileSystemEvent): void {
+async function handleFileSystemEvent(event: FileSystemEvent): Promise<void> {
   if (eventTouchesTempFile(event)) {
     return;
   }
@@ -2752,9 +2829,19 @@ function handleFileSystemEvent(event: FileSystemEvent): void {
         break;
       }
 
+      const rawDocName = typeof doc_name === 'string' ? doc_name : String(doc_name ?? '');
+      const canonicalDocName = is_body
+        ? await getCanonicalPathForSync(rawDocName)
+        : rawDocName;
+
+      if (is_body && !canonicalDocName) {
+        console.warn('[WorkspaceCrdtBridge] Dropping body sync message: empty canonical doc_name', doc_name);
+        break;
+      }
+
       // Route through WasmSyncClient (Rust handles framing and queuing)
       const docId = is_body
-        ? `body:${_workspaceId}/${doc_name}`
+        ? `body:${_workspaceId}/${canonicalDocName}`
         : `workspace:${_workspaceId}`;
 
       if (unifiedSyncTransport) {

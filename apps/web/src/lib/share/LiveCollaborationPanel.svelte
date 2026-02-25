@@ -33,6 +33,7 @@
   import { entryStore } from "@/models/stores/entryStore.svelte";
   import {
     getAuthState,
+    getCurrentWorkspace,
     createCheckoutSession,
     verifyAppleTransaction,
     restoreApplePurchases,
@@ -126,21 +127,25 @@
     }
   }
 
-  // Generate a unique workspace ID if none exists
-  function getOrCreateWorkspaceId(): string {
-    const existingId = workspaceStore.workspaceId;
-    if (existingId) return existingId;
-
-    // Generate a random ID based on timestamp and random bytes
-    const timestamp = Date.now().toString(36);
-    const random = Math.random().toString(36).substring(2, 8);
-    return `ws-${timestamp}-${random}`;
+  // Resolve the current server workspace ID used by session APIs.
+  // Share session creation must use a workspace ID that already exists on the server.
+  function getServerWorkspaceId(): string | null {
+    return getCurrentWorkspace()?.id ?? workspaceStore.workspaceId ?? null;
   }
 
   // Handle creating a session
   async function handleCreateSession() {
-    const wsId = getOrCreateWorkspaceId();
+    const wsId = getServerWorkspaceId();
     const audienceToUse = selectedAudience === "all" ? null : selectedAudience;
+
+    if (!wsId) {
+      const message = "No synced workspace selected for sharing";
+      shareSessionStore.setError(message);
+      toast.error("Failed to start session", {
+        description: "Select a synced workspace first, then try again.",
+      });
+      return;
+    }
 
     isCreating = true;
     try {
@@ -367,6 +372,11 @@
             >
               Restore Purchases
             </button>
+            <p class="text-[10px] text-muted-foreground/70 text-center leading-tight">
+              $4.99/month. Auto-renews monthly. Cancel anytime in Settings &gt; Apple&nbsp;ID &gt; Subscriptions.
+              <a href="https://diaryx.org/terms" class="underline" target="_blank" rel="noopener">Terms</a> &
+              <a href="https://diaryx.org/privacy" class="underline" target="_blank" rel="noopener">Privacy</a>.
+            </p>
           {:else}
             <Button
               variant="outline"

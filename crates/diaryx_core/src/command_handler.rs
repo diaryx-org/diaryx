@@ -14,7 +14,7 @@ use crate::error::{DiaryxError, Result};
 use crate::frontmatter;
 use crate::fs::AsyncFileSystem;
 use crate::link_parser;
-use crate::path_utils::{normalize_path, normalize_sync_path};
+use crate::path_utils::{normalize_path, normalize_sync_path, strip_workspace_root_prefix};
 
 #[cfg(feature = "crdt")]
 use crate::crdt::FileMetadata;
@@ -192,11 +192,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     /// `/Users/.../workspace/diaryx.md`). Functions like `resolve_attachment_storage_path`
     /// expect workspace-relative paths, so we strip the workspace root prefix first.
     fn to_workspace_relative(&self, path: &str) -> String {
-        if let Some(root) = self.workspace_root() {
-            let p = Path::new(path);
-            if let Ok(relative) = p.strip_prefix(&root) {
-                return relative.to_string_lossy().to_string();
-            }
+        if let Some(root) = self.workspace_root()
+            && let Some(relative) = strip_workspace_root_prefix(path, &root)
+        {
+            return relative;
         }
         path.to_string()
     }
@@ -683,19 +682,17 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                             {
                                 let canonical_old = self.get_canonical_path(&path);
                                 let canonical_new = self.get_canonical_path(&new_path_str);
-                                if canonical_old != canonical_new {
-                                    if let Some(body_manager) = self.body_doc_manager() {
-                                        if let Err(e) =
-                                            body_manager.rename(&canonical_old, &canonical_new)
-                                        {
-                                            log::warn!(
-                                                "Failed to migrate body doc on title rename {} -> {}: {}",
-                                                canonical_old,
-                                                canonical_new,
-                                                e
-                                            );
-                                        }
-                                    }
+                                if canonical_old != canonical_new
+                                    && let Some(body_manager) = self.body_doc_manager()
+                                    && let Err(e) =
+                                        body_manager.rename(&canonical_old, &canonical_new)
+                                {
+                                    log::warn!(
+                                        "Failed to migrate body doc on title rename {} -> {}: {}",
+                                        canonical_old,
+                                        canonical_new,
+                                        e
+                                    );
                                 }
                             }
 
@@ -5269,6 +5266,16 @@ mod tests {
                 other => panic!("Expected Response::Tree, got {:?}", other),
             }
         });
+    }
+
+    #[test]
+    fn test_to_workspace_relative_strips_corrupted_absolute_without_leading_slash() {
+        let fs = SyncToAsyncFs::new(InMemoryFileSystem::new());
+        let diaryx = Diaryx::new(fs);
+        diaryx.set_workspace_root(PathBuf::from("/Users/test/workspace"));
+
+        let relative = diaryx.to_workspace_relative("Users/test/workspace/notes/day.md");
+        assert_eq!(relative, "notes/day.md");
     }
 
     #[test]

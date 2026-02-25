@@ -203,20 +203,20 @@ impl FileMetadata {
                     }),
                     serde_yaml::Value::Mapping(map) => {
                         let key = |name: &str| serde_yaml::Value::String(name.to_string());
-                        let path = map.get(&key("path")).and_then(|v| v.as_str())?;
+                        let path = map.get(key("path")).and_then(|v| v.as_str())?;
                         let source = map
-                            .get(&key("source"))
+                            .get(key("source"))
                             .and_then(|v| v.as_str())
                             .unwrap_or("local");
-                        let hash = map.get(&key("hash")).and_then(|v| v.as_str()).unwrap_or("");
+                        let hash = map.get(key("hash")).and_then(|v| v.as_str()).unwrap_or("");
                         let mime_type = map
-                            .get(&key("mime_type"))
+                            .get(key("mime_type"))
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
-                        let size = map.get(&key("size")).and_then(|v| v.as_u64()).unwrap_or(0);
-                        let uploaded_at = map.get(&key("uploaded_at")).and_then(|v| v.as_i64());
+                        let size = map.get(key("size")).and_then(|v| v.as_u64()).unwrap_or(0);
+                        let uploaded_at = map.get(key("uploaded_at")).and_then(|v| v.as_i64());
                         let deleted = map
-                            .get(&key("deleted"))
+                            .get(key("deleted"))
                             .and_then(|v| v.as_bool())
                             .unwrap_or(false);
 

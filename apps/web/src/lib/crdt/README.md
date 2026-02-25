@@ -65,12 +65,29 @@ fallback timer.
 `sync_complete` (when present) is still surfaced for metrics/progress callbacks,
 but it is not required to mark the workspace as synced.
 
+Sync status error payloads are normalized before callback/UI propagation, so
+object-shaped errors are rendered as readable text instead of raw
+`[object Object]`.
+
 ## Canonical Path Resolution for Sync Events
 
 `workspaceCrdtBridge.ts` resolves canonical paths for sync decisions via
 backend `GetCanonicalPath` (`syncHelpers.getCanonicalPath`) when available, and
 falls back to local normalization only if backend canonicalization is
 unavailable.
+
+When backend canonicalization returns an absolute path (for example during
+native workspace transitions), the bridge also strips the current workspace
+root path in TypeScript as a defensive fallback. This keeps event matching
+stable between absolute storage paths and canonical workspace-relative paths.
+
+On native/Tauri backends, canonicalization now prefers that local fallback
+path and skips the `GetCanonicalPath` command. This avoids `SyncHandler not
+enabled` command errors in guest/in-memory execution contexts.
+
+For outgoing `SendSyncMessage` body events, the bridge canonicalizes `doc_name`
+before constructing `body:{workspace_id}/{path}` doc IDs, so absolute/storage
+paths do not leak into wire-level body document IDs.
 
 For metadata mutations addressed by filesystem path, the bridge resolves the
 underlying CRDT storage key (`doc_id` in doc-ID mode) before calling `Get/SetCrdtFile`,
@@ -85,6 +102,10 @@ resolver remains as fallback.
 `App.svelte` uses the async bridge method when matching metadata/body events to
 the currently open entry. This avoids alias mismatches such as `./README.md`
 vs `README.md` and prevents duplicate or missed UI updates.
+
+`workspaceCrdtBridge.ts` deduplicates identical body-change payloads per path
+before notifying UI listeners, which avoids duplicate editor updates when the
+same remote body state is observed more than once.
 
 `workspaceCrdtBridge.ts` also exposes `onFileRenamed(oldPath, newPath)` so UI
 state can remap the currently open entry path immediately when a rename arrives.

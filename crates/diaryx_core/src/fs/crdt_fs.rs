@@ -481,18 +481,17 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
                 metadata.attachments = existing.attachments.clone();
             } else {
                 for attachment in &mut metadata.attachments {
-                    if attachment.hash.is_empty() {
-                        if let Some(existing_ref) = existing
+                    if attachment.hash.is_empty()
+                        && let Some(existing_ref) = existing
                             .attachments
                             .iter()
                             .find(|r| r.path == attachment.path && !r.hash.is_empty())
-                        {
-                            attachment.hash = existing_ref.hash.clone();
-                            attachment.mime_type = existing_ref.mime_type.clone();
-                            attachment.size = existing_ref.size;
-                            attachment.uploaded_at = existing_ref.uploaded_at;
-                            attachment.source = existing_ref.source.clone();
-                        }
+                    {
+                        attachment.hash = existing_ref.hash.clone();
+                        attachment.mime_type = existing_ref.mime_type.clone();
+                        attachment.size = existing_ref.size;
+                        attachment.uploaded_at = existing_ref.uploaded_at;
+                        attachment.source = existing_ref.source.clone();
                     }
                 }
             }

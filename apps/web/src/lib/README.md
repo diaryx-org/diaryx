@@ -88,6 +88,15 @@ The dialog's local->sync upload path copies local workspace files to the server
 (snapshot upload) and keeps local files on device; it does not delete or move
 local data.
 
+On Tauri, the dialog resets the location field when opened and derives a
+fresh default path from the app document directory + workspace name when no
+explicit location is provided, so "start fresh" flows don't reuse a previous
+workspace folder accidentally.
+
+For local->sync uploads, the snapshot root is resolved from the selected local
+workspace's stored filesystem path when available (instead of ambient backend
+path), preventing uploads from reading a different currently-open workspace.
+
 `App.svelte` routes the editor empty-workspace `Initialize workspace` action
 to the same setup flow (`AddWorkspaceDialog.svelte`) instead of exposing separate
 `Create Root Index` and `Import from ZIP` buttons in the editor area.

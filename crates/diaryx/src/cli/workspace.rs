@@ -3291,6 +3291,50 @@ fn convert_file_links(
         }
     }
 
+    fn attachment_title(path: &str) -> String {
+        Path::new(path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(path)
+            .to_string()
+    }
+
+    fn resolve_attachment_link_target_with_hint(
+        raw_link: &str,
+        from_canonical_path: &str,
+        source_format_hint: Option<link_parser::LinkFormat>,
+    ) -> String {
+        let parsed = link_parser::parse_link(raw_link);
+
+        if parsed.path_type == link_parser::PathType::Ambiguous {
+            let current_dir = Path::new(from_canonical_path)
+                .parent()
+                .and_then(|parent| parent.to_str())
+                .unwrap_or("");
+            let plain_path_looks_canonical = !current_dir.is_empty()
+                && parsed.path.starts_with(current_dir)
+                && parsed
+                    .path
+                    .as_bytes()
+                    .get(current_dir.len())
+                    .is_some_and(|ch| *ch == b'/');
+
+            if plain_path_looks_canonical {
+                return link_parser::to_canonical_with_link_format(
+                    &parsed,
+                    Path::new(from_canonical_path),
+                    Some(link_parser::LinkFormat::PlainCanonical),
+                );
+            }
+        }
+
+        link_parser::to_canonical_with_link_format(
+            &parsed,
+            Path::new(from_canonical_path),
+            source_format_hint,
+        )
+    }
+
     // Convert part_of if present (can be string or array)
     if let Some(part_of_value) = fm.get("part_of") {
         if let Some(part_of_str) = part_of_value.as_str() {
@@ -3368,6 +3412,47 @@ fn convert_file_links(
 
             if contents_changed {
                 fm.insert("contents".to_string(), Value::Sequence(new_contents));
+                result.was_modified = true;
+            }
+        }
+    }
+
+    // Convert attachments if present
+    if let Some(attachments_value) = fm.get("attachments") {
+        if let Some(attachments_seq) = attachments_value.as_sequence() {
+            let mut new_attachments = Vec::new();
+            let mut attachments_changed = false;
+
+            for item in attachments_seq {
+                if let Some(item_str) = item.as_str() {
+                    let parsed = link_parser::parse_link(item_str);
+                    let canonical_target = resolve_attachment_link_target_with_hint(
+                        item_str,
+                        relative_path,
+                        source_format_hint,
+                    );
+                    let title = parsed
+                        .title
+                        .unwrap_or_else(|| attachment_title(&canonical_target));
+                    let converted = link_parser::format_link_with_format(
+                        &canonical_target,
+                        &title,
+                        target_format,
+                        relative_path,
+                    );
+                    if converted != item_str {
+                        track_source_format(&mut result.source_formats, item_str);
+                        attachments_changed = true;
+                        result.links_converted += 1;
+                    }
+                    new_attachments.push(Value::String(converted));
+                } else {
+                    new_attachments.push(item.clone());
+                }
+            }
+
+            if attachments_changed {
+                fm.insert("attachments".to_string(), Value::Sequence(new_attachments));
                 result.was_modified = true;
             }
         }

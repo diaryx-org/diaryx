@@ -2,8 +2,8 @@
   /**
    * LinkSettings - Link format configuration for the workspace
    *
-   * Allows users to configure how links in part_of and contents properties
-   * are formatted, and to convert existing links to a different format.
+   * Allows users to configure how links in part_of, contents, and attachments
+   * properties are formatted, and to convert existing links to a different format.
    */
   import { Button } from "$lib/components/ui/button";
   import { Label } from "$lib/components/ui/label";
@@ -82,7 +82,8 @@
 
     <p class="text-xs text-muted-foreground px-1">
       Choose how links in <code class="bg-muted px-1 rounded">part_of</code> and
-      <code class="bg-muted px-1 rounded">contents</code> properties are formatted.
+      <code class="bg-muted px-1 rounded">contents</code> and
+      <code class="bg-muted px-1 rounded">attachments</code> properties are formatted.
     </p>
 
     <div class="space-y-3 px-1">
@@ -128,7 +129,8 @@
         <p class="text-xs text-muted-foreground">
           Convert all existing links in your workspace to the selected format.
           This will update <code class="bg-muted px-1 rounded">part_of</code> and
-          <code class="bg-muted px-1 rounded">contents</code> in all files.
+          <code class="bg-muted px-1 rounded">contents</code> and
+          <code class="bg-muted px-1 rounded">attachments</code> in all files.
         </p>
 
         <Button

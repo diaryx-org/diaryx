@@ -1089,7 +1089,8 @@ pub enum Command {
 
     /// Convert all links in workspace files to a target format.
     ///
-    /// This scans files and rewrites `part_of` and `contents` properties.
+    /// This scans files and rewrites `part_of`, `contents`, and `attachments`
+    /// properties.
     /// Returns the count of files modified and links converted.
     ConvertLinks {
         /// Path to the workspace root index file.

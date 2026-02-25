@@ -670,7 +670,7 @@ for child in &tree.children {
 
 ### Link Formats
 
-Configure how `part_of` and `contents` links are formatted:
+Configure how `part_of`, `contents`, and `attachments` links are formatted:
 
 - `LinkFormat::MarkdownRoot` (default) - `[../parent.md](../parent.md)` (clickable in editors)
 - `LinkFormat::Relative` - `../parent.md` (simple relative paths)

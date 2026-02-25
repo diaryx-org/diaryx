@@ -1,4 +1,5 @@
-//! Portable path link parsing and formatting for `part_of` and `contents` properties.
+//! Portable path link parsing and formatting for frontmatter path properties
+//! such as `part_of`, `contents`, and `attachments`.
 //!
 //! This module provides utilities for working with file references in frontmatter that are:
 //! - **Portable**: Work across Obsidian, Diaryx, and other markdown editors
@@ -39,7 +40,7 @@ use ts_rs::TS;
 
 /// The format to use when writing links to frontmatter.
 ///
-/// This controls how `part_of` and `contents` paths are serialized.
+/// This controls how frontmatter link paths are serialized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings/")]
 #[serde(rename_all = "snake_case")]

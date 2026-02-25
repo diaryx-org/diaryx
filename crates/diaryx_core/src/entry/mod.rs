@@ -382,15 +382,25 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
     /// Creates the attachments property if it doesn't exist.
     pub async fn add_attachment(&self, path: &str, attachment_path: &str) -> Result<()> {
         let (mut frontmatter, body) = self.parse_file_or_create_frontmatter(path).await?;
+        let parsed_target = link_parser::parse_link(attachment_path);
+        let target_canonical = link_parser::to_canonical(&parsed_target, Path::new(path));
 
         let attachments = frontmatter
             .entry("attachments".to_string())
             .or_insert(Value::Sequence(vec![]));
 
         if let Value::Sequence(list) = attachments {
-            let new_attachment = Value::String(attachment_path.to_string());
-            if !list.contains(&new_attachment) {
-                list.push(new_attachment);
+            let exists = list.iter().any(|item| {
+                if let Value::String(existing) = item {
+                    let parsed_existing = link_parser::parse_link(existing);
+                    return link_parser::to_canonical(&parsed_existing, Path::new(path))
+                        == target_canonical;
+                }
+                false
+            });
+
+            if !exists {
+                list.push(Value::String(attachment_path.to_string()));
             }
         }
 
@@ -405,11 +415,14 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
             Err(DiaryxError::NoFrontmatter(_)) => return Ok(()),
             Err(e) => return Err(e),
         };
+        let parsed_target = link_parser::parse_link(attachment_path);
+        let target_canonical = link_parser::to_canonical(&parsed_target, Path::new(path));
 
         if let Some(Value::Sequence(list)) = frontmatter.get_mut("attachments") {
             list.retain(|item| {
                 if let Value::String(s) = item {
-                    s != attachment_path
+                    let parsed_existing = link_parser::parse_link(s);
+                    link_parser::to_canonical(&parsed_existing, Path::new(path)) != target_canonical
                 } else {
                     true
                 }
@@ -765,15 +778,25 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
     /// Creates the attachments property if it doesn't exist.
     pub fn add_attachment(&self, path: &str, attachment_path: &str) -> Result<()> {
         let (mut frontmatter, body) = self.parse_file_or_create_frontmatter(path)?;
+        let parsed_target = link_parser::parse_link(attachment_path);
+        let target_canonical = link_parser::to_canonical(&parsed_target, Path::new(path));
 
         let attachments = frontmatter
             .entry("attachments".to_string())
             .or_insert(Value::Sequence(vec![]));
 
         if let Value::Sequence(list) = attachments {
-            let new_attachment = Value::String(attachment_path.to_string());
-            if !list.contains(&new_attachment) {
-                list.push(new_attachment);
+            let exists = list.iter().any(|item| {
+                if let Value::String(existing) = item {
+                    let parsed_existing = link_parser::parse_link(existing);
+                    return link_parser::to_canonical(&parsed_existing, Path::new(path))
+                        == target_canonical;
+                }
+                false
+            });
+
+            if !exists {
+                list.push(Value::String(attachment_path.to_string()));
             }
         }
 
@@ -788,11 +811,14 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
             Err(DiaryxError::NoFrontmatter(_)) => return Ok(()),
             Err(e) => return Err(e),
         };
+        let parsed_target = link_parser::parse_link(attachment_path);
+        let target_canonical = link_parser::to_canonical(&parsed_target, Path::new(path));
 
         if let Some(Value::Sequence(list)) = frontmatter.get_mut("attachments") {
             list.retain(|item| {
                 if let Value::String(s) = item {
-                    s != attachment_path
+                    let parsed_existing = link_parser::parse_link(s);
+                    link_parser::to_canonical(&parsed_existing, Path::new(path)) != target_canonical
                 } else {
                     true
                 }

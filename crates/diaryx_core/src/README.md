@@ -82,6 +82,9 @@ Returns `Response::String(new_path)` if a rename occurred, `Response::Ok` otherw
   for markdown links, root-relative refs, plain relative refs, and plain
   canonical refs that include the current entry directory. This keeps
   get/delete/move attachment commands consistent for nested entries.
+- Frontmatter attachment values set through `SetFrontmatterProperty` and
+  `ConvertLinks` are normalized through the same link parser pipeline used for
+  `part_of`/`contents`, then formatted according to workspace `link_format`.
 
 ## Command Path Resolution Notes
 

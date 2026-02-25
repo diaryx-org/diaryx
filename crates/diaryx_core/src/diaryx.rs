@@ -21,7 +21,7 @@
 //! let tree = diaryx.workspace().inner().get_tree("workspace/").await?;
 //! ```
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 #[cfg(feature = "crdt")]
 use std::sync::Arc;
 
@@ -31,6 +31,7 @@ use serde_yaml::Value;
 use crate::error::{DiaryxError, Result};
 use crate::frontmatter;
 use crate::fs::AsyncFileSystem;
+use crate::link_parser;
 
 #[cfg(feature = "crdt")]
 use crate::crdt::{BodyDocManager, CrdtStorage, WorkspaceCrdt};
@@ -112,7 +113,7 @@ pub struct Diaryx<FS: AsyncFileSystem> {
     /// The workspace root directory (for computing canonical paths and link formatting).
     /// Uses RwLock for interior mutability since `set_workspace_root` takes `&self`.
     workspace_root: std::sync::RwLock<Option<PathBuf>>,
-    /// Link format for part_of and contents properties.
+    /// Link format for `part_of`, `contents`, and `attachments` properties.
     link_format: crate::link_parser::LinkFormat,
     /// CRDT workspace document (optional, requires `crdt` feature).
     /// Wrapped in Arc to allow sharing between backend and command execution.
@@ -148,7 +149,7 @@ impl<FS: AsyncFileSystem> Diaryx<FS> {
         }
     }
 
-    /// Set the link format for part_of and contents properties.
+    /// Set the link format for `part_of`, `contents`, and `attachments` properties.
     pub fn set_link_format(&mut self, format: crate::link_parser::LinkFormat) {
         self.link_format = format;
     }
@@ -576,6 +577,8 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
     pub async fn add_attachment(&self, path: &str, attachment_path: &str) -> Result<()> {
         let content = self.read_raw_or_empty(path).await?;
         let mut parsed = frontmatter::parse_or_empty(&content)?;
+        let parsed_target = link_parser::parse_link(attachment_path);
+        let target_canonical = link_parser::to_canonical(&parsed_target, Path::new(path));
 
         let attachments = parsed
             .frontmatter
@@ -583,9 +586,16 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
             .or_insert(Value::Sequence(vec![]));
 
         if let Value::Sequence(list) = attachments {
-            let new_attachment = Value::String(attachment_path.to_string());
-            if !list.contains(&new_attachment) {
-                list.push(new_attachment);
+            let exists = list.iter().any(|item| {
+                if let Value::String(existing) = item {
+                    let parsed_existing = link_parser::parse_link(existing);
+                    return link_parser::to_canonical(&parsed_existing, Path::new(path))
+                        == target_canonical;
+                }
+                false
+            });
+            if !exists {
+                list.push(Value::String(attachment_path.to_string()));
             }
         }
 
@@ -598,6 +608,8 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
             Ok(c) => c,
             Err(_) => return Ok(()),
         };
+        let parsed_target = link_parser::parse_link(attachment_path);
+        let target_canonical = link_parser::to_canonical(&parsed_target, Path::new(path));
 
         let mut parsed = match frontmatter::parse(&content) {
             Ok(p) => p,
@@ -608,7 +620,8 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
         if let Some(Value::Sequence(list)) = parsed.frontmatter.get_mut("attachments") {
             list.retain(|item| {
                 if let Value::String(s) = item {
-                    s != attachment_path
+                    let parsed_existing = link_parser::parse_link(s);
+                    link_parser::to_canonical(&parsed_existing, Path::new(path)) != target_canonical
                 } else {
                     true
                 }

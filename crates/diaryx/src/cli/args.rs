@@ -804,8 +804,8 @@ pub enum WorkspaceCommands {
 
     /// Convert all links in the workspace to a specific format
     ///
-    /// Rewrites `part_of` and `contents` properties in all workspace files
-    /// to use the specified link format.
+    /// Rewrites `part_of`, `contents`, and `attachments` properties in all
+    /// workspace files to use the specified link format.
     #[command(alias = "convert")]
     ConvertLinks {
         /// Target link format

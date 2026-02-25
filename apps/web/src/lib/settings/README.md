@@ -48,7 +48,7 @@ Settings panel components for the settings dialog.
 | `GoogleDriveSettings.svelte` | Google Drive integration |
 | `FormatImportSettings.svelte` | Import from Day One or Markdown formats (uses WASM parsers + ImportEntries command) |
 | `ImportSettings.svelte` | Import from file (raw ZIP extraction) |
-| `LinkSettings.svelte` | Link format settings (workspace config) |
+| `LinkSettings.svelte` | Link format settings (workspace config) + bulk conversion for `part_of`/`contents`/`attachments` |
 | `S3BackupSettings.svelte` | S3 backup configuration |
 | `StorageSettings.svelte` | Storage backend settings |
 | `SyncSettings.svelte` | Sync server settings + synced attachment storage usage |

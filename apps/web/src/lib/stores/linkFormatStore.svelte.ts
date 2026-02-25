@@ -115,6 +115,7 @@ export function createLinkFormatStore() {
 
   /**
    * Convert all links in the workspace to the target format.
+   * Rewrites `part_of`, `contents`, and `attachments`.
    */
   async function convertLinks(
     targetFormat: LinkFormatValue,

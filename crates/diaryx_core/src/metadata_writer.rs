@@ -5,7 +5,7 @@
 //!
 //! # Link Formats
 //!
-//! When writing `part_of` and `contents` to frontmatter, this module creates
+//! When writing `part_of`, `contents`, and `attachments` to frontmatter, this module creates
 //! portable markdown links in the format: `[Title](/workspace/path.md)`
 //!
 //! These links are:
@@ -30,7 +30,7 @@ use crate::link_parser;
 /// Metadata structure for file frontmatter.
 /// This mirrors the CRDT FileMetadata but with simpler types for serialization.
 ///
-/// When serialized to YAML, `part_of` and `contents` are formatted as markdown links
+/// When serialized to YAML, `part_of`, `contents`, and `attachments` are formatted as markdown links
 /// with workspace-root paths: `[Title](/path/to/file.md)`
 #[derive(Debug, Clone, Default)]
 pub struct FrontmatterMetadata {
@@ -63,7 +63,7 @@ impl FrontmatterMetadata {
 
     /// Parse from a JSON value with the canonical file path.
     ///
-    /// This method formats `part_of` and `contents` as markdown links with
+    /// This method formats `part_of`, `contents`, and `attachments` as markdown links with
     /// workspace-root paths: `[Title](/path/to/file.md)`
     ///
     /// # Arguments
@@ -79,7 +79,7 @@ impl FrontmatterMetadata {
 
     /// Parse from a JSON value, formatting links with titles from a resolver function.
     ///
-    /// This method formats `part_of` and `contents` as markdown links with
+    /// This method formats `part_of`, `contents`, and `attachments` as markdown links with
     /// workspace-root paths: `[Title](/path/to/file.md)`
     ///
     /// # Arguments
@@ -155,6 +155,19 @@ impl FrontmatterMetadata {
                         } else {
                             None
                         }
+                    })
+                    .map(|raw_value| {
+                        // Parse incoming value to avoid double-wrapping existing markdown links.
+                        let parsed = link_parser::parse_link(&raw_value);
+                        let canonical_path = &parsed.path;
+                        let link_title = parsed.title.clone().unwrap_or_else(|| {
+                            std::path::Path::new(canonical_path)
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or(canonical_path)
+                                .to_string()
+                        });
+                        link_parser::format_link(canonical_path, &link_title)
                     })
                     .collect()
             });
@@ -819,6 +832,41 @@ mod tests {
             Some(vec![
                 "[Child1](/folder/child1.md)".to_string(),
                 "[Child2](/folder/sub/child2.md)".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn test_from_json_with_markdown_links_formats_attachments() {
+        let json = serde_json::json!({
+            "title": "Entry",
+            "attachments": ["folder/_attachments/image.png", "folder/_attachments/report.pdf"],
+        });
+
+        let fm = FrontmatterMetadata::from_json_with_file_path(&json, Some("folder/entry.md"));
+        assert_eq!(
+            fm.attachments,
+            Some(vec![
+                "[image.png](/folder/_attachments/image.png)".to_string(),
+                "[report.pdf](/folder/_attachments/report.pdf)".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_from_json_with_markdown_links_formats_binary_ref_attachments() {
+        let json = serde_json::json!({
+            "title": "Entry",
+            "attachments": [
+                { "path": "folder/_attachments/photo.jpg", "hash": "abc" }
+            ],
+        });
+
+        let fm = FrontmatterMetadata::from_json_with_file_path(&json, Some("folder/entry.md"));
+        assert_eq!(
+            fm.attachments,
+            Some(vec![
+                "[photo.jpg](/folder/_attachments/photo.jpg)".to_string()
             ])
         );
     }

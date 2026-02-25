@@ -379,6 +379,29 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         link_parser::format_link_with_format(canonical_path, &title, format, from_canonical_path)
     }
 
+    /// Resolve a display title for an attachment link.
+    ///
+    /// Attachments should keep their filename (including extension) as the
+    /// link title to avoid lossy title prettification (e.g. dropping `.png`).
+    fn resolve_attachment_title(canonical_path: &str) -> String {
+        Path::new(canonical_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(canonical_path)
+            .to_string()
+    }
+
+    /// Format a canonical attachment path as a frontmatter link.
+    fn format_attachment_link_for_file(
+        &self,
+        canonical_path: &str,
+        from_canonical_path: &str,
+    ) -> String {
+        let title = Self::resolve_attachment_title(canonical_path);
+        let format = self.link_format();
+        link_parser::format_link_with_format(canonical_path, &title, format, from_canonical_path)
+    }
+
     /// Format a canonical path as a link (simple version without source file context).
     ///
     /// For formats that require a source file (relative formats), this falls back
@@ -416,7 +439,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         link_parser::format_link_with_format(canonical_path, &title, format, from_canonical_path)
     }
 
-    /// Resolve a frontmatter reference (`part_of`, `contents`) to canonical workspace path.
+    /// Resolve a frontmatter reference (`part_of`, `contents`, `attachments`) to
+    /// canonical workspace path.
     ///
     /// Uses the configured workspace link format as a hint so PlainCanonical
     /// workspaces treat ambiguous plain paths as workspace-root references.
@@ -426,6 +450,48 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             &parsed,
             Path::new(from_canonical_path),
             Some(self.link_format()),
+        )
+    }
+
+    /// Resolve an attachment frontmatter reference to canonical workspace path.
+    ///
+    /// In addition to normal link parsing semantics, this treats ambiguous
+    /// plain paths that start with the current entry directory as canonical
+    /// workspace paths (for compatibility with persisted attachment refs).
+    fn resolve_attachment_link_target_with_hint(
+        &self,
+        raw_link: &str,
+        from_canonical_path: &str,
+        source_format_hint: Option<link_parser::LinkFormat>,
+    ) -> String {
+        let parsed = link_parser::parse_link(raw_link);
+
+        if parsed.path_type == link_parser::PathType::Ambiguous {
+            let current_dir = Path::new(from_canonical_path)
+                .parent()
+                .and_then(|parent| parent.to_str())
+                .unwrap_or("");
+            let plain_path_looks_canonical = !current_dir.is_empty()
+                && parsed.path.starts_with(current_dir)
+                && parsed
+                    .path
+                    .as_bytes()
+                    .get(current_dir.len())
+                    .is_some_and(|ch| *ch == b'/');
+
+            if plain_path_looks_canonical {
+                return link_parser::to_canonical_with_link_format(
+                    &parsed,
+                    Path::new(from_canonical_path),
+                    Some(link_parser::LinkFormat::PlainCanonical),
+                );
+            }
+        }
+
+        link_parser::to_canonical_with_link_format(
+            &parsed,
+            Path::new(from_canonical_path),
+            source_format_hint,
         )
     }
 
@@ -552,7 +618,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 value,
                 root_index_path,
             } => {
-                // Handle part_of and contents specially - format as markdown links
+                // Handle part_of/contents/attachments specially - normalize and
+                // format links according to workspace settings.
                 // CrdtFs.write_file extracts metadata from frontmatter automatically
                 #[cfg(feature = "crdt")]
                 {
@@ -614,6 +681,65 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                             }
 
                             // Emit workspace sync message
+                            self.emit_workspace_sync("SetFrontmatterProperty");
+                            return Ok(Response::Ok);
+                        }
+                    } else if key == "attachments" {
+                        // Handle attachments array - format each item as a normalized link.
+                        if let serde_json::Value::Array(ref arr) = value {
+                            let mut formatted_links: Vec<Value> = Vec::new();
+
+                            for item in arr {
+                                if let serde_json::Value::String(s) = item {
+                                    let canonical_target = self
+                                        .resolve_attachment_link_target_with_hint(
+                                            s,
+                                            &canonical_path,
+                                            Some(self.link_format()),
+                                        );
+                                    let formatted = self.format_attachment_link_for_file(
+                                        &canonical_target,
+                                        &canonical_path,
+                                    );
+                                    formatted_links.push(Value::String(formatted));
+                                }
+                            }
+
+                            let yaml_value = Value::Sequence(formatted_links);
+                            self.entry()
+                                .set_frontmatter_property(&path, &key, yaml_value)
+                                .await?;
+
+                            if let Some(crdt_ops) = self.crdt()
+                                && let Some(metadata) = crdt_ops.get_file(&canonical_path)
+                            {
+                                self.track_metadata_for_sync(&canonical_path, &metadata);
+                            }
+
+                            self.emit_workspace_sync("SetFrontmatterProperty");
+                            return Ok(Response::Ok);
+                        } else if let serde_json::Value::String(ref s) = value {
+                            // Accept scalar attachment values for backwards compatibility.
+                            let canonical_target = self.resolve_attachment_link_target_with_hint(
+                                s,
+                                &canonical_path,
+                                Some(self.link_format()),
+                            );
+                            let formatted = self.format_attachment_link_for_file(
+                                &canonical_target,
+                                &canonical_path,
+                            );
+                            let yaml_value = Value::String(formatted);
+                            self.entry()
+                                .set_frontmatter_property(&path, &key, yaml_value)
+                                .await?;
+
+                            if let Some(crdt_ops) = self.crdt()
+                                && let Some(metadata) = crdt_ops.get_file(&canonical_path)
+                            {
+                                self.track_metadata_for_sync(&canonical_path, &metadata);
+                            }
+
                             self.emit_workspace_sync("SetFrontmatterProperty");
                             return Ok(Response::Ok);
                         }
@@ -737,7 +863,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 // We only need to track for echo detection and emit sync.
                 #[cfg(feature = "crdt")]
                 {
-                    if key == "part_of" || key == "contents" {
+                    if key == "part_of" || key == "contents" || key == "attachments" {
                         let canonical_path = self.get_canonical_path(&path);
 
                         // Track for echo detection (read metadata that CrdtFs already set)
@@ -2457,13 +2583,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     format!("{}/{}", entry_parent, attachment_rel_path)
                 };
 
-                // Format as markdown root-relative link: [filename](/canonical/path)
-                let link = link_parser::format_link_with_format(
-                    &canonical_attachment,
-                    &filename,
-                    link_parser::LinkFormat::MarkdownRoot,
-                    &entry_path,
-                );
+                // Format using the configured workspace link format.
+                let entry_canonical = self.get_canonical_path(&entry_path);
+                let link =
+                    self.format_attachment_link_for_file(&canonical_attachment, &entry_canonical);
 
                 self.entry().add_attachment(&entry_path, &link).await?;
 
@@ -2582,8 +2705,15 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .remove_attachment(&source_entry_path, &attachment_path)
                     .await?;
                 let target_rel_path = format!("_attachments/{}", final_filename);
+                let target_entry_canonical = self.get_canonical_path(&target_entry_path);
+                let target_canonical_path =
+                    self.resolve_frontmatter_link_target(&target_rel_path, &target_entry_canonical);
+                let formatted_target = self.format_attachment_link_for_file(
+                    &target_canonical_path,
+                    &target_entry_canonical,
+                );
                 self.entry()
-                    .add_attachment(&target_entry_path, &target_rel_path)
+                    .add_attachment(&target_entry_path, &formatted_target)
                     .await?;
 
                 // Delete the original file
@@ -2595,7 +2725,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         source: e,
                     })?;
 
-                Ok(Response::String(target_rel_path))
+                // Return canonical path so callers can match CRDT BinaryRef paths directly.
+                Ok(Response::String(target_canonical_path))
             }
 
             // === Import Operations ===
@@ -2945,7 +3076,23 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         .and_then(|v| v.as_sequence())
                         .map(|seq| {
                             seq.iter()
-                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                .filter_map(|v| v.as_str())
+                                .map(|raw_value| {
+                                    let parsed_link = link_parser::parse_link(raw_value);
+                                    let resolved = link_parser::to_canonical_with_link_format(
+                                        &parsed_link,
+                                        Path::new(&canonical_path),
+                                        link_format_hint,
+                                    );
+                                    log::debug!(
+                                        "[InitializeWorkspaceCrdt] attachments: file={} (from '{}', type={:?}) -> {}",
+                                        canonical_path,
+                                        raw_value,
+                                        parsed_link.path_type,
+                                        resolved
+                                    );
+                                    resolved
+                                })
                                 .collect()
                         })
                         .unwrap_or_default();
@@ -4025,7 +4172,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     /// Convert all links in workspace files to a target format.
     ///
     /// This method scans all files in the workspace tree and rewrites
-    /// `part_of` and `contents` properties to use the specified format.
+    /// `part_of`, `contents`, and `attachments` properties to use the
+    /// specified format.
     async fn convert_workspace_links(
         &self,
         root_index_path: &Path,
@@ -4155,6 +4303,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         let mut fm = parsed.frontmatter.clone();
         let mut modified = false;
 
+        fn attachment_title(path: &str) -> String {
+            Path::new(path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(path)
+                .to_string()
+        }
+
         // Convert part_of if present (can be string or array)
         if let Some(part_of_value) = fm.get("part_of") {
             if let Some(part_of_str) = part_of_value.as_str() {
@@ -4230,6 +4386,46 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
             if contents_changed {
                 fm.insert("contents".to_string(), Value::Sequence(new_contents));
+                modified = true;
+            }
+        }
+
+        // Convert attachments if present
+        if let Some(attachments_value) = fm.get("attachments")
+            && let Some(attachments_seq) = attachments_value.as_sequence()
+        {
+            let mut new_attachments = Vec::new();
+            let mut attachments_changed = false;
+
+            for item in attachments_seq {
+                if let Some(item_str) = item.as_str() {
+                    let parsed = link_parser::parse_link(item_str);
+                    let canonical_target = self.resolve_attachment_link_target_with_hint(
+                        item_str,
+                        relative_path,
+                        source_format_hint,
+                    );
+                    let title = parsed
+                        .title
+                        .unwrap_or_else(|| attachment_title(&canonical_target));
+                    let converted = link_parser::format_link_with_format(
+                        &canonical_target,
+                        &title,
+                        target_format,
+                        relative_path,
+                    );
+                    if converted != item_str {
+                        attachments_changed = true;
+                        links_converted += 1;
+                    }
+                    new_attachments.push(Value::String(converted));
+                } else {
+                    new_attachments.push(item.clone());
+                }
+            }
+
+            if attachments_changed {
+                fm.insert("attachments".to_string(), Value::Sequence(new_attachments));
                 modified = true;
             }
         }
@@ -5320,6 +5516,130 @@ mod tests {
                 }
                 other => panic!("Expected Response::ValidationResult, got {:?}", other),
             }
+        });
+    }
+
+    #[test]
+    fn test_set_frontmatter_property_normalizes_attachments_to_link_format() {
+        block_on(async {
+            let fs = SyncToAsyncFs::new(InMemoryFileSystem::new());
+            let mut diaryx = Diaryx::new(fs);
+            diaryx.set_link_format(link_parser::LinkFormat::PlainRelative);
+
+            diaryx
+                .fs()
+                .create_dir_all(Path::new("notes"))
+                .await
+                .unwrap();
+            diaryx
+                .fs()
+                .write_file(Path::new("notes/day.md"), "---\ntitle: Day\n---\n\n# Day\n")
+                .await
+                .unwrap();
+
+            diaryx
+                .execute(Command::SetFrontmatterProperty {
+                    path: "notes/day.md".to_string(),
+                    key: "attachments".to_string(),
+                    value: serde_json::json!([
+                        "notes/_attachments/a.png",
+                        "[Doc](/notes/_attachments/report.pdf)"
+                    ]),
+                    root_index_path: None,
+                })
+                .await
+                .unwrap();
+
+            let updated = diaryx
+                .fs()
+                .read_to_string(Path::new("notes/day.md"))
+                .await
+                .unwrap();
+            let parsed = crate::frontmatter::parse_or_empty(&updated).unwrap();
+            let attachments: Vec<String> = parsed
+                .frontmatter
+                .get("attachments")
+                .and_then(|v| v.as_sequence())
+                .map(|seq| {
+                    seq.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            assert_eq!(
+                attachments,
+                vec![
+                    "_attachments/a.png".to_string(),
+                    "_attachments/report.pdf".to_string()
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn test_convert_links_converts_attachment_values() {
+        block_on(async {
+            let fs = SyncToAsyncFs::new(InMemoryFileSystem::new());
+            let mut diaryx = Diaryx::new(fs);
+            diaryx.set_link_format(link_parser::LinkFormat::MarkdownRoot);
+
+            diaryx
+                .fs()
+                .create_dir_all(Path::new("notes"))
+                .await
+                .unwrap();
+            diaryx
+                .fs()
+                .write_file(
+                    Path::new("README.md"),
+                    "---\ntitle: Root\nlink_format: markdown_root\ncontents:\n  - \"[Day](/notes/day.md)\"\n---\n\n# Root\n",
+                )
+                .await
+                .unwrap();
+            diaryx
+                .fs()
+                .write_file(
+                    Path::new("notes/day.md"),
+                    "---\ntitle: Day\npart_of: \"[Root](/README.md)\"\nattachments:\n  - \"[Image](/notes/_attachments/a.png)\"\n  - \"/notes/_attachments/report.pdf\"\n---\n\n# Day\n",
+                )
+                .await
+                .unwrap();
+
+            diaryx
+                .execute(Command::ConvertLinks {
+                    root_index_path: "README.md".to_string(),
+                    format: "plain_relative".to_string(),
+                    path: Some("notes/day.md".to_string()),
+                    dry_run: false,
+                })
+                .await
+                .unwrap();
+
+            let updated = diaryx
+                .fs()
+                .read_to_string(Path::new("notes/day.md"))
+                .await
+                .unwrap();
+            let parsed = crate::frontmatter::parse_or_empty(&updated).unwrap();
+            let attachments: Vec<String> = parsed
+                .frontmatter
+                .get("attachments")
+                .and_then(|v| v.as_sequence())
+                .map(|seq| {
+                    seq.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            assert_eq!(
+                attachments,
+                vec![
+                    "_attachments/a.png".to_string(),
+                    "_attachments/report.pdf".to_string()
+                ]
+            );
         });
     }
 

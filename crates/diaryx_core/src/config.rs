@@ -9,7 +9,7 @@
 //! - `default_workspace`: Primary workspace directory path
 //! - `daily_entry_folder`: Optional subfolder for daily entries
 //! - `editor`: Preferred editor command
-//! - `link_format`: Format for `part_of`/`contents` links
+//! - `link_format`: Format for `part_of`/`contents`/`attachments` links
 //! - `sync_*`: Cloud synchronization settings
 //!
 //! # Async-first Design
@@ -61,7 +61,7 @@ pub struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub editor: Option<String>,
 
-    /// Format for `part_of` and `contents` links in frontmatter.
+    /// Format for `part_of`, `contents`, and `attachments` links in frontmatter.
     /// Used by CLI; web/tauri reads from WorkspaceConfig instead.
     #[serde(default, skip_serializing_if = "is_default_link_format")]
     pub link_format: LinkFormat,

@@ -51,7 +51,8 @@ pub mod body_template;
 /// Validate (check workspace link integrity)
 pub mod validate;
 
-/// Portable path link parsing and formatting for part_of/contents properties
+/// Portable path link parsing and formatting for frontmatter link properties
+/// (e.g., part_of/contents/attachments)
 pub mod link_parser;
 
 /// Utility functions (date parsing, path calculations)

@@ -60,7 +60,7 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings/")]
 pub struct WorkspaceConfig {
-    /// Format for `part_of` and `contents` links.
+    /// Format for `part_of`, `contents`, and `attachments` links.
     /// Defaults to MarkdownRoot if not specified.
     #[serde(default)]
     pub link_format: LinkFormat,
@@ -115,7 +115,7 @@ pub struct Workspace<FS: AsyncFileSystem> {
     fs: FS,
     /// The workspace root directory path (for computing canonical paths)
     root_path: Option<PathBuf>,
-    /// Link format for part_of and contents properties
+    /// Link format for `part_of`, `contents`, and `attachments` properties
     link_format: LinkFormat,
 }
 
@@ -135,7 +135,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
     /// # Arguments
     /// * `fs` - The filesystem to use
     /// * `root_path` - The workspace root directory (for computing canonical paths)
-    /// * `link_format` - How to format part_of and contents links
+    /// * `link_format` - How to format `part_of`, `contents`, and `attachments` links
     pub fn with_link_format(fs: FS, root_path: PathBuf, link_format: LinkFormat) -> Self {
         Self {
             fs,

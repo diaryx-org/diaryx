@@ -154,7 +154,8 @@
       showError('Enable sync setup before publishing this workspace.', 'Publishing');
       return;
     }
-    const ok = await sitePublishingStore.publishNow();
+    const audience = templateContextStore.previewAudience ?? undefined;
+    const ok = await sitePublishingStore.publishNow(audience);
     if (ok) {
       showSuccess('Site published', `Published at ${formatUnixTimestamp(sitePublishingStore.lastPublishedAt)}`);
     } else {
@@ -531,7 +532,7 @@
             Publishing...
           {:else}
             <Upload class="size-4 mr-2" />
-            Publish Now
+            {templateContextStore.previewAudience ? `Publish ${templateContextStore.previewAudience}` : 'Publish All'}
           {/if}
         </Button>
         <Button

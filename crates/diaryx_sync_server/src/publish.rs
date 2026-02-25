@@ -76,6 +76,7 @@ pub async fn publish_workspace_to_r2(
     attachments_store: &dyn BlobStore,
     workspace_id: &str,
     site: &PublishedSiteInfo,
+    requested_audience: Option<&str>,
 ) -> Result<PublishWorkspaceResult, String> {
     let storage = storage_cache
         .get_storage(workspace_id)
@@ -216,11 +217,24 @@ pub async fn publish_workspace_to_r2(
         "publish: discovered audiences from materialized files"
     );
 
-    let audiences_to_build =
+    let mut audiences_to_build =
         build_audiences_to_build(discovered_audiences, public_audience.as_deref());
+
+    if let Some(requested) = requested_audience {
+        let requested_lower = requested.trim().to_lowercase();
+        if !audiences_to_build.contains(&requested_lower) {
+            return Err(format!(
+                "requested audience '{}' is not in the discovered audience set",
+                requested
+            ));
+        }
+        audiences_to_build.retain(|a| *a == requested_lower);
+    }
+
     info!(
         workspace_id,
         audiences = ?audiences_to_build,
+        requested_audience = ?requested_audience,
         "publish: final audiences to build"
     );
 
@@ -244,29 +258,32 @@ pub async fn publish_workspace_to_r2(
 
     // Clean up R2 artifacts for audiences that were previously published
     // but are no longer in the current build set (e.g. user removed audience
-    // tags from all files).
-    let previous_builds = repo
-        .list_site_audience_builds(&site.id)
-        .map_err(|e| format!("failed to read previous audience builds: {}", e))?;
-    let current_set: HashSet<&str> = audiences_to_build.iter().map(|a| a.as_str()).collect();
-    for prev in &previous_builds {
-        if !current_set.contains(prev.audience.as_str()) {
-            let stale_prefix = format!("{}/{}/", site.slug, prev.audience);
-            info!(
-                workspace_id,
-                audience = %prev.audience,
-                prefix = %stale_prefix,
-                "publish: cleaning up stale audience artifacts"
-            );
-            sites_store
-                .delete_by_prefix(&stale_prefix)
-                .await
-                .map_err(|e| {
-                    format!(
-                        "failed to clean up stale audience artifacts for {}: {}",
-                        prev.audience, e
-                    )
-                })?;
+    // tags from all files). Skip when doing a partial (single-audience) publish
+    // to avoid deleting artifacts for audiences that are still valid.
+    if requested_audience.is_none() {
+        let previous_builds = repo
+            .list_site_audience_builds(&site.id)
+            .map_err(|e| format!("failed to read previous audience builds: {}", e))?;
+        let current_set: HashSet<&str> = audiences_to_build.iter().map(|a| a.as_str()).collect();
+        for prev in &previous_builds {
+            if !current_set.contains(prev.audience.as_str()) {
+                let stale_prefix = format!("{}/{}/", site.slug, prev.audience);
+                info!(
+                    workspace_id,
+                    audience = %prev.audience,
+                    prefix = %stale_prefix,
+                    "publish: cleaning up stale audience artifacts"
+                );
+                sites_store
+                    .delete_by_prefix(&stale_prefix)
+                    .await
+                    .map_err(|e| {
+                        format!(
+                            "failed to clean up stale audience artifacts for {}: {}",
+                            prev.audience, e
+                        )
+                    })?;
+            }
         }
     }
 

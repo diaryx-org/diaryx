@@ -562,6 +562,7 @@ async fn main() {
                                         publish_attachments_store.as_ref(),
                                         &publish_workspace_id,
                                         &publish_site,
+                                        None,
                                     )
                                     .await;
 

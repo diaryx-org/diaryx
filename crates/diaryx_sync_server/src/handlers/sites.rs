@@ -45,6 +45,11 @@ struct CreateSiteRequest {
     enabled: Option<bool>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct PublishRequest {
+    audience: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct CreateTokenRequest {
     audience: String,
@@ -360,6 +365,7 @@ async fn trigger_publish(
     State(state): State<SitesState>,
     RequireAuth(auth): RequireAuth,
     Path(workspace_id): Path<String>,
+    body: Option<Json<PublishRequest>>,
 ) -> Response {
     // Rate limit: 10 per hour
     if let Err(retry_after) = state.rate_limiter.check(
@@ -402,6 +408,8 @@ async fn trigger_publish(
         );
     }
 
+    let requested_audience = body.and_then(|b| b.0.audience);
+
     let result = publish_workspace_to_r2(
         state.repo.as_ref(),
         state.sync_v2.storage_cache.as_ref(),
@@ -409,6 +417,7 @@ async fn trigger_publish(
         state.attachments_store.as_ref(),
         &workspace_id,
         &site,
+        requested_audience.as_deref(),
     )
     .await;
 

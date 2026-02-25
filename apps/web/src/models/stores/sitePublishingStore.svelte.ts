@@ -205,7 +205,7 @@ class SitePublishingStore {
     }
   }
 
-  async publishNow(workspaceId?: string): Promise<boolean> {
+  async publishNow(audience?: string, workspaceId?: string): Promise<boolean> {
     if (this.isPublishing) return false;
 
     const resolvedWorkspaceId = this.resolveWorkspaceId(workspaceId);
@@ -215,7 +215,7 @@ class SitePublishingStore {
     this.error = null;
 
     try {
-      const result = await publishSite(resolvedWorkspaceId);
+      const result = await publishSite(resolvedWorkspaceId, audience);
       this.lastPublishedAt = result.published_at;
 
       if (this.site) {

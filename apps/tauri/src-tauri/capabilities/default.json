@@ -23,7 +23,6 @@
     "fs:allow-appdata-write-recursive",
     "fs:allow-applocaldata-read-recursive",
     "fs:allow-applocaldata-write-recursive",
-    "stronghold:default",
     "google-auth:default"
   ]
 }

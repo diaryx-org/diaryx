@@ -59,25 +59,6 @@ pub fn run() {
     log::info!("Starting Diaryx application...");
 
     let mut builder = tauri::Builder::default()
-        // Stronghold plugin for secure credential storage
-        .plugin(
-            tauri_plugin_stronghold::Builder::new(|password| {
-                // Use argon2 for password hashing
-                use argon2::{Config, Variant, Version, hash_raw};
-                let config = Config {
-                    lanes: 4,
-                    mem_cost: 10_000,
-                    time_cost: 10,
-                    variant: Variant::Argon2id,
-                    version: Version::Version13,
-                    ..Default::default()
-                };
-                let salt = "diaryx-stronghold-salt";
-                hash_raw(password.as_bytes(), salt.as_bytes(), &config)
-                    .expect("Failed to hash password")
-            })
-            .build(),
-        )
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())

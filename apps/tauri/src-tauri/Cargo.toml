@@ -38,9 +38,6 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 uuid = { version = "1", features = ["v4"] }
 bytes = "1"
 futures = "0.3"
-tauri-plugin-stronghold = "2.3.1"
-rust-argon2 = "3.0.0"
-
 # Cloud backup (Google Drive)
 tauri-plugin-google-auth = "0.3"
 

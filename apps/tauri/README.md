@@ -125,6 +125,10 @@ bun run tauri:iap
 
 Testing requires a StoreKit configuration file (`.storekit`) in Xcode for sandbox testing. For local sync-server testing with simulator mock transactions, set `APPLE_IAP_SKIP_SIGNATURE_VERIFY=1` on the server so mock JWS payloads can be decoded.
 
+## Publishing
+
+See [PUBLISHING.md](PUBLISHING.md) for the full guide to publishing to the App Store (iOS + macOS) and signing GitHub Releases.
+
 ## Platform Support
 
 - macOS (Intel and Apple Silicon)

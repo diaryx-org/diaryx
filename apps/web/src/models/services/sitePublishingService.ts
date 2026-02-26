@@ -268,12 +268,11 @@ export async function deleteSite(workspaceId: string): Promise<void> {
 }
 
 export async function publishSite(workspaceId: string, audience?: string): Promise<PublishResult> {
-  const options: RequestInit = { method: 'POST' };
-  if (audience) {
-    options.body = JSON.stringify({ audience });
-    options.headers = { 'Content-Type': 'application/json' };
-  }
-  return apiFetch<PublishResult>(workspaceId, '/site/publish', options);
+  const body = audience ? { audience } : {};
+  return apiFetch<PublishResult>(workspaceId, '/site/publish', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
 }
 
 export async function createToken(

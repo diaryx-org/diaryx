@@ -14,5 +14,5 @@ mod rebuild;
 mod repo;
 
 pub use commit::{CommitOptions, CommitResult, commit_workspace, compact_workspace};
-pub use rebuild::rebuild_crdt_from_git;
+pub use rebuild::{materialize_from_git, rebuild_crdt_from_git};
 pub use repo::{RepoKind, init_repo, open_repo};

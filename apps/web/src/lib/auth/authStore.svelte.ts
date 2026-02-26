@@ -826,6 +826,7 @@ export async function checkUserHasData(): Promise<UserHasDataResponse | null> {
 export async function downloadWorkspaceSnapshot(
   workspaceId: string,
   includeAttachments = true,
+  commitId?: string,
 ): Promise<Blob | null> {
   const token = getToken();
   const url = state.serverUrl;
@@ -836,6 +837,7 @@ export async function downloadWorkspaceSnapshot(
       token,
       workspaceId,
       includeAttachments,
+      commitId,
     );
   } catch (err) {
     console.error("[AuthStore] Failed to download snapshot:", err);

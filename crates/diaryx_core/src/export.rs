@@ -303,8 +303,8 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
             return (visible, None);
         }
 
-        // No audience defined anywhere — not visible for this audience
-        (false, None)
+        // No audience defined anywhere — visible to all audiences
+        (true, None)
     }
 
     /// Determine the reason a file was excluded.
@@ -571,7 +571,7 @@ mod tests {
     }
 
     #[test]
-    fn test_no_audience_excluded() {
+    fn test_no_audience_included() {
         let fs = make_test_fs();
         fs.write_file(
             Path::new("/workspace/README.md"),
@@ -588,10 +588,9 @@ mod tests {
         ))
         .unwrap();
 
-        // Root has no audience — excluded from audience-specific export
-        assert_eq!(plan.included.len(), 0);
-        assert_eq!(plan.excluded.len(), 1);
-        assert_eq!(plan.excluded[0].reason, ExclusionReason::NoAudienceDefined);
+        // Root has no audience — visible to all audiences
+        assert_eq!(plan.included.len(), 1);
+        assert_eq!(plan.excluded.len(), 0);
     }
 
     #[test]

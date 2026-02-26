@@ -458,11 +458,15 @@ export class AuthService {
     authToken: string,
     workspaceId: string,
     includeAttachments = true,
+    commitId?: string,
   ): Promise<Blob> {
     const url = new URL(
       `${this.serverUrl}/api/workspaces/${encodeURIComponent(workspaceId)}/snapshot`,
     );
     url.searchParams.set("include_attachments", String(includeAttachments));
+    if (commitId) {
+      url.searchParams.set("commit_id", commitId);
+    }
 
     const response = await proxyFetch(
       url.toString(),

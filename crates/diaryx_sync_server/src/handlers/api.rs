@@ -431,21 +431,50 @@ async fn get_workspace_snapshot(
     }
 
     let include_attachments = query.include_attachments.unwrap_or(true);
-    let temp_file = match state
-        .sync_v2
-        .store
-        .export_snapshot_zip_to_file(
-            &workspace_id,
-            &auth.user.id,
-            include_attachments,
-            state.blob_store.as_ref(),
-        )
-        .await
-    {
-        Ok(f) => f,
-        Err(err) => {
-            error!("Snapshot export failed for {}: {:?}", workspace_id, err);
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+
+    let temp_file = if let Some(ref commit_hex) = query.commit_id {
+        let oid = match git2::Oid::from_str(commit_hex) {
+            Ok(oid) => oid,
+            Err(_) => return (StatusCode::BAD_REQUEST, "Invalid commit_id").into_response(),
+        };
+        match state
+            .sync_v2
+            .store
+            .export_snapshot_zip_from_commit(
+                &workspace_id,
+                &auth.user.id,
+                oid,
+                include_attachments,
+                state.blob_store.as_ref(),
+            )
+            .await
+        {
+            Ok(f) => f,
+            Err(err) => {
+                error!(
+                    "Snapshot export (commit {}) failed for {}: {:?}",
+                    commit_hex, workspace_id, err
+                );
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        }
+    } else {
+        match state
+            .sync_v2
+            .store
+            .export_snapshot_zip_to_file(
+                &workspace_id,
+                &auth.user.id,
+                include_attachments,
+                state.blob_store.as_ref(),
+            )
+            .await
+        {
+            Ok(f) => f,
+            Err(err) => {
+                error!("Snapshot export failed for {}: {:?}", workspace_id, err);
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
         }
     };
 
@@ -483,6 +512,7 @@ async fn get_workspace_snapshot(
 #[derive(Debug, serde::Deserialize)]
 struct SnapshotQuery {
     include_attachments: Option<bool>,
+    commit_id: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]

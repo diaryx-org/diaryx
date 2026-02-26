@@ -8,6 +8,7 @@
 use crate::blob_store::BlobStore;
 use crate::db::{AuthRepo, CompletedAttachmentUploadInfo, WorkspaceAttachmentRefRecord};
 use chrono::Utc;
+use diaryx_core::crdt::git::{materialize_from_git, open_repo};
 use diaryx_core::crdt::{
     BodyDocManager, WorkspaceCrdt, materialize_workspace, parse_snapshot_markdown,
 };
@@ -529,6 +530,84 @@ impl WorkspaceStore {
                     None => {
                         warn!(
                             "Snapshot export: missing blob for hash {} (workspace {})",
+                            hash, workspace_id
+                        );
+                    }
+                }
+            }
+        }
+
+        zip.finish()?;
+        Ok(temp_file)
+    }
+
+    /// Export a snapshot zip from a specific git commit.
+    ///
+    /// Uses `materialize_from_git` to read the commit tree without touching
+    /// CRDT state, then writes the files to a temporary ZIP file.
+    pub async fn export_snapshot_zip_from_commit(
+        &self,
+        workspace_id: &str,
+        user_id: &str,
+        commit_id: git2::Oid,
+        include_attachments: bool,
+        blob_store: &dyn BlobStore,
+    ) -> Result<tempfile::NamedTempFile, SnapshotError> {
+        let git_path = self.storage_cache.git_repo_path(workspace_id);
+        let repo = open_repo(&git_path)
+            .map_err(|e| SnapshotError::Storage(format!("Failed to open git repo: {}", e)))?;
+
+        let files = materialize_from_git(&repo, workspace_id, Some(commit_id)).map_err(|e| {
+            SnapshotError::Storage(format!("Failed to materialize from git: {}", e))
+        })?;
+
+        let temp_file = tempfile::NamedTempFile::new().map_err(SnapshotError::Zip)?;
+        let buf_writer = BufWriter::new(temp_file.reopen().map_err(SnapshotError::Zip)?);
+        let mut zip = ZipWriter::new(buf_writer);
+        let markdown_options = FileOptions::<()>::default()
+            .compression_method(CompressionMethod::Deflated)
+            .unix_permissions(0o644);
+        let binary_options = FileOptions::<()>::default()
+            .compression_method(CompressionMethod::Stored)
+            .unix_permissions(0o644);
+
+        let mut unique_attachments: HashSet<String> = HashSet::new();
+        let mut attachment_requests: Vec<(String, String)> = Vec::new();
+
+        for file in files {
+            let normalized = normalize_workspace_path(&file.path).ok_or_else(|| {
+                SnapshotError::Parse(format!("Invalid file path while exporting: {}", file.path))
+            })?;
+            zip.start_file(normalized.clone(), markdown_options)?;
+            zip.write_all(file.content.as_bytes())?;
+
+            if include_attachments {
+                for attachment in file.metadata.attachments {
+                    if attachment.deleted || attachment.hash.is_empty() {
+                        continue;
+                    }
+                    if let Some(path) = normalize_attachment_path(&normalized, &attachment.path)
+                        && unique_attachments.insert(path.clone())
+                    {
+                        attachment_requests.push((path, attachment.hash));
+                    }
+                }
+            }
+        }
+
+        if include_attachments {
+            for (attachment_path, hash) in attachment_requests {
+                let key = blob_store.blob_key(user_id, &hash);
+                let bytes = blob_store.get(&key).await.map_err(SnapshotError::Blob)?;
+
+                match bytes {
+                    Some(payload) => {
+                        zip.start_file(attachment_path, binary_options)?;
+                        zip.write_all(&payload)?;
+                    }
+                    None => {
+                        warn!(
+                            "Snapshot export (commit): missing blob for hash {} (workspace {})",
                             hash, workspace_id
                         );
                     }

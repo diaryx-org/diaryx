@@ -76,6 +76,9 @@ pub mod pandoc;
 /// require feature flags: `import-email`, `import-dayone`, `import-markdown`.
 pub mod import;
 
+/// Plugin architecture for modular feature composition
+pub mod plugin;
+
 /// Cloud storage module for bidirectional file synchronization
 pub mod cloud;
 

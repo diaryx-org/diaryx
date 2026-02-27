@@ -32,6 +32,7 @@ use crate::error::{DiaryxError, Result};
 use crate::frontmatter;
 use crate::fs::AsyncFileSystem;
 use crate::link_parser;
+use crate::plugin::PluginRegistry;
 
 #[cfg(feature = "crdt")]
 use crate::crdt::{BodyDocManager, CrdtStorage, WorkspaceCrdt};
@@ -115,6 +116,8 @@ pub struct Diaryx<FS: AsyncFileSystem> {
     workspace_root: std::sync::RwLock<Option<PathBuf>>,
     /// Link format for `part_of`, `contents`, and `attachments` properties.
     link_format: crate::link_parser::LinkFormat,
+    /// Plugin registry for dispatching events and commands to registered plugins.
+    plugin_registry: PluginRegistry,
     /// CRDT workspace document (optional, requires `crdt` feature).
     /// Wrapped in Arc to allow sharing between backend and command execution.
     #[cfg(feature = "crdt")]
@@ -138,6 +141,7 @@ impl<FS: AsyncFileSystem> Diaryx<FS> {
             fs,
             workspace_root: std::sync::RwLock::new(None),
             link_format: crate::link_parser::LinkFormat::default(),
+            plugin_registry: PluginRegistry::new(),
             #[cfg(feature = "crdt")]
             workspace_crdt: None,
             #[cfg(feature = "crdt")]
@@ -184,6 +188,7 @@ impl<FS: AsyncFileSystem> Diaryx<FS> {
             fs,
             workspace_root: std::sync::RwLock::new(None),
             link_format: crate::link_parser::LinkFormat::default(),
+            plugin_registry: PluginRegistry::new(),
             workspace_crdt: Some(workspace_crdt),
             body_doc_manager: Some(body_doc_manager),
             sync_handler: Some(sync_handler),
@@ -212,6 +217,7 @@ impl<FS: AsyncFileSystem> Diaryx<FS> {
             fs,
             workspace_root: std::sync::RwLock::new(None),
             link_format: crate::link_parser::LinkFormat::default(),
+            plugin_registry: PluginRegistry::new(),
             workspace_crdt: Some(workspace_crdt),
             body_doc_manager: Some(body_doc_manager),
             sync_handler: Some(sync_handler),
@@ -244,6 +250,7 @@ impl<FS: AsyncFileSystem> Diaryx<FS> {
             fs,
             workspace_root: std::sync::RwLock::new(None),
             link_format: crate::link_parser::LinkFormat::default(),
+            plugin_registry: PluginRegistry::new(),
             workspace_crdt: Some(workspace_crdt),
             body_doc_manager: Some(body_doc_manager),
             sync_handler: Some(sync_handler),
@@ -254,6 +261,16 @@ impl<FS: AsyncFileSystem> Diaryx<FS> {
     /// Get a reference to the underlying filesystem.
     pub fn fs(&self) -> &FS {
         &self.fs
+    }
+
+    /// Get a reference to the plugin registry.
+    pub fn plugin_registry(&self) -> &PluginRegistry {
+        &self.plugin_registry
+    }
+
+    /// Get a mutable reference to the plugin registry for registration.
+    pub fn plugin_registry_mut(&mut self) -> &mut PluginRegistry {
+        &mut self.plugin_registry
     }
 
     /// Get entry operations accessor.

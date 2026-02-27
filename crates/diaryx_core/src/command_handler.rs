@@ -4253,6 +4253,25 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 use crate::utils::naming;
                 Ok(Response::String(naming::to_websocket_sync_url(&url)))
             }
+
+            // === Plugin Operations ===
+            Command::PluginCommand {
+                plugin,
+                command,
+                params,
+            } => {
+                let result = self
+                    .plugin_registry()
+                    .handle_plugin_command(&plugin, &command, params)
+                    .await;
+                match result {
+                    Some(Ok(value)) => Ok(Response::PluginResult(value)),
+                    Some(Err(e)) => Err(DiaryxError::Plugin(e.to_string())),
+                    None => Err(DiaryxError::Plugin(format!(
+                        "No plugin '{plugin}' handles command '{command}'"
+                    ))),
+                }
+            }
         }
     }
 

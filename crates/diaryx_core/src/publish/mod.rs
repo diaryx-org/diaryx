@@ -8,9 +8,11 @@
 //! For synchronous contexts (CLI, tests), wrap a sync filesystem with
 //! `SyncToAsyncFs` and use `futures_lite::future::block_on()`.
 
+pub mod content_provider;
 mod types;
 
 // Re-export types for backwards compatibility
+pub use content_provider::{ContentProvider, MaterializedFile};
 pub use types::{NavLink, PublishOptions, PublishResult, PublishedPage};
 
 use std::collections::{HashMap, HashSet};

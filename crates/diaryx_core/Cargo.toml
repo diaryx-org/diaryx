@@ -22,6 +22,7 @@ serde_json.workspace = true
 serde_yaml.workspace = true
 toml = "0.9.8"
 thiserror.workspace = true
+async-trait = "0.1"
 
 # CRDT support
 # The "sync" feature makes Subscription Send+Sync, enabling thread-safe observers
@@ -59,7 +60,6 @@ tokio = { version = "1", features = ["sync", "time", "macros", "rt"], optional =
 tokio-tungstenite = { version = "0.26", optional = true, features = ["rustls-tls-webpki-roots"] }
 url = { version = "2", optional = true }
 futures-util = { version = "0.3", optional = true }
-async-trait = { version = "0.1", optional = true }
 
 # WASM-specific dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -83,7 +83,7 @@ live-sync = []
 # Enable native sync transport (tokio-tungstenite WebSocket)
 # This provides TokioTransport and SyncClient for CLI and native apps.
 # Not available on WASM - use CallbackTransport instead.
-native-sync = ["crdt", "dep:tokio", "dep:tokio-tungstenite", "dep:url", "dep:futures-util", "dep:async-trait"]
+native-sync = ["crdt", "dep:tokio", "dep:tokio-tungstenite", "dep:url", "dep:futures-util"]
 
 # Enable git-backed version history (requires crdt-sqlite for storage, native only)
 git = ["crdt-sqlite", "dep:git2"]

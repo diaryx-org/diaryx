@@ -1153,6 +1153,21 @@ pub enum Command {
         /// The HTTP URL to convert.
         url: String,
     },
+
+    // === Plugin Operations ===
+    /// Execute a plugin-specific command.
+    ///
+    /// Routes to the named plugin via the [`PluginRegistry`](crate::plugin::PluginRegistry).
+    /// Existing CRDT command variants stay and route internally; new plugin-specific
+    /// commands use this variant.
+    PluginCommand {
+        /// Plugin identifier (e.g., `"sync"`, `"publish"`).
+        plugin: String,
+        /// Command name within the plugin.
+        command: String,
+        /// Command parameters as JSON.
+        params: JsonValue,
+    },
 }
 
 impl Command {
@@ -1399,7 +1414,8 @@ impl Command {
             | Command::NormalizeServerUrl { .. }
             | Command::ToWebSocketSyncUrl { .. }
             | Command::ImportEntries { .. }
-            | Command::ImportDirectoryInPlace { .. } => {}
+            | Command::ImportDirectoryInPlace { .. }
+            | Command::PluginCommand { .. } => {}
 
             // --- CRDT commands with filesystem path fields ---
             #[cfg(feature = "crdt")]
@@ -1587,6 +1603,9 @@ pub enum Response {
 
     /// Import result response.
     ImportResult(crate::import::ImportResult),
+
+    /// Result from a plugin command.
+    PluginResult(JsonValue),
 
     /// Binary data response (for CRDT state vectors, updates).
     #[cfg(feature = "crdt")]

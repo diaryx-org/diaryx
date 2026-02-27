@@ -178,6 +178,10 @@ pub enum DiaryxError {
         message: String,
     },
 
+    /// Error from a plugin operation.
+    #[error("Plugin error: {0}")]
+    Plugin(String),
+
     /// Error from CRDT operations (sync, storage, etc.)
     #[cfg(feature = "crdt")]
     #[error("CRDT error: {0}")]
@@ -233,6 +237,7 @@ impl From<&DiaryxError> for SerializableError {
             DiaryxError::InvalidPath { .. } => "InvalidPath",
             DiaryxError::Unsupported(_) => "Unsupported",
             DiaryxError::Validation(_) => "Validation",
+            DiaryxError::Plugin(_) => "Plugin",
             #[cfg(feature = "crdt")]
             DiaryxError::Crdt(_) => "Crdt",
             #[cfg(all(feature = "crdt-sqlite", not(target_arch = "wasm32")))]

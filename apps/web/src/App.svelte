@@ -1101,8 +1101,9 @@
 
   // Handle content changes - triggers debounced auto-save
   // Note: CRDT sync happens at save time via workspaceCrdtBridge, not on each keystroke
-  function handleContentChange(_markdown: string) {
+  function handleContentChange(markdown: string) {
     entryStore.markDirty();
+    entryStore.setDisplayContent(markdown);
     scheduleAutoSave();
   }
 

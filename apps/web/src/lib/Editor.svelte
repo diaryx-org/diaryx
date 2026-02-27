@@ -130,6 +130,14 @@
     }
   }
 
+  /** Walk up from `el` to find the nearest ancestor with overflow scroll/auto. */
+  function getScrollParent(el: HTMLElement | null): HTMLElement | Window {
+    if (!el || el === document.documentElement) return window;
+    const { overflow, overflowY } = getComputedStyle(el);
+    if (/(auto|scroll)/.test(overflow + overflowY)) return el;
+    return getScrollParent(el.parentElement);
+  }
+
   function createEditor() {
     destroyEditor();
 
@@ -349,6 +357,7 @@
           options: {
             strategy: "fixed",
             placement: "left-start",
+            scrollTarget: getScrollParent(element),
             offset: 10,
             flip: {
               fallbackPlacements: ["right-start", "left", "right"],

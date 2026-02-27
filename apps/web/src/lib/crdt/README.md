@@ -107,6 +107,11 @@ vs `README.md` and prevents duplicate or missed UI updates.
 before notifying UI listeners, which avoids duplicate editor updates when the
 same remote body state is observed more than once.
 
+For browser/session sync transports, UI body refreshes now flow through
+`ContentsChanged` filesystem events emitted by Rust. The transport-level
+`bodyChanged` callback is not used for direct editor updates, which avoids
+stale content reads racing against save/sync transitions.
+
 `workspaceCrdtBridge.ts` also exposes `onFileRenamed(oldPath, newPath)` so UI
 state can remap the currently open entry path immediately when a rename arrives.
 For `FileRenamed` events, the bridge fetches fresh metadata for `new_path` from

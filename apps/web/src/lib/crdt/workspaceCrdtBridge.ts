@@ -468,9 +468,6 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
           onFilesChanged: async () => {
             notifyFileChange(null, null);
           },
-          onBodyChanged: (filePath) => {
-            void emitBodyChangeFromPath(filePath);
-          },
           onProgress: (completed, total) => {
             notifySyncProgress(completed, total);
           },
@@ -975,9 +972,6 @@ export async function startSessionSync(
     onFilesChanged: async () => {
       shareSessionStore.isGuest ? notifySessionSync() : notifyFileChange(null, null);
     },
-    onBodyChanged: (filePath) => {
-      void emitBodyChangeFromPath(filePath);
-    },
     onProgress: (completed, total) => {
       console.log('[WorkspaceCrdtBridge] Session sync progress:', completed, '/', total);
       notifySyncProgress(completed, total);
@@ -1201,9 +1195,6 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
             },
             onFilesChanged: async () => {
               notifyFileChange(null, null);
-            },
-            onBodyChanged: (filePath) => {
-              void emitBodyChangeFromPath(filePath);
             },
             onProgress: (completed, total) => {
               notifySyncProgress(completed, total);

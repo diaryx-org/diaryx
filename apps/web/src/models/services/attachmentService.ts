@@ -209,6 +209,16 @@ export async function transformAttachmentPaths(
     const { canonical: canonicalPath, sourceRelative: sourceRelativePath } =
       await normalizeAttachmentReference(api, entryPath, rawImagePath);
 
+    // Reuse existing blob URL if we already resolved this attachment
+    const existingBlobUrl = blobUrlMap.get(sourceRelativePath);
+    if (existingBlobUrl) {
+      replacements.push({
+        original: fullMatch,
+        replacement: `![${alt}](${existingBlobUrl})`,
+      });
+      continue;
+    }
+
     try {
       // Try to read the attachment data
       const data = await api.getAttachmentData(entryPath, sourceRelativePath);

@@ -60,7 +60,7 @@
 
   // Import auth
   import { initAuth, getCurrentWorkspace, verifyMagicLink, setServerUrl, refreshUserInfo, getAuthState, isAuthenticated, getWorkspaces, isSyncEnabled } from "./lib/auth";
-  import { getLocalWorkspace, getLocalWorkspaces, getCurrentWorkspaceId, getWorkspaceStorageType, discoverOpfsWorkspaces } from "$lib/storage/localWorkspaceRegistry.svelte";
+  import { getLocalWorkspace, getLocalWorkspaces, getCurrentWorkspaceId, getWorkspaceStorageType, discoverOpfsWorkspaces, createLocalWorkspace, setCurrentWorkspaceId } from "$lib/storage/localWorkspaceRegistry.svelte";
 
   // Initialize theme store immediately
   getThemeStore();
@@ -552,10 +552,33 @@
       const currentWsId = getCurrentWorkspaceId();
 
       if (!defaultWorkspace && (localWsList.length === 0 || !currentWsId)) {
-        // No workspaces exist — show welcome screen
-        showWelcomeScreen = true;
-        entryStore.setLoading(false);
-        return;
+        // Check if the user just cleared all data — if so, show the welcome
+        // screen instead of silently auto-creating a new workspace.
+        const dataJustCleared = sessionStorage.getItem('diaryx_data_cleared');
+        if (dataJustCleared) {
+          sessionStorage.removeItem('diaryx_data_cleared');
+          showWelcomeScreen = true;
+          entryStore.setLoading(false);
+          return;
+        }
+
+        // No workspaces exist — auto-create a default workspace
+        try {
+          await autoCreateDefaultWorkspace();
+          await refreshTree();
+          if (tree) {
+            workspaceStore.expandNode(tree.path);
+            await openEntry(tree.path);
+          }
+          await runValidation();
+          entryStore.setLoading(false);
+          return;
+        } catch (e) {
+          console.error("[App] Auto-create default workspace failed, showing welcome screen:", e);
+          showWelcomeScreen = true;
+          entryStore.setLoading(false);
+          return;
+        }
       }
 
       // Initialize the backend (auto-detects Tauri vs WASM)
@@ -1339,6 +1362,91 @@
     } finally {
       entryStore.setLoading(false);
     }
+  }
+
+  /**
+   * Auto-create a default local workspace for first-time users.
+   * Returns { id, name } on success, or throws on failure.
+   */
+  async function autoCreateDefaultWorkspace(): Promise<{ id: string; name: string }> {
+    const ws = createLocalWorkspace("My Workspace");
+    setCurrentWorkspaceId(ws.id);
+
+    const backendInstance = await getBackend(ws.id, ws.name, ws.storageType);
+    workspaceStore.setBackend(backendInstance);
+
+    const apiInstance = createApi(backendInstance);
+    setBackendApi(apiInstance);
+    setBackend(backendInstance);
+    rustApi = new RustCrdtApi(backendInstance);
+
+    cleanupEventSubscription = initEventSubscription(backendInstance);
+
+    // Create workspace root structure
+    const workspaceDir = backendInstance.getWorkspacePath()
+      .replace(/\/index\.md$/, '')
+      .replace(/\/README\.md$/, '');
+    await apiInstance.createWorkspace(workspaceDir, ws.name);
+
+    // Find the root index and overwrite with welcome content
+    const rootPath = await apiInstance.findRootIndex(workspaceDir);
+
+    const rootContent = `Welcome to **Diaryx** — your personal knowledge workspace.
+
+In Diaryx, every note can also be a folder. And all notes are attached to at least one other note.
+
+- The **left sidebar** is the big picture view: the whole workspace. You can see the filetree and other commands that affect all your files.
+- The **right sidebar** is the entry-specific view: you can see metadata for the specific
+
+A few tips to get started:
+
+- Press **Ctrl+K** (or **Cmd+K** on Mac) to open the command palette
+- Right click on a file/folder on the **left sidebar** to open a context menu—or tap the ⠇button on mobile.
+
+Explore [the **Getting Started** guide](</Getting Started.md>) for more details.`;
+
+    await apiInstance.saveEntry(rootPath, rootContent, rootPath);
+
+    // Create a "Getting Started" child entry (handles part_of + parent contents automatically)
+    const childResult = await apiInstance.createChildEntry(rootPath);
+    let gettingStartedPath = childResult.child_path;
+    // Rename from "Untitled" to "Getting Started"
+    const newPath = await apiInstance.setFrontmatterProperty(
+      gettingStartedPath, "title", "Getting Started" as any, rootPath
+    );
+    if (newPath) gettingStartedPath = newPath;
+
+    const gettingStartedContent = `## Creating Entries
+
+Create new entries from the sidebar **+** button or by pressing **Ctrl+K** and typing "New Entry". Entries are simple markdown files.
+
+## Organizing Your Workspace
+
+Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, or use the **contents** property to define child pages in order.
+
+## Daily Entries
+
+Use the calendar icon or **Ctrl+K** → "Daily Entry" to create a date-stamped journal entry. These are automatically organized by date.
+
+## Optional Sync
+
+Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to configure sync when you're ready.
+
+## Keyboard Shortcuts
+
+
+| Shortcut     | Action                      |
+| ------------ | --------------------------- |
+| Ctrl/Cmd + K | Command palette             |
+| Ctrl/Cmd + S | Manually save current entry |
+| Ctrl/Cmd + B | Bold                        |
+| Ctrl/Cmd + I | Italic                      |
+| Ctrl/Cmd + [ | Toggle left sidebar         |
+| Ctrl/Cmd + ] | Toggle right sidebar        |`;
+
+    await apiInstance.saveEntry(gettingStartedPath, gettingStartedContent, rootPath);
+
+    return { id: ws.id, name: ws.name };
   }
 
   async function handleDailyEntry() {
@@ -2137,7 +2245,24 @@
 
 {#if showWelcomeScreen}
   <WelcomeScreen
-    onGetStarted={() => { showAddWorkspace = true; }}
+    onGetStarted={async () => {
+      entryStore.setLoading(true);
+      try {
+        await autoCreateDefaultWorkspace();
+        showWelcomeScreen = false;
+        await refreshTree();
+        if (tree) {
+          workspaceStore.expandNode(tree.path);
+          await openEntry(tree.path);
+        }
+        await runValidation();
+      } catch (e) {
+        console.error("[App] Auto-create from welcome screen failed, opening dialog:", e);
+        showAddWorkspace = true;
+      } finally {
+        entryStore.setLoading(false);
+      }
+    }}
   />
 {:else}
 <div class="flex h-full bg-background overflow-hidden">
@@ -2248,6 +2373,7 @@
     {:else}
       <EditorEmptyState
         {leftSidebarCollapsed}
+        {isLoading}
         onToggleLeftSidebar={toggleLeftSidebar}
         onOpenCommandPalette={uiStore.openCommandPalette}
         hasWorkspaceTree={!!tree && tree.path !== '.'}

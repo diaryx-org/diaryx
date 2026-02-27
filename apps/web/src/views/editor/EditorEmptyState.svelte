@@ -9,7 +9,7 @@
    */
 
   import { Button } from "$lib/components/ui/button";
-  import { PanelLeft, Menu, Search, FolderPlus } from "@lucide/svelte";
+  import { PanelLeft, Menu, Search, FolderPlus, Loader2 } from "@lucide/svelte";
 
   interface Props {
     leftSidebarCollapsed: boolean;
@@ -17,6 +17,7 @@
     onOpenCommandPalette: () => void;
     hasWorkspaceTree?: boolean;
     onInitializeWorkspace?: () => void;
+    isLoading?: boolean;
   }
 
   let {
@@ -25,6 +26,7 @@
     onOpenCommandPalette,
     hasWorkspaceTree = true,
     onInitializeWorkspace,
+    isLoading = false,
   }: Props = $props();
 </script>
 
@@ -70,7 +72,10 @@
         </Button>
       {/if}
     </div>
-    {#if !hasWorkspaceTree && onInitializeWorkspace}
+    {#if isLoading}
+      <Loader2 class="size-8 text-muted-foreground animate-spin mb-4" />
+      <p class="text-muted-foreground">Loading workspace…</p>
+    {:else if !hasWorkspaceTree && onInitializeWorkspace}
       <h2 class="text-2xl font-semibold text-foreground mb-2">
         Your workspace is empty
       </h2>

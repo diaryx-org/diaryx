@@ -168,6 +168,9 @@ export async function clearAllLocalData(): Promise<void> {
   await clearOpfs();
   await clearIndexedDb();
   clearLocalStorage();
+  // Signal to the next page load that data was just cleared,
+  // so it shows the welcome screen instead of auto-creating a workspace.
+  sessionStorage.setItem('diaryx_data_cleared', '1');
   await new Promise((resolve) => setTimeout(resolve, 100));
   window.location.reload();
 }

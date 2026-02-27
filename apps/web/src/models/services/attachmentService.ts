@@ -7,7 +7,7 @@
 
 import type { Api } from '$lib/backend/api';
 import heic2any from 'heic2any';
-import { requestMissingBlobDownload } from './attachmentSyncService';
+import { getServerAttachmentUrl, getAttachmentMetadata, sha256Hex } from './attachmentSyncService';
 
 // ============================================================================
 // State
@@ -222,10 +222,53 @@ export async function transformAttachmentPaths(
     try {
       // Try to read the attachment data
       const data = await api.getAttachmentData(entryPath, sourceRelativePath);
+      const bytes = new Uint8Array(data);
 
-      // Create blob and URL
+      // Check if local file hash matches CRDT metadata — if not, the attachment
+      // was updated on another device and we should re-fetch from the server.
+      const meta =
+        getAttachmentMetadata(entryPath, sourceRelativePath) ||
+        (canonicalPath !== sourceRelativePath
+          ? getAttachmentMetadata(entryPath, canonicalPath)
+          : null);
+      if (meta) {
+        const localHash = await sha256Hex(bytes);
+        if (localHash !== meta.hash) {
+          const serverUrl =
+            getServerAttachmentUrl(entryPath, sourceRelativePath) ||
+            (canonicalPath !== sourceRelativePath
+              ? getServerAttachmentUrl(entryPath, canonicalPath)
+              : null);
+          if (serverUrl) {
+            try {
+              const resp = await fetch(serverUrl);
+              if (resp.ok) {
+                const mimeType = getMimeType(canonicalPath);
+                let blob = await resp.blob();
+                if (blob.type !== mimeType) {
+                  blob = new Blob([blob], { type: mimeType });
+                }
+                if (isHeicFile(canonicalPath)) {
+                  blob = await convertHeicToJpeg(blob);
+                }
+                const blobUrl = URL.createObjectURL(blob);
+                blobUrlMap.set(sourceRelativePath, blobUrl);
+                replacements.push({
+                  original: fullMatch,
+                  replacement: `![${alt}](${blobUrl})`,
+                });
+                continue;
+              }
+            } catch {
+              // Fall through to use stale local copy.
+            }
+          }
+        }
+      }
+
+      // Create blob and URL from local data
       const mimeType = getMimeType(canonicalPath);
-      let blob = new Blob([new Uint8Array(data)], { type: mimeType });
+      let blob = new Blob([bytes], { type: mimeType });
 
       // Convert HEIC to JPEG for browser display
       if (isHeicFile(canonicalPath)) {
@@ -243,18 +286,22 @@ export async function transformAttachmentPaths(
         replacement: `![${alt}](${blobUrl})`,
       });
     } catch (e) {
-      // Attachment not found locally. If metadata has a hash, enqueue a background
-      // fetch and retry once after a short wait.
-      const queued =
-        requestMissingBlobDownload(entryPath, sourceRelativePath) ||
-        (canonicalPath !== sourceRelativePath &&
-          requestMissingBlobDownload(entryPath, canonicalPath));
-      if (queued) {
+      // Attachment not found locally — try streaming from server.
+      const serverUrl =
+        getServerAttachmentUrl(entryPath, sourceRelativePath) ||
+        (canonicalPath !== sourceRelativePath
+          ? getServerAttachmentUrl(entryPath, canonicalPath)
+          : null);
+
+      if (serverUrl) {
         try {
-          await new Promise((resolve) => setTimeout(resolve, 250));
-          const retried = await api.getAttachmentData(entryPath, sourceRelativePath);
+          const resp = await fetch(serverUrl);
+          if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
           const mimeType = getMimeType(canonicalPath);
-          let blob = new Blob([new Uint8Array(retried)], { type: mimeType });
+          let blob = await resp.blob();
+          if (blob.type !== mimeType) {
+            blob = new Blob([blob], { type: mimeType });
+          }
           if (isHeicFile(canonicalPath)) {
             blob = await convertHeicToJpeg(blob);
           }
@@ -266,11 +313,11 @@ export async function transformAttachmentPaths(
           });
           continue;
         } catch {
-          // Leave original path if retry is still unavailable.
+          // Server fetch failed — leave original path.
         }
       }
 
-      // Attachment not found or error - leave original path
+      // Attachment not available locally or from server - leave original path
       console.warn(`[AttachmentService] Could not load attachment: ${sourceRelativePath}`, e);
     }
   }
@@ -368,8 +415,47 @@ export async function resolveImageSrc(
 
   try {
     const data = await api.getAttachmentData(entryPath, sourceRelativePath);
+    const bytes = new Uint8Array(data);
+
+    // Verify hash matches CRDT metadata — re-fetch from server if stale.
+    const meta =
+      getAttachmentMetadata(entryPath, sourceRelativePath) ||
+      (canonicalPath !== sourceRelativePath
+        ? getAttachmentMetadata(entryPath, canonicalPath)
+        : null);
+    if (meta) {
+      const localHash = await sha256Hex(bytes);
+      if (localHash !== meta.hash) {
+        const serverUrl =
+          getServerAttachmentUrl(entryPath, sourceRelativePath) ||
+          (canonicalPath !== sourceRelativePath
+            ? getServerAttachmentUrl(entryPath, canonicalPath)
+            : null);
+        if (serverUrl) {
+          try {
+            const resp = await fetch(serverUrl);
+            if (resp.ok) {
+              const mimeType = getMimeType(canonicalPath);
+              let blob = await resp.blob();
+              if (blob.type !== mimeType) {
+                blob = new Blob([blob], { type: mimeType });
+              }
+              if (isHeicFile(canonicalPath)) {
+                blob = await convertHeicToJpeg(blob);
+              }
+              const blobUrl = URL.createObjectURL(blob);
+              blobUrlMap.set(sourceRelativePath, blobUrl);
+              return blobUrl;
+            }
+          } catch {
+            // Fall through to use stale local copy.
+          }
+        }
+      }
+    }
+
     const mimeType = getMimeType(canonicalPath);
-    let blob = new Blob([new Uint8Array(data)], { type: mimeType });
+    let blob = new Blob([bytes], { type: mimeType });
     if (isHeicFile(canonicalPath)) {
       blob = await convertHeicToJpeg(blob);
     }
@@ -377,6 +463,33 @@ export async function resolveImageSrc(
     blobUrlMap.set(sourceRelativePath, blobUrl);
     return blobUrl;
   } catch {
+    // Not available locally — try streaming from server.
+    const serverUrl =
+      getServerAttachmentUrl(entryPath, sourceRelativePath) ||
+      (canonicalPath !== sourceRelativePath
+        ? getServerAttachmentUrl(entryPath, canonicalPath)
+        : null);
+
+    if (serverUrl) {
+      try {
+        const resp = await fetch(serverUrl);
+        if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
+        const mimeType = getMimeType(canonicalPath);
+        let blob = await resp.blob();
+        if (blob.type !== mimeType) {
+          blob = new Blob([blob], { type: mimeType });
+        }
+        if (isHeicFile(canonicalPath)) {
+          blob = await convertHeicToJpeg(blob);
+        }
+        const blobUrl = URL.createObjectURL(blob);
+        blobUrlMap.set(sourceRelativePath, blobUrl);
+        return blobUrl;
+      } catch {
+        // Server fetch also failed.
+      }
+    }
+
     return undefined;
   }
 }

@@ -131,7 +131,7 @@ create/delete/body events on top of already-imported snapshot state.
 
 - configures queue auth/server/workspace context as sync state changes
 - provides backend access for local attachment reads/writes
-- indexes `BinaryRef` attachment metadata and queues missing-blob downloads on metadata updates
+- indexes `BinaryRef` attachment metadata on metadata updates (lazy sync: does NOT auto-download attachments)
 - normalizes filesystem-event frontmatter before callbacks/queueing so missing
   `attachments` fields are treated as `[]` instead of crashing event handlers
 - normalizes metadata-event `audience` values so both arrays and comma-delimited

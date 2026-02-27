@@ -31,7 +31,7 @@ import * as syncHelpers from './syncHelpers';
 import {
   setAttachmentSyncBackend,
   setAttachmentSyncContext,
-  enqueueMissingDownloadsFromMetadata,
+  indexAttachmentRefs,
 } from '../../models/services/attachmentSyncService';
 import {
   setCurrentWorkspaceId as registrySetCurrentWorkspaceId,
@@ -2521,7 +2521,7 @@ function notifyFileChange(path: string | null, metadata: FileMetadata | null): v
     _workspaceId &&
     normalizedMetadata.attachments.length > 0
   ) {
-    enqueueMissingDownloadsFromMetadata(path, _workspaceId, normalizedMetadata.attachments);
+    indexAttachmentRefs(path, normalizedMetadata.attachments, _workspaceId);
   }
   for (const callback of fileChangeCallbacks) {
     try {

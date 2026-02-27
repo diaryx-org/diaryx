@@ -1,4 +1,4 @@
-use crate::auth::RequireAuth;
+use crate::auth::{OptionalAuth, RequireAuth};
 use crate::blob_store::{BlobStore, MultipartCompletedPart};
 use crate::db::{AttachmentUploadSession, AuthRepo};
 use crate::rate_limit::RateLimiter;
@@ -36,6 +36,12 @@ pub struct ApiState {
     /// Using this instead of `std::env::temp_dir()` avoids writing to tmpfs,
     /// which consumes RAM on systems where /tmp is memory-backed.
     pub data_dir: PathBuf,
+}
+
+/// Query parameters for the attachment download endpoint.
+#[derive(Debug, Deserialize)]
+struct AttachmentDownloadQuery {
+    session: Option<String>,
 }
 
 /// Server status response
@@ -1345,8 +1351,9 @@ async fn complete_attachment_upload(
 /// GET /api/workspaces/:workspace_id/attachments/:blob_hash
 async fn download_attachment_blob(
     State(state): State<ApiState>,
-    RequireAuth(auth): RequireAuth,
+    OptionalAuth(auth): OptionalAuth,
     axum::extract::Path((workspace_id, blob_hash)): axum::extract::Path<(String, String)>,
+    Query(query): Query<AttachmentDownloadQuery>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
     if !state.attachment_incremental_sync_enabled {
@@ -1358,9 +1365,34 @@ async fn download_attachment_blob(
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
-    if workspace.user_id != auth.user.id {
-        return StatusCode::NOT_FOUND.into_response();
-    }
+
+    // Determine the workspace owner's user_id for blob lookup.
+    // Auth path 1: Authenticated user owns the workspace.
+    // Auth path 2: Guest with a valid session code for this workspace.
+    let owner_user_id = if let Some(ref auth_user) = auth {
+        if workspace.user_id != auth_user.user.id {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+        workspace.user_id.clone()
+    } else if let Some(session_code) = &query.session {
+        let code = session_code.to_uppercase();
+        let session = match state.repo.get_share_session(&code) {
+            Ok(Some(s)) => s,
+            Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
+        if session.workspace_id != workspace_id {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+        match state.repo.get_user_tier(&session.owner_user_id) {
+            Ok(crate::db::UserTier::Plus) => {}
+            _ => return StatusCode::FORBIDDEN.into_response(),
+        }
+        workspace.user_id.clone()
+    } else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+
     let is_referenced = match state
         .repo
         .workspace_references_blob(&workspace_id, &blob_hash)
@@ -1375,7 +1407,7 @@ async fn download_attachment_blob(
         return StatusCode::NOT_FOUND.into_response();
     }
 
-    let (r2_key, size_bytes, mime_type) = match state.repo.get_user_blob(&auth.user.id, &blob_hash)
+    let (r2_key, size_bytes, mime_type) = match state.repo.get_user_blob(&owner_user_id, &blob_hash)
     {
         Ok(Some(row)) => row,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),

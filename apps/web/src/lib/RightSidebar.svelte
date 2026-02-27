@@ -39,6 +39,10 @@
     Eye,
     Settings2,
     ChevronRight,
+    CloudDownload,
+    Download,
+    CheckCircle2,
+    Loader2,
   } from "@lucide/svelte";
   import type { Component } from "svelte";
   import VersionDiff from "./history/VersionDiff.svelte";
@@ -46,6 +50,11 @@
   import * as Kbd from "$lib/components/ui/kbd";
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
   import { workspaceStore } from "@/models/stores/workspaceStore.svelte";
+  import {
+    getAttachmentMetadata,
+    enqueueAttachmentDownload,
+    isAttachmentSyncEnabled,
+  } from "@/models/services/attachmentSyncService";
 
   // Platform detection for keyboard shortcut display
   const isMac =
@@ -314,6 +323,79 @@
     if (codeExts.includes(ext)) return FileCode;
     return File;
   }
+
+  // Attachment availability: 'local' | 'remote' | 'downloading' | 'unknown'
+  type AttachmentStatus = 'local' | 'remote' | 'downloading' | 'unknown';
+  let attachmentStatuses = $state<Map<string, AttachmentStatus>>(new Map());
+
+  // Check local availability for all attachments when entry changes
+  $effect(() => {
+    if (!entry || !api) return;
+    const attachments = getAttachments();
+    if (attachments.length === 0) return;
+    const entryPath = entry.path;
+    const currentApi = api;
+    const statuses = new Map<string, AttachmentStatus>();
+
+    // Start with 'unknown' then probe each attachment
+    for (const attachment of attachments) {
+      const attachPath = getAttachmentPath(attachment);
+      statuses.set(attachPath, 'unknown');
+    }
+    attachmentStatuses = new Map(statuses);
+
+    // Probe each attachment asynchronously
+    void (async () => {
+      for (const attachment of attachments) {
+        const attachPath = getAttachmentPath(attachment);
+        try {
+          await currentApi.getAttachmentData(entryPath, attachPath);
+          statuses.set(attachPath, 'local');
+        } catch {
+          const meta = getAttachmentMetadata(entryPath, attachPath);
+          statuses.set(attachPath, meta ? 'remote' : 'unknown');
+        }
+      }
+      attachmentStatuses = new Map(statuses);
+    })();
+  });
+
+  function formatFileSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  }
+
+  function downloadAttachment(attachPath: string): void {
+    if (!entry) return;
+    const meta = getAttachmentMetadata(entry.path, attachPath);
+    if (!meta) return;
+    attachmentStatuses.set(attachPath, 'downloading');
+    attachmentStatuses = new Map(attachmentStatuses);
+    enqueueAttachmentDownload({
+      workspaceId: meta.workspaceId,
+      entryPath: entry.path,
+      attachmentPath: attachPath,
+      hash: meta.hash,
+      mimeType: meta.mimeType,
+      sizeBytes: meta.sizeBytes,
+    });
+  }
+
+  function downloadAllRemoteAttachments(): void {
+    if (!entry) return;
+    for (const attachment of getAttachments()) {
+      const attachPath = getAttachmentPath(attachment);
+      if (attachmentStatuses.get(attachPath) === 'remote') {
+        downloadAttachment(attachPath);
+      }
+    }
+  }
+
+  const hasRemoteAttachments = $derived(
+    [...attachmentStatuses.values()].some(s => s === 'remote')
+  );
 
   // Collapsible section state
   let audienceCollapsed = $state(true);
@@ -984,6 +1066,8 @@
               {@const attachPath = getAttachmentPath(attachment)}
               {@const Icon = getFileIcon(displayName)}
               {@const isImage = isImageAttachment(displayName)}
+              {@const status = attachmentStatuses.get(attachPath) ?? 'unknown'}
+              {@const meta = entry ? getAttachmentMetadata(entry.path, attachPath) : null}
               <div
                 class="flex items-center justify-between gap-2 px-2 py-1.5 rounded-md bg-secondary/50 group cursor-grab active:cursor-grabbing"
                 role="listitem"
@@ -1004,25 +1088,58 @@
                   disabled={!isImage}
                 >
                   <Icon class="size-3.5 shrink-0 text-muted-foreground" />
-                  <span
-                    class="text-xs text-foreground truncate {isImage ? 'hover:underline' : ''}"
-                    title={isImage ? `Preview ${displayName}` : attachPath}
-                  >
-                    {displayName}
-                  </span>
+                  <div class="flex flex-col min-w-0">
+                    <span
+                      class="text-xs text-foreground truncate {isImage ? 'hover:underline' : ''}"
+                      title={isImage ? `Preview ${displayName}` : attachPath}
+                    >
+                      {displayName}
+                    </span>
+                    {#if meta && (status === 'remote' || status === 'downloading')}
+                      <span class="text-[10px] text-muted-foreground">{formatFileSize(meta.sizeBytes)}</span>
+                    {/if}
+                  </div>
                 </button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  class="size-5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
-                  onclick={() => onDeleteAttachment?.(attachment)}
-                  aria-label="Remove attachment"
-                >
-                  <Trash2 class="size-3" />
-                </Button>
+                <div class="flex items-center gap-0.5 shrink-0">
+                  {#if status === 'local'}
+                    <CheckCircle2 class="size-3 text-green-500" />
+                  {:else if status === 'downloading'}
+                    <Loader2 class="size-3 text-muted-foreground animate-spin" />
+                  {:else if status === 'remote'}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class="size-5"
+                      onclick={(e: MouseEvent) => { e.stopPropagation(); downloadAttachment(attachPath); }}
+                      aria-label="Download attachment"
+                    >
+                      <Download class="size-3 text-muted-foreground" />
+                    </Button>
+                  {/if}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    class="size-5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                    onclick={() => onDeleteAttachment?.(attachment)}
+                    aria-label="Remove attachment"
+                  >
+                    <Trash2 class="size-3" />
+                  </Button>
+                </div>
               </div>
             {/each}
           </div>
+          {#if isAttachmentSyncEnabled() && hasRemoteAttachments}
+            <Button
+              variant="outline"
+              size="sm"
+              class="w-full h-7 text-xs mb-2"
+              onclick={() => downloadAllRemoteAttachments()}
+            >
+              <CloudDownload class="size-3 mr-1" />
+              Download All
+            </Button>
+          {/if}
         {:else}
           <p class="text-xs text-muted-foreground mb-2">No attachments</p>
         {/if}

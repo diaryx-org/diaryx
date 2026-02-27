@@ -80,7 +80,7 @@ memory at once.
 
 For one-part uploads, the handler uses a direct blob `put` path internally and
 skips remote multipart completion/abort calls.
-- `GET /api/workspaces/{workspace_id}/attachments/{hash}` — download attachment bytes (supports `Range`).
+- `GET /api/workspaces/{workspace_id}/attachments/{hash}` — download attachment bytes (supports `Range`). Accepts `?token=` (owner auth) or `?session=CODE` (guest access via share session). Guest access validates session code, workspace match, and owner Plus subscription.
 
 Attachment uploads and attachment-enabled snapshot imports enforce per-user
 attachment limits. Over-limit requests return `413` with

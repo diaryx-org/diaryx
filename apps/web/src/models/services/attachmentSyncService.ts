@@ -644,10 +644,64 @@ export function isAttachmentSyncEnabled(): boolean {
   return syncContext.enabled;
 }
 
+export function getAttachmentMetadata(
+  entryPath: string,
+  attachmentPath: string,
+): AttachmentLookup | null {
+  return attachmentIndex.get(metadataIndexKey(entryPath, attachmentPath)) ?? null;
+}
+
+export function getServerAttachmentUrl(
+  entryPath: string,
+  attachmentPath: string,
+): string | null {
+  const metadata = attachmentIndex.get(metadataIndexKey(entryPath, attachmentPath));
+  if (!metadata || !syncContext.serverUrl || !syncContext.authToken || !syncContext.workspaceId) {
+    return null;
+  }
+  const base = syncContext.serverUrl.replace(/\/$/, "");
+  const hash = encodeURIComponent(metadata.hash);
+  const wsId = encodeURIComponent(syncContext.workspaceId);
+  const token = encodeURIComponent(syncContext.authToken);
+  return `${base}/api/workspaces/${wsId}/attachments/${hash}?token=${token}`;
+}
+
+export function getServerAttachmentUrlForGuest(
+  entryPath: string,
+  attachmentPath: string,
+  sessionCode: string,
+): string | null {
+  const metadata = attachmentIndex.get(metadataIndexKey(entryPath, attachmentPath));
+  if (!metadata || !syncContext.serverUrl || !syncContext.workspaceId) {
+    return null;
+  }
+  const base = syncContext.serverUrl.replace(/\/$/, "");
+  const hash = encodeURIComponent(metadata.hash);
+  const wsId = encodeURIComponent(syncContext.workspaceId);
+  const session = encodeURIComponent(sessionCode);
+  return `${base}/api/workspaces/${wsId}/attachments/${hash}?session=${session}`;
+}
+
+export async function checkAttachmentIntegrity(
+  entryPath: string,
+  attachmentPath: string,
+): Promise<'match' | 'modified' | 'missing'> {
+  const metadata = attachmentIndex.get(metadataIndexKey(entryPath, attachmentPath));
+  if (!metadata || !backendApi) return 'missing';
+  try {
+    const data = await backendApi.getAttachmentData(entryPath, attachmentPath);
+    const localHash = await sha256Hex(new Uint8Array(data));
+    return localHash === metadata.hash ? 'match' : 'modified';
+  } catch {
+    return 'missing';
+  }
+}
+
 export type {
   SyncContext,
   QueueItem,
   QueueItemEvent,
   UploadJobInput,
   DownloadJobInput,
+  AttachmentLookup,
 };

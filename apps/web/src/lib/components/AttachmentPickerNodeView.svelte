@@ -408,6 +408,8 @@
     background: var(--card);
     overflow: hidden;
     margin: 1em 0;
+    -webkit-user-select: none;
+    user-select: none;
   }
 
   .picker-header {

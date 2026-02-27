@@ -129,6 +129,8 @@
     margin: 0.5em 0;
     border-radius: 6px;
     overflow: hidden;
+    -webkit-user-select: none;
+    user-select: none;
   }
 
   .drawing-block-preview {

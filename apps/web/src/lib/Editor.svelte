@@ -990,6 +990,8 @@
     cursor: pointer;
     font-weight: 600;
     line-height: 1;
+    -webkit-user-select: none;
+    user-select: none;
   }
 
   :global(.footnote-ref:hover) {

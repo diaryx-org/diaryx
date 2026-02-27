@@ -177,6 +177,8 @@
     border-radius: 6px;
     margin: 0.5em 0;
     overflow: hidden;
+    -webkit-user-select: none;
+    user-select: none;
   }
 
   .html-block-header {

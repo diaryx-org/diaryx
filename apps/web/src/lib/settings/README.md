@@ -25,6 +25,9 @@ attachments:
   - '[TemplateSettings.svelte](/apps/web/src/lib/settings/TemplateSettings.svelte)'
   - '[WorkspaceManagement.svelte](/apps/web/src/lib/settings/WorkspaceManagement.svelte)'
   - '[WorkspaceSettings.svelte](/apps/web/src/lib/settings/WorkspaceSettings.svelte)'
+  - '[AppearanceSettings.svelte](/apps/web/src/lib/settings/AppearanceSettings.svelte)'
+  - '[ThemePresetCard.svelte](/apps/web/src/lib/settings/ThemePresetCard.svelte)'
+  - '[AccentHuePicker.svelte](/apps/web/src/lib/settings/AccentHuePicker.svelte)'
 exclude:
   - '*.lock'
 ---
@@ -58,6 +61,9 @@ Settings panel components for the settings dialog.
 | `TemplateSettings.svelte` | Template management (default_template/daily_template in workspace config) |
 | `WorkspaceManagement.svelte` | Local/synced workspace management and sync toggles |
 | `WorkspaceSettings.svelte` | Workspace config: location, daily folder, entry behavior, filename style |
+| `AppearanceSettings.svelte` | Theme presets, accent hue, typography, and layout settings |
+| `ThemePresetCard.svelte` | Preset preview card with color swatches |
+| `AccentHuePicker.svelte` | Hue range slider (0–360) with conic gradient |
 
 `SyncSettings.svelte` displays:
 

@@ -189,14 +189,6 @@ describe('workspaceStore', () => {
       expect(store.showEditorPath).toBe(false)
     })
 
-    it('should toggle readable line length', () => {
-      store.setReadableLineLength(true)
-      expect(store.readableLineLength).toBe(true)
-
-      store.setReadableLineLength(false)
-      expect(store.readableLineLength).toBe(false)
-    })
-
     it('should toggle focus mode', () => {
       store.setFocusMode(true)
       expect(store.focusMode).toBe(true)

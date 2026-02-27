@@ -15,6 +15,9 @@ export function createThemeStore() {
   let mode = $state<ThemeMode>("system");
   let resolvedTheme = $state<"light" | "dark">("light");
 
+  // Listeners notified after the resolved mode changes (used by appearance store)
+  const modeChangeListeners: Array<() => void> = [];
+
   // Initialize from localStorage or default to system
   if (typeof window !== "undefined") {
     const stored = localStorage.getItem(STORAGE_KEY) as ThemeMode | null;
@@ -32,6 +35,7 @@ export function createThemeStore() {
         resolvedTheme = mode;
       }
       applyTheme(resolvedTheme);
+      for (const fn of modeChangeListeners) fn();
     }
 
     mediaQuery.addEventListener("change", updateResolvedTheme);
@@ -68,6 +72,7 @@ export function createThemeStore() {
         resolvedTheme = newMode;
       }
       applyTheme(resolvedTheme);
+      for (const fn of modeChangeListeners) fn();
     }
   }
 
@@ -88,6 +93,14 @@ export function createThemeStore() {
     },
     setMode,
     toggle,
+    /** Register a callback invoked after light/dark mode changes. */
+    onModeChange(fn: () => void) {
+      modeChangeListeners.push(fn);
+      return () => {
+        const idx = modeChangeListeners.indexOf(fn);
+        if (idx >= 0) modeChangeListeners.splice(idx, 1);
+      };
+    },
   };
 }
 
@@ -111,6 +124,7 @@ export function getThemeStore() {
       },
       setMode: () => {},
       toggle: () => {},
+      onModeChange: () => () => {},
     };
   }
 

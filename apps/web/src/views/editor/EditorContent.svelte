@@ -14,7 +14,6 @@
     editorRef: any;
     content: string;
     editorKey: string;
-    readableLineLength?: boolean;
     readonly?: boolean;
     onchange: (markdown: string) => void;
     onblur: () => void;
@@ -39,7 +38,6 @@
     editorRef = $bindable(),
     content,
     editorKey,
-    readableLineLength = true,
     readonly = false,
     onchange,
     onblur,
@@ -56,11 +54,10 @@
 <div class="flex-1 overflow-y-auto">
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <!-- Inner wrapper: padding and optional max-width for readability -->
+  <!-- Inner wrapper: padding and max-width controlled by --editor-content-max-width -->
   <div
-    class="px-4 py-8 md:px-6 md:py-12 min-h-full"
-    class:max-w-prose={readableLineLength}
-    class:mx-auto={readableLineLength}
+    class="px-4 py-8 md:px-6 md:py-12 min-h-full mx-auto"
+    style:max-width="var(--editor-content-max-width)"
     onclick={(e) => {
       // Only handle clicks directly on this container (not bubbled from editor content)
       // This allows clicking in the empty space below the editor to focus at the end

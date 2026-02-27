@@ -53,13 +53,6 @@ let showEditorPath = $state(
     : false
 );
 
-// Readable line length setting (default to true for better readability)
-let readableLineLength = $state(
-  typeof window !== 'undefined'
-    ? localStorage.getItem('diaryx-readable-line-length') !== 'false'
-    : true
-);
-
 // Focus mode setting (default to true on desktop, false on mobile)
 // When enabled and both sidebars are closed, the editor header fades out
 let focusMode = $state(
@@ -277,7 +270,6 @@ export function getWorkspaceStore() {
     get showHiddenFiles() { return showHiddenFiles; },
     get showEditorTitle() { return showEditorTitle; },
     get showEditorPath() { return showEditorPath; },
-    get readableLineLength() { return readableLineLength; },
     get focusMode() { return focusMode; },
 
     // Tree management
@@ -450,13 +442,6 @@ export function getWorkspaceStore() {
       showEditorPath = show;
       if (typeof window !== 'undefined') {
         localStorage.setItem('diaryx-show-editor-path', String(show));
-      }
-    },
-
-    setReadableLineLength(enabled: boolean) {
-      readableLineLength = enabled;
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('diaryx-readable-line-length', String(enabled));
       }
     },
 

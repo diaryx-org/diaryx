@@ -56,6 +56,7 @@
   } from "./models/stores";
   import { getFormattingStore } from "./lib/stores/formattingStore.svelte";
   import { getTemplateContextStore } from "./lib/stores/templateContextStore.svelte";
+  import { getAppearanceStore } from "./lib/stores/appearance.svelte";
 
 
   // Import auth
@@ -70,6 +71,9 @@
 
   // Initialize template context store (feeds live values to editor template variables)
   const templateContextStore = getTemplateContextStore();
+
+  // Initialize appearance store (theme presets, typography, layout)
+  getAppearanceStore();
 
   // Import services
   import {
@@ -185,7 +189,6 @@
   let showHiddenFiles = $derived(workspaceStore.showHiddenFiles);
   let showEditorTitle = $derived(workspaceStore.showEditorTitle);
   let showEditorPath = $derived(workspaceStore.showEditorPath);
-  let readableLineLength = $derived(workspaceStore.readableLineLength);
   let focusMode = $derived(workspaceStore.focusMode);
 
   // API wrapper - uses execute() internally for all operations
@@ -1024,7 +1027,9 @@
       // IMPORTANT: Populate CRDT from filesystem BEFORE connecting to server
       // This ensures our local files are available to sync to other devices
       // At startup, reconciles file mtime vs CRDT modified_at - if file is newer, CRDT is updated
-      if (sharedWorkspaceId && workspacePath) {
+      // Note: This also runs for local-only workspaces (sharedWorkspaceId=null)
+      // so the workspace tree is populated correctly on startup.
+      if (workspacePath) {
         console.log("[App] Initializing CRDT from filesystem via Rust command...");
         try {
           const result = await api.initializeWorkspaceCrdt(workspacePath);
@@ -2162,7 +2167,6 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
   bind:showHiddenFiles
   bind:showEditorTitle
   bind:showEditorPath
-  bind:readableLineLength
   bind:focusMode
   workspacePath={tree?.path}
   initialTab={settingsInitialTab}
@@ -2359,7 +2363,6 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
         bind:editorRef
         content={displayContent}
         editorKey={currentEntry.path}
-        {readableLineLength}
         readonly={editorReadonly}
         onchange={handleContentChange}
         onblur={handleEditorBlur}

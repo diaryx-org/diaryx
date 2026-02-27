@@ -1,7 +1,7 @@
 <script lang="ts">
   /**
    * DisplaySettings - Display and theme settings section
-   * 
+   *
    * Extracted from SettingsDialog for modularity.
    */
   import { Switch } from "$lib/components/ui/switch";
@@ -14,7 +14,6 @@
     showHiddenFiles?: boolean;
     showEditorTitle?: boolean;
     showEditorPath?: boolean;
-    readableLineLength?: boolean;
     focusMode?: boolean;
   }
 
@@ -23,7 +22,6 @@
     showHiddenFiles = $bindable(false),
     showEditorTitle = $bindable(false),
     showEditorPath = $bindable(false),
-    readableLineLength = $bindable(true),
     focusMode = $bindable(true),
   }: Props = $props();
 
@@ -86,17 +84,6 @@
       bind:checked={showEditorPath}
       disabled={!showEditorTitle}
     />
-  </div>
-
-  <!-- Readable Line Length -->
-  <div class="flex items-center justify-between gap-4 px-1">
-    <Label for="readable-line-length" class="text-sm cursor-pointer flex flex-col gap-0.5">
-      <span>Readable line length</span>
-      <span class="font-normal text-xs text-muted-foreground">
-        Limit text width for comfortable reading.
-      </span>
-    </Label>
-    <Switch id="readable-line-length" bind:checked={readableLineLength} />
   </div>
 
   <!-- Focus Mode -->

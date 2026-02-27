@@ -31,6 +31,7 @@
   import DebugInfo from "./settings/DebugInfo.svelte";
   import TemplateSettings from "./settings/TemplateSettings.svelte";
   import WorkspaceManagement from "./settings/WorkspaceManagement.svelte";
+  import AppearanceSettings from "./settings/AppearanceSettings.svelte";
 
   interface Props {
     open?: boolean;
@@ -38,7 +39,6 @@
     showHiddenFiles?: boolean;
     showEditorTitle?: boolean;
     showEditorPath?: boolean;
-    readableLineLength?: boolean;
     focusMode?: boolean;
     workspacePath?: string | null;
     /** Tab to show when the dialog opens */
@@ -53,7 +53,6 @@
     showHiddenFiles = $bindable(false),
     showEditorTitle = $bindable(false),
     showEditorPath = $bindable(false),
-    readableLineLength = $bindable(true),
     focusMode = $bindable(true),
     workspacePath = null,
     initialTab,
@@ -125,9 +124,9 @@
           bind:showHiddenFiles
           bind:showEditorTitle
           bind:showEditorPath
-          bind:readableLineLength
           bind:focusMode
         />
+        <AppearanceSettings />
         <FormattingSettings />
       </div>
     </Tabs.Content>

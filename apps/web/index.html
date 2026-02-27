@@ -36,6 +36,17 @@
         color: #64748b;
       }
     </style>
+    <!-- FOUC prevention: apply cached appearance CSS vars before first paint -->
+    <script>
+      try {
+        var v = localStorage.getItem('diaryx-appearance-vars');
+        if (v) {
+          var vars = JSON.parse(v);
+          var s = document.documentElement.style;
+          for (var k in vars) s.setProperty(k, vars[k]);
+        }
+      } catch(e) {}
+    </script>
   </head>
   <body>
     <div id="app">

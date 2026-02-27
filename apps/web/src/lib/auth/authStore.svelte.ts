@@ -119,6 +119,10 @@ export function getDefaultWorkspace(): Workspace | null {
   if (state.activeWorkspaceId) {
     const active = state.workspaces.find((w) => w.id === state.activeWorkspaceId);
     if (active) return active;
+    // activeWorkspaceId is set but not in server workspace list — this is a
+    // local-only workspace. Don't fall back to an unrelated server workspace,
+    // as that would cause the wrong workspace's data to sync in.
+    return null;
   }
   return state.workspaces[0] ?? null;
 }

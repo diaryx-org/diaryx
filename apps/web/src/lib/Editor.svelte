@@ -838,6 +838,9 @@
     outline: none;
     min-height: 100%;
     padding-bottom: 50vh;
+    font-family: var(--editor-font-family);
+    font-size: var(--editor-font-size);
+    line-height: var(--editor-line-height);
   }
 
   :global(.editor-content > * + *) {
@@ -866,7 +869,7 @@
   }
 
   :global(.editor-content p) {
-    line-height: 1.6;
+    line-height: var(--editor-line-height);
     color: var(--foreground);
   }
 

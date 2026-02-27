@@ -118,10 +118,10 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
     /// and "/" prefixes to ensure consistent keys across the CRDT.
     fn normalize_crdt_path(&self, path: &Path) -> String {
         let path_str = path.to_string_lossy();
-        if let Some(ref root) = *self.workspace_root.read().unwrap() {
-            if let Some(relative) = strip_workspace_root_prefix(&path_str, root) {
-                return normalize_sync_path(&relative);
-            }
+        if let Some(ref root) = *self.workspace_root.read().unwrap()
+            && let Some(relative) = strip_workspace_root_prefix(&path_str, root)
+        {
+            return normalize_sync_path(&relative);
         }
         normalize_sync_path(&path_str)
     }

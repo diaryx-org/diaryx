@@ -102,40 +102,27 @@
     />
   </div>
 
-  <!-- Auto-rename to title -->
-  <div class="flex items-center justify-between gap-2">
-    <span class="text-xs">Auto-rename to title</span>
-    <Switch
-      checked={configStore.config?.auto_rename_to_title ?? true}
-      onCheckedChange={(checked) => configStore.setField("auto_rename_to_title", String(checked))}
+  <!-- Filename Style -->
+  <div class="space-y-1">
+    <span class="text-xs text-muted-foreground">Filename style</span>
+    <Select.Root
+      type="single"
+      value={configStore.config?.filename_style ?? "preserve"}
+      onValueChange={(value) => { if (value) configStore.setField("filename_style", value); }}
       disabled={configStore.loading}
-      class="scale-75 origin-right"
-    />
+    >
+      <Select.Trigger class="h-7 text-xs w-full">
+        {getFilenameStyleLabel(configStore.config?.filename_style ?? "preserve")}
+      </Select.Trigger>
+      <Select.Content>
+        {#each FILENAME_STYLE_OPTIONS as option}
+          <Select.Item value={option.value}>
+            <span class="text-xs">{option.label}</span>
+          </Select.Item>
+        {/each}
+      </Select.Content>
+    </Select.Root>
   </div>
-
-  <!-- Filename Style (only when auto-rename is on) -->
-  {#if configStore.config?.auto_rename_to_title !== false}
-    <div class="space-y-1">
-      <span class="text-xs text-muted-foreground">Filename style</span>
-      <Select.Root
-        type="single"
-        value={configStore.config?.filename_style ?? "preserve"}
-        onValueChange={(value) => { if (value) configStore.setField("filename_style", value); }}
-        disabled={configStore.loading}
-      >
-        <Select.Trigger class="h-7 text-xs w-full">
-          {getFilenameStyleLabel(configStore.config?.filename_style ?? "preserve")}
-        </Select.Trigger>
-        <Select.Content>
-          {#each FILENAME_STYLE_OPTIONS as option}
-            <Select.Item value={option.value}>
-              <span class="text-xs">{option.label}</span>
-            </Select.Item>
-          {/each}
-        </Select.Content>
-      </Select.Root>
-    </div>
-  {/if}
 
   <!-- Auto-update timestamp -->
   <div class="flex items-center justify-between gap-2">
@@ -143,17 +130,6 @@
     <Switch
       checked={configStore.config?.auto_update_timestamp ?? true}
       onCheckedChange={(checked) => configStore.setField("auto_update_timestamp", String(checked))}
-      disabled={configStore.loading}
-      class="scale-75 origin-right"
-    />
-  </div>
-
-  <!-- Sync title to heading -->
-  <div class="flex items-center justify-between gap-2">
-    <span class="text-xs">Sync title to heading</span>
-    <Switch
-      checked={configStore.config?.sync_title_to_heading ?? false}
-      onCheckedChange={(checked) => configStore.setField("sync_title_to_heading", String(checked))}
       disabled={configStore.loading}
       class="scale-75 origin-right"
     />

@@ -20,6 +20,8 @@
     initEventSubscription,
     waitForInitialSync,
     getCanonicalPathForSync,
+    closeBodySync,
+    ensureBodySync,
   } from "./lib/crdt/workspaceCrdtBridge";
   // Note: YDoc and HocuspocusProvider types are now handled by collaborationStore
   import LeftSidebar from "./lib/LeftSidebar.svelte";
@@ -91,7 +93,6 @@
     createChildEntryWithSync,
     createEntryWithSync,
     deleteEntryWithSync,
-    renameEntry as renameEntryController,
     duplicateEntry as duplicateEntryController,
     handleValidateWorkspace as validateWorkspaceHandler,
     handleRefreshTree as refreshTreeHandler,
@@ -1075,9 +1076,32 @@
   }
 
   // Save current entry - delegates to controller with sync support
-  async function save() {
+  // detectH1Title: when true, backend detects first-line H1 and syncs to title/filename
+  async function save(detectH1Title = false) {
     if (!api || !currentEntry || !editorRef) return;
-    await saveEntryWithSync(api, currentEntry, editorRef, tree?.path);
+    const result = await saveEntryWithSync(api, currentEntry, editorRef, tree?.path, detectH1Title);
+    if (result?.newPath) {
+      // H1→title sync caused a path change — update UI state
+      const entry = entryStore.currentEntry;
+      if (entry) {
+        if (expandedNodes.has(entry.path)) {
+          workspaceStore.collapseNode(entry.path);
+          workspaceStore.expandNode(result.newPath);
+        }
+        // Re-fetch the entry to get updated frontmatter (title may have changed)
+        try {
+          const updatedEntry = await api.getEntry(result.newPath);
+          entryStore.setCurrentEntry(updatedEntry);
+          if (collaborationEnabled) {
+            collaborationStore.setCollaborationPath(toCollaborationPath(result.newPath));
+          }
+        } catch {
+          // Fallback: just update the path
+          entryStore.setCurrentEntry({ ...entry, path: result.newPath });
+        }
+        await refreshTree();
+      }
+    }
   }
 
   // Cancel pending auto-save
@@ -1088,13 +1112,13 @@
     }
   }
 
-  // Schedule auto-save with debounce
+  // Schedule auto-save with debounce (no H1 detection)
   function scheduleAutoSave() {
     cancelAutoSave();
     autoSaveTimer = setTimeout(() => {
       autoSaveTimer = null;
       if (isDirty) {
-        save();
+        save(false);
       }
     }, AUTO_SAVE_DELAY_MS);
   }
@@ -1107,11 +1131,11 @@
     scheduleAutoSave();
   }
 
-  // Handle editor blur - save immediately if dirty
+  // Handle editor blur - save immediately with H1 detection if dirty
   function handleEditorBlur() {
     cancelAutoSave();
     if (isDirty) {
-      save();
+      save(true);
     }
   }
 
@@ -1134,7 +1158,7 @@
   function handleKeydown(event: KeyboardEvent) {
     if ((event.metaKey || event.ctrlKey) && event.key === "s") {
       event.preventDefault();
-      save();
+      save(true);
     }
     // Command palette with Cmd/Ctrl + K
     if ((event.metaKey || event.ctrlKey) && event.key === "k") {
@@ -1383,30 +1407,75 @@
     }
   }
 
-  // Rename an entry - delegates to controller with sync support
-  async function handleRenameEntry(path: string, newFilename: string): Promise<string> {
+  // Rename an entry by title - uses SetFrontmatterProperty which handles title→filename→H1 sync
+  async function handleRenameEntry(path: string, newTitle: string): Promise<string> {
     if (!api) throw new Error("API not initialized");
     if (currentEntry?.path === path && isDirty && editorRef) {
       await saveEntryWithSync(api, currentEntry, editorRef, tree?.path);
     }
+
+    // Use SetFrontmatterProperty to set title, which atomically handles filename rename + H1 sync
+    const newPath = await api.setFrontmatterProperty(path, "title", newTitle, tree?.path);
+    const effectivePath = newPath ?? path;
+
+    await refreshTree();
     const parentPath = workspaceStore.getParentNodePath(path);
-    const newPath = await renameEntryController(api, path, newFilename, async () => {
-      await refreshTree();
-      if (parentPath) {
-        await loadNodeChildren(parentPath);
-      }
-      await runValidation();
-    });
+    if (parentPath) {
+      await loadNodeChildren(parentPath);
+    }
+    await runValidation();
+
     if (currentEntry?.path === path) {
-      entryStore.setCurrentEntry({
-        ...currentEntry,
-        path: newPath,
-      });
+      // Re-fetch entry to get updated frontmatter
+      try {
+        const updatedEntry = await api.getEntry(effectivePath);
+        entryStore.setCurrentEntry(updatedEntry);
+      } catch {
+        entryStore.setCurrentEntry({
+          ...currentEntry,
+          path: effectivePath,
+          frontmatter: { ...currentEntry.frontmatter, title: newTitle },
+        });
+      }
       if (collaborationEnabled) {
-        collaborationStore.setCollaborationPath(toCollaborationPath(newPath));
+        collaborationStore.setCollaborationPath(toCollaborationPath(effectivePath));
+      }
+
+      // Sync editor H1 if this is the current entry
+      if (editorRef) {
+        const editor = editorRef.getEditor();
+        if (editor) {
+          const { doc } = editor.state;
+          let firstHeadingPos: number | null = null;
+          let firstHeadingSize = 0;
+          doc.descendants((node: any, pos: number) => {
+            if (firstHeadingPos === null && node.type.name === 'heading' && node.attrs.level === 1) {
+              firstHeadingPos = pos;
+              firstHeadingSize = node.content.size;
+              return false;
+            }
+          });
+          if (firstHeadingPos !== null) {
+            editor.chain()
+              .setTextSelection({ from: firstHeadingPos + 1, to: firstHeadingPos + 1 + firstHeadingSize })
+              .insertContent(newTitle)
+              .run();
+          } else {
+            editor.chain()
+              .insertContentAt(0, { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: newTitle }] })
+              .run();
+          }
+        }
       }
     }
-    return newPath;
+
+    // Handle body sync bridge migration if path changed
+    if (newPath && newPath !== path) {
+      closeBodySync(path);
+      await ensureBodySync(newPath);
+    }
+
+    return effectivePath;
   }
 
   // Duplicate an entry - delegates to controller with sync support
@@ -1811,6 +1880,36 @@
             };
             entryStore.setCurrentEntry(updatedEntry);
             updateCrdtFileMetadata(path, updatedEntry.frontmatter);
+          }
+
+          // Sync editor H1 to match the new title (backend already wrote to disk,
+          // but we must update the in-memory editor to prevent the next save from reverting)
+          if (editorRef) {
+            const editor = editorRef.getEditor();
+            if (editor) {
+              const { doc } = editor.state;
+              let firstHeadingPos: number | null = null;
+              let firstHeadingSize = 0;
+              doc.descendants((node: any, pos: number) => {
+                if (firstHeadingPos === null && node.type.name === 'heading' && node.attrs.level === 1) {
+                  firstHeadingPos = pos;
+                  firstHeadingSize = node.content.size;
+                  return false;
+                }
+              });
+              if (firstHeadingPos !== null) {
+                // Replace existing H1 text
+                editor.chain()
+                  .setTextSelection({ from: firstHeadingPos + 1, to: firstHeadingPos + 1 + firstHeadingSize })
+                  .insertContent(value)
+                  .run();
+              } else {
+                // Prepend H1 at start of document
+                editor.chain()
+                  .insertContentAt(0, { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: value }] })
+                  .run();
+              }
+            }
           }
 
           titleError = null;

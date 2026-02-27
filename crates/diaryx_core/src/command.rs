@@ -57,6 +57,11 @@ pub enum Command {
         /// When provided, `auto_update_timestamp` from workspace config is respected.
         #[serde(default)]
         root_index_path: Option<String>,
+        /// When true, detect the first-line H1 heading and sync it to the
+        /// frontmatter title and filename. Used for manual save / editor blur
+        /// (not auto-save) to avoid mid-typing renames.
+        #[serde(default)]
+        detect_h1_title: bool,
     },
 
     /// Create a new entry.

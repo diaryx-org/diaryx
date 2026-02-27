@@ -72,7 +72,7 @@
     onValidationFix?: () => void;
     onLoadChildren?: (path: string) => Promise<void>;
     onValidate?: (path: string) => void;
-    onRenameEntry?: (path: string, newFilename: string) => Promise<string>;
+    onRenameEntry?: (path: string, newTitle: string) => Promise<string>;
     onDuplicateEntry?: (path: string) => Promise<string>;
     onWorkspaceSwitchStart?: () => void;
     onWorkspaceSwitchComplete?: () => void;
@@ -501,20 +501,16 @@
     showRenameDialog = true;
   }
 
-  // Perform the rename
+  // Perform the rename (by title — backend handles filename + H1 sync)
   async function handleRenameSubmit() {
     if (!renameTargetPath || !renameNewName.trim() || !onRenameEntry) return;
 
-    // Ensure .md extension
-    let newFilename = renameNewName.trim();
-    if (!newFilename.endsWith('.md')) {
-      newFilename += '.md';
-    }
+    const newTitle = renameNewName.trim();
 
     isRenaming = true;
     try {
-      const newPath = await onRenameEntry(renameTargetPath, newFilename);
-      toast.success(`Renamed to ${newFilename}`);
+      const newPath = await onRenameEntry(renameTargetPath, newTitle);
+      toast.success(`Renamed to ${newTitle}`);
       closeRenameDialog();
       // Open the renamed entry
       onOpenEntry(newPath);
@@ -1469,7 +1465,7 @@
       >
         <div class="space-y-2">
           <label for="rename-input" class="text-sm font-medium">
-            New name
+            New title
           </label>
           <input
             id="rename-input"
@@ -1477,12 +1473,9 @@
             class="w-full px-3 py-2 border rounded-md bg-background text-foreground
               focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
             bind:value={renameNewName}
-            placeholder="Enter new filename"
+            placeholder="Enter new title"
             disabled={isRenaming}
           />
-          <p class="text-xs text-muted-foreground">
-            The .md extension will be added automatically if not provided.
-          </p>
         </div>
         <div class="flex justify-end gap-2">
           <Button variant="outline" type="button" onclick={closeRenameDialog} disabled={isRenaming}>

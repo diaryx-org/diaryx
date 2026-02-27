@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use diaryx_core::config::Config;
-use diaryx_core::entry::slugify_title;
+use diaryx_core::entry::{DiaryxApp, slugify_title, sync_h1_in_body};
 use diaryx_core::link_parser::LinkFormat;
 use diaryx_core::workspace::Workspace;
 
@@ -71,6 +71,8 @@ pub fn exec_rename(
     let new_filename = slugify_title(new_title);
     let new_path = parent_dir.join(&new_filename);
 
+    let entry_ops = DiaryxApp::new(rws.fs_ref().clone());
+
     if new_path == path {
         // Just update the title in frontmatter
         block_on(rws.set_frontmatter_property(
@@ -79,6 +81,16 @@ pub fn exec_rename(
             serde_yaml::Value::String(new_title.to_string()),
         ))
         .map_err(|e| format!("Rename failed: {}", e))?;
+
+        // Sync H1 heading to match
+        let path_str = path.to_string_lossy();
+        let body = block_on(entry_ops.get_content(&path_str)).unwrap_or_default();
+        let new_body = sync_h1_in_body(&body, new_title);
+        if new_body != body {
+            block_on(entry_ops.set_content(&path_str, &new_body))
+                .map_err(|e| format!("H1 sync failed: {}", e))?;
+        }
+
         return Ok(path.to_path_buf());
     }
 
@@ -96,6 +108,15 @@ pub fn exec_rename(
         serde_yaml::Value::String(new_title.to_string()),
     ))
     .map_err(|e| format!("Title update failed: {}", e))?;
+
+    // Sync H1 heading to match
+    let new_path_str = new_path.to_string_lossy();
+    let body = block_on(entry_ops.get_content(&new_path_str)).unwrap_or_default();
+    let new_body = sync_h1_in_body(&body, new_title);
+    if new_body != body {
+        block_on(entry_ops.set_content(&new_path_str, &new_body))
+            .map_err(|e| format!("H1 sync failed: {}", e))?;
+    }
 
     Ok(new_path)
 }

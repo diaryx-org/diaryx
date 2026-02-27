@@ -27,8 +27,8 @@ mod helpers;
 
 // Re-export helper functions
 pub use helpers::{
-    apply_filename_style, has_non_portable_chars, prettify_filename, sanitize_filename, slugify,
-    slugify_title,
+    apply_filename_style, extract_first_line_h1, has_non_portable_chars, prettify_filename,
+    sanitize_filename, slugify, slugify_title, sync_h1_in_body,
 };
 
 use crate::config::Config;

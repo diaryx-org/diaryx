@@ -274,71 +274,37 @@
         />
       </div>
 
-      <!-- Sync title to heading -->
-      <div class="flex items-center justify-between gap-4">
-        <Label for="sync-title-heading" class="text-sm flex flex-col gap-0.5">
-          <span>Sync title to heading</span>
-          <span class="font-normal text-xs text-muted-foreground">
-            When changing a title, also update the first H1 heading in the body.
-          </span>
-        </Label>
-        <Switch
-          id="sync-title-heading"
-          checked={configStore.config?.sync_title_to_heading ?? false}
-          onCheckedChange={(checked) => configStore.setField("sync_title_to_heading", String(checked))}
-          disabled={configStore.loading || !workspaceRootIndex}
-        />
-      </div>
-
-      <!-- Auto-rename to title -->
-      <div class="flex items-center justify-between gap-4">
-        <Label for="auto-rename-title" class="text-sm flex flex-col gap-0.5">
-          <span>Auto-rename to title</span>
-          <span class="font-normal text-xs text-muted-foreground">
-            Automatically rename files when the title changes.
-          </span>
-        </Label>
-        <Switch
-          id="auto-rename-title"
-          checked={configStore.config?.auto_rename_to_title ?? true}
-          onCheckedChange={(checked) => configStore.setField("auto_rename_to_title", String(checked))}
-          disabled={configStore.loading || !workspaceRootIndex}
-        />
-      </div>
-
       <!-- Filename Style -->
-      {#if configStore.config?.auto_rename_to_title !== false}
-        <div class="space-y-2">
-          <Label for="filename-style" class="text-sm flex flex-col gap-0.5">
-            <span>Filename style</span>
-            <span class="font-normal text-xs text-muted-foreground">
-              How filenames are generated from entry titles when renaming.
-            </span>
-          </Label>
-          <Select.Root
-            type="single"
-            value={configStore.config?.filename_style ?? "preserve"}
-            onValueChange={(value) => { if (value) configStore.setField("filename_style", value); }}
-            disabled={configStore.loading || !workspaceRootIndex}
-          >
-            <Select.Trigger id="filename-style" class="w-full">
-              {getFilenameStyleLabel(configStore.config?.filename_style ?? "preserve")}
-            </Select.Trigger>
-            <Select.Content>
-              {#each FILENAME_STYLE_OPTIONS as option}
-                <Select.Item value={option.value}>
-                  <div class="flex flex-col gap-0.5">
-                    <span>{option.label}</span>
-                    <span class="text-xs text-muted-foreground font-mono">
-                      {option.description}
-                    </span>
-                  </div>
-                </Select.Item>
-              {/each}
-            </Select.Content>
-          </Select.Root>
-        </div>
-      {/if}
+      <div class="space-y-2">
+        <Label for="filename-style" class="text-sm flex flex-col gap-0.5">
+          <span>Filename style</span>
+          <span class="font-normal text-xs text-muted-foreground">
+            How filenames are generated from entry titles when renaming.
+          </span>
+        </Label>
+        <Select.Root
+          type="single"
+          value={configStore.config?.filename_style ?? "preserve"}
+          onValueChange={(value) => { if (value) configStore.setField("filename_style", value); }}
+          disabled={configStore.loading || !workspaceRootIndex}
+        >
+          <Select.Trigger id="filename-style" class="w-full">
+            {getFilenameStyleLabel(configStore.config?.filename_style ?? "preserve")}
+          </Select.Trigger>
+          <Select.Content>
+            {#each FILENAME_STYLE_OPTIONS as option}
+              <Select.Item value={option.value}>
+                <div class="flex flex-col gap-0.5">
+                  <span>{option.label}</span>
+                  <span class="text-xs text-muted-foreground font-mono">
+                    {option.description}
+                  </span>
+                </div>
+              </Select.Item>
+            {/each}
+          </Select.Content>
+        </Select.Root>
+      </div>
     </div>
 
     {#if configStore.error}

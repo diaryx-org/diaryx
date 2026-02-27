@@ -95,9 +95,13 @@ export function createApi(backend: Backend) {
       return expectResponse(response, 'Entry').data;
     },
 
-    /** Save an entry's content. */
-    async saveEntry(path: string, content: string, rootIndexPath?: string): Promise<void> {
-      await backend.execute({ type: 'SaveEntry', params: { path, content, root_index_path: rootIndexPath ?? null } } as any);
+    /** Save an entry's content. Returns new path if H1→title sync caused a rename, null otherwise. */
+    async saveEntry(path: string, content: string, rootIndexPath?: string, detectH1Title?: boolean): Promise<string | null> {
+      const response = await backend.execute({ type: 'SaveEntry', params: { path, content, root_index_path: rootIndexPath ?? null, detect_h1_title: detectH1Title ?? false } } as any);
+      if (response.type === 'String') {
+        return response.data;
+      }
+      return null;
     },
 
     /** Create a new entry. Returns the path to the created entry. */

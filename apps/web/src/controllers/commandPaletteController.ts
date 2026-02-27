@@ -86,21 +86,23 @@ export async function handleDuplicateCurrentEntry(
 export async function handleRenameCurrentEntry(
   _api: Api,
   currentEntry: EntryData | null,
-  renameEntryFn: (path: string, newFilename: string) => Promise<string>,
+  renameEntryFn: (path: string, newTitle: string) => Promise<string>,
   openEntryFn: (path: string) => Promise<void>
 ): Promise<void> {
   if (!currentEntry) {
     toast.error('No entry selected');
     return;
   }
-  const currentName = currentEntry.path.split('/').pop()?.replace('.md', '') || '';
-  const newName = window.prompt('Enter new name:', currentName);
-  if (!newName || newName === currentName) return;
+  const currentTitle = (typeof currentEntry.frontmatter?.title === 'string' ? currentEntry.frontmatter.title : null)
+    || currentEntry.path.split('/').pop()?.replace('.md', '')
+    || '';
+  const newTitle = window.prompt('Enter new title:', currentTitle);
+  if (!newTitle || newTitle === currentTitle) return;
 
   try {
-    const newPath = await renameEntryFn(currentEntry.path, newName + '.md');
+    const newPath = await renameEntryFn(currentEntry.path, newTitle);
     await openEntryFn(newPath);
-    toast.success('Entry renamed', { description: newName });
+    toast.success('Entry renamed', { description: newTitle });
   } catch (e) {
     toast.error('Failed to rename', {
       description: e instanceof Error ? e.message : String(e),

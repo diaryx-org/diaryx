@@ -247,38 +247,17 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     }
 
     /// Sync the first H1 heading in the body to the given title.
-    /// If an H1 exists, replace its text. If not, prepend `# {title}\n\n` to the body.
+    /// If an H1 exists on the first non-blank line, replace its text.
+    /// If not, prepend `# {title}\n\n` to the body.
     async fn sync_heading_to_title(&self, path: &str, title: &str) -> Result<()> {
+        use crate::entry::sync_h1_in_body;
         let body = self.entry().get_content(path).await.unwrap_or_default();
-
-        // Find the first line starting with "# " (markdown H1)
-        let mut found = false;
-        let mut new_lines: Vec<String> = Vec::new();
-        for line in body.lines() {
-            if !found && line.starts_with("# ") {
-                new_lines.push(format!("# {}", title));
-                found = true;
-            } else {
-                new_lines.push(line.to_string());
-            }
-        }
-
-        let new_body = if found {
-            let mut result = new_lines.join("\n");
-            // Preserve trailing newline if original had one
-            if body.ends_with('\n') {
-                result.push('\n');
-            }
-            result
+        let new_body = sync_h1_in_body(&body, title);
+        if new_body != body {
+            self.entry().set_content(path, &new_body).await
         } else {
-            // No H1 found — prepend one
-            if body.is_empty() {
-                format!("# {}\n\n", title)
-            } else {
-                format!("# {}\n\n{}", title, body)
-            }
-        };
-        self.entry().set_content(path, &new_body).await
+            Ok(())
+        }
     }
 
     /// Resolve a template from a workspace config link value.
@@ -556,6 +535,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 path,
                 content,
                 root_index_path,
+                detect_h1_title,
             } => {
                 log::debug!(
                     "[CommandHandler] SaveEntry: input path='{}', content_preview='{}'",
@@ -563,17 +543,20 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     content.chars().take(50).collect::<String>()
                 );
 
-                // Read auto_update_timestamp from workspace config if root_index_path provided
-                let auto_update = if let Some(ref rip) = root_index_path {
+                // Read workspace config if root_index_path provided
+                let ws_config = if let Some(ref rip) = root_index_path {
                     let ws = self.workspace().inner();
                     let resolved_root_index_path = self.resolve_fs_path(rip);
                     ws.get_workspace_config(&resolved_root_index_path)
                         .await
-                        .map(|c| c.auto_update_timestamp)
-                        .unwrap_or(true)
+                        .ok()
                 } else {
-                    true
+                    None
                 };
+                let auto_update = ws_config
+                    .as_ref()
+                    .map(|c| c.auto_update_timestamp)
+                    .unwrap_or(true);
 
                 // Save to filesystem (CrdtFs automatically updates body CRDT via its write hook)
                 self.entry()
@@ -600,6 +583,98 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         "[CommandHandler] SaveEntry: completed for canonical_path='{}'",
                         canonical_path
                     );
+                }
+
+                // H1→title sync: detect first-line H1 and sync to title + filename
+                if detect_h1_title && let Some(ref ws_config) = ws_config {
+                    use crate::entry::{apply_filename_style, extract_first_line_h1};
+
+                    if let Some(h1_title) = extract_first_line_h1(&content) {
+                        // Read current frontmatter title
+                        let current_title = self
+                            .entry()
+                            .get_frontmatter_property(&path, "title")
+                            .await
+                            .ok()
+                            .flatten()
+                            .and_then(|v| {
+                                if let serde_yaml::Value::String(s) = v {
+                                    Some(s)
+                                } else {
+                                    None
+                                }
+                            });
+
+                        if current_title.as_deref() != Some(&h1_title) {
+                            // Set title in frontmatter
+                            self.entry()
+                                .set_frontmatter_property(
+                                    &path,
+                                    "title",
+                                    serde_yaml::Value::String(h1_title.clone()),
+                                )
+                                .await?;
+
+                            // Rename file to match new title
+                            let new_stem =
+                                apply_filename_style(&h1_title, &ws_config.filename_style);
+                            let new_filename = format!("{}.md", new_stem);
+
+                            let entry_path = self.resolve_fs_path(&path);
+                            let ws = self.workspace().inner();
+                            let is_index = ws.is_index_file(&entry_path).await;
+                            let is_root = ws.is_root_index(&entry_path).await;
+
+                            let current_comparable = if is_index && !is_root {
+                                entry_path
+                                    .parent()
+                                    .and_then(|p| p.file_name())
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("")
+                                    .to_string()
+                            } else {
+                                entry_path
+                                    .file_stem()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("")
+                                    .to_string()
+                            };
+
+                            if current_comparable != new_stem {
+                                let new_path = ws.rename_entry(&entry_path, &new_filename).await?;
+                                let new_path_str = new_path.to_string_lossy().to_string();
+
+                                // Migrate body CRDT doc to new path
+                                #[cfg(feature = "crdt")]
+                                {
+                                    let canonical_old = self.get_canonical_path(&path);
+                                    let canonical_new = self.get_canonical_path(&new_path_str);
+                                    if canonical_old != canonical_new
+                                        && let Some(body_manager) = self.body_doc_manager()
+                                        && let Err(e) =
+                                            body_manager.rename(&canonical_old, &canonical_new)
+                                    {
+                                        log::warn!(
+                                            "Failed to migrate body doc on H1 rename {} -> {}: {}",
+                                            canonical_old,
+                                            canonical_new,
+                                            e
+                                        );
+                                    }
+
+                                    self.emit_workspace_sync("SaveEntry_H1Sync");
+                                }
+
+                                return Ok(Response::String(new_path_str));
+                            }
+
+                            // Title changed but filename didn't need to change
+                            #[cfg(feature = "crdt")]
+                            self.emit_workspace_sync("SaveEntry_H1Sync");
+
+                            return Ok(Response::String(path));
+                        }
+                    }
                 }
 
                 Ok(Response::Ok)
@@ -771,8 +846,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         .set_frontmatter_property(&path, &key, yaml_value)
                         .await?;
 
-                    // Auto-rename if enabled
-                    if ws_config.auto_rename_to_title {
+                    // Always auto-rename file to match title
+                    {
                         let new_stem = apply_filename_style(new_title, &ws_config.filename_style);
                         let new_filename = format!("{}.md", new_stem);
 
@@ -826,11 +901,9 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         }
                     }
 
-                    // sync_title_to_heading
-                    if ws_config.sync_title_to_heading {
-                        self.sync_heading_to_title(&effective_path, new_title)
-                            .await?;
-                    }
+                    // Always sync title to H1 heading
+                    self.sync_heading_to_title(&effective_path, new_title)
+                        .await?;
 
                     // Emit workspace sync (covers both rename + frontmatter update)
                     #[cfg(feature = "crdt")]
@@ -1463,6 +1536,20 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         canonical_old,
                         canonical_new
                     );
+                }
+
+                // Sync title and H1 to match the new filename
+                {
+                    use crate::entry::prettify_filename;
+                    let title = prettify_filename(new_filename.trim_end_matches(".md"));
+                    self.entry()
+                        .set_frontmatter_property(
+                            &to_path_str,
+                            "title",
+                            serde_yaml::Value::String(title.clone()),
+                        )
+                        .await?;
+                    self.sync_heading_to_title(&to_path_str, &title).await?;
                 }
 
                 Ok(Response::String(to_path_str))

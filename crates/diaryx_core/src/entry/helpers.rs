@@ -198,6 +198,66 @@ pub fn sanitize_filename(filename: &str) -> String {
     }
 }
 
+/// Extract title from strict first-line H1.
+/// Only returns Some if the first non-blank line starts with "# " and has text after it.
+pub fn extract_first_line_h1(content: &str) -> Option<String> {
+    let first_line = content.lines().find(|l| !l.trim().is_empty())?;
+    let title = first_line.strip_prefix("# ")?.trim();
+    if title.is_empty() {
+        None
+    } else {
+        Some(title.to_string())
+    }
+}
+
+/// Update the first-line H1 in a body string to match the given title.
+/// If no H1 exists on the first non-blank line, prepend one.
+/// Returns the modified body.
+pub fn sync_h1_in_body(body: &str, title: &str) -> String {
+    // Find the first non-blank line
+    let mut found = false;
+    let mut new_lines: Vec<String> = Vec::new();
+    let mut is_first_nonblank = true;
+
+    for line in body.lines() {
+        if is_first_nonblank && !line.trim().is_empty() {
+            is_first_nonblank = false;
+            if line.starts_with("# ") {
+                // Replace existing H1
+                new_lines.push(format!("# {}", title));
+                found = true;
+            } else {
+                // First non-blank line is not an H1 — prepend one
+                new_lines.push(format!("# {}", title));
+                new_lines.push(String::new());
+                new_lines.push(line.to_string());
+                found = true;
+            }
+        } else {
+            new_lines.push(line.to_string());
+        }
+    }
+
+    if !found {
+        // Body is empty or all blank lines
+        if body.is_empty() {
+            return format!("# {}\n\n", title);
+        } else {
+            // Prepend H1 before the blank lines
+            let mut result = format!("# {}\n\n", title);
+            result.push_str(body);
+            return result;
+        }
+    }
+
+    let mut result = new_lines.join("\n");
+    // Preserve trailing newline if original had one
+    if body.ends_with('\n') && !result.ends_with('\n') {
+        result.push('\n');
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,6 +420,50 @@ mod tests {
         assert_eq!(
             slugify_title_with_style("My Entry", &FilenameStyle::ScreamingSnakeCase),
             "MY_ENTRY.md"
+        );
+    }
+
+    #[test]
+    fn test_extract_first_line_h1() {
+        assert_eq!(
+            extract_first_line_h1("# My Title\n\nBody text"),
+            Some("My Title".to_string())
+        );
+        assert_eq!(
+            extract_first_line_h1("\n\n# My Title\n\nBody text"),
+            Some("My Title".to_string())
+        );
+        assert_eq!(extract_first_line_h1("No heading here"), None);
+        assert_eq!(extract_first_line_h1("## Not H1"), None);
+        assert_eq!(extract_first_line_h1("# "), None);
+        assert_eq!(extract_first_line_h1("# \n\nBody"), None);
+        assert_eq!(extract_first_line_h1(""), None);
+        assert_eq!(extract_first_line_h1("Body\n# Later Heading"), None);
+    }
+
+    #[test]
+    fn test_sync_h1_in_body() {
+        // Replace existing H1
+        assert_eq!(
+            sync_h1_in_body("# Old Title\n\nBody text", "New Title"),
+            "# New Title\n\nBody text"
+        );
+        // Prepend H1 when none exists
+        assert_eq!(
+            sync_h1_in_body("Body text\nMore text", "New Title"),
+            "# New Title\n\nBody text\nMore text"
+        );
+        // Empty body
+        assert_eq!(sync_h1_in_body("", "New Title"), "# New Title\n\n");
+        // Preserve trailing newline
+        assert_eq!(
+            sync_h1_in_body("# Old Title\n\nBody\n", "New Title"),
+            "# New Title\n\nBody\n"
+        );
+        // H1 with leading blank lines
+        assert_eq!(
+            sync_h1_in_body("\n\n# Old Title\n\nBody", "New Title"),
+            "\n\n# New Title\n\nBody"
         );
     }
 }

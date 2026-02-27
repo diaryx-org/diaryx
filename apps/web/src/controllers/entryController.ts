@@ -43,13 +43,13 @@ async function saveEntryWithRetry(
   api: Api,
   path: string,
   markdown: string,
-  rootIndexPath?: string
-): Promise<void> {
+  rootIndexPath?: string,
+  detectH1Title?: boolean
+): Promise<string | null> {
   let lastError: unknown = null;
   for (let attempt = 0; attempt <= SAVE_RETRY_DELAYS_MS.length; attempt++) {
     try {
-      await api.saveEntry(path, markdown, rootIndexPath);
-      return;
+      return await api.saveEntry(path, markdown, rootIndexPath, detectH1Title);
     } catch (e) {
       lastError = e;
       const shouldRetry = isTransientSaveError(e) && attempt < SAVE_RETRY_DELAYS_MS.length;
@@ -662,13 +662,17 @@ export async function createEntryWithSync(
  * @param api - API instance
  * @param currentEntry - The current entry being saved
  * @param editorRef - Reference to the editor component
+ * @param rootIndexPath - Workspace root index path
+ * @param detectH1Title - When true, detect H1→title sync (manual save/blur only, not auto-save)
+ * @returns Object with newPath if H1 sync caused a rename
  */
 export async function saveEntryWithSync(
   api: Api,
   currentEntry: EntryData | null,
   editorRef: any,
-  rootIndexPath?: string
-): Promise<void> {
+  rootIndexPath?: string,
+  detectH1Title?: boolean
+): Promise<{ newPath?: string } | void> {
   if (!currentEntry || !editorRef) return;
   if (entryStore.isSaving) return; // Prevent concurrent saves
 
@@ -679,8 +683,20 @@ export async function saveEntryWithSync(
     const markdown = reverseBlobUrlsToAttachmentPaths(markdownWithBlobUrls || '');
 
     // Save to backend - Rust handles CRDT sync automatically
-    await saveEntryWithRetry(api, currentEntry.path, markdown, rootIndexPath);
+    const newPath = await saveEntryWithRetry(api, currentEntry.path, markdown, rootIndexPath, detectH1Title);
     entryStore.markClean();
+
+    if (newPath && newPath !== currentEntry.path) {
+      // H1 sync caused a rename — update body sync bridges
+      closeBodySync(currentEntry.path);
+      await ensureBodySync(newPath);
+      return { newPath };
+    }
+
+    if (newPath) {
+      // Title changed but path didn't — return so caller can refresh UI
+      return { newPath };
+    }
   } catch (e) {
     uiStore.setError(e instanceof Error ? e.message : String(e));
   } finally {

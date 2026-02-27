@@ -1027,9 +1027,9 @@
       // IMPORTANT: Populate CRDT from filesystem BEFORE connecting to server
       // This ensures our local files are available to sync to other devices
       // At startup, reconciles file mtime vs CRDT modified_at - if file is newer, CRDT is updated
-      // Note: This also runs for local-only workspaces (sharedWorkspaceId=null)
-      // so the workspace tree is populated correctly on startup.
-      if (workspacePath) {
+      // Skipped for local-only workspaces (sharedWorkspaceId=null) — they don't sync
+      // and the tree is built from the filesystem directly.
+      if (sharedWorkspaceId && workspacePath) {
         console.log("[App] Initializing CRDT from filesystem via Rust command...");
         try {
           const result = await api.initializeWorkspaceCrdt(workspacePath);

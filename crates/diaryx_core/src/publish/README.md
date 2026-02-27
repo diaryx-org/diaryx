@@ -1,30 +1,26 @@
 ---
 title: Publish module
-description: HTML publishing using comrak
+description: ContentProvider trait — shared publish abstractions
 part_of: '[README](/crates/diaryx_core/src/README.md)'
 attachments:
   - '[mod.rs](/crates/diaryx_core/src/publish/mod.rs)'
-  - '[types.rs](/crates/diaryx_core/src/publish/types.rs)'
+  - '[content_provider.rs](/crates/diaryx_core/src/publish/content_provider.rs)'
 exclude:
   - '*.lock'
 ---
 
-# Publish Module
+# Publish Module (Core)
 
-This module converts markdown files to HTML using [comrak](https://docs.rs/comrak).
+This module defines the shared abstractions for publishing. The full rendering pipeline (markdown-to-HTML via comrak) has moved to the [`diaryx_publish`](/crates/diaryx_publish/README.md) crate.
 
-## Features
+## What remains here
 
-- Multi-file and single-file HTML output modes
-- Audience filtering via the export system
-- Automatic navigation links from `contents`/`part_of` frontmatter
-- Floating metadata pill showing frontmatter key-value pairs
-- **Footnotes**: Comrak's built-in footnote extension (`[^label]` / `[^label]: ...`) is enabled
-- **Colored highlights**: `==text==` and `=={color}text==` syntax is pre-processed into `<mark>` elements with color classes matching the editor's 10-color palette (red, orange, yellow, green, cyan, blue, violet, pink, brown, grey; default yellow). Light and dark mode CSS included.
-- **Spoilers**: `||text||` syntax is pre-processed into click-to-reveal `<span>` elements with JS toggle handlers in both multi-file and single-file templates
-- **Attachment copying**: Referenced files in `_attachments/` directories are discovered from markdown body links/images and the `attachments` frontmatter list, then copied to the output directory preserving relative paths. Enabled by default; disable with `PublishOptions::copy_attachments = false` (or `--no-copy-attachments` in the CLI). Skipped in single-file mode and by the sync server (which uses R2 URL rewriting instead).
+- `ContentProvider` trait — abstraction for content sources (filesystem, CRDT, etc.)
+- `MaterializedFile` — a file ready for rendering (path, content, frontmatter)
+
+These types live in `diaryx_core` because they are part of the shared kernel used by both the publish crate and potential server-side content providers.
 
 ## Files
 
-- `mod.rs` - Publisher implementation with attachment discovery, TOC generation, and HTML rendering
-- `types.rs` - PublishOptions, PublishResult, and related types
+- `mod.rs` — re-exports from `content_provider`
+- `content_provider.rs` — `ContentProvider` trait and `MaterializedFile` type

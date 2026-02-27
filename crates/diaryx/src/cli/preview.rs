@@ -5,7 +5,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use axum::Router;
 use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
-use diaryx_core::publish::{PublishOptions, Publisher};
+use diaryx_publish::{PublishOptions, Publisher};
 use tower_http::services::ServeDir;
 
 /// RAII guard that removes a temp directory on drop.

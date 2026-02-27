@@ -1902,6 +1902,7 @@ dependencies = [
  "clap",
  "crossterm 0.28.1",
  "diaryx_core",
+ "diaryx_publish",
  "diaryx_sync",
  "dirs 6.0.0",
  "env_logger",
@@ -1964,7 +1965,6 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "chrono-english",
- "comrak",
  "dirs 6.0.0",
  "futures-lite 2.6.1",
  "futures-util",
@@ -1991,6 +1991,21 @@ dependencies = [
  "uuid",
  "yrs 0.25.0",
  "zip",
+]
+
+[[package]]
+name = "diaryx_publish"
+version = "1.2.1"
+dependencies = [
+ "async-trait",
+ "comrak",
+ "diaryx_core",
+ "futures-lite 2.6.1",
+ "indexmap 2.13.0",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
 ]
 
 [[package]]
@@ -2031,6 +2046,7 @@ dependencies = [
  "dashmap",
  "diaryx-siphonophore",
  "diaryx_core",
+ "diaryx_publish",
  "diaryx_sync",
  "dotenvy",
  "futures",

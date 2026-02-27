@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
 use diaryx_core::pandoc;
-use diaryx_core::publish::{PublishOptions, Publisher};
 use diaryx_core::workspace::Workspace;
+use diaryx_publish::{PublishOptions, Publisher};
 
 /// Helper to run async operations in sync context
 fn block_on<F: std::future::Future>(f: F) -> F::Output {

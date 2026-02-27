@@ -37,7 +37,6 @@ ts-rs = { version = "10", features = ["serde-json-impl", "indexmap-impl", "no-se
 futures-lite = "2"
 
 # Optional dependencies
-comrak = { version = "0.49", optional = true }
 git2 = { version = "0.19", optional = true, default-features = false }
 handlebars = { version = "6", optional = true }
 
@@ -67,8 +66,8 @@ futures-util = { version = "0.3", optional = true }
 # wasm-bindgen = "0.2"
 
 [features]
-# Enable markdown-to-HTML conversion (for publish feature)
-markdown = ["dep:comrak"]
+# Kept for backward compatibility — the publish pipeline has moved to diaryx_publish.
+markdown = []
 
 # Enable CRDT-based sync and version history (works on all platforms)
 # On native, also enables SqliteStorage via rusqlite

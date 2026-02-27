@@ -345,6 +345,8 @@
     overflow: visible;
     margin: 4px 0;
     width: fit-content;
+    -webkit-user-select: none;
+    user-select: none;
   }
 
   .menu-section {
@@ -467,19 +469,7 @@
 
   @media (max-width: 767px) {
     .block-picker-menu {
-      min-width: 0;
-      flex-wrap: wrap;
-      max-width: min(90vw, 280px);
-      justify-content: flex-start;
-    }
-
-    .menu-item {
-      width: 36px;
-      height: 36px;
-    }
-
-    .submenu-wrapper .menu-item {
-      width: 44px;
+      max-width: 90vw;
     }
 
     .menu-divider {

@@ -8,12 +8,10 @@
 use crate::blob_store::BlobStore;
 use crate::db::{AuthRepo, CompletedAttachmentUploadInfo, WorkspaceAttachmentRefRecord};
 use chrono::Utc;
-use diaryx_core::crdt::git::{materialize_from_git, open_repo};
-use diaryx_core::crdt::{
-    BodyDocManager, WorkspaceCrdt, materialize_workspace, parse_snapshot_markdown,
-};
 use diaryx_core::link_parser;
+use diaryx_sync::git::{materialize_from_git, open_repo};
 pub use diaryx_sync::storage::StorageCache;
+use diaryx_sync::{BodyDocManager, WorkspaceCrdt, materialize_workspace, parse_snapshot_markdown};
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use serde::{Deserialize, Serialize};
@@ -386,7 +384,7 @@ impl WorkspaceStore {
         let result = materialize_workspace(&workspace, &body_docs, workspace_id);
 
         for skipped in &result.skipped {
-            if skipped.reason == diaryx_core::crdt::materialize::SkipReason::UnresolvedPath {
+            if skipped.reason == diaryx_sync::materialize::SkipReason::UnresolvedPath {
                 warn!(
                     "Snapshot export: skipping unresolved path for {}",
                     skipped.key
@@ -475,7 +473,7 @@ impl WorkspaceStore {
         let result = materialize_workspace(&workspace, &body_docs, workspace_id);
 
         for skipped in &result.skipped {
-            if skipped.reason == diaryx_core::crdt::materialize::SkipReason::UnresolvedPath {
+            if skipped.reason == diaryx_sync::materialize::SkipReason::UnresolvedPath {
                 warn!(
                     "Snapshot export: skipping unresolved path for {}",
                     skipped.key
@@ -894,7 +892,7 @@ fn import_snapshot_blocking(
     workspace_id: &str,
     mode: SnapshotImportMode,
     include_attachments: bool,
-    storage: &diaryx_core::crdt::SqliteStorage,
+    storage: &diaryx_sync::SqliteStorage,
     workspace: &WorkspaceCrdt,
     body_docs: &BodyDocManager,
 ) -> Result<(Vec<BlobUploadJob>, usize, Vec<WorkspaceAttachmentRefRecord>), SnapshotError> {

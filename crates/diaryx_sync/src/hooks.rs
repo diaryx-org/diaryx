@@ -4,8 +4,8 @@
 //! [`DiarySyncHook`] — a generic siphonophore `Hook` implementation that
 //! delegates to a `SyncHookDelegate` for server-specific behavior.
 
+use crate::{CrdtStorage, UpdateOrigin};
 use async_trait::async_trait;
-use diaryx_core::crdt::{CrdtStorage, UpdateOrigin};
 use siphonophore::{
     BeforeCloseDirtyPayload, BeforeSyncAction, ControlMessageResponse, Handle, Hook, HookResult,
     OnAuthenticatePayload, OnBeforeSyncPayload, OnChangePayload, OnConnectPayload,
@@ -625,7 +625,7 @@ impl<D: SyncHookDelegate> Hook for DiarySyncHook<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use diaryx_core::crdt::BodyDoc;
+    use crate::BodyDoc;
     use siphonophore::Context;
     use std::sync::atomic::{AtomicBool, Ordering};
     use yrs::{Doc, GetString, ReadTxn, Text, Transact, updates::decoder::Decode};
@@ -663,7 +663,7 @@ mod tests {
             // Also do actual write-back to verify end-to-end
             let storage = self.storage_cache.get_storage(workspace_id).unwrap();
             let body_key = format!("body:{}/{}", workspace_id, path);
-            let body_storage: Arc<dyn diaryx_core::crdt::CrdtStorage> = storage;
+            let body_storage: Arc<dyn crate::CrdtStorage> = storage;
             let body_doc = BodyDoc::load(body_storage, body_key).unwrap();
             let new_body = body_doc.get_body();
 
@@ -696,7 +696,7 @@ mod tests {
         let storage = storage_cache.get_storage(workspace_id).unwrap();
         let body_key = format!("body:{}/notes.md", workspace_id);
         {
-            let body_storage: Arc<dyn diaryx_core::crdt::CrdtStorage> = storage.clone();
+            let body_storage: Arc<dyn crate::CrdtStorage> = storage.clone();
             let body_doc = BodyDoc::new(body_storage, body_key.clone());
             body_doc.set_body("Initial content.\n").unwrap();
             body_doc.save().unwrap();

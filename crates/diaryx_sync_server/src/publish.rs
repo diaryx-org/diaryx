@@ -2,11 +2,11 @@ use crate::blob_store::BlobStore;
 use crate::db::{AuthRepo, PublishedSiteInfo};
 use crate::sync_v2::StorageCache;
 use base64::Engine;
-use diaryx_core::crdt::{BodyDocManager, MaterializedFile, WorkspaceCrdt, materialize_workspace};
 use diaryx_core::export::{ExcludedFile, ExclusionReason, Exporter};
 use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
 use diaryx_core::workspace::Workspace;
 use diaryx_publish::{PublishOptions, Publisher};
+use diaryx_sync::{BodyDocManager, MaterializedFile, WorkspaceCrdt, materialize_workspace};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -863,7 +863,7 @@ fn compact_yaml_value(value: &serde_yaml::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use diaryx_core::crdt::FileMetadata;
+    use diaryx_sync::FileMetadata;
 
     fn materialized(path: &str, content: &str) -> MaterializedFile {
         MaterializedFile {

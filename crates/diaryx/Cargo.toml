@@ -42,7 +42,7 @@ tower-http = { version = "0.6", features = ["fs"] }
 open = "5"
 
 # Optional: local sync server for web editing
-diaryx_sync = { workspace = true, optional = true }
+diaryx_sync = { workspace = true, features = ["server"], optional = true }
 
 [features]
 default = ["web-edit"]

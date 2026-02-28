@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-02-27T21:21:37Z
+updated: 2026-02-28T02:14:36Z
 part_of: '[README](/README.md)'
 ---
 # Instructions for AI agents
@@ -95,6 +95,7 @@ Read the root README.md first. For specific projects, use these entry points:
 | Web app          | apps/web/README.md                  |
 | Tauri app        | apps/tauri/README.md                |
 | WASM bindings    | crates/diaryx_wasm/README.md        |
+| Sync engine      | crates/diaryx_sync/README.md        |
 | Sync server      | crates/diaryx_sync_server/README.md |
 
 

@@ -8,9 +8,9 @@
 //!
 //! The CLI's `diaryx edit` command uses this to enable web-based editing.
 
+use crate::{BodyDoc, CrdtStorage};
 use async_trait::async_trait;
 use axum::{Json, Router, extract::Path, extract::State, http::StatusCode, routing::get};
-use diaryx_core::crdt::{BodyDoc, CrdtStorage};
 use rand::Rng;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -245,7 +245,7 @@ pub fn create_local_router(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use diaryx_core::crdt::CrdtStorage;
+    use crate::CrdtStorage;
 
     #[test]
     fn test_generate_session_code_format() {

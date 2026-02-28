@@ -13,7 +13,7 @@ license-file.workspace = true
 # Internal crates
 diaryx_core = { workspace = true, features = ["crdt", "crdt-sqlite", "git"] }
 diaryx_publish = { workspace = true }
-diaryx_sync = { workspace = true }
+diaryx_sync = { workspace = true, features = ["server", "git"] }
 
 # Web framework
 axum = { version = "0.8", features = ["ws"] }
@@ -65,7 +65,7 @@ tokio-tungstenite = "0.26"
 siphonophore = { version = "0.1.0", package = "diaryx-siphonophore" }
 kameo = "0.19"
 async-trait = "0.1"
-yrs = "0.24"
+yrs = { version = "0.25", features = ["sync"] }
 
 # WebAuthn / Passkeys
 webauthn-rs = { version = "0.5", default-features = false, features = ["danger-allow-state-serialisation", "conditional-ui"] }

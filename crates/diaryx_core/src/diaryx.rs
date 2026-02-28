@@ -273,6 +273,15 @@ impl<FS: AsyncFileSystem> Diaryx<FS> {
         &mut self.plugin_registry
     }
 
+    /// Initialize all registered plugins with the current instance state.
+    ///
+    /// This builds a [`PluginContext`] from the current workspace root and link format,
+    /// then calls `init` on every registered plugin.
+    pub async fn init_plugins(&self) -> std::result::Result<(), crate::plugin::PluginError> {
+        let ctx = crate::plugin::PluginContext::new(self.workspace_root(), self.link_format);
+        self.plugin_registry.init_all(&ctx).await
+    }
+
     /// Get entry operations accessor.
     ///
     /// This provides methods for reading/writing file content and frontmatter.

@@ -31,6 +31,9 @@ mod workspace_doc;
 mod crdt_fs;
 mod decorator_stack;
 
+// Plugin
+mod sync_plugin;
+
 // ==================== Feature-gated modules ====================
 
 // SqliteStorage: re-exported from diaryx_core during transition period.
@@ -108,6 +111,9 @@ pub use sync_types::{SyncEvent, SyncSessionConfig, SyncStatus};
 // CrdtFs and decorator stack
 pub use crdt_fs::CrdtFs;
 pub use decorator_stack::DecoratedFsBuilder;
+
+// Plugin
+pub use sync_plugin::SyncPlugin;
 
 // Native sync client re-exports
 #[cfg(all(not(target_arch = "wasm32"), feature = "native-sync"))]

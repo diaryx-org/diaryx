@@ -20,12 +20,15 @@ pub mod events;
 pub mod registry;
 
 use std::fmt;
+use std::path::PathBuf;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use thiserror::Error;
 use ts_rs::TS;
+
+use crate::link_parser::LinkFormat;
 
 // Re-export key types.
 pub use events::*;
@@ -66,22 +69,24 @@ pub enum PluginError {
 
 /// Context provided to plugins during initialization.
 ///
-/// Intentionally minimal for now; will grow to include filesystem access,
-/// workspace root, configuration, etc. as the plugin system matures.
+/// Contains runtime configuration that isn't known at plugin construction time.
+/// Plugins that need filesystem access bring their own FS through generic construction
+/// (type-erased at registration), so FS is intentionally NOT included here.
+#[derive(Default)]
 pub struct PluginContext {
-    _private: (),
+    /// Workspace root directory (None if no workspace is open yet).
+    pub workspace_root: Option<PathBuf>,
+    /// Link format configured on the Diaryx instance.
+    pub link_format: LinkFormat,
 }
 
 impl PluginContext {
-    /// Create a new empty plugin context.
-    pub fn new() -> Self {
-        Self { _private: () }
-    }
-}
-
-impl Default for PluginContext {
-    fn default() -> Self {
-        Self::new()
+    /// Create a new plugin context.
+    pub fn new(workspace_root: Option<PathBuf>, link_format: LinkFormat) -> Self {
+        Self {
+            workspace_root,
+            link_format,
+        }
     }
 }
 

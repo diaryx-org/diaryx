@@ -105,12 +105,19 @@ jobs:
           path: apps/web/src/lib/wasm/
           key: wasm-${{ hashFiles('crates/diaryx_core/src/**', 'crates/diaryx_core/Cargo.toml', 'crates/diaryx_wasm/src/**', 'crates/diaryx_wasm/Cargo.toml', 'Cargo.lock') }}
 
+      - name: Cache TypeScript bindings
+        id: bindings-cache
+        uses: actions/cache@v4
+        with:
+          path: crates/diaryx_core/bindings/
+          key: ts-bindings-${{ hashFiles('crates/diaryx_core/src/**', 'crates/diaryx_core/Cargo.toml', 'Cargo.lock') }}
+
       - name: Install Nix
-        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        if: steps.wasm-cache.outputs.cache-hit != 'true' || steps.bindings-cache.outputs.cache-hit != 'true'
         uses: DeterminateSystems/nix-installer-action@main
 
       - name: Setup Nix cache
-        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        if: steps.wasm-cache.outputs.cache-hit != 'true' || steps.bindings-cache.outputs.cache-hit != 'true'
         uses: DeterminateSystems/magic-nix-cache-action@main
 
       - name: Build WASM
@@ -119,11 +126,21 @@ jobs:
           cd apps/web
           nix develop --command bash -c "bun install && ../../scripts/build-wasm.sh"
 
+      - name: Generate TypeScript bindings
+        if: steps.bindings-cache.outputs.cache-hit != 'true'
+        run: nix develop --command cargo test -p diaryx_core
+
       - name: Upload WASM artifact
         uses: actions/upload-artifact@v4
         with:
           name: wasm-package
           path: apps/web/src/lib/wasm/
+
+      - name: Upload bindings artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ts-bindings
+          path: crates/diaryx_core/bindings/
 
   # Web app build and checks
   web:
@@ -146,6 +163,12 @@ jobs:
         with:
           name: wasm-package
           path: apps/web/src/lib/wasm/
+
+      - name: Download bindings artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ts-bindings
+          path: crates/diaryx_core/bindings/
 
       - name: Install dependencies
         run: |
@@ -334,6 +357,12 @@ jobs:
           name: wasm-package
           path: apps/web/src/lib/wasm/
 
+      - name: Download bindings artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ts-bindings
+          path: crates/diaryx_core/bindings/
+
       - name: Install dependencies
         run: |
           cd apps/web
@@ -376,6 +405,12 @@ jobs:
         with:
           name: wasm-package
           path: apps/web/src/lib/wasm/
+
+      - name: Download bindings artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ts-bindings
+          path: crates/diaryx_core/bindings/
 
       - name: Install dependencies
         run: |

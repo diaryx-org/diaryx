@@ -35,6 +35,7 @@ This crate owns all CRDT and sync functionality. It provides WASM-compatible cor
 - **self_healing** — `HealthTracker` — auto-repair for CRDT issues
 - **crdt_fs** — `CrdtFs` — filesystem decorator that transparently updates CRDTs
 - **decorator_stack** — `DecoratedFsBuilder` — composable FS decorator builder
+- **sync_plugin** — `SyncPlugin<FS>` — `WorkspacePlugin` that owns all CRDT state and handles ~50 sync commands
 
 ## Feature-Gated Modules
 

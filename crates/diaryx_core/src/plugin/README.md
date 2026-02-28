@@ -20,6 +20,15 @@ Plugins are registered in the `PluginRegistry`, which is stored on the `Diaryx<F
 | `events.rs` | Event types for workspace and file lifecycle hooks |
 | `registry.rs` | `PluginRegistry` — collects plugins and dispatches events/commands |
 
+## PluginContext
+
+`PluginContext` provides runtime configuration to plugins during `init()`:
+
+- `workspace_root: Option<PathBuf>` — Workspace root directory (None if no workspace is open)
+- `link_format: LinkFormat` — Link format configured on the Diaryx instance
+
+Plugins that need filesystem access bring their own `FS` through generic construction — FS is **not** part of `PluginContext`. The generic is erased at registration via `Arc<dyn WorkspacePlugin>`.
+
 ## Usage
 
 ```rust
@@ -41,6 +50,9 @@ impl WorkspacePlugin for MyPlugin {
 // Register on a Diaryx instance:
 let mut diaryx = Diaryx::new(fs);
 diaryx.plugin_registry_mut().register_workspace_plugin(Arc::new(MyPlugin));
+
+// Initialize all plugins with current state:
+diaryx.init_plugins().await.unwrap();
 ```
 
 ## Command Routing

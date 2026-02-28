@@ -65,7 +65,7 @@ describe('api', () => {
 
       expect(mockBackend.execute).toHaveBeenCalledWith({
         type: 'SaveEntry',
-        params: { path: 'test.md', content: '# Updated Content', root_index_path: null },
+        params: { path: 'test.md', content: '# Updated Content', root_index_path: null, detect_h1_title: false },
       })
     })
   })

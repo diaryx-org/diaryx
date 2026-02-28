@@ -61,9 +61,9 @@
     position: absolute;
     width: 200%;
     border-radius: 50%;
-    filter: blur(72px);
+    filter: blur(50px);
     will-change: transform;
-    opacity: 0.18;
+    opacity: 0.45;
   }
 
   /* Wave 1: upper-left, drifts right */
@@ -71,9 +71,9 @@
     height: 55%;
     background: linear-gradient(
       to right,
-      oklch(0.72 0.14 265) 0%,
-      oklch(0.78 0.10 285) 45%,
-      oklch(0.80 0.08 305) 100%
+      oklch(0.58 0.22 265) 0%,
+      oklch(0.62 0.18 285) 45%,
+      oklch(0.65 0.15 305) 100%
     );
     top: -15%;
     left: -55%;
@@ -85,9 +85,9 @@
     height: 60%;
     background: linear-gradient(
       to right,
-      oklch(0.82 0.07 248) 0%,
-      oklch(0.75 0.12 268) 50%,
-      oklch(0.70 0.15 290) 100%
+      oklch(0.60 0.20 248) 0%,
+      oklch(0.55 0.25 268) 50%,
+      oklch(0.58 0.22 290) 100%
     );
     bottom: -22%;
     right: -55%;
@@ -99,9 +99,9 @@
     height: 45%;
     background: linear-gradient(
       to right,
-      oklch(0.76 0.10 290) 0%,
-      oklch(0.80 0.08 258) 50%,
-      oklch(0.74 0.13 275) 100%
+      oklch(0.62 0.18 290) 0%,
+      oklch(0.60 0.20 258) 50%,
+      oklch(0.56 0.24 275) 100%
     );
     top: 28%;
     left: -25%;
@@ -125,33 +125,33 @@
 
   /* Dark mode: deeper, more vibrant colors at higher opacity */
   :global(.dark) .aurora-wave {
-    opacity: 0.30;
+    opacity: 0.55;
   }
 
   :global(.dark) .wave-1 {
     background: linear-gradient(
       to right,
-      oklch(0.45 0.22 265) 0%,
-      oklch(0.40 0.25 285) 45%,
-      oklch(0.38 0.20 305) 100%
+      oklch(0.45 0.27 265) 0%,
+      oklch(0.40 0.30 285) 45%,
+      oklch(0.38 0.25 305) 100%
     );
   }
 
   :global(.dark) .wave-2 {
     background: linear-gradient(
       to right,
-      oklch(0.35 0.18 245) 0%,
-      oklch(0.42 0.22 265) 50%,
-      oklch(0.38 0.25 285) 100%
+      oklch(0.35 0.22 245) 0%,
+      oklch(0.42 0.27 265) 50%,
+      oklch(0.38 0.30 285) 100%
     );
   }
 
   :global(.dark) .wave-3 {
     background: linear-gradient(
       to right,
-      oklch(0.40 0.20 285) 0%,
-      oklch(0.48 0.18 260) 50%,
-      oklch(0.42 0.22 270) 100%
+      oklch(0.40 0.25 285) 0%,
+      oklch(0.48 0.23 260) 50%,
+      oklch(0.42 0.27 270) 100%
     );
   }
 

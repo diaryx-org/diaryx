@@ -155,6 +155,30 @@ impl PluginRegistry {
     }
 }
 
+// ========================================================================
+// Typed Command Dispatch
+// ========================================================================
+
+#[cfg(feature = "crdt")]
+impl PluginRegistry {
+    /// Try to handle a command via registered workspace plugins' typed dispatch.
+    ///
+    /// Iterates workspace plugins in registration order, returning the first
+    /// `Some(result)` from [`WorkspacePlugin::handle_typed_command`].
+    /// Returns `None` if no plugin handles the command.
+    pub async fn try_typed_command(
+        &self,
+        cmd: &crate::command::Command,
+    ) -> Option<Result<crate::command::Response, crate::error::DiaryxError>> {
+        for plugin in &self.workspace_plugins {
+            if let Some(result) = plugin.handle_typed_command(cmd).await {
+                return Some(result);
+            }
+        }
+        None
+    }
+}
+
 impl Default for PluginRegistry {
     fn default() -> Self {
         Self::new()

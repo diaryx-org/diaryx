@@ -57,6 +57,8 @@ diaryx.init_plugins().await.unwrap();
 
 ## Command Routing
 
+### JSON-based (PluginCommand)
+
 Plugin-specific commands use the `PluginCommand` variant:
 
 ```rust
@@ -68,3 +70,11 @@ Command::PluginCommand {
 ```
 
 The command handler routes these to the matching `WorkspacePlugin::handle_command`.
+
+### Typed dispatch (handle_typed_command)
+
+Plugins can also intercept core `Command` variants directly via `handle_typed_command` (requires `crdt` feature). This avoids JSON serialization overhead for commands that carry binary data (e.g., CRDT updates).
+
+When `Diaryx::execute()` encounters a CRDT command, it first checks `PluginRegistry::try_typed_command()`. If a plugin returns `Some(result)`, that result is used directly. Otherwise, the command falls through to the existing inline handler code.
+
+`SyncPlugin` in `diaryx_sync` implements this to handle all ~50 CRDT command variants, making it the authoritative CRDT handler when registered.

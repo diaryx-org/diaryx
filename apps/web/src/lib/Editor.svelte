@@ -11,6 +11,7 @@
   import { ColoredHighlightMark } from "./extensions/ColoredHighlightMark";
   import Typography from "@tiptap/extension-typography";
   import Image from "@tiptap/extension-image";
+  import { getPathForBlobUrl, isVideoFile } from "../models/services/attachmentService";
   import { Table } from "@tiptap/extension-table";
   import { TableRow } from "@tiptap/extension-table-row";
   import { TableHeader } from "@tiptap/extension-table-header";
@@ -230,6 +231,42 @@
         allowBase64: true,
         HTMLAttributes: {
           class: "editor-image",
+          loading: "lazy",
+        },
+      }).extend({
+        addNodeView() {
+          return ({ node, HTMLAttributes }) => {
+            const src = node.attrs.src || "";
+            const alt = node.attrs.alt || "";
+            const title = node.attrs.title || "";
+
+            // Check if this is a video by looking up the original path from blob URL,
+            // or checking the src directly for video extensions
+            const originalPath = getPathForBlobUrl(src);
+            const isVideo = (originalPath && isVideoFile(originalPath)) || isVideoFile(src);
+
+            let dom: HTMLElement;
+
+            if (isVideo) {
+              const video = document.createElement("video");
+              video.src = src;
+              video.controls = true;
+              video.preload = "metadata";
+              video.className = "editor-image editor-video";
+              if (title) video.title = title;
+              dom = video;
+            } else {
+              const img = document.createElement("img");
+              img.src = src;
+              img.alt = alt;
+              img.loading = "lazy";
+              img.className = HTMLAttributes.class || "editor-image";
+              if (title) img.title = title;
+              dom = img;
+            }
+
+            return { dom };
+          };
         },
       }),
       Table.configure({ resizable: false }).extend({
@@ -979,6 +1016,13 @@
   }
 
   :global(.editor-image) {
+    max-width: 100%;
+    height: auto;
+    border-radius: 6px;
+    margin: 0.5em 0;
+  }
+
+  :global(.editor-video) {
     max-width: 100%;
     height: auto;
     border-radius: 6px;

@@ -32,6 +32,7 @@ mod crdt_fs;
 mod decorator_stack;
 
 // Plugin
+mod conversions;
 mod sync_plugin;
 
 // ==================== Feature-gated modules ====================

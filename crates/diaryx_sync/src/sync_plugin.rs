@@ -205,6 +205,13 @@ impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> WorkspacePlugin for Sy
     ) -> Option<Result<JsonValue, PluginError>> {
         Some(self.dispatch(cmd, params).await)
     }
+
+    async fn handle_typed_command(
+        &self,
+        cmd: &diaryx_core::command::Command,
+    ) -> Option<Result<diaryx_core::command::Response, diaryx_core::error::DiaryxError>> {
+        Some(self.dispatch_typed(cmd).await)
+    }
 }
 
 // ============================================================================
@@ -290,6 +297,553 @@ impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> SyncPlugin<FS> {
 
             other => Err(PluginError::CommandError(format!(
                 "Unknown sync command: {other}"
+            ))),
+        }
+    }
+}
+
+// ============================================================================
+// Typed command dispatch (Command → Response, no JSON roundtrip)
+// ============================================================================
+
+impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> SyncPlugin<FS> {
+    /// Handle a typed `Command` and return a typed `Response`.
+    ///
+    /// This is the main entry point for the plugin-based CRDT command routing.
+    /// It mirrors the logic in `diaryx_core::command_handler` but uses the
+    /// plugin's own CRDT instances instead of the Diaryx struct's fields.
+    async fn dispatch_typed(
+        &self,
+        cmd: &diaryx_core::command::Command,
+    ) -> Result<diaryx_core::command::Response, diaryx_core::error::DiaryxError> {
+        use diaryx_core::command::{Command, Response};
+        use diaryx_core::error::DiaryxError;
+
+        match cmd {
+            // =================================================================
+            // Workspace CRDT State
+            // =================================================================
+            Command::GetSyncState { .. } => {
+                let sv = self.workspace_crdt.encode_state_vector();
+                Ok(Response::Binary(sv))
+            }
+
+            Command::GetFullState { .. } => {
+                let state = self.workspace_crdt.encode_state_as_update();
+                Ok(Response::Binary(state))
+            }
+
+            Command::ApplyRemoteUpdate { update, .. } => {
+                let update_id = self
+                    .workspace_crdt
+                    .apply_update(update, UpdateOrigin::Remote)?;
+                Ok(Response::UpdateId(update_id))
+            }
+
+            Command::GetMissingUpdates {
+                remote_state_vector,
+                ..
+            } => {
+                let diff = self.workspace_crdt.encode_diff(remote_state_vector)?;
+                Ok(Response::Binary(diff))
+            }
+
+            Command::SaveCrdtState { .. } => {
+                self.workspace_crdt.save()?;
+                Ok(Response::Ok)
+            }
+
+            // =================================================================
+            // File Metadata
+            // =================================================================
+            Command::GetCrdtFile { path } => {
+                let file = self.workspace_crdt.get_file(path);
+                Ok(Response::CrdtFile(file))
+            }
+
+            Command::SetCrdtFile { path, metadata } => {
+                let mut file_metadata: FileMetadata = serde_json::from_value(metadata.clone())
+                    .map_err(|e| DiaryxError::Unsupported(format!("Invalid metadata: {}", e)))?;
+
+                if let Some(existing) = self.workspace_crdt.get_file(path) {
+                    merge_attachment_refs(&existing, &mut file_metadata);
+                }
+
+                self.workspace_crdt.set_file(path, file_metadata)?;
+
+                if let Err(e) = self.sync_manager.emit_workspace_update() {
+                    log::warn!("Failed to emit workspace sync for SetCrdtFile: {}", e);
+                }
+
+                Ok(Response::Ok)
+            }
+
+            Command::ListCrdtFiles { include_deleted } => {
+                let files = if *include_deleted {
+                    self.workspace_crdt.list_files()
+                } else {
+                    self.workspace_crdt.list_active_files()
+                };
+                Ok(Response::CrdtFiles(files))
+            }
+
+            // =================================================================
+            // Body Documents
+            // =================================================================
+            Command::GetBodyContent { doc_name } => {
+                let content = self
+                    .body_docs
+                    .get(doc_name)
+                    .map(|doc| doc.get_body())
+                    .unwrap_or_default();
+                Ok(Response::String(content))
+            }
+
+            Command::SetBodyContent { doc_name, content } => {
+                let doc = self.body_docs.get_or_create(doc_name);
+                doc.set_body(content)?;
+                Ok(Response::Ok)
+            }
+
+            Command::ResetBodyDoc { doc_name } => {
+                self.body_docs.create(doc_name);
+                Ok(Response::Ok)
+            }
+
+            Command::GetBodySyncState { doc_name } => {
+                let state = self.body_docs.get_sync_state(doc_name).unwrap_or_default();
+                Ok(Response::Binary(state))
+            }
+
+            Command::GetBodyFullState { doc_name } => {
+                let state = self.body_docs.get_full_state(doc_name).unwrap_or_default();
+                Ok(Response::Binary(state))
+            }
+
+            Command::ApplyBodyUpdate { doc_name, update } => {
+                let update_id =
+                    self.body_docs
+                        .apply_update(doc_name, update, UpdateOrigin::Remote)?;
+                Ok(Response::UpdateId(update_id))
+            }
+
+            Command::GetBodyMissingUpdates {
+                doc_name,
+                remote_state_vector,
+            } => {
+                let diff = self.body_docs.get_diff(doc_name, remote_state_vector)?;
+                Ok(Response::Binary(diff))
+            }
+
+            Command::SaveBodyDoc { doc_name } => {
+                self.body_docs.save(doc_name)?;
+                Ok(Response::Ok)
+            }
+
+            Command::SaveAllBodyDocs => {
+                self.body_docs.save_all()?;
+                Ok(Response::Ok)
+            }
+
+            Command::ListLoadedBodyDocs => {
+                let docs = self.body_docs.loaded_docs();
+                Ok(Response::Strings(docs))
+            }
+
+            Command::UnloadBodyDoc { doc_name } => {
+                self.body_docs.unload(doc_name);
+                Ok(Response::Ok)
+            }
+
+            // =================================================================
+            // Y-Sync Protocol (CrdtOps-level)
+            // =================================================================
+            Command::CreateSyncStep1 { doc_name } => {
+                let message = if is_workspace_doc(doc_name) {
+                    let sv = self.workspace_crdt.encode_state_vector();
+                    SyncMessage::SyncStep1(sv).encode()
+                } else {
+                    let doc = self.body_docs.get_or_create(doc_name);
+                    let sv = doc.encode_state_vector();
+                    SyncMessage::SyncStep1(sv).encode()
+                };
+                Ok(Response::Binary(message))
+            }
+
+            Command::HandleSyncMessage {
+                doc_name,
+                message,
+                write_to_disk,
+            } => {
+                let messages = SyncMessage::decode_all(message)?;
+                if messages.is_empty() {
+                    return Ok(Response::Ok);
+                }
+
+                let mut response: Option<Vec<u8>> = None;
+                let mut all_changed_files = Vec::new();
+
+                for sync_msg in messages {
+                    if is_workspace_doc(doc_name) {
+                        let (msg_response, changed_files) = self
+                            .handle_workspace_sync_msg_with_changes(sync_msg)
+                            .map_err(|e| DiaryxError::Crdt(e.to_string()))?;
+                        all_changed_files.extend(changed_files);
+                        if let Some(resp) = msg_response {
+                            match response.as_mut() {
+                                Some(existing) => existing.extend_from_slice(&resp),
+                                None => response = Some(resp),
+                            }
+                        }
+                    } else {
+                        let msg_response = self
+                            .handle_body_sync_msg(doc_name, sync_msg)
+                            .map_err(|e| DiaryxError::Crdt(e.to_string()))?;
+                        if let Some(resp) = msg_response {
+                            match response.as_mut() {
+                                Some(existing) => existing.extend_from_slice(&resp),
+                                None => response = Some(resp),
+                            }
+                        }
+                    }
+                }
+
+                // Write changed files to disk if requested
+                if *write_to_disk && !all_changed_files.is_empty() {
+                    let files_to_sync: Vec<(String, FileMetadata)> = all_changed_files
+                        .iter()
+                        .filter_map(|path| {
+                            self.workspace_crdt
+                                .get_file(path)
+                                .map(|m| (path.clone(), m))
+                        })
+                        .collect();
+                    if !files_to_sync.is_empty() {
+                        self.sync_handler
+                            .handle_remote_metadata_update(
+                                files_to_sync,
+                                Vec::new(),
+                                Some(self.body_docs.as_ref()),
+                                true,
+                            )
+                            .await?;
+                    }
+                }
+
+                match response {
+                    Some(data) => Ok(Response::Binary(data)),
+                    None => Ok(Response::Ok),
+                }
+            }
+
+            Command::CreateUpdateMessage { update, .. } => {
+                let message = SyncMessage::Update(update.clone()).encode();
+                Ok(Response::Binary(message))
+            }
+
+            // =================================================================
+            // Sync Handler
+            // =================================================================
+            Command::ConfigureSyncHandler {
+                guest_join_code,
+                uses_opfs,
+            } => {
+                let config = guest_join_code.as_ref().map(|join_code| GuestConfig {
+                    join_code: join_code.clone(),
+                    uses_opfs: *uses_opfs,
+                });
+                self.sync_handler.configure_guest(config);
+                Ok(Response::Ok)
+            }
+
+            Command::GetStoragePath { canonical_path } => {
+                let storage_path = self.sync_handler.get_storage_path(canonical_path);
+                Ok(Response::String(storage_path.to_string_lossy().to_string()))
+            }
+
+            Command::GetCanonicalPath { storage_path } => {
+                let canonical = self.sync_handler.get_canonical_path(storage_path);
+                Ok(Response::String(canonical))
+            }
+
+            Command::ApplyRemoteWorkspaceUpdateWithEffects {
+                update,
+                write_to_disk,
+            } => {
+                let (update_id, changed_paths, renames) = self
+                    .workspace_crdt
+                    .apply_update_tracking_changes(update, UpdateOrigin::Remote)?;
+
+                if *write_to_disk {
+                    let files: Vec<(String, FileMetadata)> = changed_paths
+                        .iter()
+                        .filter_map(|path| {
+                            self.workspace_crdt
+                                .get_file(path)
+                                .map(|m| (path.clone(), m))
+                        })
+                        .collect();
+                    self.sync_handler
+                        .handle_remote_metadata_update(
+                            files,
+                            renames,
+                            Some(self.body_docs.as_ref()),
+                            true,
+                        )
+                        .await?;
+                }
+
+                Ok(Response::UpdateId(update_id))
+            }
+
+            Command::ApplyRemoteBodyUpdateWithEffects {
+                doc_name,
+                update,
+                write_to_disk,
+            } => {
+                let doc = self.body_docs.get_or_create(doc_name);
+                let update_id = doc.apply_update(update, UpdateOrigin::Remote)?;
+
+                if *write_to_disk {
+                    let body = doc.get_body();
+                    let metadata = self.workspace_crdt.get_file(doc_name);
+                    self.sync_handler
+                        .handle_remote_body_update(doc_name, &body, metadata.as_ref())
+                        .await?;
+                }
+
+                Ok(Response::UpdateId(update_id))
+            }
+
+            // =================================================================
+            // Sync Manager
+            // =================================================================
+            Command::HandleWorkspaceSyncMessage {
+                message,
+                write_to_disk,
+            } => {
+                let result = self
+                    .sync_manager
+                    .handle_workspace_message(message, *write_to_disk)
+                    .await?;
+
+                Ok(Response::WorkspaceSyncResult {
+                    response: result.response,
+                    changed_files: result.changed_files,
+                    sync_complete: result.sync_complete,
+                })
+            }
+
+            Command::HandleCrdtState { state } => {
+                let file_count = self.sync_manager.handle_crdt_state(state).await?;
+                log::info!(
+                    "[SyncPlugin] HandleCrdtState: applied state, {} files in workspace",
+                    file_count
+                );
+                Ok(Response::Ok)
+            }
+
+            Command::CreateWorkspaceSyncStep1 => {
+                let step1 = self.sync_manager.create_workspace_sync_step1();
+                Ok(Response::Binary(step1))
+            }
+
+            Command::CreateWorkspaceUpdate { since_state_vector } => {
+                let update = self
+                    .sync_manager
+                    .create_workspace_update(since_state_vector.as_deref())?;
+                Ok(Response::Binary(update))
+            }
+
+            Command::InitBodySync { doc_name } => {
+                self.sync_manager.init_body_sync(doc_name);
+                Ok(Response::Ok)
+            }
+
+            Command::CloseBodySync { doc_name } => {
+                self.sync_manager.close_body_sync(doc_name);
+                Ok(Response::Ok)
+            }
+
+            Command::HandleBodySyncMessage {
+                doc_name,
+                message,
+                write_to_disk,
+            } => {
+                let result = self
+                    .sync_manager
+                    .handle_body_message(doc_name, message, *write_to_disk)
+                    .await?;
+
+                Ok(Response::BodySyncResult {
+                    response: result.response,
+                    content: result.content,
+                    is_echo: result.is_echo,
+                })
+            }
+
+            Command::CreateBodySyncStep1 { doc_name } => {
+                let step1 = self.sync_manager.create_body_sync_step1(doc_name);
+                Ok(Response::Binary(step1))
+            }
+
+            Command::CreateBodyUpdate { doc_name, content } => {
+                let update = self.sync_manager.create_body_update(doc_name, content)?;
+                Ok(Response::Binary(update))
+            }
+
+            Command::IsSyncComplete => Ok(Response::Bool(self.sync_manager.is_sync_complete())),
+
+            Command::IsWorkspaceSynced => {
+                Ok(Response::Bool(self.sync_manager.is_workspace_synced()))
+            }
+
+            Command::IsBodySynced { doc_name } => {
+                Ok(Response::Bool(self.sync_manager.is_body_synced(doc_name)))
+            }
+
+            Command::MarkSyncComplete => {
+                self.sync_manager.mark_sync_complete();
+                Ok(Response::Ok)
+            }
+
+            Command::GetActiveSyncs => {
+                let syncs = self.sync_manager.get_active_syncs();
+                Ok(Response::Strings(syncs))
+            }
+
+            Command::TrackContent { path, content } => {
+                self.sync_manager.track_content(path, content);
+                Ok(Response::Ok)
+            }
+
+            Command::IsEcho { path, content } => {
+                Ok(Response::Bool(self.sync_manager.is_echo(path, content)))
+            }
+
+            Command::ClearTrackedContent { path } => {
+                self.sync_manager.clear_tracked_content(path);
+                Ok(Response::Ok)
+            }
+
+            Command::ResetSyncState => {
+                self.sync_manager.reset();
+                Ok(Response::Ok)
+            }
+
+            Command::TriggerWorkspaceSync => {
+                let update = self.sync_manager.create_workspace_update(None)?;
+                if update.is_empty() {
+                    Ok(Response::Ok)
+                } else {
+                    Ok(Response::Binary(update))
+                }
+            }
+
+            // =================================================================
+            // History
+            // =================================================================
+            Command::GetHistory { doc_name, limit } => {
+                let history_manager = crate::HistoryManager::new(Arc::clone(&self.storage));
+                let history = history_manager.get_history(doc_name, *limit)?;
+                let entries: Vec<diaryx_core::command::CrdtHistoryEntry> = history
+                    .into_iter()
+                    .map(|u| diaryx_core::command::CrdtHistoryEntry {
+                        update_id: u.update_id,
+                        timestamp: u.timestamp,
+                        origin: u.origin,
+                        files_changed: u.files_changed,
+                        device_id: u.device_id,
+                        device_name: u.device_name,
+                    })
+                    .collect();
+                Ok(Response::CrdtHistory(entries))
+            }
+
+            Command::GetFileHistory { file_path, limit } => {
+                let history_manager = crate::HistoryManager::new(Arc::clone(&self.storage));
+                let history = history_manager.get_file_history(file_path, *limit)?;
+                let entries: Vec<diaryx_core::command::CrdtHistoryEntry> = history
+                    .into_iter()
+                    .map(|u| diaryx_core::command::CrdtHistoryEntry {
+                        update_id: u.update_id,
+                        timestamp: u.timestamp,
+                        origin: u.origin,
+                        files_changed: u.files_changed,
+                        device_id: u.device_id,
+                        device_name: u.device_name,
+                    })
+                    .collect();
+                Ok(Response::CrdtHistory(entries))
+            }
+
+            Command::RestoreVersion {
+                doc_name,
+                update_id,
+            } => {
+                let history_manager = crate::HistoryManager::new(Arc::clone(&self.storage));
+                let restore_update = history_manager.create_restore_update(doc_name, *update_id)?;
+                self.workspace_crdt
+                    .apply_update(&restore_update, UpdateOrigin::Local)?;
+                self.workspace_crdt.save()?;
+                Ok(Response::Ok)
+            }
+
+            Command::GetVersionDiff {
+                doc_name,
+                from_id,
+                to_id,
+            } => {
+                let history_manager = crate::HistoryManager::new(Arc::clone(&self.storage));
+                let diffs = history_manager.diff(doc_name, *from_id, *to_id)?;
+                // Convert diaryx_sync::FileDiff → diaryx_core::crdt::FileDiff
+                let core_diffs: Vec<diaryx_core::crdt::FileDiff> =
+                    diffs.into_iter().map(Into::into).collect();
+                Ok(Response::VersionDiff(core_diffs))
+            }
+
+            Command::GetStateAt {
+                doc_name,
+                update_id,
+            } => {
+                let history_manager = crate::HistoryManager::new(Arc::clone(&self.storage));
+                let state = history_manager.get_state_at(doc_name, *update_id)?;
+                match state {
+                    Some(data) => Ok(Response::Binary(data)),
+                    None => Ok(Response::Ok),
+                }
+            }
+
+            // =================================================================
+            // Workspace Initialization
+            // =================================================================
+            Command::InitializeWorkspaceCrdt {
+                workspace_path,
+                audience,
+            } => {
+                // Delegate to the existing JSON-based handler and adapt the response
+                let params = serde_json::json!({
+                    "workspace_path": workspace_path,
+                    "audience": audience,
+                });
+                self.cmd_initialize_workspace_crdt(params)
+                    .await
+                    .map(|json| {
+                        // Extract the message string for Response::String
+                        let msg = json
+                            .get("message")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("initialized")
+                            .to_string();
+                        Response::String(msg)
+                    })
+                    .map_err(|e| DiaryxError::Crdt(e.to_string()))
+            }
+
+            // Not a CRDT command — should not reach here
+            _ => Err(DiaryxError::Unsupported(format!(
+                "SyncPlugin does not handle command: {:?}",
+                std::mem::discriminant(cmd)
             ))),
         }
     }

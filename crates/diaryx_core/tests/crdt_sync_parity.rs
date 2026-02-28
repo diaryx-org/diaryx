@@ -5,13 +5,13 @@ use std::path::Path;
 use std::sync::Arc;
 
 use diaryx_core::command::{Command, Response};
-use diaryx_core::crdt::{BodyDocManager, FileMetadata, WorkspaceCrdt, parse_snapshot_markdown};
+use diaryx_core::crdt::{FileMetadata, parse_snapshot_markdown};
 use diaryx_core::diaryx::Diaryx;
 use diaryx_core::fs::{
-    AsyncFileSystem, CrdtFs, DecoratedFsBuilder, EventEmittingFs, FileSystem, InMemoryFileSystem,
-    SyncToAsyncFs,
+    AsyncFileSystem, EventEmittingFs, FileSystem, InMemoryFileSystem, SyncToAsyncFs,
 };
 use diaryx_core::path_utils::normalize_sync_path;
+use diaryx_sync::{BodyDocManager, CrdtFs, DecoratedFsBuilder, SyncPlugin, WorkspaceCrdt};
 use futures_lite::future::block_on;
 
 type BaseFs = SyncToAsyncFs<InMemoryFileSystem>;
@@ -33,11 +33,17 @@ impl TestNode {
         let base_fs = decorated.base_fs().clone();
         let workspace_crdt = Arc::clone(&decorated.workspace_crdt);
         let body_docs = Arc::clone(&decorated.body_doc_manager);
-        let diaryx = Diaryx::with_crdt_instances(
+
+        let sync_plugin = SyncPlugin::with_instances(
             fs.clone(),
             Arc::clone(&workspace_crdt),
             Arc::clone(&body_docs),
+            Arc::clone(&decorated.storage),
         );
+        let mut diaryx = Diaryx::new(fs.clone());
+        diaryx
+            .plugin_registry_mut()
+            .register_workspace_plugin(Arc::new(sync_plugin));
 
         Self {
             diaryx,

@@ -111,7 +111,7 @@ pub use sync_types::{SyncEvent, SyncSessionConfig, SyncStatus};
 
 // CrdtFs and decorator stack
 pub use crdt_fs::CrdtFs;
-pub use decorator_stack::DecoratedFsBuilder;
+pub use decorator_stack::{DecoratedFs, DecoratedFsBuilder};
 
 // Plugin
 pub use sync_plugin::SyncPlugin;

@@ -39,17 +39,17 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use diaryx_core::crdt::{
-    BodyDocManager, CrdtStorage, MemoryStorage, RustSyncManager, SyncHandler, SyncMessage,
-    SyncSessionConfig, WorkspaceCrdt,
-};
 use diaryx_core::diaryx::Diaryx;
 use diaryx_core::frontmatter;
 use diaryx_core::fs::{
-    AsyncFileSystem, CallbackRegistry, CrdtFs, EventEmittingFs, FileSystemEvent,
-    InMemoryFileSystem, SyncToAsyncFs,
+    AsyncFileSystem, CallbackRegistry, EventEmittingFs, FileSystemEvent, InMemoryFileSystem,
+    SyncToAsyncFs,
 };
 use diaryx_core::workspace::Workspace;
+use diaryx_sync::{
+    BodyDocManager, CrdtFs, CrdtStorage, MemoryStorage, RustSyncManager, SyncMessage, SyncPlugin,
+    SyncSessionConfig, WorkspaceCrdt,
+};
 use js_sys::Promise;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
@@ -568,22 +568,21 @@ impl DiaryxBackend {
         // Subscribe to CRDT updates to trigger sync emission
         let crdt_update_subscription = subscribe_to_crdt_updates(&workspace_crdt);
 
-        // Create SyncHandler and RustSyncManager for sync protocol handling
-        let sync_handler = Arc::new(SyncHandler::new((*fs).clone()));
-        let sync_manager = Arc::new(RustSyncManager::new(
+        // Create SyncPlugin and extract sync_manager handle
+        let sync_plugin = SyncPlugin::with_instances(
+            (*fs).clone(),
             Arc::clone(&workspace_crdt),
             Arc::clone(&body_doc_manager),
-            sync_handler,
-        ));
+            Arc::clone(&crdt_storage),
+        );
+        let sync_manager = sync_plugin.sync_manager();
+        sync_manager.set_event_callback(create_event_bridge());
 
-        // Create shared Diaryx instance with callbacks pre-configured
+        // Create shared Diaryx instance with SyncPlugin registered
         let diaryx = {
-            let d = Diaryx::with_crdt_instances(
-                (*fs).clone(),
-                Arc::clone(&workspace_crdt),
-                Arc::clone(&body_doc_manager),
-            );
-            d.set_sync_event_callback(create_event_bridge());
+            let mut d = Diaryx::new((*fs).clone());
+            d.plugin_registry_mut()
+                .register_workspace_plugin(Arc::new(sync_plugin));
             // In WASM with OPFS, paths are already workspace-relative
             d.set_workspace_root(PathBuf::from(""));
             d
@@ -682,22 +681,21 @@ impl DiaryxBackend {
         // Subscribe to CRDT updates to trigger sync emission
         let crdt_update_subscription = subscribe_to_crdt_updates(&workspace_crdt);
 
-        // Create SyncHandler and RustSyncManager for sync protocol handling
-        let sync_handler = Arc::new(SyncHandler::new((*fs).clone()));
-        let sync_manager = Arc::new(RustSyncManager::new(
+        // Create SyncPlugin and extract sync_manager handle
+        let sync_plugin = SyncPlugin::with_instances(
+            (*fs).clone(),
             Arc::clone(&workspace_crdt),
             Arc::clone(&body_doc_manager),
-            sync_handler,
-        ));
+            Arc::clone(&crdt_storage),
+        );
+        let sync_manager = sync_plugin.sync_manager();
+        sync_manager.set_event_callback(create_event_bridge());
 
-        // Create shared Diaryx instance with callbacks pre-configured
+        // Create shared Diaryx instance with SyncPlugin registered
         let diaryx = {
-            let d = Diaryx::with_crdt_instances(
-                (*fs).clone(),
-                Arc::clone(&workspace_crdt),
-                Arc::clone(&body_doc_manager),
-            );
-            d.set_sync_event_callback(create_event_bridge());
+            let mut d = Diaryx::new((*fs).clone());
+            d.plugin_registry_mut()
+                .register_workspace_plugin(Arc::new(sync_plugin));
             d.set_workspace_root(PathBuf::from(""));
             d
         };
@@ -803,22 +801,21 @@ impl DiaryxBackend {
         // Subscribe to CRDT updates to trigger sync emission
         let crdt_update_subscription = subscribe_to_crdt_updates(&workspace_crdt);
 
-        // Create SyncHandler and RustSyncManager for sync protocol handling
-        let sync_handler = Arc::new(SyncHandler::new((*fs).clone()));
-        let sync_manager = Arc::new(RustSyncManager::new(
+        // Create SyncPlugin and extract sync_manager handle
+        let sync_plugin = SyncPlugin::with_instances(
+            (*fs).clone(),
             Arc::clone(&workspace_crdt),
             Arc::clone(&body_doc_manager),
-            sync_handler,
-        ));
+            Arc::clone(&crdt_storage),
+        );
+        let sync_manager = sync_plugin.sync_manager();
+        sync_manager.set_event_callback(create_event_bridge());
 
-        // Create shared Diaryx instance with callbacks pre-configured
+        // Create shared Diaryx instance with SyncPlugin registered
         let diaryx = {
-            let d = Diaryx::with_crdt_instances(
-                (*fs).clone(),
-                Arc::clone(&workspace_crdt),
-                Arc::clone(&body_doc_manager),
-            );
-            d.set_sync_event_callback(create_event_bridge());
+            let mut d = Diaryx::new((*fs).clone());
+            d.plugin_registry_mut()
+                .register_workspace_plugin(Arc::new(sync_plugin));
             d.set_workspace_root(PathBuf::from(""));
             d
         };
@@ -908,22 +905,21 @@ impl DiaryxBackend {
         // Subscribe to CRDT updates to trigger sync emission
         let crdt_update_subscription = subscribe_to_crdt_updates(&workspace_crdt);
 
-        // Create SyncHandler and RustSyncManager for sync protocol handling
-        let sync_handler = Arc::new(SyncHandler::new((*fs).clone()));
-        let sync_manager = Arc::new(RustSyncManager::new(
+        // Create SyncPlugin and extract sync_manager handle
+        let sync_plugin = SyncPlugin::with_instances(
+            (*fs).clone(),
             Arc::clone(&workspace_crdt),
             Arc::clone(&body_doc_manager),
-            sync_handler,
-        ));
+            Arc::clone(&crdt_storage),
+        );
+        let sync_manager = sync_plugin.sync_manager();
+        sync_manager.set_event_callback(create_event_bridge());
 
-        // Create shared Diaryx instance with callbacks pre-configured
+        // Create shared Diaryx instance with SyncPlugin registered
         let diaryx = {
-            let d = Diaryx::with_crdt_instances(
-                (*fs).clone(),
-                Arc::clone(&workspace_crdt),
-                Arc::clone(&body_doc_manager),
-            );
-            d.set_sync_event_callback(create_event_bridge());
+            let mut d = Diaryx::new((*fs).clone());
+            d.plugin_registry_mut()
+                .register_workspace_plugin(Arc::new(sync_plugin));
             d.set_workspace_root(PathBuf::from(""));
             d
         };
@@ -1030,22 +1026,21 @@ impl DiaryxBackend {
         // Subscribe to CRDT updates to trigger sync emission
         let crdt_update_subscription = subscribe_to_crdt_updates(&workspace_crdt);
 
-        // Create SyncHandler and RustSyncManager for sync protocol handling
-        let sync_handler = Arc::new(SyncHandler::new((*fs).clone()));
-        let sync_manager = Arc::new(RustSyncManager::new(
+        // Create SyncPlugin and extract sync_manager handle
+        let sync_plugin = SyncPlugin::with_instances(
+            (*fs).clone(),
             Arc::clone(&workspace_crdt),
             Arc::clone(&body_doc_manager),
-            sync_handler,
-        ));
+            Arc::clone(&crdt_storage),
+        );
+        let sync_manager = sync_plugin.sync_manager();
+        sync_manager.set_event_callback(create_event_bridge());
 
-        // Create shared Diaryx instance with callbacks pre-configured
+        // Create shared Diaryx instance with SyncPlugin registered
         let diaryx = {
-            let d = Diaryx::with_crdt_instances(
-                (*fs).clone(),
-                Arc::clone(&workspace_crdt),
-                Arc::clone(&body_doc_manager),
-            );
-            d.set_sync_event_callback(create_event_bridge());
+            let mut d = Diaryx::new((*fs).clone());
+            d.plugin_registry_mut()
+                .register_workspace_plugin(Arc::new(sync_plugin));
             d.set_workspace_root(PathBuf::from(""));
             d
         };

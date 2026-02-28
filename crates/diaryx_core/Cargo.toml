@@ -111,3 +111,5 @@ publish = true
 
 [dev-dependencies]
 tempfile = "3"
+diaryx_sync = { path = "../diaryx_sync" }
+async-trait = "0.1"

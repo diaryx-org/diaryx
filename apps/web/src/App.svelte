@@ -78,7 +78,6 @@
   // Import services
   import {
     revokeBlobUrls,
-    transformAttachmentPaths,
     initializeWorkspaceCrdt,
     updateCrdtFileMetadata,
     setShareServerUrl,
@@ -710,9 +709,8 @@
         // Only update if this is the currently open file
         if (currentEntry && path === currentCanonical) {
           console.log('[App] Updating display content with remote body, length:', body.length);
-          // Transform attachment paths to blob URLs for display
-          const transformed = await transformAttachmentPaths(body, currentEntry.path, api);
-          entryStore.setDisplayContent(transformed);
+          // Set raw content — NodeViews resolve attachments lazily
+          entryStore.setDisplayContent(body);
         }
       });
 

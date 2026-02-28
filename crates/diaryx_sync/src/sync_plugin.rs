@@ -71,7 +71,7 @@ pub struct SyncPlugin<FS: AsyncFileSystem + Clone> {
 // Constructors & Accessors
 // ============================================================================
 
-impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> SyncPlugin<FS> {
+impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
     /// Create with fresh empty CRDT state.
     pub fn new(fs: FS, storage: Arc<dyn CrdtStorage>) -> Self {
         let workspace_crdt = Arc::new(WorkspaceCrdt::new(Arc::clone(&storage)));
@@ -174,6 +174,7 @@ impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> SyncPlugin<FS> {
 // Plugin + WorkspacePlugin trait implementations
 // ============================================================================
 
+#[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
 impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> Plugin for SyncPlugin<FS> {
     fn id(&self) -> PluginId {
@@ -190,6 +191,24 @@ impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> Plugin for SyncPlugin<
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+#[async_trait(?Send)]
+impl<FS: AsyncFileSystem + Clone + 'static> Plugin for SyncPlugin<FS> {
+    fn id(&self) -> PluginId {
+        PluginId("sync".into())
+    }
+
+    async fn init(&self, ctx: &PluginContext) -> Result<(), PluginError> {
+        if let Some(root) = &ctx.workspace_root {
+            *self.workspace_root.write().unwrap() = Some(root.clone());
+            self.sync_handler.set_workspace_root(root.clone());
+        }
+        *self.link_format.write().unwrap() = ctx.link_format;
+        Ok(())
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
 impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> WorkspacePlugin for SyncPlugin<FS> {
     async fn on_workspace_opened(&self, event: &WorkspaceOpenedEvent) {
@@ -212,13 +231,124 @@ impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> WorkspacePlugin for Sy
     ) -> Option<Result<diaryx_core::command::Response, diaryx_core::error::DiaryxError>> {
         Some(self.dispatch_typed(cmd).await)
     }
+
+    async fn notify_workspace_modified(&self) {
+        if let Err(e) = self.sync_manager.emit_workspace_update() {
+            log::warn!("SyncPlugin: failed to emit workspace update: {}", e);
+        }
+    }
+
+    async fn on_body_doc_renamed(&self, old_path: &str, new_path: &str) {
+        if let Err(e) = self.body_docs.rename(old_path, new_path) {
+            log::warn!(
+                "SyncPlugin: failed to rename body doc {} -> {}: {}",
+                old_path,
+                new_path,
+                e
+            );
+        }
+    }
+
+    async fn on_body_doc_deleted(&self, path: &str) {
+        if let Err(e) = self.body_docs.delete(path) {
+            log::warn!("SyncPlugin: failed to delete body doc {}: {}", path, e);
+        }
+    }
+
+    async fn track_file_for_sync(&self, canonical_path: &str) {
+        if let Some(metadata) = self.workspace_crdt.get_file(canonical_path) {
+            self.sync_manager.track_metadata(canonical_path, &metadata);
+        }
+    }
+
+    fn get_canonical_path(&self, storage_path: &str) -> Option<String> {
+        Some(self.sync_manager.get_canonical_path(storage_path))
+    }
+
+    fn track_content_for_sync(&self, canonical_path: &str, content: &str) {
+        self.sync_manager.track_content(canonical_path, content);
+    }
+
+    fn get_file_title(&self, canonical_path: &str) -> Option<String> {
+        self.workspace_crdt
+            .get_file(canonical_path)
+            .and_then(|m| m.title)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[async_trait(?Send)]
+impl<FS: AsyncFileSystem + Clone + 'static> WorkspacePlugin for SyncPlugin<FS> {
+    async fn on_workspace_opened(&self, event: &WorkspaceOpenedEvent) {
+        *self.workspace_root.write().unwrap() = Some(event.workspace_root.clone());
+        self.sync_handler
+            .set_workspace_root(event.workspace_root.clone());
+    }
+
+    async fn handle_command(
+        &self,
+        cmd: &str,
+        params: JsonValue,
+    ) -> Option<Result<JsonValue, PluginError>> {
+        Some(self.dispatch(cmd, params).await)
+    }
+
+    async fn handle_typed_command(
+        &self,
+        cmd: &diaryx_core::command::Command,
+    ) -> Option<Result<diaryx_core::command::Response, diaryx_core::error::DiaryxError>> {
+        Some(self.dispatch_typed(cmd).await)
+    }
+
+    async fn notify_workspace_modified(&self) {
+        if let Err(e) = self.sync_manager.emit_workspace_update() {
+            log::warn!("SyncPlugin: failed to emit workspace update: {}", e);
+        }
+    }
+
+    async fn on_body_doc_renamed(&self, old_path: &str, new_path: &str) {
+        if let Err(e) = self.body_docs.rename(old_path, new_path) {
+            log::warn!(
+                "SyncPlugin: failed to rename body doc {} -> {}: {}",
+                old_path,
+                new_path,
+                e
+            );
+        }
+    }
+
+    async fn on_body_doc_deleted(&self, path: &str) {
+        if let Err(e) = self.body_docs.delete(path) {
+            log::warn!("SyncPlugin: failed to delete body doc {}: {}", path, e);
+        }
+    }
+
+    async fn track_file_for_sync(&self, canonical_path: &str) {
+        if let Some(metadata) = self.workspace_crdt.get_file(canonical_path) {
+            self.sync_manager.track_metadata(canonical_path, &metadata);
+        }
+    }
+
+    fn get_canonical_path(&self, storage_path: &str) -> Option<String> {
+        Some(self.sync_manager.get_canonical_path(storage_path))
+    }
+
+    fn track_content_for_sync(&self, canonical_path: &str, content: &str) {
+        self.sync_manager.track_content(canonical_path, content);
+    }
+
+    fn get_file_title(&self, canonical_path: &str) -> Option<String> {
+        self.workspace_crdt
+            .get_file(canonical_path)
+            .and_then(|m| m.title)
+    }
 }
 
 // ============================================================================
 // Command dispatch
 // ============================================================================
 
-impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> SyncPlugin<FS> {
+impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
     /// Route a command string to the appropriate handler method.
     async fn dispatch(&self, cmd: &str, params: JsonValue) -> Result<JsonValue, PluginError> {
         match cmd {
@@ -306,7 +436,7 @@ impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> SyncPlugin<FS> {
 // Typed command dispatch (Command → Response, no JSON roundtrip)
 // ============================================================================
 
-impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> SyncPlugin<FS> {
+impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
     /// Handle a typed `Command` and return a typed `Response`.
     ///
     /// This is the main entry point for the plugin-based CRDT command routing.
@@ -942,7 +1072,7 @@ fn merge_attachment_refs(existing: &FileMetadata, incoming: &mut FileMetadata) {
 // Command handlers — Workspace CRDT State
 // ============================================================================
 
-impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> SyncPlugin<FS> {
+impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
     fn cmd_get_sync_state(&self, _params: JsonValue) -> Result<JsonValue, PluginError> {
         let sv = self.workspace_crdt.encode_state_vector();
         Ok(serde_json::json!({ "data": encode_b64(&sv) }))
@@ -981,7 +1111,7 @@ impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> SyncPlugin<FS> {
 // Command handlers — File Metadata
 // ============================================================================
 
-impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> SyncPlugin<FS> {
+impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
     fn cmd_get_crdt_file(&self, params: JsonValue) -> Result<JsonValue, PluginError> {
         let path = get_str(&params, "path")?;
         let file = self.workspace_crdt.get_file(&path);
@@ -1027,7 +1157,7 @@ impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> SyncPlugin<FS> {
 // Command handlers — Body Documents
 // ============================================================================
 
-impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> SyncPlugin<FS> {
+impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
     fn cmd_get_body_content(&self, params: JsonValue) -> Result<JsonValue, PluginError> {
         let doc_name = get_str(&params, "doc_name")?;
         let content = self
@@ -1111,7 +1241,7 @@ impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> SyncPlugin<FS> {
 // Command handlers — Y-Sync Protocol (CrdtOps-level)
 // ============================================================================
 
-impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> SyncPlugin<FS> {
+impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
     fn cmd_create_sync_step1(&self, params: JsonValue) -> Result<JsonValue, PluginError> {
         let doc_name = get_str(&params, "doc_name")?;
         let message = if is_workspace_doc(&doc_name) {
@@ -1276,7 +1406,7 @@ impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> SyncPlugin<FS> {
 // Command handlers — Sync Handler
 // ============================================================================
 
-impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> SyncPlugin<FS> {
+impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
     fn cmd_configure_sync_handler(&self, params: JsonValue) -> Result<JsonValue, PluginError> {
         let guest_join_code = params
             .get("guest_join_code")
@@ -1364,7 +1494,7 @@ impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> SyncPlugin<FS> {
 // Command handlers — Sync Manager
 // ============================================================================
 
-impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> SyncPlugin<FS> {
+impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
     async fn cmd_handle_workspace_sync_message(
         &self,
         params: JsonValue,
@@ -1536,7 +1666,7 @@ impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> SyncPlugin<FS> {
 // Command handlers — History
 // ============================================================================
 
-impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> SyncPlugin<FS> {
+impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
     fn cmd_get_history(&self, params: JsonValue) -> Result<JsonValue, PluginError> {
         let doc_name = get_str(&params, "doc_name")?;
         let limit = get_opt_i64(&params, "limit").map(|n| n as usize);
@@ -1604,7 +1734,7 @@ impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> SyncPlugin<FS> {
 // Command handler — InitializeWorkspaceCrdt
 // ============================================================================
 
-impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> SyncPlugin<FS> {
+impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
     async fn cmd_initialize_workspace_crdt(
         &self,
         params: JsonValue,

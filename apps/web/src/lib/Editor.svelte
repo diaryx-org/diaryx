@@ -11,7 +11,7 @@
   import { ColoredHighlightMark } from "./extensions/ColoredHighlightMark";
   import Typography from "@tiptap/extension-typography";
   import Image from "@tiptap/extension-image";
-  import { getPathForBlobUrl, isVideoFile, isAudioFile } from "../models/services/attachmentService";
+  import { getPathForBlobUrl, getBlobUrl, isVideoFile, isAudioFile, queueResolveAttachment } from "../models/services/attachmentService";
   import { Table } from "@tiptap/extension-table";
   import { TableRow } from "@tiptap/extension-table-row";
   import { TableHeader } from "@tiptap/extension-table-header";
@@ -235,43 +235,108 @@
         },
       }).extend({
         addNodeView() {
+          // Capture entryPath and api from the outer scope (Editor props)
+          const ep = entryPath;
+          const epApi = api;
           return ({ node, HTMLAttributes }) => {
             const src = node.attrs.src || "";
             const alt = node.attrs.alt || "";
             const title = node.attrs.title || "";
 
-            // Check media type by looking up the original path from blob URL,
-            // or checking the src directly for file extensions
-            const originalPath = getPathForBlobUrl(src);
+            const isLocalPath = src && !src.startsWith('blob:') && !src.startsWith('http://') && !src.startsWith('https://') && !src.startsWith('data:');
+
+            // For local paths, check media type from the raw path
+            // For blob URLs, look up the original path
+            const originalPath = isLocalPath ? src : getPathForBlobUrl(src);
             const checkPath = originalPath || src;
             const isVideo = isVideoFile(checkPath);
             const isAudio = isAudioFile(checkPath);
+
+            // Transparent 1x1 GIF used as placeholder src for loading images.
+            // Without a real src, <img> elements create "dead zones" in
+            // contenteditable that capture mouse events and block text selection.
+            const PLACEHOLDER_SRC = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
+            /** Mark an element as loading: add shimmer class and disable pointer events. */
+            function setLoading(el: HTMLElement) {
+              el.classList.add("editor-image--loading");
+            }
+            /** Clear loading state and restore pointer events. */
+            function clearLoading(el: HTMLElement) {
+              el.classList.remove("editor-image--loading");
+            }
 
             let dom: HTMLElement;
 
             if (isVideo) {
               const video = document.createElement("video");
-              video.src = src;
               video.controls = true;
               video.preload = "metadata";
               video.className = "editor-image editor-video";
               if (title) video.title = title;
+              if (isLocalPath && epApi) {
+                const cached = getBlobUrl(src);
+                if (cached) {
+                  video.src = cached;
+                } else {
+                  setLoading(video);
+                  queueResolveAttachment(epApi, ep, src).then((blobUrl) => {
+                    if (blobUrl) {
+                      video.src = blobUrl;
+                      clearLoading(video);
+                    }
+                  });
+                }
+              } else {
+                video.src = src;
+              }
               dom = video;
             } else if (isAudio) {
               const audio = document.createElement("audio");
-              audio.src = src;
               audio.controls = true;
               audio.preload = "metadata";
               audio.className = "editor-audio";
               if (title) audio.title = title;
+              if (isLocalPath && epApi) {
+                const cached = getBlobUrl(src);
+                if (cached) {
+                  audio.src = cached;
+                } else {
+                  setLoading(audio);
+                  queueResolveAttachment(epApi, ep, src).then((blobUrl) => {
+                    if (blobUrl) {
+                      audio.src = blobUrl;
+                      clearLoading(audio);
+                    }
+                  });
+                }
+              } else {
+                audio.src = src;
+              }
               dom = audio;
             } else {
               const img = document.createElement("img");
-              img.src = src;
               img.alt = alt;
               img.loading = "lazy";
               img.className = HTMLAttributes.class || "editor-image";
               if (title) img.title = title;
+              if (isLocalPath && epApi) {
+                const cached = getBlobUrl(src);
+                if (cached) {
+                  img.src = cached;
+                } else {
+                  img.src = PLACEHOLDER_SRC;
+                  setLoading(img);
+                  queueResolveAttachment(epApi, ep, src).then((blobUrl) => {
+                    if (blobUrl) {
+                      img.src = blobUrl;
+                      clearLoading(img);
+                    }
+                  });
+                }
+              } else {
+                img.src = src;
+              }
               dom = img;
             }
 
@@ -1042,6 +1107,20 @@
   :global(.editor-audio) {
     max-width: 100%;
     margin: 0.5em 0;
+  }
+
+  :global(.editor-image--loading) {
+    min-height: 100px;
+    min-width: 200px;
+    background: var(--muted);
+    border-radius: 6px;
+    animation: shimmer 1.5s ease-in-out infinite;
+    pointer-events: none;
+  }
+
+  @keyframes shimmer {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 0.7; }
   }
 
   /* Footnote ref styles */

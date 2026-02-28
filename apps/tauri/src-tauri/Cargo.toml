@@ -15,6 +15,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 diaryx_core = { workspace = true, features = ["markdown", "live-sync", "crdt", "crdt-sqlite", "native-sync", "native-pandoc"] }
+diaryx_sync = { workspace = true, features = ["sqlite", "native-sync"] }
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml = "0.9"

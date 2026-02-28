@@ -95,8 +95,33 @@ impl PluginContext {
 // ============================================================================
 
 /// Base plugin trait. All plugins must implement this.
+///
+/// On native targets, requires `Send + Sync` for thread-safe plugin dispatch.
+/// On WASM, these bounds are relaxed since everything is single-threaded.
+#[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
 pub trait Plugin: Send + Sync + 'static {
+    /// Unique identifier for this plugin.
+    fn id(&self) -> PluginId;
+
+    /// Initialize the plugin with the given context.
+    async fn init(&self, ctx: &PluginContext) -> Result<(), PluginError> {
+        let _ = ctx;
+        Ok(())
+    }
+
+    /// Shut down the plugin, releasing any resources.
+    async fn shutdown(&self) -> Result<(), PluginError> {
+        Ok(())
+    }
+}
+
+/// Base plugin trait. All plugins must implement this.
+///
+/// WASM variant without `Send + Sync` bounds (single-threaded environment).
+#[cfg(target_arch = "wasm32")]
+#[async_trait(?Send)]
+pub trait Plugin: 'static {
     /// Unique identifier for this plugin.
     fn id(&self) -> PluginId;
 
@@ -115,7 +140,8 @@ pub trait Plugin: Send + Sync + 'static {
 /// Workspace lifecycle plugin.
 ///
 /// Receives events when workspaces are opened, closed, or modified.
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait WorkspacePlugin: Plugin {
     /// Called when a workspace is opened.
     async fn on_workspace_opened(&self, event: &WorkspaceOpenedEvent) {
@@ -162,12 +188,61 @@ pub trait WorkspacePlugin: Plugin {
         let _ = cmd;
         None
     }
+
+    // ====================================================================
+    // CRDT side-effect hooks (default: no-op)
+    // ====================================================================
+
+    /// Called after a workspace-modifying operation completes.
+    ///
+    /// Plugins that manage sync state should broadcast CRDT workspace updates
+    /// to connected peers.
+    async fn notify_workspace_modified(&self) {}
+
+    /// Called when a body document needs to be renamed (file was moved/renamed).
+    ///
+    /// Plugins that manage body CRDTs should rename the underlying Y.Doc.
+    async fn on_body_doc_renamed(&self, _old_path: &str, _new_path: &str) {}
+
+    /// Called when a body document should be deleted.
+    ///
+    /// Plugins that manage body CRDTs should remove the underlying Y.Doc.
+    async fn on_body_doc_deleted(&self, _path: &str) {}
+
+    /// Called after a file operation to track CRDT metadata for echo detection.
+    ///
+    /// Plugins should read their own CRDT file metadata for the given canonical
+    /// path and register it with the sync echo tracker.
+    async fn track_file_for_sync(&self, _canonical_path: &str) {}
+
+    /// Track body content for echo detection.
+    ///
+    /// Called after writing body content locally so that the sync system
+    /// can recognize its own writes when they arrive via remote sync.
+    fn track_content_for_sync(&self, _canonical_path: &str, _content: &str) {}
+
+    /// Resolve a canonical path from a storage path.
+    ///
+    /// Returns `Some(canonical)` if the plugin performs path mapping (e.g.,
+    /// guest mode prefix stripping), or `None` to use the default.
+    fn get_canonical_path(&self, _storage_path: &str) -> Option<String> {
+        None
+    }
+
+    /// Get the title for a file from CRDT metadata.
+    ///
+    /// Returns `Some(title)` if the plugin has metadata for the given path,
+    /// or `None` to use the default filename-based title.
+    fn get_file_title(&self, _canonical_path: &str) -> Option<String> {
+        None
+    }
 }
 
 /// Per-file lifecycle plugin.
 ///
 /// Receives events when individual files are created, saved, moved, or deleted.
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait FilePlugin: Plugin {
     /// Called after a file is saved.
     async fn on_file_saved(&self, event: &FileSavedEvent) {

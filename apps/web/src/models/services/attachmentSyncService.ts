@@ -501,11 +501,14 @@ function stripMetadataIndexForEntry(entryPath: string): void {
 }
 
 export async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const normalized = Uint8Array.from(bytes);
-  const digest = await crypto.subtle.digest("SHA-256", normalized);
-  return Array.from(new Uint8Array(digest))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
+  const digest = await crypto.subtle.digest("SHA-256", bytes as unknown as BufferSource);
+  const hashBytes = new Uint8Array(digest);
+  const HEX = '0123456789abcdef';
+  let hex = '';
+  for (let i = 0; i < hashBytes.length; i++) {
+    hex += HEX[hashBytes[i] >> 4] + HEX[hashBytes[i] & 0xf];
+  }
+  return hex;
 }
 
 export function setAttachmentSyncBackend(backend: Backend | null): void {

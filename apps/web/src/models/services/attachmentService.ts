@@ -16,6 +16,29 @@ import { getServerAttachmentUrl, getAttachmentMetadata, sha256Hex } from './atta
 // Blob URL tracking for attachments (originalPath -> blobUrl)
 const blobUrlMap = new Map<string, string>();
 
+// Normalization cache to avoid repeated WASM round-trips ("entryPath::rawPath" -> result)
+const normalizationCache = new Map<string, { canonical: string; sourceRelative: string }>();
+
+// Abort controller for in-flight resolveAttachment calls.
+// Aborted on entry switch so stale resolutions don't saturate the WASM worker queue.
+let resolveAbort = new AbortController();
+
+// Concurrency-limited resolution queue.
+// Only RESOLVE_CONCURRENCY resolutions hit the WASM worker at once; the rest wait in JS.
+// On entry switch, the JS queue is flushed instantly — at most RESOLVE_CONCURRENCY
+// in-flight calls need to finish (they bail fast via abort checks).
+const RESOLVE_CONCURRENCY = 3;
+let resolveInFlight = 0;
+interface PendingResolve { start: () => void; cancel: () => void }
+const pendingResolves: PendingResolve[] = [];
+
+function drainPendingResolves(): void {
+  while (resolveInFlight < RESOLVE_CONCURRENCY && pendingResolves.length > 0) {
+    resolveInFlight++;
+    pendingResolves.shift()!.start();
+  }
+}
+
 // ============================================================================
 // MIME Type Mapping
 // ============================================================================
@@ -167,6 +190,10 @@ async function normalizeAttachmentReference(
   sourceEntryPath: string,
   rawPath: string,
 ): Promise<{ canonical: string; sourceRelative: string }> {
+  const cacheKey = `${sourceEntryPath}::${rawPath}`;
+  const cached = normalizationCache.get(cacheKey);
+  if (cached) return cached;
+
   const trimmed = rawPath.trim();
   const candidates = [trimmed];
   if (trimmed.startsWith('[') && trimmed.includes('](') && !trimmed.endsWith(')')) {
@@ -182,16 +209,20 @@ async function normalizeAttachmentReference(
         'plain_relative',
         sourceEntryPath,
       );
-      return { canonical, sourceRelative };
+      const result = { canonical, sourceRelative };
+      normalizationCache.set(cacheKey, result);
+      return result;
     } catch {
       // Try next candidate.
     }
   }
 
-  return {
+  const fallback = {
     canonical: trimmed,
     sourceRelative: trimmed,
   };
+  normalizationCache.set(cacheKey, fallback);
+  return fallback;
 }
 
 // ============================================================================
@@ -203,23 +234,37 @@ async function normalizeAttachmentReference(
  * Should be called when switching documents or unmounting.
  */
 export function revokeBlobUrls(): void {
+  // Abort in-flight resolutions so they bail at the next check point.
+  resolveAbort.abort();
+  resolveAbort = new AbortController();
+
+  // Flush the pending queue — these never touched the worker.
+  for (const p of pendingResolves) p.cancel();
+  pendingResolves.length = 0;
+
   for (const url of blobUrlMap.values()) {
     URL.revokeObjectURL(url);
   }
   blobUrlMap.clear();
+  normalizationCache.clear();
 }
 
 /**
  * Resolve a single attachment reference to a blob URL.
  * Returns null if the attachment can't be loaded.
  */
-async function resolveAttachment(
+export async function resolveAttachment(
   api: Api,
   entryPath: string,
   rawPath: string,
 ): Promise<string | null> {
+  // Capture the current abort signal so we can bail early if the user
+  // navigates away (revokeBlobUrls aborts this signal).
+  const signal = resolveAbort.signal;
+
   const { canonical: canonicalPath, sourceRelative: sourceRelativePath } =
     await normalizeAttachmentReference(api, entryPath, rawPath);
+  if (signal.aborted) return null;
 
   // Reuse existing blob URL if we already resolved this attachment
   const existingBlobUrl = blobUrlMap.get(sourceRelativePath);
@@ -228,11 +273,13 @@ async function resolveAttachment(
   /**
    * Create a blob URL from raw bytes, handling HEIC conversion.
    */
-  async function createBlobUrlFromBytes(bytes: Uint8Array): Promise<string> {
+  async function createBlobUrlFromBytes(bytes: Uint8Array): Promise<string | null> {
+    if (signal.aborted) return null;
     const mimeType = getMimeType(canonicalPath);
     let blob = new Blob([bytes as unknown as BlobPart], { type: mimeType });
     if (isHeicFile(canonicalPath)) {
       blob = await convertHeicToJpeg(blob);
+      if (signal.aborted) return null;
     }
     const blobUrl = URL.createObjectURL(blob);
     blobUrlMap.set(sourceRelativePath, blobUrl);
@@ -243,6 +290,7 @@ async function resolveAttachment(
    * Try fetching from the server. Returns blob URL or null.
    */
   async function tryServerFetch(): Promise<string | null> {
+    if (signal.aborted) return null;
     const serverUrl =
       getServerAttachmentUrl(entryPath, sourceRelativePath) ||
       (canonicalPath !== sourceRelativePath
@@ -250,15 +298,17 @@ async function resolveAttachment(
         : null);
     if (!serverUrl) return null;
     try {
-      const resp = await fetch(serverUrl);
+      const resp = await fetch(serverUrl, { signal });
       if (!resp.ok) return null;
       const mimeType = getMimeType(canonicalPath);
       let blob = await resp.blob();
+      if (signal.aborted) return null;
       if (blob.type !== mimeType) {
         blob = new Blob([blob], { type: mimeType });
       }
       if (isHeicFile(canonicalPath)) {
         blob = await convertHeicToJpeg(blob);
+        if (signal.aborted) return null;
       }
       const blobUrl = URL.createObjectURL(blob);
       blobUrlMap.set(sourceRelativePath, blobUrl);
@@ -270,6 +320,7 @@ async function resolveAttachment(
 
   try {
     const data = await api.getAttachmentData(entryPath, sourceRelativePath);
+    if (signal.aborted) return null;
     const bytes = new Uint8Array(data);
 
     // Check if local file hash matches CRDT metadata — if not, the attachment
@@ -281,6 +332,7 @@ async function resolveAttachment(
         : null);
     if (meta) {
       const localHash = await sha256Hex(bytes);
+      if (signal.aborted) return null;
       if (localHash !== meta.hash) {
         const serverBlobUrl = await tryServerFetch();
         if (serverBlobUrl) return serverBlobUrl;
@@ -289,6 +341,7 @@ async function resolveAttachment(
 
     return await createBlobUrlFromBytes(bytes);
   } catch (e) {
+    if (signal.aborted) return null;
     // Attachment not found locally — try streaming from server.
     const serverBlobUrl = await tryServerFetch();
     if (serverBlobUrl) return serverBlobUrl;
@@ -296,6 +349,39 @@ async function resolveAttachment(
     console.warn(`[AttachmentService] Could not load attachment: ${sourceRelativePath}`, e);
     return null;
   }
+}
+
+/**
+ * Queue an attachment resolution with concurrency control.
+ * At most RESOLVE_CONCURRENCY resolutions hit the WASM worker at once;
+ * the rest wait in a JS queue that is flushed instantly on entry switch.
+ */
+export function queueResolveAttachment(
+  api: Api,
+  entryPath: string,
+  rawPath: string,
+): Promise<string | null> {
+  const signal = resolveAbort.signal;
+  return new Promise<string | null>((resolve) => {
+    const start = async () => {
+      try {
+        if (signal.aborted) { resolve(null); return; }
+        resolve(await resolveAttachment(api, entryPath, rawPath));
+      } catch {
+        resolve(null);
+      } finally {
+        resolveInFlight--;
+        drainPendingResolves();
+      }
+    };
+
+    if (resolveInFlight < RESOLVE_CONCURRENCY) {
+      resolveInFlight++;
+      start();
+    } else {
+      pendingResolves.push({ start: () => { resolveInFlight++; start(); }, cancel: () => resolve(null) });
+    }
+  });
 }
 
 /**
@@ -414,7 +500,7 @@ export function hasBlobUrls(): boolean {
 /**
  * Resolve a local image path to a blob URL for display.
  * Returns the blob URL on success, or undefined if the attachment can't be loaded.
- * Checks the cache first, then fetches from the backend.
+ * Delegates to resolveAttachment for all local path resolution.
  */
 export async function resolveImageSrc(
   rawImagePath: string,
@@ -431,92 +517,8 @@ export async function resolveImageSrc(
     return rawImagePath;
   }
 
-  const { canonical: canonicalPath, sourceRelative: sourceRelativePath } =
-    await normalizeAttachmentReference(api, entryPath, rawImagePath);
-
-  // Check cache first
-  const cached = blobUrlMap.get(sourceRelativePath);
-  if (cached) return cached;
-
-  try {
-    const data = await api.getAttachmentData(entryPath, sourceRelativePath);
-    const bytes = new Uint8Array(data);
-
-    // Verify hash matches CRDT metadata — re-fetch from server if stale.
-    const meta =
-      getAttachmentMetadata(entryPath, sourceRelativePath) ||
-      (canonicalPath !== sourceRelativePath
-        ? getAttachmentMetadata(entryPath, canonicalPath)
-        : null);
-    if (meta) {
-      const localHash = await sha256Hex(bytes);
-      if (localHash !== meta.hash) {
-        const serverUrl =
-          getServerAttachmentUrl(entryPath, sourceRelativePath) ||
-          (canonicalPath !== sourceRelativePath
-            ? getServerAttachmentUrl(entryPath, canonicalPath)
-            : null);
-        if (serverUrl) {
-          try {
-            const resp = await fetch(serverUrl);
-            if (resp.ok) {
-              const mimeType = getMimeType(canonicalPath);
-              let blob = await resp.blob();
-              if (blob.type !== mimeType) {
-                blob = new Blob([blob], { type: mimeType });
-              }
-              if (isHeicFile(canonicalPath)) {
-                blob = await convertHeicToJpeg(blob);
-              }
-              const blobUrl = URL.createObjectURL(blob);
-              blobUrlMap.set(sourceRelativePath, blobUrl);
-              return blobUrl;
-            }
-          } catch {
-            // Fall through to use stale local copy.
-          }
-        }
-      }
-    }
-
-    const mimeType = getMimeType(canonicalPath);
-    let blob = new Blob([bytes], { type: mimeType });
-    if (isHeicFile(canonicalPath)) {
-      blob = await convertHeicToJpeg(blob);
-    }
-    const blobUrl = URL.createObjectURL(blob);
-    blobUrlMap.set(sourceRelativePath, blobUrl);
-    return blobUrl;
-  } catch {
-    // Not available locally — try streaming from server.
-    const serverUrl =
-      getServerAttachmentUrl(entryPath, sourceRelativePath) ||
-      (canonicalPath !== sourceRelativePath
-        ? getServerAttachmentUrl(entryPath, canonicalPath)
-        : null);
-
-    if (serverUrl) {
-      try {
-        const resp = await fetch(serverUrl);
-        if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
-        const mimeType = getMimeType(canonicalPath);
-        let blob = await resp.blob();
-        if (blob.type !== mimeType) {
-          blob = new Blob([blob], { type: mimeType });
-        }
-        if (isHeicFile(canonicalPath)) {
-          blob = await convertHeicToJpeg(blob);
-        }
-        const blobUrl = URL.createObjectURL(blob);
-        blobUrlMap.set(sourceRelativePath, blobUrl);
-        return blobUrl;
-      } catch {
-        // Server fetch also failed.
-      }
-    }
-
-    return undefined;
-  }
+  const blobUrl = await resolveAttachment(api, entryPath, rawImagePath);
+  return blobUrl ?? undefined;
 }
 
 // ============================================================================

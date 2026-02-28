@@ -65,10 +65,10 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use diaryx_core::crdt::{
-    IncomingEvent, RustSyncManager, SessionAction, SyncSession, SyncSessionConfig,
+use diaryx_core::fs::EventEmittingFs;
+use diaryx_sync::{
+    CrdtFs, IncomingEvent, RustSyncManager, SessionAction, SyncSession, SyncSessionConfig,
 };
-use diaryx_core::fs::{CrdtFs, EventEmittingFs};
 use js_sys::Promise;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;

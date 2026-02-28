@@ -132,6 +132,69 @@ impl PluginRegistry {
     }
 
     // ========================================================================
+    // CRDT Side-Effect Dispatch
+    // ========================================================================
+
+    /// Notify all workspace plugins that a workspace-modifying operation completed.
+    ///
+    /// Plugins managing sync state should broadcast CRDT workspace updates.
+    pub async fn notify_workspace_modified(&self) {
+        for plugin in &self.workspace_plugins {
+            plugin.notify_workspace_modified().await;
+        }
+    }
+
+    /// Notify all workspace plugins that a body document was renamed.
+    pub async fn emit_body_doc_renamed(&self, old_path: &str, new_path: &str) {
+        for plugin in &self.workspace_plugins {
+            plugin.on_body_doc_renamed(old_path, new_path).await;
+        }
+    }
+
+    /// Notify all workspace plugins that a body document was deleted.
+    pub async fn emit_body_doc_deleted(&self, path: &str) {
+        for plugin in &self.workspace_plugins {
+            plugin.on_body_doc_deleted(path).await;
+        }
+    }
+
+    /// Ask workspace plugins to track CRDT metadata for echo detection.
+    pub async fn track_file_for_sync(&self, canonical_path: &str) {
+        for plugin in &self.workspace_plugins {
+            plugin.track_file_for_sync(canonical_path).await;
+        }
+    }
+
+    /// Ask workspace plugins to track body content for echo detection.
+    pub fn track_content_for_sync(&self, canonical_path: &str, content: &str) {
+        for plugin in &self.workspace_plugins {
+            plugin.track_content_for_sync(canonical_path, content);
+        }
+    }
+
+    /// Resolve a canonical path from a storage path via workspace plugins.
+    ///
+    /// Returns the first `Some` result from any plugin, or `None` to use the default.
+    pub fn get_canonical_path(&self, storage_path: &str) -> Option<String> {
+        for plugin in &self.workspace_plugins {
+            if let Some(canonical) = plugin.get_canonical_path(storage_path) {
+                return Some(canonical);
+            }
+        }
+        None
+    }
+
+    /// Get the title for a file from CRDT metadata via workspace plugins.
+    pub fn get_file_title(&self, canonical_path: &str) -> Option<String> {
+        for plugin in &self.workspace_plugins {
+            if let Some(title) = plugin.get_file_title(canonical_path) {
+                return Some(title);
+            }
+        }
+        None
+    }
+
+    // ========================================================================
     // Command Dispatch
     // ========================================================================
 

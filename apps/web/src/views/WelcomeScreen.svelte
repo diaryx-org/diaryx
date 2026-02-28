@@ -61,9 +61,9 @@
     position: absolute;
     width: 200%;
     border-radius: 50%;
-    filter: blur(50px);
+    filter: blur(55px);
     will-change: transform;
-    opacity: 0.45;
+    opacity: 0.28;
   }
 
   /* Wave 1: upper-left, drifts right */
@@ -77,7 +77,7 @@
     );
     top: -15%;
     left: -55%;
-    animation: wave-drift-1 14s ease-in-out infinite alternate;
+    animation: wave-drift-1 9s ease-in-out infinite alternate;
   }
 
   /* Wave 2: lower-right, drifts left */
@@ -91,7 +91,7 @@
     );
     bottom: -22%;
     right: -55%;
-    animation: wave-drift-2 17s ease-in-out infinite alternate;
+    animation: wave-drift-2 11s ease-in-out infinite alternate;
   }
 
   /* Wave 3: middle, drifts diagonally */
@@ -105,27 +105,27 @@
     );
     top: 28%;
     left: -25%;
-    animation: wave-drift-3 21s ease-in-out infinite alternate;
+    animation: wave-drift-3 13s ease-in-out infinite alternate;
   }
 
   @keyframes wave-drift-1 {
     from { transform: translateX(0%) translateY(0%); }
-    to   { transform: translateX(25%) translateY(8%); }
+    to   { transform: translateX(40%) translateY(14%); }
   }
 
   @keyframes wave-drift-2 {
     from { transform: translateX(0%) translateY(0%); }
-    to   { transform: translateX(-20%) translateY(-12%); }
+    to   { transform: translateX(-35%) translateY(-20%); }
   }
 
   @keyframes wave-drift-3 {
     from { transform: translateX(0%) translateY(0%); }
-    to   { transform: translateX(16%) translateY(16%); }
+    to   { transform: translateX(28%) translateY(26%); }
   }
 
   /* Dark mode: deeper, more vibrant colors at higher opacity */
   :global(.dark) .aurora-wave {
-    opacity: 0.55;
+    opacity: 0.42;
   }
 
   :global(.dark) .wave-1 {

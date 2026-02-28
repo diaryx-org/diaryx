@@ -6,6 +6,8 @@
 /// Where all the Tauri `invoke` functions are defined.
 mod commands;
 
+#[cfg(feature = "extism-plugins")]
+use commands::ExtismSyncState;
 use commands::{CrdtState, GuestModeState, WebSocketSyncState};
 
 /// Cloud backup targets (S3, Google Drive, etc.)
@@ -72,13 +74,19 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_iap::init());
     }
 
-    builder
-        // CRDT state for version history and sync
+    // Core state
+    builder = builder
         .manage(CrdtState::new())
-        // Guest mode state for share sessions
         .manage(GuestModeState::new())
-        // WebSocket sync state
-        .manage(WebSocketSyncState::new())
+        .manage(WebSocketSyncState::new());
+
+    // Extism sync plugin state — only available with extism-plugins feature
+    #[cfg(feature = "extism-plugins")]
+    {
+        builder = builder.manage(ExtismSyncState::new());
+    }
+
+    builder
         .setup(|_app| {
             #[cfg(target_os = "ios")]
             setup_ios_edge_to_edge(_app);
@@ -141,6 +149,9 @@ pub fn run() {
             commands::get_websocket_sync_status,
             // HTTP Proxy (iOS CORS bypass)
             commands::proxy_fetch,
+            // Extism Sync Plugin (load/unload on demand)
+            commands::load_sync_plugin,
+            commands::unload_sync_plugin,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

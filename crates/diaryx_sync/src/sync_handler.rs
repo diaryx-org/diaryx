@@ -774,7 +774,7 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
             modified_at: fm
                 .get("updated")
                 .and_then(parse_updated_value)
-                .unwrap_or_else(|| chrono::Utc::now().timestamp_millis()),
+                .unwrap_or_else(|| crate::time::now_timestamp_millis()),
         })
     }
 

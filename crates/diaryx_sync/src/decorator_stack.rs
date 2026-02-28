@@ -311,6 +311,88 @@ impl<FS: AsyncFileSystem> DecoratedFsBuilder<FS> {
     }
 }
 
+/// A lightweight decorated filesystem without CrdtFs.
+///
+/// Stack: `EventEmittingFs<FS>` — no CRDT layer.
+/// Used when sync is loaded as an Extism plugin (the plugin owns CRDTs internally)
+/// and the host only needs event emission for forwarding FS events to plugins.
+pub struct EventOnlyFs<FS: AsyncFileSystem> {
+    /// The event-emitting filesystem (no CrdtFs layer).
+    pub fs: EventEmittingFs<FS>,
+    /// The event callback registry.
+    pub event_registry: Arc<CallbackRegistry>,
+}
+
+impl<FS: AsyncFileSystem> EventOnlyFs<FS> {
+    /// Enable or disable event emission.
+    pub fn set_events_enabled(&self, enabled: bool) {
+        self.fs.set_enabled(enabled);
+    }
+
+    /// Check if event emission is enabled.
+    pub fn is_events_enabled(&self) -> bool {
+        self.fs.is_enabled()
+    }
+
+    /// Subscribe to filesystem events.
+    pub fn on_event(
+        &self,
+        callback: diaryx_core::fs::EventCallback,
+    ) -> diaryx_core::fs::SubscriptionId {
+        self.fs.on_event(callback)
+    }
+
+    /// Unsubscribe from filesystem events.
+    pub fn off_event(&self, id: diaryx_core::fs::SubscriptionId) -> bool {
+        self.fs.off_event(id)
+    }
+
+    /// Get a reference to the inner base filesystem.
+    pub fn base_fs(&self) -> &FS {
+        self.fs.inner()
+    }
+
+    /// Get a reference to the EventEmittingFs layer.
+    pub fn event_fs(&self) -> &EventEmittingFs<FS> {
+        &self.fs
+    }
+}
+
+impl<FS: AsyncFileSystem + Clone> Clone for EventOnlyFs<FS> {
+    fn clone(&self) -> Self {
+        Self {
+            fs: self.fs.clone(),
+            event_registry: Arc::clone(&self.event_registry),
+        }
+    }
+}
+
+impl<FS: AsyncFileSystem> std::fmt::Debug for EventOnlyFs<FS> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EventOnlyFs")
+            .field("events_enabled", &self.is_events_enabled())
+            .finish()
+    }
+}
+
+impl<FS: AsyncFileSystem> DecoratedFsBuilder<FS> {
+    /// Build an event-only filesystem stack (no CrdtFs layer).
+    ///
+    /// Use this when sync is loaded as an Extism plugin that owns CRDT state
+    /// internally. The host only needs event emission for forwarding FS events
+    /// to plugins.
+    pub fn build_event_only(self) -> EventOnlyFs<FS> {
+        let event_registry = Arc::new(CallbackRegistry::new());
+        let event_fs = EventEmittingFs::with_registry(self.base, Arc::clone(&event_registry));
+        event_fs.set_enabled(self.events_enabled);
+
+        EventOnlyFs {
+            fs: event_fs,
+            event_registry,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

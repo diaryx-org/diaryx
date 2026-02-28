@@ -8,6 +8,7 @@ attachments:
   - "[rustCrdtApi.ts](/apps/web/src/lib/crdt/rustCrdtApi.ts)"
   - "[syncHelpers.ts](/apps/web/src/lib/crdt/syncHelpers.ts)"
   - "[syncTransport.ts](/apps/web/src/lib/crdt/syncTransport.ts)"
+  - "[unifiedSyncTransport.ts](/apps/web/src/lib/crdt/unifiedSyncTransport.ts)"
   - "[types.ts](/apps/web/src/lib/crdt/types.ts)"
   - "[workspaceCrdtBridge.ts](/apps/web/src/lib/crdt/workspaceCrdtBridge.ts)"
 exclude:
@@ -44,6 +45,13 @@ For the web app, sync uses JavaScript WebSockets via `SyncTransport`. The flow i
 
 `SyncTransport` queues workspace sync messages while disconnected and flushes them after reconnect,
 so local metadata updates aren’t dropped during transient network outages.
+
+`UnifiedSyncTransport` now routes sync protocol calls through a registered
+`SyncWsHandler` interface (`sync/syncWsRegistry.ts`) instead of directly
+hard-coding backend `syncOn*`/`syncDrain` methods. The Extism sync plugin
+registers its handler factory at runtime, while transport keeps a compatibility
+fallback that wraps legacy backend sync methods when no plugin handler is
+registered.
 
 ## Sync Status Tracking
 
@@ -127,6 +135,16 @@ snapshot upload), `AddWorkspaceDialog` explicitly discards queued pre-connect lo
 updates before opening the WebSocket. This prevents replaying stale bootstrap
 create/delete/body events on top of already-imported snapshot state.
 
+During full workspace teardown/switch (`destroyWorkspace`), the bridge now also
+unloads the Extism sync plugin instance after disconnecting transport. This
+forces the next workspace to start with a fresh guest + host-function context
+bound to the new backend, avoiding cross-workspace plugin state bleed.
+
+If Extism plugin loading/instantiation fails at runtime (for example due to a
+browser/runtime incompatibility), `workspaceCrdtBridge.ts` falls back to the
+backend's built-in sync methods instead of throwing. This keeps sync/session
+flows usable while logging diagnostics for the Extism failure.
+
 `workspaceCrdtBridge.ts` also wires the incremental attachment sync queue:
 
 - configures queue auth/server/workspace context as sync state changes
@@ -167,5 +185,6 @@ missed body updates during late auth or workspace setup.
 | `rustCrdtApi.ts`         | TypeScript API for Rust CRDT                          |
 | `syncHelpers.ts`         | Sync utility functions                                |
 | `syncTransport.ts`       | WebSocket transport layer                             |
+| `unifiedSyncTransport.ts` | Unified v2 transport with plugin-registered websocket handler interface |
 | `types.ts`               | TypeScript type definitions                           |
 | `workspaceCrdtBridge.ts` | Bridge between CRDT and stores                        |

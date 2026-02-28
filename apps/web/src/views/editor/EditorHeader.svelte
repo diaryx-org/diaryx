@@ -25,7 +25,11 @@
     ChevronLeft,
     ChevronRight,
     CalendarDays,
+    Sparkles,
+    Plug,
   } from "@lucide/svelte";
+  import { getPluginStore } from "@/models/stores/pluginStore.svelte";
+
 
   // Mobile state for hiding keyboard shortcut tooltips
   const mobileState = getMobileState();
@@ -57,6 +61,8 @@
     onGoToToday?: () => void;
     /** Open sync setup wizard (for sync indicator) */
     onAddWorkspace?: () => void;
+    /** Plugin toolbar button clicked */
+    onPluginToolbarAction?: (pluginId: string, command: string) => void;
   }
 
   let {
@@ -80,7 +86,16 @@
     onNextDay,
     onGoToToday,
     onAddWorkspace,
+    onPluginToolbarAction,
   }: Props = $props();
+
+  const pluginStore = getPluginStore();
+
+  // Map icon names to Lucide components
+  const iconMap: Record<string, typeof Sparkles> = {
+    sparkles: Sparkles,
+    plug: Plug,
+  };
 
   // Focus mode: header is invisible when both sidebars are closed
   let bothSidebarsClosed = $derived(!leftSidebarOpen && !rightSidebarOpen);
@@ -256,7 +271,6 @@
 
   <!-- Right side: actions -->
   <div class="flex items-center gap-1 md:gap-2 ml-2 shrink-0">
-    <!-- Sync status indicator -->
     <SyncStatusIndicator onAddWorkspace={onAddWorkspace} />
 
     {#if readonly}
@@ -307,6 +321,29 @@
         {/if}
       </Tooltip.Root>
     {/if}
+
+    <!-- Plugin toolbar buttons -->
+    {#each pluginStore.toolbarButtons as btn}
+      {@const BtnIcon = iconMap[btn.contribution.icon ?? ""] ?? Plug}
+      <Tooltip.Root>
+        <Tooltip.Trigger>
+          <Button
+            variant="ghost"
+            size="icon"
+            onclick={() => onPluginToolbarAction?.(btn.pluginId as unknown as string, btn.contribution.plugin_command)}
+            class="size-8"
+            aria-label={btn.contribution.label}
+          >
+            <BtnIcon class="size-4" />
+          </Button>
+        </Tooltip.Trigger>
+        {#if !mobileState.isMobile}
+          <Tooltip.Content>
+            {btn.contribution.label}
+          </Tooltip.Content>
+        {/if}
+      </Tooltip.Root>
+    {/each}
 
     <!-- Command palette button with tooltip -->
     <Tooltip.Root>

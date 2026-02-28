@@ -4,28 +4,51 @@
    *
    * For Builtin component refs, renders the matching built-in component.
    * For Declarative component refs, renders a form using PluginSettingsTab.
+   * For Iframe component refs, renders plugin HTML in a sandboxed iframe.
    */
   import type { ComponentRef, PluginId } from "$lib/backend/generated";
   import type { JsonValue } from "$lib/backend/generated/serde_json/JsonValue";
   import type { Api } from "$lib/backend/api";
+  import type { EntryData } from "$lib/backend/interface";
   import PluginSettingsTab from "$lib/settings/PluginSettingsTab.svelte";
+  import PluginIframe from "$lib/components/PluginIframe.svelte";
+  import { getSyncBuiltinTabKeyByComponentId } from "$lib/sync/syncBuiltinUiRegistry";
+  import { getPlugin as getBrowserPlugin } from "$lib/plugins/browserPluginManager.svelte";
 
   interface Props {
     pluginId: PluginId;
     component: ComponentRef;
     api: Api;
+    entry?: EntryData | null;
   }
 
-  let { pluginId, component, api }: Props = $props();
+  let { pluginId, component, api, entry = null }: Props = $props();
 
   let config = $state<Record<string, JsonValue>>({});
+  const builtinComponentId = $derived(
+    component.type === "Builtin" ? component.component_id : null,
+  );
+  const syncBuiltinKey = $derived(
+    builtinComponentId ? getSyncBuiltinTabKeyByComponentId(builtinComponentId) : null,
+  );
 
   $effect(() => {
-    loadConfig();
+    // Only load config for Declarative components that actually use it.
+    // Iframe components communicate via postMessage; loading config here
+    // would race with the iframe's handle_command calls on the same WASM instance.
+    if (component.type !== "Iframe") {
+      loadConfig();
+    }
   });
 
   async function loadConfig() {
     try {
+      const browserPlugin = getBrowserPlugin(pluginId as unknown as string);
+      if (browserPlugin) {
+        const raw = await browserPlugin.getConfig();
+        config = (raw as Record<string, JsonValue>) ?? {};
+        return;
+      }
       const raw = await api.getPluginConfig(pluginId);
       config = (raw as Record<string, JsonValue>) ?? {};
     } catch {
@@ -36,6 +59,11 @@
   async function handleConfigChange(key: string, value: JsonValue) {
     config = { ...config, [key]: value };
     try {
+      const browserPlugin = getBrowserPlugin(pluginId as unknown as string);
+      if (browserPlugin) {
+        await browserPlugin.setConfig(config as Record<string, unknown>);
+        return;
+      }
       await api.setPluginConfig(pluginId, config);
     } catch (e) {
       console.error(`[PluginSidebarPanel] Failed to save config for ${pluginId}:`, e);
@@ -43,16 +71,24 @@
   }
 </script>
 
-<div class="p-4 space-y-4">
-  {#if component.type === "Declarative"}
-    <PluginSettingsTab
-      fields={component.fields}
-      {config}
-      onConfigChange={handleConfigChange}
-    />
-  {:else if component.type === "Builtin"}
-    <p class="text-sm text-muted-foreground">
-      Built-in component: {component.component_id}
-    </p>
-  {/if}
-</div>
+{#if component.type === "Iframe"}
+  <PluginIframe pluginId={pluginId as unknown as string} componentId={component.component_id} {entry} />
+{:else}
+  <div class="p-4 space-y-4">
+    {#if component.type === "Declarative"}
+      <PluginSettingsTab
+        fields={component.fields}
+        {config}
+        onConfigChange={handleConfigChange}
+      />
+    {:else if component.type === "Builtin" && syncBuiltinKey}
+      <p class="text-sm text-muted-foreground">
+        This built-in panel is rendered directly by the host sidebar slot.
+      </p>
+    {:else if component.type === "Builtin"}
+      <p class="text-sm text-muted-foreground">
+        Built-in component: {component.component_id}
+      </p>
+    {/if}
+  </div>
+{/if}

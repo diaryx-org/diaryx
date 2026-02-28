@@ -88,6 +88,20 @@ The dialog's local->sync upload path copies local workspace files to the server
 (snapshot upload) and keeps local files on device; it does not delete or move
 local data.
 
+Browser sync now loads the Extism plugin from
+`/plugins/diaryx_sync.wasm` with a runtime compatibility check. If the file is
+an older wasm-bindgen-flavored artifact, loading fails fast with a rebuild
+instruction instead of surfacing a low-level Extism import resolution error.
+
+Extism sync guest calls are serialized in `sync/extismSyncPlugin.ts` to avoid
+re-entrant guest invocations, which can panic on internal `RefCell` borrows
+when multiple sync events race in the browser.
+
+Browser host functions in `sync/hostFunctions.ts` now bridge guest filesystem
+calls (`host_read_file`, `host_file_exists`, etc.) to async backend commands,
+so Extism sync metadata/materialization paths can read/write real workspace
+files instead of falling back to no-op stubs.
+
 On Tauri, the dialog resets the location field when opened and derives a
 fresh default path from the app document directory + workspace name when no
 explicit location is provided, so "start fresh" flows don't reuse a previous
@@ -127,6 +141,21 @@ The **right sidebar** (`RightSidebar.svelte`) contains file-level concerns:
 Share and snapshots were moved from the right sidebar to the left sidebar because
 they are workspace-level operations, not file-level.
 
+## Plugin-Declared Sync UI
+
+Sync/share/history surfaces are now declared by plugin manifest contributions
+from the runtime `sync` Extism plugin (`diaryx_sync_extism`), with host-rendered
+Svelte components mapped by built-in component IDs:
+
+- `sync.share` -> `ShareTab`
+- `sync.snapshots` -> `GitHistoryPanel`
+- `sync.history` -> right sidebar CRDT history panel
+- `sync-status`/`sync.status` -> `SyncStatusIndicator`
+
+The web host keeps fallback UI when sync plugin loading/registration fails:
+left sidebar still shows Share/Snapshots, right sidebar still shows History,
+and the header still shows SyncStatusIndicator.
+
 Both `LiveCollaborationPanel` and `PublishingPanel` read the selected audience from
 `templateContextStore.previewAudience` (set by the `AudienceFilter` above the tabs)
 instead of having their own audience dropdowns.
@@ -140,3 +169,8 @@ expand/collapse interactions responsive in larger workspaces.
 The tree renderer also deduplicates children by `path` before keyed rendering,
 so duplicate references from upstream data do not crash Svelte keyed `each`
 blocks.
+
+During file switches, `App.svelte` passes a pending `activeEntryPath` into
+`LeftSidebar.svelte` so the newly clicked row highlights immediately even when
+the backend is still resolving the next entry (for example, while attachment
+loads are being canceled).

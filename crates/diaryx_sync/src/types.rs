@@ -140,7 +140,7 @@ impl FileMetadata {
                 metadata.modified_at = updated;
             }
             if metadata.modified_at == 0 {
-                metadata.modified_at = chrono::Utc::now().timestamp_millis();
+                metadata.modified_at = crate::time::now_timestamp_millis();
             }
 
             // Preserve unknown frontmatter fields in extra
@@ -247,7 +247,7 @@ impl FileMetadata {
         if let Some(updated) = fm.get("updated").and_then(parse_updated_value) {
             metadata.modified_at = updated;
         } else if metadata.modified_at == 0 {
-            metadata.modified_at = chrono::Utc::now().timestamp_millis();
+            metadata.modified_at = crate::time::now_timestamp_millis();
         }
         metadata
     }
@@ -256,7 +256,7 @@ impl FileMetadata {
     pub fn new(title: Option<String>) -> Self {
         Self {
             title,
-            modified_at: chrono::Utc::now().timestamp_millis(),
+            modified_at: crate::time::now_timestamp_millis(),
             ..Default::default()
         }
     }
@@ -266,7 +266,7 @@ impl FileMetadata {
         Self {
             filename,
             title,
-            modified_at: chrono::Utc::now().timestamp_millis(),
+            modified_at: crate::time::now_timestamp_millis(),
             ..Default::default()
         }
     }
@@ -274,7 +274,7 @@ impl FileMetadata {
     /// Mark this file as deleted (soft delete)
     pub fn mark_deleted(&mut self) {
         self.deleted = true;
-        self.modified_at = chrono::Utc::now().timestamp_millis();
+        self.modified_at = crate::time::now_timestamp_millis();
     }
 
     /// Check if this file is an index (has contents)
@@ -388,7 +388,7 @@ impl BinaryRef {
             hash,
             mime_type,
             size,
-            uploaded_at: Some(chrono::Utc::now().timestamp_millis()),
+            uploaded_at: Some(crate::time::now_timestamp_millis()),
             deleted: false,
         }
     }

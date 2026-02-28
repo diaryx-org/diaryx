@@ -279,6 +279,59 @@ impl PluginRegistry {
     }
 }
 
+// ========================================================================
+// Filesystem Event Forwarding
+// ========================================================================
+
+impl PluginRegistry {
+    /// Forward a filesystem event to all registered plugins.
+    ///
+    /// Converts a `FileSystemEvent` into the appropriate plugin events
+    /// (`FileSavedEvent`, `FileCreatedEvent`, etc.) and dispatches them.
+    /// This replaces CrdtFs interception when sync runs as an Extism plugin.
+    pub async fn forward_fs_event(&self, event: &crate::fs::FileSystemEvent) {
+        use crate::fs::FileSystemEvent;
+
+        match event {
+            FileSystemEvent::FileCreated { path, .. } => {
+                let path_str = path.to_string_lossy().to_string();
+                self.emit_file_created(&FileCreatedEvent { path: path_str })
+                    .await;
+            }
+            FileSystemEvent::FileDeleted { path, .. } => {
+                let path_str = path.to_string_lossy().to_string();
+                self.emit_file_deleted(&FileDeletedEvent { path: path_str })
+                    .await;
+            }
+            FileSystemEvent::FileRenamed {
+                old_path, new_path, ..
+            } => {
+                let old = old_path.to_string_lossy().to_string();
+                let new = new_path.to_string_lossy().to_string();
+                self.emit_file_moved(&FileMovedEvent {
+                    old_path: old,
+                    new_path: new,
+                })
+                .await;
+            }
+            FileSystemEvent::FileMoved { path, .. } => {
+                // FileMoved in FS events only has the new path
+                let path_str = path.to_string_lossy().to_string();
+                self.emit_file_saved(&FileSavedEvent { path: path_str })
+                    .await;
+            }
+            FileSystemEvent::MetadataChanged { path, .. }
+            | FileSystemEvent::ContentsChanged { path, .. } => {
+                let path_str = path.to_string_lossy().to_string();
+                self.emit_file_saved(&FileSavedEvent { path: path_str })
+                    .await;
+            }
+            // Sync events and other variants are not forwarded to plugins
+            _ => {}
+        }
+    }
+}
+
 impl Default for PluginRegistry {
     fn default() -> Self {
         Self::new()

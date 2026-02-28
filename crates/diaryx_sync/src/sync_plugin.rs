@@ -2068,7 +2068,7 @@ impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
                 }
             }
 
-            let modified_at = file_mtime.unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+            let modified_at = file_mtime.unwrap_or_else(|| crate::time::now_timestamp_millis());
 
             let filename = std::path::Path::new(&canonical_path)
                 .file_name()

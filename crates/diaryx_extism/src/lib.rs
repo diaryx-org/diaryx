@@ -21,10 +21,11 @@
 //! ```
 
 pub mod adapter;
+pub mod binary_protocol;
 pub mod host_fns;
 pub mod loader;
 pub mod protocol;
 
 pub use adapter::ExtismPluginAdapter;
-pub use host_fns::HostContext;
-pub use loader::{ExtismLoadError, load_plugins_from_dir};
+pub use host_fns::{EventEmitter, HostContext, NoopEventEmitter, NoopStorage, PluginStorage};
+pub use loader::{ExtismLoadError, load_plugin_from_wasm, load_plugins_from_dir};

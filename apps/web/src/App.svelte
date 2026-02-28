@@ -127,6 +127,10 @@
   // Dynamically import Editor to avoid SSR issues
   let Editor: typeof import("./lib/Editor.svelte").default | null =
     $state(null);
+  // Entry navigation intent tracking (keeps sidebar selection responsive while
+  // the backend is still opening the next file).
+  let pendingEntryPath = $state<string | null>(null);
+  let openEntryRequestId = 0;
 
   // ========================================================================
   // Store-backed state (using getters for now, will migrate fully later)
@@ -142,6 +146,12 @@
   let isLoading = $derived(entryStore.isLoading);
   let titleError = $derived(entryStore.titleError);
   let displayContent = $derived(entryStore.displayContent);
+  let activeEntryPath = $derived(pendingEntryPath ?? currentEntry?.path ?? null);
+  let loadingTargetPath = $derived(
+    pendingEntryPath && pendingEntryPath !== currentEntry?.path
+      ? pendingEntryPath
+      : null
+  );
 
   // UI state - proxied from uiStore
   let leftSidebarCollapsed = $derived(uiStore.leftSidebarCollapsed);
@@ -152,11 +162,11 @@
   let exportPath = $derived(uiStore.exportPath);
   let editorRef = $derived(uiStore.editorRef);
 
-  // Right sidebar tab control
-  let requestedSidebarTab: "properties" | "history" | null = $state(null);
+  // Right sidebar tab control (built-in tabs or plugin tab IDs)
+  let requestedSidebarTab: string | null = $state(null);
 
   // Left sidebar tab/session control (share + snapshots are workspace-level)
-  let requestedLeftTab: "files" | "share" | "snapshots" | null = $state(null);
+  let requestedLeftTab: string | null = $state(null);
   let triggerStartSession = $state(false);
 
   // Add workspace dialog
@@ -236,6 +246,18 @@
   let pendingCurrentRenameHint:
     | { oldCanonical: string; oldPartOf: string | null; expiresAt: number }
     | null = null;
+  let suppressRemoteEditorOnChange = $state(false);
+  let remoteEditorSuppressToken = 0;
+
+  function beginRemoteEditorApplySuppression(): void {
+    suppressRemoteEditorOnChange = true;
+    const token = ++remoteEditorSuppressToken;
+    setTimeout(() => {
+      if (remoteEditorSuppressToken === token) {
+        suppressRemoteEditorOnChange = false;
+      }
+    }, 150);
+  }
 
   // Set VITE_DISABLE_WORKSPACE_CRDT=true to disable workspace CRDT for debugging
   // This keeps per-file collaboration working but disables the workspace-level sync
@@ -613,11 +635,25 @@
       getPluginStore().init(apiInstance);
 
       // Load browser-side Extism WASM plugins from IndexedDB
-      import('$lib/plugins/browserPluginManager.svelte').then((m) =>
-        m.loadAllPlugins().catch((e: unknown) =>
+      import('$lib/plugins/browserPluginManager.svelte').then(async (m) => {
+        await m.loadAllPlugins().catch((e: unknown) =>
           console.warn('[App] Failed to load browser plugins:', e),
-        ),
-      );
+        );
+        // Always re-install built-in AI plugin so dev rebuilds take effect
+        try {
+          const resp = await fetch('/plugins/diaryx_ai.wasm');
+          if (resp.ok) {
+            const bytes = await resp.arrayBuffer();
+            const existing = m.getPlugin('diaryx.ai');
+            if (existing) {
+              await m.uninstallPlugin('diaryx.ai');
+            }
+            await m.installPlugin(bytes, 'AI Assistant');
+          }
+        } catch (e) {
+          console.warn('[App] AI plugin not available:', e);
+        }
+      });
 
       // Initialize filesystem event subscription for automatic UI updates
       cleanupEventSubscription = initEventSubscription(backendInstance);
@@ -720,6 +756,8 @@
         // Only update if this is the currently open file
         if (currentEntry && path === currentCanonical) {
           console.log('[App] Updating display content with remote body, length:', body.length);
+          beginRemoteEditorApplySuppression();
+          cancelAutoSave();
           // Set raw content — NodeViews resolve attachments lazily
           entryStore.setDisplayContent(body);
         }
@@ -1087,27 +1125,39 @@
   // Open an entry - thin wrapper that handles auto-save and delegates to controller
   async function openEntry(path: string) {
     if (!api || !backend) return;
+    const requestId = ++openEntryRequestId;
+    pendingEntryPath = path;
 
-    // Auto-save before switching documents
-    if (isDirty) {
-      cancelAutoSave();
-      await save();
-    }
+    try {
+      // Auto-save before switching documents
+      if (isDirty) {
+        cancelAutoSave();
+        await save();
+      }
+      if (requestId !== openEntryRequestId) return;
 
-    // Delegate to controller
-    await openEntryController(api, path, tree, collaborationEnabled);
+      // Delegate to controller
+      await openEntryController(api, path, tree, collaborationEnabled, {
+        isCurrentRequest: () => requestId === openEntryRequestId,
+      });
+      if (requestId !== openEntryRequestId) return;
 
-    // Check if this is a daily entry for prev/next navigation
-    if (api) {
-      isDailyEntry = await api.isDailyEntry(path);
-      if (isDailyEntry) {
-        // Check if this is today's entry by comparing the filename date to today
-        const filename = path.split('/').pop()?.replace(/\.md$/, '') ?? '';
-        const today = new Date();
-        const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-        isTodayEntry = filename === todayStr;
-      } else {
-        isTodayEntry = false;
+      // Check if this is a daily entry for prev/next navigation
+      if (api) {
+        isDailyEntry = await api.isDailyEntry(path);
+        if (isDailyEntry) {
+          // Check if this is today's entry by comparing the filename date to today
+          const filename = path.split('/').pop()?.replace(/\.md$/, '') ?? '';
+          const today = new Date();
+          const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+          isTodayEntry = filename === todayStr;
+        } else {
+          isTodayEntry = false;
+        }
+      }
+    } finally {
+      if (requestId === openEntryRequestId) {
+        pendingEntryPath = null;
       }
     }
   }
@@ -1163,6 +1213,18 @@
   // Handle content changes - triggers debounced auto-save
   // Note: CRDT sync happens at save time via workspaceCrdtBridge, not on each keystroke
   function handleContentChange(markdown: string) {
+    if (suppressRemoteEditorOnChange) {
+      suppressRemoteEditorOnChange = false;
+      cancelAutoSave();
+      entryStore.setDisplayContent(markdown);
+      entryStore.markClean();
+      return;
+    }
+
+    if (markdown === displayContent) {
+      return;
+    }
+
     entryStore.markDirty();
     entryStore.setDisplayContent(markdown);
     scheduleAutoSave();
@@ -1189,6 +1251,22 @@
 
   function toggleRightSidebar() {
     uiStore.toggleRightSidebar();
+  }
+
+  /** Handle plugin toolbar button clicks — open the right sidebar to the plugin's tab. */
+  function handlePluginToolbarAction(pluginId: string, _command: string) {
+    // Look for a matching sidebar tab from this plugin
+    const pluginStoreRef = getPluginStore();
+    const tab = pluginStoreRef.rightSidebarTabs.find(
+      (t) => (t.pluginId as unknown as string) === pluginId,
+    );
+    if (tab) {
+      // Open the right sidebar and switch to the plugin tab
+      if (rightSidebarCollapsed) {
+        uiStore.toggleRightSidebar();
+      }
+      requestedSidebarTab = tab.contribution.id;
+    }
   }
 
   // Keyboard shortcuts
@@ -1821,7 +1899,7 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
   async function handleStartShareSession() {
     await startShareSessionHandler(
       (collapsed) => uiStore.setLeftSidebarCollapsed(collapsed),
-      (tab) => { requestedLeftTab = tab as "files" | "share" | "snapshots"; },
+      (tab) => { requestedLeftTab = tab; },
       (trigger) => { triggerStartSession = trigger; }
     );
   }
@@ -2179,10 +2257,6 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
 
 <SettingsDialog
   bind:open={showSettingsDialog}
-  bind:showUnlinkedFiles
-  bind:showHiddenFiles
-  bind:showEditorTitle
-  bind:showEditorPath
   bind:focusMode
   workspacePath={tree?.path}
   initialTab={settingsInitialTab}
@@ -2291,6 +2365,7 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
   <LeftSidebar
     {tree}
     {currentEntry}
+    {activeEntryPath}
     {isLoading}
     {expandedNodes}
     {validationResult}
@@ -2353,8 +2428,10 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
   <main class="flex-1 flex flex-col overflow-hidden min-w-0 relative pt-[env(safe-area-inset-top)]">
     {#if currentEntry}
       <EditorHeader
-        title={getEntryTitle(currentEntry)}
-        path={currentEntry.path}
+        title={loadingTargetPath
+          ? loadingTargetPath.split("/").pop()?.replace(".md", "") ?? "Loading..."
+          : getEntryTitle(currentEntry)}
+        path={loadingTargetPath ?? currentEntry.path}
         {isDirty}
         {isSaving}
         showTitle={showEditorTitle}
@@ -2373,6 +2450,7 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
         onNextDay={handleNextDay}
         onGoToToday={handleGoToToday}
         onAddWorkspace={() => (showAddWorkspace = true)}
+        onPluginToolbarAction={handlePluginToolbarAction}
       />
 
       <EditorContent
@@ -2390,6 +2468,16 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
         onLinkClick={handleLinkClick}
         enableSpoilers={formattingStore.enableSpoilers}
       />
+      {#if loadingTargetPath}
+        <div
+          data-testid="entry-switch-loading-overlay"
+          class="absolute inset-0 z-10 bg-background/70 backdrop-blur-[1px] pointer-events-none flex items-center justify-center"
+        >
+          <div class="rounded-md border border-border bg-card/95 px-3 py-2 text-sm text-muted-foreground shadow-sm">
+            Opening {loadingTargetPath.split("/").pop()?.replace(".md", "") ?? "entry"}...
+          </div>
+        </div>
+      {/if}
     {:else}
       <EditorEmptyState
         {leftSidebarCollapsed}

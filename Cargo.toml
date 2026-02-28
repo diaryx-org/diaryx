@@ -9,6 +9,8 @@ members = [
     "crates/diaryx_publish",
     "crates/diaryx_sync_server",
     "crates/diaryx_extism",
+    "crates/diaryx_sync_extism",
+    "crates/diaryx_ai_extism",
     "apps/tauri/src-tauri"
 ]
 
@@ -28,7 +30,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
 thiserror = "2.0"
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { version = "0.4", default-features = false, features = ["serde", "std", "clock"] }
 indexmap = { version = "2.0", features = ["serde"] }
 
 # Internal crates - version must match workspace.package.version for publishing
@@ -50,3 +52,12 @@ push = true
 [profile.release.package.diaryx_wasm]
 # Keep wasm artifact size small without using per-crate profile stanzas.
 opt-level = "s"
+
+# Patch getrandom 0.2 to let `custom` feature take priority over `js` on wasm32.
+# Upstream getrandom checks `js` first, so when both features are enabled (our
+# `custom` + yrs→fastrand→getrandom/js), the JS/wasm-bindgen backend is selected
+# instead of our custom backend. This patch swaps the priority so diaryx_sync_extism
+# (which needs custom RNG, no wasm-bindgen) works correctly, while diaryx_wasm
+# (which only has `js`, not `custom`) still uses the browser crypto backend.
+[patch.crates-io]
+getrandom = { path = "patches/getrandom-0.2" }

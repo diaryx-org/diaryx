@@ -1,3 +1,10 @@
+# Use custom getrandom backend for wasm32-unknown-unknown.
+# This tells getrandom 0.4 to call `__getrandom_v03_custom` (defined in
+# diaryx_sync_extism) instead of requiring browser JS APIs.
+# Has no effect on diaryx_wasm (which doesn't depend on getrandom 0.4).
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="custom"']
+
 [target.aarch64-apple-ios]
 linker = "/usr/bin/clang"
 rustflags = [

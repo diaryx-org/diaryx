@@ -101,6 +101,80 @@ pub fn load_plugins_from_dir(
     Ok(adapters)
 }
 
+/// Load a single WASM plugin from a file path with a given host context.
+///
+/// This is a lower-level API for loading a specific plugin (e.g. the sync plugin)
+/// rather than scanning a directory. The caller provides the WASM file path,
+/// host context, and an optional config JSON sidecar path.
+///
+/// # Arguments
+/// * `wasm_path` — Path to the `.wasm` file
+/// * `host_context` — Host functions context (filesystem, storage, events)
+/// * `config_path` — Optional path to config.json sidecar. If `None`, uses
+///   a sibling `config.json` next to the WASM file.
+pub fn load_plugin_from_wasm(
+    wasm_path: &Path,
+    host_context: Arc<HostContext>,
+    config_path: Option<&Path>,
+) -> Result<ExtismPluginAdapter, ExtismLoadError> {
+    let plugin_name = wasm_path
+        .file_stem()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".into());
+
+    let wasm = Wasm::file(wasm_path);
+    let extism_manifest = ExtismManifest::new([wasm]);
+    let user_data = UserData::new(HostContext {
+        fs: host_context.fs.clone(),
+        storage: host_context.storage.clone(),
+        event_emitter: host_context.event_emitter.clone(),
+    });
+
+    let builder = PluginBuilder::new(extism_manifest).with_wasi(true);
+    let builder = host_fns::register_host_functions(builder, user_data);
+    let mut plugin = builder.build().map_err(|e| ExtismLoadError::PluginCreate {
+        plugin_name: plugin_name.clone(),
+        source: e,
+    })?;
+
+    // Call the guest's manifest export.
+    let output =
+        plugin
+            .call::<&str, &[u8]>("manifest", "")
+            .map_err(|e| ExtismLoadError::ManifestCall {
+                plugin_name: plugin_name.clone(),
+                source: e,
+            })?;
+    let output_str = String::from_utf8_lossy(output);
+    let guest_manifest = serde_json::from_str::<GuestManifest>(&output_str).map_err(|e| {
+        ExtismLoadError::ManifestParse {
+            plugin_name: plugin_name.clone(),
+            source: e,
+        }
+    })?;
+
+    // Load config sidecar.
+    let cfg_path = config_path.map(|p| p.to_path_buf()).unwrap_or_else(|| {
+        wasm_path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join("config.json")
+    });
+    let config = if cfg_path.exists() {
+        let json = std::fs::read_to_string(&cfg_path).map_err(ExtismLoadError::ReadDir)?;
+        serde_json::from_str(&json).unwrap_or(serde_json::Value::Object(Default::default()))
+    } else {
+        serde_json::Value::Object(Default::default())
+    };
+
+    Ok(ExtismPluginAdapter::new(
+        plugin,
+        guest_manifest,
+        config,
+        cfg_path,
+    ))
+}
+
 /// Load a single plugin from its directory.
 fn load_single_plugin(
     plugin_dir: &Path,
@@ -112,6 +186,8 @@ fn load_single_plugin(
     let extism_manifest = ExtismManifest::new([wasm]);
     let user_data = UserData::new(HostContext {
         fs: host_context.fs.clone(),
+        storage: host_context.storage.clone(),
+        event_emitter: host_context.event_emitter.clone(),
     });
 
     let builder = PluginBuilder::new(extism_manifest).with_wasi(true);

@@ -83,12 +83,16 @@ export async function openEntry(
   collaborationEnabled: boolean,
   options?: {
     onBeforeOpen?: () => Promise<void>;
+    isCurrentRequest?: () => boolean;
   }
 ): Promise<void> {
+  const isCurrentRequest = options?.isCurrentRequest ?? (() => true);
+
   // Call before open callback (e.g., save current entry)
   if (options?.onBeforeOpen) {
     await options.onBeforeOpen();
   }
+  if (!isCurrentRequest()) return;
 
   try {
     entryStore.setLoading(true);
@@ -97,6 +101,7 @@ export async function openEntry(
     revokeBlobUrls();
 
     const entry = await api.getEntry(path);
+    if (!isCurrentRequest()) return;
     // Normalize frontmatter to Object
     entry.frontmatter = normalizeFrontmatter(entry.frontmatter);
     entryStore.setCurrentEntry(entry);
@@ -114,10 +119,15 @@ export async function openEntry(
     entryStore.markClean();
     uiStore.clearError();
   } catch (e) {
-    uiStore.setError(e instanceof Error ? e.message : String(e));
+    if (isCurrentRequest()) {
+      uiStore.setError(e instanceof Error ? e.message : String(e));
+    }
   } finally {
-    entryStore.setLoading(false);
+    if (isCurrentRequest()) {
+      entryStore.setLoading(false);
+    }
   }
+  if (!isCurrentRequest()) return;
 
   // Non-blocking: set up body sync bridge and collaboration tracking.
   // The bridge must exist to receive remote body updates (onBodyChange callback),
@@ -127,6 +137,7 @@ export async function openEntry(
   } catch (e) {
     console.warn('[EntryController] Body sync setup failed:', e);
   }
+  if (!isCurrentRequest()) return;
 
   // Collaboration path tracking (doesn't affect content display)
   try {

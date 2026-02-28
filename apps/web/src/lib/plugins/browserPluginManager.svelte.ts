@@ -103,8 +103,10 @@ export async function installPlugin(
   wasmBytes: ArrayBuffer,
   name?: string,
 ): Promise<PluginManifest> {
+  console.log(`[browserPluginManager] Installing plugin (${(wasmBytes.byteLength / 1024).toFixed(0)} KB)...`);
   const plugin = await loadBrowserPlugin(wasmBytes);
   const id = plugin.manifest.id as unknown as string;
+  console.log(`[browserPluginManager] Installed plugin: ${id} (${plugin.manifest.name})`);
 
   // Persist to IndexedDB.
   await storePlugin({
@@ -146,12 +148,14 @@ export async function uninstallPlugin(pluginId: string): Promise<void> {
 export async function loadAllPlugins(): Promise<void> {
   try {
     const stored = await getAllStoredPlugins();
+    console.log(`[browserPluginManager] Found ${stored.length} stored plugin(s)`);
     for (const entry of stored) {
       try {
         const plugin = await loadBrowserPlugin(entry.wasm);
         const id = plugin.manifest.id as unknown as string;
         loadedPlugins.set(id, plugin);
         browserManifests = [...browserManifests, plugin.manifest];
+        console.log(`[browserPluginManager] Loaded plugin: ${id} (${plugin.manifest.name})`);
       } catch (e) {
         console.warn(
           `[browserPluginManager] Failed to load plugin ${entry.id}:`,

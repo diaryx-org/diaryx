@@ -591,7 +591,7 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
                         contents.remove(idx);
                     }
                 }
-                parent.modified_at = chrono::Utc::now().timestamp_millis();
+                parent.modified_at = crate::time::now_timestamp_millis();
                 let _ = self.workspace_crdt.set_file(parent_path, parent);
             }
         }

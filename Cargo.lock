@@ -2230,6 +2230,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "diaryx_ai_extism"
+version = "1.2.1"
+dependencies = [
+ "extism-pdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "diaryx_apple"
 version = "1.2.1"
 dependencies = [
@@ -2279,6 +2288,7 @@ name = "diaryx_extism"
 version = "1.2.1"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "diaryx_core",
  "extism",
  "futures-lite 2.6.1",
@@ -2286,6 +2296,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "ureq 2.12.1",
 ]
 
 [[package]]
@@ -2335,6 +2346,21 @@ dependencies = [
  "url",
  "uuid",
  "yrs 0.25.0",
+]
+
+[[package]]
+name = "diaryx_sync_extism"
+version = "1.2.1"
+dependencies = [
+ "base64 0.22.1",
+ "diaryx_core",
+ "diaryx_sync",
+ "extism-pdk",
+ "getrandom 0.2.17",
+ "getrandom 0.3.4",
+ "log",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2834,7 +2860,7 @@ dependencies = [
  "toml 0.9.12+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
- "ureq",
+ "ureq 3.2.0",
  "url",
  "uuid",
  "wasi-common",
@@ -2880,6 +2906,32 @@ dependencies = [
  "base64 0.22.1",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "extism-pdk"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "352fcb5a66eb74145a1c4a01f2bd15d59c62c85be73aac8471880c65b26b798f"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "extism-convert",
+ "extism-manifest",
+ "extism-pdk-derive",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "extism-pdk-derive"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d086daea5fd844e3c5ac69ddfe36df4a9a43e7218cf7d1f888182b089b09806c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
 ]
 
 [[package]]
@@ -3385,8 +3437,6 @@ dependencies = [
 [[package]]
 name = "getrandom"
 version = "0.2.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
 dependencies = [
  "cfg-if",
  "js-sys",
@@ -9140,6 +9190,22 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "ureq"
+version = "2.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02d1a66277ed75f640d608235660df48c8e3c19f3b4edb6a263315626cc3c01d"
+dependencies = [
+ "base64 0.22.1",
+ "flate2",
+ "log",
+ "once_cell",
+ "rustls 0.23.36",
+ "rustls-pki-types",
+ "url",
+ "webpki-roots 0.26.11",
+]
+
+[[package]]
+name = "ureq"
 version = "3.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fdc97a28575b85cfedf2a7e7d3cc64b3e11bd8ac766666318003abbacc7a21fc"
@@ -9233,7 +9299,17 @@ dependencies = [
  "js-sys",
  "serde_core",
  "sha1_smol",
+ "uuid-rng-internal",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "uuid-rng-internal"
+version = "1.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ef224d01f8c31f8c11c90290766fd622fb0a7d7025b9589d4a34a36ccf35b28"
+dependencies = [
+ "getrandom 0.4.1",
 ]
 
 [[package]]

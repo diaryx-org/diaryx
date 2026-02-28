@@ -690,7 +690,7 @@ impl WorkspaceCrdt {
     pub fn rename_file(&self, doc_id: &str, new_filename: &str) -> StorageResult<()> {
         if let Some(mut meta) = self.get_file(doc_id) {
             meta.filename = new_filename.to_string();
-            meta.modified_at = chrono::Utc::now().timestamp_millis();
+            meta.modified_at = crate::time::now_timestamp_millis();
             self.set_file(doc_id, meta)?;
         }
         Ok(())
@@ -707,7 +707,7 @@ impl WorkspaceCrdt {
     pub fn move_file(&self, doc_id: &str, new_parent_id: Option<&str>) -> StorageResult<()> {
         if let Some(mut meta) = self.get_file(doc_id) {
             meta.part_of = new_parent_id.map(String::from);
-            meta.modified_at = chrono::Utc::now().timestamp_millis();
+            meta.modified_at = crate::time::now_timestamp_millis();
             self.set_file(doc_id, meta)?;
         }
         Ok(())

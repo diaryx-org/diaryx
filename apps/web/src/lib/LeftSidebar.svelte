@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from "svelte";
   import { isTauri, type TreeNode, type EntryData, type ValidationResultWithMeta, type ValidationErrorWithMeta, type ValidationWarningWithMeta, type Api } from "./backend";
+  import type { ComponentRef, PluginId } from "$lib/backend/generated";
   import type { FixResult } from "./backend/generated";
   import { Button } from "$lib/components/ui/button";
   import * as Tooltip from "$lib/components/ui/tooltip";
@@ -41,13 +42,20 @@
   import { getAuthState } from "./auth";
   import WorkspaceSelector from "./WorkspaceSelector.svelte";
   import AudienceFilter from "./components/AudienceFilter.svelte";
+  import PluginSidebarPanel from "./components/PluginSidebarPanel.svelte";
   import ShareTab from "./share/ShareTab.svelte";
   import GitHistoryPanel from "./history/GitHistoryPanel.svelte";
   import { Share2, History, FolderTree } from "@lucide/svelte";
+  import { getPluginStore } from "@/models/stores/pluginStore.svelte";
+  import {
+    SYNC_BUILTIN_TABS,
+    getSyncBuiltinTabKeyByComponentId,
+  } from "$lib/sync/syncBuiltinUiRegistry";
 
   interface Props {
     tree: TreeNode | null;
     currentEntry: EntryData | null;
+    activeEntryPath?: string | null;
     isLoading: boolean;
     expandedNodes: Set<string>;
     validationResult: ValidationResultWithMeta | null;
@@ -81,7 +89,7 @@
     // Share props (workspace-level)
     onBeforeHost?: (audience: string | null) => Promise<void>;
     onOpenEntry2?: (path: string) => Promise<void>;
-    requestedTab?: "files" | "share" | "snapshots" | null;
+    requestedTab?: string | null;
     onRequestedTabConsumed?: () => void;
     triggerStartSession?: boolean;
     onTriggerStartSessionConsumed?: () => void;
@@ -90,6 +98,7 @@
   let {
     tree,
     currentEntry,
+    activeEntryPath = null,
     isLoading,
     expandedNodes,
     validationResult,
@@ -147,9 +156,53 @@
   // Auth state for profile icon
   const authState = $derived(getAuthState());
 
-  // Tab state for left sidebar
-  type LeftTab = "files" | "share" | "snapshots";
-  let leftTab: LeftTab = $state("files");
+  type SyncBuiltinTabKey = keyof typeof SYNC_BUILTIN_TABS;
+  type LeftSidebarTabDescriptor = {
+    id: string;
+    label: string;
+    icon: string | null;
+    pluginId: PluginId | null;
+    component: ComponentRef | null;
+    syncBuiltinKey: SyncBuiltinTabKey | null;
+  };
+
+  const pluginStore = getPluginStore();
+
+  const leftTabs = $derived.by<LeftSidebarTabDescriptor[]>(() => {
+    const tabMap = new Map<string, LeftSidebarTabDescriptor>();
+
+    for (const tab of pluginStore.leftSidebarTabs) {
+      if (tab.contribution.id === "files") continue;
+      const component = tab.contribution.component;
+      const syncBuiltinKey =
+        component.type === "Builtin"
+          ? getSyncBuiltinTabKeyByComponentId(component.component_id)
+          : null;
+      tabMap.set(tab.contribution.id, {
+        id: tab.contribution.id,
+        label: tab.contribution.label,
+        icon: tab.contribution.icon,
+        pluginId: tab.pluginId,
+        component,
+        syncBuiltinKey,
+      });
+    }
+
+    return [
+      {
+        id: "files",
+        label: "Files",
+        icon: "files",
+        pluginId: null,
+        component: null,
+        syncBuiltinKey: null,
+      },
+      ...Array.from(tabMap.values()),
+    ];
+  });
+
+  // Tab state for left sidebar (built-in + plugin IDs)
+  let leftTab = $state("files");
 
   // Handle external tab request
   $effect(() => {
@@ -158,6 +211,14 @@
       onRequestedTabConsumed?.();
     }
   });
+
+  $effect(() => {
+    if (!leftTabs.some((tab) => tab.id === leftTab)) {
+      leftTab = "files";
+    }
+  });
+
+  let selectedEntryPath = $derived(activeEntryPath ?? currentEntry?.path ?? null);
 
   // Track which nodes are currently loading children
   let loadingNodes = $state(new Set<string>());
@@ -1114,30 +1175,22 @@
   <!-- Tab Bar -->
   <div class="px-3 pt-2 pb-1 shrink-0">
     <div class="flex items-center gap-1 bg-muted rounded-md p-0.5">
-      <button
-        type="button"
-        class="flex-1 flex items-center justify-center gap-1.5 px-2 py-1 text-[11px] font-medium rounded transition-colors {leftTab === 'files' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-        onclick={() => (leftTab = 'files')}
-      >
-        <FolderTree class="size-3" />
-        Files
-      </button>
-      <button
-        type="button"
-        class="flex-1 flex items-center justify-center gap-1.5 px-2 py-1 text-[11px] font-medium rounded transition-colors {leftTab === 'share' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-        onclick={() => (leftTab = 'share')}
-      >
-        <Share2 class="size-3" />
-        Share
-      </button>
-      <button
-        type="button"
-        class="flex-1 flex items-center justify-center gap-1.5 px-2 py-1 text-[11px] font-medium rounded transition-colors {leftTab === 'snapshots' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-        onclick={() => (leftTab = 'snapshots')}
-      >
-        <History class="size-3" />
-        Snapshots
-      </button>
+      {#each leftTabs as tab (tab.id)}
+        <button
+          type="button"
+          class="flex-1 flex items-center justify-center gap-1.5 px-2 py-1 text-[11px] font-medium rounded transition-colors {leftTab === tab.id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+          onclick={() => (leftTab = tab.id)}
+        >
+          {#if tab.id === "files"}
+            <FolderTree class="size-3" />
+          {:else if tab.syncBuiltinKey === "share" || tab.icon === "share"}
+            <Share2 class="size-3" />
+          {:else if tab.syncBuiltinKey === "snapshots" || tab.icon === "history"}
+            <History class="size-3" />
+          {/if}
+          {tab.label}
+        </button>
+      {/each}
     </div>
   </div>
 
@@ -1175,17 +1228,30 @@
           <p class="text-sm text-muted-foreground">No workspace found</p>
         </div>
       {/if}
-    {:else if leftTab === "share"}
-      <ShareTab
-        {onBeforeHost}
-        {onAddWorkspace}
-        onOpenEntry={onOpenEntry2}
-        {api}
-        triggerStart={triggerStartSession}
-        onTriggerStartConsumed={onTriggerStartSessionConsumed}
-      />
-    {:else if leftTab === "snapshots"}
-      <GitHistoryPanel />
+    {:else}
+      {@const activePluginTab = leftTabs.find((tab) => tab.id === leftTab) ?? null}
+      {#if activePluginTab?.syncBuiltinKey === "share"}
+        <ShareTab
+          {onBeforeHost}
+          {onAddWorkspace}
+          onOpenEntry={onOpenEntry2}
+          {api}
+          triggerStart={triggerStartSession}
+          onTriggerStartConsumed={onTriggerStartSessionConsumed}
+        />
+      {:else if activePluginTab?.syncBuiltinKey === "snapshots"}
+        <GitHistoryPanel />
+      {:else if activePluginTab?.pluginId && activePluginTab.component && api}
+        <PluginSidebarPanel
+          pluginId={activePluginTab.pluginId}
+          component={activePluginTab.component}
+          {api}
+        />
+      {:else}
+        <div class="p-4 text-sm text-muted-foreground">
+          No panel available for this tab.
+        </div>
+      {/if}
     {/if}
   </div>
 
@@ -1554,7 +1620,7 @@
         class="select-none"
         role="treeitem"
         tabindex={0}
-        aria-selected={currentEntry?.path === node.path}
+        aria-selected={selectedEntryPath === node.path}
         aria-expanded={node.children.length > 0
           ? expandedNodes.has(node.path)
           : undefined}
@@ -1609,7 +1675,7 @@
           {/if}
           <button
             type="button"
-            class="flex-1 min-w-0 flex items-center gap-2 py-1.5 pr-2 text-sm text-left rounded-md transition-colors hover:bg-sidebar-accent active:bg-sidebar-accent {currentEntry?.path ===
+            class="flex-1 min-w-0 flex items-center gap-2 py-1.5 pr-2 text-sm text-left rounded-md transition-colors hover:bg-sidebar-accent active:bg-sidebar-accent {selectedEntryPath ===
             node.path
               ? 'text-sidebar-primary font-medium bg-sidebar-accent'
               : 'text-sidebar-foreground'}"

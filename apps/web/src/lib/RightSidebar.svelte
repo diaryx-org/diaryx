@@ -50,6 +50,9 @@
   import * as Kbd from "$lib/components/ui/kbd";
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
   import { workspaceStore } from "@/models/stores/workspaceStore.svelte";
+  import { getPluginStore } from "@/models/stores/pluginStore.svelte";
+  import PluginSidebarPanel from "$lib/components/PluginSidebarPanel.svelte";
+  import { isSyncBuiltinSidebarTab } from "$lib/sync/syncBuiltinUiRegistry";
   import {
     getAttachmentMetadata,
     enqueueAttachmentDownload,
@@ -85,8 +88,8 @@
     onHistoryRestore?: () => void;
     // API for properties tab
     api?: Api | null;
-    // External tab control
-    requestedTab?: "properties" | "history" | null;
+    // External tab control (built-in tabs or plugin tab IDs)
+    requestedTab?: string | null;
     onRequestedTabConsumed?: () => void;
   }
 
@@ -116,15 +119,42 @@
     entry !== null && workspaceStore.tree !== null && entry.path === workspaceStore.tree.path
   );
 
-  // Tab state
-  type TabType = "properties" | "history";
-  let activeTab: TabType = $state("properties");
+  // Plugin store for right sidebar tabs
+  const pluginStore = getPluginStore();
+  const pluginHistoryTab = $derived(
+    pluginStore.rightSidebarTabs.find((tab) =>
+      isSyncBuiltinSidebarTab(tab.contribution, "history")
+    ) ?? null
+  );
+  const historyTabId = $derived(pluginHistoryTab?.contribution.id ?? null);
+  const historyTabLabel = $derived(pluginHistoryTab?.contribution.label ?? "History");
+  const nonHistoryPluginTabs = $derived.by(() => {
+    return pluginStore.rightSidebarTabs.filter(
+      (tab) =>
+        !isSyncBuiltinSidebarTab(tab.contribution, "history") &&
+        (historyTabId === null || tab.contribution.id !== historyTabId),
+    );
+  });
+
+  // Tab state — built-in "properties"/"history" + plugin tab IDs
+  let activeTab: string = $state("properties");
 
   // Handle external tab request
   $effect(() => {
     if (requestedTab && requestedTab !== activeTab) {
       activeTab = requestedTab;
       onRequestedTabConsumed?.();
+    }
+  });
+
+  $effect(() => {
+    const validTabIds = new Set<string>([
+      "properties",
+      ...(historyTabId ? [historyTabId] : []),
+      ...nonHistoryPluginTabs.map((tab) => tab.contribution.id),
+    ]);
+    if (!validTabIds.has(activeTab)) {
+      activeTab = "properties";
     }
   });
 
@@ -249,7 +279,7 @@
 
   // Load history when switching to history tab or when entry changes
   $effect(() => {
-    if (activeTab === "history" && entry && rustApi) {
+    if (activeTab === historyTabId && entry && rustApi) {
       loadHistory();
     }
   });
@@ -656,13 +686,24 @@
       >
         Props
       </button>
-      <button
-        type="button"
-        class="px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === 'history' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-        onclick={() => activeTab = "history"}
-      >
-        History
-      </button>
+      {#if historyTabId}
+        <button
+          type="button"
+          class="px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === historyTabId ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+          onclick={() => activeTab = historyTabId}
+        >
+          {historyTabLabel}
+        </button>
+      {/if}
+      {#each nonHistoryPluginTabs as tab}
+        <button
+          type="button"
+          class="px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === tab.contribution.id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+          onclick={() => activeTab = tab.contribution.id}
+        >
+          {tab.contribution.label}
+        </button>
+      {/each}
     </div>
   </div>
 
@@ -1175,7 +1216,20 @@
           </p>
         </div>
       {/if}
-    {:else if activeTab === "history"}
+    {:else if activeTab !== "properties" && activeTab !== historyTabId}
+      <!-- Plugin Tab -->
+      {@const pluginTab = nonHistoryPluginTabs.find(t => t.contribution.id === activeTab)}
+      {#if pluginTab && api}
+        <div class="h-full">
+          <PluginSidebarPanel
+            pluginId={pluginTab.pluginId}
+            component={pluginTab.contribution.component}
+            {api}
+            {entry}
+          />
+        </div>
+      {/if}
+    {:else if activeTab === historyTabId}
       <!-- History Tab (CRDT Changes) -->
       {#if entry}
         <div class="p-3">

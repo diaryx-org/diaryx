@@ -73,6 +73,20 @@ impl ExtismPluginAdapter {
         Ok(String::from_utf8_lossy(output).into_owned())
     }
 
+    /// Call a guest-exported function with binary input, returning raw bytes.
+    ///
+    /// Used for hot-path binary exports (sync messages, CRDT updates).
+    pub fn call_guest_binary(&self, func: &str, input: &[u8]) -> Result<Vec<u8>, PluginError> {
+        let mut plugin = self
+            .inner
+            .lock()
+            .map_err(|e| PluginError::Other(format!("Failed to lock extism plugin: {e}")))?;
+        let output = plugin
+            .call::<&[u8], &[u8]>(func, input)
+            .map_err(|e| PluginError::Other(format!("Extism call `{func}` failed: {e}")))?;
+        Ok(output.to_vec())
+    }
+
     /// Call a guest function, ignoring the output. Logs errors but doesn't propagate.
     fn call_guest_fire_and_forget(&self, func: &str, input: &str) {
         if let Err(e) = self.call_guest(func, input) {

@@ -98,7 +98,7 @@ function buildHostFunctions() {
           if (!input) return cp.store('');
           const backend = getBackendSync();
           const response: any = await backend.execute({
-            type: 'GetBody',
+            type: 'ReadFile',
             params: { path: input.path },
           } as any);
           if (response.type === 'String') {
@@ -115,15 +115,35 @@ function buildHostFunctions() {
             | { prefix: string }
             | undefined;
           if (!input) return cp.store('[]');
+          const prefix = typeof input.prefix === 'string' ? input.prefix : '';
           const backend = getBackendSync();
           const response: any = await backend.execute({
-            type: 'ListEntries',
-            params: { path: input.prefix },
+            type: 'GetFilesystemTree',
+            params: {
+              path: prefix.length > 0 ? prefix : '.',
+              show_hidden: true,
+              depth: null,
+            },
           } as any);
-          if (response.type === 'Strings') {
-            return cp.store(JSON.stringify(response.data));
+          if (response.type !== 'Tree') {
+            return cp.store('[]');
           }
-          return cp.store('[]');
+          // Walk tree to extract leaf file paths (skip the root directory node)
+          const files: string[] = [];
+          const walk = (node: any) => {
+            if (!node || typeof node.path !== 'string') return;
+            const children = Array.isArray(node.children) ? node.children : [];
+            if (children.length === 0) {
+              files.push(node.path);
+              return;
+            }
+            for (const child of children) walk(child);
+          };
+          const root = response.data;
+          if (root && Array.isArray(root.children)) {
+            for (const child of root.children) walk(child);
+          }
+          return cp.store(JSON.stringify(files));
         } catch {
           return cp.store('[]');
         }
@@ -136,12 +156,61 @@ function buildHostFunctions() {
           if (!input) return cp.store('false');
           const backend = getBackendSync();
           const response: any = await backend.execute({
-            type: 'GetBody',
+            type: 'FileExists',
             params: { path: input.path },
           } as any);
-          return cp.store(response.type === 'String' ? 'true' : 'false');
+          if (response.type === 'Bool') {
+            return cp.store(response.data ? 'true' : 'false');
+          }
+          return cp.store('false');
         } catch {
           return cp.store('false');
+        }
+      },
+      host_storage_get(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as { key: string } | undefined;
+          if (!input?.key) return cp.store('');
+          const raw = localStorage.getItem(`diaryx-plugin:${input.key}`);
+          if (!raw) return cp.store('');
+          // Return in the same {data: base64} format the Rust host uses
+          return cp.store(raw);
+        } catch {
+          return cp.store('');
+        }
+      },
+      host_storage_set(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as { key: string; data: string } | undefined;
+          if (!input?.key) return cp.store('');
+          // Store the base64 data wrapped in JSON matching Rust host format
+          localStorage.setItem(`diaryx-plugin:${input.key}`, JSON.stringify({ data: input.data }));
+          return cp.store('');
+        } catch {
+          return cp.store('');
+        }
+      },
+      host_get_timestamp(cp: CallContext, _offs: bigint) {
+        return cp.store(Date.now().toString());
+      },
+      async host_http_request(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as
+            | { url: string; method: string; headers: Record<string, string>; body?: string }
+            | undefined;
+          if (!input) return cp.store(JSON.stringify({ status: 0, headers: {}, body: 'no input' }));
+          const resp = await fetch(input.url, {
+            method: input.method,
+            headers: input.headers,
+            body: input.body ?? undefined,
+          });
+          const respHeaders: Record<string, string> = {};
+          resp.headers.forEach((v, k) => { respHeaders[k] = v; });
+          const body = await resp.text();
+          return cp.store(JSON.stringify({ status: resp.status, headers: respHeaders, body }));
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return cp.store(JSON.stringify({ status: 0, headers: {}, body: msg }));
         }
       },
     },
@@ -194,6 +263,23 @@ function convertGuestManifest(guest: GuestManifest): PluginManifest {
 export async function loadBrowserPlugin(
   wasmBytes: ArrayBuffer,
 ): Promise<BrowserExtismPlugin> {
+  // Extism v2 needs JSPI (WebAssembly.Suspending/promising) for async host
+  // functions when running on the main thread. WebKit doesn't support JSPI
+  // yet (only Safari Technology Preview 238+). The Extism worker fallback
+  // (runInWorker) needs cross-origin isolation (COOP+COEP headers) which
+  // breaks WebKit's worker module loading. So on WebKit without JSPI,
+  // plugins are unavailable until Safari ships JSPI.
+  const hasJSPI =
+    typeof (WebAssembly as any).Suspending === 'function' &&
+    typeof (WebAssembly as any).promising === 'function';
+
+  if (!hasJSPI) {
+    throw new Error(
+      'Plugins require WebAssembly JSPI (Suspending/promising), which is not available in this browser. ' +
+        'Use Chrome, Firefox 139+, or Safari Technology Preview 238+.',
+    );
+  }
+
   const plugin: ExtismPlugin = await createPlugin(wasmBytes, {
     useWasi: true,
     functions: buildHostFunctions(),
@@ -208,52 +294,69 @@ export async function loadBrowserPlugin(
   const guestManifest: GuestManifest = manifestOutput.json();
   const manifest = convertGuestManifest(guestManifest);
 
+  // Serialize all calls to the WASM plugin. WASM modules are single-threaded;
+  // concurrent plugin.call() invocations cause response mix-ups.
+  let callQueue: Promise<unknown> = Promise.resolve();
+  function enqueue<T>(fn: () => Promise<T>): Promise<T> {
+    const next = callQueue.then(fn, fn);
+    callQueue = next.then(() => {}, () => {});
+    return next;
+  }
+
   return {
     manifest,
 
     async callEvent(event: GuestEvent): Promise<void> {
-      try {
-        await plugin.call('on_event', JSON.stringify(event));
-      } catch (e) {
-        console.warn(`[extism] ${manifest.id}: on_event failed:`, e);
-      }
+      return enqueue(async () => {
+        try {
+          await plugin.call('on_event', JSON.stringify(event));
+        } catch (e) {
+          console.warn(`[extism] ${manifest.id}: on_event failed:`, e);
+        }
+      });
     },
 
     async callCommand(
       cmd: string,
       params: unknown,
     ): Promise<CommandResponse> {
-      const request = JSON.stringify({ command: cmd, params });
-      try {
-        const output = await plugin.call('handle_command', request);
-        if (!output) return { success: false, error: 'No response from plugin' };
-        return output.json() as CommandResponse;
-      } catch (e) {
-        return {
-          success: false,
-          error: e instanceof Error ? e.message : String(e),
-        };
-      }
+      return enqueue(async () => {
+        const request = JSON.stringify({ command: cmd, params });
+        try {
+          const output = await plugin.call('handle_command', request);
+          if (!output) return { success: false, error: 'No response from plugin' };
+          return output.json() as CommandResponse;
+        } catch (e) {
+          return {
+            success: false,
+            error: e instanceof Error ? e.message : String(e),
+          };
+        }
+      });
     },
 
     async getConfig(): Promise<Record<string, unknown>> {
-      try {
-        const output = await plugin.call('get_config', '');
-        if (!output) return {};
-        const text = output.text();
-        if (!text) return {};
-        return JSON.parse(text);
-      } catch {
-        return {};
-      }
+      return enqueue(async () => {
+        try {
+          const output = await plugin.call('get_config', '');
+          if (!output) return {};
+          const text = output.text();
+          if (!text) return {};
+          return JSON.parse(text);
+        } catch {
+          return {};
+        }
+      });
     },
 
     async setConfig(config: Record<string, unknown>): Promise<void> {
-      try {
-        await plugin.call('set_config', JSON.stringify(config));
-      } catch (e) {
-        console.warn(`[extism] ${manifest.id}: set_config failed:`, e);
-      }
+      return enqueue(async () => {
+        try {
+          await plugin.call('set_config', JSON.stringify(config));
+        } catch (e) {
+          console.warn(`[extism] ${manifest.id}: set_config failed:`, e);
+        }
+      });
     },
 
     async close(): Promise<void> {

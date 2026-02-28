@@ -46,12 +46,12 @@ Settings panel components for the settings dialog.
 | `ClearDataSettings.svelte` | Clear data controls |
 | `CloudBackupSettings.svelte` | Cloud backup configuration |
 | `DebugInfo.svelte` | Debug information display |
-| `DisplaySettings.svelte` | Display preferences |
+| `DisplaySettings.svelte` | Display preferences (theme + focus mode) |
 | `FormattingSettings.svelte` | Text formatting options |
 | `GoogleDriveSettings.svelte` | Google Drive integration |
 | `FormatImportSettings.svelte` | Import from Day One or Markdown formats (uses WASM parsers + ImportEntries command) |
 | `ImportSettings.svelte` | Import from file (raw ZIP extraction) |
-| `LinkSettings.svelte` | Link format settings (workspace config) + bulk conversion for `part_of`/`contents`/`attachments` |
+| `LinkSettings.svelte` | Bulk conversion for `part_of`/`contents`/`attachments` using the current workspace link format |
 | `S3BackupSettings.svelte` | S3 backup configuration |
 | `StorageSettings.svelte` | Storage backend settings |
 | `SyncSettings.svelte` | Sync server settings + synced attachment storage usage |
@@ -60,7 +60,7 @@ Settings panel components for the settings dialog.
 | `workspaceSnapshotUpload.ts` | Shared local-workspace snapshot builder used by sync bootstrap flows |
 | `TemplateSettings.svelte` | Template management (default_template/daily_template in workspace config) |
 | `WorkspaceManagement.svelte` | Local/synced workspace management and sync toggles |
-| `WorkspaceSettings.svelte` | Workspace config: location, daily folder, entry behavior, filename style |
+| `WorkspaceSettings.svelte` | Workspace config: location and daily folder |
 | `AppearanceSettings.svelte` | Theme presets, accent hue, typography, and layout settings |
 | `ThemePresetCard.svelte` | Preset preview card with color swatches |
 | `AccentHuePicker.svelte` | Hue range slider (0–360) with conic gradient |

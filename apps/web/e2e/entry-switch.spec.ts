@@ -7,30 +7,45 @@ type SwitchFixture = {
 }
 
 async function installAttachmentReadDelay(page: import('@playwright/test').Page, delayMs: number): Promise<void> {
-  await page.evaluate(async (delay) => {
-    const { getBackend } = await import('/src/lib/backend')
-    const backend = await getBackend()
-    const g = globalThis as any
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await page.evaluate(async (delay) => {
+        const { getBackend } = await import('/src/lib/backend')
+        const backend = await getBackend()
+        const g = globalThis as any
 
-    if (g.__e2e_original_execute) return
+        if (g.__e2e_original_execute) return
 
-    g.__e2e_original_execute = backend.execute.bind(backend)
-    g.__e2e_inflight_attachment_reads = 0
+        g.__e2e_original_execute = backend.execute.bind(backend)
+        g.__e2e_inflight_attachment_reads = 0
+        g.__e2e_execute_lane = Promise.resolve()
 
-    backend.execute = async (command: any) => {
-      if (command?.type === 'GetAttachmentData') {
-        g.__e2e_inflight_attachment_reads += 1
-        try {
-          await new Promise((resolve) => setTimeout(resolve, delay))
-          return await g.__e2e_original_execute(command)
-        } finally {
-          g.__e2e_inflight_attachment_reads -= 1
+        backend.execute = async (command: any) => {
+          const run = async () => {
+            if (command?.type === 'GetAttachmentData') {
+              g.__e2e_inflight_attachment_reads += 1
+              try {
+                await new Promise((resolve) => setTimeout(resolve, delay))
+                return await g.__e2e_original_execute(command)
+              } finally {
+                g.__e2e_inflight_attachment_reads -= 1
+              }
+            }
+
+            return g.__e2e_original_execute(command)
+          }
+
+          const next = g.__e2e_execute_lane.then(run, run)
+          g.__e2e_execute_lane = next.catch(() => undefined)
+          return next
         }
-      }
-
-      return g.__e2e_original_execute(command)
+      }, delayMs)
+      return
+    } catch (e) {
+      if (attempt === 2) throw e
+      await page.waitForTimeout(200)
     }
-  }, delayMs)
+  }
 }
 
 async function createEntrySwitchFixture(page: import('@playwright/test').Page): Promise<SwitchFixture> {
@@ -132,7 +147,7 @@ test.describe('Entry Switching', () => {
     await waitForAppReady(page, 45000)
 
     await ensureFilesTreeVisible(page)
-    await installAttachmentReadDelay(page, 450)
+    await installAttachmentReadDelay(page, 2200)
 
     const fixture = await createEntrySwitchFixture(page)
 
@@ -161,13 +176,13 @@ test.describe('Entry Switching', () => {
 
     const startedAt = Date.now()
     await targetTreeItem.locator('button').first().click()
-    await expect(targetTreeItem).toHaveAttribute('aria-selected', 'true', { timeout: 1200 })
+    await expect(targetTreeItem).toHaveAttribute('aria-selected', 'true', { timeout: 500 })
+    const elapsedMs = Date.now() - startedAt
+    expect(elapsedMs).toBeLessThan(500)
+
     await expect(page.locator('.ProseMirror, [contenteditable="true"]').first()).toContainText(
       fixture.targetMarker,
-      { timeout: 1200 },
+      { timeout: 5000 },
     )
-    const elapsedMs = Date.now() - startedAt
-
-    expect(elapsedMs).toBeLessThan(1200)
   })
 })

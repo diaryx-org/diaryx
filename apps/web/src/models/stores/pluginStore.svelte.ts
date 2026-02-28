@@ -21,11 +21,30 @@ import { getBrowserManifests } from '$lib/plugins/browserPluginManager.svelte';
 /** Manifests from the native backend (Rust plugin registry). */
 let backendManifests = $state<PluginManifest[]>([]);
 
-/** Combined manifests from both backend and browser-loaded plugins. */
-const manifests = $derived<PluginManifest[]>([
-  ...backendManifests,
-  ...getBrowserManifests(),
-]);
+/** Runtime manifest overrides (for plugins loaded outside backend registry). */
+let runtimeManifestOverrides = $state<Record<string, PluginManifest>>({});
+
+/** Combined manifests from backend + browser plugins + runtime overrides. */
+const manifests = $derived.by(() => mergeManifests());
+
+function mergeManifests(): PluginManifest[] {
+  const byId = new Map<string, PluginManifest>();
+
+  for (const manifest of backendManifests) {
+    byId.set(String(manifest.id), manifest);
+  }
+
+  for (const manifest of getBrowserManifests()) {
+    byId.set(String(manifest.id), manifest);
+  }
+
+  // Runtime overrides have highest precedence (e.g. sync Extism manifest in browser).
+  for (const [pluginId, manifest] of Object.entries(runtimeManifestOverrides)) {
+    byId.set(pluginId, manifest);
+  }
+
+  return Array.from(byId.values());
+}
 
 // ============================================================================
 // Derived Selectors
@@ -114,6 +133,28 @@ async function init(api: Api): Promise<void> {
   }
 }
 
+/** Register/update a runtime manifest override. */
+function setRuntimeManifestOverride(manifest: PluginManifest): void {
+  runtimeManifestOverrides = {
+    ...runtimeManifestOverrides,
+    [String(manifest.id)]: manifest,
+  };
+}
+
+/** Remove a runtime manifest override by plugin id. */
+function clearRuntimeManifestOverride(pluginId: PluginId | string): void {
+  const id = String(pluginId);
+  if (!(id in runtimeManifestOverrides)) return;
+  const next = { ...runtimeManifestOverrides };
+  delete next[id];
+  runtimeManifestOverrides = next;
+}
+
+/** Clear all runtime manifest overrides. */
+function clearRuntimeManifestOverrides(): void {
+  runtimeManifestOverrides = {};
+}
+
 // ============================================================================
 // Store Export
 // ============================================================================
@@ -128,5 +169,8 @@ export function getPluginStore() {
     get toolbarButtons() { return getToolbarButtons(); },
     get statusBarItems() { return getStatusBarItems(); },
     init,
+    setRuntimeManifestOverride,
+    clearRuntimeManifestOverride,
+    clearRuntimeManifestOverrides,
   };
 }

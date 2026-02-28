@@ -15,7 +15,7 @@ diaryx_core = { workspace = true }
 
 # Always-on: CRDT types and sync protocol (WASM-compatible)
 yrs = { version = "0.25", features = ["sync"] }
-uuid = { version = "1", features = ["v4", "js"] }
+uuid = { version = "1", features = ["v4", "rng-getrandom"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
@@ -54,6 +54,11 @@ futures-lite = "2"
 
 [features]
 default = []
+
+# Browser WASM support (uuid/js, getrandom/js for browser crypto).
+# Enable this when compiling for wasm32 with a JS host (wasm-bindgen / wasm-pack).
+# Do NOT enable for Extism guest plugins (wasmtime, no JS).
+browser-js = ["uuid/js"]
 
 # SQLite CRDT storage (native only)
 sqlite = ["dep:rusqlite", "diaryx_core/database"]

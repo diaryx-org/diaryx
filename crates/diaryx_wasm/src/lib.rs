@@ -39,16 +39,20 @@ mod js_async_fs;
 #[cfg(feature = "browser")]
 mod opfs_fs;
 mod utils;
+#[cfg(feature = "sync")]
 mod wasm_sqlite_storage;
+#[cfg(feature = "sync")]
 mod wasm_sync_client;
 
 // Re-export WASM SQLite storage for external use
+#[cfg(feature = "sync")]
 pub use wasm_sqlite_storage::WasmSqliteStorage;
 
 // Re-export the main backend class
 pub use backend::DiaryxBackend;
 
 // Re-export WASM sync client
+#[cfg(feature = "sync")]
 pub use wasm_sync_client::WasmSyncClient;
 
 // Re-export filesystem implementations

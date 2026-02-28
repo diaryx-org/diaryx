@@ -17,6 +17,10 @@ This crate owns all CRDT and sync functionality. It provides WASM-compatible cor
 - **native-sync** — Native sync transport (tokio-tungstenite WebSocket)
 - **git** — Git-backed version history (commit, rebuild)
 
+For non-browser WASM guests (for example Extism on `wasm32-unknown-unknown`),
+sync timestamping uses a monotonic fallback clock in `time.rs` instead of
+`SystemTime::now()` to avoid runtime panics in environments without host clock APIs.
+
 ## Core Modules (always available)
 
 - **types** — `FileMetadata`, `BinaryRef`, `CrdtUpdate`, `UpdateOrigin`

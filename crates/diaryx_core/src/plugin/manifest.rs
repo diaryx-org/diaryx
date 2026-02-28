@@ -150,6 +150,14 @@ pub enum ComponentRef {
         /// Fields to render as form controls.
         fields: Vec<SettingsField>,
     },
+    /// Render plugin-provided HTML in a sandboxed iframe.
+    ///
+    /// The host calls the guest's `get_component_html` export with the
+    /// given `component_id` to obtain the HTML content.
+    Iframe {
+        /// Identifier passed to the guest export to retrieve the HTML.
+        component_id: String,
+    },
 }
 
 /// A declarative settings field rendered as a form control.

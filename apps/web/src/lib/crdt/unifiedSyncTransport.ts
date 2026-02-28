@@ -18,6 +18,12 @@
 
 import type { Backend } from "../backend/interface";
 import { proxyFetch } from "../backend/proxyFetch";
+import {
+  getSyncWsHandlerFactory,
+  type SyncWsHandler,
+  type SyncWsDrainResult,
+  type SyncWsRequest,
+} from "../sync/syncWsRegistry";
 
 /**
  * Configuration for the unified sync transport.
@@ -35,6 +41,8 @@ export interface UnifiedSyncTransportOptions {
   authToken?: string;
   /** Optional session code for share session sync. */
   sessionCode?: string;
+  /** Optional plugin id used to resolve a registered SyncWsHandler factory. */
+  syncPluginId?: string;
   /** Callback when connection status changes. */
   onStatusChange?: (connected: boolean) => void;
   /** Callback when workspace sync completes. */
@@ -61,6 +69,90 @@ export interface UnifiedSyncTransportOptions {
   onError?: (message: string) => void;
 }
 
+async function createLegacyBackendSyncHandler(
+  options: UnifiedSyncTransportOptions,
+): Promise<SyncWsHandler> {
+  const { backend } = options;
+
+  if (backend.createSyncClient) {
+    await backend.createSyncClient(
+      options.serverUrl,
+      options.workspaceId,
+      options.authToken,
+    );
+    if (options.sessionCode && backend.syncSetSessionCode) {
+      await backend.syncSetSessionCode(options.sessionCode);
+    }
+  }
+
+  return {
+    async handle(request: SyncWsRequest): Promise<void> {
+      switch (request.type) {
+        case "connected":
+          if (backend.syncOnConnected) {
+            await backend.syncOnConnected();
+          }
+          break;
+        case "disconnected":
+          if (backend.syncOnDisconnected) {
+            await backend.syncOnDisconnected();
+          }
+          break;
+        case "incoming_binary":
+          if (backend.syncOnBinaryMessage) {
+            await backend.syncOnBinaryMessage(request.data);
+          }
+          break;
+        case "incoming_text":
+          if (backend.syncOnTextMessage) {
+            await backend.syncOnTextMessage(request.text);
+          }
+          break;
+        case "local_update":
+          if (backend.syncQueueLocalUpdate) {
+            await backend.syncQueueLocalUpdate(request.docId, request.data);
+          }
+          break;
+        case "focus":
+          if (backend.syncFocusFiles) {
+            await backend.syncFocusFiles(request.files);
+          }
+          break;
+        case "unfocus":
+          if (backend.syncUnfocusFiles) {
+            await backend.syncUnfocusFiles(request.files);
+          }
+          break;
+        case "request_body":
+          if (backend.syncBodyFiles) {
+            await backend.syncBodyFiles(request.files);
+          }
+          break;
+        case "snapshot_imported":
+          if (backend.syncOnSnapshotImported) {
+            await backend.syncOnSnapshotImported();
+          }
+          break;
+        default:
+          break;
+      }
+    },
+
+    async drain(): Promise<SyncWsDrainResult> {
+      if (backend.syncDrain) {
+        return backend.syncDrain();
+      }
+      return { binary: [], text: [], events: [] };
+    },
+
+    async destroy(): Promise<void> {
+      if (backend.destroySyncClient) {
+        await backend.destroySyncClient();
+      }
+    },
+  };
+}
+
 /**
  * Unified sync transport for v2 protocol.
  *
@@ -78,8 +170,12 @@ export class UnifiedSyncTransport {
   /** Incremented on each connect() call to detect stale async handlers. */
   private connectionGeneration = 0;
 
-  /** Whether the sync client has been created in the worker. */
-  private syncClientCreated = false;
+  /** Active sync handler implementation (plugin or backend compatibility). */
+  private syncHandler: SyncWsHandler | null = null;
+  /** True when using backend compatibility mode instead of a registered plugin handler. */
+  private usingLegacyBackendHandler = false;
+  /** In-flight handler initialization promise (dedupes concurrent init). */
+  private syncHandlerInitPromise: Promise<void> | null = null;
 
   /** Whether initial workspace sync is complete. */
   private workspaceSynced = false;
@@ -112,25 +208,13 @@ export class UnifiedSyncTransport {
   async connect(): Promise<void> {
     if (this.destroyed || this.ws) return;
 
-    const backend = this.options.backend;
+    await this.ensureSyncHandler();
 
-    // Create the WasmSyncClient in the worker if not already created
-    if (!this.syncClientCreated && backend.createSyncClient) {
-      await backend.createSyncClient(
-        this.options.serverUrl,
-        this.options.workspaceId,
-        this.options.authToken,
-      );
-      if (this.options.sessionCode && backend.syncSetSessionCode) {
-        await backend.syncSetSessionCode(this.options.sessionCode);
-      }
-      this.syncClientCreated = true;
-    }
-
-    // Get the WebSocket URL from Rust
+    // Get the WebSocket URL from backend (legacy mode) or build locally.
     let url: string;
-    if (backend.syncGetWsUrl) {
-      url = await backend.syncGetWsUrl();
+    const syncGetWsUrl = this.options.backend.syncGetWsUrl;
+    if (this.usingLegacyBackendHandler && syncGetWsUrl) {
+      url = await syncGetWsUrl.call(this.options.backend);
     } else {
       url = this.buildUrl();
     }
@@ -148,21 +232,27 @@ export class UnifiedSyncTransport {
 
       this.options.onStatusChange?.(true);
 
-      // Notify Rust sync client that the WebSocket connected
-      if (backend.syncOnConnected) {
-        await backend.syncOnConnected();
+      if (this.syncHandler) {
+        await this.syncHandler.handle({
+          type: "connected",
+          serverUrl: this.options.serverUrl,
+        });
         if (gen !== this.connectionGeneration) return;
         await this.drainAndSend();
       }
 
       // Resend focus list and re-request body sync after reconnect
       if (this.focusedFiles.size > 0) {
-        if (backend.syncFocusFiles) {
-          await backend.syncFocusFiles(Array.from(this.focusedFiles));
+        if (this.syncHandler) {
+          await this.syncHandler.handle({
+            type: "focus",
+            files: Array.from(this.focusedFiles),
+          });
           await this.drainAndSend();
-        }
-        if (backend.syncBodyFiles) {
-          await backend.syncBodyFiles(Array.from(this.focusedFiles));
+          await this.syncHandler.handle({
+            type: "request_body",
+            files: Array.from(this.focusedFiles),
+          });
           await this.drainAndSend();
         }
       }
@@ -196,11 +286,17 @@ export class UnifiedSyncTransport {
       this.handshakeComplete = false;
       this.options.onStatusChange?.(false);
 
-      // Notify Rust of disconnect
-      if (backend.syncOnDisconnected) {
-        backend.syncOnDisconnected().catch(e => {
-          console.warn('[UnifiedSyncTransport] Error notifying disconnect:', e);
-        });
+      // Notify sync handler of disconnect
+      if (this.syncHandler) {
+        this.syncHandler
+          .handle({
+            type: "disconnected",
+            reason: event.reason || `code=${event.code}`,
+          })
+          .then(() => this.drainAndSend())
+          .catch((e) => {
+            console.warn('[UnifiedSyncTransport] Error notifying disconnect:', e);
+          });
       }
 
       if (!this.destroyed) {
@@ -246,13 +342,14 @@ export class UnifiedSyncTransport {
     this.destroyed = true;
     this.disconnect();
 
-    // Destroy the sync client in the worker
-    if (this.syncClientCreated && this.options.backend.destroySyncClient) {
-      this.options.backend.destroySyncClient().catch(e => {
-        console.warn('[UnifiedSyncTransport] Error destroying sync client:', e);
+    if (this.syncHandler?.destroy) {
+      Promise.resolve(this.syncHandler.destroy()).catch((e) => {
+        console.warn('[UnifiedSyncTransport] Error destroying sync handler:', e);
       });
-      this.syncClientCreated = false;
     }
+    this.syncHandler = null;
+    this.syncHandlerInitPromise = null;
+    this.usingLegacyBackendHandler = false;
 
     this.focusedFiles.clear();
     this.pendingBinaryMessages = [];
@@ -286,13 +383,13 @@ export class UnifiedSyncTransport {
    */
   async queueLocalUpdate(docId: string, data: Uint8Array): Promise<void> {
     console.log('[UnifiedSyncTransport] queueLocalUpdate: docId=', docId, 'data_len=', data.length, 'isConnected=', this.isConnected);
-    const backend = this.options.backend;
-    if (backend.syncQueueLocalUpdate) {
-      await backend.syncQueueLocalUpdate(docId, data);
+    await this.ensureSyncHandler();
+    if (this.syncHandler) {
+      await this.syncHandler.handle({ type: "local_update", docId, data });
       await this.drainAndSend();
-    } else {
-      console.warn('[UnifiedSyncTransport] queueLocalUpdate: no syncQueueLocalUpdate on backend');
+      return;
     }
+    console.warn('[UnifiedSyncTransport] queueLocalUpdate: no sync handler available');
   }
 
   /**
@@ -303,9 +400,9 @@ export class UnifiedSyncTransport {
       this.focusedFiles.add(filePath);
     }
 
-    const backend = this.options.backend;
-    if (this.isConnected && backend.syncFocusFiles) {
-      await backend.syncFocusFiles(filePaths);
+    await this.ensureSyncHandler();
+    if (this.isConnected && this.syncHandler) {
+      await this.syncHandler.handle({ type: "focus", files: filePaths });
       await this.drainAndSend();
     }
   }
@@ -315,9 +412,9 @@ export class UnifiedSyncTransport {
    * Call this when opening a file to trigger its body doc sync.
    */
   async requestBodySync(filePaths: string[]): Promise<void> {
-    const backend = this.options.backend;
-    if (this.isConnected && backend.syncBodyFiles) {
-      await backend.syncBodyFiles(filePaths);
+    await this.ensureSyncHandler();
+    if (this.isConnected && this.syncHandler) {
+      await this.syncHandler.handle({ type: "request_body", files: filePaths });
       await this.drainAndSend();
     }
   }
@@ -333,10 +430,47 @@ export class UnifiedSyncTransport {
       this.focusedFiles.delete(filePath);
     }
 
-    const backend = this.options.backend;
-    if (this.isConnected && backend.syncUnfocusFiles) {
-      await backend.syncUnfocusFiles(actuallyFocused);
+    await this.ensureSyncHandler();
+    if (this.isConnected && this.syncHandler) {
+      await this.syncHandler.handle({ type: "unfocus", files: actuallyFocused });
       await this.drainAndSend();
+    }
+  }
+
+  private async ensureSyncHandler(): Promise<void> {
+    if (this.syncHandler) return;
+    if (this.syncHandlerInitPromise) {
+      await this.syncHandlerInitPromise;
+      return;
+    }
+
+    this.syncHandlerInitPromise = (async () => {
+      const pluginId = this.options.syncPluginId;
+      if (pluginId) {
+        const factory = getSyncWsHandlerFactory(pluginId);
+        if (factory) {
+          this.syncHandler = await factory({
+            pluginId,
+            backend: this.options.backend,
+            serverUrl: this.options.serverUrl,
+            workspaceId: this.options.workspaceId,
+            writeToDisk: this.options.writeToDisk,
+            authToken: this.options.authToken,
+            sessionCode: this.options.sessionCode,
+          });
+          this.usingLegacyBackendHandler = false;
+          return;
+        }
+      }
+
+      this.syncHandler = await createLegacyBackendSyncHandler(this.options);
+      this.usingLegacyBackendHandler = true;
+    })();
+
+    try {
+      await this.syncHandlerInitPromise;
+    } finally {
+      this.syncHandlerInitPromise = null;
     }
   }
 
@@ -361,34 +495,17 @@ export class UnifiedSyncTransport {
 
     if (binaryBatch.length === 0 && textBatch.length === 0) return;
 
-    const backend = this.options.backend;
+    await this.ensureSyncHandler();
+    if (!this.syncHandler) return;
 
     // Inject binary messages
-    if (binaryBatch.length > 0) {
-      if (binaryBatch.length === 1 && backend.syncOnBinaryMessage) {
-        await backend.syncOnBinaryMessage(binaryBatch[0]);
-      } else if (backend.syncOnBinaryMessages) {
-        await backend.syncOnBinaryMessages(binaryBatch);
-      } else if (backend.syncOnBinaryMessage) {
-        // Fallback: send one at a time (e.g. Tauri backend)
-        for (const msg of binaryBatch) {
-          await backend.syncOnBinaryMessage(msg);
-        }
-      }
+    for (const msg of binaryBatch) {
+      await this.syncHandler.handle({ type: "incoming_binary", data: msg });
     }
 
     // Inject text messages
-    if (textBatch.length > 0) {
-      if (textBatch.length === 1 && backend.syncOnTextMessage) {
-        await backend.syncOnTextMessage(textBatch[0]);
-      } else if (backend.syncOnTextMessages) {
-        await backend.syncOnTextMessages(textBatch);
-      } else if (backend.syncOnTextMessage) {
-        // Fallback: send one at a time (e.g. Tauri backend)
-        for (const msg of textBatch) {
-          await backend.syncOnTextMessage(msg);
-        }
-      }
+    for (const msg of textBatch) {
+      await this.syncHandler.handle({ type: "incoming_text", text: msg });
     }
 
     // Single drain for the entire batch
@@ -403,10 +520,9 @@ export class UnifiedSyncTransport {
    * Drain outgoing messages and events from the WasmSyncClient and send/dispatch them.
    */
   private async drainAndSend(): Promise<void> {
-    const backend = this.options.backend;
-    if (!backend.syncDrain) return;
+    if (!this.syncHandler) return;
 
-    const { binary, text, events } = await backend.syncDrain();
+    const { binary, text, events } = await this.syncHandler.drain();
 
     if (binary.length > 0 || text.length > 0) {
       console.log('[UnifiedSyncTransport] drainAndSend: binary=', binary.length, 'text=', text.length, 'events=', events.length, 'isConnected=', this.isConnected);
@@ -555,8 +671,8 @@ export class UnifiedSyncTransport {
       if (!response.ok) {
         console.warn(`[UnifiedSyncTransport] Snapshot download failed: ${response.status}`);
         // Still notify Rust so handshake continues
-        if (this.options.backend.syncOnSnapshotImported) {
-          await this.options.backend.syncOnSnapshotImported();
+        if (this.syncHandler) {
+          await this.syncHandler.handle({ type: "snapshot_imported" });
           await this.drainAndSend();
         }
         return;
@@ -583,8 +699,8 @@ export class UnifiedSyncTransport {
     }
 
     // Notify Rust that snapshot was imported (or failed)
-    if (this.options.backend.syncOnSnapshotImported) {
-      await this.options.backend.syncOnSnapshotImported();
+    if (this.syncHandler) {
+      await this.syncHandler.handle({ type: "snapshot_imported" });
       await this.drainAndSend();
     }
   }

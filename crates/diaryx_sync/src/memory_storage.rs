@@ -97,7 +97,7 @@ impl CrdtStorage for MemoryStorage {
         let stored = StoredUpdate {
             id,
             data: update.to_vec(),
-            timestamp: chrono::Utc::now().timestamp_millis(),
+            timestamp: crate::time::now_timestamp_millis(),
             origin,
             device_id: device_id.map(String::from),
             device_name: device_name.map(String::from),

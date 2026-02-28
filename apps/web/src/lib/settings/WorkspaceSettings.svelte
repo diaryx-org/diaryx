@@ -1,20 +1,17 @@
 <script lang="ts">
   /**
-   * WorkspaceSettings - Workspace folder and behavior configuration
+   * WorkspaceSettings - Workspace location and daily entry configuration
    *
    * Shows the current workspace path, allows changing it (Tauri only),
-   * configures the daily entry folder, and manages entry behavior settings
-   * like auto-update timestamp, sync title to heading, auto-rename, and filename style.
+   * and configures the daily entry folder.
    *
-   * Daily entry folder and behavior settings are stored in workspace config
+   * Daily entry folder settings are stored in workspace config
    * (root index frontmatter) so they sync across devices.
    */
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
-  import { Switch } from "$lib/components/ui/switch";
-  import * as Select from "$lib/components/ui/select";
-  import { FolderOpen, RefreshCw, Calendar, Check, Settings2, AlertCircle } from "@lucide/svelte";
+  import { FolderOpen, RefreshCw, Calendar, Check, AlertCircle } from "@lucide/svelte";
   import { getBackend, isTauri } from "../backend";
   import { getWorkspaceConfigStore } from "../stores/workspaceConfigStore.svelte";
 
@@ -124,18 +121,6 @@
   function clearDailyEntryFolder() {
     dailyEntryFolder = "";
     configStore.setField("daily_entry_folder", "");
-  }
-
-  // Filename style options
-  const FILENAME_STYLE_OPTIONS = [
-    { value: "preserve", label: "Preserve", description: "Keep original casing and spacing" },
-    { value: "kebab_case", label: "kebab-case", description: "lowercase-with-dashes" },
-    { value: "snake_case", label: "snake_case", description: "lowercase_with_underscores" },
-    { value: "screaming_snake_case", label: "SCREAMING_SNAKE_CASE", description: "UPPERCASE_WITH_UNDERSCORES" },
-  ];
-
-  function getFilenameStyleLabel(value: string): string {
-    return FILENAME_STYLE_OPTIONS.find((o) => o.value === value)?.label ?? value;
   }
 </script>
 
@@ -250,68 +235,10 @@
     </div>
   </div>
 
-  <!-- Entry Behavior -->
-  <div class="space-y-3 pt-2 border-t">
-    <h3 class="font-medium flex items-center gap-2">
-      <Settings2 class="size-4" />
-      Entry Behavior
-    </h3>
-
-    <div class="space-y-4 px-1">
-      <!-- Auto-update timestamp -->
-      <div class="flex items-center justify-between gap-4">
-        <Label for="auto-update-timestamp" class="text-sm flex flex-col gap-0.5">
-          <span>Auto-update timestamp</span>
-          <span class="font-normal text-xs text-muted-foreground">
-            Automatically update the <code class="bg-muted px-1 rounded">updated</code> field when saving.
-          </span>
-        </Label>
-        <Switch
-          id="auto-update-timestamp"
-          checked={configStore.config?.auto_update_timestamp ?? true}
-          onCheckedChange={(checked) => configStore.setField("auto_update_timestamp", String(checked))}
-          disabled={configStore.loading || !workspaceRootIndex}
-        />
-      </div>
-
-      <!-- Filename Style -->
-      <div class="space-y-2">
-        <Label for="filename-style" class="text-sm flex flex-col gap-0.5">
-          <span>Filename style</span>
-          <span class="font-normal text-xs text-muted-foreground">
-            How filenames are generated from entry titles when renaming.
-          </span>
-        </Label>
-        <Select.Root
-          type="single"
-          value={configStore.config?.filename_style ?? "preserve"}
-          onValueChange={(value) => { if (value) configStore.setField("filename_style", value); }}
-          disabled={configStore.loading || !workspaceRootIndex}
-        >
-          <Select.Trigger id="filename-style" class="w-full">
-            {getFilenameStyleLabel(configStore.config?.filename_style ?? "preserve")}
-          </Select.Trigger>
-          <Select.Content>
-            {#each FILENAME_STYLE_OPTIONS as option}
-              <Select.Item value={option.value}>
-                <div class="flex flex-col gap-0.5">
-                  <span>{option.label}</span>
-                  <span class="text-xs text-muted-foreground font-mono">
-                    {option.description}
-                  </span>
-                </div>
-              </Select.Item>
-            {/each}
-          </Select.Content>
-        </Select.Root>
-      </div>
+  {#if configStore.error}
+    <div class="flex items-center gap-2 text-xs text-destructive px-1">
+      <AlertCircle class="size-3" />
+      <span>{configStore.error}</span>
     </div>
-
-    {#if configStore.error}
-      <div class="flex items-center gap-2 text-xs text-destructive px-1">
-        <AlertCircle class="size-3" />
-        <span>{configStore.error}</span>
-      </div>
-    {/if}
-  </div>
+  {/if}
 </div>

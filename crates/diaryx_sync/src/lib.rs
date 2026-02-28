@@ -25,6 +25,7 @@ mod sync_manager;
 mod sync_protocol;
 mod sync_session;
 mod sync_types;
+mod time;
 mod workspace_doc;
 
 // Filesystem decorators (CRDT-aware FS layer)
@@ -109,7 +110,7 @@ pub use sync_types::{SyncEvent, SyncSessionConfig, SyncStatus};
 
 // CrdtFs and decorator stack
 pub use crdt_fs::CrdtFs;
-pub use decorator_stack::{DecoratedFs, DecoratedFsBuilder};
+pub use decorator_stack::{DecoratedFs, DecoratedFsBuilder, EventOnlyFs};
 
 // Plugin
 pub use sync_plugin::SyncPlugin;

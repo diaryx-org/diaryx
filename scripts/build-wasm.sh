@@ -45,6 +45,47 @@ fi
 cd "$WORKSPACE_ROOT"
 $WEB_DIR/node_modules/.bin/wasm-pack build crates/diaryx_wasm --target web --out-dir "$WEB_DIR/src/lib/wasm"
 
+# Build the Extism sync plugin WASM
+echo "Building diaryx_sync_extism WASM plugin..."
+SYNC_PLUGIN_DIR="$WEB_DIR/public/plugins"
+mkdir -p "$SYNC_PLUGIN_DIR"
+cargo build --target wasm32-unknown-unknown -p diaryx_sync_extism --release
+cp "$WORKSPACE_ROOT/target/wasm32-unknown-unknown/release/diaryx_sync_extism.wasm" \
+   "$SYNC_PLUGIN_DIR/diaryx_sync.wasm"
+# Optimize with wasm-opt if available
+if command -v wasm-opt >/dev/null 2>&1; then
+    echo "Optimizing sync plugin WASM with wasm-opt..."
+    wasm-opt -Oz "$SYNC_PLUGIN_DIR/diaryx_sync.wasm" -o "$SYNC_PLUGIN_DIR/diaryx_sync.wasm"
+fi
+
+# Guardrail: Extism guest plugins must not import wasm-bindgen placeholders.
+if LC_ALL=C grep -a -q "__wbindgen_placeholder__" "$SYNC_PLUGIN_DIR/diaryx_sync.wasm"; then
+    echo "Error: sync plugin contains wasm-bindgen imports (__wbindgen_placeholder__)."
+    echo "Expected an Extism guest artifact from crates/diaryx_sync_extism."
+    exit 1
+fi
+
+echo "Sync plugin WASM built: $SYNC_PLUGIN_DIR/diaryx_sync.wasm"
+
+# Build the AI chat plugin WASM
+echo "Building diaryx_ai_extism WASM plugin..."
+cargo build --target wasm32-unknown-unknown -p diaryx_ai_extism --release
+cp "$WORKSPACE_ROOT/target/wasm32-unknown-unknown/release/diaryx_ai_extism.wasm" \
+   "$SYNC_PLUGIN_DIR/diaryx_ai.wasm"
+# Optimize with wasm-opt if available
+if command -v wasm-opt >/dev/null 2>&1; then
+    echo "Optimizing AI plugin WASM with wasm-opt..."
+    wasm-opt -Oz "$SYNC_PLUGIN_DIR/diaryx_ai.wasm" -o "$SYNC_PLUGIN_DIR/diaryx_ai.wasm"
+fi
+
+# Guardrail: AI plugin must not import wasm-bindgen placeholders.
+if LC_ALL=C grep -a -q "__wbindgen_placeholder__" "$SYNC_PLUGIN_DIR/diaryx_ai.wasm"; then
+    echo "Error: AI plugin contains wasm-bindgen imports (__wbindgen_placeholder__)."
+    exit 1
+fi
+
+echo "AI plugin WASM built: $SYNC_PLUGIN_DIR/diaryx_ai.wasm"
+
 # Clean up trailing whitespace in ts-rs generated bindings
 # (ts-rs emits trailing spaces on struct field lines)
 BINDINGS_DIR="$WORKSPACE_ROOT/crates/diaryx_core/bindings"

@@ -57,6 +57,10 @@ CrdtFs (the filesystem decorator that auto-updates CRDTs on file writes) starts
 writes during import/bootstrap from creating local CRDT operations that would
 merge with server state and cause content duplication.
 
+`App.svelte` also suppresses editor `onchange`/autosave handling briefly while
+applying remote body updates (`onBodyChange`), so programmatic content updates
+from sync do not re-trigger local saves and create metadata/body sync cycles.
+
 ## Share Sidebar
 
 `lib/share/ShareTab.svelte` now hosts two share sub-tabs in the right sidebar:

@@ -34,15 +34,13 @@
   import AppearanceSettings from "./settings/AppearanceSettings.svelte";
   import PluginSettingsTab from "./settings/PluginSettingsTab.svelte";
   import { getPluginStore } from "../models/stores/pluginStore.svelte";
+  import { isSyncPluginId } from "$lib/sync/syncBuiltinUiRegistry";
+  import { getPlugin as getBrowserPlugin } from "$lib/plugins/browserPluginManager.svelte";
   import type { Api } from "$lib/backend/api";
   import type { JsonValue } from "$lib/backend/generated/serde_json/JsonValue";
 
   interface Props {
     open?: boolean;
-    showUnlinkedFiles?: boolean;
-    showHiddenFiles?: boolean;
-    showEditorTitle?: boolean;
-    showEditorPath?: boolean;
     focusMode?: boolean;
     workspacePath?: string | null;
     /** Tab to show when the dialog opens */
@@ -55,10 +53,6 @@
 
   let {
     open = $bindable(),
-    showUnlinkedFiles = $bindable(),
-    showHiddenFiles = $bindable(false),
-    showEditorTitle = $bindable(false),
-    showEditorPath = $bindable(false),
     focusMode = $bindable(true),
     workspacePath = null,
     initialTab,
@@ -75,14 +69,25 @@
 
   // Plugin store
   const pluginStore = getPluginStore();
-  const pluginSettingsTabs = $derived(pluginStore.settingsTabs);
+  // Filter out the sync plugin's SettingsTab — the hardcoded "Sync" tab renders the
+  // richer SyncSettings component, so we don't need the plugin's declarative duplicate.
+  const pluginSettingsTabs = $derived(
+    pluginStore.settingsTabs.filter((tab) => !isSyncPluginId(tab.pluginId))
+  );
 
   // Plugin config state: keyed by pluginId
   let pluginConfigs = $state<Record<string, Record<string, JsonValue>>>({});
 
   async function loadPluginConfig(pluginId: string) {
-    if (!api) return;
     try {
+      // Browser-loaded plugins store config via their own get/setConfig
+      const browserPlugin = getBrowserPlugin(pluginId);
+      if (browserPlugin) {
+        const raw = await browserPlugin.getConfig();
+        pluginConfigs = { ...pluginConfigs, [pluginId]: (raw as Record<string, JsonValue>) ?? {} };
+        return;
+      }
+      if (!api) return;
       const raw = await api.getPluginConfig(pluginId);
       pluginConfigs = { ...pluginConfigs, [pluginId]: (raw as Record<string, JsonValue>) ?? {} };
     } catch {
@@ -91,11 +96,17 @@
   }
 
   async function handlePluginConfigChange(pluginId: string, key: string, value: JsonValue) {
-    if (!api) return;
     const current = pluginConfigs[pluginId] ?? {};
     const updated = { ...current, [key]: value };
     pluginConfigs = { ...pluginConfigs, [pluginId]: updated };
     try {
+      // Browser-loaded plugins store config via their own get/setConfig
+      const browserPlugin = getBrowserPlugin(pluginId);
+      if (browserPlugin) {
+        await browserPlugin.setConfig(updated as Record<string, unknown>);
+        return;
+      }
+      if (!api) return;
       await api.setPluginConfig(pluginId, updated);
     } catch (e) {
       console.error(`[Settings] Failed to save plugin config for ${pluginId}:`, e);
@@ -160,13 +171,7 @@
 
     <Tabs.Content value="general">
       <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
-        <DisplaySettings
-          bind:showUnlinkedFiles
-          bind:showHiddenFiles
-          bind:showEditorTitle
-          bind:showEditorPath
-          bind:focusMode
-        />
+        <DisplaySettings bind:focusMode />
         <AppearanceSettings />
         <FormattingSettings />
       </div>

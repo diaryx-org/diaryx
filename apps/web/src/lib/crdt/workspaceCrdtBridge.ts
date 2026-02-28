@@ -354,6 +354,35 @@ type SyncStatusCallback = (status: 'idle' | 'connecting' | 'syncing' | 'synced' 
 const syncStatusCallbacks = new Set<SyncStatusCallback>();
 
 // ===========================================================================
+// Extism sync plugin helpers
+// ===========================================================================
+
+let extismSyncUnavailable = false;
+const SYNC_PLUGIN_ID = 'sync';
+
+/**
+ * Ensure the Extism sync plugin is loaded and has registered a SyncWsHandler
+ * factory. Falls back silently to legacy backend sync method wiring if the
+ * plugin cannot be loaded.
+ */
+async function ensureExtismSyncHandlerRegistered(backend: Backend): Promise<void> {
+  if (extismSyncUnavailable) {
+    return;
+  }
+
+  try {
+    const { loadSyncPlugin } = await import('$lib/sync/loader');
+    await loadSyncPlugin(backend);
+  } catch (error) {
+    extismSyncUnavailable = true;
+    console.warn(
+      '[WorkspaceCrdtBridge] Extism sync plugin unavailable; falling back to built-in backend sync:',
+      error,
+    );
+  }
+}
+
+// ===========================================================================
 // Configuration
 // ===========================================================================
 
@@ -428,8 +457,10 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
         _nativeSyncActive = false;
       }
     } else {
-      // Use browser WebSocket (WASM/web)
-      console.log('[WorkspaceCrdtBridge] Using browser sync (v2)');
+      // Use browser WebSocket (WASM/web) via Extism sync plugin
+      console.log('[WorkspaceCrdtBridge] Using browser sync (v2) via Extism plugin');
+
+      await ensureExtismSyncHandlerRegistered(_backend);
 
       // Use UnifiedSyncTransport (single WebSocket for workspace + body via /sync2)
       {
@@ -441,6 +472,7 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
           backend: _backend,
           writeToDisk: true,
           authToken: getToken() ?? undefined,
+          syncPluginId: extismSyncUnavailable ? undefined : SYNC_PLUGIN_ID,
           onStatusChange: (connected) => {
             notifySyncStatus(connected ? 'syncing' : 'idle');
             if (!connected) {
@@ -939,6 +971,8 @@ export async function startSessionSync(
 
   console.log('[WorkspaceCrdtBridge] Creating UnifiedSyncTransport for session:', sessionServerUrl, 'session:', sessionCode);
 
+  await ensureExtismSyncHandlerRegistered(_backend);
+
   unifiedSyncTransport = createUnifiedSyncTransport({
     serverUrl: sessionServerUrl,
     workspaceId: _workspaceId!,
@@ -946,6 +980,7 @@ export async function startSessionSync(
     writeToDisk: true,
     authToken: getToken() ?? undefined,
     sessionCode: sessionCode,
+    syncPluginId: extismSyncUnavailable ? undefined : SYNC_PLUGIN_ID,
     onStatusChange: (connected) => {
       console.log('[WorkspaceCrdtBridge] Session sync status:', connected);
       notifySyncStatus(connected ? 'syncing' : 'idle');
@@ -1164,9 +1199,10 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
           }
         } else {
           // Use UnifiedSyncTransport (single WebSocket for workspace + body via /sync2)
-          console.log('[WorkspaceCrdtBridge] Using UnifiedSyncTransport during init');
+          console.log('[WorkspaceCrdtBridge] Using UnifiedSyncTransport during init (Extism)');
 
           const v2Url = toWebSocketUrl(serverUrl);
+          await ensureExtismSyncHandlerRegistered(_backend);
 
           unifiedSyncTransport = createUnifiedSyncTransport({
             serverUrl: v2Url,
@@ -1174,6 +1210,7 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
             backend: _backend,
             writeToDisk: true,
             authToken: getToken() ?? undefined,
+            syncPluginId: extismSyncUnavailable ? undefined : SYNC_PLUGIN_ID,
             onStatusChange: (connected) => {
               notifySyncStatus(connected ? 'syncing' : 'idle');
               if (!connected) {
@@ -1208,6 +1245,11 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
       }
     } else {
       console.log('[WorkspaceCrdtBridge] Sync skipped: local-only mode (no workspaceId)');
+      // Load the Extism sync plugin so its manifest registers UI contributions
+      // (sidebar tabs, status bar, etc.) even when not actively syncing.
+      if (_backend) {
+        await ensureExtismSyncHandlerRegistered(_backend);
+      }
       // Enable CrdtFs immediately — no sync to wait for.
       if (_backend?.setCrdtEnabled) await _backend.setCrdtEnabled(true);
       // No sync needed - mark as complete immediately
@@ -1239,6 +1281,15 @@ export function disconnectWorkspace(): void {
 export async function destroyWorkspace(): Promise<void> {
   // Disconnect existing sync (native or browser-based)
   await disconnectExistingSync();
+
+  // Fully unload Extism sync plugin so workspace switches always start from a
+  // fresh guest instance bound to the new backend host context.
+  try {
+    const { unloadSyncPlugin } = await import('$lib/sync/loader');
+    await unloadSyncPlugin();
+  } catch (e) {
+    console.warn('[WorkspaceCrdtBridge] Failed to unload sync plugin during destroy:', e);
+  }
 
   discardQueuedLocalSyncUpdates('destroyWorkspace');
 

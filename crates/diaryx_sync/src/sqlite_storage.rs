@@ -252,7 +252,7 @@ impl CrdtStorage for SqliteStorage {
 
     fn save_doc(&self, name: &str, state: &[u8]) -> StorageResult<()> {
         let conn = self.lock_conn();
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = crate::time::now_timestamp_millis();
 
         // Extract state vector from the state
         let state_vector = {
@@ -302,7 +302,7 @@ impl CrdtStorage for SqliteStorage {
         device_name: Option<&str>,
     ) -> StorageResult<i64> {
         let conn = self.lock_conn();
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = crate::time::now_timestamp_millis();
         let origin_str = origin.to_string();
 
         conn.execute(
@@ -422,7 +422,7 @@ impl CrdtStorage for SqliteStorage {
         };
 
         // Compute the state vector before starting transaction
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = crate::time::now_timestamp_millis();
         let state_vector = {
             let doc = Doc::new();
             {
@@ -472,7 +472,7 @@ impl CrdtStorage for SqliteStorage {
         }
 
         let mut conn = self.lock_conn();
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = crate::time::now_timestamp_millis();
 
         // Use a SQL transaction for atomicity
         let tx = conn.transaction()?;

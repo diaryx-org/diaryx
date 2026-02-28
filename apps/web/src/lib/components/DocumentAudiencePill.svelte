@@ -5,6 +5,7 @@
   import * as Drawer from "$lib/components/ui/drawer";
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
   import { Plus, Lock } from "@lucide/svelte";
+  import { getTemplateContextStore } from "$lib/stores/templateContextStore.svelte";
 
   interface Props {
     /** string[] = explicit tags, null = inheriting (treated as private here) */
@@ -18,6 +19,7 @@
   let { audience, entryPath, rootPath, api, onChange }: Props = $props();
 
   const mobileState = getMobileState();
+  const templateContextStore = getTemplateContextStore();
 
   let open = $state(false);
   let searchValue = $state("");
@@ -59,8 +61,12 @@
   function addTag(tag: string) {
     const trimmed = tag.trim();
     if (!trimmed) return;
+    const isNew = !availableAudiences.some(
+      (a) => a.toLowerCase() === trimmed.toLowerCase(),
+    );
     // audience null means inheriting — start an explicit list with this tag
     onChange(audience === null ? [trimmed] : [...audience, trimmed]);
+    if (isNew) templateContextStore.bumpAudiencesVersion();
     open = false;
     searchValue = "";
   }

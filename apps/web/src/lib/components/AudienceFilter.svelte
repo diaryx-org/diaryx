@@ -34,8 +34,11 @@
     }
   }
 
-  // Load audiences when rootPath changes
+  // Load audiences when rootPath changes or a new audience tag is created anywhere
   $effect(() => {
+    // Reading audiencesVersion here makes this effect re-run when it is bumped
+    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+    templateContextStore.audiencesVersion;
     if (rootPath) {
       loadAudiences();
     }

@@ -50,11 +50,21 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
+    // Stop ALL key events from bubbling to TipTap/ProseMirror.
+    // Without this, printable keys reach the editor while the block picker
+    // node is still ProseMirror-selected, causing it to delete the node and
+    // insert the character directly into the document.
+    e.stopPropagation();
     if (e.key === "Escape") {
       e.preventDefault();
-      e.stopPropagation();
       onCancel();
     }
+  }
+
+  function handleMousedown(e: MouseEvent) {
+    // Prevent ProseMirror from receiving mousedown and repositioning its
+    // cursor/selection, which can deselect the block picker node.
+    e.stopPropagation();
   }
 </script>
 
@@ -63,6 +73,7 @@
   bind:this={selectorEl}
   class="audience-inline-selector"
   onkeydown={handleKeydown}
+  onmousedown={handleMousedown}
 >
   <Command.Root
     class="rounded-md border-none shadow-none"

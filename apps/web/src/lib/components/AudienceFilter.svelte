@@ -8,6 +8,8 @@
   import * as Select from "$lib/components/ui/select";
   import { Eye, Globe } from "@lucide/svelte";
   import { getTemplateContextStore } from "../stores/templateContextStore.svelte";
+  import { getAudienceDotColor } from "$lib/utils/audienceDotColor";
+  import ManageAudiencesModal from "./ManageAudiencesModal.svelte";
   import type { Api } from "../backend";
 
   interface Props {
@@ -20,6 +22,7 @@
   const templateContextStore = getTemplateContextStore();
 
   let audiences = $state<string[]>([]);
+  let showManageModal = $state(false);
 
   async function loadAudiences() {
     if (!api || !rootPath) {
@@ -54,22 +57,6 @@
 
   let currentValue = $derived(templateContextStore.previewAudience ?? "__all__");
   let isFiltering = $derived(templateContextStore.previewAudience !== null);
-
-  // Tailwind classes are listed here so the content scanner picks them up.
-  const DOT_COLORS = [
-    "bg-indigo-500",
-    "bg-teal-500",
-    "bg-rose-500",
-    "bg-amber-500",
-    "bg-emerald-500",
-    "bg-violet-500",
-  ] as const;
-
-  function getAudienceDotColor(name: string): string {
-    let hash = 0;
-    for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
-    return DOT_COLORS[hash % DOT_COLORS.length];
-  }
 </script>
 
 {#if audiences.length > 0}
@@ -107,7 +94,7 @@
           <button
             type="button"
             class="manage-btn"
-            onclick={() => console.log("open manage")}
+            onclick={() => { showManageModal = true; }}
           >
             Manage audiences…
           </button>
@@ -115,6 +102,16 @@
       </Select.Content>
     </Select.Root>
   </div>
+{/if}
+
+<!-- Manage Audiences Modal (self-contained, mounted here to keep api/rootPath in scope) -->
+{#if api && rootPath}
+  <ManageAudiencesModal
+    open={showManageModal}
+    {api}
+    rootPath={rootPath}
+    onClose={() => { showManageModal = false; loadAudiences(); }}
+  />
 {/if}
 
 <style>

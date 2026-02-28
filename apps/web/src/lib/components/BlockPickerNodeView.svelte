@@ -17,6 +17,7 @@
     GitBranch,
     Users,
   } from "@lucide/svelte";
+  import AudienceInlineSelector from "./AudienceInlineSelector.svelte";
 
   interface Props {
     editor: Editor;
@@ -32,6 +33,7 @@
   let focusedIndex = $state(0);
   let focusableItems: HTMLElement[] = $state([]);
   let openSubmenu = $state<"heading" | "list" | "more" | null>(null);
+  let showAudienceSelector = $state(false);
 
   function updateFocusableItems() {
     focusableItems = Array.from(
@@ -57,7 +59,9 @@
     switch (event.key) {
       case "Escape":
         event.preventDefault();
-        if (openSubmenu) {
+        if (showAudienceSelector) {
+          showAudienceSelector = false;
+        } else if (openSubmenu) {
           openSubmenu = null;
         } else {
           onCancel();
@@ -81,6 +85,7 @@
   function toggleSubmenu(menu: "heading" | "list" | "more", event: MouseEvent | TouchEvent) {
     event.stopPropagation();
     openSubmenu = openSubmenu === menu ? null : menu;
+    showAudienceSelector = false;
   }
 
   function handleHeading(level: 1 | 2 | 3) {
@@ -145,14 +150,21 @@
   }
 
   function handleForAudience() {
-    const audience = window.prompt("Audience name:", "public");
-    if (!audience) return;
+    showAudienceSelector = true;
+  }
+
+  function handleAudienceSelect(audience: string) {
+    showAudienceSelector = false;
     onSelect(() =>
       editor.commands.insertConditionalBlock({
         helperType: "for-audience",
-        condition: audience.trim(),
+        condition: audience,
       })
     );
+  }
+
+  function handleAudienceCancel() {
+    showAudienceSelector = false;
   }
 
   function handleMenuItemClick(
@@ -293,19 +305,26 @@
       </button>
       {#if openSubmenu === "more"}
         <div class="submenu-dropdown">
-          <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleHtmlBlock(); }}>
-            <Code class="size-3.5" /> HTML
-          </button>
-          <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleDrawing(); }}>
-            <Pencil class="size-3.5" /> Drawing
-          </button>
-          <div class="submenu-divider"></div>
-          <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleIfElse(); }}>
-            <GitBranch class="size-3.5" /> If / Else
-          </button>
-          <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleForAudience(); }}>
-            <Users class="size-3.5" /> For Audience
-          </button>
+          {#if showAudienceSelector}
+            <AudienceInlineSelector
+              onSelect={handleAudienceSelect}
+              onCancel={handleAudienceCancel}
+            />
+          {:else}
+            <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleHtmlBlock(); }}>
+              <Code class="size-3.5" /> HTML
+            </button>
+            <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleDrawing(); }}>
+              <Pencil class="size-3.5" /> Drawing
+            </button>
+            <div class="submenu-divider"></div>
+            <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleIfElse(); }}>
+              <GitBranch class="size-3.5" /> If / Else
+            </button>
+            <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleForAudience(); }}>
+              <Users class="size-3.5" /> For Audience
+            </button>
+          {/if}
         </div>
       {/if}
     </div>

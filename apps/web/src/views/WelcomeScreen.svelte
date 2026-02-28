@@ -42,7 +42,7 @@
   @keyframes fadeIn {
     from {
       opacity: 0;
-      transform: translateY(6px);
+      transform: translateY(10px);
     }
     to {
       opacity: 1;

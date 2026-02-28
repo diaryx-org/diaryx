@@ -197,8 +197,41 @@ describe('attachmentService', () => {
       const result = await transformAttachmentPaths(content, 'entry.md', mockApi as any)
 
       expect(mockApi.getAttachmentData).toHaveBeenCalledWith('entry.md', 'test.png')
+      expect(mockApi.canonicalizeLink).not.toHaveBeenCalled()
+      expect(mockApi.formatLink).not.toHaveBeenCalled()
       expect(result).toContain('blob:')
       expect(result).toContain('![test image]')
+    })
+
+    it('should fall back to link-parser normalization when direct lookup fails', async () => {
+      const mockData = new Uint8Array([1, 2, 3])
+      const mockApi = {
+        getAttachmentData: vi.fn(async (_entryPath: string, attachmentPath: string) => {
+          if (attachmentPath === 'raw/path.png') {
+            throw new Error('Not found')
+          }
+          if (attachmentPath === 'normalized/path.png') {
+            return Array.from(mockData)
+          }
+          throw new Error('Unexpected path')
+        }),
+        canonicalizeLink: vi.fn(async () => 'normalized/path.png'),
+        formatLink: vi.fn(async () => 'normalized/path.png'),
+      }
+
+      const content = '![alt](raw/path.png)'
+      const result = await transformAttachmentPaths(content, 'entry.md', mockApi as any)
+
+      expect(mockApi.getAttachmentData).toHaveBeenNthCalledWith(1, 'entry.md', 'raw/path.png')
+      expect(mockApi.canonicalizeLink).toHaveBeenCalledWith('raw/path.png', 'entry.md')
+      expect(mockApi.formatLink).toHaveBeenCalledWith(
+        'normalized/path.png',
+        'path.png',
+        'plain_relative',
+        'entry.md',
+      )
+      expect(mockApi.getAttachmentData).toHaveBeenNthCalledWith(2, 'entry.md', 'normalized/path.png')
+      expect(result).toContain('blob:')
     })
 
     it('should handle angle-bracket syntax for paths with spaces', async () => {

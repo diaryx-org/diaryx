@@ -24,10 +24,6 @@ toml = "0.9.8"
 thiserror.workspace = true
 async-trait = "0.1"
 
-# CRDT support
-# The "sync" feature makes Subscription Send+Sync, enabling thread-safe observers
-yrs = { version = "0.25", optional = true, features = ["sync"] }
-uuid = { version = "1", features = ["v4", "js"], optional = true }
 
 # TypeScript bindings generation
 ts-rs = { version = "10", features = ["serde-json-impl", "indexmap-impl", "no-serde-warnings"] }
@@ -54,12 +50,6 @@ glob = "0.3"
 rusqlite = { version = "0.34", features = ["bundled"], optional = true }
 html-to-markdown-rs = { version = "2", optional = true }
 
-# Native sync dependencies (native-sync feature)
-tokio = { version = "1", features = ["sync", "time", "macros", "rt"], optional = true }
-tokio-tungstenite = { version = "0.26", optional = true, features = ["rustls-tls-webpki-roots"] }
-url = { version = "2", optional = true }
-futures-util = { version = "0.3", optional = true }
-
 # WASM-specific dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Add wasm-bindgen when we need JS interop
@@ -69,23 +59,11 @@ futures-util = { version = "0.3", optional = true }
 # Kept for backward compatibility — the publish pipeline has moved to diaryx_publish.
 markdown = []
 
-# Enable CRDT-based sync and version history (works on all platforms)
-# On native, also enables SqliteStorage via rusqlite
-crdt = ["dep:yrs", "dep:uuid"]
-
-# Enable SQLite storage for CRDT (native only, automatically enabled with crdt on non-WASM)
-crdt-sqlite = ["crdt", "dep:rusqlite"]
-
 # Placeholder feature for workspace crates that currently enable it.
 live-sync = []
 
-# Enable native sync transport (tokio-tungstenite WebSocket)
-# This provides TokioTransport and SyncClient for CLI and native apps.
-# Not available on WASM - use CallbackTransport instead.
-native-sync = ["crdt", "dep:tokio", "dep:tokio-tungstenite", "dep:url", "dep:futures-util"]
-
-# Enable git-backed version history (requires crdt-sqlite for storage, native only)
-git = ["crdt-sqlite", "dep:git2"]
+# SQLite database support (enables Database error variant with rusqlite From impl)
+database = ["dep:rusqlite"]
 
 # Enable native pandoc binary invocation for multi-format export (CLI/Tauri only)
 native-pandoc = []

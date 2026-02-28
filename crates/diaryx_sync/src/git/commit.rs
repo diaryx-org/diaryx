@@ -9,8 +9,8 @@ use crate::materialize::materialize_workspace;
 use crate::sanity::validate_workspace;
 use crate::self_healing::{HealingAction, HealthTracker};
 use crate::workspace_doc::WorkspaceCrdt;
-use diaryx_core::crdt::CrdtStorage;
 use diaryx_core::error::DiaryxError;
+use diaryx_core::types::CrdtStorage;
 
 /// Options for a workspace commit.
 pub struct CommitOptions {

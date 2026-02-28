@@ -13,13 +13,11 @@ doctest = false
 
 [features]
 default = ["console_error_panic_hook", "browser"]
-# Enable CRDT support for sync and collaboration
-crdt = ["diaryx_core/crdt"]
 # Enable browser-specific storage backends (OPFS, IndexedDB, File System Access)
 browser = ["dep:opfs", "dep:indexed-db", "dep:web-sys"]
 
 [dependencies]
-diaryx_core = { path = "../diaryx_core", features = ["crdt", "import-dayone", "import-markdown", "templating"] }
+diaryx_core = { path = "../diaryx_core", features = ["import-dayone", "import-markdown", "templating"] }
 diaryx_sync = { path = "../diaryx_sync" }
 wasm-bindgen = "0.2"
 yrs = "0.25"

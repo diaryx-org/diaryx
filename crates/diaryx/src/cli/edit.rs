@@ -2,11 +2,11 @@
 //!
 //! Starts a local sync server and opens the Diaryx web app for rich editing.
 
-use diaryx_core::crdt::{BodyDoc, CrdtStorage, FileMetadata, SqliteStorage, WorkspaceCrdt};
 use diaryx_core::frontmatter;
 use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
 use diaryx_core::workspace::Workspace;
 use diaryx_sync::local::{create_local_router, generate_session_code};
+use diaryx_sync::{BodyDoc, CrdtStorage, FileMetadata, SqliteStorage, WorkspaceCrdt};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::net::TcpListener;

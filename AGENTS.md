@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-02-28T02:14:36Z
+updated: 2026-02-28T08:14:49Z
 part_of: '[README](/README.md)'
 ---
 # Instructions for AI agents
@@ -58,7 +58,6 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │   └── diaryx_apple src - Source code for the Apple UniFFI bridge crate - crates/diaryx_apple/src/README.md
 │   ├── diaryx_core - Core library shared by Diaryx clients - crates/diaryx_core/README.md
 │   │   └── diaryx_core src - Source code for the core Diaryx library - crates/diaryx_core/src/README.md
-│   │       ├── CRDT Synchronization - Conflict-free replicated data types for real-time collaboration - crates/diaryx_core/src/crdt/README.md
 │   │       ├── Cloud Sync - Bidirectional file synchronization with cloud storage - crates/diaryx_core/src/cloud/README.md
 │   │       ├── Entry module - Entry manipulation functionality - crates/diaryx_core/src/entry/README.md
 │   │       ├── Filesystem module - Filesystem abstraction layer - crates/diaryx_core/src/fs/README.md

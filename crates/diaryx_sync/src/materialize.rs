@@ -10,8 +10,8 @@ use std::collections::HashMap;
 
 use super::body_doc_manager::BodyDocManager;
 use super::workspace_doc::WorkspaceCrdt;
-use diaryx_core::crdt::FileMetadata;
 use diaryx_core::metadata_writer::FrontmatterMetadata;
+use diaryx_core::types::FileMetadata;
 
 /// A single file extracted from CRDT state.
 #[derive(Debug, Clone)]
@@ -228,7 +228,7 @@ pub fn parse_snapshot_markdown(
                         let parsed_link = diaryx_core::link_parser::parse_link(raw);
                         let canonical =
                             diaryx_core::link_parser::to_canonical(&parsed_link, file_path);
-                        diaryx_core::crdt::BinaryRef {
+                        diaryx_core::types::BinaryRef {
                             path: canonical,
                             source: "local".to_string(),
                             hash: String::new(),

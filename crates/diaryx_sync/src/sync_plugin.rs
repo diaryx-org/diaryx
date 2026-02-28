@@ -26,7 +26,6 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde_json::Value as JsonValue;
 
-use diaryx_core::crdt::{BinaryRef, CrdtStorage, FileMetadata, UpdateOrigin};
 use diaryx_core::error::Result as CoreResult;
 use diaryx_core::export::Exporter;
 use diaryx_core::frontmatter;
@@ -34,8 +33,10 @@ use diaryx_core::fs::AsyncFileSystem;
 use diaryx_core::link_parser::{self, LinkFormat};
 use diaryx_core::path_utils::normalize_sync_path;
 use diaryx_core::plugin::{
-    Plugin, PluginContext, PluginError, PluginId, WorkspaceOpenedEvent, WorkspacePlugin,
+    Plugin, PluginCapability, PluginContext, PluginError, PluginId, PluginManifest, UiContribution,
+    WorkspaceOpenedEvent, WorkspacePlugin,
 };
+use diaryx_core::types::{BinaryRef, CrdtStorage, FileMetadata, UpdateOrigin};
 use diaryx_core::workspace::Workspace;
 
 use crate::history::HistoryManager;
@@ -171,6 +172,31 @@ impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
 }
 
 // ============================================================================
+// Manifest
+// ============================================================================
+
+/// Shared manifest for the Sync plugin (used by both native and WASM impls).
+fn sync_plugin_manifest() -> PluginManifest {
+    PluginManifest {
+        id: PluginId("sync".into()),
+        name: "Sync".into(),
+        version: env!("CARGO_PKG_VERSION").into(),
+        description: "Real-time CRDT sync across devices".into(),
+        capabilities: vec![
+            PluginCapability::WorkspaceEvents,
+            PluginCapability::CrdtCommands,
+            PluginCapability::SyncTransport,
+        ],
+        ui: vec![UiContribution::SettingsTab {
+            id: "sync-settings".into(),
+            label: "Sync".into(),
+            icon: None,
+            fields: vec![], // Rendered by Builtin component
+        }],
+    }
+}
+
+// ============================================================================
 // Plugin + WorkspacePlugin trait implementations
 // ============================================================================
 
@@ -179,6 +205,10 @@ impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
 impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> Plugin for SyncPlugin<FS> {
     fn id(&self) -> PluginId {
         PluginId("sync".into())
+    }
+
+    fn manifest(&self) -> PluginManifest {
+        sync_plugin_manifest()
     }
 
     async fn init(&self, ctx: &PluginContext) -> Result<(), PluginError> {
@@ -196,6 +226,10 @@ impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> Plugin for SyncPlugin<
 impl<FS: AsyncFileSystem + Clone + 'static> Plugin for SyncPlugin<FS> {
     fn id(&self) -> PluginId {
         PluginId("sync".into())
+    }
+
+    fn manifest(&self) -> PluginManifest {
+        sync_plugin_manifest()
     }
 
     async fn init(&self, ctx: &PluginContext) -> Result<(), PluginError> {
@@ -926,8 +960,8 @@ impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
             } => {
                 let history_manager = crate::HistoryManager::new(Arc::clone(&self.storage));
                 let diffs = history_manager.diff(doc_name, *from_id, *to_id)?;
-                // Convert diaryx_sync::FileDiff → diaryx_core::crdt::FileDiff
-                let core_diffs: Vec<diaryx_core::crdt::FileDiff> =
+                // Convert diaryx_sync::FileDiff → diaryx_core::types::FileDiff
+                let core_diffs: Vec<diaryx_core::types::FileDiff> =
                     diffs.into_iter().map(Into::into).collect();
                 Ok(Response::VersionDiff(core_diffs))
             }

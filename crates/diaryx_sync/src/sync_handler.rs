@@ -25,11 +25,11 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use super::body_doc_manager::BodyDocManager;
-use diaryx_core::crdt::FileMetadata;
 use diaryx_core::error::Result;
 use diaryx_core::fs::{AsyncFileSystem, FileSystemEvent};
 use diaryx_core::metadata_writer;
 use diaryx_core::path_utils::{normalize_sync_path, strip_workspace_root_prefix};
+use diaryx_core::types::FileMetadata;
 
 /// Configuration for guest mode sync.
 ///
@@ -743,7 +743,7 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
                         seq.iter()
                             .filter_map(|v| {
                                 // Handle both string and object formats
-                                v.as_str().map(|s| diaryx_core::crdt::BinaryRef {
+                                v.as_str().map(|s| diaryx_core::types::BinaryRef {
                                     path: s.to_string(),
                                     source: "local".to_string(),
                                     hash: String::new(),
@@ -824,8 +824,8 @@ impl<FS: AsyncFileSystem> std::fmt::Debug for SyncHandler<FS> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use diaryx_core::crdt::BinaryRef;
     use diaryx_core::fs::{FileSystemEvent, InMemoryFileSystem, SyncToAsyncFs};
+    use diaryx_core::types::BinaryRef;
     use std::sync::{Arc, Mutex};
 
     // Use SyncToAsyncFs wrapper which provides AsyncFileSystem for any SyncFileSystem

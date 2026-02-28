@@ -25,6 +25,7 @@ import type {
   CreateChildResult,
   LinkFormat,
   WorkspaceConfig,
+  PluginManifest,
 } from './generated';
 import type { JsonValue } from './generated/serde_json/JsonValue';
 
@@ -848,6 +849,48 @@ export function createApi(backend: Backend) {
         params: { workspace_path: workspacePath, audience: audience ?? null },
       });
       return expectResponse(response, 'String').data;
+    },
+
+    // =========================================================================
+    // Plugin Operations
+    // =========================================================================
+
+    /** Get manifests for all registered plugins. */
+    async getPluginManifests(): Promise<PluginManifest[]> {
+      const response = await backend.execute({
+        type: 'GetPluginManifests',
+      } as any);
+      return expectResponse(response, 'PluginManifests').data;
+    },
+
+    /** Get a plugin's configuration. */
+    async getPluginConfig(plugin: string): Promise<JsonValue> {
+      const response = await backend.execute({
+        type: 'GetPluginConfig',
+        params: { plugin },
+      });
+      return expectResponse(response, 'PluginResult').data;
+    },
+
+    /** Set a plugin's configuration. */
+    async setPluginConfig(plugin: string, config: JsonValue): Promise<void> {
+      await backend.execute({
+        type: 'SetPluginConfig',
+        params: { plugin, config },
+      });
+    },
+
+    /** Execute a plugin-specific command. */
+    async executePluginCommand(
+      plugin: string,
+      command: string,
+      params: JsonValue = null
+    ): Promise<JsonValue> {
+      const response = await backend.execute({
+        type: 'PluginCommand',
+        params: { plugin, command, params },
+      });
+      return expectResponse(response, 'PluginResult').data;
     },
   };
 }

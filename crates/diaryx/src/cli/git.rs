@@ -3,11 +3,11 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use diaryx_core::crdt::git::{
+use diaryx_sync::git::{
     CommitOptions, CommitResult, RepoKind, commit_workspace, init_repo, open_repo,
 };
-use diaryx_core::crdt::self_healing::HealthTracker;
-use diaryx_core::crdt::{BodyDocManager, CrdtStorage, SqliteStorage, WorkspaceCrdt};
+use diaryx_sync::self_healing::HealthTracker;
+use diaryx_sync::{BodyDocManager, CrdtStorage, SqliteStorage, WorkspaceCrdt};
 
 /// Handle the `diaryx commit` command.
 pub fn handle_commit(

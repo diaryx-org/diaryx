@@ -46,12 +46,12 @@ use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
 use yrs::{Doc, Map, MapRef, Observable, ReadTxn, StateVector, Transact, Update};
 
-use diaryx_core::crdt::{CrdtStorage, StorageResult};
-use diaryx_core::crdt::{CrdtUpdate, FileMetadata, UpdateOrigin};
 use diaryx_core::error::DiaryxError;
 use diaryx_core::fs::FileSystemEvent;
 use diaryx_core::link_parser;
 use diaryx_core::path_utils::normalize_sync_path;
+use diaryx_core::types::{CrdtStorage, StorageResult};
+use diaryx_core::types::{CrdtUpdate, FileMetadata, UpdateOrigin};
 
 /// The name of the Y.Map containing file metadata.
 const FILES_MAP_NAME: &str = "files";

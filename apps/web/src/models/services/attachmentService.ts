@@ -24,10 +24,11 @@ const normalizationCache = new Map<string, { canonical: string; sourceRelative: 
 let resolveAbort = new AbortController();
 
 // Concurrency-limited resolution queue.
-// Only RESOLVE_CONCURRENCY resolutions hit the WASM worker at once; the rest wait in JS.
+// Keep this intentionally low: attachment reads share a backend command lane with
+// entry navigation, so high concurrency can make file switches feel blocked.
 // On entry switch, the JS queue is flushed instantly — at most RESOLVE_CONCURRENCY
 // in-flight calls need to finish (they bail fast via abort checks).
-const RESOLVE_CONCURRENCY = 3;
+const RESOLVE_CONCURRENCY = 1;
 let resolveInFlight = 0;
 interface PendingResolve { start: () => void; cancel: () => void }
 const pendingResolves: PendingResolve[] = [];
@@ -225,47 +226,26 @@ async function normalizeAttachmentReference(
   return fallback;
 }
 
-// ============================================================================
-// Public API
-// ============================================================================
-
-/**
- * Revoke all tracked blob URLs (cleanup).
- * Should be called when switching documents or unmounting.
- */
-export function revokeBlobUrls(): void {
-  // Abort in-flight resolutions so they bail at the next check point.
-  resolveAbort.abort();
-  resolveAbort = new AbortController();
-
-  // Flush the pending queue — these never touched the worker.
-  for (const p of pendingResolves) p.cancel();
-  pendingResolves.length = 0;
-
-  for (const url of blobUrlMap.values()) {
-    URL.revokeObjectURL(url);
+function unwrapAngleBracketPath(rawPath: string): string {
+  const trimmed = rawPath.trim();
+  if (trimmed.startsWith('<') && trimmed.endsWith('>')) {
+    return trimmed.slice(1, -1).trim();
   }
-  blobUrlMap.clear();
-  normalizationCache.clear();
+  return trimmed;
 }
 
-/**
- * Resolve a single attachment reference to a blob URL.
- * Returns null if the attachment can't be loaded.
- */
-export async function resolveAttachment(
+function isNestedMarkdownLinkPayload(path: string): boolean {
+  return path.startsWith('[') && path.includes('](');
+}
+
+async function resolveAttachmentFromPaths(
   api: Api,
   entryPath: string,
-  rawPath: string,
+  canonicalPath: string,
+  sourceRelativePath: string,
+  signal: AbortSignal,
+  logFailure: boolean,
 ): Promise<string | null> {
-  // Capture the current abort signal so we can bail early if the user
-  // navigates away (revokeBlobUrls aborts this signal).
-  const signal = resolveAbort.signal;
-
-  const { canonical: canonicalPath, sourceRelative: sourceRelativePath } =
-    await normalizeAttachmentReference(api, entryPath, rawPath);
-  if (signal.aborted) return null;
-
   // Reuse existing blob URL if we already resolved this attachment
   const existingBlobUrl = blobUrlMap.get(sourceRelativePath);
   if (existingBlobUrl) return existingBlobUrl;
@@ -346,9 +326,93 @@ export async function resolveAttachment(
     const serverBlobUrl = await tryServerFetch();
     if (serverBlobUrl) return serverBlobUrl;
 
-    console.warn(`[AttachmentService] Could not load attachment: ${sourceRelativePath}`, e);
+    if (logFailure) {
+      console.warn(`[AttachmentService] Could not load attachment: ${sourceRelativePath}`, e);
+    }
     return null;
   }
+}
+
+// ============================================================================
+// Public API
+// ============================================================================
+
+/**
+ * Revoke all tracked blob URLs (cleanup).
+ * Should be called when switching documents or unmounting.
+ */
+export function revokeBlobUrls(): void {
+  // Abort in-flight resolutions so they bail at the next check point.
+  resolveAbort.abort();
+  resolveAbort = new AbortController();
+
+  // Flush the pending queue — these never touched the worker.
+  for (const p of pendingResolves) p.cancel();
+  pendingResolves.length = 0;
+
+  for (const url of blobUrlMap.values()) {
+    URL.revokeObjectURL(url);
+  }
+  blobUrlMap.clear();
+  normalizationCache.clear();
+}
+
+/**
+ * Resolve a single attachment reference to a blob URL.
+ * Returns null if the attachment can't be loaded.
+ */
+export async function resolveAttachment(
+  api: Api,
+  entryPath: string,
+  rawPath: string,
+): Promise<string | null> {
+  // Capture the current abort signal so we can bail early if the user
+  // navigates away (revokeBlobUrls aborts this signal).
+  const signal = resolveAbort.signal;
+  const directPath = unwrapAngleBracketPath(rawPath);
+  const shouldTryDirectPath =
+    directPath.length > 0 &&
+    !directPath.startsWith('http://') &&
+    !directPath.startsWith('https://') &&
+    !directPath.startsWith('blob:') &&
+    !isNestedMarkdownLinkPayload(directPath);
+
+  // Fast path: most attachment refs are already plain relative paths. Try direct
+  // lookup first to avoid extra link-parser calls on the backend command lane.
+  if (shouldTryDirectPath) {
+    const directResult = await resolveAttachmentFromPaths(
+      api,
+      entryPath,
+      directPath,
+      directPath,
+      signal,
+      false,
+    );
+    if (directResult || signal.aborted) return directResult;
+  }
+
+  const { canonical: canonicalPath, sourceRelative: sourceRelativePath } =
+    await normalizeAttachmentReference(api, entryPath, rawPath);
+  if (signal.aborted) return null;
+
+  // Avoid repeating the same failed lookup when normalization resolves to the
+  // same direct path we already attempted.
+  if (
+    shouldTryDirectPath &&
+    canonicalPath === directPath &&
+    sourceRelativePath === directPath
+  ) {
+    return null;
+  }
+
+  return resolveAttachmentFromPaths(
+    api,
+    entryPath,
+    canonicalPath,
+    sourceRelativePath,
+    signal,
+    true,
+  );
 }
 
 /**

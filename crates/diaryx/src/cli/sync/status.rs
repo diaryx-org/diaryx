@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use diaryx_core::config::Config;
-use diaryx_core::crdt::SqliteStorage;
+use diaryx_sync::SqliteStorage;
 
 /// Handle the status command - show sync status.
 pub fn handle_status(config: &Config, workspace_root: &Path) {

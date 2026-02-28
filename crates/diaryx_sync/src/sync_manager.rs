@@ -31,10 +31,10 @@ use super::body_doc_manager::BodyDocManager;
 use super::sync_handler::SyncHandler;
 use super::sync_protocol::SyncMessage;
 use super::workspace_doc::WorkspaceCrdt;
-use diaryx_core::crdt::{FileMetadata, UpdateOrigin};
 use diaryx_core::error::Result;
 use diaryx_core::fs::{AsyncFileSystem, FileSystemEvent};
 use diaryx_core::path_utils::normalize_sync_path;
+use diaryx_core::types::{FileMetadata, UpdateOrigin};
 
 /// Result of handling a sync message.
 #[derive(Debug)]
@@ -1296,9 +1296,9 @@ impl<FS: AsyncFileSystem> std::fmt::Debug for RustSyncManager<FS> {
 mod tests {
     use super::*;
     use crate::MemoryStorage;
-    use diaryx_core::crdt::CrdtStorage;
     use diaryx_core::fs::InMemoryFileSystem;
     use diaryx_core::fs::SyncToAsyncFs;
+    use diaryx_core::types::CrdtStorage;
     fn create_test_manager() -> RustSyncManager<SyncToAsyncFs<InMemoryFileSystem>> {
         let storage: Arc<dyn CrdtStorage> = Arc::new(MemoryStorage::new());
         let workspace_crdt = Arc::new(WorkspaceCrdt::new(Arc::clone(&storage)));

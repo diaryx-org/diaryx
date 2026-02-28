@@ -11,7 +11,7 @@ license-file.workspace = true
 
 [dependencies]
 # Internal crates
-diaryx_core = { workspace = true, features = ["crdt", "crdt-sqlite", "git"] }
+diaryx_core = { workspace = true }
 diaryx_publish = { workspace = true }
 diaryx_sync = { workspace = true, features = ["server", "git"] }
 

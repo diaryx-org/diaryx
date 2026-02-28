@@ -58,7 +58,7 @@ use diaryx_core::path_utils::{normalize_sync_path, strip_workspace_root_prefix};
 ///
 /// ```ignore
 /// use diaryx_core::fs::{CrdtFs, InMemoryFileSystem, SyncToAsyncFs};
-/// use diaryx_core::crdt::{WorkspaceCrdt, MemoryStorage};
+/// use diaryx_core::types::{WorkspaceCrdt, MemoryStorage};
 /// use std::sync::Arc;
 ///
 /// let inner_fs = SyncToAsyncFs::new(InMemoryFileSystem::new());

@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use diaryx_core::config::Config;
-use diaryx_core::crdt::{BodyDocManager, CrdtStorage, SqliteStorage, WorkspaceCrdt};
+use diaryx_sync::{BodyDocManager, CrdtStorage, SqliteStorage, WorkspaceCrdt};
 
 use crate::cli::args::SyncCommands;
 

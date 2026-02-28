@@ -41,7 +41,7 @@ use diaryx_core::fs::EventEmittingFs;
 ///
 /// ```ignore
 /// use diaryx_core::fs::{DecoratedFsBuilder, InMemoryFileSystem, SyncToAsyncFs};
-/// use diaryx_core::crdt::MemoryStorage;
+/// use diaryx_core::types::MemoryStorage;
 /// use std::sync::Arc;
 ///
 /// let base_fs = SyncToAsyncFs::new(InMemoryFileSystem::new());
@@ -171,7 +171,7 @@ impl<FS: AsyncFileSystem> std::fmt::Debug for DecoratedFs<FS> {
 ///
 /// ```ignore
 /// use diaryx_core::fs::{DecoratedFsBuilder, InMemoryFileSystem, SyncToAsyncFs};
-/// use diaryx_core::crdt::MemoryStorage;
+/// use diaryx_core::types::MemoryStorage;
 /// use std::sync::Arc;
 ///
 /// let base_fs = SyncToAsyncFs::new(InMemoryFileSystem::new());

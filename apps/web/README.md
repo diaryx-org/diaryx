@@ -218,6 +218,7 @@ e2e/
 ├── workspace.spec.ts               # Workspace navigation tests
 ├── editor.spec.ts                  # Editor functionality tests
 ├── attachments.spec.ts             # Attachment handling tests
+├── entry-switch.spec.ts            # Entry switching while attachments load
 ├── share.spec.ts                   # Share session tests
 ├── sync.spec.ts                    # Sync smoke test
 └── sync-workspace.spec.ts          # Sync workspace transfer test

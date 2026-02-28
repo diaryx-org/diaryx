@@ -8,6 +8,7 @@ use std::sync::Arc;
 use serde_json::Value as JsonValue;
 
 use super::events::*;
+use super::manifest::{PluginManifest, UiContribution};
 use super::{FilePlugin, Plugin, PluginContext, PluginError, PluginId, WorkspacePlugin};
 
 /// Central registry that holds all registered plugins.
@@ -45,6 +46,31 @@ impl PluginRegistry {
     /// Get all registered plugin IDs.
     pub fn plugin_ids(&self) -> Vec<PluginId> {
         self.plugins.iter().map(|p| p.id()).collect()
+    }
+
+    /// Get a reference to all registered workspace plugins.
+    pub fn workspace_plugins(&self) -> &[Arc<dyn WorkspacePlugin>] {
+        &self.workspace_plugins
+    }
+
+    // ========================================================================
+    // Manifests
+    // ========================================================================
+
+    /// Get manifests from all registered plugins.
+    pub fn get_all_manifests(&self) -> Vec<PluginManifest> {
+        self.plugins.iter().map(|p| p.manifest()).collect()
+    }
+
+    /// Get UI contributions from all registered plugins, tagged with plugin ID.
+    pub fn get_all_ui_contributions(&self) -> Vec<(PluginId, Vec<UiContribution>)> {
+        self.plugins
+            .iter()
+            .map(|p| {
+                let m = p.manifest();
+                (m.id, m.ui)
+            })
+            .collect()
     }
 
     // ========================================================================
@@ -222,7 +248,6 @@ impl PluginRegistry {
 // Typed Command Dispatch
 // ========================================================================
 
-#[cfg(feature = "crdt")]
 impl PluginRegistry {
     /// Try to handle a command via registered workspace plugins' typed dispatch.
     ///

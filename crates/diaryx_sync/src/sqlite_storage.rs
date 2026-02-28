@@ -10,9 +10,9 @@ use std::sync::{Mutex, MutexGuard};
 use rusqlite::{Connection, params};
 use yrs::{Doc, ReadTxn, Transact, Update, updates::decoder::Decode, updates::encoder::Encode};
 
-use diaryx_core::crdt::{CrdtStorage, StorageResult};
-use diaryx_core::crdt::{CrdtUpdate, UpdateOrigin};
 use diaryx_core::error::DiaryxError;
+use diaryx_core::types::{CrdtStorage, StorageResult};
+use diaryx_core::types::{CrdtUpdate, UpdateOrigin};
 
 /// Row type for file index queries: (path, title, part_of)
 type FileIndexRow = (String, Option<String>, Option<String>);

@@ -17,6 +17,7 @@
 //! the command handler.
 
 pub mod events;
+pub mod manifest;
 pub mod registry;
 
 use std::fmt;
@@ -32,6 +33,7 @@ use crate::link_parser::LinkFormat;
 
 // Re-export key types.
 pub use events::*;
+pub use manifest::*;
 pub use registry::PluginRegistry;
 
 /// Unique identifier for a plugin.
@@ -104,6 +106,9 @@ pub trait Plugin: Send + Sync + 'static {
     /// Unique identifier for this plugin.
     fn id(&self) -> PluginId;
 
+    /// Declarative manifest describing this plugin's metadata and UI contributions.
+    fn manifest(&self) -> PluginManifest;
+
     /// Initialize the plugin with the given context.
     async fn init(&self, ctx: &PluginContext) -> Result<(), PluginError> {
         let _ = ctx;
@@ -124,6 +129,9 @@ pub trait Plugin: Send + Sync + 'static {
 pub trait Plugin: 'static {
     /// Unique identifier for this plugin.
     fn id(&self) -> PluginId;
+
+    /// Declarative manifest describing this plugin's metadata and UI contributions.
+    fn manifest(&self) -> PluginManifest;
 
     /// Initialize the plugin with the given context.
     async fn init(&self, ctx: &PluginContext) -> Result<(), PluginError> {
@@ -180,7 +188,6 @@ pub trait WorkspacePlugin: Plugin {
     /// Returns `Some(result)` if this plugin handles the command, `None` otherwise.
     /// This allows plugins to intercept core `Command` variants and return typed
     /// `Response` values without the overhead of JSON roundtrips.
-    #[cfg(feature = "crdt")]
     async fn handle_typed_command(
         &self,
         cmd: &crate::command::Command,
@@ -235,6 +242,20 @@ pub trait WorkspacePlugin: Plugin {
     /// or `None` to use the default filename-based title.
     fn get_file_title(&self, _canonical_path: &str) -> Option<String> {
         None
+    }
+
+    // ====================================================================
+    // Configuration
+    // ====================================================================
+
+    /// Get this plugin's configuration (if any).
+    async fn get_config(&self) -> Option<serde_json::Value> {
+        None
+    }
+
+    /// Update this plugin's configuration.
+    async fn set_config(&self, _config: serde_json::Value) -> std::result::Result<(), PluginError> {
+        Ok(())
     }
 }
 

@@ -3329,7 +3329,7 @@ pub async fn proxy_fetch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use diaryx_core::crdt::SqliteStorage;
+    use diaryx_sync::SqliteStorage;
     use std::time::Instant;
 
     /// Performance test to verify CRDT caching works.

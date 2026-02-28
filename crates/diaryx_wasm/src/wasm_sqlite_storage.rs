@@ -47,8 +47,8 @@
 //!    let diaryx = Diaryx::with_crdt_load(fs, Arc::new(storage))?;
 //!    ```
 
-use diaryx_core::crdt::{CrdtStorage, CrdtUpdate, StorageResult, UpdateOrigin};
 use diaryx_core::error::DiaryxError;
+use diaryx_core::types::{CrdtStorage, CrdtUpdate, StorageResult, UpdateOrigin};
 use js_sys::{Array, Function, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
 

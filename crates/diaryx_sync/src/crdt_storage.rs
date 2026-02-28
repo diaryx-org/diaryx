@@ -3,7 +3,7 @@
 //! This module defines the [`CrdtStorage`] trait which abstracts over different
 //! storage backends (SQLite, in-memory) for persisting CRDT documents and updates.
 
-use diaryx_core::crdt::{CrdtUpdate, UpdateOrigin};
+use diaryx_core::types::{CrdtUpdate, UpdateOrigin};
 use diaryx_core::error::DiaryxError;
 
 /// Result type for storage operations.

@@ -760,9 +760,9 @@ mod tests {
     use crate::{
         BodyDocManager, DocIdKind, MemoryStorage, SyncHandler, SyncMessage, WorkspaceCrdt,
     };
-    use diaryx_core::crdt::CrdtStorage;
     use diaryx_core::fs::InMemoryFileSystem;
     use diaryx_core::fs::SyncToAsyncFs;
+    use diaryx_core::types::CrdtStorage;
     use futures_lite::future::block_on;
 
     type TestFs = SyncToAsyncFs<InMemoryFileSystem>;

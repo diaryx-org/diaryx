@@ -15,18 +15,16 @@ use crate::frontmatter;
 use crate::fs::AsyncFileSystem;
 use crate::link_parser;
 use crate::path_utils::{normalize_path, strip_workspace_root_prefix};
+use crate::plugin::{FileCreatedEvent, FileDeletedEvent, FileMovedEvent, FileSavedEvent};
 
-#[cfg(not(feature = "crdt"))]
-use crate::path_utils::normalize_sync_path;
-
-#[cfg(all(test, feature = "crdt"))]
+#[cfg(test)]
 use std::path::Component;
 
 /// Normalize a path by resolving a relative path against a base directory.
 /// Handles `.` and `..` components without filesystem access.
 /// Returns a forward-slash-separated path string suitable for CRDT keys.
 /// Also handles corrupted absolute paths by stripping the workspace base path if found.
-#[cfg(all(test, feature = "crdt"))]
+#[cfg(test)]
 fn normalize_contents_path(base_dir: &Path, relative: &str, workspace_base: &Path) -> String {
     // First, check if this looks like a corrupted absolute path
     // (e.g., "Users/adamharris/Documents/journal/Archive/file.md" - absolute path with leading / stripped)
@@ -108,7 +106,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
     /// Returns `true` if the command is a CRDT-related variant that should be
     /// delegated to a registered `SyncPlugin` via typed dispatch.
-    #[cfg(feature = "crdt")]
     fn is_crdt_command(cmd: &Command) -> bool {
         matches!(
             cmd,
@@ -268,19 +265,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     /// Get the canonical path from a storage path.
     ///
     /// Delegates to the plugin registry (e.g., SyncPlugin) if a plugin provides
-    /// path mapping. Otherwise normalizes the path.
-    #[cfg(feature = "crdt")]
+    /// path mapping. Otherwise returns the path unchanged.
     fn get_canonical_path(&self, storage_path: &str) -> String {
         self.plugin_registry()
             .get_canonical_path(storage_path)
             .unwrap_or_else(|| storage_path.to_string())
-    }
-
-    /// Get the canonical path from a storage path (non-CRDT version).
-    /// Simply normalizes the path by stripping leading slashes and "./" prefixes.
-    #[cfg(not(feature = "crdt"))]
-    fn get_canonical_path(&self, storage_path: &str) -> String {
-        normalize_sync_path(storage_path)
     }
 
     /// Sync the first H1 heading in the body to the given title.
@@ -322,7 +311,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     }
 
     /// Notify plugins that the workspace was modified (for sync broadcast).
-    #[cfg(feature = "crdt")]
     async fn emit_workspace_sync(&self) {
         self.plugin_registry().notify_workspace_modified().await;
     }
@@ -338,7 +326,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     /// The title is resolved from:
     /// 1. CRDT metadata (if available and has a title)
     /// 2. Fallback: generated from the filename using `path_to_title`
-    #[cfg(feature = "crdt")]
     fn format_link_for_file(&self, canonical_path: &str, from_canonical_path: &str) -> String {
         let title = self.resolve_title(canonical_path);
         let format = self.link_format();
@@ -372,7 +359,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     ///
     /// For formats that require a source file (relative formats), this falls back
     /// to MarkdownRoot format.
-    #[cfg(feature = "crdt")]
     #[allow(dead_code)]
     fn format_link(&self, canonical_path: &str) -> String {
         let title = self.resolve_title(canonical_path);
@@ -384,22 +370,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     ///
     /// Looks up the title from CRDT metadata if available,
     /// otherwise generates one from the filename.
-    #[cfg(feature = "crdt")]
     fn resolve_title(&self, canonical_path: &str) -> String {
         if let Some(title) = self.plugin_registry().get_file_title(canonical_path) {
             return title;
         }
         link_parser::path_to_title(canonical_path)
-    }
-
-    /// Format a canonical path as a link for frontmatter (non-CRDT version).
-    ///
-    /// Uses the configured link format.
-    #[cfg(not(feature = "crdt"))]
-    fn format_link_for_file(&self, canonical_path: &str, from_canonical_path: &str) -> String {
-        let title = link_parser::path_to_title(canonical_path);
-        let format = self.link_format();
-        link_parser::format_link_with_format(canonical_path, &title, format, from_canonical_path)
     }
 
     /// Resolve a frontmatter reference (`part_of`, `contents`, `attachments`) to
@@ -458,14 +433,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         )
     }
 
-    /// Format a canonical path as a link (non-CRDT version, simple).
-    #[cfg(not(feature = "crdt"))]
-    #[allow(dead_code)]
-    fn format_link(&self, canonical_path: &str) -> String {
-        let title = link_parser::path_to_title(canonical_path);
-        link_parser::format_link(canonical_path, &title)
-    }
-
     // =========================================================================
     // Command Execution
     // =========================================================================
@@ -493,7 +460,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         // If a sync plugin is registered, delegate CRDT commands to it.
         // This avoids duplicating CRDT logic and lets SyncPlugin be the
         // authoritative handler once consumers register it.
-        #[cfg(feature = "crdt")]
         if Self::is_crdt_command(&command) {
             if let Some(result) = self.plugin_registry().try_typed_command(&command).await {
                 return result;
@@ -562,7 +528,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .await?;
 
                 // Track for echo detection and emit sync message if CRDT is enabled
-                #[cfg(feature = "crdt")]
                 {
                     let canonical_path = self.get_canonical_path(&path);
                     log::debug!(
@@ -583,6 +548,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         canonical_path
                     );
                 }
+
+                // Emit file-saved event to file plugins
+                self.plugin_registry()
+                    .emit_file_saved(&FileSavedEvent { path: path.clone() })
+                    .await;
 
                 // H1→title sync: detect first-line H1 and sync to title + filename
                 if detect_h1_title && let Some(ref ws_config) = ws_config {
@@ -644,7 +614,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                                 let new_path_str = new_path.to_string_lossy().to_string();
 
                                 // Migrate body CRDT doc to new path
-                                #[cfg(feature = "crdt")]
                                 {
                                     let canonical_old = self.get_canonical_path(&path);
                                     let canonical_new = self.get_canonical_path(&new_path_str);
@@ -661,7 +630,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                             }
 
                             // Title changed but filename didn't need to change
-                            #[cfg(feature = "crdt")]
                             self.emit_workspace_sync().await;
 
                             return Ok(Response::String(path));
@@ -688,7 +656,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 // Handle part_of/contents/attachments specially - normalize and
                 // format links according to workspace settings.
                 // CrdtFs.write_file extracts metadata from frontmatter automatically
-                #[cfg(feature = "crdt")]
                 {
                     let canonical_path = self.get_canonical_path(&path);
 
@@ -865,7 +832,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                             let new_path_str = new_path.to_string_lossy().to_string();
 
                             // Migrate body CRDT doc to new path
-                            #[cfg(feature = "crdt")]
                             {
                                 let canonical_old = self.get_canonical_path(&path);
                                 let canonical_new = self.get_canonical_path(&new_path_str);
@@ -885,7 +851,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         .await?;
 
                     // Emit workspace sync (covers both rename + frontmatter update)
-                    #[cfg(feature = "crdt")]
                     self.emit_workspace_sync().await;
 
                     // Return new path if rename happened, Ok otherwise
@@ -913,7 +878,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 // CrdtFs handles CRDT updates automatically via write_file hook.
                 // We only need to track for echo detection and emit sync.
-                #[cfg(feature = "crdt")]
                 {
                     if key == "part_of" || key == "contents" || key == "attachments" {
                         let canonical_path = self.get_canonical_path(&path);
@@ -1029,7 +993,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .fix_broken_part_of(&resolved_path)
                     .await;
 
-                #[cfg(feature = "crdt")]
                 if result.success {
                     self.emit_workspace_sync().await;
                 }
@@ -1045,7 +1008,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .fix_broken_contents_ref(&resolved_index_path, &target)
                     .await;
 
-                #[cfg(feature = "crdt")]
                 if result.success {
                     self.emit_workspace_sync().await;
                 }
@@ -1305,13 +1267,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 // Set part_of if provided - format based on configured link format
                 // CrdtFs.write_file (via set_frontmatter_property) extracts updated metadata
                 if let Some(ref parent) = options.part_of {
-                    #[cfg(feature = "crdt")]
-                    let formatted_link = {
+                    let _formatted_link = {
                         let canonical_path = self.get_canonical_path(&path);
                         let canonical_parent = self.get_canonical_path(parent);
                         self.format_link_for_file(&canonical_parent, &canonical_path)
                     };
-                    #[cfg(not(feature = "crdt"))]
                     let formatted_link = {
                         let canonical_path = &path;
                         self.format_link_for_file(parent, canonical_path)
@@ -1323,7 +1283,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 // CrdtFs handles CRDT updates automatically via create_new and write_file hooks.
                 // We only need to track for echo detection and emit sync.
-                #[cfg(feature = "crdt")]
                 {
                     let canonical_path = self.get_canonical_path(&path);
 
@@ -1341,6 +1300,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     );
                 }
 
+                // Emit file-created event to file plugins
+                self.plugin_registry()
+                    .emit_file_created(&FileCreatedEvent { path: path.clone() })
+                    .await;
+
                 Ok(Response::String(path))
             }
 
@@ -1355,7 +1319,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 ws.delete_entry(&resolved_path).await?;
 
                 // Delete body doc CRDT and emit sync
-                #[cfg(feature = "crdt")]
                 {
                     self.plugin_registry().emit_body_doc_deleted(&path).await;
                     self.emit_workspace_sync().await;
@@ -1365,6 +1328,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         path
                     );
                 }
+
+                // Emit file-deleted event to file plugins
+                self.plugin_registry()
+                    .emit_file_deleted(&FileDeletedEvent { path: path.clone() })
+                    .await;
 
                 Ok(Response::Ok)
             }
@@ -1381,9 +1349,16 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 ws.move_entry(&resolved_from, &resolved_to).await?;
 
                 // Migrate body doc CRDT to new path
-                #[cfg(feature = "crdt")]
                 self.plugin_registry()
                     .emit_body_doc_renamed(&from, &to)
+                    .await;
+
+                // Emit file-moved event to file plugins
+                self.plugin_registry()
+                    .emit_file_moved(&FileMovedEvent {
+                        old_path: from,
+                        new_path: to.clone(),
+                    })
                     .await;
 
                 Ok(Response::String(to))
@@ -1402,7 +1377,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 ws.sync_move_metadata(&resolved_old, &resolved_new).await?;
 
                 // Migrate body doc CRDT to new path
-                #[cfg(feature = "crdt")]
                 self.plugin_registry()
                     .emit_body_doc_renamed(&old_path, &new_path)
                     .await;
@@ -1415,7 +1389,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 let ws = self.workspace().inner();
                 ws.sync_create_metadata(&resolved_path).await?;
 
-                #[cfg(feature = "crdt")]
                 {
                     self.emit_workspace_sync().await;
 
@@ -1433,7 +1406,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 let ws = self.workspace().inner();
                 ws.sync_delete_metadata(&resolved_path).await?;
 
-                #[cfg(feature = "crdt")]
                 {
                     self.emit_workspace_sync().await;
 
@@ -1456,7 +1428,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 let to_path_str = new_path.to_string_lossy().to_string();
 
                 // Migrate body doc and emit sync
-                #[cfg(feature = "crdt")]
                 {
                     let canonical_old = self.get_canonical_path(&path);
                     let canonical_new = self.get_canonical_path(&to_path_str);
@@ -1490,6 +1461,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     self.sync_heading_to_title(&to_path_str, &title).await?;
                 }
 
+                // Emit file-moved event to file plugins
+                self.plugin_registry()
+                    .emit_file_moved(&FileMovedEvent {
+                        old_path: path,
+                        new_path: to_path_str.clone(),
+                    })
+                    .await;
+
                 Ok(Response::String(to_path_str))
             }
 
@@ -1503,7 +1482,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 // CrdtFs handles CRDT updates automatically via write_file hooks.
                 // We only need to track for echo detection and emit sync.
-                #[cfg(feature = "crdt")]
                 {
                     let canonical_path = self.get_canonical_path(&new_path_str);
 
@@ -1541,7 +1519,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 // CrdtFs handles CRDT updates automatically via write_file hook.
                 // We only need to track for echo detection and emit sync.
-                #[cfg(feature = "crdt")]
                 {
                     let canonical_path = self.get_canonical_path(&path);
 
@@ -1566,7 +1543,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 // CrdtFs handles CRDT updates automatically via write_file hook.
                 // We only need to track for echo detection and emit sync.
-                #[cfg(feature = "crdt")]
                 {
                     let canonical_path = self.get_canonical_path(&path);
 
@@ -1597,7 +1573,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 // CrdtFs handles CRDT updates automatically via create_new and write_file hooks.
                 // We only need to track for echo detection and emit sync.
-                #[cfg(feature = "crdt")]
                 {
                     let canonical_child = self.get_canonical_path(&result.child_path);
 
@@ -1635,7 +1610,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 // CrdtFs handles CRDT updates automatically via move_file hooks.
                 // We only need to migrate body doc and emit sync.
-                #[cfg(feature = "crdt")]
                 {
                     let canonical_old = self.get_canonical_path(&entry_path);
                     let canonical_new = self.get_canonical_path(&new_path_str);
@@ -1788,7 +1762,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 let entry_path_str = entry_path.to_string_lossy().to_string();
 
                 // Add to workspace CRDT if enabled
-                #[cfg(feature = "crdt")]
                 {
                     let canonical_path = self.get_canonical_path(&entry_path_str);
                     let canonical_parent =
@@ -1869,7 +1842,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .fix_broken_attachment(&resolved_path, &attachment)
                     .await;
 
-                #[cfg(feature = "crdt")]
                 if result.success {
                     self.emit_workspace_sync().await;
                 }
@@ -1890,7 +1862,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .fix_non_portable_path(&resolved_path, &property, &old_value, &new_value)
                     .await;
 
-                #[cfg(feature = "crdt")]
                 if result.success {
                     self.emit_workspace_sync().await;
                 }
@@ -1910,7 +1881,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .fix_unlisted_file(&resolved_index_path, &resolved_file_path)
                     .await;
 
-                #[cfg(feature = "crdt")]
                 if result.success {
                     self.emit_workspace_sync().await;
                 }
@@ -1930,7 +1900,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .fix_orphan_binary_file(&resolved_index_path, &resolved_file_path)
                     .await;
 
-                #[cfg(feature = "crdt")]
                 if result.success {
                     self.emit_workspace_sync().await;
                 }
@@ -1950,7 +1919,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .fix_missing_part_of(&resolved_file_path, &resolved_index_path)
                     .await;
 
-                #[cfg(feature = "crdt")]
                 if result.success {
                     self.emit_workspace_sync().await;
                 }
@@ -1967,7 +1935,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 let total_failed = error_fixes.iter().filter(|r| !r.success).count()
                     + warning_fixes.iter().filter(|r| !r.success).count();
 
-                #[cfg(feature = "crdt")]
                 if total_fixed > 0 {
                     self.emit_workspace_sync().await;
                 }
@@ -1991,7 +1958,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .fix_circular_reference(&resolved_file_path, &part_of_value)
                     .await;
 
-                #[cfg(feature = "crdt")]
                 if result.success {
                     self.emit_workspace_sync().await;
                 }
@@ -2956,10 +2922,38 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 }
             }
 
+            Command::GetPluginManifests => {
+                let manifests = self.plugin_registry().get_all_manifests();
+                Ok(Response::PluginManifests(manifests))
+            }
+
+            Command::GetPluginConfig { plugin } => {
+                for wp in self.plugin_registry().workspace_plugins() {
+                    if wp.id().0 == plugin {
+                        let config = wp.get_config().await;
+                        return Ok(Response::PluginResult(
+                            config.unwrap_or(serde_json::Value::Null),
+                        ));
+                    }
+                }
+                Err(DiaryxError::Plugin(format!("Plugin '{plugin}' not found")))
+            }
+
+            Command::SetPluginConfig { plugin, config } => {
+                for wp in self.plugin_registry().workspace_plugins() {
+                    if wp.id().0 == plugin {
+                        wp.set_config(config)
+                            .await
+                            .map_err(|e| DiaryxError::Plugin(e.to_string()))?;
+                        return Ok(Response::Ok);
+                    }
+                }
+                Err(DiaryxError::Plugin(format!("Plugin '{plugin}' not found")))
+            }
+
             // CRDT commands are dispatched above via try_typed_command() before the match.
-            // This wildcard arm satisfies exhaustiveness when the `crdt` feature adds
-            // extra Command variants. It should never be reached at runtime.
-            #[cfg(feature = "crdt")]
+            // This wildcard arm satisfies exhaustiveness when extra Command variants exist.
+            // It should never be reached at runtime.
             _ => unreachable!(
                 "Unhandled command variant — CRDT commands should be intercepted above"
             ),
@@ -4027,11 +4021,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     }
 }
 
-#[cfg(all(test, feature = "crdt"))]
 mod tests {
-    use super::*;
-    use crate::fs::{InMemoryFileSystem, SyncToAsyncFs};
-    use futures_lite::future::block_on;
 
     // =========================================================================
     // normalize_contents_path tests

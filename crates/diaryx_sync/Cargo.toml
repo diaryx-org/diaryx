@@ -10,8 +10,8 @@ readme = "README.md"
 license-file.workspace = true
 
 [dependencies]
-# Internal crate (crdt feature still needed during transition from diaryx_core to diaryx_sync)
-diaryx_core = { workspace = true, features = ["crdt"] }
+# Internal crate (types module used for FileMetadata, BinaryRef, CrdtStorage, etc.)
+diaryx_core = { workspace = true }
 
 # Always-on: CRDT types and sync protocol (WASM-compatible)
 yrs = { version = "0.25", features = ["sync"] }
@@ -56,7 +56,7 @@ futures-lite = "2"
 default = []
 
 # SQLite CRDT storage (native only)
-sqlite = ["dep:rusqlite", "diaryx_core/crdt-sqlite"]
+sqlite = ["dep:rusqlite", "diaryx_core/database"]
 
 # Siphonophore-based server (hooks, axum WebSocket, StorageCache)
 server = ["sqlite", "dep:siphonophore", "dep:kameo", "dep:axum", "dep:tokio", "dep:tower-http", "dep:rand", "dep:futures"]

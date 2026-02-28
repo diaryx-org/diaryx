@@ -2,9 +2,9 @@
 
 use std::path::Path;
 
-use diaryx_core::crdt::{BinaryRef, FileMetadata};
 use diaryx_core::date::parse_date;
 use diaryx_core::frontmatter;
+use diaryx_sync::{BinaryRef, FileMetadata};
 
 use crate::cli::CliDiaryxAppSync;
 use crate::cli::sync::CrdtContext;

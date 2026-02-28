@@ -32,6 +32,10 @@
   import TemplateSettings from "./settings/TemplateSettings.svelte";
   import WorkspaceManagement from "./settings/WorkspaceManagement.svelte";
   import AppearanceSettings from "./settings/AppearanceSettings.svelte";
+  import PluginSettingsTab from "./settings/PluginSettingsTab.svelte";
+  import { getPluginStore } from "../models/stores/pluginStore.svelte";
+  import type { Api } from "$lib/backend/api";
+  import type { JsonValue } from "$lib/backend/generated/serde_json/JsonValue";
 
   interface Props {
     open?: boolean;
@@ -45,6 +49,8 @@
     initialTab?: string;
     /** Callback to open the sync setup wizard */
     onAddWorkspace?: () => void;
+    /** API wrapper for plugin config operations */
+    api?: Api | null;
   }
 
   let {
@@ -57,6 +63,7 @@
     workspacePath = null,
     initialTab,
     onAddWorkspace,
+    api = null,
   }: Props = $props();
 
   const mobileState = getMobileState();
@@ -65,6 +72,35 @@
   // Current workspace info for per-workspace settings
   let currentWorkspaceId = $derived(getCurrentWorkspaceId() ?? '');
   let currentWorkspaceName = $derived(getLocalWorkspace(currentWorkspaceId)?.name ?? 'My Journal');
+
+  // Plugin store
+  const pluginStore = getPluginStore();
+  const pluginSettingsTabs = $derived(pluginStore.settingsTabs);
+
+  // Plugin config state: keyed by pluginId
+  let pluginConfigs = $state<Record<string, Record<string, JsonValue>>>({});
+
+  async function loadPluginConfig(pluginId: string) {
+    if (!api) return;
+    try {
+      const raw = await api.getPluginConfig(pluginId);
+      pluginConfigs = { ...pluginConfigs, [pluginId]: (raw as Record<string, JsonValue>) ?? {} };
+    } catch {
+      pluginConfigs = { ...pluginConfigs, [pluginId]: {} };
+    }
+  }
+
+  async function handlePluginConfigChange(pluginId: string, key: string, value: JsonValue) {
+    if (!api) return;
+    const current = pluginConfigs[pluginId] ?? {};
+    const updated = { ...current, [key]: value };
+    pluginConfigs = { ...pluginConfigs, [pluginId]: updated };
+    try {
+      await api.setPluginConfig(pluginId, updated);
+    } catch (e) {
+      console.error(`[Settings] Failed to save plugin config for ${pluginId}:`, e);
+    }
+  }
 
   // Track active tab
   let activeTab = $state("general");
@@ -115,6 +151,11 @@
         <Bug class="size-4 mr-1.5 hidden sm:inline" />
         Debug
       </Tabs.Trigger>
+      {#each pluginSettingsTabs as tab}
+        <Tabs.Trigger value={`plugin-${tab.contribution.id}`} class="shrink-0">
+          {tab.contribution.label}
+        </Tabs.Trigger>
+      {/each}
     </Tabs.List>
 
     <Tabs.Content value="general">
@@ -179,6 +220,26 @@
         <DebugInfo />
       </div>
     </Tabs.Content>
+
+    {#each pluginSettingsTabs as tab}
+      <Tabs.Content value={`plugin-${tab.contribution.id}`}>
+        <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
+          {#if tab.contribution.fields.length > 0}
+            {#await loadPluginConfig(tab.pluginId) then}
+              <PluginSettingsTab
+                fields={tab.contribution.fields}
+                config={pluginConfigs[tab.pluginId] ?? {}}
+                onConfigChange={(key, value) => handlePluginConfigChange(tab.pluginId, key, value)}
+              />
+            {/await}
+          {:else}
+            <p class="text-sm text-muted-foreground">
+              No configurable settings for this plugin.
+            </p>
+          {/if}
+        </div>
+      </Tabs.Content>
+    {/each}
   </Tabs.Root>
 
   <div class="flex justify-end pt-4 border-t mt-4">

@@ -5,6 +5,7 @@
   import type { TreeNode, SearchResults } from "./backend";
   import type { Api } from "./backend/api";
   import { getMobileState } from "./hooks/useMobile.svelte";
+  import { getPluginStore } from "../models/stores/pluginStore.svelte";
   import {
     Search,
     CalendarDays,
@@ -55,6 +56,7 @@
     onCopyAsMarkdown: () => void;
     onViewMarkdown: () => void;
     onReorderFootnotes: () => void;
+    onPluginCommand?: (pluginId: string, command: string) => void;
   }
 
   let {
@@ -83,7 +85,11 @@
     onCopyAsMarkdown,
     onViewMarkdown,
     onReorderFootnotes,
+    onPluginCommand,
   }: Props = $props();
+
+  const pluginStore = getPluginStore();
+  const pluginCommands = $derived(pluginStore.commandPaletteItems);
 
   let searchValue = $state("");
   let searchResults: SearchResults | null = $state(null);
@@ -283,6 +289,24 @@
         <Command.Shortcut>Enter join code</Command.Shortcut>
       </Command.Item>
     </Command.Group>
+
+    <!-- Plugin Commands -->
+    {#if pluginCommands.length > 0}
+      <Command.Separator />
+      <Command.Group heading="Plugins">
+        {#each pluginCommands as item}
+          <Command.Item onSelect={() => {
+            open = false;
+            onPluginCommand?.(item.pluginId, item.contribution.plugin_command);
+          }}>
+            <span>{item.contribution.label}</span>
+            {#if item.contribution.group}
+              <Command.Shortcut class="text-xs opacity-50">{item.contribution.group}</Command.Shortcut>
+            {/if}
+          </Command.Item>
+        {/each}
+      </Command.Group>
+    {/if}
 
     <!-- Quick Navigation (files matching query) -->
     {#if filteredEntries.length > 0}

@@ -16,9 +16,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use super::body_doc::{BodyDoc, SyncCallback};
-use diaryx_core::crdt::UpdateOrigin;
-use diaryx_core::crdt::{CrdtStorage, StorageResult};
 use diaryx_core::fs::FileSystemEvent;
+use diaryx_core::types::UpdateOrigin;
+use diaryx_core::types::{CrdtStorage, StorageResult};
 
 /// Manager for multiple body document CRDTs.
 ///
@@ -31,7 +31,7 @@ use diaryx_core::fs::FileSystemEvent;
 /// # Example
 ///
 /// ```ignore
-/// use diaryx_core::crdt::{BodyDocManager, MemoryStorage};
+/// use diaryx_core::types::{BodyDocManager, MemoryStorage};
 /// use std::sync::Arc;
 ///
 /// let storage = Arc::new(MemoryStorage::new());

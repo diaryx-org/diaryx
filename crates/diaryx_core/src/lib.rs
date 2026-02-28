@@ -61,9 +61,8 @@ pub mod utils;
 /// Workspace (specify a directory to work in)
 pub mod workspace;
 
-/// CRDT-based synchronization (requires `crdt` feature)
-#[cfg(feature = "crdt")]
-pub mod crdt;
+/// Core data types (FileMetadata, BinaryRef, CrdtStorage trait, history types)
+pub mod types;
 
 /// Native pandoc binary integration for multi-format export (requires `native-pandoc` feature)
 #[cfg(feature = "native-pandoc")]

@@ -28,7 +28,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use diaryx_core::crdt::{SyncProtocol, WorkspaceCrdt, MemoryStorage};
+//! use diaryx_core::types::{SyncProtocol, WorkspaceCrdt, MemoryStorage};
 //! use std::sync::Arc;
 //!
 //! let storage = Arc::new(MemoryStorage::new());
@@ -47,9 +47,9 @@
 use yrs::{ReadTxn, Transact, Update, updates::decoder::Decode, updates::encoder::Encode};
 
 use super::workspace_doc::WorkspaceCrdt;
-use diaryx_core::crdt::StorageResult;
-use diaryx_core::crdt::UpdateOrigin;
 use diaryx_core::error::DiaryxError;
+use diaryx_core::types::StorageResult;
+use diaryx_core::types::UpdateOrigin;
 
 // ===========================================================================
 // VarUint encoding/decoding (y-protocols compatible)

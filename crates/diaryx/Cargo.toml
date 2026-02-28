@@ -15,8 +15,9 @@ name = "diaryx"
 path = "src/main.rs"
 
 [dependencies]
-diaryx_core = { workspace = true, features = ["crdt", "crdt-sqlite", "native-sync", "native-pandoc", "git", "import-email", "import-dayone", "import-markdown", "templating"] }
+diaryx_core = { workspace = true, features = ["native-pandoc", "import-email", "import-dayone", "import-markdown", "templating"] }
 diaryx_publish = { workspace = true, features = ["templating"] }
+diaryx_sync = { workspace = true, features = ["sqlite", "native-sync", "git"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 chrono.workspace = true
 serde.workspace = true
@@ -41,12 +42,9 @@ axum = "0.8"
 tower-http = { version = "0.6", features = ["fs"] }
 open = "5"
 
-# Optional: local sync server for web editing
-diaryx_sync = { workspace = true, features = ["server"], optional = true }
-
 [features]
 default = ["web-edit"]
-web-edit = ["dep:diaryx_sync"]
+web-edit = ["diaryx_sync/server"]
 
 [build-dependencies]
 diaryx_core = { workspace = true }

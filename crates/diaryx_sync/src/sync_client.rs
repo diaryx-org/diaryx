@@ -14,7 +14,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use diaryx_core::crdt::{SyncClient, SyncClientConfig, SyncEvent, SyncEventHandler};
+//! use diaryx_core::types::{SyncClient, SyncClientConfig, SyncEvent, SyncEventHandler};
 //!
 //! struct MyHandler;
 //! impl SyncEventHandler for MyHandler {
@@ -27,7 +27,7 @@
 //!     }
 //! }
 //!
-//! use diaryx_core::crdt::TokioConnector;
+//! use diaryx_core::types::TokioConnector;
 //!
 //! let client = SyncClient::new(config, sync_manager, Arc::new(MyHandler), TokioConnector);
 //! client.run_persistent(running).await;

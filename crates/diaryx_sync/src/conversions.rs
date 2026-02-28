@@ -1,13 +1,13 @@
-//! Type conversions between `diaryx_sync` history types and `diaryx_core::crdt` history types.
+//! Type conversions between `diaryx_sync` history types and `diaryx_core::types` history types.
 //!
 //! These are needed by [`SyncPlugin::handle_typed_command`] which must return
-//! `diaryx_core::command::Response` values containing `diaryx_core::crdt` types,
+//! `diaryx_core::command::Response` values containing `diaryx_core::types` types,
 //! while the plugin internally uses `diaryx_sync::history` types.
 
 use crate::history;
 
 /// Convert sync `HistoryEntry` → core `HistoryEntry`.
-impl From<history::HistoryEntry> for diaryx_core::crdt::HistoryEntry {
+impl From<history::HistoryEntry> for diaryx_core::types::HistoryEntry {
     fn from(e: history::HistoryEntry) -> Self {
         Self {
             update_id: e.update_id,
@@ -21,7 +21,7 @@ impl From<history::HistoryEntry> for diaryx_core::crdt::HistoryEntry {
 }
 
 /// Convert sync `ChangeType` → core `ChangeType`.
-impl From<history::ChangeType> for diaryx_core::crdt::ChangeType {
+impl From<history::ChangeType> for diaryx_core::types::ChangeType {
     fn from(c: history::ChangeType) -> Self {
         match c {
             history::ChangeType::Added => Self::Added,
@@ -36,7 +36,7 @@ impl From<history::ChangeType> for diaryx_core::crdt::ChangeType {
 ///
 /// `FileMetadata` is the same type in both crates (re-exported from core),
 /// so `old_metadata` and `new_metadata` don't need conversion.
-impl From<history::FileDiff> for diaryx_core::crdt::FileDiff {
+impl From<history::FileDiff> for diaryx_core::types::FileDiff {
     fn from(d: history::FileDiff) -> Self {
         Self {
             path: d.path,

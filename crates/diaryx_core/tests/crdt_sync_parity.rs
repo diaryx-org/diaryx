@@ -1,17 +1,17 @@
-#![cfg(feature = "crdt")]
+#![cfg(not(target_arch = "wasm32"))]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
 
 use diaryx_core::command::{Command, Response};
-use diaryx_core::crdt::{FileMetadata, parse_snapshot_markdown};
 use diaryx_core::diaryx::Diaryx;
 use diaryx_core::fs::{
     AsyncFileSystem, EventEmittingFs, FileSystem, InMemoryFileSystem, SyncToAsyncFs,
 };
 use diaryx_core::path_utils::normalize_sync_path;
 use diaryx_sync::{BodyDocManager, CrdtFs, DecoratedFsBuilder, SyncPlugin, WorkspaceCrdt};
+use diaryx_sync::{FileMetadata, parse_snapshot_markdown};
 use futures_lite::future::block_on;
 
 type BaseFs = SyncToAsyncFs<InMemoryFileSystem>;

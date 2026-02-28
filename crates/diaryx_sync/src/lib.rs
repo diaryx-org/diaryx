@@ -37,8 +37,9 @@ mod sync_plugin;
 
 // ==================== Feature-gated modules ====================
 
-// SqliteStorage: re-exported from diaryx_core during transition period.
-// The local copy (sqlite_storage.rs) is kept but not compiled.
+// SqliteStorage implementation (native only, sqlite feature)
+#[cfg(all(not(target_arch = "wasm32"), feature = "sqlite"))]
+mod sqlite_storage;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "git"))]
 pub mod git;
@@ -64,14 +65,10 @@ pub mod server;
 pub mod storage;
 
 // ==================== Re-exports ====================
-//
-// During the transition period, shared traits and types are re-exported from
-// diaryx_core::crdt so that all crates use the same trait identity.
-// Once diaryx_core::crdt is removed (Step 6), these will become primary definitions.
 
-// Core types — re-export from diaryx_core::crdt for trait coherence
-pub use diaryx_core::crdt::{BinaryRef, CrdtUpdate, FileMetadata, UpdateOrigin};
-pub use diaryx_core::crdt::{CrdtStorage, StorageResult};
+// Core types — re-export from diaryx_core::types (always available, no feature gate)
+pub use diaryx_core::types::{BinaryRef, CrdtUpdate, FileMetadata, UpdateOrigin};
+pub use diaryx_core::types::{CrdtStorage, StorageResult};
 
 // Body documents
 pub use body_doc::BodyDoc;
@@ -81,9 +78,10 @@ pub use body_doc_manager::BodyDocManager;
 pub use workspace_doc::WorkspaceCrdt;
 
 // Storage implementations
-#[cfg(all(not(target_arch = "wasm32"), feature = "sqlite"))]
-pub use diaryx_core::crdt::SqliteStorage;
+// SqliteStorage lives in diaryx_sync (local implementation)
 pub use memory_storage::MemoryStorage;
+#[cfg(all(not(target_arch = "wasm32"), feature = "sqlite"))]
+pub use sqlite_storage::SqliteStorage;
 
 // Sync protocol
 pub use sync_protocol::{

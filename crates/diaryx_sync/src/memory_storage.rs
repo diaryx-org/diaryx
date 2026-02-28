@@ -8,8 +8,8 @@ use std::sync::{Arc, RwLock};
 
 use yrs::{Doc, ReadTxn, Transact, Update, updates::decoder::Decode};
 
-use diaryx_core::crdt::{CrdtStorage, StorageResult};
-use diaryx_core::crdt::{CrdtUpdate, UpdateOrigin};
+use diaryx_core::types::{CrdtStorage, StorageResult};
+use diaryx_core::types::{CrdtUpdate, UpdateOrigin};
 
 /// Threshold for triggering auto-compaction (number of updates)
 const AUTO_COMPACT_THRESHOLD: usize = 1000;

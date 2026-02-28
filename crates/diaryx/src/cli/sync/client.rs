@@ -1,18 +1,18 @@
 //! Sync client command handlers.
 //!
 //! Handles start, push, and pull commands using WebSocket connections.
-//! The actual sync protocol is handled by `diaryx_core::crdt::SyncClient`.
+//! The actual sync protocol is handled by `diaryx_sync::SyncClient`.
 
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use diaryx_core::config::Config;
-use diaryx_core::crdt::{
+use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
+use diaryx_sync::{
     BodyDocManager, ReconnectConfig, RustSyncManager, SyncClient, SyncClientConfig, SyncEvent,
     SyncEventHandler, SyncHandler, SyncStatus, TokioConnector, WorkspaceCrdt,
 };
-use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
 
 use super::CrdtContext;
 use super::progress;
@@ -92,7 +92,7 @@ fn import_existing_files(
     workspace_crdt: &WorkspaceCrdt,
     body_manager: &BodyDocManager,
 ) -> usize {
-    use diaryx_core::crdt::{BinaryRef, FileMetadata};
+    use diaryx_sync::{BinaryRef, FileMetadata};
     use std::fs;
 
     let mut imported = 0;
@@ -560,9 +560,7 @@ pub fn handle_pull(config: &Config, workspace_root: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use diaryx_core::crdt::{
-        BodyDocManager, CrdtStorage, FileMetadata, MemoryStorage, WorkspaceCrdt,
-    };
+    use diaryx_sync::{BodyDocManager, CrdtStorage, FileMetadata, MemoryStorage, WorkspaceCrdt};
     use std::sync::Arc;
     use tempfile::TempDir;
 
@@ -828,7 +826,7 @@ Content here."#;
 
     // =========================================================================
     // Sync Protocol Logic Tests
-    // (ControlMessage tests are in diaryx_core::crdt::control_message)
+    // (ControlMessage tests are in diaryx_sync::control_message)
     // =========================================================================
 
     #[test]
@@ -857,10 +855,10 @@ Content here."#;
 
         // Apply diffs
         crdt1
-            .apply_update(&diff2_to_1, diaryx_core::crdt::UpdateOrigin::Sync)
+            .apply_update(&diff2_to_1, diaryx_sync::UpdateOrigin::Sync)
             .unwrap();
         crdt2
-            .apply_update(&diff1_to_2, diaryx_core::crdt::UpdateOrigin::Sync)
+            .apply_update(&diff1_to_2, diaryx_sync::UpdateOrigin::Sync)
             .unwrap();
 
         // Both should now have both files
@@ -885,7 +883,7 @@ Content here."#;
         // Sync crdt1 -> crdt2
         let update = crdt1.encode_state_as_update();
         crdt2
-            .apply_update(&update, diaryx_core::crdt::UpdateOrigin::Sync)
+            .apply_update(&update, diaryx_sync::UpdateOrigin::Sync)
             .unwrap();
 
         // Now both are synced - diff should be empty (2 bytes)
@@ -901,7 +899,7 @@ Content here."#;
 
     #[test]
     fn test_sync_message_encode_decode() {
-        use diaryx_core::crdt::SyncMessage;
+        use diaryx_sync::SyncMessage;
 
         let workspace = create_test_workspace();
         let sv = workspace.encode_state_vector();
@@ -943,7 +941,7 @@ Content here."#;
         assert!(diff.len() > 2, "Diff with content should exceed 2 bytes");
 
         // Apply diff to doc2
-        doc2.apply_update(&diff, diaryx_core::crdt::UpdateOrigin::Sync)
+        doc2.apply_update(&diff, diaryx_sync::UpdateOrigin::Sync)
             .unwrap();
 
         // Content should match

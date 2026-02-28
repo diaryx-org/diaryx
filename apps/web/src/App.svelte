@@ -54,6 +54,7 @@
     getThemeStore,
     shareSessionStore
   } from "./models/stores";
+  import { getPluginStore } from "./models/stores/pluginStore.svelte";
   import { getFormattingStore } from "./lib/stores/formattingStore.svelte";
   import { getTemplateContextStore } from "./lib/stores/templateContextStore.svelte";
   import { getAppearanceStore } from "./lib/stores/appearance.svelte";
@@ -607,6 +608,9 @@
       const apiInstance = createApi(backendInstance);
       setBackendApi(apiInstance);
       setBackend(backendInstance);
+
+      // Initialize plugin store (fetch manifests for UI extension points)
+      getPluginStore().init(apiInstance);
 
       // Initialize filesystem event subscription for automatic UI updates
       cleanupEventSubscription = initEventSubscription(backendInstance);
@@ -2157,6 +2161,13 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
   onCopyAsMarkdown={handleCopyAsMarkdown}
   onViewMarkdown={handleViewMarkdown}
   onReorderFootnotes={handleReorderFootnotes}
+  onPluginCommand={async (pluginId, command) => {
+    try {
+      await api?.executePluginCommand(pluginId, command);
+    } catch (e) {
+      console.error(`[App] Plugin command failed: ${pluginId}/${command}`, e);
+    }
+  }}
 />
 
 <SettingsDialog
@@ -2168,6 +2179,7 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
   bind:focusMode
   workspacePath={tree?.path}
   initialTab={settingsInitialTab}
+  {api}
   onAddWorkspace={async () => {
     showSettingsDialog = false;
     await tick();

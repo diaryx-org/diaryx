@@ -9,7 +9,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use diaryx_core::crdt::{WorkspaceCrdt, MemoryStorage, HistoryManager};
+//! use diaryx_core::types::{WorkspaceCrdt, MemoryStorage, HistoryManager};
 //!
 //! let storage = Arc::new(MemoryStorage::new());
 //! let workspace = WorkspaceCrdt::new(storage.clone());
@@ -34,9 +34,9 @@ use ts_rs::TS;
 use yrs::updates::decoder::Decode;
 use yrs::{Doc, Map, ReadTxn, StateVector, Transact, Update};
 
-use diaryx_core::crdt::FileMetadata;
-use diaryx_core::crdt::{CrdtStorage, StorageResult};
 use diaryx_core::error::DiaryxError;
+use diaryx_core::types::FileMetadata;
+use diaryx_core::types::{CrdtStorage, StorageResult};
 
 /// Maximum number of cached snapshots per document
 const SNAPSHOT_CACHE_MAX_SIZE: usize = 10;

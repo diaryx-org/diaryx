@@ -11,7 +11,7 @@
   import { ColoredHighlightMark } from "./extensions/ColoredHighlightMark";
   import Typography from "@tiptap/extension-typography";
   import Image from "@tiptap/extension-image";
-  import { getPathForBlobUrl, isVideoFile } from "../models/services/attachmentService";
+  import { getPathForBlobUrl, isVideoFile, isAudioFile } from "../models/services/attachmentService";
   import { Table } from "@tiptap/extension-table";
   import { TableRow } from "@tiptap/extension-table-row";
   import { TableHeader } from "@tiptap/extension-table-header";
@@ -240,10 +240,12 @@
             const alt = node.attrs.alt || "";
             const title = node.attrs.title || "";
 
-            // Check if this is a video by looking up the original path from blob URL,
-            // or checking the src directly for video extensions
+            // Check media type by looking up the original path from blob URL,
+            // or checking the src directly for file extensions
             const originalPath = getPathForBlobUrl(src);
-            const isVideo = (originalPath && isVideoFile(originalPath)) || isVideoFile(src);
+            const checkPath = originalPath || src;
+            const isVideo = isVideoFile(checkPath);
+            const isAudio = isAudioFile(checkPath);
 
             let dom: HTMLElement;
 
@@ -255,6 +257,14 @@
               video.className = "editor-image editor-video";
               if (title) video.title = title;
               dom = video;
+            } else if (isAudio) {
+              const audio = document.createElement("audio");
+              audio.src = src;
+              audio.controls = true;
+              audio.preload = "metadata";
+              audio.className = "editor-audio";
+              if (title) audio.title = title;
+              dom = audio;
             } else {
               const img = document.createElement("img");
               img.src = src;
@@ -1026,6 +1036,11 @@
     max-width: 100%;
     height: auto;
     border-radius: 6px;
+    margin: 0.5em 0;
+  }
+
+  :global(.editor-audio) {
+    max-width: 100%;
     margin: 0.5em 0;
   }
 

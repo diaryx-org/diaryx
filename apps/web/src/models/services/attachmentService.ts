@@ -40,6 +40,13 @@ const mimeTypes: Record<string, string> = {
   avi: 'video/x-msvideo',
   mkv: 'video/x-matroska',
   m4v: 'video/x-m4v',
+  // Audio
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  flac: 'audio/flac',
+  aac: 'audio/aac',
+  m4a: 'audio/mp4',
+  wma: 'audio/x-ms-wma',
   // Documents
   pdf: 'application/pdf',
   doc: 'application/msword',
@@ -95,10 +102,18 @@ export function isVideoFile(path: string): boolean {
 }
 
 /**
- * Check if a file is a displayable media file (image or video).
+ * Check if a file is an audio file based on its extension.
+ */
+export function isAudioFile(path: string): boolean {
+  const ext = path.split('.').pop()?.toLowerCase() || '';
+  return ['mp3', 'wav', 'flac', 'aac', 'm4a', 'ogg', 'wma'].includes(ext);
+}
+
+/**
+ * Check if a file is a displayable media file (image, video, or audio).
  */
 export function isMediaFile(path: string): boolean {
-  return isImageFile(path) || isVideoFile(path);
+  return isImageFile(path) || isVideoFile(path) || isAudioFile(path);
 }
 
 /**

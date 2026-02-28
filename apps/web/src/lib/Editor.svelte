@@ -1347,9 +1347,17 @@
 
   /* Branch decoration: active (condition matches current context) */
   :global(.conditional-branch-active) {
-    border-left: 3px solid color-mix(in oklch, var(--primary) 40%, transparent);
+    border-left: 3px solid color-mix(in oklch, var(--primary) 70%, transparent);
     padding-left: 12px !important;
     margin-left: -15px;
+    background: color-mix(in oklch, var(--primary) 3%, transparent);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  :global(.conditional-branch-active:hover) {
+    border-left-color: var(--primary);
+    box-shadow: inset 3px 0 0 0 var(--primary),
+      2px 0 12px color-mix(in oklch, var(--primary) 8%, transparent);
   }
 
   /* Branch decoration: inactive (condition does not match) */

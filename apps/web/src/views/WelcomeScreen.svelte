@@ -28,7 +28,7 @@
     const BASE_R = 1.0;   // dot radius at trough
     const PEAK_R = 2.6;   // dot radius at crest
     const FREQ = 0.052;   // spatial frequency — tighter = more rings visible
-    const SPEED = 0.9;    // radians per second — wave travel speed
+    const SPEED = 3.5;    // radians per second — wave travel speed (~67 px/s)
 
     function resize() {
       canvas.width = canvas.offsetWidth * devicePixelRatio;
@@ -52,7 +52,7 @@
       const isDark = document.documentElement.classList.contains("dark");
 
       // Blue-indigo tones that complement the app palette in both modes
-      const [r, g, b] = isDark ? [160, 172, 215] : [90, 100, 175];
+      const [r, g, b] = isDark ? [180, 195, 235] : [90, 100, 175];
       const spacing = SPACING * dpr;
 
       // Align grid so it's centered on the canvas
@@ -72,8 +72,8 @@
 
           const dotR = (BASE_R + wave * (PEAK_R - BASE_R)) * dpr;
           const alpha = isDark
-            ? 0.10 + wave * 0.38
-            : 0.08 + wave * 0.30;
+            ? 0.18 + wave * 0.62   // 0.18 – 0.80
+            : 0.08 + wave * 0.30;  // 0.08 – 0.38
 
           ctx.beginPath();
           ctx.arc(x, y, dotR, 0, Math.PI * 2);

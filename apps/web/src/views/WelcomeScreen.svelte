@@ -28,7 +28,7 @@
     </div>
 
     <Button
-      class="w-full fade-in"
+      class="w-full fade-in get-started-btn"
       style="animation-delay: 0.6s"
       onclick={onGetStarted}
     >
@@ -51,6 +51,15 @@
   }
 
   .fade-in {
-    animation: fadeIn 0.4s ease-out both;
+    animation: fadeIn 0.4s ease-out backwards;
+  }
+
+  :global(.get-started-btn) {
+    transition: transform 0.2s ease-out, box-shadow 0.2s ease-out;
+  }
+
+  :global(.get-started-btn:hover) {
+    transform: scale(1.02);
+    box-shadow: 0 4px 20px color-mix(in oklch, var(--primary) 35%, transparent);
   }
 </style>

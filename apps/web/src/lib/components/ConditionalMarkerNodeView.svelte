@@ -14,6 +14,8 @@
 
   import { Users, Lock } from "@lucide/svelte";
   import { getTemplateContextStore } from "$lib/stores/templateContextStore.svelte";
+  import { getAudienceColorStore } from "$lib/stores/audienceColorStore.svelte";
+  import { getAudienceColor } from "$lib/utils/audienceDotColor";
 
   interface Props {
     variant: "open" | "else" | "close";
@@ -32,6 +34,12 @@
   }: Props = $props();
 
   const templateContextStore = getTemplateContextStore();
+  const colorStore = getAudienceColorStore();
+
+  /** Persistent Tailwind bg class for the audience dot. */
+  const audienceDotClass = $derived(
+    getAudienceColor(condition, colorStore.audienceColors),
+  );
 
   /** True when the user has selected a specific audience to filter by */
   const isFilterActive = $derived(templateContextStore.previewAudience !== null);
@@ -88,7 +96,7 @@
   {#if isAudienceOpen}
     <!-- ── Enhanced BlockHeader for for-audience open markers ── -->
     <Users class="audience-users-icon" aria-hidden="true" />
-    <span class="audience-dot" aria-hidden="true"></span>
+    <span class="audience-dot {audienceDotClass}" aria-hidden="true"></span>
     <span class="audience-name">{label}</span>
     <!-- Lock sits on the far right; brightens when filtered out -->
     <span
@@ -168,13 +176,12 @@
     border-left-color: var(--primary);
   }
 
-  /* Colored accent dot immediately before the audience name */
+  /* Colored accent dot — color comes from the Tailwind class set dynamically */
   .audience-dot {
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: var(--primary);
-    opacity: 0.75;
+    opacity: 0.85;
     flex-shrink: 0;
   }
 

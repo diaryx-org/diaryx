@@ -1,11 +1,11 @@
 <script lang="ts">
   /**
-   * ManageAudiencesModal — Step 5 of the Audiences moat.
+   * ManageAudiencesModal — list, create, rename, and delete audiences.
    *
-   * Lets the user list, create, rename, and delete audience strings across
-   * the entire workspace. Rename and delete walk the workspace tree and
-   * bulk-update every entry's frontmatter (and ConditionalBlock content
-   * for renames) using existing API primitives — no data-model changes.
+   * Colors are persistent: each audience gets a Tailwind bg class assigned
+   * at creation time and stored in audienceColorStore. Renaming moves the
+   * color entry so visual identity never breaks. A per-row inline swatch
+   * picker lets users manually choose any of the 8 palette colors.
    */
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
@@ -14,7 +14,8 @@
   import type { Api } from "$lib/backend/api";
   import type { TreeNode } from "$lib/backend/interface";
   import { getTemplateContextStore } from "$lib/stores/templateContextStore.svelte";
-  import { getAudienceDotColor } from "$lib/utils/audienceDotColor";
+  import { getAudienceColorStore } from "$lib/stores/audienceColorStore.svelte";
+  import { getAudienceColor, AUDIENCE_PALETTE } from "$lib/utils/audienceDotColor";
 
   interface Props {
     open: boolean;
@@ -26,6 +27,7 @@
   let { open, api, rootPath, onClose }: Props = $props();
 
   const templateContextStore = getTemplateContextStore();
+  const colorStore = getAudienceColorStore();
 
   // ── Modal state ─────────────────────────────────────────────────────────
   let audiences = $state<string[]>([]);
@@ -44,6 +46,9 @@
   let deleteCandidate = $state<{ name: string; count: number } | null>(null);
   let deleteWorking = $state(false);
 
+  // Color picker — which audience row has its swatch palette open
+  let colorPickerOpen = $state<string | null>(null);
+
   // ── Load ────────────────────────────────────────────────────────────────
   $effect(() => {
     if (open && api && rootPath) loadAudiences();
@@ -53,6 +58,8 @@
     loading = true;
     try {
       audiences = await api!.getAvailableAudiences(rootPath);
+      // Ensure every existing audience has a persisted color
+      for (const name of audiences) colorStore.assignColor(name);
     } catch {
       audiences = [];
     } finally {
@@ -89,6 +96,7 @@
     createValue = "";
     editingAudience = null;
     deleteCandidate = null;
+    colorPickerOpen = null;
   }
 
   function cancelCreate() {
@@ -103,6 +111,7 @@
       toast.error(`"${name}" already exists`);
       return;
     }
+    colorStore.assignColor(name);
     audiences = [...audiences, name].sort();
     templateContextStore.bumpAudiencesVersion();
     cancelCreate();
@@ -114,6 +123,7 @@
     editValue = name;
     deleteCandidate = null;
     isCreating = false;
+    colorPickerOpen = null;
   }
 
   function cancelEdit() {
@@ -139,7 +149,7 @@
           const fm = await api!.getFrontmatter(path);
           const updated = (fm.audience as string[]).map((a) => (a === oldName ? newName : a));
           await api!.setFrontmatterProperty(path, "audience", updated, rootPath);
-          // 2. Update {{#for-audience "..."}} markers in content
+          // 2. Update {{#for-audience "..."}} markers in entry content
           const entry = await api!.getEntry(path);
           const marker = `{{#for-audience "${oldName}"}}`;
           if (entry.content.includes(marker)) {
@@ -151,6 +161,8 @@
           }
         }),
       );
+      // Move the persistent color entry to the new name
+      colorStore.renameColor(oldName, newName);
       audiences = audiences.map((a) => (a === oldName ? newName : a));
       templateContextStore.bumpAudiencesVersion();
       toast.success(
@@ -170,6 +182,7 @@
     if (!api) return;
     editingAudience = null;
     isCreating = false;
+    colorPickerOpen = null;
     working = true;
     try {
       const paths = await findEntriesWithAudience(name);
@@ -202,6 +215,7 @@
           }
         }),
       );
+      colorStore.deleteColor(name);
       audiences = audiences.filter((a) => a !== name);
       templateContextStore.bumpAudiencesVersion();
       toast.success(
@@ -216,12 +230,23 @@
     }
   }
 
+  // ── Color picker ─────────────────────────────────────────────────────────
+  function toggleColorPicker(name: string) {
+    colorPickerOpen = colorPickerOpen === name ? null : name;
+  }
+
+  function pickColor(name: string, tailwindClass: string) {
+    colorStore.setColor(name, tailwindClass);
+    colorPickerOpen = null;
+  }
+
   // ── Close ────────────────────────────────────────────────────────────────
   function handleOpenChange(isOpen: boolean) {
     if (!isOpen) {
       cancelEdit();
       cancelCreate();
       deleteCandidate = null;
+      colorPickerOpen = null;
       onClose();
     }
   }
@@ -253,70 +278,104 @@
           {#each audiences as name (name)}
             {@const isEditing = editingAudience === name}
             {@const isPendingDelete = deleteCandidate?.name === name}
+            {@const dotClass = getAudienceColor(name, colorStore.audienceColors)}
+            {@const pickerOpen = colorPickerOpen === name}
             <li
-              class="flex items-center gap-2 px-3 py-2 text-sm transition-colors {isPendingDelete ? 'bg-destructive/10' : 'hover:bg-muted/40'}"
+              class="flex flex-col text-sm transition-colors {isPendingDelete
+                ? 'bg-destructive/10'
+                : 'hover:bg-muted/40'}"
             >
-              <!-- Dot -->
-              <span
-                class="size-2 rounded-full shrink-0 {getAudienceDotColor(isEditing ? editValue || name : name)}"
-              ></span>
+              <!-- Main row -->
+              <div class="flex items-center gap-2 px-3 py-2">
+                <!-- Colored dot — click to open inline swatch picker -->
+                <button
+                  class="size-2.5 rounded-full shrink-0 {dotClass} focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-foreground/30 hover:scale-125 transition-transform"
+                  onclick={() => toggleColorPicker(name)}
+                  aria-label="Change color for {name}"
+                  title="Click to change color"
+                  disabled={working || deleteWorking}
+                ></button>
 
-              {#if isEditing}
-                <!-- Edit mode -->
-                <input
-                  class="flex-1 min-w-0 bg-transparent border-b border-border focus:border-primary outline-none text-sm py-0.5"
-                  bind:value={editValue}
-                  onkeydown={(e) => {
-                    if (e.key === "Enter") { e.preventDefault(); confirmRename(); }
-                    if (e.key === "Escape") { e.preventDefault(); cancelEdit(); }
-                  }}
-                  autofocus
-                  disabled={working}
-                />
-                <button
-                  class="text-muted-foreground hover:text-primary transition-colors disabled:opacity-40"
-                  onclick={confirmRename}
-                  disabled={working}
-                  aria-label="Save"
-                >
-                  {#if working}
-                    <Loader2 class="size-3.5 animate-spin" />
-                  {:else}
-                    <Check class="size-3.5" />
-                  {/if}
-                </button>
-                <button
-                  class="text-muted-foreground hover:text-foreground transition-colors"
-                  onclick={cancelEdit}
-                  disabled={working}
-                  aria-label="Cancel"
-                >
-                  <X class="size-3.5" />
-                </button>
-              {:else}
-                <!-- Normal view -->
-                <span class="flex-1 truncate {isPendingDelete ? 'text-muted-foreground line-through' : ''}">{name}</span>
-                <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 [li:hover_&]:opacity-100">
+                {#if isEditing}
+                  <!-- Edit mode -->
+                  <input
+                    class="flex-1 min-w-0 bg-transparent border-b border-border focus:border-primary outline-none text-sm py-0.5"
+                    bind:value={editValue}
+                    onkeydown={(e) => {
+                      if (e.key === "Enter") { e.preventDefault(); confirmRename(); }
+                      if (e.key === "Escape") { e.preventDefault(); cancelEdit(); }
+                    }}
+                    autofocus
+                    disabled={working}
+                  />
                   <button
-                    class="text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded"
-                    onclick={() => startEdit(name)}
-                    disabled={working || deleteWorking || !!deleteCandidate}
-                    aria-label="Rename {name}"
+                    class="text-muted-foreground hover:text-primary transition-colors disabled:opacity-40"
+                    onclick={confirmRename}
+                    disabled={working}
+                    aria-label="Save rename"
                   >
-                    <Pencil class="size-3.5" />
-                  </button>
-                  <button
-                    class="text-muted-foreground hover:text-destructive transition-colors p-0.5 rounded"
-                    onclick={() => requestDelete(name)}
-                    disabled={working || deleteWorking || !!deleteCandidate}
-                    aria-label="Delete {name}"
-                  >
-                    {#if working && !deleteCandidate}
+                    {#if working}
                       <Loader2 class="size-3.5 animate-spin" />
                     {:else}
-                      <Trash2 class="size-3.5" />
+                      <Check class="size-3.5" />
                     {/if}
                   </button>
+                  <button
+                    class="text-muted-foreground hover:text-foreground transition-colors"
+                    onclick={cancelEdit}
+                    disabled={working}
+                    aria-label="Cancel rename"
+                  >
+                    <X class="size-3.5" />
+                  </button>
+                {:else}
+                  <!-- Normal view -->
+                  <span
+                    class="flex-1 truncate {isPendingDelete
+                      ? 'text-muted-foreground line-through'
+                      : ''}"
+                  >{name}</span>
+                  <div
+                    class="flex items-center gap-1 opacity-0 focus-within:opacity-100 [li:hover_&]:opacity-100"
+                  >
+                    <button
+                      class="text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded"
+                      onclick={() => startEdit(name)}
+                      disabled={working || deleteWorking || !!deleteCandidate}
+                      aria-label="Rename {name}"
+                    >
+                      <Pencil class="size-3.5" />
+                    </button>
+                    <button
+                      class="text-muted-foreground hover:text-destructive transition-colors p-0.5 rounded"
+                      onclick={() => requestDelete(name)}
+                      disabled={working || deleteWorking || !!deleteCandidate}
+                      aria-label="Delete {name}"
+                    >
+                      {#if working && !deleteCandidate}
+                        <Loader2 class="size-3.5 animate-spin" />
+                      {:else}
+                        <Trash2 class="size-3.5" />
+                      {/if}
+                    </button>
+                  </div>
+                {/if}
+              </div>
+
+              <!-- Inline swatch picker — shown when dot is clicked -->
+              {#if pickerOpen}
+                <div class="flex items-center gap-2 px-3 pb-2.5 pt-0">
+                  <span class="text-[10px] text-muted-foreground mr-0.5">Color:</span>
+                  {#each AUDIENCE_PALETTE as swatch}
+                    {@const isActive = dotClass === swatch}
+                    <button
+                      class="size-4 rounded-full {swatch} shrink-0 transition-transform hover:scale-110
+                        {isActive ? 'ring-2 ring-offset-1 ring-foreground/60 scale-110' : ''}"
+                      onclick={() => pickColor(name, swatch)}
+                      aria-label="Set color {swatch}"
+                      title={swatch}
+                    ></button>
+                  {/each}
                 </div>
               {/if}
             </li>
@@ -326,7 +385,10 @@
           {#if isCreating}
             <li class="flex items-center gap-2 px-3 py-2 text-sm bg-muted/30">
               <span
-                class="size-2 rounded-full shrink-0 {getAudienceDotColor(createValue || '?')}"
+                class="size-2.5 rounded-full shrink-0 {getAudienceColor(
+                  createValue,
+                  colorStore.audienceColors,
+                )}"
               ></span>
               <input
                 class="flex-1 min-w-0 bg-transparent border-b border-border focus:border-primary outline-none text-sm py-0.5 placeholder:text-muted-foreground"
@@ -341,7 +403,7 @@
               <button
                 class="text-muted-foreground hover:text-primary transition-colors"
                 onclick={confirmCreate}
-                aria-label="Add"
+                aria-label="Add audience"
               >
                 <Check class="size-3.5" />
               </button>
@@ -359,13 +421,17 @@
 
       <!-- Delete warning banner -->
       {#if deleteCandidate}
-        <div class="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2.5 flex flex-col gap-2">
+        <div
+          class="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2.5 flex flex-col gap-2"
+        >
           <div class="flex items-start gap-2 text-sm">
             <AlertTriangle class="size-4 text-destructive shrink-0 mt-0.5" />
             <p class="text-foreground leading-snug">
               <strong>"{deleteCandidate.name}"</strong> is used in
-              <strong>{deleteCandidate.count} {deleteCandidate.count === 1 ? "entry" : "entries"}</strong>.
-              Deleting will remove this tag from all of them.
+              <strong
+                >{deleteCandidate.count}
+                {deleteCandidate.count === 1 ? "entry" : "entries"}</strong
+              >. Deleting will remove this tag from all of them.
             </p>
           </div>
           <div class="flex items-center gap-2 justify-end">

@@ -6,6 +6,8 @@
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
   import { Plus, Lock } from "@lucide/svelte";
   import { getTemplateContextStore } from "$lib/stores/templateContextStore.svelte";
+  import { getAudienceColorStore } from "$lib/stores/audienceColorStore.svelte";
+  import { getAudienceColor } from "$lib/utils/audienceDotColor";
 
   interface Props {
     /** string[] = explicit tags, null = inheriting (treated as private here) */
@@ -20,6 +22,7 @@
 
   const mobileState = getMobileState();
   const templateContextStore = getTemplateContextStore();
+  const colorStore = getAudienceColorStore();
 
   let open = $state(false);
   let searchValue = $state("");
@@ -66,7 +69,10 @@
     );
     // audience null means inheriting — start an explicit list with this tag
     onChange(audience === null ? [trimmed] : [...audience, trimmed]);
-    if (isNew) templateContextStore.bumpAudiencesVersion();
+    if (isNew) {
+      colorStore.assignColor(trimmed);
+      templateContextStore.bumpAudiencesVersion();
+    }
     open = false;
     searchValue = "";
   }
@@ -120,7 +126,10 @@
       </span>
     {:else}
       {#each currentTags as tag (tag)}
-        <span class="pill-tag">{tag}</span>
+        <span class="pill-tag">
+          <span class="pill-dot {getAudienceColor(tag, colorStore.audienceColors)}"></span>
+          {tag}
+        </span>
       {/each}
       <span class="pill-add" aria-hidden="true">
         <Plus class="size-3" />
@@ -196,12 +205,22 @@
   .pill-tag {
     display: inline-flex;
     align-items: center;
+    gap: 5px;
     padding: 2px 8px;
     border-radius: 4px;
     font-size: 12px;
     font-weight: 500;
     background: var(--secondary);
     color: var(--secondary-foreground);
+  }
+
+  /* Persistent audience color dot inside each pill */
+  .pill-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    opacity: 0.85;
   }
 
   /* Compact "+" button after tags */

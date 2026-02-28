@@ -8,7 +8,8 @@
   import * as Select from "$lib/components/ui/select";
   import { Eye, Globe } from "@lucide/svelte";
   import { getTemplateContextStore } from "../stores/templateContextStore.svelte";
-  import { getAudienceDotColor } from "$lib/utils/audienceDotColor";
+  import { getAudienceColorStore } from "$lib/stores/audienceColorStore.svelte";
+  import { getAudienceColor } from "$lib/utils/audienceDotColor";
   import ManageAudiencesModal from "./ManageAudiencesModal.svelte";
   import type { Api } from "../backend";
 
@@ -20,6 +21,7 @@
   let { api, rootPath }: Props = $props();
 
   const templateContextStore = getTemplateContextStore();
+  const colorStore = getAudienceColorStore();
 
   let audiences = $state<string[]>([]);
   let showManageModal = $state(false);
@@ -31,13 +33,15 @@
     }
     try {
       audiences = await api.getAvailableAudiences(rootPath);
+      // Ensure every existing audience has a persisted color (no-op for already-assigned)
+      for (const name of audiences) colorStore.assignColor(name);
     } catch (e) {
       console.warn("[AudienceFilter] Failed to load audiences:", e);
       audiences = [];
     }
   }
 
-  // Load audiences when rootPath changes or a new audience tag is created anywhere
+  // Reload when rootPath changes or a new audience tag is created anywhere
   $effect(() => {
     // Reading audiencesVersion here makes this effect re-run when it is bumped
     // eslint-disable-next-line @typescript-eslint/no-unused-expressions
@@ -70,7 +74,12 @@
         <span class="audience-filter-label">
           <Eye class="size-3.5" />
           {#if isFiltering}
-            <span class="dot {getAudienceDotColor(templateContextStore.previewAudience!)}"></span>
+            <span
+              class="dot {getAudienceColor(
+                templateContextStore.previewAudience!,
+                colorStore.audienceColors,
+              )}"
+            ></span>
             {templateContextStore.previewAudience}
           {:else}
             All audiences
@@ -85,7 +94,7 @@
         <Select.Separator />
         {#each audiences as audience}
           <Select.Item value={audience}>
-            <span class="dot {getAudienceDotColor(audience)}"></span>
+            <span class="dot {getAudienceColor(audience, colorStore.audienceColors)}"></span>
             {audience}
           </Select.Item>
         {/each}
@@ -104,7 +113,7 @@
   </div>
 {/if}
 
-<!-- Manage Audiences Modal (self-contained, mounted here to keep api/rootPath in scope) -->
+<!-- Manage Audiences Modal -->
 {#if api && rootPath}
   <ManageAudiencesModal
     open={showManageModal}
@@ -154,7 +163,6 @@
     white-space: nowrap;
   }
 
-  /* Colored dot used both in trigger label and in dropdown items */
   .dot {
     display: inline-block;
     width: 8px;

@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-02-28T08:14:49Z
+updated: 2026-02-28T15:32:16Z
 part_of: '[README](/README.md)'
 ---
 # Instructions for AI agents
@@ -96,6 +96,7 @@ Read the root README.md first. For specific projects, use these entry points:
 | WASM bindings    | crates/diaryx_wasm/README.md        |
 | Sync engine      | crates/diaryx_sync/README.md        |
 | Sync server      | crates/diaryx_sync_server/README.md |
+| Extism plugins   | crates/diaryx_extism/README.md      |
 
 
 ## Commands

@@ -163,6 +163,48 @@ fn acquire_lock<T>(mutex: &Mutex<T>) -> Result<std::sync::MutexGuard<'_, T>, Ser
 }
 
 // ============================================================================
+// Extism Third-Party Plugin Loading
+// ============================================================================
+
+/// Load and register any third-party Extism WASM plugins from the user's
+/// plugin directory (`~/.diaryx/plugins/`).
+///
+/// Each subdirectory containing a `plugin.wasm` file is loaded as a plugin
+/// and registered as both a WorkspacePlugin and FilePlugin. Errors during
+/// loading are logged and skipped (not fatal).
+#[cfg(feature = "extism-plugins")]
+fn register_extism_plugins<FS: diaryx_core::fs::AsyncFileSystem + 'static>(
+    diaryx: &mut Diaryx<FS>,
+) {
+    let plugins_dir = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("diaryx")
+        .join("plugins");
+    if !plugins_dir.exists() {
+        return;
+    }
+
+    // Use a basic real filesystem for host function file access.
+    let fs: Arc<dyn diaryx_core::fs::AsyncFileSystem> =
+        Arc::new(SyncToAsyncFs::new(RealFileSystem));
+    let host_ctx = Arc::new(diaryx_extism::HostContext { fs });
+    match diaryx_extism::load_plugins_from_dir(&plugins_dir, host_ctx) {
+        Ok(plugins) => {
+            for plugin in plugins {
+                let arc = Arc::new(plugin);
+                diaryx
+                    .plugin_registry_mut()
+                    .register_workspace_plugin(arc.clone());
+                diaryx.plugin_registry_mut().register_file_plugin(arc);
+            }
+        }
+        Err(e) => {
+            log::warn!("Failed to load extism plugins: {e}");
+        }
+    }
+}
+
+// ============================================================================
 // Unified Command API
 // ============================================================================
 
@@ -271,6 +313,8 @@ pub async fn execute<R: Runtime>(
                         decorated.set_workspace_root(ws_path.clone());
                     }
                     log::debug!("[execute] Created Diaryx with DecoratedFs + SyncPlugin");
+                    #[cfg(feature = "extism-plugins")]
+                    register_extism_plugins(&mut d);
                     Arc::new(d)
                 } else {
                     // Fallback: no DecoratedFs yet (before initialize_app).
@@ -291,6 +335,8 @@ pub async fn execute<R: Runtime>(
                         d.set_workspace_root(ws_path.clone());
                         decorated.set_workspace_root(ws_path.clone());
                     }
+                    #[cfg(feature = "extism-plugins")]
+                    register_extism_plugins(&mut d);
                     Arc::new(d)
                 }
             };

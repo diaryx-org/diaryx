@@ -20,6 +20,10 @@ Plugins are registered in the `PluginRegistry`, which is stored on the `Diaryx<F
 | `events.rs` | Event types for workspace and file lifecycle hooks |
 | `registry.rs` | `PluginRegistry` — collects plugins and dispatches events/commands |
 
+## Registration Dedup
+
+When a plugin implements both `WorkspacePlugin` and `FilePlugin`, call both `register_workspace_plugin` and `register_file_plugin` with the same `Arc`. The registry deduplicates the base `plugins` list by plugin ID, so `init()`, `shutdown()`, and `manifest()` are only called once.
+
 ## PluginContext
 
 `PluginContext` provides runtime configuration to plugins during `init()`:

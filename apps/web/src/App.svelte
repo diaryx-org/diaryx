@@ -612,6 +612,13 @@
       // Initialize plugin store (fetch manifests for UI extension points)
       getPluginStore().init(apiInstance);
 
+      // Load browser-side Extism WASM plugins from IndexedDB
+      import('$lib/plugins/browserPluginManager.svelte').then((m) =>
+        m.loadAllPlugins().catch((e: unknown) =>
+          console.warn('[App] Failed to load browser plugins:', e),
+        ),
+      );
+
       // Initialize filesystem event subscription for automatic UI updates
       cleanupEventSubscription = initEventSubscription(backendInstance);
 

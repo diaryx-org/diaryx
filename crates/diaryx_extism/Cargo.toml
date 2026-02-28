@@ -1,0 +1,17 @@
+[package]
+name = "diaryx_extism"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+description = "Extism-based third-party plugin runtime for Diaryx"
+publish = false
+
+[dependencies]
+diaryx_core.workspace = true
+extism = "1.13"
+serde.workspace = true
+serde_json.workspace = true
+async-trait = "0.1"
+log = "0.4"
+thiserror.workspace = true
+futures-lite = "2"

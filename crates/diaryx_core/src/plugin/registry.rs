@@ -32,14 +32,26 @@ impl PluginRegistry {
     }
 
     /// Register a workspace plugin.
+    ///
+    /// The plugin is added to the base `plugins` list only if no plugin with
+    /// the same ID is already registered, preventing double `init()`/`shutdown()`
+    /// calls and duplicate manifests when a plugin implements both
+    /// `WorkspacePlugin` and `FilePlugin`.
     pub fn register_workspace_plugin(&mut self, plugin: Arc<dyn WorkspacePlugin>) {
-        self.plugins.push(plugin.clone());
+        if !self.plugins.iter().any(|p| p.id() == plugin.id()) {
+            self.plugins.push(plugin.clone());
+        }
         self.workspace_plugins.push(plugin);
     }
 
     /// Register a file plugin.
+    ///
+    /// The plugin is added to the base `plugins` list only if no plugin with
+    /// the same ID is already registered (see [`register_workspace_plugin`](Self::register_workspace_plugin)).
     pub fn register_file_plugin(&mut self, plugin: Arc<dyn FilePlugin>) {
-        self.plugins.push(plugin.clone());
+        if !self.plugins.iter().any(|p| p.id() == plugin.id()) {
+            self.plugins.push(plugin.clone());
+        }
         self.file_plugins.push(plugin);
     }
 

@@ -12,12 +12,20 @@ import type {
   UiContribution,
   PluginId,
 } from '$lib/backend/generated';
+import { getBrowserManifests } from '$lib/plugins/browserPluginManager.svelte';
 
 // ============================================================================
 // State
 // ============================================================================
 
-let manifests = $state<PluginManifest[]>([]);
+/** Manifests from the native backend (Rust plugin registry). */
+let backendManifests = $state<PluginManifest[]>([]);
+
+/** Combined manifests from both backend and browser-loaded plugins. */
+const manifests = $derived<PluginManifest[]>([
+  ...backendManifests,
+  ...getBrowserManifests(),
+]);
 
 // ============================================================================
 // Derived Selectors
@@ -99,10 +107,10 @@ function getStatusBarItems(): Array<{ pluginId: PluginId; contribution: Extract<
 /** Fetch plugin manifests from the backend. Call once during app init. */
 async function init(api: Api): Promise<void> {
   try {
-    manifests = await api.getPluginManifests();
+    backendManifests = await api.getPluginManifests();
   } catch (e) {
     console.warn('[pluginStore] Failed to load plugin manifests:', e);
-    manifests = [];
+    backendManifests = [];
   }
 }
 

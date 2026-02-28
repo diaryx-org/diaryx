@@ -86,6 +86,44 @@ fi
 
 echo "AI plugin WASM built: $SYNC_PLUGIN_DIR/diaryx_ai.wasm"
 
+# Build the Publish plugin WASM
+echo "Building diaryx_publish_extism WASM plugin..."
+cargo build --target wasm32-unknown-unknown -p diaryx_publish_extism --release
+cp "$WORKSPACE_ROOT/target/wasm32-unknown-unknown/release/diaryx_publish_extism.wasm" \
+   "$SYNC_PLUGIN_DIR/diaryx_publish.wasm"
+# Optimize with wasm-opt if available
+if command -v wasm-opt >/dev/null 2>&1; then
+    echo "Optimizing Publish plugin WASM with wasm-opt..."
+    wasm-opt -Oz "$SYNC_PLUGIN_DIR/diaryx_publish.wasm" -o "$SYNC_PLUGIN_DIR/diaryx_publish.wasm"
+fi
+
+# Guardrail: Publish plugin must not import wasm-bindgen placeholders.
+if LC_ALL=C grep -a -q "__wbindgen_placeholder__" "$SYNC_PLUGIN_DIR/diaryx_publish.wasm"; then
+    echo "Error: Publish plugin contains wasm-bindgen imports (__wbindgen_placeholder__)."
+    exit 1
+fi
+
+echo "Publish plugin WASM built: $SYNC_PLUGIN_DIR/diaryx_publish.wasm"
+
+# Build the Math plugin WASM
+echo "Building diaryx_math_extism WASM plugin..."
+cargo build --target wasm32-unknown-unknown -p diaryx_math_extism --release
+cp "$WORKSPACE_ROOT/target/wasm32-unknown-unknown/release/diaryx_math_extism.wasm" \
+   "$SYNC_PLUGIN_DIR/diaryx_math.wasm"
+# Optimize with wasm-opt if available
+if command -v wasm-opt >/dev/null 2>&1; then
+    echo "Optimizing Math plugin WASM with wasm-opt..."
+    wasm-opt -Oz "$SYNC_PLUGIN_DIR/diaryx_math.wasm" -o "$SYNC_PLUGIN_DIR/diaryx_math.wasm"
+fi
+
+# Guardrail: Math plugin must not import wasm-bindgen placeholders.
+if LC_ALL=C grep -a -q "__wbindgen_placeholder__" "$SYNC_PLUGIN_DIR/diaryx_math.wasm"; then
+    echo "Error: Math plugin contains wasm-bindgen imports (__wbindgen_placeholder__)."
+    exit 1
+fi
+
+echo "Math plugin WASM built: $SYNC_PLUGIN_DIR/diaryx_math.wasm"
+
 # Clean up trailing whitespace in ts-rs generated bindings
 # (ts-rs emits trailing spaces on struct field lines)
 BINDINGS_DIR="$WORKSPACE_ROOT/crates/diaryx_core/bindings"

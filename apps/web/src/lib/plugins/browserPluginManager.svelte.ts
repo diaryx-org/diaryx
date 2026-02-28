@@ -8,18 +8,25 @@
 
 import {
   loadBrowserPlugin,
+  getBrowserPluginRuntimeSupport,
   type BrowserExtismPlugin,
   type GuestEvent,
-} from './extismBrowserLoader';
-import type { PluginManifest } from '$lib/backend/generated';
+} from "./extismBrowserLoader";
+import type { PluginManifest } from "$lib/backend/generated";
+import { getPluginStore } from "@/models/stores/pluginStore.svelte";
+import {
+  createExtensionFromManifest,
+  isEditorExtension,
+  type EditorExtensionManifest,
+} from "./editorExtensionFactory";
 
 // ============================================================================
 // IndexedDB storage
 // ============================================================================
 
-const DB_NAME = 'diaryx-plugins';
+const DB_NAME = "diaryx-plugins";
 const DB_VERSION = 1;
-const STORE_NAME = 'plugins';
+const STORE_NAME = "plugins";
 
 interface StoredPlugin {
   /** Plugin ID (primary key). */
@@ -38,7 +45,7 @@ function openDb(): Promise<IDBDatabase> {
     request.onupgradeneeded = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+        db.createObjectStore(STORE_NAME, { keyPath: "id" });
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -49,7 +56,7 @@ function openDb(): Promise<IDBDatabase> {
 async function getAllStoredPlugins(): Promise<StoredPlugin[]> {
   const db = await openDb();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readonly');
+    const tx = db.transaction(STORE_NAME, "readonly");
     const store = tx.objectStore(STORE_NAME);
     const request = store.getAll();
     request.onsuccess = () => resolve(request.result);
@@ -60,7 +67,7 @@ async function getAllStoredPlugins(): Promise<StoredPlugin[]> {
 async function storePlugin(entry: StoredPlugin): Promise<void> {
   const db = await openDb();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const tx = db.transaction(STORE_NAME, "readwrite");
     const store = tx.objectStore(STORE_NAME);
     const request = store.put(entry);
     request.onsuccess = () => resolve();
@@ -71,7 +78,7 @@ async function storePlugin(entry: StoredPlugin): Promise<void> {
 async function removeStoredPlugin(id: string): Promise<void> {
   const db = await openDb();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const tx = db.transaction(STORE_NAME, "readwrite");
     const store = tx.objectStore(STORE_NAME);
     const request = store.delete(id);
     request.onsuccess = () => resolve();
@@ -89,6 +96,9 @@ const loadedPlugins = new Map<string, BrowserExtismPlugin>();
 /** Reactive array of browser plugin manifests. */
 let browserManifests = $state<PluginManifest[]>([]);
 
+/** Last runtime-level support error for browser plugins. */
+let runtimeSupportError = $state<string | null>(null);
+
 // ============================================================================
 // Public API
 // ============================================================================
@@ -103,10 +113,21 @@ export async function installPlugin(
   wasmBytes: ArrayBuffer,
   name?: string,
 ): Promise<PluginManifest> {
-  console.log(`[browserPluginManager] Installing plugin (${(wasmBytes.byteLength / 1024).toFixed(0)} KB)...`);
+  const support = getBrowserPluginRuntimeSupport();
+  if (!support.supported) {
+    runtimeSupportError =
+      support.reason ?? "Browser plugins are not supported in this runtime.";
+    throw new Error(runtimeSupportError);
+  }
+
+  console.log(
+    `[browserPluginManager] Installing plugin (${(wasmBytes.byteLength / 1024).toFixed(0)} KB)...`,
+  );
   const plugin = await loadBrowserPlugin(wasmBytes);
   const id = plugin.manifest.id as unknown as string;
-  console.log(`[browserPluginManager] Installed plugin: ${id} (${plugin.manifest.name})`);
+  console.log(
+    `[browserPluginManager] Installed plugin: ${id} (${plugin.manifest.name})`,
+  );
 
   // Persist to IndexedDB.
   await storePlugin({
@@ -146,16 +167,30 @@ export async function uninstallPlugin(pluginId: string): Promise<void> {
  * Called once at app startup. Plugins that fail to load are logged and skipped.
  */
 export async function loadAllPlugins(): Promise<void> {
+  const support = getBrowserPluginRuntimeSupport();
+  if (!support.supported) {
+    runtimeSupportError =
+      support.reason ?? "Browser plugins are not supported in this runtime.";
+    console.info("[browserPluginManager]", runtimeSupportError);
+    return;
+  }
+
+  runtimeSupportError = null;
+
   try {
     const stored = await getAllStoredPlugins();
-    console.log(`[browserPluginManager] Found ${stored.length} stored plugin(s)`);
+    console.log(
+      `[browserPluginManager] Found ${stored.length} stored plugin(s)`,
+    );
     for (const entry of stored) {
       try {
         const plugin = await loadBrowserPlugin(entry.wasm);
         const id = plugin.manifest.id as unknown as string;
         loadedPlugins.set(id, plugin);
         browserManifests = [...browserManifests, plugin.manifest];
-        console.log(`[browserPluginManager] Loaded plugin: ${id} (${plugin.manifest.name})`);
+        console.log(
+          `[browserPluginManager] Loaded plugin: ${id} (${plugin.manifest.name})`,
+        );
       } catch (e) {
         console.warn(
           `[browserPluginManager] Failed to load plugin ${entry.id}:`,
@@ -164,7 +199,10 @@ export async function loadAllPlugins(): Promise<void> {
       }
     }
   } catch (e) {
-    console.warn('[browserPluginManager] Failed to load plugins from IndexedDB:', e);
+    console.warn(
+      "[browserPluginManager] Failed to load plugins from IndexedDB:",
+      e,
+    );
   }
 }
 
@@ -182,6 +220,70 @@ export function getBrowserManifests(): PluginManifest[] {
   return browserManifests;
 }
 
+/** Runtime support for browser-loaded plugins in the current browser. */
+export function getBrowserPluginSupport(): {
+  supported: boolean;
+  reason?: string;
+} {
+  return getBrowserPluginRuntimeSupport();
+}
+
+/** Last runtime support error encountered by plugin manager. */
+export function getBrowserPluginSupportError(): string | null {
+  return runtimeSupportError;
+}
+
+// ============================================================================
+// Editor extension generation
+// ============================================================================
+
+/** Cache of generated TipTap extensions (rebuilt when plugins change). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let cachedEditorExtensions: any[] | null = null;
+let cachedPluginCount = 0;
+
+/**
+ * Get TipTap extensions generated from all loaded plugins' EditorExtension manifests.
+ *
+ * Returns an array of TipTap Node extensions ready to register with the editor.
+ * Results are cached and invalidated when plugin count changes.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function getEditorExtensions(): any[] {
+  if (cachedEditorExtensions && cachedPluginCount === loadedPlugins.size) {
+    return cachedEditorExtensions;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const extensions: any[] = [];
+
+  for (const [, plugin] of loadedPlugins) {
+    const manifest = plugin.manifest;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const uiEntries = (manifest.ui ?? []) as any[];
+    for (const ui of uiEntries) {
+      if (isEditorExtension(ui)) {
+        try {
+          const ext = createExtensionFromManifest(
+            ui as EditorExtensionManifest,
+            plugin,
+          );
+          extensions.push(ext);
+        } catch (e) {
+          console.warn(
+            `[browserPluginManager] Failed to create editor extension ${ui.extension_id}:`,
+            e,
+          );
+        }
+      }
+    }
+  }
+
+  cachedEditorExtensions = extensions;
+  cachedPluginCount = loadedPlugins.size;
+  return extensions;
+}
+
 // ============================================================================
 // Event dispatch helpers
 // ============================================================================
@@ -190,9 +292,10 @@ export function getBrowserManifests(): PluginManifest[] {
  * Dispatch a lifecycle event to all loaded browser plugins.
  */
 export async function dispatchEvent(event: GuestEvent): Promise<void> {
-  const promises = Array.from(loadedPlugins.values()).map((plugin) =>
-    plugin.callEvent(event),
-  );
+  const pluginStore = getPluginStore();
+  const promises = Array.from(loadedPlugins.entries())
+    .filter(([pluginId]) => pluginStore.isPluginEnabled(pluginId))
+    .map(([, plugin]) => plugin.callEvent(event));
   await Promise.allSettled(promises);
 }
 
@@ -204,6 +307,10 @@ export async function dispatchCommand(
   cmd: string,
   params: unknown,
 ): Promise<{ success: boolean; data?: unknown; error?: string }> {
+  if (!getPluginStore().isPluginEnabled(pluginId)) {
+    return { success: false, error: `Plugin is disabled: ${pluginId}` };
+  }
+
   const plugin = loadedPlugins.get(pluginId);
   if (!plugin) {
     return { success: false, error: `Plugin not loaded: ${pluginId}` };

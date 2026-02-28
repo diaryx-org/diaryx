@@ -8,8 +8,11 @@
 use crate::{CommandResponse, PluginConfig, storage_get, storage_set};
 use serde_json::Value as JsonValue;
 
-const HISTORY_KEY: &str = "diaryx.ai.history";
+const LEGACY_HISTORY_KEY: &str = "diaryx.ai.history";
+const INDEX_KEY: &str = "diaryx.ai.conversations.index";
+const CONV_PREFIX: &str = "diaryx.ai.conversations.";
 const MAX_HISTORY_MESSAGES: usize = 50;
+const MAX_CONVERSATIONS: usize = 50;
 const MAX_AGENT_ITERATIONS: usize = 10;
 const MAX_TOOL_RESULT_BYTES: usize = 8192;
 
@@ -39,6 +42,22 @@ pub struct EntryContext {
     pub content: String,
 }
 
+/// Metadata for a single conversation in the index.
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct ConversationMeta {
+    pub id: String,
+    pub title: String,
+    pub created_at: u64,
+    pub message_count: usize,
+}
+
+/// Top-level index of all conversations.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
+pub struct ConversationIndex {
+    pub conversations: Vec<ConversationMeta>,
+    pub active_id: Option<String>,
+}
+
 /// Tracks an agent tool-use step for the UI.
 #[derive(serde::Serialize, Clone)]
 pub struct AgentStep {
@@ -57,6 +76,7 @@ pub struct AgentStep {
 
 /// Conversation state held in plugin memory.
 pub struct Conversation {
+    pub id: Option<String>,
     pub messages: Vec<ChatMessage>,
     pub loaded: bool,
 }
@@ -64,6 +84,7 @@ pub struct Conversation {
 impl Conversation {
     pub fn new() -> Self {
         Self {
+            id: None,
             messages: Vec::new(),
             loaded: false,
         }
@@ -92,16 +113,31 @@ std::thread_local! {
 }
 
 // ============================================================================
-// History persistence
+// Conversation index & message persistence
 // ============================================================================
 
-fn load_history() -> Vec<ChatMessage> {
-    storage_get(HISTORY_KEY)
+fn load_index() -> ConversationIndex {
+    storage_get(INDEX_KEY)
+        .and_then(|bytes| serde_json::from_slice::<ConversationIndex>(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn save_index(index: &ConversationIndex) {
+    let bytes = serde_json::to_vec(index).unwrap_or_default();
+    storage_set(INDEX_KEY, &bytes);
+}
+
+fn conv_storage_key(id: &str) -> String {
+    format!("{}{}", CONV_PREFIX, id)
+}
+
+fn load_conversation_messages(id: &str) -> Vec<ChatMessage> {
+    storage_get(&conv_storage_key(id))
         .and_then(|bytes| serde_json::from_slice::<Vec<ChatMessage>>(&bytes).ok())
         .unwrap_or_default()
 }
 
-fn save_history(messages: &[ChatMessage]) {
+fn save_conversation_messages(id: &str, messages: &[ChatMessage]) {
     let trimmed: &[ChatMessage] = if messages.len() > MAX_HISTORY_MESSAGES {
         let excess = messages.len() - MAX_HISTORY_MESSAGES;
         let start = if excess % 2 == 0 { excess } else { excess + 1 };
@@ -110,14 +146,97 @@ fn save_history(messages: &[ChatMessage]) {
         messages
     };
     let bytes = serde_json::to_vec(trimmed).unwrap_or_default();
-    storage_set(HISTORY_KEY, &bytes);
+    storage_set(&conv_storage_key(id), &bytes);
 }
+
+fn delete_conversation_messages(id: &str) {
+    storage_set(&conv_storage_key(id), &[]);
+}
+
+fn generate_conversation_id() -> String {
+    let index = load_index();
+    // Find the highest existing numeric suffix to avoid collisions after deletions
+    let max_n = index
+        .conversations
+        .iter()
+        .filter_map(|c| c.id.strip_prefix("conv_")?.parse::<usize>().ok())
+        .max()
+        .unwrap_or(0);
+    format!("conv_{}", max_n + 1)
+}
+
+fn generate_title(first_user_message: &str) -> String {
+    let trimmed = first_user_message.trim();
+    if trimmed.len() <= 50 {
+        trimmed.to_string()
+    } else {
+        let mut end = 50;
+        // Try to break at a word boundary
+        if let Some(pos) = trimmed[..50].rfind(' ') {
+            end = pos;
+        }
+        format!("{}...", &trimmed[..end])
+    }
+}
+
+// ============================================================================
+// Migration from flat history
+// ============================================================================
+
+fn migrate_if_needed() {
+    // Already migrated?
+    if storage_get(INDEX_KEY).is_some() {
+        return;
+    }
+
+    // Check for legacy flat history
+    let legacy = storage_get(LEGACY_HISTORY_KEY)
+        .and_then(|bytes| serde_json::from_slice::<Vec<ChatMessage>>(&bytes).ok())
+        .unwrap_or_default();
+
+    if legacy.is_empty() {
+        // Nothing to migrate — save an empty index so we don't check again
+        save_index(&ConversationIndex::default());
+        return;
+    }
+
+    let id = "conv_1".to_string();
+    let title = legacy
+        .iter()
+        .find(|m| m.role == "user")
+        .map(|m| generate_title(&m.content))
+        .unwrap_or_else(|| "Imported chat".into());
+
+    let meta = ConversationMeta {
+        id: id.clone(),
+        title,
+        created_at: 0,
+        message_count: legacy.len(),
+    };
+
+    save_conversation_messages(&id, &legacy);
+
+    let index = ConversationIndex {
+        conversations: vec![meta],
+        active_id: Some(id),
+    };
+    save_index(&index);
+}
+
+// ============================================================================
+// ensure_loaded (multi-conversation aware)
+// ============================================================================
 
 fn ensure_loaded() {
     CONVERSATION.with(|conv| {
         let mut conv = conv.borrow_mut();
         if !conv.loaded {
-            conv.messages = load_history();
+            migrate_if_needed();
+            let index = load_index();
+            if let Some(active_id) = &index.active_id {
+                conv.id = Some(active_id.clone());
+                conv.messages = load_conversation_messages(active_id);
+            }
             conv.loaded = true;
         }
     });
@@ -576,14 +695,141 @@ pub fn chat_continue() -> CommandResponse {
     }
 }
 
-/// Clear conversation history.
+/// Return the full conversation history.
+pub fn get_history() -> CommandResponse {
+    ensure_loaded();
+    let messages = CONVERSATION.with(|conv| conv.borrow().messages.clone());
+    CommandResponse {
+        success: true,
+        data: Some(serde_json::to_value(&messages).unwrap_or_default()),
+        error: None,
+    }
+}
+
+/// Delete the active conversation (or reset if none active).
 pub fn clear_conversation() -> CommandResponse {
+    let conv_id = CONVERSATION.with(|conv| conv.borrow().id.clone());
+
+    if let Some(id) = conv_id {
+        // Remove from index
+        let mut index = load_index();
+        delete_conversation_messages(&id);
+        index.conversations.retain(|c| c.id != id);
+        index.active_id = None;
+        save_index(&index);
+    }
+
     CONVERSATION.with(|conv| {
         let mut conv = conv.borrow_mut();
+        conv.id = None;
         conv.messages.clear();
-        save_history(&conv.messages);
     });
     AGENT_STATE.with(|s| *s.borrow_mut() = None);
+    CommandResponse {
+        success: true,
+        data: None,
+        error: None,
+    }
+}
+
+// ============================================================================
+// Multi-conversation commands
+// ============================================================================
+
+/// List all conversations with metadata.
+pub fn list_conversations() -> CommandResponse {
+    ensure_loaded();
+    let index = load_index();
+    CommandResponse {
+        success: true,
+        data: Some(serde_json::to_value(&index).unwrap_or_default()),
+        error: None,
+    }
+}
+
+/// Switch to a different conversation by id.
+pub fn switch_conversation(id: &str) -> CommandResponse {
+    let mut index = load_index();
+    let exists = index.conversations.iter().any(|c| c.id == id);
+
+    if !exists {
+        return CommandResponse {
+            success: false,
+            data: None,
+            error: Some(format!("Conversation not found: {}", id)),
+        };
+    }
+
+    index.active_id = Some(id.to_string());
+    save_index(&index);
+
+    let messages = load_conversation_messages(id);
+
+    CONVERSATION.with(|conv| {
+        let mut conv = conv.borrow_mut();
+        conv.id = Some(id.to_string());
+        conv.messages = messages.clone();
+    });
+
+    CommandResponse {
+        success: true,
+        data: Some(serde_json::to_value(&messages).unwrap_or_default()),
+        error: None,
+    }
+}
+
+/// Start a new empty conversation (doesn't persist until first message).
+pub fn new_conversation() -> CommandResponse {
+    // Update index to clear active_id
+    let mut index = load_index();
+    index.active_id = None;
+    save_index(&index);
+
+    CONVERSATION.with(|conv| {
+        let mut conv = conv.borrow_mut();
+        conv.id = None;
+        conv.messages.clear();
+    });
+    AGENT_STATE.with(|s| *s.borrow_mut() = None);
+
+    CommandResponse {
+        success: true,
+        data: None,
+        error: None,
+    }
+}
+
+/// Delete a specific conversation by id.
+pub fn delete_conversation(id: &str) -> CommandResponse {
+    let mut index = load_index();
+
+    if !index.conversations.iter().any(|c| c.id == id) {
+        return CommandResponse {
+            success: false,
+            data: None,
+            error: Some(format!("Conversation not found: {}", id)),
+        };
+    }
+
+    delete_conversation_messages(id);
+    index.conversations.retain(|c| c.id != id);
+
+    // If deleting the active conversation, clear active state
+    let was_active = index.active_id.as_deref() == Some(id);
+    if was_active {
+        index.active_id = None;
+    }
+    save_index(&index);
+
+    if was_active {
+        CONVERSATION.with(|conv| {
+            let mut conv = conv.borrow_mut();
+            conv.id = None;
+            conv.messages.clear();
+        });
+        AGENT_STATE.with(|s| *s.borrow_mut() = None);
+    }
+
     CommandResponse {
         success: true,
         data: None,
@@ -606,6 +852,41 @@ fn persist_exchange(user_message: &str, assistant_text: &str) {
             role: "assistant".into(),
             content: assistant_text.into(),
         });
-        save_history(&conv.messages);
+
+        let mut index = load_index();
+
+        if let Some(ref id) = conv.id {
+            // Existing conversation — save messages and update count
+            save_conversation_messages(id, &conv.messages);
+            if let Some(meta) = index.conversations.iter_mut().find(|c| c.id == *id) {
+                meta.message_count = conv.messages.len();
+            }
+            save_index(&index);
+        } else {
+            // New conversation — create entry in index
+            let id = generate_conversation_id();
+            let title = generate_title(user_message);
+            let meta = ConversationMeta {
+                id: id.clone(),
+                title,
+                created_at: 0, // no timestamp host fn available
+                message_count: conv.messages.len(),
+            };
+
+            save_conversation_messages(&id, &conv.messages);
+
+            // Enforce max conversations — remove oldest if at limit
+            if index.conversations.len() >= MAX_CONVERSATIONS {
+                if let Some(removed) = index.conversations.pop() {
+                    delete_conversation_messages(&removed.id);
+                }
+            }
+
+            index.conversations.insert(0, meta);
+            index.active_id = Some(id.clone());
+            save_index(&index);
+
+            conv.id = Some(id);
+        }
     });
 }

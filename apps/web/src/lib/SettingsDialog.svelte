@@ -9,7 +9,7 @@
   import * as Drawer from "$lib/components/ui/drawer";
   import * as Tabs from "$lib/components/ui/tabs";
   import { Button } from "$lib/components/ui/button";
-  import { Settings, Eye, FolderOpen, FileText, RefreshCw, Database, Bug, User, CreditCard } from "@lucide/svelte";
+  import { Settings, Eye, FolderOpen, FileText, RefreshCw, Database, Bug, User, CreditCard, Puzzle } from "@lucide/svelte";
   import { getMobileState } from "./hooks/useMobile.svelte";
   import { getAuthState } from "$lib/auth";
   import { getCurrentWorkspaceId, getLocalWorkspace } from "$lib/storage/localWorkspaceRegistry.svelte";
@@ -32,6 +32,7 @@
   import TemplateSettings from "./settings/TemplateSettings.svelte";
   import WorkspaceManagement from "./settings/WorkspaceManagement.svelte";
   import AppearanceSettings from "./settings/AppearanceSettings.svelte";
+  import PluginsSettings from "./settings/PluginsSettings.svelte";
   import PluginSettingsTab from "./settings/PluginSettingsTab.svelte";
   import { getPluginStore } from "../models/stores/pluginStore.svelte";
   import { isSyncPluginId } from "$lib/sync/syncBuiltinUiRegistry";
@@ -158,6 +159,10 @@
         <Database class="size-4 mr-1.5 hidden sm:inline" />
         Data
       </Tabs.Trigger>
+      <Tabs.Trigger value="plugins" class="shrink-0">
+        <Puzzle class="size-4 mr-1.5 hidden sm:inline" />
+        Plugins
+      </Tabs.Trigger>
       <Tabs.Trigger value="debug" class="shrink-0">
         <Bug class="size-4 mr-1.5 hidden sm:inline" />
         Debug
@@ -217,6 +222,12 @@
         <FormatImportSettings {workspacePath} />
         <CloudBackupSettings {workspacePath} />
         <ClearDataSettings />
+      </div>
+    </Tabs.Content>
+
+    <Tabs.Content value="plugins">
+      <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
+        <PluginsSettings />
       </div>
     </Tabs.Content>
 

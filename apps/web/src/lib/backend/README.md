@@ -1,21 +1,21 @@
 ---
 title: Backend
 description: Backend abstraction layer for WASM and Tauri
-part_of: '[README](/apps/web/src/lib/README.md)'
+part_of: "[README](/apps/web/src/lib/README.md)"
 attachments:
-  - '[index.ts](/apps/web/src/lib/backend/index.ts)'
-  - '[api.ts](/apps/web/src/lib/backend/api.ts)'
-  - '[eventEmitter.ts](/apps/web/src/lib/backend/eventEmitter.ts)'
-  - '[interface.ts](/apps/web/src/lib/backend/interface.ts)'
-  - '[storageType.ts](/apps/web/src/lib/backend/storageType.ts)'
-  - '[tauri.ts](/apps/web/src/lib/backend/tauri.ts)'
-  - '[wasmWorkerNew.ts](/apps/web/src/lib/backend/wasmWorkerNew.ts)'
-  - '[workerBackendNew.ts](/apps/web/src/lib/backend/workerBackendNew.ts)'
+  - "[index.ts](/apps/web/src/lib/backend/index.ts)"
+  - "[api.ts](/apps/web/src/lib/backend/api.ts)"
+  - "[eventEmitter.ts](/apps/web/src/lib/backend/eventEmitter.ts)"
+  - "[interface.ts](/apps/web/src/lib/backend/interface.ts)"
+  - "[storageType.ts](/apps/web/src/lib/backend/storageType.ts)"
+  - "[tauri.ts](/apps/web/src/lib/backend/tauri.ts)"
+  - "[wasmWorkerNew.ts](/apps/web/src/lib/backend/wasmWorkerNew.ts)"
+  - "[workerBackendNew.ts](/apps/web/src/lib/backend/workerBackendNew.ts)"
 exclude:
-  - '*.lock'
-  - 'generated/**'
-  - 'serde_json/**'
-  - '*.test.ts'
+  - "*.lock"
+  - "generated/**"
+  - "serde_json/**"
+  - "*.test.ts"
 ---
 
 # Backend
@@ -24,15 +24,15 @@ Backend abstraction layer supporting both WASM and Tauri environments.
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `api.ts` | High-level backend API |
-| `eventEmitter.ts` | Event emission for file changes |
-| `interface.ts` | Backend interface definition |
-| `storageType.ts` | Storage type detection |
-| `tauri.ts` | Tauri IPC implementation |
-| `wasmWorkerNew.ts` | WASM worker implementation |
-| `workerBackendNew.ts` | Worker-based backend |
+| File                  | Purpose                         |
+| --------------------- | ------------------------------- |
+| `api.ts`              | High-level backend API          |
+| `eventEmitter.ts`     | Event emission for file changes |
+| `interface.ts`        | Backend interface definition    |
+| `storageType.ts`      | Storage type detection          |
+| `tauri.ts`            | Tauri IPC implementation        |
+| `wasmWorkerNew.ts`    | WASM worker implementation      |
+| `workerBackendNew.ts` | Worker-based backend            |
 
 The `generated/` directory contains TypeScript types generated from Rust.
 
@@ -43,6 +43,17 @@ instead of loading full archives into a single `ArrayBuffer`. This significantly
 reduces peak memory usage for large local imports by processing entries one at a time.
 The import loop also yields periodically to the event loop and throttles progress
 callbacks, improving UI responsiveness during very large imports.
+
+## Worker Startup Fail-Fast
+
+`workerBackendNew.ts` now guards worker startup with error listeners and an
+initialization timeout. If module worker loading is blocked (for example by
+WebKit COEP/origin restrictions), backend initialization fails quickly with a
+clear error instead of hanging indefinitely.
+
+When worker startup fails due browser restrictions, `WorkerBackendNew` now
+automatically falls back to an in-process (main-thread) WASM backend path so
+local workspace flows can still proceed without plugins/worker-only features.
 
 ## Native Sync (Tauri only)
 
@@ -56,7 +67,7 @@ if (backend.hasNativeSync?.()) {
 
   // Subscribe to sync events
   const unsubscribe = backend.onSyncEvent?.((event) => {
-    console.log('Sync event:', event.type, event);
+    console.log("Sync event:", event.type, event);
   });
 
   // Get sync status

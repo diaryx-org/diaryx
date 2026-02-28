@@ -2295,8 +2295,21 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "ureq 2.12.1",
+ "wasi-common",
+ "wasmtime",
+]
+
+[[package]]
+name = "diaryx_math_extism"
+version = "1.2.1"
+dependencies = [
+ "extism-pdk",
+ "pulldown-latex",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2308,10 +2321,27 @@ dependencies = [
  "diaryx_core",
  "futures-lite 2.6.1",
  "indexmap 2.13.0",
+ "log",
+ "pathdiff",
  "serde",
  "serde_json",
  "serde_yaml",
  "tempfile",
+]
+
+[[package]]
+name = "diaryx_publish_extism"
+version = "1.2.1"
+dependencies = [
+ "base64 0.22.1",
+ "diaryx_core",
+ "diaryx_publish",
+ "extism-pdk",
+ "getrandom 0.2.17",
+ "getrandom 0.3.4",
+ "log",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2425,6 +2455,7 @@ dependencies = [
  "chrono",
  "diaryx_core",
  "diaryx_extism",
+ "diaryx_publish",
  "diaryx_sync",
  "dirs 6.0.0",
  "dotenvy",
@@ -2455,11 +2486,13 @@ dependencies = [
 name = "diaryx_wasm"
 version = "1.2.1"
 dependencies = [
+ "async-trait",
  "chrono",
  "comrak",
  "console_error_panic_hook",
  "console_log",
  "diaryx_core",
+ "diaryx_publish",
  "diaryx_sync",
  "futures",
  "indexed-db",
@@ -6167,6 +6200,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
+]
+
+[[package]]
+name = "pulldown-latex"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5abae0e37a730c3e0c6805cfc30d80754fa03091bf5bad54ae47d033aae6ba8b"
+dependencies = [
+ "bumpalo",
 ]
 
 [[package]]

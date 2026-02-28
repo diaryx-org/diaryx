@@ -263,7 +263,12 @@ pub fn manifest(_input: String) -> FnResult<String> {
             "chat".into(),
             "chat_continue".into(),
             "clear_conversation".into(),
+            "get_history".into(),
             "get_component_html".into(),
+            "list_conversations".into(),
+            "switch_conversation".into(),
+            "new_conversation".into(),
+            "delete_conversation".into(),
         ],
     };
 
@@ -295,6 +300,25 @@ pub fn handle_command(input: String) -> FnResult<String> {
         }
         "chat_continue" => chat::chat_continue(),
         "clear_conversation" => chat::clear_conversation(),
+        "get_history" => chat::get_history(),
+        "list_conversations" => chat::list_conversations(),
+        "switch_conversation" => {
+            let id = request
+                .params
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            chat::switch_conversation(id)
+        }
+        "new_conversation" => chat::new_conversation(),
+        "delete_conversation" => {
+            let id = request
+                .params
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            chat::delete_conversation(id)
+        }
         _ => CommandResponse {
             success: false,
             data: None,

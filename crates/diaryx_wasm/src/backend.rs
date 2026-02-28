@@ -331,30 +331,30 @@ type DecoratedFs = EventEmittingFs<StorageBackend>;
 ///
 /// Unlike the thread-safe `CallbackRegistry` in diaryx_core, this version
 /// stores JS functions directly using `Rc<RefCell>` since WASM is single-threaded.
-struct WasmCallbackRegistry {
+pub(crate) struct WasmCallbackRegistry {
     callbacks: RefCell<HashMap<u64, js_sys::Function>>,
     next_id: AtomicU64,
 }
 
 impl WasmCallbackRegistry {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             callbacks: RefCell::new(HashMap::new()),
             next_id: AtomicU64::new(1),
         }
     }
 
-    fn subscribe(&self, callback: js_sys::Function) -> u64 {
+    pub(crate) fn subscribe(&self, callback: js_sys::Function) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         self.callbacks.borrow_mut().insert(id, callback);
         id
     }
 
-    fn unsubscribe(&self, id: u64) -> bool {
+    pub(crate) fn unsubscribe(&self, id: u64) -> bool {
         self.callbacks.borrow_mut().remove(&id).is_some()
     }
 
-    fn emit(&self, event: &FileSystemEvent) {
+    pub(crate) fn emit(&self, event: &FileSystemEvent) {
         if let Ok(json) = serde_json::to_string(event) {
             let callbacks = self.callbacks.borrow();
             for callback in callbacks.values() {
@@ -363,7 +363,15 @@ impl WasmCallbackRegistry {
         }
     }
 
-    fn subscriber_count(&self) -> usize {
+    /// Emit a raw JsValue to all subscribers (for non-FileSystemEvent data like snapshot blobs).
+    pub(crate) fn emit_raw_js(&self, value: &JsValue) {
+        let callbacks = self.callbacks.borrow();
+        for callback in callbacks.values() {
+            let _ = callback.call1(&JsValue::NULL, value);
+        }
+    }
+
+    pub(crate) fn subscriber_count(&self) -> usize {
         self.callbacks.borrow().len()
     }
 }
@@ -497,6 +505,9 @@ pub struct DiaryxBackend {
     /// Shared Diaryx instance for command execution.
     /// Created once during backend initialization with callbacks pre-configured.
     diaryx: Diaryx<DecoratedFs>,
+    /// Active WebSocket transport (Rust-owned connection).
+    #[cfg(feature = "sync")]
+    transport: RefCell<Option<crate::wasm_transport::WasmSyncTransport>>,
 }
 
 impl DiaryxBackend {
@@ -586,11 +597,14 @@ impl DiaryxBackend {
         let sync_manager = sync_plugin.sync_manager();
         sync_manager.set_event_callback(create_event_bridge());
 
-        // Create shared Diaryx instance with SyncPlugin registered
+        // Create shared Diaryx instance with plugins registered
         let diaryx = {
             let mut d = Diaryx::new((*fs).clone());
             d.plugin_registry_mut()
                 .register_workspace_plugin(Arc::new(sync_plugin));
+            d.plugin_registry_mut().register_workspace_plugin(Arc::new(
+                diaryx_publish::PublishPlugin::new((*fs).clone()),
+            ));
             d.set_workspace_root(PathBuf::from(""));
             d
         };
@@ -605,6 +619,7 @@ impl DiaryxBackend {
             crdt_update_subscription: Some(crdt_update_subscription),
             sync_manager,
             diaryx,
+            transport: RefCell::new(None),
         })
     }
 
@@ -629,7 +644,10 @@ impl DiaryxBackend {
         let fs = Rc::new(event_fs);
 
         let diaryx = {
-            let d = Diaryx::new((*fs).clone());
+            let mut d = Diaryx::new((*fs).clone());
+            d.plugin_registry_mut().register_workspace_plugin(Arc::new(
+                diaryx_publish::PublishPlugin::new((*fs).clone()),
+            ));
             d.set_workspace_root(PathBuf::from(""));
             d
         };
@@ -1081,6 +1099,7 @@ impl DiaryxBackend {
     // ========================================================================
 
     /// Create a new sync client for the given server and workspace.
+    /// DEPRECATED: Use `start_sync()` instead. Kept for backward compatibility.
     #[cfg(feature = "sync")]
     #[wasm_bindgen(js_name = "createSyncClient")]
     pub fn create_sync_client(
@@ -1106,6 +1125,243 @@ impl DiaryxBackend {
             session_config,
             Arc::clone(&self.sync_manager),
         )
+    }
+
+    /// Start sync — Rust owns the WebSocket connection.
+    ///
+    /// Creates a `WasmSyncTransport`, connects to the server, and subscribes
+    /// to local CRDT updates. Replaces the old `createSyncClient()` flow.
+    #[cfg(feature = "sync")]
+    #[wasm_bindgen(js_name = "startSync")]
+    pub fn start_sync(
+        &self,
+        server_url: String,
+        workspace_id: String,
+        auth_token: Option<String>,
+        session_code: Option<String>,
+    ) {
+        // Stop existing transport if any
+        self.stop_sync();
+
+        log::info!(
+            "[DiaryxBackend] Starting sync for workspace: {}",
+            workspace_id
+        );
+
+        let transport = crate::wasm_transport::WasmSyncTransport::new(
+            server_url,
+            workspace_id,
+            auth_token,
+            session_code,
+            Arc::clone(&self.sync_manager),
+            Rc::clone(&self.wasm_event_registry),
+        );
+
+        transport.subscribe_to_local_updates();
+        transport.connect();
+
+        *self.transport.borrow_mut() = Some(transport);
+    }
+
+    /// Stop sync — disconnect and drop the transport.
+    #[cfg(feature = "sync")]
+    #[wasm_bindgen(js_name = "stopSync")]
+    pub fn stop_sync(&self) {
+        if let Some(transport) = self.transport.borrow_mut().take() {
+            transport.disconnect();
+            log::info!("[DiaryxBackend] Sync stopped");
+        }
+    }
+
+    /// Focus on specific files for body sync.
+    #[cfg(feature = "sync")]
+    #[wasm_bindgen(js_name = "focusSyncFiles")]
+    pub fn focus_sync_files(&self, files: Vec<String>) {
+        if let Some(ref transport) = *self.transport.borrow() {
+            transport.focus_files(files);
+        }
+    }
+
+    /// Unfocus specific files.
+    #[cfg(feature = "sync")]
+    #[wasm_bindgen(js_name = "unfocusSyncFiles")]
+    pub fn unfocus_sync_files(&self, files: Vec<String>) {
+        if let Some(ref transport) = *self.transport.borrow() {
+            transport.unfocus_files(files);
+        }
+    }
+
+    /// Request body sync for specific files.
+    #[cfg(feature = "sync")]
+    #[wasm_bindgen(js_name = "requestBodySync")]
+    pub fn request_body_sync(&self, files: Vec<String>) {
+        if let Some(ref transport) = *self.transport.borrow() {
+            transport.request_body_sync(files);
+        }
+    }
+
+    // ========================================================================
+    // Share Session REST API
+    // ========================================================================
+
+    /// Create a share session via REST API.
+    /// Returns the join code as a string.
+    #[cfg(feature = "sync")]
+    #[wasm_bindgen(js_name = "createShareSession")]
+    pub async fn create_share_session(
+        &self,
+        server_url: String,
+        workspace_id: String,
+        auth_token: String,
+        read_only: bool,
+    ) -> Result<JsValue, JsValue> {
+        use crate::wasm_http::WasmHttpClient;
+        use diaryx_sync::ShareSessionClient;
+
+        let client = ShareSessionClient::new(WasmHttpClient, server_url, Some(auth_token));
+
+        match client.create_session(&workspace_id, read_only).await {
+            Ok(resp) => {
+                let obj = js_sys::Object::new();
+                let _ = js_sys::Reflect::set(&obj, &"code".into(), &resp.code.into());
+                let _ =
+                    js_sys::Reflect::set(&obj, &"workspace_id".into(), &resp.workspace_id.into());
+                let _ = js_sys::Reflect::set(&obj, &"read_only".into(), &resp.read_only.into());
+                Ok(obj.into())
+            }
+            Err(e) => Err(JsValue::from_str(&e)),
+        }
+    }
+
+    /// Look up a share session by join code.
+    #[cfg(feature = "sync")]
+    #[wasm_bindgen(js_name = "lookupShareSession")]
+    pub async fn lookup_share_session(
+        &self,
+        server_url: String,
+        join_code: String,
+        auth_token: Option<String>,
+    ) -> Result<JsValue, JsValue> {
+        use crate::wasm_http::WasmHttpClient;
+        use diaryx_sync::ShareSessionClient;
+
+        let client = ShareSessionClient::new(WasmHttpClient, server_url, auth_token);
+
+        match client.lookup_session(&join_code).await {
+            Ok(resp) => {
+                let obj = js_sys::Object::new();
+                let _ = js_sys::Reflect::set(&obj, &"code".into(), &resp.code.into());
+                let _ =
+                    js_sys::Reflect::set(&obj, &"workspace_id".into(), &resp.workspace_id.into());
+                let _ = js_sys::Reflect::set(&obj, &"read_only".into(), &resp.read_only.into());
+                let _ = js_sys::Reflect::set(
+                    &obj,
+                    &"peer_count".into(),
+                    &(resp.peer_count as u32).into(),
+                );
+                Ok(obj.into())
+            }
+            Err(e) => Err(JsValue::from_str(&e)),
+        }
+    }
+
+    /// Delete a share session (owner only).
+    #[cfg(feature = "sync")]
+    #[wasm_bindgen(js_name = "deleteShareSession")]
+    pub async fn delete_share_session(
+        &self,
+        server_url: String,
+        join_code: String,
+        auth_token: String,
+    ) -> Result<(), JsValue> {
+        use crate::wasm_http::WasmHttpClient;
+        use diaryx_sync::ShareSessionClient;
+
+        let client = ShareSessionClient::new(WasmHttpClient, server_url, Some(auth_token));
+
+        client
+            .delete_session(&join_code)
+            .await
+            .map_err(|e| JsValue::from_str(&e))
+    }
+
+    /// Update session read-only status (owner only).
+    #[cfg(feature = "sync")]
+    #[wasm_bindgen(js_name = "setShareSessionReadOnly")]
+    pub async fn set_share_session_read_only(
+        &self,
+        server_url: String,
+        join_code: String,
+        auth_token: String,
+        read_only: bool,
+    ) -> Result<(), JsValue> {
+        use crate::wasm_http::WasmHttpClient;
+        use diaryx_sync::ShareSessionClient;
+
+        let client = ShareSessionClient::new(WasmHttpClient, server_url, Some(auth_token));
+
+        client
+            .update_read_only(&join_code, read_only)
+            .await
+            .map_err(|e| JsValue::from_str(&e))
+    }
+
+    // ========================================================================
+    // Attachment Sync
+    // ========================================================================
+
+    /// Upload an attachment (full multipart flow).
+    #[cfg(feature = "sync")]
+    #[wasm_bindgen(js_name = "uploadAttachment")]
+    pub async fn upload_attachment(
+        &self,
+        server_url: String,
+        auth_token: String,
+        workspace_id: String,
+        entry_path: String,
+        attachment_path: String,
+        hash: String,
+        mime_type: String,
+        data: Vec<u8>,
+    ) -> Result<(), JsValue> {
+        use crate::wasm_http::WasmHttpClient;
+        use diaryx_sync::AttachmentSyncClient;
+
+        let client = AttachmentSyncClient::new(WasmHttpClient, server_url, auth_token);
+
+        client
+            .upload_full(
+                &workspace_id,
+                &entry_path,
+                &attachment_path,
+                &hash,
+                &mime_type,
+                &data,
+            )
+            .await
+            .map_err(|e| JsValue::from_str(&e))
+    }
+
+    /// Download an attachment by hash.
+    /// Returns the raw bytes as a Uint8Array.
+    #[cfg(feature = "sync")]
+    #[wasm_bindgen(js_name = "downloadAttachment")]
+    pub async fn download_attachment(
+        &self,
+        server_url: String,
+        auth_token: String,
+        workspace_id: String,
+        hash: String,
+    ) -> Result<Vec<u8>, JsValue> {
+        use crate::wasm_http::WasmHttpClient;
+        use diaryx_sync::AttachmentSyncClient;
+
+        let client = AttachmentSyncClient::new(WasmHttpClient, server_url, auth_token);
+
+        match client.download(&workspace_id, &hash).await {
+            Ok(resp) => Ok(resp.bytes),
+            Err(e) => Err(JsValue::from_str(&e)),
+        }
     }
 
     /// Check if this backend has native sync support.

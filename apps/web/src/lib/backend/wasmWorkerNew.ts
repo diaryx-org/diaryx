@@ -9,40 +9,38 @@
  * - `readBinary` / `writeBinary`: Efficient Uint8Array handling (no base64 overhead)
  */
 
-import * as Comlink from 'comlink';
-import type { BackendEventType, BackendEventListener } from './interface';
-import type { StorageType } from './storageType';
+import * as Comlink from "comlink";
+import type { BackendEventType, BackendEventListener } from "./interface";
+import type { StorageType } from "./storageType";
 
 const COMMON_ATTACHMENT_RE =
   /\.(png|jpg|jpeg|gif|svg|pdf|webp|heic|heif|mp3|mp4|wav|mov|docx?|xlsx?|pptx?)$/i;
 
 function isHiddenOrSystemSegment(part: string): boolean {
   return (
-    part.startsWith('.') ||
-    part === '__MACOSX' ||
-    part === 'Thumbs.db' ||
-    part === 'desktop.ini' ||
-    part.startsWith('._')
+    part.startsWith(".") ||
+    part === "__MACOSX" ||
+    part === "Thumbs.db" ||
+    part === "desktop.ini" ||
+    part.startsWith("._")
   );
 }
 
 function shouldSkipZipPath(path: string): boolean {
-  return path
-    .split('/')
-    .some((part) => isHiddenOrSystemSegment(part));
+  return path.split("/").some((part) => isHiddenOrSystemSegment(part));
 }
 
 function detectCommonRootPrefix(fileNames: string[]): string {
   const candidates = fileNames.filter((name) => !shouldSkipZipPath(name));
   if (candidates.length === 0) {
-    return '';
+    return "";
   }
 
   let sharedRoot: string | null = null;
   for (const name of candidates) {
-    const firstSlash = name.indexOf('/');
+    const firstSlash = name.indexOf("/");
     if (firstSlash <= 0) {
-      return '';
+      return "";
     }
     const root = name.substring(0, firstSlash);
     if (sharedRoot === null) {
@@ -50,11 +48,11 @@ function detectCommonRootPrefix(fileNames: string[]): string {
       continue;
     }
     if (sharedRoot !== root) {
-      return '';
+      return "";
     }
   }
 
-  return sharedRoot ? `${sharedRoot}/` : '';
+  return sharedRoot ? `${sharedRoot}/` : "";
 }
 
 // We'll dynamically import the WASM module
@@ -88,7 +86,7 @@ function clearRootPathCache() {
  */
 function getBackend(): any {
   if (!backend) {
-    throw new Error('DiaryxBackend not initialized. Call init() first.');
+    throw new Error("DiaryxBackend not initialized. Call init() first.");
   }
   return backend;
 }
@@ -97,7 +95,10 @@ function getBackend(): any {
  * Execute a command and parse the response.
  * Helper to avoid repetitive JSON.stringify/parse in each method.
  */
-async function executeCommand<T = any>(type: string, params?: Record<string, any>): Promise<T> {
+async function executeCommand<T = any>(
+  type: string,
+  params?: Record<string, any>,
+): Promise<T> {
   const command = params ? { type, params } : { type };
   const json = await getBackend().execute(JSON.stringify(command));
   return JSON.parse(json);
@@ -110,16 +111,18 @@ async function executeCommand<T = any>(type: string, params?: Record<string, any
 async function executeAndExtract<T>(
   type: string,
   params: Record<string, any> | undefined,
-  expectedResponseType: string
+  expectedResponseType: string,
 ): Promise<T> {
   const response = await executeCommand(type, params);
   if (response.type === expectedResponseType) {
     return response.data as T;
   }
-  if (response.type === 'Ok') {
+  if (response.type === "Ok") {
     return undefined as T; // For void responses
   }
-  throw new Error(`Expected ${expectedResponseType}, got ${response.type}: ${JSON.stringify(response)}`);
+  throw new Error(
+    `Expected ${expectedResponseType}, got ${response.type}: ${JSON.stringify(response)}`,
+  );
 }
 
 /**
@@ -128,7 +131,7 @@ async function executeAndExtract<T>(
  * Also migrates legacy ".diaryx/" at OPFS root into the workspace directory.
  */
 async function migrateWorkspaceDirectory(targetName: string): Promise<void> {
-  if (targetName === 'diaryx') return;
+  if (targetName === "diaryx") return;
 
   try {
     const root = await navigator.storage.getDirectory();
@@ -146,7 +149,7 @@ async function migrateWorkspaceDirectory(targetName: string): Promise<void> {
     // Check if old "diaryx" directory exists
     let oldDir: FileSystemDirectoryHandle;
     try {
-      oldDir = await root.getDirectoryHandle('diaryx', { create: false });
+      oldDir = await root.getDirectoryHandle("diaryx", { create: false });
     } catch {
       // Neither exists — fresh install, also migrate legacy .diaryx/ if present
       await migrateLegacyCrdtDir(root, targetName);
@@ -154,32 +157,43 @@ async function migrateWorkspaceDirectory(targetName: string): Promise<void> {
     }
 
     // Old directory exists — copy recursively to new name
-    console.log(`[WasmWorker] Migrating workspace directory: diaryx -> ${targetName}`);
+    console.log(
+      `[WasmWorker] Migrating workspace directory: diaryx -> ${targetName}`,
+    );
     const newDir = await root.getDirectoryHandle(targetName, { create: true });
     await copyDirectoryRecursive(oldDir, newDir);
-    await root.removeEntry('diaryx', { recursive: true });
+    await root.removeEntry("diaryx", { recursive: true });
     console.log(`[WasmWorker] Migration complete: diaryx -> ${targetName}`);
 
     // Also migrate legacy .diaryx/ at root
     await migrateLegacyCrdtDir(root, targetName);
   } catch (e) {
-    console.error('[WasmWorker] Migration failed:', e);
+    console.error("[WasmWorker] Migration failed:", e);
   }
 }
 
 /**
  * Migrate legacy ".diaryx/" directory from OPFS root into the workspace directory.
  */
-async function migrateLegacyCrdtDir(root: FileSystemDirectoryHandle, workspaceName: string): Promise<void> {
+async function migrateLegacyCrdtDir(
+  root: FileSystemDirectoryHandle,
+  workspaceName: string,
+): Promise<void> {
   try {
-    const legacyDir = await root.getDirectoryHandle('.diaryx', { create: false });
+    const legacyDir = await root.getDirectoryHandle(".diaryx", {
+      create: false,
+    });
     // Legacy .diaryx/ exists at root — copy crdt.db into workspace/.diaryx/
-    console.log('[WasmWorker] Migrating legacy .diaryx/ into workspace');
-    const wsDir = await root.getDirectoryHandle(workspaceName, { create: true });
-    const targetDir = await wsDir.getDirectoryHandle('.diaryx', { create: true });
+    console.log("[WasmWorker] Migrating legacy .diaryx/ into workspace");
+    const wsDir = await root.getDirectoryHandle(workspaceName, {
+      create: true,
+    });
+    const targetDir = await wsDir.getDirectoryHandle(".diaryx", {
+      create: true,
+    });
     await copyDirectoryRecursive(legacyDir, targetDir);
-    await root.removeEntry('.diaryx', { recursive: true });
-    console.log('[WasmWorker] Legacy .diaryx/ migrated into workspace');
+    await root.removeEntry(".diaryx", { recursive: true });
+    console.log("[WasmWorker] Legacy .diaryx/ migrated into workspace");
   } catch {
     // No legacy .diaryx/ at root — nothing to do
   }
@@ -189,7 +203,10 @@ async function migrateLegacyCrdtDir(root: FileSystemDirectoryHandle, workspaceNa
  * Migrate a UUID-named OPFS directory to a name-based one.
  * This handles users who previously had UUID-named directories from workspace switching.
  */
-async function migrateUuidToName(workspaceId: string, workspaceName: string): Promise<void> {
+async function migrateUuidToName(
+  workspaceId: string,
+  workspaceName: string,
+): Promise<void> {
   try {
     const root = await navigator.storage.getDirectory();
 
@@ -199,7 +216,9 @@ async function migrateUuidToName(workspaceId: string, workspaceName: string): Pr
       // Name-based dir already exists — skip migration, just clean up UUID dir if present
       try {
         await root.removeEntry(workspaceId, { recursive: true });
-        console.log(`[WasmWorker] Cleaned up orphaned UUID directory: ${workspaceId}`);
+        console.log(
+          `[WasmWorker] Cleaned up orphaned UUID directory: ${workspaceId}`,
+        );
       } catch {
         // UUID dir doesn't exist — nothing to clean up
       }
@@ -218,13 +237,19 @@ async function migrateUuidToName(workspaceId: string, workspaceName: string): Pr
     }
 
     // UUID dir exists, name dir doesn't — copy UUID → name and delete UUID
-    console.log(`[WasmWorker] Migrating UUID directory to name: ${workspaceId} -> ${workspaceName}`);
-    const nameDir = await root.getDirectoryHandle(workspaceName, { create: true });
+    console.log(
+      `[WasmWorker] Migrating UUID directory to name: ${workspaceId} -> ${workspaceName}`,
+    );
+    const nameDir = await root.getDirectoryHandle(workspaceName, {
+      create: true,
+    });
     await copyDirectoryRecursive(uuidDir, nameDir);
     await root.removeEntry(workspaceId, { recursive: true });
-    console.log(`[WasmWorker] UUID-to-name migration complete: ${workspaceId} -> ${workspaceName}`);
+    console.log(
+      `[WasmWorker] UUID-to-name migration complete: ${workspaceId} -> ${workspaceName}`,
+    );
   } catch (e) {
-    console.error('[WasmWorker] UUID-to-name migration failed:', e);
+    console.error("[WasmWorker] UUID-to-name migration failed:", e);
   }
 }
 
@@ -236,16 +261,19 @@ async function copyDirectoryRecursive(
   dest: FileSystemDirectoryHandle,
 ): Promise<void> {
   for await (const [name, handle] of (source as any).entries()) {
-    if (handle.kind === 'file') {
+    if (handle.kind === "file") {
       const file = await (handle as FileSystemFileHandle).getFile();
       const data = await file.arrayBuffer();
       const newFile = await dest.getFileHandle(name, { create: true });
       const writable = await newFile.createWritable();
       await writable.write(data);
       await writable.close();
-    } else if (handle.kind === 'directory') {
+    } else if (handle.kind === "directory") {
       const newSubDir = await dest.getDirectoryHandle(name, { create: true });
-      await copyDirectoryRecursive(handle as FileSystemDirectoryHandle, newSubDir);
+      await copyDirectoryRecursive(
+        handle as FileSystemDirectoryHandle,
+        newSubDir,
+      );
     }
   }
 }
@@ -256,41 +284,59 @@ async function copyDirectoryRecursive(
  */
 async function doSetupCrdtStorage(): Promise<void> {
   if (_crdtStorageReady) return;
-  if (!_storedStorageType || _storedStorageType === 'memory') return;
+  if (!_storedStorageType || _storedStorageType === "memory") return;
 
   try {
-    const { setupCrdtStorageBridge, DirectoryHandlePersistence } = await import('../storage/index.js');
+    const { setupCrdtStorageBridge, DirectoryHandlePersistence } =
+      await import("../storage/index.js");
 
     // Create persistence adapter based on storage type
-    let persistence: InstanceType<typeof DirectoryHandlePersistence> | null = null;
-    if (_storedStorageType === 'opfs') {
+    let persistence: InstanceType<typeof DirectoryHandlePersistence> | null =
+      null;
+    if (_storedStorageType === "opfs") {
       // Get the workspace directory handle from OPFS for .diaryx/crdt.db persistence
       const opfsRoot = await navigator.storage.getDirectory();
-      const wsHandle = await opfsRoot.getDirectoryHandle(_storedWorkspaceName || 'My Journal', { create: true });
+      const wsHandle = await opfsRoot.getDirectoryHandle(
+        _storedWorkspaceName || "My Journal",
+        { create: true },
+      );
       persistence = new DirectoryHandlePersistence(wsHandle);
-    } else if (_storedStorageType === 'filesystem-access' && _storedDirectoryHandle) {
+    } else if (
+      _storedStorageType === "filesystem-access" &&
+      _storedDirectoryHandle
+    ) {
       // Use the user's selected directory for .diaryx/crdt.db persistence
       persistence = new DirectoryHandlePersistence(_storedDirectoryHandle);
     }
 
     await setupCrdtStorageBridge(persistence);
     _crdtStorageReady = true;
-    console.log('[WasmWorker] CRDT storage bridge initialized');
+    console.log("[WasmWorker] CRDT storage bridge initialized");
   } catch (e) {
-    console.warn('[WasmWorker] Failed to initialize CRDT storage bridge, using memory storage:', e);
+    console.warn(
+      "[WasmWorker] Failed to initialize CRDT storage bridge, using memory storage:",
+      e,
+    );
   }
 }
 
 /**
  * Initialize the backend and set up event forwarding.
  */
-async function init(port: MessagePort, storageType: StorageType, workspaceName?: string, directoryHandle?: FileSystemDirectoryHandle, syncEnabled?: boolean, workspaceId?: string): Promise<void> {
+async function init(
+  port: MessagePort,
+  storageType: StorageType,
+  workspaceName?: string,
+  directoryHandle?: FileSystemDirectoryHandle,
+  syncEnabled?: boolean,
+  workspaceId?: string,
+): Promise<void> {
   // Store event port for forwarding filesystem events
   eventPort = port;
 
   // Use workspace name for OPFS directory naming (human-readable).
   // The workspaceId is only used for CRDT document namespacing, not storage paths.
-  const resolvedWorkspaceName = workspaceName || 'My Journal';
+  const resolvedWorkspaceName = workspaceName || "My Journal";
 
   // Store init params for lazy CRDT storage setup
   _storedStorageType = storageType;
@@ -298,7 +344,7 @@ async function init(port: MessagePort, storageType: StorageType, workspaceName?:
   _storedDirectoryHandle = directoryHandle ?? null;
 
   // For OPFS, run legacy "diaryx" -> name migration
-  if (storageType === 'opfs') {
+  if (storageType === "opfs") {
     await migrateWorkspaceDirectory(resolvedWorkspaceName);
 
     // Also migrate UUID-named directories to name-based (for users who had UUID dirs)
@@ -311,7 +357,7 @@ async function init(port: MessagePort, storageType: StorageType, workspaceName?:
   // is configured. Without sync, Rust falls back to MemoryStorage which is fine
   // for local-only usage. This avoids downloading sql.js WASM unnecessarily
   // (important for IndexedDB targets where there's no OPFS persistence anyway).
-  if (syncEnabled && storageType !== 'memory') {
+  if (syncEnabled && storageType !== "memory") {
     await doSetupCrdtStorage();
   }
 
@@ -320,31 +366,39 @@ async function init(port: MessagePort, storageType: StorageType, workspaceName?:
   // to guarantee they come from the same wasm-pack build. wasm-bindgen generates
   // hashed function names that must match between JS and WASM; loading them from
   // different sources (npm JS + CDN WASM) causes "is not a function" errors.
-  const wasmCdnUrl = (import.meta as any).env?.VITE_WASM_CDN_URL as string | undefined;
+  const wasmCdnUrl = (import.meta as any).env?.VITE_WASM_CDN_URL as
+    | string
+    | undefined;
   let wasm: any;
   if (wasmCdnUrl) {
     wasm = await import(/* @vite-ignore */ `${wasmCdnUrl}/diaryx_wasm.js`);
     await wasm.default({ module_or_path: `${wasmCdnUrl}/diaryx_wasm_bg.wasm` });
   } else {
-    wasm = await import('@diaryx/wasm');
+    wasm = await import("@diaryx/wasm");
     await wasm.default();
   }
 
   // Create backend with specified storage type
-  if (storageType === 'opfs') {
+  if (storageType === "opfs") {
     backend = await wasm.DiaryxBackend.createOpfs(resolvedWorkspaceName);
-  } else if (storageType === 'filesystem-access') {
+  } else if (storageType === "filesystem-access") {
     if (!directoryHandle) {
-      throw new Error('Directory handle required for filesystem-access storage type');
+      throw new Error(
+        "Directory handle required for filesystem-access storage type",
+      );
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    backend = (wasm.DiaryxBackend as any).createFromDirectoryHandle(directoryHandle);
-  } else if (storageType === 'memory') {
+    backend = (wasm.DiaryxBackend as any).createFromDirectoryHandle(
+      directoryHandle,
+    );
+  } else if (storageType === "memory") {
     // In-memory storage for guest mode - files live only in memory
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     backend = (wasm.DiaryxBackend as any).createInMemory();
   } else {
-    backend = await wasm.DiaryxBackend.createIndexedDb(workspaceId ?? undefined);
+    backend = await wasm.DiaryxBackend.createIndexedDb(
+      workspaceId ?? undefined,
+    );
   }
 
   // Subscribe to filesystem events and forward them to the main thread
@@ -352,25 +406,41 @@ async function init(port: MessagePort, storageType: StorageType, workspaceName?:
     fsEventSubscriptionId = backend.onFileSystemEvent((eventJson: string) => {
       // Forward the event JSON to the main thread via MessagePort
       try {
-        eventPort!.postMessage({ type: 'FileSystemEvent', data: eventJson });
+        eventPort!.postMessage({ type: "FileSystemEvent", data: eventJson });
       } catch (e) {
-        console.error('[WasmWorker] Failed to forward filesystem event:', e);
+        console.error("[WasmWorker] Failed to forward filesystem event:", e);
       }
     });
-    console.log('[WasmWorker] Subscribed to filesystem events, id:', fsEventSubscriptionId);
+    console.log(
+      "[WasmWorker] Subscribed to filesystem events, id:",
+      fsEventSubscriptionId,
+    );
   } else {
-    console.log('[WasmWorker] Filesystem events not available on this backend');
+    console.log("[WasmWorker] Filesystem events not available on this backend");
   }
 
-  console.log('[WasmWorker] DiaryxBackend initialized with storage:', storageType);
+  console.log(
+    "[WasmWorker] DiaryxBackend initialized with storage:",
+    storageType,
+  );
 }
 
 /**
  * Initialize the backend with a File System Access API directory handle.
  * This is called when the user selects "Local Folder" storage.
  */
-async function initWithDirectoryHandle(_port: MessagePort, directoryHandle: FileSystemDirectoryHandle, syncEnabled?: boolean): Promise<void> {
-  return init(_port, 'filesystem-access', undefined, directoryHandle, syncEnabled);
+async function initWithDirectoryHandle(
+  _port: MessagePort,
+  directoryHandle: FileSystemDirectoryHandle,
+  syncEnabled?: boolean,
+): Promise<void> {
+  return init(
+    _port,
+    "filesystem-access",
+    undefined,
+    directoryHandle,
+    syncEnabled,
+  );
 }
 
 /**
@@ -378,7 +448,7 @@ async function initWithDirectoryHandle(_port: MessagePort, directoryHandle: File
  *
  * All methods use the unified command API through `execute()` except where noted.
  */
-const workerApi = {
+export const workerApi = {
   init,
   initWithDirectoryHandle,
 
@@ -397,10 +467,12 @@ const workerApi = {
 
   // Event stubs - events will go through MessagePort
   on(_event: BackendEventType, _listener: BackendEventListener): void {
-    console.warn('[WasmWorker] Events are forwarded via MessagePort, not on()');
+    console.warn("[WasmWorker] Events are forwarded via MessagePort, not on()");
   },
   off(_event: BackendEventType, _listener: BackendEventListener): void {
-    console.warn('[WasmWorker] Events are forwarded via MessagePort, not off()');
+    console.warn(
+      "[WasmWorker] Events are forwarded via MessagePort, not off()",
+    );
   },
 
   // =========================================================================
@@ -444,9 +516,9 @@ const workerApi = {
   // =========================================================================
 
   async findRootIndex(dirPath?: string): Promise<string | null> {
-    const directory = dirPath ?? '.';
-    const response = await executeCommand('FindRootIndex', { directory });
-    if (response.type === 'String') {
+    const directory = dirPath ?? ".";
+    const response = await executeCommand("FindRootIndex", { directory });
+    if (response.type === "String") {
       return response.data;
     }
     return null;
@@ -457,23 +529,23 @@ const workerApi = {
     if (rootPath) return rootPath;
 
     // Try to discover root index in current directory first
-    let root = await this.findRootIndex('.');
+    let root = await this.findRootIndex(".");
 
     // Fallback: try "workspace" directory (OPFS default)
     if (!root) {
-      root = await this.findRootIndex('workspace');
+      root = await this.findRootIndex("workspace");
     }
 
     // Fallback: scan all top-level directories for a root index
     if (!root) {
       try {
         // Use GetFilesystemTree to list directories
-        const response = await executeCommand('GetFilesystemTree', {
-          path: '.',
+        const response = await executeCommand("GetFilesystemTree", {
+          path: ".",
           show_hidden: false,
-          depth: 1
+          depth: 1,
         });
-        if (response.type === 'Tree' && response.data?.children) {
+        if (response.type === "Tree" && response.data?.children) {
           for (const child of response.data.children) {
             if (child.children && child.children.length >= 0) {
               // It's a directory
@@ -486,20 +558,20 @@ const workerApi = {
           }
         }
       } catch (e) {
-        console.warn('[WasmWorker] Failed to scan directories:', e);
+        console.warn("[WasmWorker] Failed to scan directories:", e);
       }
     }
 
     if (root) {
       // Get parent directory of root index
-      const lastSlash = root.lastIndexOf('/');
-      const discoveredPath = lastSlash > 0 ? root.substring(0, lastSlash) : '.';
+      const lastSlash = root.lastIndexOf("/");
+      const discoveredPath = lastSlash > 0 ? root.substring(0, lastSlash) : ".";
       rootPath = discoveredPath;
       return discoveredPath;
     }
 
     // Fallback to current directory
-    return '.';
+    return ".";
   },
 
   // Clear cached root path (for after rename operations)
@@ -511,26 +583,44 @@ const workerApi = {
   // Workspace (uses commands)
   // =========================================================================
 
-  async getWorkspaceTree(workspacePath?: string, depth?: number, audience?: string): Promise<any> {
-    const path = workspacePath ?? await this.getDefaultWorkspacePath();
-    return executeAndExtract('GetWorkspaceTree', { path, depth: depth ?? null, audience: audience ?? null }, 'Tree');
+  async getWorkspaceTree(
+    workspacePath?: string,
+    depth?: number,
+    audience?: string,
+  ): Promise<any> {
+    const path = workspacePath ?? (await this.getDefaultWorkspacePath());
+    return executeAndExtract(
+      "GetWorkspaceTree",
+      { path, depth: depth ?? null, audience: audience ?? null },
+      "Tree",
+    );
   },
 
   async createWorkspace(path?: string, name?: string): Promise<string> {
-    const workspacePath = path ?? '.';
-    const workspaceName = name ?? 'My Workspace';
-    await executeCommand('CreateWorkspace', { path: workspacePath, name: workspaceName });
+    const workspacePath = path ?? ".";
+    const workspaceName = name ?? "My Workspace";
+    await executeCommand("CreateWorkspace", {
+      path: workspacePath,
+      name: workspaceName,
+    });
     rootPath = workspacePath; // Cache the new workspace path
     return workspacePath;
   },
 
-  async getFilesystemTree(workspacePath?: string, showHidden?: boolean): Promise<any> {
-    const path = workspacePath ?? await this.getDefaultWorkspacePath();
-    return executeAndExtract('GetFilesystemTree', {
-      path,
-      show_hidden: showHidden ?? false,
-      depth: null
-    }, 'Tree');
+  async getFilesystemTree(
+    workspacePath?: string,
+    showHidden?: boolean,
+  ): Promise<any> {
+    const path = workspacePath ?? (await this.getDefaultWorkspacePath());
+    return executeAndExtract(
+      "GetFilesystemTree",
+      {
+        path,
+        show_hidden: showHidden ?? false,
+        depth: null,
+      },
+      "Tree",
+    );
   },
 
   // =========================================================================
@@ -538,42 +628,53 @@ const workerApi = {
   // =========================================================================
 
   async getEntry(path: string): Promise<any> {
-    return executeAndExtract('GetEntry', { path }, 'Entry');
+    return executeAndExtract("GetEntry", { path }, "Entry");
   },
 
   async saveEntry(path: string, content: string): Promise<void> {
-    await executeCommand('SaveEntry', { path, content });
+    await executeCommand("SaveEntry", { path, content });
   },
 
-  async createEntry(path: string, options?: { title?: string }): Promise<string> {
-    return executeAndExtract('CreateEntry', {
-      path,
-      options: {
-        title: options?.title ?? null,
-        part_of: null,
-        template: null
-      }
-    }, 'String');
+  async createEntry(
+    path: string,
+    options?: { title?: string },
+  ): Promise<string> {
+    return executeAndExtract(
+      "CreateEntry",
+      {
+        path,
+        options: {
+          title: options?.title ?? null,
+          part_of: null,
+          template: null,
+        },
+      },
+      "String",
+    );
   },
 
   async deleteEntry(path: string): Promise<void> {
-    await executeCommand('DeleteEntry', { path });
+    await executeCommand("DeleteEntry", { path });
   },
 
   async moveEntry(fromPath: string, toPath: string): Promise<string> {
-    await executeCommand('MoveEntry', { from: fromPath, to: toPath });
+    await executeCommand("MoveEntry", { from: fromPath, to: toPath });
     return toPath;
   },
 
   async renameEntry(path: string, newFilename: string): Promise<string> {
-    const result = await executeAndExtract<string>('RenameEntry', { path, new_filename: newFilename }, 'String');
+    const result = await executeAndExtract<string>(
+      "RenameEntry",
+      { path, new_filename: newFilename },
+      "String",
+    );
     // Clear cached root path in case we renamed the root index
     clearRootPathCache();
     return result;
   },
 
   async duplicateEntry(path: string): Promise<string> {
-    return executeAndExtract('DuplicateEntry', { path }, 'String');
+    return executeAndExtract("DuplicateEntry", { path }, "String");
   },
 
   // =========================================================================
@@ -581,11 +682,15 @@ const workerApi = {
   // =========================================================================
 
   async getFrontmatter(path: string): Promise<any> {
-    return executeAndExtract('GetFrontmatter', { path }, 'Frontmatter');
+    return executeAndExtract("GetFrontmatter", { path }, "Frontmatter");
   },
 
-  async setFrontmatterProperty(path: string, key: string, value: any): Promise<void> {
-    await executeCommand('SetFrontmatterProperty', { path, key, value });
+  async setFrontmatterProperty(
+    path: string,
+    key: string,
+    value: any,
+  ): Promise<void> {
+    await executeCommand("SetFrontmatterProperty", { path, key, value });
   },
 
   // =========================================================================
@@ -593,16 +698,21 @@ const workerApi = {
   // =========================================================================
 
   async searchWorkspace(pattern: string, options?: any): Promise<any> {
-    const workspacePath = options?.workspacePath ?? await this.getDefaultWorkspacePath();
-    return executeAndExtract('SearchWorkspace', {
-      pattern,
-      options: {
-        workspace_path: workspacePath,
-        search_frontmatter: options?.searchFrontmatter ?? false,
-        property: options?.property ?? null,
-        case_sensitive: options?.caseSensitive ?? false
-      }
-    }, 'SearchResults');
+    const workspacePath =
+      options?.workspacePath ?? (await this.getDefaultWorkspacePath());
+    return executeAndExtract(
+      "SearchWorkspace",
+      {
+        pattern,
+        options: {
+          workspace_path: workspacePath,
+          search_frontmatter: options?.searchFrontmatter ?? false,
+          property: options?.property ?? null,
+          case_sensitive: options?.caseSensitive ?? false,
+        },
+      },
+      "SearchResults",
+    );
   },
 
   // =========================================================================
@@ -610,8 +720,8 @@ const workerApi = {
   // =========================================================================
 
   async validateWorkspace(workspacePath?: string): Promise<any> {
-    const path = workspacePath ?? await this.getDefaultWorkspacePath();
-    return executeAndExtract('ValidateWorkspace', { path }, 'ValidationResult');
+    const path = workspacePath ?? (await this.getDefaultWorkspacePath());
+    return executeAndExtract("ValidateWorkspace", { path }, "ValidationResult");
   },
 
   // =========================================================================
@@ -619,19 +729,19 @@ const workerApi = {
   // =========================================================================
 
   async fileExists(path: string): Promise<boolean> {
-    return executeAndExtract('FileExists', { path }, 'Bool');
+    return executeAndExtract("FileExists", { path }, "Bool");
   },
 
   async readFile(path: string): Promise<string> {
-    return executeAndExtract('ReadFile', { path }, 'String');
+    return executeAndExtract("ReadFile", { path }, "String");
   },
 
   async writeFile(path: string, content: string): Promise<void> {
-    await executeCommand('WriteFile', { path, content });
+    await executeCommand("WriteFile", { path, content });
   },
 
   async deleteFile(path: string): Promise<void> {
-    await executeCommand('DeleteFile', { path });
+    await executeCommand("DeleteFile", { path });
   },
 
   // Binary operations kept as native calls for efficiency (no base64 overhead)
@@ -648,51 +758,87 @@ const workerApi = {
   // =========================================================================
 
   async getAvailableAudiences(rootPath: string): Promise<string[]> {
-    return executeAndExtract('GetAvailableAudiences', { root_path: rootPath }, 'Strings');
+    return executeAndExtract(
+      "GetAvailableAudiences",
+      { root_path: rootPath },
+      "Strings",
+    );
   },
 
   async planExport(rootPath: string, audience: string): Promise<any> {
-    return executeAndExtract('PlanExport', { root_path: rootPath, audience }, 'ExportPlan');
+    return executeAndExtract(
+      "PlanExport",
+      { root_path: rootPath, audience },
+      "ExportPlan",
+    );
   },
 
   async exportToMemory(rootPath: string, audience: string): Promise<any[]> {
-    return executeAndExtract('ExportToMemory', { root_path: rootPath, audience }, 'ExportedFiles');
+    return executeAndExtract(
+      "ExportToMemory",
+      { root_path: rootPath, audience },
+      "ExportedFiles",
+    );
   },
 
   async exportToHtml(rootPath: string, audience: string): Promise<any[]> {
-    return executeAndExtract('ExportToHtml', { root_path: rootPath, audience }, 'ExportedFiles');
+    return executeAndExtract(
+      "ExportToHtml",
+      { root_path: rootPath, audience },
+      "ExportedFiles",
+    );
   },
 
-  async exportBinaryAttachments(rootPath: string, audience: string): Promise<{ source_path: string; relative_path: string }[]> {
-    return executeAndExtract('ExportBinaryAttachments', { root_path: rootPath, audience }, 'BinaryFilePaths');
+  async exportBinaryAttachments(
+    rootPath: string,
+    audience: string,
+  ): Promise<{ source_path: string; relative_path: string }[]> {
+    return executeAndExtract(
+      "ExportBinaryAttachments",
+      { root_path: rootPath, audience },
+      "BinaryFilePaths",
+    );
   },
 
   // =========================================================================
-  // Sync Client (WasmSyncClient inject/poll bridge)
+  // Sync Client (WasmSyncClient inject/poll bridge) — DEPRECATED
+  // Use the Rust-owned sync API below instead.
   // =========================================================================
 
   /**
    * Create a WasmSyncClient for the given workspace.
-   * The client is stored in the worker and accessed via inject/poll methods below.
+   * DEPRECATED: Use startSync() instead.
    */
-  createSyncClient(serverUrl: string, workspaceId: string, authToken?: string): void {
+  createSyncClient(
+    serverUrl: string,
+    workspaceId: string,
+    authToken?: string,
+  ): void {
     if (syncClient) {
-      console.warn('[WasmWorker] Destroying existing sync client');
+      console.warn("[WasmWorker] Destroying existing sync client");
       syncClient.free?.();
       syncClient = null;
     }
-    syncClient = getBackend().createSyncClient(serverUrl, workspaceId, authToken ?? null);
-    console.log('[WasmWorker] Created WasmSyncClient for workspace:', workspaceId);
+    syncClient = getBackend().createSyncClient(
+      serverUrl,
+      workspaceId,
+      authToken ?? null,
+    );
+    console.log(
+      "[WasmWorker] Created WasmSyncClient for workspace:",
+      workspaceId,
+    );
   },
 
   /**
    * Destroy the sync client.
+   * DEPRECATED: Use stopSync() instead.
    */
   destroySyncClient(): void {
     if (syncClient) {
       syncClient.free?.();
       syncClient = null;
-      console.log('[WasmWorker] Sync client destroyed');
+      console.log("[WasmWorker] Sync client destroyed");
     }
   },
 
@@ -700,7 +846,7 @@ const workerApi = {
    * Get the WebSocket URL from the sync client.
    */
   syncGetWsUrl(): string {
-    if (!syncClient) throw new Error('Sync client not created');
+    if (!syncClient) throw new Error("Sync client not created");
     return syncClient.getWsUrl();
   },
 
@@ -708,7 +854,7 @@ const workerApi = {
    * Set the session code on the sync client.
    */
   syncSetSessionCode(code: string): void {
-    if (!syncClient) throw new Error('Sync client not created');
+    if (!syncClient) throw new Error("Sync client not created");
     syncClient.setSessionCode(code);
   },
 
@@ -717,7 +863,7 @@ const workerApi = {
    * Returns void — poll outgoing queues and events after this.
    */
   async syncOnConnected(): Promise<void> {
-    if (!syncClient) throw new Error('Sync client not created');
+    if (!syncClient) throw new Error("Sync client not created");
     await syncClient.onConnected();
   },
 
@@ -725,7 +871,7 @@ const workerApi = {
    * Inject a binary WebSocket message into the sync client.
    */
   async syncOnBinaryMessage(data: Uint8Array): Promise<void> {
-    if (!syncClient) throw new Error('Sync client not created');
+    if (!syncClient) throw new Error("Sync client not created");
     await syncClient.onBinaryMessage(data);
   },
 
@@ -734,7 +880,7 @@ const workerApi = {
    * More efficient than individual calls across the Comlink boundary.
    */
   async syncOnBinaryMessages(messages: Uint8Array[]): Promise<void> {
-    if (!syncClient) throw new Error('Sync client not created');
+    if (!syncClient) throw new Error("Sync client not created");
     for (const msg of messages) {
       await syncClient.onBinaryMessage(msg);
     }
@@ -744,7 +890,7 @@ const workerApi = {
    * Inject a text WebSocket message into the sync client.
    */
   async syncOnTextMessage(text: string): Promise<void> {
-    if (!syncClient) throw new Error('Sync client not created');
+    if (!syncClient) throw new Error("Sync client not created");
     await syncClient.onTextMessage(text);
   },
 
@@ -753,7 +899,7 @@ const workerApi = {
    * More efficient than individual calls across the Comlink boundary.
    */
   async syncOnTextMessages(messages: string[]): Promise<void> {
-    if (!syncClient) throw new Error('Sync client not created');
+    if (!syncClient) throw new Error("Sync client not created");
     for (const msg of messages) {
       await syncClient.onTextMessage(msg);
     }
@@ -763,7 +909,7 @@ const workerApi = {
    * Notify the sync client that the WebSocket disconnected.
    */
   async syncOnDisconnected(): Promise<void> {
-    if (!syncClient) throw new Error('Sync client not created');
+    if (!syncClient) throw new Error("Sync client not created");
     await syncClient.onDisconnected();
   },
 
@@ -771,7 +917,7 @@ const workerApi = {
    * Notify the sync client that a snapshot was imported.
    */
   async syncOnSnapshotImported(): Promise<void> {
-    if (!syncClient) throw new Error('Sync client not created');
+    if (!syncClient) throw new Error("Sync client not created");
     await syncClient.onSnapshotImported();
   },
 
@@ -779,7 +925,7 @@ const workerApi = {
    * Queue a local CRDT update for the sync client to send.
    */
   async syncQueueLocalUpdate(docId: string, data: Uint8Array): Promise<void> {
-    if (!syncClient) throw new Error('Sync client not created');
+    if (!syncClient) throw new Error("Sync client not created");
     await syncClient.queueLocalUpdate(docId, data);
   },
 
@@ -834,6 +980,63 @@ const workerApi = {
   },
 
   // =========================================================================
+  // Rust-Owned Sync (Rust owns the WebSocket — replaces poll-based bridge)
+  // =========================================================================
+
+  /**
+   * Start sync — Rust owns the WebSocket connection.
+   * Creates a WasmSyncTransport, connects to the server, and subscribes
+   * to local CRDT updates. All sync events are forwarded via the filesystem
+   * event port (MessagePort).
+   */
+  startSync(
+    serverUrl: string,
+    workspaceId: string,
+    authToken?: string,
+    sessionCode?: string,
+  ): void {
+    getBackend().startSync(
+      serverUrl,
+      workspaceId,
+      authToken ?? null,
+      sessionCode ?? null,
+    );
+    console.log(
+      "[WasmWorker] Started Rust-owned sync for workspace:",
+      workspaceId,
+    );
+  },
+
+  /**
+   * Stop sync — disconnect and drop the transport.
+   */
+  stopSync(): void {
+    getBackend().stopSync();
+    console.log("[WasmWorker] Stopped Rust-owned sync");
+  },
+
+  /**
+   * Focus on specific files for body sync (Rust-owned).
+   */
+  focusSyncFiles(files: string[]): void {
+    getBackend().focusSyncFiles(files);
+  },
+
+  /**
+   * Unfocus specific files (Rust-owned).
+   */
+  unfocusSyncFiles(files: string[]): void {
+    getBackend().unfocusSyncFiles(files);
+  },
+
+  /**
+   * Request body sync for specific files (Rust-owned).
+   */
+  requestBodySync(files: string[]): void {
+    getBackend().requestBodySync(files);
+  },
+
+  // =========================================================================
   // ZIP Import (runs entirely in worker — no main-thread decompression)
   // =========================================================================
 
@@ -841,13 +1044,13 @@ const workerApi = {
     file: File,
     workspacePath?: string,
     onProgress?: (bytesUploaded: number, totalBytes: number) => void,
-  ): Promise<{ success: boolean; files_imported: number; files_skipped: number }> {
-    const {
-      ZipReader,
-      BlobReader,
-      TextWriter,
-      Uint8ArrayWriter,
-    } = await import('@zip.js/zip.js');
+  ): Promise<{
+    success: boolean;
+    files_imported: number;
+    files_skipped: number;
+  }> {
+    const { ZipReader, BlobReader, TextWriter, Uint8ArrayWriter } =
+      await import("@zip.js/zip.js");
 
     let workspace: string;
     if (workspacePath) {
@@ -856,7 +1059,7 @@ const workerApi = {
       try {
         workspace = await workerApi.getDefaultWorkspacePath();
       } catch {
-        workspace = '.';
+        workspace = ".";
       }
     }
 
@@ -865,13 +1068,16 @@ const workerApi = {
     try {
       const entries = await zipReader.getEntries();
       const files = entries.filter((entry) => !entry.directory);
-      const commonPrefix = detectCommonRootPrefix(files.map((entry) => entry.filename));
+      const commonPrefix = detectCommonRootPrefix(
+        files.map((entry) => entry.filename),
+      );
 
       let filesImported = 0;
       let filesSkipped = 0;
       let processedWeight = 0;
       const now = () =>
-        (typeof performance !== 'undefined' && typeof performance.now === 'function')
+        typeof performance !== "undefined" &&
+        typeof performance.now === "function"
           ? performance.now()
           : Date.now();
       let lastProgressEmitAt = now();
@@ -888,7 +1094,7 @@ const workerApi = {
 
         if (commonPrefix && fileName.startsWith(commonPrefix)) {
           fileName = fileName.substring(commonPrefix.length);
-          if (fileName === '') {
+          if (fileName === "") {
             continue;
           }
         }
@@ -898,7 +1104,7 @@ const workerApi = {
           continue;
         }
 
-        const isMarkdown = fileName.endsWith('.md');
+        const isMarkdown = fileName.endsWith(".md");
         const isAttachment = COMMON_ATTACHMENT_RE.test(fileName);
         if (!isMarkdown && !isAttachment) {
           filesSkipped++;
@@ -921,7 +1127,10 @@ const workerApi = {
         }
 
         if (onProgress && totalWeight > 0) {
-          processedWeight = Math.min(totalWeight, processedWeight + entryWeights[i]);
+          processedWeight = Math.min(
+            totalWeight,
+            processedWeight + entryWeights[i],
+          );
           const tick = now();
           const shouldEmit =
             processedWeight >= totalWeight || tick - lastProgressEmitAt >= 120;
@@ -950,14 +1159,20 @@ const workerApi = {
   async call(method: string, args: unknown[]): Promise<unknown> {
     const b = getBackend();
     const fn = (b as any)[method];
-    if (typeof fn !== 'function') {
+    if (typeof fn !== "function") {
       throw new Error(`Unknown backend method: ${method}`);
     }
     return (fn as Function).apply(b, args);
   },
 };
 
-// Expose the worker API via Comlink
-Comlink.expose(workerApi);
+// Expose the worker API via Comlink only when running inside a real Worker.
+const isWorkerRuntime =
+  typeof self !== "undefined" &&
+  typeof (self as { importScripts?: unknown }).importScripts === "function";
+
+if (isWorkerRuntime) {
+  Comlink.expose(workerApi);
+}
 
 export type WorkerApi = typeof workerApi;

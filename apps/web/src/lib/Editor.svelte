@@ -47,6 +47,7 @@
   // Custom extension for conditional block markers ({{#if}}, {{#for-audience}}, etc.)
   import { ConditionalBlock } from "./extensions/ConditionalBlock";
   import { getTemplateContextStore } from "./stores/templateContextStore.svelte";
+  import { getEditorExtensions } from "$lib/plugins/browserPluginManager.svelte";
   import type { Api } from "$lib/backend/api";
   import { isTauri } from "$lib/backend/interface";
   import { isIOS } from "$lib/hooks/useMobile.svelte";
@@ -458,6 +459,8 @@
           ? () => editor?.commands.insertAttachmentPicker()
           : undefined,
       }),
+      // Plugin-generated editor extensions (e.g., math blocks)
+      ...getEditorExtensions(),
     ];
 
     // Add FloatingMenu extension (for block formatting on empty lines)

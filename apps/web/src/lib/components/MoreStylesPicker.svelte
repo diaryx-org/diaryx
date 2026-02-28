@@ -7,6 +7,7 @@
     EyeOff,
     Superscript,
   } from "@lucide/svelte";
+  import { getPluginStore } from "@/models/stores/pluginStore.svelte";
 
   interface Props {
     editor: Editor | null;
@@ -18,6 +19,8 @@
   let { editor, enableSpoilers = true, open = $bindable(false), onOpen }: Props = $props();
   let wrapperElement: HTMLDivElement | null = $state(null);
   let showBelow = $state(false);
+
+  const pluginInlineCommands = $derived(getPluginStore().editorInsertCommands.inline);
 
   let isStrikeActive = $state(false);
   let isCodeActive = $state(false);
@@ -208,6 +211,29 @@
         <Superscript class="size-4" />
         <span>Footnote</span>
       </button>
+
+      {#if pluginInlineCommands.length > 0}
+        <div class="more-styles-divider"></div>
+        {#each pluginInlineCommands as cmd (cmd.extensionId)}
+          <button
+            type="button"
+            class="more-styles-option"
+            onmousedown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              editor?.chain().focus().insertContent({
+                type: cmd.extensionId,
+                attrs: { source: '' },
+              }).run();
+            }}
+            title={cmd.description ?? cmd.label}
+            role="menuitem"
+          >
+            <cmd.icon class="size-4" />
+            <span>{cmd.label}</span>
+          </button>
+        {/each}
+      {/if}
     </div>
   {/if}
 </div>
@@ -263,6 +289,13 @@
       opacity: 1;
       transform: translateX(-50%) translateY(0);
     }
+  }
+
+  .more-styles-divider {
+    height: 1px;
+    background: var(--border);
+    margin: 4px 0;
+    opacity: 0.5;
   }
 
   .more-styles-option {

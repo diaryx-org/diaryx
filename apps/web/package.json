@@ -20,11 +20,10 @@
   },
   "dependencies": {
     "@choochmeque/tauri-plugin-google-auth-api": "^0.3.6",
+    "@bjorn3/browser_wasi_shim": "^0.4.2",
     "@extism/extism": "^2.0.0-rc13",
     "@choochmeque/tauri-plugin-iap-api": "^0.8.0",
     "@diaryx/wasm": "^0.11.0-dev",
-    "@myriaddreamin/typst-ts-web-compiler": "^0.7.0-rc2",
-    "@myriaddreamin/typst.ts": "^0.7.0-rc2",
     "@tauri-apps/api": "^2.9.1",
     "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-fs": "^2.4.5",
@@ -55,8 +54,7 @@
     "js-yaml": "^4.1.1",
     "jszip": "^3.10.1",
     "perfect-freehand": "^1.2.3",
-    "sql.js": "^1.13.0",
-    "wasm-pandoc": "^1.0.0"
+    "sql.js": "^1.13.0"
   },
   "devDependencies": {
     "@internationalized/date": "^3.10.1",

@@ -26,31 +26,33 @@
     AlertCircle,
     AlertTriangle,
     Plus,
-    Trash2,
-    Download,
     Settings,
     Wrench,
     Eye,
     X,
-    SearchCheck,
     MoreVertical,
-    Pencil,
-    Copy,
     FolderInput,
     CircleUser,
+    Download,
+    SearchCheck,
+    Trash2,
+    Pencil,
+    Copy,
   } from "@lucide/svelte";
   import { getAuthState } from "./auth";
   import WorkspaceSelector from "./WorkspaceSelector.svelte";
   import AudienceFilter from "./components/AudienceFilter.svelte";
   import PluginSidebarPanel from "./components/PluginSidebarPanel.svelte";
   import ShareTab from "./share/ShareTab.svelte";
+  import PublishTab from "./publish/PublishTab.svelte";
   import GitHistoryPanel from "./history/GitHistoryPanel.svelte";
-  import { Share2, History, FolderTree } from "@lucide/svelte";
+  import { Share2, History, FolderTree, Globe } from "@lucide/svelte";
   import { getPluginStore } from "@/models/stores/pluginStore.svelte";
   import {
     SYNC_BUILTIN_TABS,
     getSyncBuiltinTabKeyByComponentId,
   } from "$lib/sync/syncBuiltinUiRegistry";
+  import { getPublishBuiltinTabKeyByComponentId } from "$lib/publish/publishBuiltinUiRegistry";
 
   interface Props {
     tree: TreeNode | null;
@@ -72,6 +74,8 @@
     onCreateChildEntry: (parentPath: string) => void;
     onDeleteEntry: (path: string) => void;
     onExport: (path: string) => void;
+    onOpenBackupImport?: () => void;
+    onImportMarkdownFile?: () => void;
     onAddAttachment: (entryPath: string) => void;
     onMoveAttachment?: (sourceEntryPath: string, targetEntryPath: string, attachmentPath: string) => void;
     onRemoveBrokenPartOf?: (filePath: string) => void;
@@ -115,6 +119,8 @@
     onCreateChildEntry,
     onDeleteEntry,
     onExport,
+    onOpenBackupImport,
+    onImportMarkdownFile,
     onAddAttachment: _onAddAttachment,
     onMoveAttachment,
     onRemoveBrokenPartOf,
@@ -164,9 +170,33 @@
     pluginId: PluginId | null;
     component: ComponentRef | null;
     syncBuiltinKey: SyncBuiltinTabKey | null;
+    publishBuiltinKey: "publish" | null;
   };
 
   const pluginStore = getPluginStore();
+  const contextMenuOwner = $derived(pluginStore.leftSidebarContextMenuOwner);
+  let showPluginContextMenu = $state(false);
+  let pluginContextTarget = $state<TreeNodeMenuData | null>(null);
+
+  async function openPluginOwnedContextMenu(target: TreeNodeMenuData) {
+    pluginContextTarget = target;
+    showPluginContextMenu = true;
+
+    if (!api || !contextMenuOwner) return;
+    try {
+      await api.executePluginCommand(
+        contextMenuOwner.pluginId,
+        "set_context_menu_context",
+        {
+          path: target.path,
+          name: target.name,
+          has_children: target.hasChildren,
+        } as any,
+      );
+    } catch {
+      // Optional command; owners may rely only on iframe init + plugin events.
+    }
+  }
 
   const leftTabs = $derived.by<LeftSidebarTabDescriptor[]>(() => {
     const tabMap = new Map<string, LeftSidebarTabDescriptor>();
@@ -178,6 +208,10 @@
         component.type === "Builtin"
           ? getSyncBuiltinTabKeyByComponentId(component.component_id)
           : null;
+      const publishBuiltinKey =
+        component.type === "Builtin"
+          ? getPublishBuiltinTabKeyByComponentId(component.component_id)
+          : null;
       tabMap.set(tab.contribution.id, {
         id: tab.contribution.id,
         label: tab.contribution.label,
@@ -185,6 +219,7 @@
         pluginId: tab.pluginId,
         component,
         syncBuiltinKey,
+        publishBuiltinKey,
       });
     }
 
@@ -196,6 +231,7 @@
         pluginId: null,
         component: null,
         syncBuiltinKey: null,
+        publishBuiltinKey: null,
       },
       ...Array.from(tabMap.values()),
     ];
@@ -1187,6 +1223,8 @@
             <Share2 class="size-3" />
           {:else if tab.syncBuiltinKey === "snapshots" || tab.icon === "history"}
             <History class="size-3" />
+          {:else if tab.publishBuiltinKey === "publish" || tab.icon === "globe"}
+            <Globe class="size-3" />
           {/if}
           {tab.label}
         </button>
@@ -1233,7 +1271,6 @@
       {#if activePluginTab?.syncBuiltinKey === "share"}
         <ShareTab
           {onBeforeHost}
-          {onAddWorkspace}
           onOpenEntry={onOpenEntry2}
           {api}
           triggerStart={triggerStartSession}
@@ -1241,6 +1278,12 @@
         />
       {:else if activePluginTab?.syncBuiltinKey === "snapshots"}
         <GitHistoryPanel />
+      {:else if activePluginTab?.publishBuiltinKey === "publish"}
+        <PublishTab
+          rootPath={tree?.path ?? "."}
+          {api}
+          {onAddWorkspace}
+        />
       {:else if activePluginTab?.pluginId && activePluginTab.component && api}
         <PluginSidebarPanel
           pluginId={activePluginTab.pluginId}
@@ -1447,7 +1490,46 @@
   onDuplicate={onDuplicateEntry ? handleDuplicate : undefined}
   onMoveTo={api ? handleMoveToClick : undefined}
   onSetAudience={onSetAudience}
+  onOpenBackupImport={onOpenBackupImport}
+  onImportMarkdownFile={onImportMarkdownFile}
+  minimalMode={false}
 />
+
+<!-- Plugin-owned Context Menu Dialog -->
+{#if showPluginContextMenu && contextMenuOwner && api}
+  <div
+    class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="plugin-context-menu-title"
+    onclick={() => (showPluginContextMenu = false)}
+    onkeydown={(e) => e.key === 'Escape' && (showPluginContextMenu = false)}
+    tabindex={-1}
+  >
+    <div
+      class="bg-background rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] flex flex-col overflow-hidden"
+      role="presentation"
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
+    >
+      <div class="flex items-center justify-between p-4 border-b">
+        <h2 id="plugin-context-menu-title" class="text-lg font-semibold">
+          {pluginContextTarget?.name?.replace('.md', '') ?? 'Context Menu'}
+        </h2>
+        <Button variant="ghost" size="sm" onclick={() => (showPluginContextMenu = false)}>
+          <X class="size-4" />
+        </Button>
+      </div>
+      <div class="h-[60vh] max-h-[640px] overflow-hidden">
+        <PluginSidebarPanel
+          pluginId={contextMenuOwner.pluginId}
+          component={contextMenuOwner.contribution.component}
+          {api}
+        />
+      </div>
+    </div>
+  </div>
+{/if}
 
 <!-- Parent Picker Dialog (for validation fixes) -->
 {#if showParentPicker}
@@ -1615,7 +1697,7 @@
 
 {#snippet treeNode(node: TreeNode, depth: number)}
   <ContextMenu.Root>
-    <ContextMenu.Trigger disabled={contextMenuState.useBottomSheet}>
+    <ContextMenu.Trigger disabled={contextMenuState.useBottomSheet || !!contextMenuOwner}>
       <div
         class="select-none"
         role="treeitem"
@@ -1629,7 +1711,10 @@
         ondragstart={(e) => handleDragStart(e, node.path)}
         ondragend={handleDragEnd}
         oncontextmenu={(e) => {
-          if (contextMenuState.useBottomSheet) {
+          if (contextMenuOwner) {
+            e.preventDefault();
+            openPluginOwnedContextMenu({ path: node.path, name: node.name, hasChildren: node.children.length > 0 });
+          } else if (contextMenuState.useBottomSheet) {
             e.preventDefault();
             contextMenuState.openMenu({ path: node.path, name: node.name, hasChildren: node.children.length > 0 });
           }
@@ -1867,7 +1952,11 @@
               class="p-1.5 rounded-md hover:bg-sidebar-accent-foreground/10 transition-colors shrink-0"
               onclick={(e) => {
                 e.stopPropagation();
-                contextMenuState.openMenu({ path: node.path, name: node.name, hasChildren: node.children.length > 0 });
+                if (contextMenuOwner) {
+                  openPluginOwnedContextMenu({ path: node.path, name: node.name, hasChildren: node.children.length > 0 });
+                } else {
+                  contextMenuState.openMenu({ path: node.path, name: node.name, hasChildren: node.children.length > 0 });
+                }
               }}
               aria-label="More actions"
             >
@@ -1886,54 +1975,79 @@
       </div>
     </ContextMenu.Trigger>
 
-    <ContextMenu.Content class="w-48">
-      <ContextMenu.Item onclick={() => onCreateChildEntry(node.path)}>
-        <Plus class="size-4 mr-2" />
-        New Entry Here
-      </ContextMenu.Item>
-      {#if onRenameEntry}
-        <ContextMenu.Item onclick={() => handleRenameClick(node.path, node.name)}>
-          <Pencil class="size-4 mr-2" />
-          Rename
+    {#if !contextMenuOwner}
+      <ContextMenu.Content class="w-56">
+        <ContextMenu.Item onclick={() => onCreateChildEntry(node.path)}>
+          <Plus class="size-4 mr-2" />
+          New Entry Here
         </ContextMenu.Item>
-      {/if}
-      {#if onDuplicateEntry}
-        <ContextMenu.Item onclick={() => handleDuplicate(node.path)}>
-          <Copy class="size-4 mr-2" />
-          Duplicate
+
+        {#if onRenameEntry}
+          <ContextMenu.Item onclick={() => handleRenameClick(node.path, node.name)}>
+            <Pencil class="size-4 mr-2" />
+            Rename
+          </ContextMenu.Item>
+        {/if}
+
+        {#if onDuplicateEntry}
+          <ContextMenu.Item onclick={() => handleDuplicate(node.path)}>
+            <Copy class="size-4 mr-2" />
+            Duplicate
+          </ContextMenu.Item>
+        {/if}
+
+        {#if api}
+          <ContextMenu.Item onclick={() => handleMoveToClick(node.path)}>
+            <FolderInput class="size-4 mr-2" />
+            Move to...
+          </ContextMenu.Item>
+        {/if}
+
+        {#if onSetAudience}
+          <ContextMenu.Item onclick={() => onSetAudience(node.path)}>
+            <CircleUser class="size-4 mr-2" />
+            Set Audience...
+          </ContextMenu.Item>
+        {/if}
+
+        <ContextMenu.Separator />
+
+        <ContextMenu.Item onclick={() => onExport(node.path)}>
+          <Download class="size-4 mr-2" />
+          Export...
         </ContextMenu.Item>
-      {/if}
-      {#if api}
-        <ContextMenu.Item onclick={() => handleMoveToClick(node.path)}>
-          <FolderInput class="size-4 mr-2" />
-          Move to...
+
+        {#if onValidate}
+          <ContextMenu.Item onclick={() => onValidate(node.path)}>
+            <SearchCheck class="size-4 mr-2" />
+            Validate
+          </ContextMenu.Item>
+        {/if}
+
+        {#if onImportMarkdownFile}
+          <ContextMenu.Item onclick={() => onImportMarkdownFile()}>
+            <FolderInput class="size-4 mr-2" />
+            Import Markdown File
+          </ContextMenu.Item>
+        {/if}
+
+        {#if onOpenBackupImport}
+          <ContextMenu.Item onclick={() => onOpenBackupImport()}>
+            <Settings class="size-4 mr-2" />
+            Download Backup ZIP
+          </ContextMenu.Item>
+        {/if}
+
+        <ContextMenu.Separator />
+
+        <ContextMenu.Item
+          class="text-destructive focus:text-destructive"
+          onclick={() => onDeleteEntry(node.path)}
+        >
+          <Trash2 class="size-4 mr-2" />
+          Delete
         </ContextMenu.Item>
-      {/if}
-      {#if onSetAudience}
-        <ContextMenu.Item onclick={() => onSetAudience(node.path)}>
-          <CircleUser class="size-4 mr-2" />
-          Set Audience...
-        </ContextMenu.Item>
-      {/if}
-      <ContextMenu.Separator />
-      <ContextMenu.Item onclick={() => onExport(node.path)}>
-        <Download class="size-4 mr-2" />
-        Export...
-      </ContextMenu.Item>
-      {#if onValidate}
-        <ContextMenu.Item onclick={() => onValidate(node.path)}>
-          <SearchCheck class="size-4 mr-2" />
-          Validate
-        </ContextMenu.Item>
-      {/if}
-      <ContextMenu.Separator />
-      <ContextMenu.Item
-        variant="destructive"
-        onclick={() => onDeleteEntry(node.path)}
-      >
-        <Trash2 class="size-4 mr-2" />
-        Delete
-      </ContextMenu.Item>
-    </ContextMenu.Content>
+      </ContextMenu.Content>
+    {/if}
   </ContextMenu.Root>
 {/snippet}

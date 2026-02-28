@@ -5,7 +5,7 @@
  * eliminating the need for InMemoryFileSystem sync.
  */
 
-import * as Comlink from 'comlink';
+import * as Comlink from "comlink";
 import type {
   Backend,
   BackendEventType,
@@ -15,20 +15,227 @@ import type {
   Config,
   FileSystemEvent,
   FileSystemEventCallback,
-} from './interface';
-import { BackendEventEmitter } from './eventEmitter';
-import type { WorkerApi } from './wasmWorkerNew';
-import { getStorageType, type StorageType } from './storageType';
+} from "./interface";
+import { BackendEventEmitter } from "./eventEmitter";
+import type { WorkerApi } from "./wasmWorkerNew";
+import { getStorageType, type StorageType } from "./storageType";
+
+const WORKER_INIT_TIMEOUT_MS = 15000;
+
+function buildWorkerStartupErrorMessage(details: string): string {
+  return (
+    `Failed to start browser worker backend: ${details}. ` +
+    "This is often caused by cross-origin isolation restrictions in WebKit. " +
+    "In dev, ensure the app and worker assets use the same origin (avoid mixing localhost and 127.0.0.1)."
+  );
+}
 
 export class WorkerBackendNew implements Backend {
   private worker: Worker | null = null;
   private remote: Comlink.Remote<WorkerApi> | null = null;
   private eventEmitter = new BackendEventEmitter();
   private _ready = false;
+  private usingMainThreadFallback = false;
 
   // Filesystem event subscription management
   private fsEventCallbacks = new Map<number, FileSystemEventCallback>();
   private nextFsEventId = 1;
+
+  private async withWorkerStartupGuards<T>(
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const worker = this.worker;
+    if (!worker) {
+      throw new Error("Worker not initialized");
+    }
+
+    let onError: ((event: ErrorEvent) => void) | null = null;
+    let onMessageError: ((event: MessageEvent) => void) | null = null;
+
+    const workerFailure = new Promise<never>((_resolve, reject) => {
+      onError = (event: ErrorEvent) => {
+        const detail = event.message || "Worker script failed to load";
+        reject(new Error(buildWorkerStartupErrorMessage(detail)));
+      };
+      onMessageError = () => {
+        reject(
+          new Error(
+            buildWorkerStartupErrorMessage("Worker message channel failed"),
+          ),
+        );
+      };
+
+      worker.addEventListener("error", onError!);
+      worker.addEventListener("messageerror", onMessageError!);
+    });
+
+    const timeout = new Promise<never>((_resolve, reject) => {
+      setTimeout(() => {
+        reject(
+          new Error(
+            buildWorkerStartupErrorMessage(
+              `Initialization timed out after ${WORKER_INIT_TIMEOUT_MS}ms`,
+            ),
+          ),
+        );
+      }, WORKER_INIT_TIMEOUT_MS);
+    });
+
+    try {
+      return await Promise.race([operation(), workerFailure, timeout]);
+    } finally {
+      if (onError) worker.removeEventListener("error", onError);
+      if (onMessageError)
+        worker.removeEventListener("messageerror", onMessageError);
+    }
+  }
+
+  private isWorkerStartupFailure(error: unknown): boolean {
+    if (!(error instanceof Error)) return false;
+    const msg = error.message.toLowerCase();
+    return (
+      msg.includes("failed to start browser worker backend") ||
+      msg.includes("worker script failed to load") ||
+      msg.includes("coep") ||
+      msg.includes("cross-origin") ||
+      msg.includes("timed out")
+    );
+  }
+
+  private attachEventPort(port: MessagePort): void {
+    port.onmessage = (event) => {
+      const message = event.data;
+
+      if (message?.type === "FileSystemEvent" && message.data) {
+        try {
+          const fsEvent = JSON.parse(message.data) as FileSystemEvent;
+          for (const callback of this.fsEventCallbacks.values()) {
+            try {
+              callback(fsEvent);
+            } catch (e) {
+              console.error(
+                "[WorkerBackendNew] Error in filesystem event callback:",
+                e,
+              );
+            }
+          }
+        } catch (e) {
+          console.error(
+            "[WorkerBackendNew] Failed to parse filesystem event:",
+            e,
+          );
+        }
+        return;
+      }
+
+      this.eventEmitter.emit(message);
+    };
+    port.start();
+  }
+
+  private async initMainThreadFallback(
+    storageTypeOverride?: StorageType,
+    workspaceId?: string,
+    workspaceName?: string,
+  ): Promise<void> {
+    const mod = await import("./wasmWorkerNew");
+    this.remote = mod.workerApi as unknown as Comlink.Remote<WorkerApi>;
+    this.usingMainThreadFallback = true;
+
+    const { port1, port2 } = new MessageChannel();
+    this.attachEventPort(port1);
+
+    const storageType = storageTypeOverride ?? getStorageType();
+    console.log(
+      `[WorkerBackendNew] Falling back to main-thread WASM backend with storage: ${storageType}`,
+    );
+
+    if (storageType === "filesystem-access") {
+      const {
+        getWorkspaceFileSystemHandle,
+        storeWorkspaceFileSystemHandle,
+        getStoredFileSystemHandle,
+        storeFileSystemHandle,
+      } = await import("./storageType");
+
+      let handle: FileSystemDirectoryHandle | null = null;
+
+      if (workspaceId) {
+        handle = await getWorkspaceFileSystemHandle(workspaceId);
+      }
+
+      if (!handle) {
+        handle = await getStoredFileSystemHandle();
+        if (handle && workspaceId) {
+          await storeWorkspaceFileSystemHandle(workspaceId, handle);
+        }
+      }
+
+      if (!handle) {
+        try {
+          handle = await (window as any).showDirectoryPicker({
+            mode: "readwrite",
+          });
+          if (workspaceId) {
+            await storeWorkspaceFileSystemHandle(workspaceId, handle!);
+          } else {
+            await storeFileSystemHandle(handle!);
+          }
+        } catch (e) {
+          console.error(
+            "[WorkerBackendNew] Failed to get directory handle:",
+            e,
+          );
+          throw new Error(
+            "Failed to open local folder. Please try again from Settings.",
+          );
+        }
+      } else {
+        const permission = await (handle as any).queryPermission({
+          mode: "readwrite",
+        });
+        if (permission !== "granted") {
+          try {
+            const newPermission = await (handle as any).requestPermission({
+              mode: "readwrite",
+            });
+            if (newPermission !== "granted") {
+              throw new Error("Permission denied");
+            }
+          } catch (e) {
+            console.error(
+              "[WorkerBackendNew] Permission denied for directory:",
+              e,
+            );
+            throw new Error(
+              "Permission denied for local folder. Please reselect in Settings.",
+            );
+          }
+        }
+      }
+
+      const syncEnabled = !!localStorage.getItem("diaryx_auth_token");
+      await this.remote.initWithDirectoryHandle(
+        port2 as any,
+        handle!,
+        syncEnabled,
+      );
+    } else {
+      const resolvedName =
+        workspaceName ||
+        localStorage.getItem("diaryx-workspace-name") ||
+        "My Journal";
+      const syncEnabled = !!localStorage.getItem("diaryx_auth_token");
+      await this.remote.init(
+        port2 as any,
+        storageType,
+        resolvedName,
+        undefined,
+        syncEnabled,
+        workspaceId,
+      );
+    }
+  }
 
   /**
    * Initialize the backend.
@@ -38,12 +245,17 @@ export class WorkerBackendNew implements Backend {
    * @param workspaceName Optional workspace display name for OPFS directory naming.
    *                      Falls back to localStorage('diaryx-workspace-name') or 'My Journal'.
    */
-  async init(storageTypeOverride?: StorageType, workspaceId?: string, workspaceName?: string): Promise<void> {
+  async init(
+    storageTypeOverride?: StorageType,
+    workspaceId?: string,
+    workspaceName?: string,
+  ): Promise<void> {
+    this.usingMainThreadFallback = false;
+
     // Create the worker
-    this.worker = new Worker(
-      new URL('./wasmWorkerNew.ts', import.meta.url),
-      { type: 'module' }
-    );
+    this.worker = new Worker(new URL("./wasmWorkerNew.ts", import.meta.url), {
+      type: "module",
+    });
 
     // Wrap with Comlink
     this.remote = Comlink.wrap<WorkerApi>(this.worker);
@@ -52,106 +264,144 @@ export class WorkerBackendNew implements Backend {
     const { port1, port2 } = new MessageChannel();
 
     // Listen for events from worker
-    port1.onmessage = (event) => {
-      const message = event.data;
-
-      // Handle filesystem events from worker
-      if (message?.type === 'FileSystemEvent' && message.data) {
-        try {
-          const fsEvent = JSON.parse(message.data) as FileSystemEvent;
-          // Dispatch to all subscribers
-          for (const callback of this.fsEventCallbacks.values()) {
-            try {
-              callback(fsEvent);
-            } catch (e) {
-              console.error('[WorkerBackendNew] Error in filesystem event callback:', e);
-            }
-          }
-        } catch (e) {
-          console.error('[WorkerBackendNew] Failed to parse filesystem event:', e);
-        }
-        return;
-      }
-
-      // Handle other events via eventEmitter
-      this.eventEmitter.emit(message);
-    };
-    port1.start();
+    this.attachEventPort(port1);
 
     // Initialize the backend with storage type (use override if provided)
     const storageType = storageTypeOverride ?? getStorageType();
     console.log(`[WorkerBackendNew] Initializing with storage: ${storageType}`);
 
-    if (storageType === 'filesystem-access') {
-      // For FSA, we need to get or request the directory handle (per-workspace or legacy global)
-      const {
-        getWorkspaceFileSystemHandle,
-        storeWorkspaceFileSystemHandle,
-        getStoredFileSystemHandle,
-        storeFileSystemHandle,
-      } = await import('./storageType');
+    try {
+      if (storageType === "filesystem-access") {
+        // For FSA, we need to get or request the directory handle (per-workspace or legacy global)
+        const {
+          getWorkspaceFileSystemHandle,
+          storeWorkspaceFileSystemHandle,
+          getStoredFileSystemHandle,
+          storeFileSystemHandle,
+        } = await import("./storageType");
 
-      let handle: FileSystemDirectoryHandle | null = null;
+        let handle: FileSystemDirectoryHandle | null = null;
 
-      // Try per-workspace handle first
-      if (workspaceId) {
-        handle = await getWorkspaceFileSystemHandle(workspaceId);
-      }
-
-      // Fall back to legacy global handle (migration path)
-      if (!handle) {
-        handle = await getStoredFileSystemHandle();
-        // If found globally and we have a workspace ID, migrate to per-workspace key
-        if (handle && workspaceId) {
-          await storeWorkspaceFileSystemHandle(workspaceId, handle);
+        // Try per-workspace handle first
+        if (workspaceId) {
+          handle = await getWorkspaceFileSystemHandle(workspaceId);
         }
-      }
 
-      if (!handle) {
-        // No stored handle - prompt user to select a folder
-        // Note: showDirectoryPicker requires user gesture, so this will fail if not triggered by user action
-        try {
-          handle = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
-          if (workspaceId) {
-            await storeWorkspaceFileSystemHandle(workspaceId, handle!);
-          } else {
-            await storeFileSystemHandle(handle!);
+        // Fall back to legacy global handle (migration path)
+        if (!handle) {
+          handle = await getStoredFileSystemHandle();
+          // If found globally and we have a workspace ID, migrate to per-workspace key
+          if (handle && workspaceId) {
+            await storeWorkspaceFileSystemHandle(workspaceId, handle);
           }
-        } catch (e) {
-          console.error('[WorkerBackendNew] Failed to get directory handle:', e);
-          throw new Error('Failed to open local folder. Please try again from Settings.');
         }
-      } else {
-        // Verify we still have permission
-        // Note: queryPermission/requestPermission are not in TypeScript's lib types yet
-        const permission = await (handle as any).queryPermission({ mode: 'readwrite' });
-        if (permission !== 'granted') {
+
+        if (!handle) {
+          // No stored handle - prompt user to select a folder
+          // Note: showDirectoryPicker requires user gesture, so this will fail if not triggered by user action
           try {
-            const newPermission = await (handle as any).requestPermission({ mode: 'readwrite' });
-            if (newPermission !== 'granted') {
-              throw new Error('Permission denied');
+            handle = await (window as any).showDirectoryPicker({
+              mode: "readwrite",
+            });
+            if (workspaceId) {
+              await storeWorkspaceFileSystemHandle(workspaceId, handle!);
+            } else {
+              await storeFileSystemHandle(handle!);
             }
           } catch (e) {
-            console.error('[WorkerBackendNew] Permission denied for directory:', e);
-            throw new Error('Permission denied for local folder. Please reselect in Settings.');
+            console.error(
+              "[WorkerBackendNew] Failed to get directory handle:",
+              e,
+            );
+            throw new Error(
+              "Failed to open local folder. Please try again from Settings.",
+            );
+          }
+        } else {
+          // Verify we still have permission
+          // Note: queryPermission/requestPermission are not in TypeScript's lib types yet
+          const permission = await (handle as any).queryPermission({
+            mode: "readwrite",
+          });
+          if (permission !== "granted") {
+            try {
+              const newPermission = await (handle as any).requestPermission({
+                mode: "readwrite",
+              });
+              if (newPermission !== "granted") {
+                throw new Error("Permission denied");
+              }
+            } catch (e) {
+              console.error(
+                "[WorkerBackendNew] Permission denied for directory:",
+                e,
+              );
+              throw new Error(
+                "Permission denied for local folder. Please reselect in Settings.",
+              );
+            }
           }
         }
+
+        // Check if sync is configured (auth token present) to decide whether to
+        // eagerly initialize the SQLite CRDT storage bridge. This avoids downloading
+        // sql.js WASM when sync isn't needed (important for IndexedDB targets).
+        const syncEnabled = !!localStorage.getItem("diaryx_auth_token");
+
+        await this.withWorkerStartupGuards(() =>
+          this.remote!.initWithDirectoryHandle(
+            Comlink.transfer(port2, [port2]),
+            handle!,
+            syncEnabled,
+          ),
+        );
+      } else {
+        const resolvedName =
+          workspaceName ||
+          localStorage.getItem("diaryx-workspace-name") ||
+          "My Journal";
+        const syncEnabled = !!localStorage.getItem("diaryx_auth_token");
+        await this.withWorkerStartupGuards(() =>
+          this.remote!.init(
+            Comlink.transfer(port2, [port2]),
+            storageType,
+            resolvedName,
+            undefined,
+            syncEnabled,
+            workspaceId,
+          ),
+        );
       }
 
-      // Check if sync is configured (auth token present) to decide whether to
-      // eagerly initialize the SQLite CRDT storage bridge. This avoids downloading
-      // sql.js WASM when sync isn't needed (important for IndexedDB targets).
-      const syncEnabled = !!localStorage.getItem('diaryx_auth_token');
+      this._ready = true;
+      console.log("[WorkerBackendNew] Ready");
+    } catch (e) {
+      this._ready = false;
+      try {
+        this.worker?.terminate();
+      } catch {
+        // no-op
+      }
+      this.worker = null;
+      this.remote = null;
 
-      await this.remote.initWithDirectoryHandle(Comlink.transfer(port2, [port2]), handle!, syncEnabled);
-    } else {
-      const resolvedName = workspaceName || localStorage.getItem('diaryx-workspace-name') || 'My Journal';
-      const syncEnabled = !!localStorage.getItem('diaryx_auth_token');
-      await this.remote.init(Comlink.transfer(port2, [port2]), storageType, resolvedName, undefined, syncEnabled, workspaceId);
+      if (this.isWorkerStartupFailure(e)) {
+        console.warn(
+          "[WorkerBackendNew] Worker backend unavailable, attempting main-thread fallback:",
+          e,
+        );
+        await this.initMainThreadFallback(
+          storageTypeOverride,
+          workspaceId,
+          workspaceName,
+        );
+        this._ready = true;
+        console.log("[WorkerBackendNew] Ready (main-thread fallback)");
+        return;
+      }
+
+      throw e;
     }
-
-    this._ready = true;
-    console.log('[WorkerBackendNew] Ready');
   }
 
   isReady(): boolean {
@@ -222,7 +472,10 @@ export class WorkerBackendNew implements Backend {
       try {
         callback(event);
       } catch (e) {
-        console.error('[WorkerBackendNew] Error in filesystem event callback:', e);
+        console.error(
+          "[WorkerBackendNew] Error in filesystem event callback:",
+          e,
+        );
       }
     }
   }
@@ -245,14 +498,20 @@ export class WorkerBackendNew implements Backend {
   async execute(command: Command): Promise<Response> {
     // Custom replacer to handle BigInt serialization
     const commandJson = JSON.stringify(command, (_key, value) =>
-      typeof value === 'bigint' ? Number(value) : value
+      typeof value === "bigint" ? Number(value) : value,
     );
     const responseJson = await this.remote!.execute(commandJson);
     // Custom reviver to handle BigInt deserialization for known fields
     return JSON.parse(responseJson, (key, value) => {
       // Convert numeric timestamps back to BigInt for specific fields
-      if ((key === 'modified_at' || key === 'uploaded_at' || key === 'size' ||
-           key === 'timestamp' || key === 'update_id') && typeof value === 'number') {
+      if (
+        (key === "modified_at" ||
+          key === "uploaded_at" ||
+          key === "size" ||
+          key === "timestamp" ||
+          key === "update_id") &&
+        typeof value === "number"
+      ) {
         return BigInt(value);
       }
       return value;
@@ -284,11 +543,14 @@ export class WorkerBackendNew implements Backend {
     this.remote!.getFilesystemTree(path, showHidden);
 
   getEntry = (path: string) => this.remote!.getEntry(path);
-  saveEntry = (path: string, content: string) => this.remote!.saveEntry(path, content);
-  createEntry = (path: string, options?: any) => this.remote!.createEntry(path, options);
+  saveEntry = (path: string, content: string) =>
+    this.remote!.saveEntry(path, content);
+  createEntry = (path: string, options?: any) =>
+    this.remote!.createEntry(path, options);
   deleteEntry = (path: string) => this.remote!.deleteEntry(path);
   moveEntry = (from: string, to: string) => this.remote!.moveEntry(from, to);
-  renameEntry = (path: string, newName: string) => this.remote!.renameEntry(path, newName);
+  renameEntry = (path: string, newName: string) =>
+    this.remote!.renameEntry(path, newName);
   duplicateEntry = (path: string) => this.remote!.duplicateEntry(path);
 
   getFrontmatter = (path: string) => this.remote!.getFrontmatter(path);
@@ -303,10 +565,12 @@ export class WorkerBackendNew implements Backend {
   // File operations
   fileExists = (path: string) => this.remote!.fileExists(path);
   readFile = (path: string) => this.remote!.readFile(path);
-  writeFile = (path: string, content: string) => this.remote!.writeFile(path, content);
+  writeFile = (path: string, content: string) =>
+    this.remote!.writeFile(path, content);
   deleteFile = (path: string) => this.remote!.deleteFile(path);
   readBinary = (path: string) => this.remote!.readBinary(path);
-  writeBinary = (path: string, data: Uint8Array) => this.remote!.writeBinary(path, data);
+  writeBinary = (path: string, data: Uint8Array) =>
+    this.remote!.writeBinary(path, data);
 
   // =========================================================================
   // Stubs for methods not yet in new backend (delegate via call)
@@ -319,28 +583,31 @@ export class WorkerBackendNew implements Backend {
   slugifyTitle(title: string): string {
     const slug = title
       .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '');
-    return slug ? `${slug}.md` : 'untitled.md';
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "");
+    return slug ? `${slug}.md` : "untitled.md";
   }
 
   parseDayOneJson = (bytes: Uint8Array): Promise<string> =>
-    this.remote!.call('parseDayOneJson', [bytes]) as Promise<string>;
+    this.remote!.call("parseDayOneJson", [bytes]) as Promise<string>;
 
   parseMarkdownFile = (bytes: Uint8Array, filename: string): Promise<string> =>
-    this.remote!.call('parseMarkdownFile', [bytes, filename]) as Promise<string>;
+    this.remote!.call("parseMarkdownFile", [
+      bytes,
+      filename,
+    ]) as Promise<string>;
 
   attachEntryToParent = (entry: string, parent: string): Promise<string> =>
-    this.remote!.call('attachToParent', [entry, parent]) as Promise<string>;
+    this.remote!.call("attachToParent", [entry, parent]) as Promise<string>;
 
   convertToIndex = (path: string): Promise<string> =>
-    this.remote!.call('convertToIndex', [path]) as Promise<string>;
+    this.remote!.call("convertToIndex", [path]) as Promise<string>;
 
   convertToLeaf = (path: string): Promise<string> =>
-    this.remote!.call('convertToLeaf', [path]) as Promise<string>;
+    this.remote!.call("convertToLeaf", [path]) as Promise<string>;
 
   createChildEntry = (parentPath: string): Promise<string> =>
-    this.remote!.call('createChildEntry', [parentPath]) as Promise<string>;
+    this.remote!.call("createChildEntry", [parentPath]) as Promise<string>;
 
   ensureDailyEntry = (
     workspacePath: string,
@@ -348,7 +615,7 @@ export class WorkerBackendNew implements Backend {
     template?: string,
     date?: string,
   ): Promise<string> =>
-    this.remote!.call('ensureDailyEntry', [
+    this.remote!.call("ensureDailyEntry", [
       workspacePath,
       dailyEntryFolder,
       template,
@@ -356,90 +623,149 @@ export class WorkerBackendNew implements Backend {
     ]) as Promise<string>;
 
   getAvailableAudiences = (rootPath: string): Promise<string[]> =>
-    this.remote!.call('getAvailableAudiences', [rootPath]) as Promise<string[]>;
+    this.remote!.call("getAvailableAudiences", [rootPath]) as Promise<string[]>;
 
   planExport = (rootPath: string, audience: string): Promise<any> =>
-    this.remote!.call('planExport', [rootPath, audience]) as Promise<any>;
+    this.remote!.call("planExport", [rootPath, audience]) as Promise<any>;
 
   exportToMemory = (rootPath: string, audience: string): Promise<any> =>
-    this.remote!.call('exportToMemory', [rootPath, audience]) as Promise<any>;
+    this.remote!.call("exportToMemory", [rootPath, audience]) as Promise<any>;
 
   exportToHtml = (rootPath: string, audience: string): Promise<any> =>
-    this.remote!.call('exportToHtml', [rootPath, audience]) as Promise<any>;
+    this.remote!.call("exportToHtml", [rootPath, audience]) as Promise<any>;
 
-  exportBinaryAttachments = (rootPath: string, audience: string): Promise<any> =>
-    this.remote!.call('exportBinaryAttachments', [rootPath, audience]) as Promise<any>;
+  exportBinaryAttachments = (
+    rootPath: string,
+    audience: string,
+  ): Promise<any> =>
+    this.remote!.call("exportBinaryAttachments", [
+      rootPath,
+      audience,
+    ]) as Promise<any>;
 
   getAttachments = (entryPath: string): Promise<string[]> =>
-    this.remote!.call('listAttachments', [entryPath]) as Promise<string[]>;
+    this.remote!.call("listAttachments", [entryPath]) as Promise<string[]>;
 
-  uploadAttachment = (entryPath: string, filename: string, dataBase64: string): Promise<string> =>
-    this.remote!.call('uploadAttachment', [entryPath, filename, dataBase64]) as Promise<string>;
+  uploadAttachment = (
+    entryPath: string,
+    filename: string,
+    dataBase64: string,
+  ): Promise<string> =>
+    this.remote!.call("uploadAttachment", [
+      entryPath,
+      filename,
+      dataBase64,
+    ]) as Promise<string>;
 
-  deleteAttachment = (entryPath: string, attachmentPath: string): Promise<void> =>
-    this.remote!.call('deleteAttachment', [entryPath, attachmentPath]) as Promise<void>;
+  deleteAttachment = (
+    entryPath: string,
+    attachmentPath: string,
+  ): Promise<void> =>
+    this.remote!.call("deleteAttachment", [
+      entryPath,
+      attachmentPath,
+    ]) as Promise<void>;
 
   getStorageUsage = (): Promise<any> =>
-    this.remote!.call('getStorageUsage', []) as Promise<any>;
+    this.remote!.call("getStorageUsage", []) as Promise<any>;
 
-  getAttachmentData = (entryPath: string, attachmentPath: string): Promise<Uint8Array> =>
-    this.remote!.call('getAttachmentData', [entryPath, attachmentPath]) as Promise<Uint8Array>;
+  getAttachmentData = (
+    entryPath: string,
+    attachmentPath: string,
+  ): Promise<Uint8Array> =>
+    this.remote!.call("getAttachmentData", [
+      entryPath,
+      attachmentPath,
+    ]) as Promise<Uint8Array>;
 
   removeFrontmatterProperty = (path: string, key: string): Promise<void> =>
-    this.remote!.call('removeFrontmatterProperty', [path, key]) as Promise<void>;
+    this.remote!.call("removeFrontmatterProperty", [
+      path,
+      key,
+    ]) as Promise<void>;
 
   listTemplates = async (): Promise<any> => {
     const wsPath = await this.getDefaultWorkspacePath();
-    return this.remote!.call('listTemplates', [wsPath]) as Promise<any>;
+    return this.remote!.call("listTemplates", [wsPath]) as Promise<any>;
   };
 
   getTemplate = async (name: string): Promise<string> => {
     const wsPath = await this.getDefaultWorkspacePath();
-    return this.remote!.call('getTemplate', [name, wsPath]) as Promise<string>;
+    return this.remote!.call("getTemplate", [name, wsPath]) as Promise<string>;
   };
 
   saveTemplate = async (name: string, content: string): Promise<void> => {
     const wsPath = await this.getDefaultWorkspacePath();
-    return this.remote!.call('saveTemplate', [name, content, wsPath]) as Promise<void>;
+    return this.remote!.call("saveTemplate", [
+      name,
+      content,
+      wsPath,
+    ]) as Promise<void>;
   };
 
   deleteTemplate = async (name: string): Promise<void> => {
     const wsPath = await this.getDefaultWorkspacePath();
-    return this.remote!.call('deleteTemplate', [name, wsPath]) as Promise<void>;
+    return this.remote!.call("deleteTemplate", [name, wsPath]) as Promise<void>;
   };
 
   validateFile = (filePath: string): Promise<any> =>
-    this.remote!.call('validateFile', [filePath]) as Promise<any>;
+    this.remote!.call("validateFile", [filePath]) as Promise<any>;
 
   fixBrokenPartOf = (filePath: string): Promise<any> =>
-    this.remote!.call('fixBrokenPartOf', [filePath]) as Promise<any>;
+    this.remote!.call("fixBrokenPartOf", [filePath]) as Promise<any>;
 
   fixBrokenContentsRef = (indexPath: string, target: string): Promise<any> =>
-    this.remote!.call('fixBrokenContentsRef', [indexPath, target]) as Promise<any>;
+    this.remote!.call("fixBrokenContentsRef", [
+      indexPath,
+      target,
+    ]) as Promise<any>;
 
   fixBrokenAttachment = (filePath: string, attachment: string): Promise<any> =>
-    this.remote!.call('fixBrokenAttachment', [filePath, attachment]) as Promise<any>;
+    this.remote!.call("fixBrokenAttachment", [
+      filePath,
+      attachment,
+    ]) as Promise<any>;
 
-  fixNonPortablePath = (filePath: string, property: string, oldValue: string, newValue: string): Promise<any> =>
-    this.remote!.call('fixNonPortablePath', [filePath, property, oldValue, newValue]) as Promise<any>;
+  fixNonPortablePath = (
+    filePath: string,
+    property: string,
+    oldValue: string,
+    newValue: string,
+  ): Promise<any> =>
+    this.remote!.call("fixNonPortablePath", [
+      filePath,
+      property,
+      oldValue,
+      newValue,
+    ]) as Promise<any>;
 
   fixUnlistedFile = (indexPath: string, filePath: string): Promise<any> =>
-    this.remote!.call('fixUnlistedFile', [indexPath, filePath]) as Promise<any>;
+    this.remote!.call("fixUnlistedFile", [indexPath, filePath]) as Promise<any>;
 
   fixOrphanBinaryFile = (indexPath: string, filePath: string): Promise<any> =>
-    this.remote!.call('fixOrphanBinaryFile', [indexPath, filePath]) as Promise<any>;
+    this.remote!.call("fixOrphanBinaryFile", [
+      indexPath,
+      filePath,
+    ]) as Promise<any>;
 
   fixMissingPartOf = (filePath: string, indexPath: string): Promise<any> =>
-    this.remote!.call('fixMissingPartOf', [filePath, indexPath]) as Promise<any>;
+    this.remote!.call("fixMissingPartOf", [
+      filePath,
+      indexPath,
+    ]) as Promise<any>;
 
   fixAll = (validationResult: any): Promise<any> =>
-    this.remote!.call('fixAll', [validationResult]) as Promise<any>;
+    this.remote!.call("fixAll", [validationResult]) as Promise<any>;
 
   // =========================================================================
   // WasmSyncClient (inject/poll bridge)
   // =========================================================================
 
-  async createSyncClient(serverUrl: string, workspaceId: string, authToken?: string): Promise<void> {
+  async createSyncClient(
+    serverUrl: string,
+    workspaceId: string,
+    authToken?: string,
+  ): Promise<void> {
     return this.remote!.createSyncClient(serverUrl, workspaceId, authToken);
   }
 
@@ -487,7 +813,11 @@ export class WorkerBackendNew implements Backend {
     return this.remote!.syncQueueLocalUpdate(docId, data);
   }
 
-  async syncDrain(): Promise<{ binary: Uint8Array[]; text: string[]; events: string[] }> {
+  async syncDrain(): Promise<{
+    binary: Uint8Array[];
+    text: string[];
+    events: string[];
+  }> {
     return this.remote!.syncDrain();
   }
 
@@ -503,11 +833,44 @@ export class WorkerBackendNew implements Backend {
     return this.remote!.syncBodyFiles(files);
   }
 
+  // =========================================================================
+  // Rust-Owned Sync (Rust owns WebSocket — replaces poll-based bridge)
+  // =========================================================================
+
+  async startSync(
+    serverUrl: string,
+    workspaceId: string,
+    authToken?: string,
+    sessionCode?: string,
+  ): Promise<void> {
+    return this.remote!.startSync(serverUrl, workspaceId, authToken, sessionCode);
+  }
+
+  async stopSync(): Promise<void> {
+    return this.remote!.stopSync();
+  }
+
+  async focusSyncFiles(files: string[]): Promise<void> {
+    return this.remote!.focusSyncFiles(files);
+  }
+
+  async unfocusSyncFiles(files: string[]): Promise<void> {
+    return this.remote!.unfocusSyncFiles(files);
+  }
+
+  async requestBodySync(files: string[]): Promise<void> {
+    return this.remote!.requestBodySync(files);
+  }
+
   importFromZip = async (
     file: File,
     workspacePath?: string,
     onProgress?: (bytesUploaded: number, totalBytes: number) => void,
   ): Promise<any> => {
+    if (this.usingMainThreadFallback) {
+      return this.remote!.importFromZip(file, workspacePath, onProgress as any);
+    }
+
     return this.remote!.importFromZip(
       file,
       workspacePath,
@@ -530,6 +893,6 @@ export class WorkerBackendNew implements Backend {
  */
 export async function createGuestBackend(): Promise<WorkerBackendNew> {
   const backend = new WorkerBackendNew();
-  await backend.init('memory');
+  await backend.init("memory");
   return backend;
 }

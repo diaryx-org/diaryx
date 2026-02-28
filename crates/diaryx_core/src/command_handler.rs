@@ -164,6 +164,19 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         )
     }
 
+    /// Returns `true` if the command is a publish/export variant that should be
+    /// delegated to a registered `PublishPlugin` via typed dispatch.
+    fn is_publish_command(cmd: &Command) -> bool {
+        matches!(
+            cmd,
+            Command::PlanExport { .. }
+                | Command::GetAvailableAudiences { .. }
+                | Command::ExportToMemory { .. }
+                | Command::ExportToHtml { .. }
+                | Command::ExportBinaryAttachments { .. }
+        )
+    }
+
     // =========================================================================
     // Path Conversion Helpers (Phase 1)
     // =========================================================================
@@ -466,6 +479,16 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             }
             return Err(DiaryxError::Unsupported(
                 "CRDT command received but no SyncPlugin is registered".to_string(),
+            ));
+        }
+
+        // If a publish plugin is registered, delegate export commands to it.
+        if Self::is_publish_command(&command) {
+            if let Some(result) = self.plugin_registry().try_typed_command(&command).await {
+                return result;
+            }
+            return Err(DiaryxError::Unsupported(
+                "Export command received but no PublishPlugin is registered".to_string(),
             ));
         }
 
@@ -1039,19 +1062,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .search_workspace(&resolved_workspace_path, &query)
                     .await?;
                 Ok(Response::SearchResults(results))
-            }
-
-            // === Export Operations ===
-            Command::PlanExport {
-                root_path,
-                audience,
-            } => {
-                let resolved_root_path = self.resolve_fs_path(&root_path);
-                let plan = self
-                    .export()
-                    .plan_export(&resolved_root_path, &audience, Path::new("/tmp/export"))
-                    .await?;
-                Ok(Response::ExportPlan(plan))
             }
 
             // === File System Operations ===
@@ -2024,321 +2034,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 // Sort for consistent ordering
                 parents.sort();
                 Ok(Response::Strings(parents))
-            }
-
-            // === Export Operations ===
-            Command::GetAvailableAudiences { root_path } => {
-                // Collect unique audience tags from workspace
-                let ws = self.workspace().inner();
-                let mut audiences = std::collections::HashSet::new();
-                let mut visited = std::collections::HashSet::new();
-                let resolved_root_path = self.resolve_fs_path(&root_path);
-
-                // Get workspace root for resolving paths
-                let workspace_root = resolved_root_path
-                    .parent()
-                    .unwrap_or(Path::new("."))
-                    .to_path_buf();
-
-                // Get link format from workspace config
-                let link_format = ws
-                    .get_workspace_config(&resolved_root_path)
-                    .await
-                    .map(|c| c.link_format)
-                    .ok();
-
-                async fn collect_audiences<FS: AsyncFileSystem>(
-                    ws: &crate::workspace::Workspace<FS>,
-                    path: &Path,
-                    audiences: &mut std::collections::HashSet<String>,
-                    visited: &mut std::collections::HashSet<PathBuf>,
-                    workspace_root: &Path,
-                    link_format: Option<crate::link_parser::LinkFormat>,
-                ) {
-                    if visited.contains(path) {
-                        return;
-                    }
-                    visited.insert(path.to_path_buf());
-
-                    if let Ok(index) = ws.parse_index_with_hint(path, link_format).await {
-                        if let Some(file_audiences) = &index.frontmatter.audience {
-                            for a in file_audiences {
-                                let trimmed = a.trim();
-                                if !trimmed.is_empty() {
-                                    audiences.insert(a.clone());
-                                }
-                            }
-                        }
-
-                        if index.frontmatter.is_index() {
-                            for child_rel in index.frontmatter.contents_list() {
-                                let child_path = index.resolve_path(child_rel);
-                                // Make path absolute if needed
-                                let absolute_child_path = if child_path.is_absolute() {
-                                    child_path
-                                } else {
-                                    workspace_root.join(&child_path)
-                                };
-                                if ws.fs_ref().exists(&absolute_child_path).await {
-                                    Box::pin(collect_audiences(
-                                        ws,
-                                        &absolute_child_path,
-                                        audiences,
-                                        visited,
-                                        workspace_root,
-                                        link_format,
-                                    ))
-                                    .await;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                collect_audiences(
-                    &ws,
-                    &resolved_root_path,
-                    &mut audiences,
-                    &mut visited,
-                    &workspace_root,
-                    link_format,
-                )
-                .await;
-                let mut result: Vec<String> = audiences.into_iter().collect();
-                result.sort();
-                Ok(Response::Strings(result))
-            }
-
-            Command::ExportToMemory {
-                root_path,
-                audience,
-            } => {
-                // Plan the export first
-                log::debug!(
-                    "[Export] ExportToMemory starting - root_path: {:?}, audience: {:?}",
-                    root_path,
-                    audience
-                );
-                let resolved_root_path = self.resolve_fs_path(&root_path);
-                let plan = self
-                    .export()
-                    .plan_export(&resolved_root_path, &audience, Path::new("/tmp/export"))
-                    .await?;
-
-                log::debug!(
-                    "[Export] plan_export returned {} included files",
-                    plan.included.len()
-                );
-
-                // Read each included file
-                let mut files = Vec::new();
-                for included in &plan.included {
-                    match self.fs().read_to_string(&included.source_path).await {
-                        Ok(content) => {
-                            // When exporting for a specific audience, render body templates
-                            // so {{#for-audience}} blocks resolve. For "all" (*), leave raw.
-                            #[cfg(feature = "templating")]
-                            let content = if audience != "*"
-                                && crate::body_template::has_templates(&content)
-                            {
-                                match crate::frontmatter::parse_or_empty(&content) {
-                                    Ok(parsed) => {
-                                        let context = crate::body_template::build_publish_context(
-                                            &parsed.frontmatter,
-                                            &included.source_path,
-                                            Some(&resolved_root_path),
-                                            &audience,
-                                        );
-                                        let rendered =
-                                            crate::body_template::BodyTemplateRenderer::new()
-                                                .render(&parsed.body, &context)
-                                                .unwrap_or_else(|_| parsed.body.clone());
-                                        // Reconstruct file with original frontmatter + rendered body
-                                        crate::frontmatter::serialize(
-                                            &parsed.frontmatter,
-                                            &rendered,
-                                        )
-                                        .unwrap_or(content)
-                                    }
-                                    Err(_) => content,
-                                }
-                            } else {
-                                content
-                            };
-
-                            files.push(crate::command::ExportedFile {
-                                path: included.relative_path.to_string_lossy().to_string(),
-                                content,
-                            });
-                        }
-                        Err(e) => {
-                            log::warn!("[Export] read failed: {:?} - {}", included.source_path, e);
-                        }
-                    }
-                }
-                log::debug!("[Export] ExportToMemory returning {} files", files.len());
-                Ok(Response::ExportedFiles(files))
-            }
-
-            Command::ExportToHtml {
-                root_path,
-                audience,
-            } => {
-                // Plan the export first
-                let resolved_root_path = self.resolve_fs_path(&root_path);
-                let plan = self
-                    .export()
-                    .plan_export(&resolved_root_path, &audience, Path::new("/tmp/export"))
-                    .await?;
-
-                // Read each included file and convert path extension
-                let mut files = Vec::new();
-                for included in &plan.included {
-                    if let Ok(content) = self.fs().read_to_string(&included.source_path).await {
-                        let html_path = included
-                            .relative_path
-                            .to_string_lossy()
-                            .replace(".md", ".html");
-                        files.push(crate::command::ExportedFile {
-                            path: html_path,
-                            content, // TODO: Add markdown-to-HTML conversion
-                        });
-                    }
-                }
-                Ok(Response::ExportedFiles(files))
-            }
-
-            Command::ExportBinaryAttachments {
-                root_path,
-                audience: _,
-            } => {
-                // Collect all non-hidden binary files from workspace
-                let resolved_root_path = self.resolve_fs_path(&root_path);
-                let root_index = resolved_root_path.as_path();
-                let root_dir = root_index.parent().unwrap_or(root_index);
-
-                log::info!(
-                    "[Export] ExportBinaryAttachments starting - root_path: {:?}, root_dir: {:?}",
-                    root_path,
-                    root_dir
-                );
-
-                let mut attachments: Vec<crate::command::BinaryFileInfo> = Vec::new();
-                let mut visited_dirs = std::collections::HashSet::new();
-
-                // Helper to check if a file is a binary attachment (not markdown)
-                fn is_binary_file(path: &Path) -> bool {
-                    let ext = path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .map(|e| e.to_lowercase());
-
-                    match ext.as_deref() {
-                        // Text/markdown files - not binary
-                        Some("md" | "txt" | "json" | "yaml" | "yml" | "toml") => false,
-                        // Common binary formats
-                        Some(
-                            "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "ico" | "bmp" | "pdf"
-                            | "heic" | "heif" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx"
-                            | "mp3" | "mp4" | "wav" | "ogg" | "flac" | "m4a" | "aac" | "mov"
-                            | "avi" | "mkv" | "webm" | "zip" | "tar" | "gz" | "rar" | "7z" | "ttf"
-                            | "otf" | "woff" | "woff2" | "sqlite" | "db",
-                        ) => true,
-                        // Unknown extension - check if it looks like a text file
-                        _ => false,
-                    }
-                }
-
-                // Helper to check if a path component is hidden
-                fn is_hidden_component(name: &str) -> bool {
-                    name.starts_with('.')
-                }
-
-                // Recursively collect binary file paths from a directory (no data, for efficiency)
-                async fn collect_binaries_recursive<FS: AsyncFileSystem>(
-                    fs: &FS,
-                    dir: &Path,
-                    root_dir: &Path,
-                    attachments: &mut Vec<crate::command::BinaryFileInfo>,
-                    visited_dirs: &mut std::collections::HashSet<PathBuf>,
-                ) {
-                    if visited_dirs.contains(dir) {
-                        log::debug!("[Export] skipping already visited dir: {:?}", dir);
-                        return;
-                    }
-                    visited_dirs.insert(dir.to_path_buf());
-
-                    // Skip hidden directories
-                    if let Some(name) = dir.file_name().and_then(|n| n.to_str())
-                        && is_hidden_component(name)
-                    {
-                        log::debug!("[Export] skipping hidden dir: {:?}", dir);
-                        return;
-                    }
-
-                    log::info!("[Export] listing files in dir: {:?}", dir);
-                    let entries = match fs.list_files(dir).await {
-                        Ok(e) => {
-                            log::info!(
-                                "[Export] list_files returned {} entries for {:?}",
-                                e.len(),
-                                dir
-                            );
-                            e
-                        }
-                        Err(e) => {
-                            log::warn!("[Export] list_files failed for {:?}: {}", dir, e);
-                            return;
-                        }
-                    };
-
-                    for entry_path in entries {
-                        // Skip hidden files/dirs
-                        if let Some(name) = entry_path.file_name().and_then(|n| n.to_str())
-                            && is_hidden_component(name)
-                        {
-                            continue;
-                        }
-
-                        if fs.is_dir(&entry_path).await {
-                            // Recurse into subdirectory
-                            Box::pin(collect_binaries_recursive(
-                                fs,
-                                &entry_path,
-                                root_dir,
-                                attachments,
-                                visited_dirs,
-                            ))
-                            .await;
-                        } else if is_binary_file(&entry_path) {
-                            // Just record the path, don't read data (for efficiency)
-                            let relative_path = pathdiff::diff_paths(&entry_path, root_dir)
-                                .unwrap_or_else(|| entry_path.clone());
-                            log::debug!("[Export] found binary file: {:?}", entry_path);
-                            attachments.push(crate::command::BinaryFileInfo {
-                                source_path: entry_path.to_string_lossy().to_string(),
-                                relative_path: relative_path.to_string_lossy().to_string(),
-                            });
-                        } else {
-                            log::debug!("[Export] skipping non-binary file: {:?}", entry_path);
-                        }
-                    }
-                }
-
-                collect_binaries_recursive(
-                    self.fs(),
-                    root_dir,
-                    root_dir,
-                    &mut attachments,
-                    &mut visited_dirs,
-                )
-                .await;
-
-                log::info!(
-                    "[Export] ExportBinaryAttachments returning {} attachment paths",
-                    attachments.len()
-                );
-                Ok(Response::BinaryFilePaths(attachments))
             }
 
             // === Template Operations ===

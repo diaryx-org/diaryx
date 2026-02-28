@@ -10,6 +10,12 @@ The plugin system provides three trait namespaces:
 - **`WorkspacePlugin`** — Workspace lifecycle events (opened, closed, changed, committed) and custom commands
 - **`FilePlugin`** — Per-file lifecycle events (saved, created, deleted, moved)
 
+Plugins can also declare host UI surface ownership in their manifest via
+`UiContribution`:
+
+- `CommandPalette` — plugin-owned command palette surface UI
+- `ContextMenu` — plugin-owned context menu UI (currently `LeftSidebarTree` target)
+
 Plugins are registered in the `PluginRegistry`, which is stored on the `Diaryx<FS>` struct and wired into the command handler.
 
 ## Files
@@ -82,3 +88,12 @@ Plugins can also intercept core `Command` variants directly via `handle_typed_co
 When `Diaryx::execute()` encounters a CRDT command, it first checks `PluginRegistry::try_typed_command()`. If a plugin returns `Some(result)`, that result is used directly. Otherwise, the command falls through to the existing inline handler code.
 
 `SyncPlugin` in `diaryx_sync` implements this to handle all ~50 CRDT command variants, making it the authoritative CRDT handler when registered.
+
+## Plugin-owned UI Surfaces
+
+When a plugin contributes `UiContribution::CommandPalette`, the web host renders
+that component as the command palette UI instead of the built-in command list.
+
+When a plugin contributes `UiContribution::ContextMenu { target: LeftSidebarTree, ... }`,
+the web host routes left-sidebar tree context menu interactions to the plugin-owned
+surface component.

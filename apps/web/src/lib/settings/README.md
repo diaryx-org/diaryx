@@ -1,35 +1,36 @@
 ---
 title: Settings
 description: Settings panel components
-part_of: '[README](/apps/web/src/lib/README.md)'
+part_of: "[README](/apps/web/src/lib/README.md)"
 attachments:
-  - '[index.ts](/apps/web/src/lib/settings/index.ts)'
-  - '[AccountSettings.svelte](/apps/web/src/lib/settings/AccountSettings.svelte)'
-  - '[BackupSettings.svelte](/apps/web/src/lib/settings/BackupSettings.svelte)'
-  - '[BillingSettings.svelte](/apps/web/src/lib/settings/BillingSettings.svelte)'
-  - '[ClearDataSettings.svelte](/apps/web/src/lib/settings/ClearDataSettings.svelte)'
-  - '[CloudBackupSettings.svelte](/apps/web/src/lib/settings/CloudBackupSettings.svelte)'
-  - '[DebugInfo.svelte](/apps/web/src/lib/settings/DebugInfo.svelte)'
-  - '[DisplaySettings.svelte](/apps/web/src/lib/settings/DisplaySettings.svelte)'
-  - '[FormattingSettings.svelte](/apps/web/src/lib/settings/FormattingSettings.svelte)'
-  - '[GoogleDriveSettings.svelte](/apps/web/src/lib/settings/GoogleDriveSettings.svelte)'
-  - '[FormatImportSettings.svelte](/apps/web/src/lib/settings/FormatImportSettings.svelte)'
-  - '[ImportSettings.svelte](/apps/web/src/lib/settings/ImportSettings.svelte)'
-  - '[LinkSettings.svelte](/apps/web/src/lib/settings/LinkSettings.svelte)'
-  - '[S3BackupSettings.svelte](/apps/web/src/lib/settings/S3BackupSettings.svelte)'
-  - '[StorageSettings.svelte](/apps/web/src/lib/settings/StorageSettings.svelte)'
-  - '[SyncSettings.svelte](/apps/web/src/lib/settings/SyncSettings.svelte)'
-  - '[syncActionStatusStore.svelte.ts](/apps/web/src/lib/settings/syncActionStatusStore.svelte.ts)'
-  - '[syncSettingsLogic.ts](/apps/web/src/lib/settings/syncSettingsLogic.ts)'
-  - '[workspaceSnapshotUpload.ts](/apps/web/src/lib/settings/workspaceSnapshotUpload.ts)'
-  - '[TemplateSettings.svelte](/apps/web/src/lib/settings/TemplateSettings.svelte)'
-  - '[WorkspaceManagement.svelte](/apps/web/src/lib/settings/WorkspaceManagement.svelte)'
-  - '[WorkspaceSettings.svelte](/apps/web/src/lib/settings/WorkspaceSettings.svelte)'
-  - '[AppearanceSettings.svelte](/apps/web/src/lib/settings/AppearanceSettings.svelte)'
-  - '[ThemePresetCard.svelte](/apps/web/src/lib/settings/ThemePresetCard.svelte)'
-  - '[AccentHuePicker.svelte](/apps/web/src/lib/settings/AccentHuePicker.svelte)'
+  - "[index.ts](/apps/web/src/lib/settings/index.ts)"
+  - "[AccountSettings.svelte](/apps/web/src/lib/settings/AccountSettings.svelte)"
+  - "[BackupSettings.svelte](/apps/web/src/lib/settings/BackupSettings.svelte)"
+  - "[BillingSettings.svelte](/apps/web/src/lib/settings/BillingSettings.svelte)"
+  - "[ClearDataSettings.svelte](/apps/web/src/lib/settings/ClearDataSettings.svelte)"
+  - "[CloudBackupSettings.svelte](/apps/web/src/lib/settings/CloudBackupSettings.svelte)"
+  - "[DebugInfo.svelte](/apps/web/src/lib/settings/DebugInfo.svelte)"
+  - "[DisplaySettings.svelte](/apps/web/src/lib/settings/DisplaySettings.svelte)"
+  - "[FormattingSettings.svelte](/apps/web/src/lib/settings/FormattingSettings.svelte)"
+  - "[GoogleDriveSettings.svelte](/apps/web/src/lib/settings/GoogleDriveSettings.svelte)"
+  - "[FormatImportSettings.svelte](/apps/web/src/lib/settings/FormatImportSettings.svelte)"
+  - "[ImportSettings.svelte](/apps/web/src/lib/settings/ImportSettings.svelte)"
+  - "[LinkSettings.svelte](/apps/web/src/lib/settings/LinkSettings.svelte)"
+  - "[S3BackupSettings.svelte](/apps/web/src/lib/settings/S3BackupSettings.svelte)"
+  - "[StorageSettings.svelte](/apps/web/src/lib/settings/StorageSettings.svelte)"
+  - "[SyncSettings.svelte](/apps/web/src/lib/settings/SyncSettings.svelte)"
+  - "[syncActionStatusStore.svelte.ts](/apps/web/src/lib/settings/syncActionStatusStore.svelte.ts)"
+  - "[syncSettingsLogic.ts](/apps/web/src/lib/settings/syncSettingsLogic.ts)"
+  - "[workspaceSnapshotUpload.ts](/apps/web/src/lib/settings/workspaceSnapshotUpload.ts)"
+  - "[TemplateSettings.svelte](/apps/web/src/lib/settings/TemplateSettings.svelte)"
+  - "[WorkspaceManagement.svelte](/apps/web/src/lib/settings/WorkspaceManagement.svelte)"
+  - "[WorkspaceSettings.svelte](/apps/web/src/lib/settings/WorkspaceSettings.svelte)"
+  - "[AppearanceSettings.svelte](/apps/web/src/lib/settings/AppearanceSettings.svelte)"
+  - "[PluginsSettings.svelte](/apps/web/src/lib/settings/PluginsSettings.svelte)"
+  - "[ThemePresetCard.svelte](/apps/web/src/lib/settings/ThemePresetCard.svelte)"
+  - "[AccentHuePicker.svelte](/apps/web/src/lib/settings/AccentHuePicker.svelte)"
 exclude:
-  - '*.lock'
+  - "*.lock"
 ---
 
 # Settings
@@ -38,32 +39,41 @@ Settings panel components for the settings dialog.
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `AccountSettings.svelte` | Account and login settings |
-| `BackupSettings.svelte` | Local backup settings |
-| `BillingSettings.svelte` | Subscription and billing settings (Stripe + Apple IAP) |
-| `ClearDataSettings.svelte` | Clear data controls |
-| `CloudBackupSettings.svelte` | Cloud backup configuration |
-| `DebugInfo.svelte` | Debug information display |
-| `DisplaySettings.svelte` | Display preferences (theme + focus mode) |
-| `FormattingSettings.svelte` | Text formatting options |
-| `GoogleDriveSettings.svelte` | Google Drive integration |
-| `FormatImportSettings.svelte` | Import from Day One or Markdown formats (uses WASM parsers + ImportEntries command) |
-| `ImportSettings.svelte` | Import from file (raw ZIP extraction) |
-| `LinkSettings.svelte` | Bulk conversion for `part_of`/`contents`/`attachments` using the current workspace link format |
-| `S3BackupSettings.svelte` | S3 backup configuration |
-| `StorageSettings.svelte` | Storage backend settings |
-| `SyncSettings.svelte` | Sync server settings + synced attachment storage usage |
-| `syncActionStatusStore.svelte.ts` | Shared progress/status state for settings-driven sync actions |
-| `syncSettingsLogic.ts` | Storage usage status/summary helpers for sync settings |
-| `workspaceSnapshotUpload.ts` | Shared local-workspace snapshot builder used by sync bootstrap flows |
-| `TemplateSettings.svelte` | Template management (default_template/daily_template in workspace config) |
-| `WorkspaceManagement.svelte` | Local/synced workspace management and sync toggles |
-| `WorkspaceSettings.svelte` | Workspace config: location and daily folder |
-| `AppearanceSettings.svelte` | Theme presets, accent hue, typography, and layout settings |
-| `ThemePresetCard.svelte` | Preset preview card with color swatches |
-| `AccentHuePicker.svelte` | Hue range slider (0–360) with conic gradient |
+| File                              | Purpose                                                                                        |
+| --------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `AccountSettings.svelte`          | Account and login settings                                                                     |
+| `BackupSettings.svelte`           | Local backup settings                                                                          |
+| `BillingSettings.svelte`          | Subscription and billing settings (Stripe + Apple IAP)                                         |
+| `ClearDataSettings.svelte`        | Clear data controls                                                                            |
+| `CloudBackupSettings.svelte`      | Cloud backup configuration                                                                     |
+| `DebugInfo.svelte`                | Debug information display                                                                      |
+| `DisplaySettings.svelte`          | Display preferences (theme + focus mode)                                                       |
+| `FormattingSettings.svelte`       | Text formatting options                                                                        |
+| `GoogleDriveSettings.svelte`      | Google Drive integration                                                                       |
+| `FormatImportSettings.svelte`     | Import from Day One or Markdown formats (uses WASM parsers + ImportEntries command)            |
+| `ImportSettings.svelte`           | Import from file (raw ZIP extraction)                                                          |
+| `LinkSettings.svelte`             | Bulk conversion for `part_of`/`contents`/`attachments` using the current workspace link format |
+| `S3BackupSettings.svelte`         | S3 backup configuration                                                                        |
+| `StorageSettings.svelte`          | Storage backend settings                                                                       |
+| `SyncSettings.svelte`             | Sync server settings + synced attachment storage usage                                         |
+| `syncActionStatusStore.svelte.ts` | Shared progress/status state for settings-driven sync actions                                  |
+| `syncSettingsLogic.ts`            | Storage usage status/summary helpers for sync settings                                         |
+| `workspaceSnapshotUpload.ts`      | Shared local-workspace snapshot builder used by sync bootstrap flows                           |
+| `TemplateSettings.svelte`         | Template management (default_template/daily_template in workspace config)                      |
+| `WorkspaceManagement.svelte`      | Local/synced workspace management and sync toggles                                             |
+| `WorkspaceSettings.svelte`        | Workspace config: location and daily folder                                                    |
+| `AppearanceSettings.svelte`       | Theme presets, accent hue, typography, and layout settings                                     |
+| `PluginsSettings.svelte`          | Per-plugin enable/disable toggles                                                              |
+| `ThemePresetCard.svelte`          | Preset preview card with color swatches                                                        |
+| `AccentHuePicker.svelte`          | Hue range slider (0–360) with conic gradient                                                   |
+
+`PluginsSettings.svelte` behavior:
+
+- lists all known plugin manifests (backend, browser-loaded, and runtime overrides)
+- stores enable/disable state per plugin in localStorage
+- disables plugin UI contributions (settings tabs, sidebar tabs, command palette items, toolbar/status items) when toggled off
+- blocks browser plugin event/command dispatch when a plugin is disabled
+- shows a runtime support notice and disables plugin toggles when browser Extism plugins are unsupported (for example, WebKit without JSPI)
 
 `SyncSettings.svelte` displays:
 

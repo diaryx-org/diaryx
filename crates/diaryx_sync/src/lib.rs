@@ -12,6 +12,7 @@
 
 // ==================== CRDT core (always available, WASM-compatible) ====================
 
+pub mod attachment_sync;
 mod body_doc;
 mod body_doc_manager;
 pub mod control_message;
@@ -20,6 +21,7 @@ pub mod materialize;
 mod memory_storage;
 pub mod sanity;
 pub mod self_healing;
+pub mod share_session;
 mod sync_handler;
 mod sync_manager;
 mod sync_protocol;
@@ -104,7 +106,11 @@ pub use sanity::{IssueKind, SanityIssue, SanityReport, validate_workspace};
 pub use self_healing::{HealingAction, HealthTracker};
 
 // Shared sync types (all platforms)
+pub use attachment_sync::AttachmentSyncClient;
 pub use control_message::ControlMessage;
+pub use share_session::{
+    HttpClient, HttpResponse, SessionCreatedResponse, SessionInfoResponse, ShareSessionClient,
+};
 pub use sync_session::{IncomingEvent, SessionAction, SyncSession};
 pub use sync_types::{SyncEvent, SyncSessionConfig, SyncStatus};
 

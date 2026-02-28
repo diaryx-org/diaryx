@@ -47,6 +47,8 @@ pub enum PluginCapability {
         /// Names of the custom commands this plugin handles.
         commands: Vec<String>,
     },
+    /// Contributes editor extensions (TipTap nodes/marks).
+    EditorExtension,
 }
 
 /// A UI extension point contributed by a plugin.
@@ -89,6 +91,32 @@ pub enum UiContribution {
         /// Plugin command to execute when selected.
         plugin_command: String,
     },
+    /// A plugin-owned command palette surface.
+    ///
+    /// When present, the host renders this component instead of the built-in
+    /// command palette command list.
+    CommandPalette {
+        /// Unique identifier for this contribution.
+        id: String,
+        /// Optional label shown by host UIs.
+        label: Option<String>,
+        /// Component reference for rendering.
+        component: ComponentRef,
+    },
+    /// A plugin-owned context menu surface.
+    ///
+    /// When present, the host renders this component for the target context
+    /// menu surface instead of built-in menu items.
+    ContextMenu {
+        /// Unique identifier for this contribution.
+        id: String,
+        /// Optional label shown by host UIs.
+        label: Option<String>,
+        /// Target menu surface this contribution owns.
+        target: ContextMenuTarget,
+        /// Component reference for rendering.
+        component: ComponentRef,
+    },
     /// A button in the editor toolbar.
     ToolbarButton {
         /// Unique identifier for this button.
@@ -110,6 +138,31 @@ pub enum UiContribution {
         position: StatusBarPosition,
         /// Optional plugin command to execute on click.
         plugin_command: Option<String>,
+    },
+    /// An editor extension (TipTap node/mark) contributed by a plugin.
+    ///
+    /// The host generates a TipTap extension from this declaration and calls
+    /// the plugin's `render_export` function to render content.
+    EditorExtension {
+        /// Unique extension ID (becomes the TipTap node name).
+        extension_id: String,
+        /// What kind of editor node this creates.
+        node_type: EditorNodeType,
+        /// Markdown syntax delimiters for parsing and serialization.
+        markdown: MarkdownSyntax,
+        /// Name of the plugin's WASM export to call for rendering.
+        render_export: String,
+        /// How the user edits the source content.
+        edit_mode: EditMode,
+        /// Optional CSS to inject for rendered output.
+        css: Option<String>,
+        /// Optional insert command for editor menu integration.
+        ///
+        /// When present, the host adds a button in the appropriate editor menu
+        /// (MoreStylesPicker for inline atoms, BlockPicker for block atoms)
+        /// to insert an empty node of this type.
+        #[serde(default)]
+        insert_command: Option<InsertCommand>,
     },
 }
 
@@ -133,6 +186,73 @@ pub enum StatusBarPosition {
     Center,
     /// Right-aligned.
     Right,
+}
+
+/// Which host context menu surface a plugin contribution targets.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub enum ContextMenuTarget {
+    /// Context menu for entry nodes in the left sidebar file tree.
+    LeftSidebarTree,
+}
+
+/// The kind of TipTap node an [`EditorExtension`](UiContribution::EditorExtension) creates.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub enum EditorNodeType {
+    /// Inline atom node (like a footnote reference).
+    InlineAtom,
+    /// Block atom node (like an HTML block).
+    BlockAtom,
+}
+
+/// Markdown syntax delimiters for an editor extension.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub struct MarkdownSyntax {
+    /// Whether this is an inline or block-level syntax.
+    pub level: MarkdownLevel,
+    /// Opening delimiter (e.g., `"$"` or `"$$"`).
+    pub open: String,
+    /// Closing delimiter (e.g., `"$"` or `"$$"`).
+    pub close: String,
+}
+
+/// Whether a markdown syntax is inline or block-level.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub enum MarkdownLevel {
+    /// Inline-level (within a paragraph).
+    Inline,
+    /// Block-level (standalone paragraph).
+    Block,
+}
+
+/// How the user edits the source content of an editor extension node.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub enum EditMode {
+    /// Click opens a popover with a source text input (for inline nodes).
+    Popover,
+    /// Click toggles between source textarea and rendered preview (for block nodes).
+    SourceToggle,
+}
+
+/// Metadata for an insert button in the editor menus.
+///
+/// When present on an [`EditorExtension`](UiContribution::EditorExtension),
+/// the host renders a button in the appropriate menu (MoreStylesPicker for
+/// inline atoms, BlockPicker/BlockStylePicker for block atoms).
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub struct InsertCommand {
+    /// Button label shown in the menu.
+    pub label: String,
+    /// Lucide icon name in kebab-case (e.g., `"sigma"`, `"square-sigma"`).
+    /// Falls back to a generic plugin icon if unrecognized.
+    pub icon: Option<String>,
+    /// Tooltip / description for the button.
+    pub description: Option<String>,
 }
 
 /// How to render a plugin-contributed UI panel.

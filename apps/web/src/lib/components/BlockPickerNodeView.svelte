@@ -17,6 +17,7 @@
     GitBranch,
     Users,
   } from "@lucide/svelte";
+  import { getPluginStore } from "@/models/stores/pluginStore.svelte";
 
   interface Props {
     editor: Editor;
@@ -27,6 +28,8 @@
   }
 
   let { editor, showAttachment, onSelect, onInsertAttachment, onCancel }: Props = $props();
+
+  const pluginBlockCommands = $derived(getPluginStore().editorInsertCommands.block);
 
   let menuElement: HTMLDivElement | undefined = $state();
   let focusedIndex = $state(0);
@@ -306,6 +309,20 @@
           <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleForAudience(); }}>
             <Users class="size-3.5" /> For Audience
           </button>
+          {#if pluginBlockCommands.length > 0}
+            <div class="submenu-divider"></div>
+            {#each pluginBlockCommands as cmd (cmd.extensionId)}
+              <button type="button" class="submenu-item" onclick={(e) => {
+                e.stopPropagation();
+                onSelect(() => editor.chain().focus().insertContent({
+                  type: cmd.extensionId,
+                  attrs: { source: '' },
+                }).run());
+              }}>
+                <cmd.icon class="size-3.5" /> {cmd.label}
+              </button>
+            {/each}
+          {/if}
         </div>
       {/if}
     </div>

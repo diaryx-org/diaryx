@@ -9,10 +9,12 @@
 #![doc = "- [`ContentProvider`] (re-exported from `diaryx_core`) — trait for content sources"]
 
 mod fs_content_provider;
+pub mod plugin;
 mod publisher;
 mod types;
 
 pub use fs_content_provider::FilesystemContentProvider;
+pub use plugin::PublishPlugin;
 pub use publisher::Publisher;
 pub use types::{NavLink, PublishOptions, PublishResult, PublishedPage};
 

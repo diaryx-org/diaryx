@@ -98,22 +98,8 @@
     createEntryWithSync,
     deleteEntryWithSync,
     duplicateEntry as duplicateEntryController,
-    handleValidateWorkspace as validateWorkspaceHandler,
-    handleRefreshTree as refreshTreeHandler,
-    handleDuplicateCurrentEntry as duplicateCurrentEntryHandler,
-    handleRenameCurrentEntry as renameCurrentEntryHandler,
-    handleDeleteCurrentEntry as deleteCurrentEntryHandler,
-    handleMoveCurrentEntry as moveCurrentEntryHandler,
-    handleCreateChildUnderCurrent as createChildUnderCurrentHandler,
-    handleStartShareSession as startShareSessionHandler,
-    handleJoinShareSession as joinShareSessionHandler,
-    handleFindInFile,
-    handleWordCount as wordCountHandler,
     handleImportFromClipboard as importFromClipboardHandler,
     handleImportMarkdownFile as importMarkdownFileHandler,
-    handleCopyAsMarkdown as copyAsMarkdownHandler,
-    handleViewMarkdown as viewMarkdownHandler,
-    handleReorderFootnotes as reorderFootnotesHandler,
     handleAddAttachment as addAttachmentHandler,
     handleAttachmentFileSelect as attachmentFileSelectHandler,
     handleEditorFileDrop as editorFileDropHandler,
@@ -636,23 +622,38 @@
 
       // Load browser-side Extism WASM plugins from IndexedDB
       import('$lib/plugins/browserPluginManager.svelte').then(async (m) => {
+        const pluginSupport = m.getBrowserPluginSupport();
+        if (!pluginSupport.supported) {
+          console.info('[App] Browser plugins disabled:', pluginSupport.reason);
+          return;
+        }
+
         await m.loadAllPlugins().catch((e: unknown) =>
           console.warn('[App] Failed to load browser plugins:', e),
         );
-        // Always re-install built-in AI plugin so dev rebuilds take effect
-        try {
-          const resp = await fetch('/plugins/diaryx_ai.wasm');
-          if (resp.ok) {
-            const bytes = await resp.arrayBuffer();
-            const existing = m.getPlugin('diaryx.ai');
-            if (existing) {
-              await m.uninstallPlugin('diaryx.ai');
+        // Always re-install built-in plugins so dev rebuilds take effect
+        const builtinPlugins = [
+          { url: '/plugins/diaryx_ai.wasm', id: 'diaryx.ai', name: 'AI Assistant' },
+          { url: '/plugins/diaryx_math.wasm', id: 'diaryx.math', name: 'Math' },
+          { url: '/plugins/diaryx_publish.wasm', id: 'publish', name: 'Publish' },
+        ];
+        for (const bp of builtinPlugins) {
+          try {
+            const resp = await fetch(bp.url);
+            if (resp.ok) {
+              const bytes = await resp.arrayBuffer();
+              const existing = m.getPlugin(bp.id);
+              if (existing) {
+                await m.uninstallPlugin(bp.id);
+              }
+              await m.installPlugin(bytes, bp.name);
             }
-            await m.installPlugin(bytes, 'AI Assistant');
+          } catch (e) {
+            console.warn(`[App] ${bp.name} plugin not available:`, e);
           }
-        } catch (e) {
-          console.warn('[App] AI plugin not available:', e);
         }
+        // Eagerly load icons for plugin insert commands so they're cached before menus open.
+        getPluginStore().preloadInsertCommandIcons();
       });
 
       // Initialize filesystem event subscription for automatic UI updates
@@ -1541,19 +1542,6 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
     return { id: ws.id, name: ws.name };
   }
 
-  async function handleDailyEntry() {
-    if (!api || !tree) return;
-    try {
-      // daily_entry_folder and daily_template are now read from workspace config
-      // by the command handler. Pass null to use workspace config defaults.
-      const path = await api.ensureDailyEntry(tree.path, undefined, undefined);
-      await refreshTree();
-      await openEntry(path);
-    } catch (e) {
-      uiStore.setError(e instanceof Error ? e.message : String(e));
-    }
-  }
-
   /** Extract YYYY-MM-DD date string from a daily entry path filename. */
   function extractDateFromPath(path: string): string | null {
     const filename = path.split('/').pop()?.replace(/\.md$/, '');
@@ -1861,56 +1849,8 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
   }
 
   // ========================================================================
-  // Command Palette Handlers - Thin wrappers that delegate to controllers
+  // Import handlers used by fallback command UIs
   // ========================================================================
-
-  async function handleValidateWorkspace() {
-    if (!api || !backend) return;
-    await validateWorkspaceHandler(api, tree, backend);
-  }
-
-  async function handleRefreshTreeCmd() {
-    await refreshTreeHandler(refreshTree);
-  }
-
-  async function handleDuplicateCurrentEntry() {
-    if (!api) return;
-    await duplicateCurrentEntryHandler(api, currentEntry, handleDuplicateEntry, openEntry);
-  }
-
-  async function handleRenameCurrentEntry() {
-    if (!api) return;
-    await renameCurrentEntryHandler(api, currentEntry, handleRenameEntry, openEntry);
-  }
-
-  async function handleDeleteCurrentEntry() {
-    await deleteCurrentEntryHandler(currentEntry, handleDeleteEntry);
-  }
-
-  async function handleMoveCurrentEntry() {
-    if (!api) return;
-    await moveCurrentEntryHandler(api, currentEntry, tree, handleMoveEntry);
-  }
-
-  async function handleCreateChildUnderCurrent() {
-    await createChildUnderCurrentHandler(currentEntry, handleCreateChildEntry);
-  }
-
-  async function handleStartShareSession() {
-    await startShareSessionHandler(
-      (collapsed) => uiStore.setLeftSidebarCollapsed(collapsed),
-      (tab) => { requestedLeftTab = tab; },
-      (trigger) => { triggerStartSession = trigger; }
-    );
-  }
-
-  async function handleJoinShareSessionCmd() {
-    await joinShareSessionHandler();
-  }
-
-  function handleWordCount() {
-    wordCountHandler(editorRef, currentEntry);
-  }
 
   async function handleImportFromClipboard() {
     if (!api) return;
@@ -1922,20 +1862,57 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
     await importMarkdownFileHandler(api, tree, currentEntry?.path ?? null, refreshTree, openEntry);
   }
 
-  async function handleCopyAsMarkdown() {
-    await copyAsMarkdownHandler(editorRef, currentEntry);
-  }
+  async function handleQuickBackupExport() {
+    if (!tree?.path || !backend) {
+      toast.error("No workspace loaded");
+      return;
+    }
 
-  function handleReorderFootnotes() {
-    reorderFootnotesHandler(editorRef);
-  }
+    try {
+      if ("getInvoke" in backend) {
+        const invoke = (backend as any).getInvoke();
+        const workspaceDir = tree.path.substring(0, tree.path.lastIndexOf("/"));
+        const result = await invoke("export_to_zip", { workspacePath: workspaceDir });
 
-  function handleViewMarkdown() {
-    const result = viewMarkdownHandler(editorRef, currentEntry);
-    if (result !== null) {
-      markdownPreviewBody = result.body;
-      markdownPreviewFrontmatter = result.frontmatter;
-      markdownPreviewOpen = true;
+        if (result?.cancelled) return;
+        if (!result?.success) {
+          throw new Error(result?.error || "Export failed");
+        }
+
+        toast.success(`Backup exported (${result.files_exported ?? 0} files)`);
+        return;
+      }
+
+      const { addFilesToZip } = await import("./lib/settings/zipUtils");
+      const JSZip = (await import("jszip")).default;
+
+      const workspaceDir = tree.path.substring(0, tree.path.lastIndexOf("/"));
+      const filesystemTree = await api!.getFilesystemTree(workspaceDir, false);
+
+      const zip = new JSZip();
+      const reader = {
+        readText: (path: string) => api!.readFile(path),
+        readBinary: (path: string) => (backend as any).readBinary(path) as Promise<Uint8Array>,
+      };
+
+      const fileCount = await addFilesToZip(zip, filesystemTree, workspaceDir, reader);
+      const blob = await zip.generateAsync({ type: "blob" });
+      const url = URL.createObjectURL(blob);
+
+      const downloadLink = document.createElement("a");
+      downloadLink.href = url;
+      const baseName = tree.path.split("/").pop()?.replace(".md", "") || "workspace";
+      const timestamp = new Date().toISOString().slice(0, 10);
+      downloadLink.download = `${baseName}-${timestamp}.zip`;
+      document.body.appendChild(downloadLink);
+      downloadLink.click();
+      document.body.removeChild(downloadLink);
+      URL.revokeObjectURL(url);
+
+      toast.success(`Backup exported (${fileCount} files)`);
+    } catch (error) {
+      console.error("[App] Quick backup export failed:", error);
+      toast.error(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -2219,40 +2196,10 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
 <!-- Command Palette -->
 <CommandPalette
   bind:open={uiStore.showCommandPalette}
-  {tree}
   {api}
-  currentEntryPath={currentEntry?.path ?? null}
-  onOpenEntry={openEntry}
-  onNewEntry={() => uiStore.openNewEntryModal()}
-  onDailyEntry={handleDailyEntry}
-  onSettings={() => (showSettingsDialog = true)}
-  onExport={() => {
-    exportPath = currentEntry?.path ?? tree?.path ?? "";
-    if (exportPath) showExportDialog = true;
-  }}
-  onValidate={handleValidateWorkspace}
-  onRefreshTree={handleRefreshTreeCmd}
-  onDuplicateEntry={handleDuplicateCurrentEntry}
-  onRenameEntry={handleRenameCurrentEntry}
-  onDeleteEntry={handleDeleteCurrentEntry}
-  onMoveEntry={handleMoveCurrentEntry}
-  onCreateChildEntry={handleCreateChildUnderCurrent}
-  onStartShare={handleStartShareSession}
-  onJoinSession={handleJoinShareSessionCmd}
-  onFindInFile={handleFindInFile}
-  onWordCount={handleWordCount}
   onImportFromClipboard={handleImportFromClipboard}
   onImportMarkdownFile={handleImportMarkdownFile}
-  onCopyAsMarkdown={handleCopyAsMarkdown}
-  onViewMarkdown={handleViewMarkdown}
-  onReorderFootnotes={handleReorderFootnotes}
-  onPluginCommand={async (pluginId, command) => {
-    try {
-      await api?.executePluginCommand(pluginId, command);
-    } catch (e) {
-      console.error(`[App] Plugin command failed: ${pluginId}/${command}`, e);
-    }
-  }}
+  onOpenBackupImport={handleQuickBackupExport}
 />
 
 <SettingsDialog
@@ -2385,6 +2332,8 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
       exportPath = path;
       showExportDialog = true;
     }}
+    onOpenBackupImport={handleQuickBackupExport}
+    onImportMarkdownFile={handleImportMarkdownFile}
     onAddAttachment={handleAddAttachment}
     onMoveAttachment={handleMoveAttachmentWrapper}
     onRemoveBrokenPartOf={handleRemoveBrokenPartOf}

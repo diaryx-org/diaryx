@@ -1,36 +1,37 @@
 ---
 title: lib
 description: Shared libraries and components
-part_of: '[README](/apps/web/src/README.md)'
+part_of: "[README](/apps/web/src/README.md)"
 contents:
-  - '[README](/apps/web/src/lib/auth/README.md)'
-  - '[README](/apps/web/src/lib/backend/README.md)'
-  - '[README](/apps/web/src/lib/components/README.md)'
-  - '[README](/apps/web/src/lib/crdt/README.md)'
-  - '[README](/apps/web/src/lib/device/README.md)'
-  - '[README](/apps/web/src/lib/extensions/README.md)'
-  - '[README](/apps/web/src/lib/history/README.md)'
-  - '[README](/apps/web/src/lib/hooks/README.md)'
-  - '[README](/apps/web/src/lib/settings/README.md)'
-  - '[README](/apps/web/src/lib/share/README.md)'
-  - '[README](/apps/web/src/lib/storage/README.md)'
-  - '[README](/apps/web/src/lib/stores/README.md)'
-  - '[README](/apps/web/src/lib/wasm/README.md)'
+  - "[README](/apps/web/src/lib/auth/README.md)"
+  - "[README](/apps/web/src/lib/backend/README.md)"
+  - "[README](/apps/web/src/lib/components/README.md)"
+  - "[README](/apps/web/src/lib/crdt/README.md)"
+  - "[README](/apps/web/src/lib/device/README.md)"
+  - "[README](/apps/web/src/lib/extensions/README.md)"
+  - "[README](/apps/web/src/lib/history/README.md)"
+  - "[README](/apps/web/src/lib/hooks/README.md)"
+  - "[README](/apps/web/src/lib/publish/README.md)"
+  - "[README](/apps/web/src/lib/settings/README.md)"
+  - "[README](/apps/web/src/lib/share/README.md)"
+  - "[README](/apps/web/src/lib/storage/README.md)"
+  - "[README](/apps/web/src/lib/stores/README.md)"
+  - "[README](/apps/web/src/lib/wasm/README.md)"
 attachments:
-  - '[utils.ts](/apps/web/src/lib/utils.ts)'
-  - '[credentials.ts](/apps/web/src/lib/credentials.ts)'
-  - '[wasm-stub.js](/apps/web/src/lib/wasm-stub.js)'
-  - '[CommandPalette.svelte](/apps/web/src/lib/CommandPalette.svelte)'
-  - '[Editor.svelte](/apps/web/src/lib/Editor.svelte)'
-  - '[ExportDialog.svelte](/apps/web/src/lib/ExportDialog.svelte)'
-  - '[LeftSidebar.svelte](/apps/web/src/lib/LeftSidebar.svelte)'
-  - '[NewEntryModal.svelte](/apps/web/src/lib/NewEntryModal.svelte)'
-  - '[RightSidebar.svelte](/apps/web/src/lib/RightSidebar.svelte)'
-  - '[SettingsDialog.svelte](/apps/web/src/lib/SettingsDialog.svelte)'
-  - '[AddWorkspaceDialog.svelte](/apps/web/src/lib/AddWorkspaceDialog.svelte)'
-  - '[SyncStatusIndicator.svelte](/apps/web/src/lib/SyncStatusIndicator.svelte)'
+  - "[utils.ts](/apps/web/src/lib/utils.ts)"
+  - "[credentials.ts](/apps/web/src/lib/credentials.ts)"
+  - "[wasm-stub.js](/apps/web/src/lib/wasm-stub.js)"
+  - "[CommandPalette.svelte](/apps/web/src/lib/CommandPalette.svelte)"
+  - "[Editor.svelte](/apps/web/src/lib/Editor.svelte)"
+  - "[ExportDialog.svelte](/apps/web/src/lib/ExportDialog.svelte)"
+  - "[LeftSidebar.svelte](/apps/web/src/lib/LeftSidebar.svelte)"
+  - "[NewEntryModal.svelte](/apps/web/src/lib/NewEntryModal.svelte)"
+  - "[RightSidebar.svelte](/apps/web/src/lib/RightSidebar.svelte)"
+  - "[SettingsDialog.svelte](/apps/web/src/lib/SettingsDialog.svelte)"
+  - "[AddWorkspaceDialog.svelte](/apps/web/src/lib/AddWorkspaceDialog.svelte)"
+  - "[SyncStatusIndicator.svelte](/apps/web/src/lib/SyncStatusIndicator.svelte)"
 exclude:
-  - '*.lock'
+  - "*.lock"
 ---
 
 # Lib
@@ -39,21 +40,22 @@ Shared libraries, components, and utilities for the web application.
 
 ## Structure
 
-| Directory | Purpose |
-|-----------|---------|
-| `auth/` | Authentication services and stores |
-| `backend/` | Backend abstraction layer (WASM/Tauri) |
-| `components/` | Reusable Svelte components |
-| `crdt/` | CRDT synchronization bridge |
-| `device/` | Device identification |
-| `extensions/` | TipTap editor extensions |
-| `history/` | Version history components |
-| `hooks/` | Svelte hooks |
-| `settings/` | Settings panel components |
-| `share/` | Share session components |
-| `storage/` | Storage abstraction |
-| `stores/` | Svelte stores |
-| `wasm/` | Built WASM module |
+| Directory     | Purpose                                |
+| ------------- | -------------------------------------- |
+| `auth/`       | Authentication services and stores     |
+| `backend/`    | Backend abstraction layer (WASM/Tauri) |
+| `components/` | Reusable Svelte components             |
+| `crdt/`       | CRDT synchronization bridge            |
+| `device/`     | Device identification                  |
+| `extensions/` | TipTap editor extensions               |
+| `history/`    | Version history components             |
+| `hooks/`      | Svelte hooks                           |
+| `publish/`    | Publishing and export components       |
+| `settings/`   | Settings panel components              |
+| `share/`      | Share session components               |
+| `storage/`    | Storage abstraction                    |
+| `stores/`     | Svelte stores                          |
+| `wasm/`       | Built WASM module                      |
 
 ## Validation
 
@@ -125,16 +127,23 @@ when a command opens another modal (for example, `New Entry`).
 does not continuously rewrite `pickerExpanded`. This avoids reactive update-loop
 errors that can leave overlapping dialogs/focus traps on screen.
 
+The command palette can now be plugin-owned via a `UiContribution::CommandPalette`
+surface contribution. When no plugin owns the surface, the built-in fallback is
+limited to backup/import actions.
+
 ## Sidebar Layout
 
 The **left sidebar** (`LeftSidebar.svelte`) contains workspace-level concerns:
+
 - **Files** tab: workspace tree, problems panel
-- **Share** tab: live collaboration and publishing (`ShareTab.svelte`)
+- **Share** tab: live collaboration (`ShareTab.svelte`)
+- **Publish** tab: export + static site publishing (`publish/PublishTab.svelte`)
 - **Snapshots** tab: git snapshot history (`GitHistoryPanel.svelte`)
 
 The `WorkspaceSelector` and `AudienceFilter` sit above all tabs and are always visible.
 
 The **right sidebar** (`RightSidebar.svelte`) contains file-level concerns:
+
 - **Props** tab: frontmatter properties, attachments, audience, workspace config
 - **History** tab: CRDT change history for the current file
 
@@ -159,6 +168,17 @@ and the header still shows SyncStatusIndicator.
 Both `LiveCollaborationPanel` and `PublishingPanel` read the selected audience from
 `templateContextStore.previewAudience` (set by the `AudienceFilter` above the tabs)
 instead of having their own audience dropdowns.
+
+Publish/export surfaces are now also declared by plugin manifest contributions
+from the runtime `publish` Extism plugin (`diaryx_publish_extism`) and mapped by
+built-in component IDs:
+
+- `publish.panel` -> `publish/PublishTab`
+
+Left sidebar tree context menus can also be plugin-owned via
+`UiContribution::ContextMenu { target: LeftSidebarTree, ... }`. When no plugin
+owns this surface, the built-in fallback context menu is limited to
+backup/import actions.
 
 ## Sidebar Tree Performance
 

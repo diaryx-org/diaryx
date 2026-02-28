@@ -9,6 +9,7 @@ publish = false
 [features]
 default = []
 http = ["ureq"]
+wasi-runner = ["dep:wasmtime", "dep:wasi-common", "dep:tempfile"]
 
 [dependencies]
 diaryx_core.workspace = true
@@ -21,3 +22,8 @@ thiserror.workspace = true
 futures-lite = "2"
 base64 = "0.22"
 ureq = { version = "2", optional = true }
+
+# WASI module runner (for host_run_wasi_module)
+wasmtime = { version = "37", optional = true }
+wasi-common = { version = "37", optional = true, features = ["sync"] }
+tempfile = { version = "3", optional = true }

@@ -319,6 +319,7 @@ fn convert_guest_manifest(guest: &GuestManifest) -> PluginManifest {
             "custom_commands" => Some(PluginCapability::CustomCommands {
                 commands: guest.commands.clone(),
             }),
+            "editor_extension" => Some(PluginCapability::EditorExtension),
             other => {
                 log::warn!("Unknown capability: {other}");
                 None

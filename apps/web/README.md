@@ -42,6 +42,33 @@ bun run dev
 bun run build
 ```
 
+### Dev Host Consistency (WebKit)
+
+When running the web app in development, use `http://localhost:5174` rather
+than `127.0.0.1`. Mixing loopback hosts can cause WebKit to block module worker
+imports (COEP/access control), which breaks worker-backed WASM initialization.
+
+The app now redirects `127.0.0.1` to `localhost` in dev mode, and Vite uses a
+canonical localhost origin for non-Tauri web development.
+
+To support the Extism plugin worker fallback on browsers without JSPI, dev
+server responses include COOP/COEP headers by default so `crossOriginIsolated`
+can be enabled. To disable this temporarily, run with `VITE_DISABLE_COI=1`.
+
+Production builds also ship a static `_headers` file from `public/_headers` so
+deployed assets can be served with:
+
+- `Cross-Origin-Opener-Policy: same-origin`
+- `Cross-Origin-Embedder-Policy: require-corp`
+
+After deploy, verify with:
+
+```bash
+curl -I https://<your-app-host>/
+```
+
+and confirm `window.crossOriginIsolated === true` in the browser console.
+
 ## Architecture
 
 This is a plain Svelte 5 app (not SvelteKit). It uses a backend abstraction layer to support two runtime environments:

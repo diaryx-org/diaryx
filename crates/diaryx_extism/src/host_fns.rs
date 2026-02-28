@@ -161,6 +161,13 @@ pub fn register_host_functions(
             host_http_request,
         )
         .with_function(
+            "host_run_wasi_module",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_run_wasi_module,
+        )
+        .with_function(
             "host_ws_request",
             [ValType::I64],
             [ValType::I64],
@@ -449,6 +456,101 @@ fn host_storage_set(
     Ok(())
 }
 
+/// Host function: `host_run_wasi_module(input: WasiRunRequest) -> WasiRunResult`
+///
+/// Runs a WASI module stored in plugin storage. The guest provides a storage
+/// key, CLI arguments, optional stdin, virtual filesystem files, and a list
+/// of output files to capture. Only available when the `wasi-runner` feature
+/// is enabled.
+#[cfg(feature = "wasi-runner")]
+fn host_run_wasi_module(
+    plugin: &mut CurrentPlugin,
+    inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    use base64::Engine;
+
+    let input: String = plugin.memory_get_val(&inputs[0])?;
+    let request: crate::wasi_runner::WasiRunRequest = serde_json::from_str(&input)
+        .map_err(|e| ExtismError::msg(format!("host_run_wasi_module: invalid input: {e}")))?;
+
+    // Load the WASM module bytes from plugin storage
+    let ctx = user_data.get()?;
+    let ctx = ctx.lock().unwrap();
+    let wasm_bytes = ctx.storage.get(&request.module_key).ok_or_else(|| {
+        ExtismError::msg(format!(
+            "host_run_wasi_module: module not found in storage: {}",
+            request.module_key
+        ))
+    })?;
+    drop(ctx);
+
+    // Decode input files from base64
+    let decoded_files = if let Some(ref files) = request.files {
+        let mut map = std::collections::HashMap::new();
+        for (path, b64) in files {
+            let data = base64::engine::general_purpose::STANDARD
+                .decode(b64)
+                .map_err(|e| {
+                    ExtismError::msg(format!(
+                        "host_run_wasi_module: base64 decode for {path}: {e}"
+                    ))
+                })?;
+            map.insert(path.clone(), data);
+        }
+        Some(map)
+    } else {
+        None
+    };
+
+    // Decode stdin from base64
+    let stdin_bytes = if let Some(ref b64) = request.stdin {
+        Some(
+            base64::engine::general_purpose::STANDARD
+                .decode(b64)
+                .map_err(|e| {
+                    ExtismError::msg(format!("host_run_wasi_module: stdin base64 decode: {e}"))
+                })?,
+        )
+    } else {
+        None
+    };
+
+    // Run the module
+    let result = crate::wasi_runner::run_wasi_module(
+        &wasm_bytes,
+        &request.args,
+        stdin_bytes.as_deref(),
+        decoded_files.as_ref(),
+        request.output_files.as_deref(),
+    )
+    .map_err(|e| ExtismError::msg(format!("host_run_wasi_module: {e}")))?;
+
+    let json = serde_json::to_string(&result)
+        .map_err(|e| ExtismError::msg(format!("host_run_wasi_module: serialize: {e}")))?;
+
+    plugin.memory_set_val(&mut outputs[0], json.as_str())?;
+    Ok(())
+}
+
+/// Stub for `host_run_wasi_module` when the `wasi-runner` feature is not enabled.
+#[cfg(not(feature = "wasi-runner"))]
+fn host_run_wasi_module(
+    plugin: &mut CurrentPlugin,
+    _inputs: &[Val],
+    outputs: &mut [Val],
+    _user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    let error = serde_json::json!({
+        "exit_code": -1,
+        "stdout": "",
+        "stderr": "host_run_wasi_module: wasi-runner feature not enabled"
+    });
+    plugin.memory_set_val(&mut outputs[0], error.to_string().as_str())?;
+    Ok(())
+}
+
 /// Host function: `host_get_timestamp(input: "") -> timestamp_ms string`
 ///
 /// Returns the current timestamp in milliseconds since epoch.
@@ -494,6 +596,8 @@ fn host_http_request(
     outputs: &mut [Val],
     _user_data: UserData<HostContext>,
 ) -> Result<(), ExtismError> {
+    use base64::Engine as _;
+
     let input: String = plugin.memory_get_val(&inputs[0])?;
 
     #[derive(serde::Deserialize)]
@@ -509,6 +613,8 @@ fn host_http_request(
         status: u16,
         headers: std::collections::HashMap<String, String>,
         body: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        body_base64: Option<String>,
     }
 
     let parsed: HttpInput = serde_json::from_str(&input)
@@ -536,14 +642,18 @@ fn host_http_request(
             resp_headers.insert(name, value.to_string());
         }
     }
-    let body = response
-        .into_string()
+    let mut reader = response.into_reader();
+    let mut body_bytes = Vec::new();
+    std::io::Read::read_to_end(&mut reader, &mut body_bytes)
         .map_err(|e| ExtismError::msg(format!("host_http_request: read body: {e}")))?;
+    let body = String::from_utf8_lossy(&body_bytes).to_string();
+    let body_base64 = Some(base64::engine::general_purpose::STANDARD.encode(&body_bytes));
 
     let output = HttpOutput {
         status,
         headers: resp_headers,
         body,
+        body_base64,
     };
 
     let json = serde_json::to_string(&output)

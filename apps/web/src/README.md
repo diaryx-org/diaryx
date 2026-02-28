@@ -1,20 +1,20 @@
 ---
 title: web src
 description: Source code for the Diaryx web application
-part_of: '[README](/apps/web/README.md)'
+part_of: "[README](/apps/web/README.md)"
 contents:
-  - '[README](/apps/web/src/controllers/README.md)'
-  - '[README](/apps/web/src/lib/README.md)'
-  - '[README](/apps/web/src/models/README.md)'
-  - '[README](/apps/web/src/views/README.md)'
-  - '[LICENSE](/apps/web/src/LICENSE.md)'
+  - "[README](/apps/web/src/controllers/README.md)"
+  - "[README](/apps/web/src/lib/README.md)"
+  - "[README](/apps/web/src/models/README.md)"
+  - "[README](/apps/web/src/views/README.md)"
+  - "[LICENSE](/apps/web/src/LICENSE.md)"
 attachments:
-  - '[App.svelte](/apps/web/src/App.svelte)'
-  - '[main.ts](/apps/web/src/main.ts)'
-  - '[app.css](/apps/web/src/app.css)'
+  - "[App.svelte](/apps/web/src/App.svelte)"
+  - "[main.ts](/apps/web/src/main.ts)"
+  - "[app.css](/apps/web/src/app.css)"
 exclude:
-  - '*.lock'
-  - 'test/**'
+  - "*.lock"
+  - "test/**"
 ---
 
 # Diaryx Web Source
@@ -23,15 +23,15 @@ This directory contains the source code for the Diaryx web application.
 
 ## Structure
 
-| File/Directory | Purpose |
-|----------------|---------|
-| `App.svelte` | Main application component |
-| `main.ts` | Application entry point |
-| `app.css` | Global styles |
+| File/Directory | Purpose                         |
+| -------------- | ------------------------------- |
+| `App.svelte`   | Main application component      |
+| `main.ts`      | Application entry point         |
+| `app.css`      | Global styles                   |
 | `controllers/` | Controller logic for UI actions |
-| `lib/` | Shared libraries and components |
-| `models/` | Stores and services |
-| `views/` | View components |
+| `lib/`         | Shared libraries and components |
+| `models/`      | Stores and services             |
+| `views/`       | View components                 |
 
 ## Rename Behavior
 
@@ -63,8 +63,11 @@ from sync do not re-trigger local saves and create metadata/body sync cycles.
 
 ## Share Sidebar
 
-`lib/share/ShareTab.svelte` now hosts two share sub-tabs in the right sidebar:
+`lib/share/ShareTab.svelte` now hosts live collaboration in the left sidebar Share tab.
 
-- `Live Collaboration` for session hosting/joining.
-- `Publishing` for site setup, publish-now, and token management against
-  `/api/workspaces/{id}/site*` endpoints using the authenticated default workspace.
+`lib/publish/PublishTab.svelte` hosts export and publishing in the left sidebar
+Publish tab. It includes:
+
+- `Export` via `ExportDialog.svelte` using publish-plugin command dispatch.
+- `Site Publishing` UI (`PublishingPanel.svelte`) for setup, publish-now, and
+  token management against `/api/workspaces/{id}/site*` endpoints.

@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-02-28T15:32:16Z
+updated: 2026-02-28T23:14:40Z
 part_of: '[README](/README.md)'
 ---
 # Instructions for AI agents
@@ -30,6 +30,7 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │   │   │   ├── Extensions - TipTap editor extensions - apps/web/src/lib/extensions/README.md
 │   │   │   │   ├── History - Version history components - apps/web/src/lib/history/README.md
 │   │   │   │   ├── Hooks - Svelte hooks - apps/web/src/lib/hooks/README.md
+│   │   │   │   ├── Publish - Publishing and export UI components - apps/web/src/lib/publish/README.md
 │   │   │   │   ├── Settings - Settings panel components - apps/web/src/lib/settings/README.md
 │   │   │   │   ├── Share - Share session components - apps/web/src/lib/share/README.md
 │   │   │   │   ├── Storage - Storage abstraction layer - apps/web/src/lib/storage/README.md
@@ -67,6 +68,7 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │       ├── Workspace module - Workspace tree organization - crates/diaryx_core/src/workspace/README.md
 │   │       └── Import module - Import external formats into Diaryx entries - crates/diaryx_core/src/import/README.md
 │   ├── diaryx_publish - Publishing pipeline for Diaryx workspaces — converts markdown to HTML - crates/diaryx_publish/README.md
+│   ├── crates/diaryx_publish_extism/README.md
 │   ├── diaryx_wasm - WASM bindings for diaryx_core - crates/diaryx_wasm/README.md
 │   │   └── diaryx_wasm src - Source code for WASM bindings - crates/diaryx_wasm/src/README.md
 │   ├── diaryx_sync_server - Sync server used by frontends - crates/diaryx_sync_server/README.md

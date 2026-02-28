@@ -15,7 +15,34 @@
     Image,
     Paperclip,
   } from "@lucide/svelte";
-  import { EXPORT_FORMATS, PandocService, TypstService, type ExportFormat } from "$lib/export";
+  type ExportFormat =
+    | 'markdown'
+    | 'html'
+    | 'docx'
+    | 'epub'
+    | 'pdf'
+    | 'latex'
+    | 'odt'
+    | 'rst';
+
+  interface FormatInfo {
+    id: ExportFormat;
+    label: string;
+    extension: string;
+    binary: boolean;
+    requiresConverter: boolean;
+  }
+
+  const FALLBACK_EXPORT_FORMATS: FormatInfo[] = [
+    { id: 'markdown', label: 'Markdown', extension: '.md', binary: false, requiresConverter: false },
+    { id: 'html', label: 'HTML', extension: '.html', binary: false, requiresConverter: false },
+    { id: 'pdf', label: 'PDF', extension: '.pdf', binary: true, requiresConverter: true },
+    { id: 'docx', label: 'Word (DOCX)', extension: '.docx', binary: true, requiresConverter: true },
+    { id: 'epub', label: 'EPUB', extension: '.epub', binary: true, requiresConverter: true },
+    { id: 'latex', label: 'LaTeX', extension: '.tex', binary: false, requiresConverter: true },
+    { id: 'odt', label: 'OpenDocument (ODT)', extension: '.odt', binary: true, requiresConverter: true },
+    { id: 'rst', label: 'reStructuredText', extension: '.rst', binary: false, requiresConverter: true },
+  ];
 
   interface Props {
     open: boolean;
@@ -39,17 +66,15 @@
   let isExporting = $state(false);
   let error: string | null = $state(null);
   let expandedNodes = $state(new Set<string>());
+  let exportFormats = $state<FormatInfo[]>(FALLBACK_EXPORT_FORMATS);
   let selectedFormat = $state<ExportFormat>('markdown');
-  let pandocProgress = $state('');
-
-  // Lazy-created services (only instantiated when needed)
-  let pandocService: PandocService | null = null;
-  let typstService: TypstService | null = null;
+  let converterProgress = $state('');
 
   // Load audiences when dialog opens
   $effect(() => {
     if (open && api && rootPath) {
       loadAudiences();
+      loadExportFormats();
     }
   });
 
@@ -83,6 +108,80 @@
       return value.map(normalizeToObject);
     }
     return value;
+  }
+
+  async function executePublishCommand<T = any>(
+    command: string,
+    params: Record<string, any> = {},
+  ): Promise<T> {
+    if (!api) throw new Error("Export API unavailable");
+
+    const browserPlugins = await import("$lib/plugins/browserPluginManager.svelte");
+    const browserPublish = browserPlugins.getPlugin("publish");
+    if (browserPublish) {
+      const result = await browserPlugins.dispatchCommand("publish", command, params);
+      if (!result.success) {
+        throw new Error(result.error ?? `Publish command failed: ${command}`);
+      }
+      return normalizeToObject(result.data) as T;
+    }
+
+    const data = await api.executePluginCommand("publish", command, params as any);
+    return normalizeToObject(data) as T;
+  }
+
+  function normalizeFormatInfo(raw: any): FormatInfo | null {
+    const id = raw?.id as ExportFormat | undefined;
+    if (!id) return null;
+
+    const extensionRaw = String(raw.extension ?? "md");
+    const extension = extensionRaw.startsWith(".") ? extensionRaw : `.${extensionRaw}`;
+    const requiresConverter = Boolean(raw.requiresConverter ?? raw.requires_converter ?? false);
+    const binary = Boolean(raw.binary ?? ["pdf", "docx", "epub", "odt"].includes(id));
+
+    return {
+      id,
+      label: String(raw.label ?? id.toUpperCase()),
+      extension,
+      binary,
+      requiresConverter,
+    };
+  }
+
+  async function loadExportFormats() {
+    try {
+      const rawFormats = await executePublishCommand<any[]>("GetExportFormats", {});
+      const mapped = (rawFormats ?? [])
+        .map(normalizeFormatInfo)
+        .filter((entry): entry is FormatInfo => entry !== null);
+
+      if (mapped.length > 0) {
+        exportFormats = mapped;
+        if (!mapped.some((f) => f.id === selectedFormat)) {
+          selectedFormat = mapped[0].id;
+        }
+      }
+    } catch (e) {
+      console.warn("[ExportDialog] Falling back to built-in format list:", e);
+      exportFormats = FALLBACK_EXPORT_FORMATS;
+    }
+  }
+
+  function uint8ArrayToBase64(data: Uint8Array): string {
+    let binary = "";
+    for (let i = 0; i < data.length; i++) {
+      binary += String.fromCharCode(data[i]);
+    }
+    return btoa(binary);
+  }
+
+  function base64ToUint8Array(b64: string): Uint8Array {
+    const binary = atob(b64);
+    const data = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      data[i] = binary.charCodeAt(i);
+    }
+    return data;
   }
 
   async function loadExportPlan() {
@@ -125,70 +224,65 @@
 
     isExporting = true;
     error = null;
-    pandocProgress = '';
+    converterProgress = '';
     try {
       const audience = selectedAudience === "all" ? "*" : selectedAudience;
-      const formatInfo = EXPORT_FORMATS.find(f => f.id === selectedFormat)!;
+      const formatInfo = exportFormats.find((f) => f.id === selectedFormat);
+      if (!formatInfo) {
+        throw new Error(`Unknown export format: ${selectedFormat}`);
+      }
 
-      if (formatInfo.requiresPandoc) {
-        // Pandoc format — get markdown files, then convert via WASM worker
+      if (formatInfo.requiresConverter) {
         const rawFiles = await api.exportToMemory(rootPath, audience);
         const files = normalizeToObject(rawFiles) ?? [];
         const rawBinaryFiles = await api.exportBinaryAttachments(rootPath, audience);
         const binaries = normalizeToObject(rawBinaryFiles) ?? [];
 
-        pandocProgress = 'Loading pandoc (first time may take a moment)...';
-        if (!pandocService) pandocService = new PandocService();
-        await pandocService.ensureReady();
+        const availability = await executePublishCommand<any>("IsConverterAvailable", {
+          name: "pandoc",
+        });
+        const converterAvailable =
+          typeof availability === "boolean"
+            ? availability
+            : Boolean(availability?.available);
 
-        // For PDF, also load the Typst compiler (pandoc produces typst source, typst compiles to PDF)
-        const isPdf = selectedFormat === 'pdf';
-        if (isPdf) {
-          pandocProgress = 'Loading typst compiler (first time may take a moment)...';
-          if (!typstService) typstService = new TypstService();
-          await typstService.ensureReady();
+        if (!converterAvailable) {
+          converterProgress = 'Downloading converter (first time only)...';
+          await executePublishCommand("DownloadConverter", { name: "pandoc" });
         }
 
-        // Build resource map for embedded images
-        const resources: Record<string, Uint8Array> = {};
+        const resources: Record<string, string> = {};
         for (const info of binaries) {
           try {
             const data = await api.readBinary(info.source_path);
-            resources[info.relative_path] = data;
+            resources[info.relative_path] = uint8ArrayToBase64(data);
           } catch (e) {
             console.warn(`[Export] Failed to read binary ${info.source_path}:`, e);
           }
         }
 
-        // Convert each file
         const convertedFiles: { path: string; data: Uint8Array | string }[] = [];
         for (let i = 0; i < files.length; i++) {
-          pandocProgress = `Converting ${i + 1}/${files.length}: ${files[i].path}`;
-          const result = await pandocService.convert(files[i].content, selectedFormat, resources);
+          converterProgress = `Converting ${i + 1}/${files.length}: ${files[i].path}`;
+          const result = await executePublishCommand<any>("ConvertFormat", {
+            content: files[i].content,
+            from: "markdown",
+            to: selectedFormat,
+            resources,
+          });
           const newPath = files[i].path.replace(/\.md$/, formatInfo.extension);
 
-          if (isPdf) {
-            // PDF: pandoc returns typst source in stdout, compile to PDF with typst
-            const typstSource = result.stdout ?? '';
-            pandocProgress = `Generating PDF ${i + 1}/${files.length}: ${files[i].path}`;
-            const pdfBytes = await typstService!.compile(typstSource);
-            convertedFiles.push({ path: newPath, data: pdfBytes });
-          } else if (formatInfo.binary) {
-            // Binary output (docx, epub, odt)
-            const outputKey = result.outputFilename ?? Object.keys(result.files ?? {})[0];
-            const outputFile = outputKey ? result.files?.[outputKey] : null;
-            if (outputFile) {
-              convertedFiles.push({ path: newPath, data: outputFile });
-            } else {
-              console.warn(`[Export] No binary output for ${files[i].path}`, result);
+          if (formatInfo.binary) {
+            if (!result?.binary) {
+              throw new Error(`No binary output returned for ${files[i].path}`);
             }
+            convertedFiles.push({ path: newPath, data: base64ToUint8Array(result.binary) });
           } else {
-            // Text output (latex, rst)
-            convertedFiles.push({ path: newPath, data: result.stdout ?? '' });
+            convertedFiles.push({ path: newPath, data: String(result?.content ?? '') });
           }
         }
 
-        pandocProgress = '';
+        converterProgress = '';
         await downloadConvertedAsZip(convertedFiles, formatInfo.binary ? [] : binaries);
       } else if (selectedFormat === 'html') {
         // Use existing HTML pipeline
@@ -209,7 +303,7 @@
       open = false;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
-      pandocProgress = '';
+      converterProgress = '';
     } finally {
       isExporting = false;
     }
@@ -386,17 +480,17 @@
       <div class="flex items-center gap-2">
         <label for="format-select" class="text-sm font-medium w-20">Format:</label>
         <NativeSelect id="format-select" bind:value={selectedFormat} class="flex-1">
-          {#each EXPORT_FORMATS as fmt}
+          {#each exportFormats as fmt}
             <option value={fmt.id}>{fmt.label}</option>
           {/each}
         </NativeSelect>
       </div>
 
-      <!-- Pandoc loading indicator -->
-      {#if pandocProgress}
+      <!-- Converter loading indicator -->
+      {#if converterProgress}
         <div class="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 class="size-4 animate-spin" />
-          <span>{pandocProgress}</span>
+          <span>{converterProgress}</span>
         </div>
       {/if}
 

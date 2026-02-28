@@ -21,6 +21,7 @@ sync = ["dep:diaryx_sync", "dep:yrs", "diaryx_sync/browser-js"]
 
 [dependencies]
 diaryx_core = { path = "../diaryx_core", features = ["import-dayone", "import-markdown", "templating"] }
+diaryx_publish = { path = "../diaryx_publish" }
 diaryx_sync = { path = "../diaryx_sync", optional = true }
 wasm-bindgen = "0.2"
 yrs = { version = "0.25", optional = true }
@@ -35,6 +36,7 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 pathdiff = "0.2"
 comrak = "0.49"
 log = "0.4"
+async-trait = "0.1"
 console_log = { version = "1.0", features = ["color"] }
 
 # Browser-only storage backends (gated behind "browser" feature)
@@ -49,6 +51,18 @@ web-sys = { version = "0.3", optional = true, features = [
   "WorkerGlobalScope",
   "WorkerNavigator",
   "FileSystemDirectoryHandle",
+  # WebSocket transport
+  "WebSocket",
+  "MessageEvent",
+  "CloseEvent",
+  "ErrorEvent",
+  "BinaryType",
+  "Blob",
+  # HTTP fetch (snapshot download, share sessions)
+  "Request",
+  "RequestInit",
+  "Headers",
+  "Response",
 ] }
 
 # The `console_error_panic_hook` crate provides better debugging of panics by

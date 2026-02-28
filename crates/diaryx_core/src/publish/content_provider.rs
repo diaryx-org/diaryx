@@ -29,6 +29,10 @@ pub struct MaterializedFile {
 ///
 /// This trait breaks the dependency between publishing and sync — a publisher
 /// can work with any content source that implements this trait.
+///
+/// On native targets, implementors must be `Send + Sync`. On WASM, these
+/// bounds are relaxed since everything is single-threaded.
+#[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
 pub trait ContentProvider: Send + Sync {
     /// Materialize all publishable files from the workspace.
@@ -38,6 +42,20 @@ pub trait ContentProvider: Send + Sync {
     ///
     /// Returns `(storage_key, mime_type)` keyed by the workspace-relative
     /// attachment path.
+    async fn get_attachment_map(
+        &self,
+        workspace_id: &str,
+    ) -> Result<HashMap<String, (String, String)>, String>;
+}
+
+/// WASM variant without `Send + Sync` bounds (single-threaded environment).
+#[cfg(target_arch = "wasm32")]
+#[async_trait(?Send)]
+pub trait ContentProvider {
+    /// Materialize all publishable files from the workspace.
+    async fn materialize_files(&self, workspace_id: &str) -> Result<Vec<MaterializedFile>, String>;
+
+    /// Get a mapping of attachment references to their storage locations.
     async fn get_attachment_map(
         &self,
         workspace_id: &str,

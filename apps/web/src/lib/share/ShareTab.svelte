@@ -1,13 +1,11 @@
 <script lang="ts">
   import LiveCollaborationPanel from './LiveCollaborationPanel.svelte';
-  import PublishingPanel from './PublishingPanel.svelte';
   import type { Api } from '$lib/backend/api';
 
   interface Props {
     onSessionStart?: () => void;
     onSessionEnd?: () => void;
     onBeforeHost?: (audience: string | null) => Promise<void>;
-    onAddWorkspace?: () => void;
     onOpenEntry?: (path: string) => Promise<void>;
     api: Api | null;
     triggerStart?: boolean;
@@ -18,45 +16,18 @@
     onSessionStart,
     onSessionEnd,
     onBeforeHost,
-    onAddWorkspace,
     onOpenEntry,
-    api,
+    api: _api,
     triggerStart = false,
     onTriggerStartConsumed,
   }: Props = $props();
-
-  type ShareSubTab = 'live-collaboration' | 'publishing';
-  let shareSubTab: ShareSubTab = $state('live-collaboration');
 </script>
 
-<div class="px-3 pt-3 pb-1">
-  <div class="flex items-center gap-1 bg-muted rounded-md p-0.5">
-    <button
-      type="button"
-      class="flex-1 px-2 py-1 text-[11px] font-medium rounded transition-colors {shareSubTab === 'live-collaboration' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-      onclick={() => (shareSubTab = 'live-collaboration')}
-    >
-      Live Collaboration
-    </button>
-    <button
-      type="button"
-      class="flex-1 px-2 py-1 text-[11px] font-medium rounded transition-colors {shareSubTab === 'publishing' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-      onclick={() => (shareSubTab = 'publishing')}
-    >
-      Publishing
-    </button>
-  </div>
-</div>
-
-{#if shareSubTab === 'live-collaboration'}
-  <LiveCollaborationPanel
-    {onSessionStart}
-    {onSessionEnd}
-    {onBeforeHost}
-    {onOpenEntry}
-    {triggerStart}
-    {onTriggerStartConsumed}
-  />
-{:else}
-  <PublishingPanel {onAddWorkspace} {api} />
-{/if}
+<LiveCollaborationPanel
+  {onSessionStart}
+  {onSessionEnd}
+  {onBeforeHost}
+  {onOpenEntry}
+  {triggerStart}
+  {onTriggerStartConsumed}
+/>

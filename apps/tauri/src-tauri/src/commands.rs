@@ -583,6 +583,9 @@ pub async fn execute<R: Runtime>(
                     let mut d = Diaryx::new(decorated.fs.clone());
                     d.plugin_registry_mut()
                         .register_workspace_plugin(Arc::new(sync_plugin));
+                    d.plugin_registry_mut().register_workspace_plugin(Arc::new(
+                        diaryx_publish::PublishPlugin::new(decorated.fs.clone()),
+                    ));
                     if let Some(ref ws_path) = workspace_path {
                         log::debug!("[execute] Setting workspace root: {:?}", ws_path);
                         d.set_workspace_root(ws_path.clone());
@@ -609,6 +612,9 @@ pub async fn execute<R: Runtime>(
                     let mut d = Diaryx::new(decorated.fs.clone());
                     d.plugin_registry_mut()
                         .register_workspace_plugin(Arc::new(sync_plugin));
+                    d.plugin_registry_mut().register_workspace_plugin(Arc::new(
+                        diaryx_publish::PublishPlugin::new(decorated.fs.clone()),
+                    ));
                     if let Some(ref ws_path) = workspace_path {
                         d.set_workspace_root(ws_path.clone());
                         decorated.set_workspace_root(ws_path.clone());
@@ -2309,6 +2315,11 @@ pub async fn finish_import_upload<R: Runtime>(
         diaryx
             .plugin_registry_mut()
             .register_workspace_plugin(Arc::new(sync_plugin));
+        diaryx
+            .plugin_registry_mut()
+            .register_workspace_plugin(Arc::new(diaryx_publish::PublishPlugin::new(
+                decorated.fs.clone(),
+            )));
 
         // Initialize CRDT by scanning workspace
         let cmd = Command::InitializeWorkspaceCrdt {

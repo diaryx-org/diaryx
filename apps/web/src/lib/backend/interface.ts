@@ -490,17 +490,18 @@ export interface Backend {
 
   /**
    * Start native WebSocket sync to a server.
-   * Only available in Tauri - uses the native Rust sync client.
+   * Available in Tauri (native Rust sync client) and WASM (Rust-owned WebSocket).
    *
    * @param serverUrl The WebSocket server URL (will be converted to ws:// if http://)
-   * @param docName The document name for sync (e.g., "workspace" or "workspaceId:workspace")
+   * @param docNameOrWorkspaceId The document name (Tauri) or workspace ID (WASM) for sync
    * @param authToken Optional JWT auth token
+   * @param sessionCode Optional share session code (WASM only)
    */
-  startSync?(serverUrl: string, docName: string, authToken?: string): Promise<void>;
+  startSync?(serverUrl: string, docNameOrWorkspaceId: string, authToken?: string, sessionCode?: string): Promise<void>;
 
   /**
-   * Stop native WebSocket sync.
-   * Only available in Tauri.
+   * Stop WebSocket sync.
+   * Available in Tauri and WASM.
    */
   stopSync?(): Promise<void>;
 
@@ -527,13 +528,32 @@ export interface Backend {
    */
   onSyncEvent?(callback: SyncEventCallback): () => void;
 
+  /**
+   * Focus on specific files for body sync.
+   * Available in WASM (Rust-owned transport).
+   */
+  focusSyncFiles?(files: string[]): Promise<void>;
+
+  /**
+   * Unfocus specific files.
+   * Available in WASM (Rust-owned transport).
+   */
+  unfocusSyncFiles?(files: string[]): Promise<void>;
+
+  /**
+   * Request body sync for specific files.
+   * Available in WASM (Rust-owned transport).
+   */
+  requestBodySync?(files: string[]): Promise<void>;
+
   // =========================================================================
-  // WasmSyncClient (inject/poll bridge for WASM/web)
+  // WasmSyncClient (inject/poll bridge for WASM/web) — DEPRECATED
+  // Use startSync/stopSync and focusSyncFiles/unfocusSyncFiles instead.
   // =========================================================================
 
-  /** Create a WasmSyncClient in the worker. */
+  /** Create a WasmSyncClient in the worker. DEPRECATED: Use startSync(). */
   createSyncClient?(serverUrl: string, workspaceId: string, authToken?: string): Promise<void>;
-  /** Destroy the sync client. */
+  /** Destroy the sync client. DEPRECATED: Use stopSync(). */
   destroySyncClient?(): Promise<void>;
   /** Get the WebSocket URL for the sync client. */
   syncGetWsUrl?(): Promise<string>;

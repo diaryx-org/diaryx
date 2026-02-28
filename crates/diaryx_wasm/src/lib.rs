@@ -40,9 +40,13 @@ mod js_async_fs;
 mod opfs_fs;
 mod utils;
 #[cfg(feature = "sync")]
+mod wasm_http;
+#[cfg(feature = "sync")]
 mod wasm_sqlite_storage;
 #[cfg(feature = "sync")]
 mod wasm_sync_client;
+#[cfg(feature = "sync")]
+mod wasm_transport;
 
 // Re-export WASM SQLite storage for external use
 #[cfg(feature = "sync")]

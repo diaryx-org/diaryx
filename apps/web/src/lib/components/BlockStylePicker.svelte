@@ -13,6 +13,7 @@
     ChevronDown,
   } from "@lucide/svelte";
   import type { Component } from "svelte";
+  import { getPluginStore } from "@/models/stores/pluginStore.svelte";
 
   interface Props {
     editor: Editor | null;
@@ -22,6 +23,8 @@
 
   let { editor, open = $bindable(false), onOpen }: Props = $props();
   let wrapperElement: HTMLDivElement | null = $state(null);
+
+  const pluginBlockCommands = $derived(getPluginStore().editorInsertCommands.block);
 
   type BlockType =
     | "paragraph"
@@ -230,6 +233,23 @@
             role="menuitem"
           >
             <option.icon class="size-4" />
+          </button>
+        {/each}
+        {#each pluginBlockCommands as cmd (cmd.extensionId)}
+          <button
+            type="button"
+            class="icon-button"
+            onclick={() => {
+              editor?.chain().focus().insertContent({
+                type: cmd.extensionId,
+                attrs: { source: '' },
+              }).run();
+              open = false;
+            }}
+            title={cmd.label}
+            role="menuitem"
+          >
+            <cmd.icon class="size-4" />
           </button>
         {/each}
       </div>

@@ -4021,7 +4021,13 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     }
 }
 
+#[cfg(test)]
 mod tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    use crate::fs::{InMemoryFileSystem, SyncToAsyncFs};
+    use futures_lite::future::block_on;
 
     // =========================================================================
     // normalize_contents_path tests

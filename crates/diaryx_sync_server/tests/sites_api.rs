@@ -33,6 +33,10 @@ fn setup() -> (
 
     let user_a = repo.get_or_create_user("sites-a@example.com").unwrap();
     let user_b = repo.get_or_create_user("sites-b@example.com").unwrap();
+    repo.set_user_published_site_limit(&user_a, Some(1))
+        .expect("set user_a site limit");
+    repo.set_user_published_site_limit(&user_b, Some(1))
+        .expect("set user_b site limit");
 
     let device_a = repo.create_device(&user_a, Some("a"), None).unwrap();
     let device_b = repo.create_device(&user_b, Some("b"), None).unwrap();
@@ -143,6 +147,10 @@ async fn publish_respects_audience_filtering_for_public_and_private_groups() {
         "family-only.md".to_string(),
     ]);
     root.audience = Some(vec!["family".to_string(), "ENGL212".to_string()]);
+    root.extra.insert(
+        "public_audience".to_string(),
+        serde_json::Value::String("public".to_string()),
+    );
     workspace.set_file("README.md", root).expect("set root");
     body_docs
         .get_or_create(&format!("body:{}/README.md", workspace_a))

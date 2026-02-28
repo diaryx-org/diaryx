@@ -57,12 +57,12 @@
     background-image:
       radial-gradient(
         ellipse 70% 60% at var(--orb1-x) var(--orb1-y),
-        color-mix(in oklch, var(--primary) 8%, transparent) 0%,
+        color-mix(in oklch, var(--primary) 12%, transparent) 0%,
         transparent 60%
       ),
       radial-gradient(
         ellipse 60% 70% at var(--orb2-x) var(--orb2-y),
-        color-mix(in oklch, var(--ring) 5%, transparent) 0%,
+        color-mix(in oklch, var(--ring) 8%, transparent) 0%,
         transparent 60%
       );
     animation: ambientShift 22s ease-in-out infinite;

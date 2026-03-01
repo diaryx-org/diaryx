@@ -68,7 +68,6 @@ let eventPort: MessagePort | null = null;
 let fsEventSubscriptionId: number | null = null;
 
 // WasmSyncClient instance (created by createSyncClient, lives in worker)
-let syncClient: any | null = null;
 
 // Stored init params for lazy CRDT storage setup
 let _storedStorageType: StorageType | null = null;
@@ -321,6 +320,33 @@ async function doSetupCrdtStorage(): Promise<void> {
 }
 
 /**
+ * Handle a SnapshotDownloaded event from Rust.
+ * Imports the zip blob into the backend, then notifies Rust that import is done.
+ */
+async function handleSnapshotDownloaded(blob: Blob, workspaceId: string): Promise<void> {
+  try {
+    console.log(`[WasmWorker] Snapshot downloaded for ${workspaceId}, importing...`);
+    const file = new File([blob], "snapshot.zip", { type: "application/zip" });
+    const b = getBackend();
+    await workerApi.importFromZip(file);
+    // Notify Rust that the snapshot was imported so the handshake can continue
+    if (b.notifySnapshotImported) {
+      b.notifySnapshotImported();
+    }
+    console.log(`[WasmWorker] Snapshot import complete for ${workspaceId}`);
+  } catch (e) {
+    console.error("[WasmWorker] Failed to import snapshot:", e);
+    // Still notify so the handshake doesn't hang
+    try {
+      const b = getBackend();
+      if (b.notifySnapshotImported) {
+        b.notifySnapshotImported();
+      }
+    } catch { /* ignore */ }
+  }
+}
+
+/**
  * Initialize the backend and set up event forwarding.
  */
 async function init(
@@ -401,9 +427,17 @@ async function init(
     );
   }
 
-  // Subscribe to filesystem events and forward them to the main thread
+  // Subscribe to filesystem events and forward them to the main thread.
+  // The callback receives either a JSON string (FileSystemEvent) or a raw
+  // JS object (e.g. SnapshotDownloaded with a Blob).
   if (backend.onFileSystemEvent && eventPort) {
-    fsEventSubscriptionId = backend.onFileSystemEvent((eventJson: string) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    fsEventSubscriptionId = backend.onFileSystemEvent((eventJson: any) => {
+      // Raw JS object events (e.g. SnapshotDownloaded) are objects, not strings
+      if (typeof eventJson === "object" && eventJson?.type === "SnapshotDownloaded") {
+        handleSnapshotDownloaded(eventJson.blob, eventJson.workspace_id);
+        return;
+      }
       // Forward the event JSON to the main thread via MessagePort
       try {
         eventPort!.postMessage({ type: "FileSystemEvent", data: eventJson });
@@ -801,186 +835,7 @@ export const workerApi = {
   },
 
   // =========================================================================
-  // Sync Client (WasmSyncClient inject/poll bridge) — DEPRECATED
-  // Use the Rust-owned sync API below instead.
-  // =========================================================================
-
-  /**
-   * Create a WasmSyncClient for the given workspace.
-   * DEPRECATED: Use startSync() instead.
-   */
-  createSyncClient(
-    serverUrl: string,
-    workspaceId: string,
-    authToken?: string,
-  ): void {
-    if (syncClient) {
-      console.warn("[WasmWorker] Destroying existing sync client");
-      syncClient.free?.();
-      syncClient = null;
-    }
-    syncClient = getBackend().createSyncClient(
-      serverUrl,
-      workspaceId,
-      authToken ?? null,
-    );
-    console.log(
-      "[WasmWorker] Created WasmSyncClient for workspace:",
-      workspaceId,
-    );
-  },
-
-  /**
-   * Destroy the sync client.
-   * DEPRECATED: Use stopSync() instead.
-   */
-  destroySyncClient(): void {
-    if (syncClient) {
-      syncClient.free?.();
-      syncClient = null;
-      console.log("[WasmWorker] Sync client destroyed");
-    }
-  },
-
-  /**
-   * Get the WebSocket URL from the sync client.
-   */
-  syncGetWsUrl(): string {
-    if (!syncClient) throw new Error("Sync client not created");
-    return syncClient.getWsUrl();
-  },
-
-  /**
-   * Set the session code on the sync client.
-   */
-  syncSetSessionCode(code: string): void {
-    if (!syncClient) throw new Error("Sync client not created");
-    syncClient.setSessionCode(code);
-  },
-
-  /**
-   * Notify the sync client that the WebSocket connected.
-   * Returns void — poll outgoing queues and events after this.
-   */
-  async syncOnConnected(): Promise<void> {
-    if (!syncClient) throw new Error("Sync client not created");
-    await syncClient.onConnected();
-  },
-
-  /**
-   * Inject a binary WebSocket message into the sync client.
-   */
-  async syncOnBinaryMessage(data: Uint8Array): Promise<void> {
-    if (!syncClient) throw new Error("Sync client not created");
-    await syncClient.onBinaryMessage(data);
-  },
-
-  /**
-   * Inject a batch of binary WebSocket messages into the sync client.
-   * More efficient than individual calls across the Comlink boundary.
-   */
-  async syncOnBinaryMessages(messages: Uint8Array[]): Promise<void> {
-    if (!syncClient) throw new Error("Sync client not created");
-    for (const msg of messages) {
-      await syncClient.onBinaryMessage(msg);
-    }
-  },
-
-  /**
-   * Inject a text WebSocket message into the sync client.
-   */
-  async syncOnTextMessage(text: string): Promise<void> {
-    if (!syncClient) throw new Error("Sync client not created");
-    await syncClient.onTextMessage(text);
-  },
-
-  /**
-   * Inject a batch of text WebSocket messages into the sync client.
-   * More efficient than individual calls across the Comlink boundary.
-   */
-  async syncOnTextMessages(messages: string[]): Promise<void> {
-    if (!syncClient) throw new Error("Sync client not created");
-    for (const msg of messages) {
-      await syncClient.onTextMessage(msg);
-    }
-  },
-
-  /**
-   * Notify the sync client that the WebSocket disconnected.
-   */
-  async syncOnDisconnected(): Promise<void> {
-    if (!syncClient) throw new Error("Sync client not created");
-    await syncClient.onDisconnected();
-  },
-
-  /**
-   * Notify the sync client that a snapshot was imported.
-   */
-  async syncOnSnapshotImported(): Promise<void> {
-    if (!syncClient) throw new Error("Sync client not created");
-    await syncClient.onSnapshotImported();
-  },
-
-  /**
-   * Queue a local CRDT update for the sync client to send.
-   */
-  async syncQueueLocalUpdate(docId: string, data: Uint8Array): Promise<void> {
-    if (!syncClient) throw new Error("Sync client not created");
-    await syncClient.queueLocalUpdate(docId, data);
-  },
-
-  /**
-   * Drain all outgoing data and events from the sync client.
-   * Returns an object with binary messages, text messages, and events.
-   * This is more efficient than individual poll calls across the worker boundary.
-   */
-  syncDrain(): { binary: Uint8Array[]; text: string[]; events: string[] } {
-    if (!syncClient) return { binary: [], text: [], events: [] };
-
-    const binary: Uint8Array[] = [];
-    const text: string[] = [];
-    const events: string[] = [];
-
-    let msg;
-    while ((msg = syncClient.pollOutgoingBinary())) {
-      binary.push(msg);
-    }
-    while ((msg = syncClient.pollOutgoingText())) {
-      text.push(msg);
-    }
-    while ((msg = syncClient.pollEvent())) {
-      events.push(msg);
-    }
-
-    return { binary, text, events };
-  },
-
-  /**
-   * Send focus messages for specific files.
-   */
-  syncFocusFiles(files: string[]): void {
-    if (!syncClient) return;
-    syncClient.focusFiles(files);
-  },
-
-  /**
-   * Send unfocus messages for specific files.
-   */
-  syncUnfocusFiles(files: string[]): void {
-    if (!syncClient) return;
-    syncClient.unfocusFiles(files);
-  },
-
-  /**
-   * Request body sync for specific files (lazy sync on demand).
-   */
-  async syncBodyFiles(files: string[]): Promise<void> {
-    if (!syncClient) return;
-    await syncClient.syncBodyFiles(files);
-  },
-
-  // =========================================================================
-  // Rust-Owned Sync (Rust owns the WebSocket — replaces poll-based bridge)
+  // Rust-Owned Sync (Rust owns the WebSocket)
   // =========================================================================
 
   /**
@@ -1034,6 +889,59 @@ export const workerApi = {
    */
   requestBodySync(files: string[]): void {
     getBackend().requestBodySync(files);
+  },
+
+  /**
+   * Notify Rust that a snapshot import has completed.
+   */
+  notifySnapshotImported(): void {
+    const b = getBackend();
+    if (b.notifySnapshotImported) {
+      b.notifySnapshotImported();
+    }
+  },
+
+  // =========================================================================
+  // Share Session REST API (Rust-backed)
+  // =========================================================================
+
+  async createShareSession(serverUrl: string, workspaceId: string, authToken: string, readOnly: boolean): Promise<any> {
+    return getBackend().createShareSession(serverUrl, workspaceId, authToken, readOnly);
+  },
+
+  async lookupShareSession(serverUrl: string, joinCode: string, authToken?: string): Promise<any> {
+    return getBackend().lookupShareSession(serverUrl, joinCode, authToken);
+  },
+
+  async deleteShareSession(serverUrl: string, joinCode: string, authToken: string): Promise<void> {
+    return getBackend().deleteShareSession(serverUrl, joinCode, authToken);
+  },
+
+  async setShareSessionReadOnly(serverUrl: string, joinCode: string, authToken: string, readOnly: boolean): Promise<void> {
+    return getBackend().setShareSessionReadOnly(serverUrl, joinCode, authToken, readOnly);
+  },
+
+  // =========================================================================
+  // Attachment Sync (Rust-backed)
+  // =========================================================================
+
+  async syncUploadAttachment(
+    serverUrl: string, authToken: string, workspaceId: string,
+    entryPath: string, attachmentPath: string, hash: string,
+    mimeType: string, data: Uint8Array,
+  ): Promise<void> {
+    return getBackend().uploadAttachment(
+      serverUrl, authToken, workspaceId,
+      entryPath, attachmentPath, hash,
+      mimeType, Array.from(data),
+    );
+  },
+
+  async syncDownloadAttachment(
+    serverUrl: string, authToken: string, workspaceId: string, hash: string,
+  ): Promise<Uint8Array> {
+    const bytes = await getBackend().downloadAttachment(serverUrl, authToken, workspaceId, hash);
+    return new Uint8Array(bytes);
   },
 
   // =========================================================================

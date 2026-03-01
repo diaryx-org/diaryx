@@ -180,26 +180,36 @@ export async function createShareSession(workspaceId: string, readOnly: boolean 
       throw new Error('Authentication required to create a session');
     }
 
-    const response = await proxyFetch(`${baseUrl}/api/sessions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        workspace_id: workspaceId,
-        read_only: readOnly,
-      }),
-    });
+    const backend = workspaceStore.backend;
+    let joinCode: string;
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: 'Failed to create session' }));
-      shareSessionStore.setError(error.error || 'Failed to create session');
-      throw new Error(error.error || 'Failed to create session');
+    if (backend?.createShareSession) {
+      // Use Rust-backed REST client
+      const result = await backend.createShareSession(baseUrl, workspaceId, token, readOnly);
+      joinCode = result.code;
+    } else {
+      // Fallback to proxyFetch
+      const response = await proxyFetch(`${baseUrl}/api/sessions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          workspace_id: workspaceId,
+          read_only: readOnly,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Failed to create session' }));
+        shareSessionStore.setError(error.error || 'Failed to create session');
+        throw new Error(error.error || 'Failed to create session');
+      }
+
+      const sessionData = await response.json();
+      joinCode = sessionData.code;
     }
-
-    const sessionData = await response.json();
-    const joinCode = sessionData.code;
 
     console.log('[ShareService] Session created via REST API:', joinCode);
 
@@ -325,12 +335,21 @@ export async function joinShareSession(joinCode: string): Promise<string> {
   const baseUrl = getBaseServerUrl();
   let sessionInfo: { workspace_id: string; read_only: boolean };
   try {
-    const resp = await proxyFetch(`${baseUrl}/api/sessions/${encodeURIComponent(normalizedCode)}`);
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({ error: 'Session not found' }));
-      throw new Error(err.error || 'Session not found');
+    // Use the original backend (before guest swap) for REST lookup
+    const lookupBackend = originalBackend || workspaceStore.backend;
+    if (lookupBackend?.lookupShareSession) {
+      // Use Rust-backed REST client
+      const result = await lookupBackend.lookupShareSession(baseUrl, normalizedCode);
+      sessionInfo = { workspace_id: result.workspace_id, read_only: result.read_only };
+    } else {
+      // Fallback to proxyFetch
+      const resp = await proxyFetch(`${baseUrl}/api/sessions/${encodeURIComponent(normalizedCode)}`);
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ error: 'Session not found' }));
+        throw new Error(err.error || 'Session not found');
+      }
+      sessionInfo = await resp.json();
     }
-    sessionInfo = await resp.json();
     console.log('[ShareService] Session lookup:', sessionInfo);
   } catch (e) {
     shareSessionStore.setError('Session not found or expired');
@@ -398,13 +417,18 @@ export async function endShareSession(): Promise<void> {
     const token = getAuthToken();
     if (token) {
       const baseUrl = getBaseServerUrl();
+      const backend = workspaceStore.backend;
       try {
-        await proxyFetch(`${baseUrl}/api/sessions/${encodeURIComponent(joinCode)}`, {
-          method: 'DELETE',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-          },
-        });
+        if (backend?.deleteShareSession) {
+          await backend.deleteShareSession(baseUrl, joinCode, token);
+        } else {
+          await proxyFetch(`${baseUrl}/api/sessions/${encodeURIComponent(joinCode)}`, {
+            method: 'DELETE',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+            },
+          });
+        }
         console.log('[ShareService] Session deleted via REST API');
       } catch (e) {
         console.error('[ShareService] Failed to delete session via REST API:', e);
@@ -491,20 +515,25 @@ export async function setSessionReadOnly(readOnly: boolean): Promise<void> {
   }
 
   const baseUrl = getBaseServerUrl();
+  const backend = workspaceStore.backend;
   try {
-    const response = await proxyFetch(`${baseUrl}/api/sessions/${encodeURIComponent(joinCode)}`, {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify({ read_only: readOnly }),
-    });
+    if (backend?.setShareSessionReadOnly) {
+      await backend.setShareSessionReadOnly(baseUrl, joinCode, token, readOnly);
+    } else {
+      const response = await proxyFetch(`${baseUrl}/api/sessions/${encodeURIComponent(joinCode)}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ read_only: readOnly }),
+      });
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: 'Failed to update session' }));
-      console.error('[ShareService] Failed to update read-only:', error.error);
-      return;
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Failed to update session' }));
+        console.error('[ShareService] Failed to update read-only:', error.error);
+        return;
+      }
     }
 
     // Update local state (server will broadcast to other clients)

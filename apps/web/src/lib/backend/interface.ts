@@ -263,7 +263,11 @@ export type FileSystemEvent =
   | { type: 'SyncStatusChanged'; status: string; error?: string }
   | { type: 'SyncProgress'; completed: number; total: number }
   // Send sync message event - emitted by Rust after CRDT updates
-  | { type: 'SendSyncMessage'; doc_name: string; message: number[]; is_body: boolean };
+  | { type: 'SendSyncMessage'; doc_name: string; message: number[]; is_body: boolean }
+  // Peer/session events from Rust sync
+  | { type: 'PeerJoined'; peer_count: number }
+  | { type: 'PeerLeft'; peer_count: number }
+  | { type: 'FocusListChanged'; files: string[] };
 
 /**
  * Callback type for filesystem event subscriptions.
@@ -546,43 +550,34 @@ export interface Backend {
    */
   requestBodySync?(files: string[]): Promise<void>;
 
+  /**
+   * Notify Rust that a snapshot import has completed.
+   * Called after importFromZip() finishes so the sync handshake can continue.
+   */
+  notifySnapshotImported?(): Promise<void>;
+
   // =========================================================================
-  // WasmSyncClient (inject/poll bridge for WASM/web) — DEPRECATED
-  // Use startSync/stopSync and focusSyncFiles/unfocusSyncFiles instead.
+  // Share Session REST API (Rust-backed)
   // =========================================================================
 
-  /** Create a WasmSyncClient in the worker. DEPRECATED: Use startSync(). */
-  createSyncClient?(serverUrl: string, workspaceId: string, authToken?: string): Promise<void>;
-  /** Destroy the sync client. DEPRECATED: Use stopSync(). */
-  destroySyncClient?(): Promise<void>;
-  /** Get the WebSocket URL for the sync client. */
-  syncGetWsUrl?(): Promise<string>;
-  /** Set the session code on the sync client. */
-  syncSetSessionCode?(code: string): Promise<void>;
-  /** Notify connected — returns void; drain outgoing after. */
-  syncOnConnected?(): Promise<void>;
-  /** Inject a binary WebSocket message. */
-  syncOnBinaryMessage?(data: Uint8Array): Promise<void>;
-  /** Inject a batch of binary WebSocket messages (single Comlink round-trip). */
-  syncOnBinaryMessages?(messages: Uint8Array[]): Promise<void>;
-  /** Inject a text WebSocket message. */
-  syncOnTextMessage?(text: string): Promise<void>;
-  /** Inject a batch of text WebSocket messages (single Comlink round-trip). */
-  syncOnTextMessages?(messages: string[]): Promise<void>;
-  /** Notify disconnected. */
-  syncOnDisconnected?(): Promise<void>;
-  /** Notify snapshot imported. */
-  syncOnSnapshotImported?(): Promise<void>;
-  /** Queue a local CRDT update for sending. */
-  syncQueueLocalUpdate?(docId: string, data: Uint8Array): Promise<void>;
-  /** Drain all outgoing data and events from the sync client. */
-  syncDrain?(): Promise<{ binary: Uint8Array[]; text: string[]; events: string[] }>;
-  /** Send focus messages. */
-  syncFocusFiles?(files: string[]): Promise<void>;
-  /** Send unfocus messages. */
-  syncUnfocusFiles?(files: string[]): Promise<void>;
-  /** Request body sync for specific files (lazy sync on demand). */
-  syncBodyFiles?(files: string[]): Promise<void>;
+  /** Create a share session. Returns { code, workspace_id, read_only }. */
+  createShareSession?(serverUrl: string, workspaceId: string, authToken: string, readOnly: boolean): Promise<any>;
+  /** Look up a share session by join code. Returns { code, workspace_id, read_only, peer_count }. */
+  lookupShareSession?(serverUrl: string, joinCode: string, authToken?: string): Promise<any>;
+  /** Delete a share session. */
+  deleteShareSession?(serverUrl: string, joinCode: string, authToken: string): Promise<void>;
+  /** Set read-only mode on a share session. */
+  setShareSessionReadOnly?(serverUrl: string, joinCode: string, authToken: string, readOnly: boolean): Promise<void>;
+
+  // =========================================================================
+  // Attachment Sync (Rust-backed)
+  // =========================================================================
+
+  /** Upload an attachment via Rust HTTP client. */
+  syncUploadAttachment?(serverUrl: string, authToken: string, workspaceId: string, entryPath: string, attachmentPath: string, hash: string, mimeType: string, data: Uint8Array): Promise<void>;
+  /** Download an attachment via Rust HTTP client. Returns raw bytes. */
+  syncDownloadAttachment?(serverUrl: string, authToken: string, workspaceId: string, hash: string): Promise<Uint8Array>;
+
 }
 
 // ============================================================================

@@ -481,9 +481,18 @@ impl WasmSyncTransport {
         });
     }
 
-    /// Set the session code for share sessions.
-    pub(crate) fn set_session_code(&self, code: String) {
-        self.config.borrow_mut().session_code = Some(code);
+    /// Notify the session that a snapshot has been imported by the TS side.
+    /// Called after `importFromZip()` completes on the JS side.
+    pub(crate) fn notify_snapshot_imported(&self) {
+        let session = Rc::clone(&self.session);
+        let ws = Rc::clone(&self.ws);
+        let registry = Rc::clone(&self.event_registry);
+        let config = Rc::clone(&self.config);
+
+        wasm_bindgen_futures::spawn_local(async move {
+            let actions = session.process(IncomingEvent::SnapshotImported).await;
+            execute_actions(&actions, &ws, &registry, &session, &config);
+        });
     }
 
     /// Disconnect and clean up.
@@ -540,7 +549,7 @@ fn execute_actions(
     actions: &[SessionAction],
     ws: &Rc<RefCell<Option<WebSocket>>>,
     registry: &Rc<WasmCallbackRegistry>,
-    session: &Rc<SyncSession<SyncFs>>,
+    _session: &Rc<SyncSession<SyncFs>>,
     config: &Rc<RefCell<WasmSyncConfig>>,
 ) {
     for action in actions {
@@ -571,20 +580,14 @@ fn execute_actions(
                     "[WasmSyncTransport] Downloading snapshot for workspace: {}",
                     workspace_id
                 );
-                // Spawn async task: fetch snapshot → emit event → notify session
-                let session_dl = Rc::clone(session);
-                let ws_dl = Rc::clone(ws);
+                // Spawn async task: fetch snapshot → emit event
                 let registry_dl = Rc::clone(registry);
                 let config_dl = Rc::clone(config);
                 let ws_id = workspace_id.clone();
 
                 wasm_bindgen_futures::spawn_local(async move {
                     download_snapshot(&ws_id, &config_dl, &registry_dl).await;
-
-                    // Notify session that snapshot was imported (or failed)
-                    // Either way, handshake must continue.
-                    let actions = session_dl.process(IncomingEvent::SnapshotImported).await;
-                    execute_actions(&actions, &ws_dl, &registry_dl, &session_dl, &config_dl);
+                    // TS will call notifySnapshotImported() after importFromZip() completes.
                 });
             }
         }
@@ -730,6 +733,12 @@ fn emit_sync_event_to_registry(event: &SyncEvent, registry: &WasmCallbackRegistr
         SyncEvent::Error { message } => {
             FileSystemEvent::sync_status_changed("error", Some(message.clone()))
         }
+        SyncEvent::PeerJoined { peer_count } => FileSystemEvent::peer_joined(*peer_count),
+        SyncEvent::PeerLeft { peer_count } => FileSystemEvent::peer_left(*peer_count),
+        SyncEvent::SyncComplete { files_synced } => {
+            FileSystemEvent::sync_completed("workspace".to_string(), *files_synced)
+        }
+        SyncEvent::FocusListChanged { files } => FileSystemEvent::focus_list_changed(files.clone()),
     };
     registry.emit(&fs_event);
 }

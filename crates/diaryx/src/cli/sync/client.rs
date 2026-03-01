@@ -80,6 +80,20 @@ impl SyncEventHandler for CliEventHandler {
             SyncEvent::Error { message } => {
                 eprintln!("  Error: {}", message);
             }
+            SyncEvent::PeerJoined { peer_count } => {
+                println!("  Peer joined ({} connected)", peer_count);
+            }
+            SyncEvent::PeerLeft { peer_count } => {
+                println!("  Peer left ({} connected)", peer_count);
+            }
+            SyncEvent::SyncComplete { files_synced } => {
+                println!("  Sync complete ({} files)", files_synced);
+            }
+            SyncEvent::FocusListChanged { files } => {
+                if !files.is_empty() {
+                    println!("  Focus list changed: {} files", files.len());
+                }
+            }
         }
     }
 }

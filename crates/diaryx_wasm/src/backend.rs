@@ -49,7 +49,7 @@ use diaryx_core::workspace::Workspace;
 #[cfg(feature = "sync")]
 use diaryx_sync::{
     BodyDocManager, CrdtFs, CrdtStorage, MemoryStorage, RustSyncManager, SyncMessage, SyncPlugin,
-    SyncSessionConfig, WorkspaceCrdt,
+    WorkspaceCrdt,
 };
 use js_sys::Promise;
 use wasm_bindgen::prelude::*;
@@ -70,7 +70,6 @@ use crate::wasm_sqlite_storage::WasmSqliteStorage;
 // ============================================================================
 
 /// Internal enum to hold either storage backend.
-/// Exposed for use by wasm_sync_client module.
 pub(crate) enum StorageBackend {
     #[cfg(feature = "browser")]
     Opfs(OpfsFileSystem),
@@ -1095,42 +1094,13 @@ impl DiaryxBackend {
     }
 
     // ========================================================================
-    // Sync Client API (sync feature only)
+    // Sync API (sync feature only)
     // ========================================================================
-
-    /// Create a new sync client for the given server and workspace.
-    /// DEPRECATED: Use `start_sync()` instead. Kept for backward compatibility.
-    #[cfg(feature = "sync")]
-    #[wasm_bindgen(js_name = "createSyncClient")]
-    pub fn create_sync_client(
-        &self,
-        server_url: String,
-        workspace_id: String,
-        auth_token: Option<String>,
-    ) -> crate::wasm_sync_client::WasmSyncClient {
-        let session_config = SyncSessionConfig {
-            workspace_id: workspace_id.clone(),
-            write_to_disk: true,
-        };
-
-        log::info!(
-            "[DiaryxBackend] Creating WasmSyncClient for workspace: {}",
-            workspace_id
-        );
-
-        crate::wasm_sync_client::WasmSyncClient::new(
-            server_url,
-            workspace_id,
-            auth_token,
-            session_config,
-            Arc::clone(&self.sync_manager),
-        )
-    }
 
     /// Start sync — Rust owns the WebSocket connection.
     ///
     /// Creates a `WasmSyncTransport`, connects to the server, and subscribes
-    /// to local CRDT updates. Replaces the old `createSyncClient()` flow.
+    /// to local CRDT updates.
     #[cfg(feature = "sync")]
     #[wasm_bindgen(js_name = "startSync")]
     pub fn start_sync(
@@ -1197,6 +1167,16 @@ impl DiaryxBackend {
     pub fn request_body_sync(&self, files: Vec<String>) {
         if let Some(ref transport) = *self.transport.borrow() {
             transport.request_body_sync(files);
+        }
+    }
+
+    /// Notify that a snapshot has been imported by the TS side.
+    /// Called after `importFromZip()` completes.
+    #[cfg(feature = "sync")]
+    #[wasm_bindgen(js_name = "notifySnapshotImported")]
+    pub fn notify_snapshot_imported(&self) {
+        if let Some(ref transport) = *self.transport.borrow() {
+            transport.notify_snapshot_imported();
         }
     }
 

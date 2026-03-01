@@ -758,83 +758,7 @@ export class WorkerBackendNew implements Backend {
     this.remote!.call("fixAll", [validationResult]) as Promise<any>;
 
   // =========================================================================
-  // WasmSyncClient (inject/poll bridge)
-  // =========================================================================
-
-  async createSyncClient(
-    serverUrl: string,
-    workspaceId: string,
-    authToken?: string,
-  ): Promise<void> {
-    return this.remote!.createSyncClient(serverUrl, workspaceId, authToken);
-  }
-
-  async destroySyncClient(): Promise<void> {
-    return this.remote!.destroySyncClient();
-  }
-
-  async syncGetWsUrl(): Promise<string> {
-    return this.remote!.syncGetWsUrl();
-  }
-
-  async syncSetSessionCode(code: string): Promise<void> {
-    return this.remote!.syncSetSessionCode(code);
-  }
-
-  async syncOnConnected(): Promise<void> {
-    return this.remote!.syncOnConnected();
-  }
-
-  async syncOnBinaryMessage(data: Uint8Array): Promise<void> {
-    return this.remote!.syncOnBinaryMessage(data);
-  }
-
-  async syncOnBinaryMessages(messages: Uint8Array[]): Promise<void> {
-    return this.remote!.syncOnBinaryMessages(messages);
-  }
-
-  async syncOnTextMessage(text: string): Promise<void> {
-    return this.remote!.syncOnTextMessage(text);
-  }
-
-  async syncOnTextMessages(messages: string[]): Promise<void> {
-    return this.remote!.syncOnTextMessages(messages);
-  }
-
-  async syncOnDisconnected(): Promise<void> {
-    return this.remote!.syncOnDisconnected();
-  }
-
-  async syncOnSnapshotImported(): Promise<void> {
-    return this.remote!.syncOnSnapshotImported();
-  }
-
-  async syncQueueLocalUpdate(docId: string, data: Uint8Array): Promise<void> {
-    return this.remote!.syncQueueLocalUpdate(docId, data);
-  }
-
-  async syncDrain(): Promise<{
-    binary: Uint8Array[];
-    text: string[];
-    events: string[];
-  }> {
-    return this.remote!.syncDrain();
-  }
-
-  async syncFocusFiles(files: string[]): Promise<void> {
-    return this.remote!.syncFocusFiles(files);
-  }
-
-  async syncUnfocusFiles(files: string[]): Promise<void> {
-    return this.remote!.syncUnfocusFiles(files);
-  }
-
-  async syncBodyFiles(files: string[]): Promise<void> {
-    return this.remote!.syncBodyFiles(files);
-  }
-
-  // =========================================================================
-  // Rust-Owned Sync (Rust owns WebSocket — replaces poll-based bridge)
+  // Rust-Owned Sync (Rust owns WebSocket)
   // =========================================================================
 
   async startSync(
@@ -860,6 +784,40 @@ export class WorkerBackendNew implements Backend {
 
   async requestBodySync(files: string[]): Promise<void> {
     return this.remote!.requestBodySync(files);
+  }
+
+  async notifySnapshotImported(): Promise<void> {
+    return this.remote!.notifySnapshotImported();
+  }
+
+  async createShareSession(serverUrl: string, workspaceId: string, authToken: string, readOnly: boolean): Promise<any> {
+    return this.remote!.createShareSession(serverUrl, workspaceId, authToken, readOnly);
+  }
+
+  async lookupShareSession(serverUrl: string, joinCode: string, authToken?: string): Promise<any> {
+    return this.remote!.lookupShareSession(serverUrl, joinCode, authToken);
+  }
+
+  async deleteShareSession(serverUrl: string, joinCode: string, authToken: string): Promise<void> {
+    return this.remote!.deleteShareSession(serverUrl, joinCode, authToken);
+  }
+
+  async setShareSessionReadOnly(serverUrl: string, joinCode: string, authToken: string, readOnly: boolean): Promise<void> {
+    return this.remote!.setShareSessionReadOnly(serverUrl, joinCode, authToken, readOnly);
+  }
+
+  async syncUploadAttachment(
+    serverUrl: string, authToken: string, workspaceId: string,
+    entryPath: string, attachmentPath: string, hash: string,
+    mimeType: string, data: Uint8Array,
+  ): Promise<void> {
+    return this.remote!.syncUploadAttachment(serverUrl, authToken, workspaceId, entryPath, attachmentPath, hash, mimeType, data);
+  }
+
+  async syncDownloadAttachment(
+    serverUrl: string, authToken: string, workspaceId: string, hash: string,
+  ): Promise<Uint8Array> {
+    return this.remote!.syncDownloadAttachment(serverUrl, authToken, workspaceId, hash);
   }
 
   importFromZip = async (

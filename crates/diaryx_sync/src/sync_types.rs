@@ -45,6 +45,26 @@ pub enum SyncEvent {
         /// Error message.
         message: String,
     },
+    /// A peer joined the sync session.
+    PeerJoined {
+        /// Current peer count.
+        peer_count: usize,
+    },
+    /// A peer left the sync session.
+    PeerLeft {
+        /// Current peer count.
+        peer_count: usize,
+    },
+    /// Initial sync completed with file count.
+    SyncComplete {
+        /// Number of files synced.
+        files_synced: usize,
+    },
+    /// The server's focus list changed.
+    FocusListChanged {
+        /// Currently focused file paths.
+        files: Vec<String>,
+    },
 }
 
 /// Current sync status.

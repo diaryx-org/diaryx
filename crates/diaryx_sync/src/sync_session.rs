@@ -689,20 +689,28 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
                 self.set_metadata_ready();
                 let mut heal_actions = self.audit_and_reconcile_integrity().await;
                 actions.append(&mut heal_actions);
+                actions.push(SessionAction::Emit(SyncEvent::SyncComplete {
+                    files_synced,
+                }));
                 if let Some(synced) = self.maybe_emit_synced() {
                     actions.push(synced);
                 }
             }
             ControlMessage::PeerJoined { peer_count } => {
                 log::info!("[SyncSession] Peer joined ({} connected)", peer_count);
+                actions.push(SessionAction::Emit(SyncEvent::PeerJoined { peer_count }));
             }
             ControlMessage::PeerLeft { peer_count } => {
                 log::info!("[SyncSession] Peer left ({} connected)", peer_count);
+                actions.push(SessionAction::Emit(SyncEvent::PeerLeft { peer_count }));
             }
-            ControlMessage::FocusListChanged { files } => {
+            ControlMessage::FocusListChanged { ref files } => {
                 if !files.is_empty() {
                     log::debug!("[SyncSession] Focus list changed: {} files", files.len());
                 }
+                actions.push(SessionAction::Emit(SyncEvent::FocusListChanged {
+                    files: files.clone(),
+                }));
             }
             _ => {}
         }

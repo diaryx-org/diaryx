@@ -19,7 +19,6 @@
  */
 
 import { RustCrdtApi } from './rustCrdtApi';
-import { UnifiedSyncTransport, createUnifiedSyncTransport } from './unifiedSyncTransport';
 import type { FileMetadata, BinaryRef } from '../backend/generated';
 import type { Backend, FileSystemEvent, SyncEvent } from '../backend/interface';
 import { crdt_update_file_index, isStorageReady } from '$lib/storage/sqliteStorageBridge.js';
@@ -236,15 +235,14 @@ let _initializing = false;
 let _initialSyncComplete = false;
 let _initialSyncResolvers: Array<() => void> = [];
 
-// Unified sync v2 transport (single WebSocket for workspace + body)
-let unifiedSyncTransport: UnifiedSyncTransport | null = null;
-
-// Outgoing local updates captured before the transport is available.
-// This can happen during reconnects or sync mode transitions.
-let pendingLocalSyncUpdates: Array<{ docId: string; bytes: Uint8Array }> = [];
+// Whether Rust-owned sync is active (WASM path)
+let _rustSyncActive = false;
 
 // Cached server URL (WebSocket) for sync readiness checks
 let _serverUrl: string | null = null;
+
+// Session callbacks stored for dispatch from handleFileSystemEvent
+let _sessionPeerCallbacks: SessionSyncCallbacks | null = null;
 
 function refreshAttachmentSyncContext(): void {
   setAttachmentSyncContext({
@@ -263,45 +261,11 @@ const fileLocks = new Map<string, Promise<void>>();
 const pendingIntervals: Set<ReturnType<typeof setInterval>> = new Set();
 const pendingTimeouts: Set<ReturnType<typeof setTimeout>> = new Set();
 
-async function flushPendingLocalSyncUpdates(): Promise<void> {
-  if (pendingLocalSyncUpdates.length === 0) {
-    return;
-  }
-
-  if (!unifiedSyncTransport) {
-    return;
-  }
-
-  const pending = pendingLocalSyncUpdates;
-  pendingLocalSyncUpdates = [];
-  console.log(`[WorkspaceCrdtBridge] Flushing ${pending.length} queued local sync update(s)`);
-
-  for (const { docId, bytes } of pending) {
-    try {
-      await unifiedSyncTransport.queueLocalUpdate(docId, bytes);
-    } catch (err) {
-      console.warn('[WorkspaceCrdtBridge] Failed to flush queued sync update, re-queueing:', err);
-      pendingLocalSyncUpdates.unshift({ docId, bytes });
-      break;
-    }
-  }
-}
-
 /**
- * Discard queued local sync updates that were captured while no transport was connected.
- *
- * This is used by bootstrap flows (snapshot load/upload) where replaying pre-connect
- * local updates would duplicate or conflict with snapshot state.
- *
- * Returns the number of dropped updates.
+ * @deprecated No longer needed — Rust's subscribe_to_local_updates() handles this internally.
  */
-export function discardQueuedLocalSyncUpdates(reason: string = 'manual'): number {
-  const dropped = pendingLocalSyncUpdates.length;
-  if (dropped > 0) {
-    console.log(`[WorkspaceCrdtBridge] Discarding ${dropped} queued local sync update(s): ${reason}`);
-    pendingLocalSyncUpdates = [];
-  }
-  return dropped;
+export function discardQueuedLocalSyncUpdates(_reason: string = 'manual'): number {
+  return 0;
 }
 
 /**
@@ -352,35 +316,6 @@ const syncProgressCallbacks = new Set<SyncProgressCallback>();
 // Sync status callbacks - called when sync status changes
 type SyncStatusCallback = (status: 'idle' | 'connecting' | 'syncing' | 'synced' | 'error', error?: string) => void;
 const syncStatusCallbacks = new Set<SyncStatusCallback>();
-
-// ===========================================================================
-// Extism sync plugin helpers
-// ===========================================================================
-
-let extismSyncUnavailable = false;
-const SYNC_PLUGIN_ID = 'sync';
-
-/**
- * Ensure the Extism sync plugin is loaded and has registered a SyncWsHandler
- * factory. Falls back silently to legacy backend sync method wiring if the
- * plugin cannot be loaded.
- */
-async function ensureExtismSyncHandlerRegistered(backend: Backend): Promise<void> {
-  if (extismSyncUnavailable) {
-    return;
-  }
-
-  try {
-    const { loadSyncPlugin } = await import('$lib/sync/loader');
-    await loadSyncPlugin(backend);
-  } catch (error) {
-    extismSyncUnavailable = true;
-    console.warn(
-      '[WorkspaceCrdtBridge] Extism sync plugin unavailable; falling back to built-in backend sync:',
-      error,
-    );
-  }
-}
 
 // ===========================================================================
 // Configuration
@@ -457,59 +392,19 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
         _nativeSyncActive = false;
       }
     } else {
-      // Use browser WebSocket (WASM/web) via Extism sync plugin
-      console.log('[WorkspaceCrdtBridge] Using browser sync (v2) via Extism plugin');
+      // WASM/web: Rust owns the WebSocket via WasmSyncTransport
+      console.log('[WorkspaceCrdtBridge] Using Rust-owned sync (WASM)');
 
-      await ensureExtismSyncHandlerRegistered(_backend);
+      notifySyncStatus('connecting');
 
-      // Use UnifiedSyncTransport (single WebSocket for workspace + body via /sync2)
-      {
-        const v2Url = toWebSocketUrl(url);
-
-        unifiedSyncTransport = createUnifiedSyncTransport({
-          serverUrl: v2Url,
-          workspaceId: _workspaceId!,
-          backend: _backend,
-          writeToDisk: true,
-          authToken: getToken() ?? undefined,
-          syncPluginId: extismSyncUnavailable ? undefined : SYNC_PLUGIN_ID,
-          onStatusChange: (connected) => {
-            notifySyncStatus(connected ? 'syncing' : 'idle');
-            if (!connected) {
-              collaborationStore.setBodySyncStatus('idle');
-            }
-          },
-          onError: (message) => {
-            notifySyncStatus('error', message);
-          },
-          onWorkspaceSynced: async () => {
-            // Enable CrdtFs now that sync handshake is complete —
-            // file writes from this point will populate CRDTs for sync.
-            if (_backend?.setCrdtEnabled) await _backend.setCrdtEnabled(true);
-            notifySyncStatus('synced');
-            notifyFileChange(null, null);
-            await updateFileIndexFromCrdt();
-            markInitialSyncComplete();
-            // Body sync is handled automatically by SyncSession in Rust
-            collaborationStore.setBodySyncStatus('synced');
-          },
-          onSyncComplete: (filesSynced) => {
-            console.log(`[UnifiedSync] Sync complete: ${filesSynced} files synced`);
-            collaborationStore.setBodySyncStatus('synced');
-          },
-          onFilesChanged: async () => {
-            notifyFileChange(null, null);
-          },
-          onProgress: (completed, total) => {
-            notifySyncProgress(completed, total);
-          },
-        });
-
-        // Notify connecting status
-        notifySyncStatus('connecting');
-
-        await unifiedSyncTransport.connect();
-        await flushPendingLocalSyncUpdates();
+      try {
+        _rustSyncActive = true;
+        await _backend.startSync!(_serverUrl!, _workspaceId!, getToken() ?? undefined);
+        console.log('[WorkspaceCrdtBridge] Rust-owned sync started successfully');
+      } catch (e) {
+        console.error('[WorkspaceCrdtBridge] Rust-owned sync failed to start:', e);
+        notifySyncStatus('error', e);
+        _rustSyncActive = false;
       }
     }
 
@@ -611,11 +506,15 @@ async function disconnectExistingSync(): Promise<void> {
   // Reset body sync status since we're disconnecting
   collaborationStore.resetBodySyncStatus();
 
-  // Disconnect v2 unified sync transport if any
-  if (unifiedSyncTransport) {
-    console.log('[WorkspaceCrdtBridge] Disconnecting UnifiedSyncTransport');
-    unifiedSyncTransport.destroy();
-    unifiedSyncTransport = null;
+  // Stop Rust-owned sync (WASM path)
+  if (_rustSyncActive && _backend?.stopSync) {
+    console.log('[WorkspaceCrdtBridge] Stopping Rust-owned sync');
+    try {
+      await _backend.stopSync();
+    } catch (e) {
+      console.warn('[WorkspaceCrdtBridge] Error stopping Rust-owned sync:', e);
+    }
+    _rustSyncActive = false;
   }
 }
 
@@ -927,11 +826,8 @@ export async function startSessionSync(
     isHost,
   });
 
-  // Disconnect existing transport
-  if (unifiedSyncTransport) {
-    unifiedSyncTransport.destroy();
-    unifiedSyncTransport = null;
-  }
+  // Disconnect existing sync
+  await disconnectExistingSync();
 
   // For guests, recreate rustApi with the guest backend so CRDT commands
   // go through the in-memory guest filesystem, not the original backend.
@@ -963,68 +859,41 @@ export async function startSessionSync(
   // Ensure CRDT storage bridge is initialized before session sync connects.
   await _backend.setupCrdtStorage?.();
 
+  // Store session callbacks for dispatch from handleFileSystemEvent
+  _sessionPeerCallbacks = callbacks ?? null;
+
   // Create a promise that resolves when initial workspace sync completes
   let syncResolve: () => void;
   const syncPromise = new Promise<void>((resolve) => {
     syncResolve = resolve;
   });
 
-  console.log('[WorkspaceCrdtBridge] Creating UnifiedSyncTransport for session:', sessionServerUrl, 'session:', sessionCode);
-
-  await ensureExtismSyncHandlerRegistered(_backend);
-
-  unifiedSyncTransport = createUnifiedSyncTransport({
-    serverUrl: sessionServerUrl,
-    workspaceId: _workspaceId!,
-    backend: _backend,
-    writeToDisk: true,
-    authToken: getToken() ?? undefined,
-    sessionCode: sessionCode,
-    syncPluginId: extismSyncUnavailable ? undefined : SYNC_PLUGIN_ID,
-    onStatusChange: (connected) => {
-      console.log('[WorkspaceCrdtBridge] Session sync status:', connected);
-      notifySyncStatus(connected ? 'syncing' : 'idle');
-      if (!connected) {
-        collaborationStore.setBodySyncStatus('idle');
-      }
-    },
-    onError: (message) => {
-      notifySyncStatus('error', message);
-    },
-    onWorkspaceSynced: async () => {
-      console.log('[WorkspaceCrdtBridge] Session workspace sync complete, isHost:', isHost);
-      if (_backend?.setCrdtEnabled) {
-        await _backend.setCrdtEnabled(true);
-        const enabled = _backend.isCrdtEnabled ? await _backend.isCrdtEnabled() : 'N/A';
-        console.log('[WorkspaceCrdtBridge] CrdtFs enabled after sync:', enabled);
-      }
-      notifySyncStatus('synced');
-      if (!isHost) notifySessionSync();
+  // Listen for SyncStatusChanged 'synced' to resolve the promise
+  const onSyncedForSession = (status: 'idle' | 'connecting' | 'syncing' | 'synced' | 'error') => {
+    if (status === 'synced') {
       syncResolve();
-      // Body sync is handled automatically by SyncSession in Rust
-      collaborationStore.setBodySyncStatus('synced');
-    },
-    onFilesChanged: async () => {
-      shareSessionStore.isGuest ? notifySessionSync() : notifyFileChange(null, null);
-    },
-    onProgress: (completed, total) => {
-      console.log('[WorkspaceCrdtBridge] Session sync progress:', completed, '/', total);
-      notifySyncProgress(completed, total);
-    },
-    onSyncComplete: (filesSynced) => {
-      console.log(`[SessionSync] Sync complete: ${filesSynced} files synced`);
-      collaborationStore.setBodySyncStatus('synced');
-    },
-    // Pass through session callbacks to the transport
-    onSessionJoined: callbacks?.onSessionJoined,
-    onPeerJoined: callbacks?.onPeerJoined,
-    onPeerLeft: callbacks?.onPeerLeft,
-    onSessionEnded: callbacks?.onSessionEnded,
-  });
+      syncStatusCallbacks.delete(onSyncedForSession);
+    }
+  };
+  syncStatusCallbacks.add(onSyncedForSession);
+
+  const sessionWsUrl = toWebSocketUrl(sessionServerUrl);
+
+  console.log('[WorkspaceCrdtBridge] Starting Rust-owned sync for session:', sessionWsUrl, 'session:', sessionCode);
 
   notifySyncStatus('connecting');
-  await unifiedSyncTransport.connect();
-  await flushPendingLocalSyncUpdates();
+
+  try {
+    _rustSyncActive = true;
+    await _backend.startSync!(sessionWsUrl, _workspaceId!, getToken() ?? undefined, sessionCode);
+    console.log('[WorkspaceCrdtBridge] Session sync started successfully');
+  } catch (e) {
+    console.error('[WorkspaceCrdtBridge] Session sync failed to start:', e);
+    notifySyncStatus('error', e);
+    _rustSyncActive = false;
+    syncStatusCallbacks.delete(onSyncedForSession);
+    return;
+  }
 
   // Wait for initial sync to complete (with timeout)
   const timeoutPromise = new Promise<void>((_, reject) => {
@@ -1036,6 +905,7 @@ export async function startSessionSync(
     console.log('[WorkspaceCrdtBridge] Session sync fully complete');
   } catch (error) {
     console.warn('[WorkspaceCrdtBridge] Session sync did not complete in time, continuing anyway');
+    syncStatusCallbacks.delete(onSyncedForSession);
     // Enable CrdtFs even on timeout — otherwise guest edits won't propagate
     // because update_crdt_for_file_internal returns early when CrdtFs is disabled
     if (_backend?.setCrdtEnabled) {
@@ -1080,11 +950,18 @@ export async function stopSessionSync(): Promise<void> {
     await syncHelpers.configureSyncHandler(_backend, null, false);
   }
 
-  // Destroy unified transport (handles both workspace + body sync)
-  if (unifiedSyncTransport) {
-    unifiedSyncTransport.destroy();
-    unifiedSyncTransport = null;
+  // Stop Rust-owned sync
+  if (_rustSyncActive && _backend?.stopSync) {
+    try {
+      await _backend.stopSync();
+    } catch (e) {
+      console.warn('[WorkspaceCrdtBridge] Error stopping session sync:', e);
+    }
+    _rustSyncActive = false;
   }
+
+  // Clear session peer callbacks
+  _sessionPeerCallbacks = null;
 
   collaborationStore.setBodySyncStatus('idle');
 }
@@ -1108,7 +985,7 @@ export function getWorkspaceId(): string | null {
  * True when we have a unified sync transport connected but no live share session.
  */
 export function isDeviceSyncActive(): boolean {
-  return unifiedSyncTransport !== null && !_sessionCode;
+  return (_nativeSyncActive || _rustSyncActive) && !_sessionCode;
 }
 
 /**
@@ -1198,58 +1075,23 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
             _nativeSyncActive = false;
           }
         } else {
-          // Use UnifiedSyncTransport (single WebSocket for workspace + body via /sync2)
-          console.log('[WorkspaceCrdtBridge] Using UnifiedSyncTransport during init (Extism)');
-
-          const v2Url = toWebSocketUrl(serverUrl);
-          await ensureExtismSyncHandlerRegistered(_backend);
-
-          unifiedSyncTransport = createUnifiedSyncTransport({
-            serverUrl: v2Url,
-            workspaceId: _workspaceId!,
-            backend: _backend,
-            writeToDisk: true,
-            authToken: getToken() ?? undefined,
-            syncPluginId: extismSyncUnavailable ? undefined : SYNC_PLUGIN_ID,
-            onStatusChange: (connected) => {
-              notifySyncStatus(connected ? 'syncing' : 'idle');
-              if (!connected) {
-                collaborationStore.setBodySyncStatus('idle');
-              }
-            },
-            onWorkspaceSynced: async () => {
-              if (_backend?.setCrdtEnabled) await _backend.setCrdtEnabled(true);
-              notifySyncStatus('synced');
-              notifyFileChange(null, null);
-              await updateFileIndexFromCrdt();
-              markInitialSyncComplete();
-              // Body sync is handled automatically by SyncSession in Rust
-              collaborationStore.setBodySyncStatus('synced');
-            },
-            onSyncComplete: (filesSynced) => {
-              console.log(`[UnifiedSync] Sync complete (init): ${filesSynced} files synced`);
-              collaborationStore.setBodySyncStatus('synced');
-            },
-            onFilesChanged: async () => {
-              notifyFileChange(null, null);
-            },
-            onProgress: (completed, total) => {
-              notifySyncProgress(completed, total);
-            },
-          });
+          // WASM/web: Rust owns the WebSocket via WasmSyncTransport
+          console.log('[WorkspaceCrdtBridge] Using Rust-owned sync during init (WASM)');
 
           notifySyncStatus('connecting');
-          await unifiedSyncTransport.connect();
-          await flushPendingLocalSyncUpdates();
+
+          try {
+            _rustSyncActive = true;
+            await _backend.startSync!(_serverUrl!, _workspaceId!, getToken() ?? undefined);
+            console.log('[WorkspaceCrdtBridge] Rust-owned sync started successfully (init)');
+          } catch (e) {
+            console.error('[WorkspaceCrdtBridge] Rust-owned sync failed to start (init):', e);
+            _rustSyncActive = false;
+          }
         }
       }
     } else {
       console.log('[WorkspaceCrdtBridge] Sync skipped: local-only mode (no workspaceId)');
-      // Load the Extism sync plugin so its manifest registers UI contributions
-      // (sidebar tabs, status bar, etc.) even when not actively syncing.
-      if (_backend) {
-        await ensureExtismSyncHandlerRegistered(_backend);
-      }
       // Enable CrdtFs immediately — no sync to wait for.
       if (_backend?.setCrdtEnabled) await _backend.setCrdtEnabled(true);
       // No sync needed - mark as complete immediately
@@ -1269,10 +1111,7 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
  * Disconnect the workspace sync.
  */
 export function disconnectWorkspace(): void {
-  if (unifiedSyncTransport) {
-    unifiedSyncTransport.destroy();
-    unifiedSyncTransport = null;
-  }
+  disconnectExistingSync();
 }
 
 /**
@@ -1281,17 +1120,6 @@ export function disconnectWorkspace(): void {
 export async function destroyWorkspace(): Promise<void> {
   // Disconnect existing sync (native or browser-based)
   await disconnectExistingSync();
-
-  // Fully unload Extism sync plugin so workspace switches always start from a
-  // fresh guest instance bound to the new backend host context.
-  try {
-    const { unloadSyncPlugin } = await import('$lib/sync/loader');
-    await unloadSyncPlugin();
-  } catch (e) {
-    console.warn('[WorkspaceCrdtBridge] Failed to unload sync plugin during destroy:', e);
-  }
-
-  discardQueuedLocalSyncUpdates('destroyWorkspace');
 
   // Clear pending intervals/timeouts to prevent memory leaks
   for (const interval of pendingIntervals) {
@@ -1441,8 +1269,8 @@ export function isWorkspaceConnected(): boolean {
   if (_nativeSyncActive) {
     return true;
   }
-  // Check v2 unified transport
-  return unifiedSyncTransport !== null;
+  // Check Rust-owned sync (WASM)
+  return _rustSyncActive;
 }
 
 // ===========================================================================
@@ -1825,10 +1653,10 @@ export async function ensureBodySync(filePath: string): Promise<void> {
 }
 
 async function _ensureBodySyncImpl(filePath: string): Promise<void> {
-  if (!unifiedSyncTransport) return;
-  if (!unifiedSyncTransport.isWorkspaceSynced) return;
-  await unifiedSyncTransport.focus([filePath]);
-  await unifiedSyncTransport.requestBodySync([filePath]);
+  if (!_backend) return;
+  if (!_nativeSyncActive && !_rustSyncActive) return;
+  await _backend.focusSyncFiles?.([filePath]);
+  await _backend.requestBodySync?.([filePath]);
 }
 
 /**
@@ -2235,7 +2063,7 @@ export function waitForInitialSync(timeoutMs = 10000): Promise<boolean> {
     }
 
     // No sync in progress (local-only mode or sync disabled)
-    if (!unifiedSyncTransport && !_nativeSyncActive && initialized) {
+    if (!_rustSyncActive && !_nativeSyncActive && initialized) {
       console.log('[WorkspaceCrdtBridge] waitForInitialSync: no sync transport, resolving immediately');
       _initialSyncComplete = true;
       resolve(true);
@@ -2841,67 +2669,59 @@ async function handleFileSystemEvent(event: FileSystemEvent): Promise<void> {
       updateFileIndexFromCrdt();
       break;
 
-    case 'SyncStatusChanged':
+    case 'SyncStatusChanged': {
       console.log('[WorkspaceCrdtBridge] Sync status changed:', event.status, event.error);
-      notifySyncStatus(event.status as 'idle' | 'connecting' | 'syncing' | 'synced' | 'error', event.error);
+      const status = event.status as 'idle' | 'connecting' | 'syncing' | 'synced' | 'error' | 'connected' | 'disconnected' | 'reconnecting';
+
+      // Map Rust transport statuses to our internal statuses
+      if (status === 'synced') {
+        // Workspace sync is complete — enable CrdtFs, update file index, mark initial sync done
+        if (_backend?.setCrdtEnabled) await _backend.setCrdtEnabled(true);
+        notifySyncStatus('synced');
+        notifyFileChange(null, null);
+        await updateFileIndexFromCrdt();
+        markInitialSyncComplete();
+        collaborationStore.setBodySyncStatus('synced');
+        // Notify session sync for guests
+        if (shareSessionStore.isGuest) notifySessionSync();
+      } else if (status === 'connected' || status === 'syncing') {
+        notifySyncStatus('syncing');
+      } else if (status === 'connecting' || status === 'reconnecting') {
+        notifySyncStatus('connecting');
+      } else if (status === 'disconnected') {
+        notifySyncStatus('idle');
+        collaborationStore.setBodySyncStatus('idle');
+      } else if (status === 'error') {
+        notifySyncStatus('error', event.error);
+      } else {
+        notifySyncStatus(status as any, event.error);
+      }
       break;
+    }
 
     case 'SyncProgress':
       console.log('[WorkspaceCrdtBridge] Sync progress:', event.completed, '/', event.total);
       notifySyncProgress(event.completed, event.total);
       break;
 
-    case 'SendSyncMessage': {
-      // Rust is requesting that we send a sync message over WebSocket.
-      // This happens after CRDT updates (SaveEntry, CreateEntry, DeleteEntry, RenameEntry).
-      //
-      // For native sync (Tauri): Skip - native SyncClient handles this internally.
-      if (_backend?.hasNativeSync?.()) {
-        console.log('[WorkspaceCrdtBridge] SendSyncMessage: SKIPPED (native sync)');
-        break;
-      }
-
-      const { doc_name, message, is_body } = event as any;
-      const bytes = new Uint8Array(message);
-
-      console.log('[WorkspaceCrdtBridge] SendSyncMessage: doc_name=', doc_name, 'is_body=', is_body, 'bytes_len=', bytes.length, '_workspaceId=', _workspaceId, 'hasTransport=', !!unifiedSyncTransport);
-
-      if (!_workspaceId) {
-        console.warn('[WorkspaceCrdtBridge] Dropping sync message: missing workspace ID');
-        break;
-      }
-
-      const rawDocName = typeof doc_name === 'string' ? doc_name : String(doc_name ?? '');
-      const canonicalDocName = is_body
-        ? await getCanonicalPathForSync(rawDocName)
-        : rawDocName;
-
-      if (is_body && !canonicalDocName) {
-        console.warn('[WorkspaceCrdtBridge] Dropping body sync message: empty canonical doc_name', doc_name);
-        break;
-      }
-
-      // Route through WasmSyncClient (Rust handles framing and queuing)
-      const docId = is_body
-        ? `body:${_workspaceId}/${canonicalDocName}`
-        : `workspace:${_workspaceId}`;
-
-      if (unifiedSyncTransport) {
-        console.log('[WorkspaceCrdtBridge] SendSyncMessage: queueing docId=', docId);
-        unifiedSyncTransport.queueLocalUpdate(docId, bytes).catch(err => {
-          console.warn('[WorkspaceCrdtBridge] Failed to queue sync message:', err);
-        });
-      } else {
-        console.log('[WorkspaceCrdtBridge] SendSyncMessage: queued to pendingLocalSyncUpdates (no transport), docId=', docId);
-        // Queue until a transport is connected (reconnect / setup transition).
-        pendingLocalSyncUpdates.push({ docId, bytes });
-        // Keep bounded to avoid unbounded memory growth if sync is down.
-        if (pendingLocalSyncUpdates.length > 2000) {
-          pendingLocalSyncUpdates = pendingLocalSyncUpdates.slice(-2000);
-        }
-      }
+    case 'SendSyncMessage':
+      // No-op: Rust's subscribe_to_local_updates() handles this internally
+      // when Rust owns the WebSocket transport.
       break;
-    }
+
+    case 'PeerJoined':
+      console.log('[WorkspaceCrdtBridge] Peer joined:', event.peer_count);
+      _sessionPeerCallbacks?.onPeerJoined?.('', event.peer_count);
+      break;
+
+    case 'PeerLeft':
+      console.log('[WorkspaceCrdtBridge] Peer left:', event.peer_count);
+      _sessionPeerCallbacks?.onPeerLeft?.('', event.peer_count);
+      break;
+
+    case 'FocusListChanged':
+      console.log('[WorkspaceCrdtBridge] Focus list changed:', event.files?.length, 'files');
+      break;
   }
 }
 
@@ -2924,7 +2744,7 @@ export function debugSync(): void {
   console.log('=== Sync Debug ===');
   console.log('serverUrl:', serverUrl);
   console.log('nativeSyncActive:', _nativeSyncActive);
-  console.log('unifiedSyncTransport:', unifiedSyncTransport ? 'exists' : 'null');
+  console.log('rustSyncActive:', _rustSyncActive);
   console.log('initialized:', initialized);
   console.log('rustApi:', rustApi ? 'exists' : 'null');
   console.log('hasNativeSync:', _backend?.hasNativeSync?.() ?? false);

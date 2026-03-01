@@ -1,13 +1,12 @@
 //! Git version history CLI command handlers.
 
 use std::path::Path;
-use std::sync::Arc;
 
-use diaryx_sync::git::{
-    CommitOptions, CommitResult, RepoKind, commit_workspace, init_repo, open_repo,
+use diaryx_git::{
+    CommitOptions, CommitResult, HealthTracker, RepoKind, commit_workspace, init_repo, open_repo,
 };
-use diaryx_sync::self_healing::HealthTracker;
-use diaryx_sync::{BodyDocManager, CrdtStorage, SqliteStorage, WorkspaceCrdt};
+
+use crate::cli::plugin_loader::CliSyncContext;
 
 /// Handle the `diaryx commit` command.
 pub fn handle_commit(
@@ -15,41 +14,43 @@ pub fn handle_commit(
     message: Option<String>,
     skip_validation: bool,
 ) -> bool {
-    // Open or initialize storage
-    let db_path = workspace_root.join(".diaryx").join("crdt.db");
-    if !db_path.exists() {
-        eprintln!("No CRDT database found at {}", db_path.display());
-        eprintln!("Run 'diaryx sync start' first to initialize sync state.");
+    // Load sync plugin to materialize workspace files
+    let ctx = match CliSyncContext::load(workspace_root) {
+        Some(ctx) => ctx,
+        None => {
+            eprintln!("No CRDT database found.");
+            eprintln!("Run 'diaryx sync start' first to initialize sync state.");
+            return false;
+        }
+    };
+
+    // Materialize workspace files via sync plugin
+    let materialized = match ctx.cmd("MaterializeWorkspace", serde_json::json!({})) {
+        Ok(data) => data,
+        Err(e) => {
+            eprintln!("Failed to materialize workspace: {}", e);
+            return false;
+        }
+    };
+
+    let files: Vec<diaryx_git::commit::MaterializedFile> = materialized
+        .get("files")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|f| {
+                    let path = f.get("path")?.as_str()?.to_string();
+                    let content = f.get("content")?.as_str()?.to_string();
+                    Some(diaryx_git::commit::MaterializedFile { path, content })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if files.is_empty() {
+        eprintln!("No files to commit");
         return false;
     }
-
-    let storage = match SqliteStorage::open(&db_path) {
-        Ok(s) => Arc::new(s),
-        Err(e) => {
-            eprintln!("Failed to open CRDT storage: {}", e);
-            return false;
-        }
-    };
-
-    // Load workspace CRDT - try to find the workspace ID
-    let workspace_id = find_workspace_id(&storage);
-    let workspace_id = match workspace_id {
-        Some(id) => id,
-        None => {
-            eprintln!("No workspace found in CRDT storage.");
-            return false;
-        }
-    };
-
-    let workspace_doc_name = format!("workspace:{}", workspace_id);
-    let workspace = match WorkspaceCrdt::load_with_name(storage.clone(), workspace_doc_name) {
-        Ok(w) => w,
-        Err(e) => {
-            eprintln!("Failed to load workspace CRDT: {}", e);
-            return false;
-        }
-    };
-    let body_docs = BodyDocManager::new(storage.clone());
 
     // Open or init git repo
     let repo = match open_repo(workspace_root) {
@@ -76,15 +77,7 @@ pub fn handle_commit(
     };
 
     let mut tracker = HealthTracker::new();
-    match commit_workspace(
-        &(storage as Arc<dyn CrdtStorage>),
-        &workspace,
-        &body_docs,
-        &repo,
-        &workspace_id,
-        &options,
-        &mut tracker,
-    ) {
+    match commit_workspace(&files, &repo, &options, &mut tracker) {
         Ok(result) => {
             print_commit_result(&result);
             true
@@ -175,18 +168,4 @@ pub fn handle_log(workspace_root: &Path, count: usize) -> bool {
 fn print_commit_result(result: &CommitResult) {
     let short_id = &result.commit_id.to_string()[..8];
     println!("Committed {} files [{}]", result.file_count, short_id);
-    if result.compacted {
-        println!("  CRDT updates compacted");
-    }
-}
-
-/// Find the workspace ID by scanning storage for workspace docs.
-fn find_workspace_id(storage: &Arc<SqliteStorage>) -> Option<String> {
-    let docs = storage.list_docs().ok()?;
-    for doc in docs {
-        if let Some(id) = doc.strip_prefix("workspace:") {
-            return Some(id.to_string());
-        }
-    }
-    None
 }

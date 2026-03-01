@@ -6,6 +6,7 @@ contents:
   - "[Diaryx CLI README](/crates/diaryx/README.md)"
   - "[Diaryx Apple README](/crates/diaryx_apple/README.md)"
   - "[Diaryx Core README](/crates/diaryx_core/README.md)"
+  - "[Diaryx Git README](/crates/diaryx_git/README.md)"
   - "[Diaryx Publish README](/crates/diaryx_publish/README.md)"
   - "[Diaryx Publish Extism README](/crates/diaryx_publish_extism/README.md)"
   - "[Diaryx WASM README](/crates/diaryx_wasm/README.md)"
@@ -23,6 +24,7 @@ This folder contains Diaryx crates for core features and platform bindings.
 - `[diaryx](/crates/diaryx/README.md)`: CLI interface
 - `[diaryx_apple](/crates/diaryx_apple/README.md)`: UniFFI bridge crate for Apple clients
 - `[diaryx_core](/crates/diaryx_core/README.md)`: Core functions shared across all Diaryx clients
+- `[diaryx_git](/crates/diaryx_git/README.md)`: Git version history — commits materialized workspace state
 - `[diaryx_publish](/crates/diaryx_publish/README.md)`: Publishing pipeline — converts workspace markdown to HTML
 - `[diaryx_publish_extism](/crates/diaryx_publish_extism/README.md)`: Extism guest plugin for export/publish commands and runtime format conversion
 - `[diaryx_wasm](/crates/diaryx_wasm/README.md)`: WASM version of `diaryx_core` to be used in the web client at `[../apps/web](/apps/web/README.md)`

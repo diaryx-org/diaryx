@@ -370,6 +370,7 @@ fn publish_plugin_manifest() -> PluginManifest {
                     "GetAvailableAudiences".into(),
                     "ExportBinaryAttachments".into(),
                     "GetExportFormats".into(),
+                    "PublishWorkspace".into(),
                 ],
             },
         ],
@@ -541,6 +542,38 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                     { "id": "rst", "label": "reStructuredText", "extension": ".rst", "binary": false, "requiresConverter": true },
                 ]);
                 Ok(formats)
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "PublishWorkspace" => {
+                let workspace_root = params["workspace_root"]
+                    .as_str()
+                    .ok_or_else(|| PluginError::CommandError("missing workspace_root".into()))?;
+                let destination = params["destination"]
+                    .as_str()
+                    .ok_or_else(|| PluginError::CommandError("missing destination".into()))?;
+
+                let resolved_root = self.resolve_path(workspace_root);
+                let dest_path = PathBuf::from(destination);
+
+                let options = crate::types::PublishOptions {
+                    single_file: params["single_file"].as_bool().unwrap_or(false),
+                    title: params["title"].as_str().map(String::from),
+                    audience: params["audience"].as_str().map(String::from),
+                    force: params["force"].as_bool().unwrap_or(false),
+                    copy_attachments: params["copy_attachments"].as_bool().unwrap_or(true),
+                };
+
+                let publisher = crate::publisher::Publisher::new(self.fs.clone());
+                let result = publisher
+                    .publish(&resolved_root, &dest_path, &options)
+                    .await
+                    .map_err(|e| PluginError::CommandError(e.to_string()))?;
+
+                Ok(serde_json::json!({
+                    "files_processed": result.files_processed,
+                    "attachments_copied": result.attachments_copied,
+                }))
             }
 
             _ => Err(PluginError::CommandError(format!(

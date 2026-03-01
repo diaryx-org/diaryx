@@ -5,7 +5,8 @@
 use std::path::Path;
 
 use diaryx_core::config::Config;
-use diaryx_sync::SqliteStorage;
+
+use crate::cli::plugin_loader::CliSyncContext;
 
 /// Handle the status command - show sync status.
 pub fn handle_status(config: &Config, workspace_root: &Path) {
@@ -46,10 +47,12 @@ pub fn handle_status(config: &Config, workspace_root: &Path) {
     if crdt_db.exists() {
         println!("CRDT database: {}", crdt_db.display());
 
-        // Try to get some stats from the database
-        if let Ok(storage) = SqliteStorage::open(&crdt_db) {
-            if let Ok(files) = storage.query_active_files() {
-                println!("  Files tracked: {}", files.len());
+        // Try to get file count from sync plugin
+        if let Some(ctx) = CliSyncContext::load(workspace_root) {
+            if let Ok(data) = ctx.cmd("ListFiles", serde_json::json!({})) {
+                if let Some(files) = data.get("files").and_then(|v| v.as_array()) {
+                    println!("  Files tracked: {}", files.len());
+                }
             }
         }
     } else {

@@ -447,6 +447,9 @@ impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
             // === Workspace Initialization ===
             "InitializeWorkspaceCrdt" => self.cmd_initialize_workspace_crdt(params).await,
 
+            // === Materialization ===
+            "MaterializeWorkspace" => self.cmd_materialize_workspace(),
+
             other => Err(PluginError::CommandError(format!(
                 "Unknown sync command: {other}"
             ))),
@@ -1202,6 +1205,41 @@ impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
             Some(data) => Ok(serde_json::json!({ "data": encode_b64(&data) })),
             None => Ok(JsonValue::Null),
         }
+    }
+}
+
+// ============================================================================
+// Command handler — MaterializeWorkspace
+// ============================================================================
+
+impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
+    /// Materialize all active (non-deleted) files from the CRDT into a JSON array
+    /// of `{ path, content }` objects. Used by the CLI for git commit operations.
+    fn cmd_materialize_workspace(&self) -> Result<JsonValue, PluginError> {
+        let workspace_id = self
+            .workspace_crdt
+            .doc_name()
+            .strip_prefix("workspace:")
+            .unwrap_or("default");
+
+        let result = crate::materialize::materialize_workspace(
+            &self.workspace_crdt,
+            &self.body_docs,
+            workspace_id,
+        );
+
+        let files: Vec<JsonValue> = result
+            .files
+            .into_iter()
+            .map(|f| {
+                serde_json::json!({
+                    "path": f.path,
+                    "content": f.content,
+                })
+            })
+            .collect();
+
+        Ok(serde_json::json!({ "files": files }))
     }
 }
 

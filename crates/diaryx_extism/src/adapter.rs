@@ -61,8 +61,8 @@ impl ExtismPluginAdapter {
         }
     }
 
-    /// Call a guest-exported function with a JSON input, returning the raw output bytes.
-    fn call_guest(&self, func: &str, input: &str) -> Result<String, PluginError> {
+    /// Call a guest-exported function with a JSON input, returning the output string.
+    pub fn call_guest(&self, func: &str, input: &str) -> Result<String, PluginError> {
         let mut plugin = self
             .inner
             .lock()

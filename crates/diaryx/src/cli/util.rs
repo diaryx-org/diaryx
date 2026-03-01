@@ -156,42 +156,6 @@ pub fn format_workspace_link(
     calculate_relative_path(from_path, to_path)
 }
 
-/// Parse a `link_format` string from frontmatter.
-pub fn parse_link_format(raw: &str) -> Option<LinkFormat> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "markdown_root" => Some(LinkFormat::MarkdownRoot),
-        "markdown_relative" => Some(LinkFormat::MarkdownRelative),
-        "plain_relative" => Some(LinkFormat::PlainRelative),
-        "plain_canonical" => Some(LinkFormat::PlainCanonical),
-        _ => None,
-    }
-}
-
-/// Detect workspace link format from the root index file if available.
-pub fn detect_workspace_link_format(workspace_root: &Path) -> Option<LinkFormat> {
-    for index_name in ["README.md", "index.md"] {
-        let path = workspace_root.join(index_name);
-        if !path.exists() {
-            continue;
-        }
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(parsed) = diaryx_core::frontmatter::parse_or_empty(&content) else {
-            continue;
-        };
-        if let Some(raw) = parsed
-            .frontmatter
-            .get("link_format")
-            .and_then(|v| v.as_str())
-            && let Some(format) = parse_link_format(raw)
-        {
-            return Some(format);
-        }
-    }
-    None
-}
-
 /// Resolve a frontmatter reference to canonical workspace-relative path.
 pub fn canonicalize_frontmatter_reference(
     raw_value: &str,

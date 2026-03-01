@@ -2188,11 +2188,13 @@ dependencies = [
  "clap",
  "crossterm 0.28.1",
  "diaryx_core",
- "diaryx_publish",
+ "diaryx_extism",
+ "diaryx_git",
  "diaryx_sync",
  "dirs 6.0.0",
  "env_logger",
  "futures-lite 2.6.1",
+ "futures-util",
  "glob",
  "indexmap 2.13.0",
  "log",
@@ -2206,6 +2208,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-tungstenite 0.24.0",
  "tower-http",
  "tui-tree-widget",
  "urlencoding",
@@ -2300,6 +2303,18 @@ dependencies = [
  "ureq 2.12.1",
  "wasi-common",
  "wasmtime",
+]
+
+[[package]]
+name = "diaryx_git"
+version = "1.2.1"
+dependencies = [
+ "chrono",
+ "diaryx_core",
+ "git2",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -8593,6 +8608,20 @@ dependencies = [
 
 [[package]]
 name = "tokio-tungstenite"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "edc5f74e248dc973e0dbb7b74c7e0d6fcc301c694ff50049504004ef4d0cdcd9"
+dependencies = [
+ "futures-util",
+ "log",
+ "native-tls",
+ "tokio",
+ "tokio-native-tls",
+ "tungstenite 0.24.0",
+]
+
+[[package]]
+name = "tokio-tungstenite"
 version = "0.26.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a9daff607c6d2bf6c16fd681ccb7eecc83e4e2cdc1ca067ffaadfca5de7f084"
@@ -8935,6 +8964,25 @@ dependencies = [
  "ratatui-core",
  "ratatui-widgets",
  "unicode-width",
+]
+
+[[package]]
+name = "tungstenite"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18e5b8366ee7a95b16d32197d0b2604b43a0be89dc5fac9f8e96ccafbaedda8a"
+dependencies = [
+ "byteorder",
+ "bytes",
+ "data-encoding",
+ "http 1.4.0",
+ "httparse",
+ "log",
+ "native-tls",
+ "rand 0.8.5",
+ "sha1",
+ "thiserror 1.0.69",
+ "utf-8",
 ]
 
 [[package]]

@@ -49,11 +49,17 @@ mod sync;
 mod nav;
 
 /// Web-based editing via local sync server
-#[cfg(feature = "web-edit")]
+#[cfg(feature = "edit")]
 mod edit;
 
 /// Template management
 mod template;
+
+/// Plugin storage for Extism plugins
+mod plugin_storage;
+
+/// Plugin loading and context (Extism integration)
+mod plugin_loader;
 
 /// Shared CLI utilities
 mod util;
@@ -282,7 +288,7 @@ pub fn run_cli() {
             git::handle_log(&workspace_root, count)
         }
 
-        #[cfg(feature = "web-edit")]
+        #[cfg(feature = "edit")]
         Commands::Edit { url, port } => {
             // Edit defaults to the current directory (not the configured default workspace)
             // since it's meant for editing local files in a web editor.

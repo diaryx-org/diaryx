@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
 use diaryx_core::pandoc;
 use diaryx_core::workspace::Workspace;
-use diaryx_publish::{PublishOptions, Publisher};
+
+use crate::cli::plugin_loader::CliPublishContext;
 
 /// Helper to run async operations in sync context
 fn block_on<F: std::future::Future>(f: F) -> F::Output {
@@ -65,15 +66,6 @@ pub fn handle_publish(
         return;
     }
 
-    // Build options
-    let options = PublishOptions {
-        single_file,
-        title,
-        audience: audience.clone(),
-        force,
-        copy_attachments: !no_copy_attachments,
-    };
-
     // Show plan
     println!("Publish Plan");
     println!("============");
@@ -100,13 +92,38 @@ pub fn handle_publish(
         return;
     }
 
-    // Execute publish
-    let fs = SyncToAsyncFs::new(RealFileSystem);
-    let publisher = Publisher::new(fs);
+    // Execute publish via plugin
+    let ctx = match CliPublishContext::load(&workspace_root) {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            eprintln!("✗ Failed to load publish plugin: {}", e);
+            return;
+        }
+    };
 
-    match block_on(publisher.publish(&workspace_root, &destination, &options)) {
+    match ctx.cmd(
+        "PublishWorkspace",
+        serde_json::json!({
+            "workspace_root": workspace_root.to_string_lossy(),
+            "destination": destination.to_string_lossy(),
+            "single_file": single_file,
+            "title": title,
+            "audience": audience,
+            "force": force,
+            "copy_attachments": !no_copy_attachments,
+        }),
+    ) {
         Ok(result) => {
-            if result.files_processed == 0 {
+            let files_processed = result
+                .get("files_processed")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let attachments_copied = result
+                .get("attachments_copied")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+
+            if files_processed == 0 {
                 println!("⚠ No files to publish");
                 if audience.is_some() {
                     println!("  (no files match the specified audience)");
@@ -116,19 +133,15 @@ pub fn handle_publish(
 
             println!(
                 "✓ Published {} page{} to {}",
-                result.files_processed,
-                if result.files_processed == 1 { "" } else { "s" },
+                files_processed,
+                if files_processed == 1 { "" } else { "s" },
                 destination.display()
             );
-            if result.attachments_copied > 0 {
+            if attachments_copied > 0 {
                 println!(
                     "  Copied {} attachment{}",
-                    result.attachments_copied,
-                    if result.attachments_copied == 1 {
-                        ""
-                    } else {
-                        "s"
-                    }
+                    attachments_copied,
+                    if attachments_copied == 1 { "" } else { "s" }
                 );
             }
 

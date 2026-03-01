@@ -129,6 +129,16 @@ function setPluginEnabled(pluginId: PluginId | string, enabled: boolean): void {
   persistPluginEnabledState(next);
 }
 
+/** Remove a plugin's enabled state entirely (used on uninstall). */
+function clearPluginEnabled(pluginId: PluginId | string): void {
+  const id = String(pluginId);
+  if (!(id in pluginEnabledState)) return;
+  const next = { ...pluginEnabledState };
+  delete next[id];
+  pluginEnabledState = next;
+  persistPluginEnabledState(next);
+}
+
 // ============================================================================
 // Derived Selectors
 // ============================================================================
@@ -387,6 +397,7 @@ export function getPluginStore() {
     preloadInsertCommandIcons,
     isPluginEnabled,
     setPluginEnabled,
+    clearPluginEnabled,
     init,
     setRuntimeManifestOverride,
     clearRuntimeManifestOverride,

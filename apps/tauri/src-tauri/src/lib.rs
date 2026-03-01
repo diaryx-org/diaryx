@@ -152,6 +152,9 @@ pub fn run() {
             // Extism Sync Plugin (load/unload on demand)
             commands::load_sync_plugin,
             commands::unload_sync_plugin,
+            // Extism User Plugin Management
+            commands::install_user_plugin,
+            commands::uninstall_user_plugin,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

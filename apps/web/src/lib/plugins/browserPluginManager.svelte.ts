@@ -152,6 +152,16 @@ export async function installPlugin(
     `[browserPluginManager] Installed plugin: ${id} (${plugin.manifest.name})`,
   );
 
+  // Close and remove any existing instance with the same ID (idempotent reinstall).
+  const existing = loadedPlugins.get(id);
+  if (existing) {
+    await existing.close();
+    loadedPlugins.delete(id);
+    browserManifests = browserManifests.filter(
+      (m) => (m.id as unknown as string) !== id,
+    );
+  }
+
   // Persist to IndexedDB.
   await storePlugin({
     id,
@@ -182,6 +192,7 @@ export async function uninstallPlugin(pluginId: string): Promise<void> {
   browserManifests = browserManifests.filter(
     (m) => (m.id as unknown as string) !== pluginId,
   );
+  getPluginStore().clearPluginEnabled(pluginId);
 }
 
 /**

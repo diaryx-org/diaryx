@@ -578,6 +578,15 @@ export interface Backend {
   /** Download an attachment via Rust HTTP client. Returns raw bytes. */
   syncDownloadAttachment?(serverUrl: string, authToken: string, workspaceId: string, hash: string): Promise<Uint8Array>;
 
+  // =========================================================================
+  // Plugin Management (Tauri only)
+  // =========================================================================
+
+  /** Install a user plugin from WASM bytes. Returns the manifest JSON string. */
+  installPlugin?(wasmBytes: Uint8Array): Promise<string>;
+  /** Uninstall a user plugin by ID. */
+  uninstallPlugin?(pluginId: string): Promise<void>;
+
 }
 
 // ============================================================================

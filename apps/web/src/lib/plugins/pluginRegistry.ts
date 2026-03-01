@@ -19,7 +19,7 @@ export interface PluginRegistry {
   plugins: RegistryPlugin[];
 }
 
-const REGISTRY_URL = "https://cdn.diaryx.com/plugins/plugins.json";
+const REGISTRY_URL = "https://cdn.diaryx.org/plugins/plugins.json";
 
 let cachedRegistry: PluginRegistry | null = null;
 

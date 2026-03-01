@@ -481,6 +481,172 @@ pub async fn unload_sync_plugin<R: Runtime>(_app: AppHandle<R>) -> Result<(), Se
 }
 
 // ============================================================================
+// User Plugin Install/Uninstall
+// ============================================================================
+
+/// Install a user plugin from raw WASM bytes.
+///
+/// Writes the WASM to `~/.diaryx/plugins/{plugin_id}/plugin.wasm`, loads it
+/// to extract the manifest, then clears the cached Diaryx instance so the
+/// plugin is picked up on the next `execute()` call.
+///
+/// Returns the plugin manifest as a JSON string.
+#[cfg(feature = "extism-plugins")]
+#[tauri::command]
+pub async fn install_user_plugin<R: Runtime>(
+    app: AppHandle<R>,
+    wasm_bytes: Vec<u8>,
+) -> Result<String, SerializableError> {
+    use diaryx_core::plugin::Plugin;
+
+    log::info!(
+        "[install_user_plugin] Installing plugin ({} KB)",
+        wasm_bytes.len() / 1024
+    );
+
+    // Write to a temp location first so we can call load_plugin_from_wasm (file-based).
+    let tmp_dir = std::env::temp_dir().join("diaryx-plugin-install");
+    std::fs::create_dir_all(&tmp_dir).map_err(|e| SerializableError {
+        kind: "IoError".to_string(),
+        message: format!("Failed to create temp directory: {e}"),
+        path: None,
+    })?;
+    let tmp_wasm = tmp_dir.join("plugin.wasm");
+    std::fs::write(&tmp_wasm, &wasm_bytes).map_err(|e| SerializableError {
+        kind: "IoError".to_string(),
+        message: format!("Failed to write temp WASM: {e}"),
+        path: None,
+    })?;
+
+    // Load to extract the manifest.
+    let fs: Arc<dyn diaryx_core::fs::AsyncFileSystem> =
+        Arc::new(SyncToAsyncFs::new(RealFileSystem));
+    let host_ctx = Arc::new(diaryx_extism::HostContext::with_fs(fs));
+
+    let adapter = diaryx_extism::load_plugin_from_wasm(&tmp_wasm, host_ctx, None).map_err(|e| {
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        SerializableError {
+            kind: "PluginError".to_string(),
+            message: format!("Invalid WASM plugin: {e}"),
+            path: None,
+        }
+    })?;
+
+    let manifest = adapter.manifest();
+    let plugin_id = manifest.id.clone();
+    let manifest_json = serde_json::to_string(&manifest).map_err(|e| SerializableError {
+        kind: "SerializationError".to_string(),
+        message: format!("Failed to serialize manifest: {e}"),
+        path: None,
+    })?;
+
+    // Persist WASM to ~/.diaryx/plugins/{plugin_id}/plugin.wasm
+    let plugins_dir = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("diaryx")
+        .join("plugins")
+        .join(&plugin_id);
+    std::fs::create_dir_all(&plugins_dir).map_err(|e| SerializableError {
+        kind: "IoError".to_string(),
+        message: format!("Failed to create plugin directory: {e}"),
+        path: Some(plugins_dir.display().to_string()),
+    })?;
+
+    let wasm_path = plugins_dir.join("plugin.wasm");
+    std::fs::rename(&tmp_wasm, &wasm_path)
+        .or_else(|_| {
+            // rename fails across filesystems; fall back to copy+delete
+            std::fs::copy(&tmp_wasm, &wasm_path).map(|_| ())
+        })
+        .map_err(|e| SerializableError {
+            kind: "IoError".to_string(),
+            message: format!("Failed to write plugin WASM: {e}"),
+            path: Some(wasm_path.display().to_string()),
+        })?;
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+
+    // Clear cached Diaryx so next execute() picks up the new plugin.
+    let crdt_state = app.state::<CrdtState>();
+    {
+        let mut diaryx_guard = acquire_lock(&crdt_state.diaryx)?;
+        *diaryx_guard = None;
+    }
+
+    log::info!(
+        "[install_user_plugin] Installed: {} ({})",
+        manifest.name,
+        plugin_id
+    );
+    Ok(manifest_json)
+}
+
+/// Uninstall a user plugin by ID.
+///
+/// Deletes `~/.diaryx/plugins/{plugin_id}/` and clears the cached Diaryx instance.
+#[cfg(feature = "extism-plugins")]
+#[tauri::command]
+pub async fn uninstall_user_plugin<R: Runtime>(
+    app: AppHandle<R>,
+    plugin_id: String,
+) -> Result<(), SerializableError> {
+    log::info!("[uninstall_user_plugin] Uninstalling plugin: {}", plugin_id);
+
+    let plugins_dir = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("diaryx")
+        .join("plugins")
+        .join(&plugin_id);
+
+    if plugins_dir.exists() {
+        std::fs::remove_dir_all(&plugins_dir).map_err(|e| SerializableError {
+            kind: "IoError".to_string(),
+            message: format!("Failed to remove plugin directory: {e}"),
+            path: Some(plugins_dir.display().to_string()),
+        })?;
+    }
+
+    // Clear cached Diaryx so the plugin is no longer registered.
+    let crdt_state = app.state::<CrdtState>();
+    {
+        let mut diaryx_guard = acquire_lock(&crdt_state.diaryx)?;
+        *diaryx_guard = None;
+    }
+
+    log::info!("[uninstall_user_plugin] Uninstalled: {}", plugin_id);
+    Ok(())
+}
+
+/// Stub: install_user_plugin when extism-plugins feature is disabled.
+#[cfg(not(feature = "extism-plugins"))]
+#[tauri::command]
+pub async fn install_user_plugin<R: Runtime>(
+    _app: AppHandle<R>,
+    _wasm_bytes: Vec<u8>,
+) -> Result<String, SerializableError> {
+    Err(SerializableError {
+        kind: "Unsupported".to_string(),
+        message: "Extism plugin support is not enabled. Build with --features extism-plugins."
+            .to_string(),
+        path: None,
+    })
+}
+
+/// Stub: uninstall_user_plugin when extism-plugins feature is disabled.
+#[cfg(not(feature = "extism-plugins"))]
+#[tauri::command]
+pub async fn uninstall_user_plugin<R: Runtime>(
+    _app: AppHandle<R>,
+    _plugin_id: String,
+) -> Result<(), SerializableError> {
+    Err(SerializableError {
+        kind: "Unsupported".to_string(),
+        message: "Extism plugin support is not enabled. Build with --features extism-plugins."
+            .to_string(),
+        path: None,
+    })
+}
+
+// ============================================================================
 // Unified Command API
 // ============================================================================
 

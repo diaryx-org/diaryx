@@ -632,20 +632,11 @@
           console.warn('[App] Failed to load browser plugins:', e),
         );
         // Always re-install built-in plugins so dev rebuilds take effect
-        const builtinPlugins = [
-          { url: '/plugins/diaryx_ai.wasm', id: 'diaryx.ai', name: 'AI Assistant' },
-          { url: '/plugins/diaryx_math.wasm', id: 'diaryx.math', name: 'Math' },
-          { url: '/plugins/diaryx_publish.wasm', id: 'publish', name: 'Publish' },
-        ];
-        for (const bp of builtinPlugins) {
+        for (const bp of m.BUILTIN_PLUGINS) {
           try {
             const resp = await fetch(bp.url);
             if (resp.ok) {
               const bytes = await resp.arrayBuffer();
-              const existing = m.getPlugin(bp.id);
-              if (existing) {
-                await m.uninstallPlugin(bp.id);
-              }
               await m.installPlugin(bytes, bp.name);
             }
           } catch (e) {

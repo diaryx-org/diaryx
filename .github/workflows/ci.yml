@@ -136,6 +136,12 @@ jobs:
           name: wasm-package
           path: apps/web/src/lib/wasm/
 
+      - name: Upload plugin WASM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-wasm
+          path: apps/web/public/plugins/
+
       - name: Upload bindings artifact
         uses: actions/upload-artifact@v4
         with:
@@ -207,6 +213,12 @@ jobs:
           name: wasm-package
           path: wasm-output/
 
+      - name: Download plugin WASM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: plugin-wasm
+          path: plugin-output/
+
       - name: Upload WASM to CDN (SHA)
         uses: ./.github/actions/upload-wasm-cdn
         with:
@@ -226,6 +238,68 @@ jobs:
           r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           r2-endpoint: ${{ secrets.R2_ENDPOINT }}
           r2-bucket: ${{ secrets.R2_BUCKET }}
+
+      - name: Upload plugins to CDN and generate registry
+        if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          ENDPOINT="${{ secrets.R2_ENDPOINT }}"
+          BUCKET="${{ secrets.R2_BUCKET }}"
+          CDN_BASE="https://cdn.diaryx.org/plugins"
+
+          # Upload each plugin WASM to plugins/ prefix
+          for f in plugin-output/*.wasm; do
+            [ -f "$f" ] || continue
+            echo "Uploading $(basename "$f") to plugins/"
+            aws s3 cp "$f" "s3://${BUCKET}/plugins/$(basename "$f")" \
+              --endpoint-url "${ENDPOINT}" \
+              --content-type "application/wasm" \
+              --cache-control "public, max-age=300"
+          done
+
+          # Generate plugins.json registry from the built plugin files
+          cat > plugins.json <<'REGISTRY'
+          {
+            "version": 1,
+            "plugins": [
+              {
+                "id": "diaryx.ai",
+                "name": "AI Assistant",
+                "description": "AI-powered writing assistant",
+                "version": "0.1.0",
+                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_ai.wasm",
+                "builtin": true
+              },
+              {
+                "id": "diaryx.math",
+                "name": "Math",
+                "description": "LaTeX math rendering",
+                "version": "0.1.0",
+                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_math.wasm",
+                "builtin": true
+              },
+              {
+                "id": "publish",
+                "name": "Publish",
+                "description": "Export and publish workspaces",
+                "version": "0.1.0",
+                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_publish.wasm",
+                "builtin": true
+              }
+            ]
+          }
+          REGISTRY
+          sed -i "s|CDN_BASE_PLACEHOLDER|${CDN_BASE}|g" plugins.json
+
+          aws s3 cp plugins.json "s3://${BUCKET}/plugins/plugins.json" \
+            --endpoint-url "${ENDPOINT}" \
+            --content-type "application/json" \
+            --cache-control "public, max-age=300"
+
+          echo "Plugin registry uploaded: ${CDN_BASE}/plugins.json"
 
   # Publish WASM bindings to npm (JS glue + types, no .wasm binary)
   publish-wasm-npm:

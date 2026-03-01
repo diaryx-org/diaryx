@@ -381,6 +381,37 @@ pub fn set_config(input: String) -> FnResult<String> {
     Ok(String::new())
 }
 
+/// Execute a typed Command (same format as Diaryx::execute).
+///
+/// Takes a full serialized Command JSON, calls handle_typed_command on the
+/// inner PublishPlugin, and returns a full serialized Response JSON.
+/// Returns empty string if the command is not handled by this plugin.
+#[plugin_fn]
+pub fn execute_typed_command(input: String) -> FnResult<String> {
+    use diaryx_core::command::Command;
+
+    let cmd: Command = serde_json::from_str(&input)
+        .map_err(|e| extism_pdk::Error::msg(format!("Invalid command: {e}")))?;
+
+    let result = state::with_state(|s| {
+        poll_future(diaryx_core::plugin::WorkspacePlugin::handle_typed_command(
+            &s.publish_plugin,
+            &cmd,
+        ))
+    })
+    .map_err(|e| extism_pdk::Error::msg(e))?;
+
+    match result {
+        Some(Ok(response)) => {
+            let json = serde_json::to_string(&response)
+                .map_err(|e| extism_pdk::Error::msg(format!("Serialize error: {e}")))?;
+            Ok(json)
+        }
+        Some(Err(e)) => Err(extism_pdk::Error::msg(format!("{e}")).into()),
+        None => Ok(String::new()),
+    }
+}
+
 fn all_commands() -> Vec<String> {
     [
         "PlanExport",

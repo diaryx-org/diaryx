@@ -669,6 +669,15 @@ export function createApi(backend: Backend) {
       return expectResponse(response, 'Bytes').data;
     },
 
+    /** Resolve an attachment path to its storage path (for use with readBinary). */
+    async resolveAttachmentStoragePath(entryPath: string, attachmentPath: string): Promise<string> {
+      const response = await backend.execute({
+        type: 'ResolveAttachmentPath',
+        params: { entry_path: entryPath, attachment_path: attachmentPath },
+      } as any);
+      return expectResponse(response, 'String').data;
+    },
+
     /** Move an attachment from one entry to another. Returns the new attachment path. */
     async moveAttachment(
       sourceEntryPath: string,

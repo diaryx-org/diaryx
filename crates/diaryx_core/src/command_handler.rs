@@ -2244,6 +2244,15 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 Ok(Response::Bytes(data))
             }
 
+            Command::ResolveAttachmentPath {
+                entry_path,
+                attachment_path,
+            } => {
+                let rel_path = resolve_attachment_storage_path(&entry_path, &attachment_path);
+                let full_path = self.resolve_fs_path(&rel_path);
+                Ok(Response::String(full_path.to_string_lossy().into_owned()))
+            }
+
             Command::MoveAttachment {
                 source_entry_path,
                 target_entry_path,

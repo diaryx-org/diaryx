@@ -336,11 +336,8 @@ export async function handleAttachmentFileSelect(
 
       // If it's an image, also insert it into the editor at cursor
       if (file.type.startsWith('image/') && editorRef) {
-        const data = await api.getAttachmentData(
-          currentEntry.path,
-          entryRelativePath
-        );
-        const blob = new Blob([new Uint8Array(data)], { type: file.type });
+        // Use the bytes already in memory — no need to re-read from storage
+        const blob = new Blob([bytes], { type: file.type });
         const blobUrl = URL.createObjectURL(blob);
 
         // Track for cleanup
@@ -411,13 +408,9 @@ export async function handleEditorFileDrop(
 
     // For images, create blob URL for display in editor
     if (file.type.startsWith('image/')) {
-      const data = await api.getAttachmentData(
-        currentEntry.path,
-        entryRelativePath
-      );
-      // Use the file's actual MIME type when available, fall back to extension-based lookup
+      // Use the bytes already in memory — no need to re-read from storage
       const mimeType = file.type || getMimeType(file.name);
-      const blob = new Blob([new Uint8Array(data)], { type: mimeType });
+      const blob = new Blob([bytes], { type: mimeType });
       const blobUrl = URL.createObjectURL(blob);
 
       // Track for cleanup

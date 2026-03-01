@@ -60,6 +60,14 @@ export interface BrowserExtismPlugin {
   callEvent(event: GuestEvent): Promise<void>;
   /** Dispatch a command to the guest. */
   callCommand(cmd: string, params: unknown): Promise<CommandResponse>;
+  /**
+   * Execute a typed Command (same format as backend.execute).
+   * Calls the guest's `execute_typed_command` export.
+   * Returns the Response if handled, null if the plugin doesn't handle this command.
+   */
+  callTypedCommand(command: unknown): Promise<unknown | null>;
+  /** Call a named export with binary input, returning binary output. */
+  callBinary(exportName: string, data: Uint8Array): Promise<Uint8Array | null>;
   /** Get the guest's current configuration. */
   getConfig(): Promise<Record<string, unknown>>;
   /** Update the guest's configuration. */
@@ -258,6 +266,58 @@ function buildHostFunctions() {
           );
         }
       },
+      async host_write_file(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as
+            | { path: string; content: string }
+            | undefined;
+          if (!input) return cp.store("");
+          const backend = getBackendSync();
+          await backend.execute({
+            type: "WriteFile",
+            params: { path: input.path, content: input.content },
+          } as any);
+          return cp.store("");
+        } catch {
+          return cp.store("");
+        }
+      },
+      async host_write_binary(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as
+            | { path: string; content: string }
+            | undefined;
+          if (!input) return cp.store("");
+          // Decode base64 to Uint8Array
+          const binary = atob(input.content);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+          }
+          const backend = getBackendSync();
+          await backend.writeBinary(input.path, bytes);
+          return cp.store("");
+        } catch {
+          return cp.store("");
+        }
+      },
+      host_emit_event(cp: CallContext, offs: bigint) {
+        try {
+          const eventJson = cp.read(offs)?.text();
+          if (!eventJson) return cp.store("");
+          const backend = getBackendSync();
+          if (!backend) return cp.store("");
+          const event = JSON.parse(eventJson);
+          backend.emitFileSystemEvent?.(event);
+          return cp.store("");
+        } catch {
+          return cp.store("");
+        }
+      },
+      host_ws_request(cp: CallContext, _offs: bigint) {
+        // No-op stub — WebSocket lifecycle is managed by the TypeScript transport.
+        return cp.store("");
+      },
       async host_run_wasi_module(cp: CallContext, offs: bigint) {
         try {
           const input = cp.read(offs)?.json() as WasiRunRequest | undefined;
@@ -448,6 +508,46 @@ export async function loadBrowserPlugin(
             success: false,
             error: e instanceof Error ? e.message : String(e),
           };
+        }
+      });
+    },
+
+    async callTypedCommand(command: unknown): Promise<unknown | null> {
+      return enqueue(async () => {
+        try {
+          const output = await plugin.call(
+            "execute_typed_command",
+            JSON.stringify(command),
+          );
+          if (!output) return null;
+          const text = output.text();
+          if (!text) return null;
+          return JSON.parse(text);
+        } catch (e) {
+          console.error(
+            `[extism] ${manifest.id}: execute_typed_command failed:`,
+            e,
+          );
+          return null;
+        }
+      });
+    },
+
+    async callBinary(
+      exportName: string,
+      data: Uint8Array,
+    ): Promise<Uint8Array | null> {
+      return enqueue(async () => {
+        try {
+          const output = await plugin.call(exportName, data);
+          if (!output) return null;
+          return output.bytes();
+        } catch (e) {
+          console.error(
+            `[extism] ${manifest.id}: ${exportName} (binary) failed:`,
+            e,
+          );
+          return null;
         }
       });
     },

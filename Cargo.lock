@@ -2492,8 +2492,6 @@ dependencies = [
  "console_error_panic_hook",
  "console_log",
  "diaryx_core",
- "diaryx_publish",
- "diaryx_sync",
  "futures",
  "indexed-db",
  "js-sys",
@@ -2509,7 +2507,6 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
- "yrs 0.25.0",
 ]
 
 [[package]]

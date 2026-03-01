@@ -36,6 +36,7 @@ import {
   setCurrentWorkspaceId as registrySetCurrentWorkspaceId,
   addLocalWorkspace,
 } from '$lib/storage/localWorkspaceRegistry.svelte';
+import { PluginSyncAdapter } from '$lib/sync/pluginSyncAdapter';
 
 /**
  * Convert an HTTP URL to a WebSocket URL for sync v2 (/sync2).
@@ -235,8 +236,9 @@ let _initializing = false;
 let _initialSyncComplete = false;
 let _initialSyncResolvers: Array<() => void> = [];
 
-// Whether Rust-owned sync is active (WASM path)
+// Whether plugin-based sync is active (WASM path)
 let _rustSyncActive = false;
+let _pluginSyncAdapter: PluginSyncAdapter | null = null;
 
 // Cached server URL (WebSocket) for sync readiness checks
 let _serverUrl: string | null = null;
@@ -318,13 +320,47 @@ type SyncStatusCallback = (status: 'idle' | 'connecting' | 'syncing' | 'synced' 
 const syncStatusCallbacks = new Set<SyncStatusCallback>();
 
 // ===========================================================================
+// Plugin Sync Adapter
+// ===========================================================================
+
+/**
+ * Get or create a PluginSyncAdapter for the WASM/web sync path.
+ * Uses the browser-loaded Extism sync plugin for protocol processing.
+ */
+async function getOrCreateSyncAdapter(): Promise<PluginSyncAdapter | null> {
+  if (_pluginSyncAdapter) return _pluginSyncAdapter;
+  if (!_backend || !serverUrl) return null;
+
+  try {
+    const { getPlugin } = await import('$lib/plugins/browserPluginManager.svelte');
+    const syncPlugin = getPlugin('diaryx.sync');
+    if (!syncPlugin) {
+      console.error('[WorkspaceCrdtBridge] Sync plugin not loaded');
+      return null;
+    }
+
+    _pluginSyncAdapter = new PluginSyncAdapter({
+      syncPlugin,
+      backend: _backend,
+      getAuthToken: () => getToken() ?? undefined,
+      serverHttpUrl: serverUrl!,
+    });
+
+    return _pluginSyncAdapter;
+  } catch (e) {
+    console.error('[WorkspaceCrdtBridge] Failed to create sync adapter:', e);
+    return null;
+  }
+}
+
+// ===========================================================================
 // Configuration
 // ===========================================================================
 
 /**
  * Set the server URL for workspace sync.
  * For Tauri: Uses native Rust sync client for better performance.
- * For WASM/web: Creates and connects a UnifiedSyncTransport.
+ * For WASM/web: Uses PluginSyncAdapter with browser-loaded Extism sync plugin.
  *
  * IMPORTANT: setBackend() must be called before this function.
  * If backend is null, sync operations will fail silently or throw.
@@ -392,17 +428,27 @@ export async function setWorkspaceServer(url: string | null): Promise<void> {
         _nativeSyncActive = false;
       }
     } else {
-      // WASM/web: Rust owns the WebSocket via WasmSyncTransport
-      console.log('[WorkspaceCrdtBridge] Using Rust-owned sync (WASM)');
+      // WASM/web: Use PluginSyncAdapter with Extism sync plugin
+      console.log('[WorkspaceCrdtBridge] Using plugin sync adapter (WASM)');
 
       notifySyncStatus('connecting');
 
       try {
-        _rustSyncActive = true;
-        await _backend.startSync!(_serverUrl!, _workspaceId!, getToken() ?? undefined);
-        console.log('[WorkspaceCrdtBridge] Rust-owned sync started successfully');
+        const adapter = await getOrCreateSyncAdapter();
+        if (!adapter) {
+          // Fallback to Rust-owned sync if adapter unavailable
+          if (_backend.startSync) {
+            _rustSyncActive = true;
+            await _backend.startSync(_serverUrl!, _workspaceId!, getToken() ?? undefined);
+            console.log('[WorkspaceCrdtBridge] Fallback Rust-owned sync started');
+          }
+        } else {
+          _rustSyncActive = true;
+          await adapter.connect(_serverUrl!, _workspaceId!, getToken() ?? undefined);
+          console.log('[WorkspaceCrdtBridge] Plugin sync adapter connected');
+        }
       } catch (e) {
-        console.error('[WorkspaceCrdtBridge] Rust-owned sync failed to start:', e);
+        console.error('[WorkspaceCrdtBridge] Plugin sync failed to start:', e);
         notifySyncStatus('error', e);
         _rustSyncActive = false;
       }
@@ -506,13 +552,23 @@ async function disconnectExistingSync(): Promise<void> {
   // Reset body sync status since we're disconnecting
   collaborationStore.resetBodySyncStatus();
 
-  // Stop Rust-owned sync (WASM path)
-  if (_rustSyncActive && _backend?.stopSync) {
-    console.log('[WorkspaceCrdtBridge] Stopping Rust-owned sync');
-    try {
-      await _backend.stopSync();
-    } catch (e) {
-      console.warn('[WorkspaceCrdtBridge] Error stopping Rust-owned sync:', e);
+  // Stop plugin sync adapter (WASM path)
+  if (_rustSyncActive) {
+    console.log('[WorkspaceCrdtBridge] Stopping plugin sync');
+    if (_pluginSyncAdapter) {
+      try {
+        await _pluginSyncAdapter.disconnect();
+      } catch (e) {
+        console.warn('[WorkspaceCrdtBridge] Error stopping plugin sync:', e);
+      }
+      _pluginSyncAdapter = null;
+    } else if (_backend?.stopSync) {
+      // Fallback for legacy Rust-owned sync
+      try {
+        await _backend.stopSync();
+      } catch (e) {
+        console.warn('[WorkspaceCrdtBridge] Error stopping Rust-owned sync:', e);
+      }
     }
     _rustSyncActive = false;
   }
@@ -879,14 +935,24 @@ export async function startSessionSync(
 
   const sessionWsUrl = toWebSocketUrl(sessionServerUrl);
 
-  console.log('[WorkspaceCrdtBridge] Starting Rust-owned sync for session:', sessionWsUrl, 'session:', sessionCode);
+  console.log('[WorkspaceCrdtBridge] Starting plugin sync for session:', sessionWsUrl, 'session:', sessionCode);
 
   notifySyncStatus('connecting');
 
   try {
-    _rustSyncActive = true;
-    await _backend.startSync!(sessionWsUrl, _workspaceId!, getToken() ?? undefined, sessionCode);
-    console.log('[WorkspaceCrdtBridge] Session sync started successfully');
+    const adapter = await getOrCreateSyncAdapter();
+    if (!adapter) {
+      // Fallback to Rust-owned sync
+      if (_backend.startSync) {
+        _rustSyncActive = true;
+        await _backend.startSync(sessionWsUrl, _workspaceId!, getToken() ?? undefined, sessionCode);
+        console.log('[WorkspaceCrdtBridge] Fallback session sync started');
+      }
+    } else {
+      _rustSyncActive = true;
+      await adapter.connect(sessionWsUrl, _workspaceId!, getToken() ?? undefined, sessionCode);
+      console.log('[WorkspaceCrdtBridge] Plugin session sync started');
+    }
   } catch (e) {
     console.error('[WorkspaceCrdtBridge] Session sync failed to start:', e);
     notifySyncStatus('error', e);
@@ -950,12 +1016,21 @@ export async function stopSessionSync(): Promise<void> {
     await syncHelpers.configureSyncHandler(_backend, null, false);
   }
 
-  // Stop Rust-owned sync
-  if (_rustSyncActive && _backend?.stopSync) {
-    try {
-      await _backend.stopSync();
-    } catch (e) {
-      console.warn('[WorkspaceCrdtBridge] Error stopping session sync:', e);
+  // Stop plugin sync adapter
+  if (_rustSyncActive) {
+    if (_pluginSyncAdapter) {
+      try {
+        await _pluginSyncAdapter.disconnect();
+      } catch (e) {
+        console.warn('[WorkspaceCrdtBridge] Error stopping session sync:', e);
+      }
+      _pluginSyncAdapter = null;
+    } else if (_backend?.stopSync) {
+      try {
+        await _backend.stopSync();
+      } catch (e) {
+        console.warn('[WorkspaceCrdtBridge] Error stopping session sync:', e);
+      }
     }
     _rustSyncActive = false;
   }
@@ -1075,17 +1150,27 @@ export async function initWorkspace(options: WorkspaceInitOptions): Promise<void
             _nativeSyncActive = false;
           }
         } else {
-          // WASM/web: Rust owns the WebSocket via WasmSyncTransport
-          console.log('[WorkspaceCrdtBridge] Using Rust-owned sync during init (WASM)');
+          // WASM/web: Use PluginSyncAdapter with Extism sync plugin
+          console.log('[WorkspaceCrdtBridge] Using plugin sync adapter during init (WASM)');
 
           notifySyncStatus('connecting');
 
           try {
-            _rustSyncActive = true;
-            await _backend.startSync!(_serverUrl!, _workspaceId!, getToken() ?? undefined);
-            console.log('[WorkspaceCrdtBridge] Rust-owned sync started successfully (init)');
+            const adapter = await getOrCreateSyncAdapter();
+            if (!adapter) {
+              // Fallback to Rust-owned sync if adapter unavailable
+              if (_backend.startSync) {
+                _rustSyncActive = true;
+                await _backend.startSync(_serverUrl!, _workspaceId!, getToken() ?? undefined);
+                console.log('[WorkspaceCrdtBridge] Fallback Rust-owned sync started (init)');
+              }
+            } else {
+              _rustSyncActive = true;
+              await adapter.connect(_serverUrl!, _workspaceId!, getToken() ?? undefined);
+              console.log('[WorkspaceCrdtBridge] Plugin sync adapter connected (init)');
+            }
           } catch (e) {
-            console.error('[WorkspaceCrdtBridge] Rust-owned sync failed to start (init):', e);
+            console.error('[WorkspaceCrdtBridge] Plugin sync failed to start (init):', e);
             _rustSyncActive = false;
           }
         }
@@ -1655,8 +1740,14 @@ export async function ensureBodySync(filePath: string): Promise<void> {
 async function _ensureBodySyncImpl(filePath: string): Promise<void> {
   if (!_backend) return;
   if (!_nativeSyncActive && !_rustSyncActive) return;
-  await _backend.focusSyncFiles?.([filePath]);
-  await _backend.requestBodySync?.([filePath]);
+
+  if (_pluginSyncAdapter) {
+    await _pluginSyncAdapter.focusFiles([filePath]);
+    await _pluginSyncAdapter.requestBodySync([filePath]);
+  } else {
+    await _backend.focusSyncFiles?.([filePath]);
+    await _backend.requestBodySync?.([filePath]);
+  }
 }
 
 /**

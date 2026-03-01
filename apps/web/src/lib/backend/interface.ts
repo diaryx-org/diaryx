@@ -534,49 +534,17 @@ export interface Backend {
 
   /**
    * Focus on specific files for body sync.
-   * Available in WASM (Rust-owned transport).
+   * Available in Tauri (native Rust sync).
+   * For WASM, body sync is handled by the PluginSyncAdapter.
    */
   focusSyncFiles?(files: string[]): Promise<void>;
 
   /**
-   * Unfocus specific files.
-   * Available in WASM (Rust-owned transport).
-   */
-  unfocusSyncFiles?(files: string[]): Promise<void>;
-
-  /**
    * Request body sync for specific files.
-   * Available in WASM (Rust-owned transport).
+   * Available in Tauri (native Rust sync).
+   * For WASM, body sync is handled by the PluginSyncAdapter.
    */
   requestBodySync?(files: string[]): Promise<void>;
-
-  /**
-   * Notify Rust that a snapshot import has completed.
-   * Called after importFromZip() finishes so the sync handshake can continue.
-   */
-  notifySnapshotImported?(): Promise<void>;
-
-  // =========================================================================
-  // Share Session REST API (Rust-backed)
-  // =========================================================================
-
-  /** Create a share session. Returns { code, workspace_id, read_only }. */
-  createShareSession?(serverUrl: string, workspaceId: string, authToken: string, readOnly: boolean): Promise<any>;
-  /** Look up a share session by join code. Returns { code, workspace_id, read_only, peer_count }. */
-  lookupShareSession?(serverUrl: string, joinCode: string, authToken?: string): Promise<any>;
-  /** Delete a share session. */
-  deleteShareSession?(serverUrl: string, joinCode: string, authToken: string): Promise<void>;
-  /** Set read-only mode on a share session. */
-  setShareSessionReadOnly?(serverUrl: string, joinCode: string, authToken: string, readOnly: boolean): Promise<void>;
-
-  // =========================================================================
-  // Attachment Sync (Rust-backed)
-  // =========================================================================
-
-  /** Upload an attachment via Rust HTTP client. */
-  syncUploadAttachment?(serverUrl: string, authToken: string, workspaceId: string, entryPath: string, attachmentPath: string, hash: string, mimeType: string, data: Uint8Array): Promise<void>;
-  /** Download an attachment via Rust HTTP client. Returns raw bytes. */
-  syncDownloadAttachment?(serverUrl: string, authToken: string, workspaceId: string, hash: string): Promise<Uint8Array>;
 
   // =========================================================================
   // Plugin Management (Tauri only)

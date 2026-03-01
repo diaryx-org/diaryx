@@ -95,7 +95,6 @@ let syncContext: SyncContext = {
   workspaceId: null,
 };
 let backendApi: Api | null = null;
-let _syncBackend: Backend | null = null;
 let queuePumpScheduled = false;
 let uploadInFlight = 0;
 let downloadInFlight = 0;
@@ -273,20 +272,7 @@ async function processUpload(item: UploadQueueItem): Promise<void> {
     throw new Error("Attachment sync upload is not configured");
   }
 
-  // Try Rust-backed single-call upload first
-  if (_syncBackend?.syncUploadAttachment) {
-    const bytes = new Uint8Array(
-      await backendApi.getAttachmentData(item.entryPath, item.attachmentPath),
-    );
-    await _syncBackend.syncUploadAttachment(
-      syncContext.serverUrl, syncContext.authToken, item.workspaceId,
-      item.entryPath, item.attachmentPath, item.hash,
-      item.mimeType, bytes,
-    );
-    return;
-  }
-
-  // Fallback to multipart upload via authService
+  // Multipart upload via authService
   const auth = createAuthService(syncContext.serverUrl);
   const bytes = new Uint8Array(
     await backendApi.getAttachmentData(item.entryPath, item.attachmentPath),
@@ -365,17 +351,7 @@ async function processDownload(item: DownloadQueueItem): Promise<void> {
   }
   const storagePath = resolveAttachmentStoragePath(item.entryPath, item.attachmentPath);
 
-  // Try Rust-backed download first
-  if (_syncBackend?.syncDownloadAttachment) {
-    const bytes = await _syncBackend.syncDownloadAttachment(
-      syncContext.serverUrl, syncContext.authToken,
-      item.workspaceId, item.hash,
-    );
-    await backendApi.writeBinary(storagePath, bytes);
-    return;
-  }
-
-  // Fallback to authService download
+  // Download via authService
   const auth = createAuthService(syncContext.serverUrl);
   const response = await auth.downloadAttachment(
     syncContext.authToken,
@@ -540,7 +516,6 @@ export async function sha256Hex(bytes: Uint8Array): Promise<string> {
 }
 
 export function setAttachmentSyncBackend(backend: Backend | null): void {
-  _syncBackend = backend;
   backendApi = backend ? createApi(backend) : null;
   ensureOnlineHooks();
   scheduleQueuePump();

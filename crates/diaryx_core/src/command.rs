@@ -473,6 +473,18 @@ pub enum Command {
         attachment_path: String,
     },
 
+    /// Resolve an attachment path to its storage path (for use with readBinary).
+    ///
+    /// Returns the resolved filesystem-relative path as a string, allowing
+    /// callers to use the efficient binary transfer path (readBinary) instead
+    /// of the JSON-serialized GetAttachmentData command.
+    ResolveAttachmentPath {
+        /// Path to the entry file.
+        entry_path: String,
+        /// Path to the attachment (link ref or relative path).
+        attachment_path: String,
+    },
+
     /// Move an attachment from one entry to another.
     MoveAttachment {
         /// Path to the source entry file.
@@ -1303,7 +1315,8 @@ impl Command {
             // --- Attachments (entry_path only; attachment_path is a link ref) ---
             Command::UploadAttachment { entry_path, .. }
             | Command::DeleteAttachment { entry_path, .. }
-            | Command::GetAttachmentData { entry_path, .. } => {
+            | Command::GetAttachmentData { entry_path, .. }
+            | Command::ResolveAttachmentPath { entry_path, .. } => {
                 *entry_path = normalizer(entry_path);
             }
 

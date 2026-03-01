@@ -299,9 +299,10 @@ async function resolveAttachmentFromPaths(
   }
 
   try {
-    const data = await api.getAttachmentData(entryPath, sourceRelativePath);
+    const storagePath = await api.resolveAttachmentStoragePath(entryPath, sourceRelativePath);
     if (signal.aborted) return null;
-    const bytes = new Uint8Array(data);
+    const bytes = await api.readBinary(storagePath);
+    if (signal.aborted) return null;
 
     // Check if local file hash matches CRDT metadata — if not, the attachment
     // was updated on another device and we should re-fetch from the server.

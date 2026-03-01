@@ -491,11 +491,35 @@ export class WorkerBackendNew implements Backend {
   // Unified Command API
   // =========================================================================
 
+  // Cached command router (lazy-loaded to avoid circular import)
+  private pluginCommandRouter:
+    | ((cmd: Command) => Promise<Response | null>)
+    | null = null;
+
   /**
    * Execute a command via the unified command pattern.
    * This is the new primary API - all operations can be performed via execute().
+   *
+   * Commands are first checked against loaded browser Extism plugins. If a
+   * plugin handles the command (e.g., publish, sync), the response comes from
+   * the plugin. Otherwise, the command falls through to the WASM backend.
    */
   async execute(command: Command): Promise<Response> {
+    // Lazy-load plugin command router (avoids circular import with plugin system)
+    if (!this.pluginCommandRouter) {
+      try {
+        const mod = await import("$lib/plugins/commandRouter");
+        this.pluginCommandRouter = mod.tryBrowserPluginCommand;
+      } catch {
+        this.pluginCommandRouter = async () => null;
+      }
+    }
+
+    // Try browser plugins first
+    const pluginResponse = await this.pluginCommandRouter(command);
+    if (pluginResponse) return pluginResponse;
+
+    // Fall through to WASM backend
     // Custom replacer to handle BigInt serialization
     const commandJson = JSON.stringify(command, (_key, value) =>
       typeof value === "bigint" ? Number(value) : value,
@@ -756,69 +780,6 @@ export class WorkerBackendNew implements Backend {
 
   fixAll = (validationResult: any): Promise<any> =>
     this.remote!.call("fixAll", [validationResult]) as Promise<any>;
-
-  // =========================================================================
-  // Rust-Owned Sync (Rust owns WebSocket)
-  // =========================================================================
-
-  async startSync(
-    serverUrl: string,
-    workspaceId: string,
-    authToken?: string,
-    sessionCode?: string,
-  ): Promise<void> {
-    return this.remote!.startSync(serverUrl, workspaceId, authToken, sessionCode);
-  }
-
-  async stopSync(): Promise<void> {
-    return this.remote!.stopSync();
-  }
-
-  async focusSyncFiles(files: string[]): Promise<void> {
-    return this.remote!.focusSyncFiles(files);
-  }
-
-  async unfocusSyncFiles(files: string[]): Promise<void> {
-    return this.remote!.unfocusSyncFiles(files);
-  }
-
-  async requestBodySync(files: string[]): Promise<void> {
-    return this.remote!.requestBodySync(files);
-  }
-
-  async notifySnapshotImported(): Promise<void> {
-    return this.remote!.notifySnapshotImported();
-  }
-
-  async createShareSession(serverUrl: string, workspaceId: string, authToken: string, readOnly: boolean): Promise<any> {
-    return this.remote!.createShareSession(serverUrl, workspaceId, authToken, readOnly);
-  }
-
-  async lookupShareSession(serverUrl: string, joinCode: string, authToken?: string): Promise<any> {
-    return this.remote!.lookupShareSession(serverUrl, joinCode, authToken);
-  }
-
-  async deleteShareSession(serverUrl: string, joinCode: string, authToken: string): Promise<void> {
-    return this.remote!.deleteShareSession(serverUrl, joinCode, authToken);
-  }
-
-  async setShareSessionReadOnly(serverUrl: string, joinCode: string, authToken: string, readOnly: boolean): Promise<void> {
-    return this.remote!.setShareSessionReadOnly(serverUrl, joinCode, authToken, readOnly);
-  }
-
-  async syncUploadAttachment(
-    serverUrl: string, authToken: string, workspaceId: string,
-    entryPath: string, attachmentPath: string, hash: string,
-    mimeType: string, data: Uint8Array,
-  ): Promise<void> {
-    return this.remote!.syncUploadAttachment(serverUrl, authToken, workspaceId, entryPath, attachmentPath, hash, mimeType, data);
-  }
-
-  async syncDownloadAttachment(
-    serverUrl: string, authToken: string, workspaceId: string, hash: string,
-  ): Promise<Uint8Array> {
-    return this.remote!.syncDownloadAttachment(serverUrl, authToken, workspaceId, hash);
-  }
 
   importFromZip = async (
     file: File,

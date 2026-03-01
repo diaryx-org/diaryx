@@ -46,11 +46,6 @@ use diaryx_core::fs::{
     SyncToAsyncFs,
 };
 use diaryx_core::workspace::Workspace;
-#[cfg(feature = "sync")]
-use diaryx_sync::{
-    BodyDocManager, CrdtFs, CrdtStorage, MemoryStorage, RustSyncManager, SyncMessage, SyncPlugin,
-    WorkspaceCrdt,
-};
 use js_sys::Promise;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
@@ -62,8 +57,6 @@ use crate::indexeddb_fs::IndexedDbFileSystem;
 use crate::js_async_fs::JsAsyncFileSystem;
 #[cfg(feature = "browser")]
 use crate::opfs_fs::OpfsFileSystem;
-#[cfg(feature = "sync")]
-use crate::wasm_sqlite_storage::WasmSqliteStorage;
 
 // ============================================================================
 // Storage Backend Enum
@@ -311,15 +304,8 @@ impl AsyncFileSystem for StorageBackend {
 
 /// The decorated filesystem stack.
 ///
-/// With the `sync` feature: `EventEmittingFs<CrdtFs<StorageBackend>>` — file
-/// writes automatically update CRDTs for sync.
-///
-/// Without the `sync` feature: `EventEmittingFs<StorageBackend>` — pure
-/// event-emitting filesystem, sync handled externally by Extism plugin.
-#[cfg(feature = "sync")]
-type DecoratedFs = EventEmittingFs<CrdtFs<StorageBackend>>;
-
-#[cfg(not(feature = "sync"))]
+/// `EventEmittingFs<StorageBackend>` — pure event-emitting filesystem.
+/// Sync is handled externally by the Extism sync plugin loaded at runtime.
 type DecoratedFs = EventEmittingFs<StorageBackend>;
 
 // ============================================================================
@@ -362,14 +348,6 @@ impl WasmCallbackRegistry {
         }
     }
 
-    /// Emit a raw JsValue to all subscribers (for non-FileSystemEvent data like snapshot blobs).
-    pub(crate) fn emit_raw_js(&self, value: &JsValue) {
-        let callbacks = self.callbacks.borrow();
-        for callback in callbacks.values() {
-            let _ = callback.call1(&JsValue::NULL, value);
-        }
-    }
-
     pub(crate) fn subscriber_count(&self) -> usize {
         self.callbacks.borrow().len()
     }
@@ -386,14 +364,6 @@ thread_local! {
     static WASM_EVENT_REGISTRY: RefCell<Option<Rc<WasmCallbackRegistry>>> = RefCell::new(None);
 }
 
-// Thread-local storage for CRDT update sync callback.
-// This allows observe_updates() callbacks to emit sync messages without complex lifetimes.
-// Safe because WASM is single-threaded.
-#[cfg(feature = "sync")]
-thread_local! {
-    static CRDT_SYNC_CALLBACK: RefCell<Option<Box<dyn Fn(&[u8])>>> = RefCell::new(None);
-}
-
 /// Create a bridge callback that forwards events from Rust's CallbackRegistry
 /// to the WASM-specific WasmCallbackRegistry (which holds JS functions).
 fn create_event_bridge() -> Arc<dyn Fn(&FileSystemEvent) + Send + Sync> {
@@ -406,45 +376,6 @@ fn create_event_bridge() -> Arc<dyn Fn(&FileSystemEvent) + Send + Sync> {
                 registry.emit(event);
             } else {
                 log::warn!("[EventBridge] WASM_EVENT_REGISTRY is None!");
-            }
-        });
-    })
-}
-
-/// Set up the CRDT sync callback that will be called on any CRDT update.
-/// This enables automatic sync emission whenever the workspace CRDT changes.
-#[cfg(feature = "sync")]
-fn setup_crdt_sync_callback(wasm_registry: &Rc<WasmCallbackRegistry>) {
-    let registry = Rc::clone(wasm_registry);
-    CRDT_SYNC_CALLBACK.with(|cb| {
-        *cb.borrow_mut() = Some(Box::new(move |update: &[u8]| {
-            if registry.subscriber_count() > 0 {
-                log::trace!(
-                    "[CRDT_SYNC_CALLBACK] Emitting {} byte update, subscribers: {}",
-                    update.len(),
-                    registry.subscriber_count()
-                );
-                let encoded = SyncMessage::Update(update.to_vec()).encode();
-                let event = FileSystemEvent::send_sync_message("workspace", encoded, false);
-                registry.emit(&event);
-            } else {
-                log::trace!(
-                    "[CRDT_SYNC_CALLBACK] No subscribers, dropping {} byte update",
-                    update.len()
-                );
-            }
-        }));
-    });
-}
-
-/// Create a subscription to workspace CRDT updates that emits sync messages.
-/// The subscription callback accesses the thread-local CRDT_SYNC_CALLBACK.
-#[cfg(feature = "sync")]
-fn subscribe_to_crdt_updates(workspace_crdt: &Arc<WorkspaceCrdt>) -> yrs::Subscription {
-    workspace_crdt.observe_updates(|update| {
-        CRDT_SYNC_CALLBACK.with(|cb| {
-            if let Some(ref callback) = *cb.borrow() {
-                callback(update);
             }
         });
     })
@@ -475,155 +406,21 @@ fn subscribe_to_crdt_updates(workspace_crdt: &Arc<WorkspaceCrdt>) -> yrs::Subscr
 pub struct DiaryxBackend {
     /// Filesystem stack (see `DecoratedFs` type alias).
     fs: Rc<DecoratedFs>,
-    /// CRDT storage for sync and history features.
-    #[cfg(feature = "sync")]
-    #[allow(dead_code)]
-    crdt_storage: Arc<dyn CrdtStorage>,
-    /// Workspace CRDT for file metadata sync.
-    #[cfg(feature = "sync")]
-    #[allow(dead_code)]
-    workspace_crdt: Arc<WorkspaceCrdt>,
-    /// Body document manager for file content sync.
-    #[cfg(feature = "sync")]
-    #[allow(dead_code)]
-    body_doc_manager: Arc<BodyDocManager>,
     /// WASM-specific event callback registry for JS subscribers.
     wasm_event_registry: Rc<WasmCallbackRegistry>,
     /// Rust event registry that bridges to WASM registry.
     #[allow(dead_code)]
     rust_event_registry: Arc<CallbackRegistry>,
-    /// Subscription to CRDT updates for automatic sync emission.
-    /// Must be stored to prevent the subscription from being dropped.
-    #[cfg(feature = "sync")]
-    #[allow(dead_code)]
-    crdt_update_subscription: Option<yrs::Subscription>,
-    /// Sync manager for handling sync protocol messages.
-    /// Shared across all sync operations for persistent state.
-    #[cfg(feature = "sync")]
-    sync_manager: Arc<RustSyncManager<DecoratedFs>>,
     /// Shared Diaryx instance for command execution.
     /// Created once during backend initialization with callbacks pre-configured.
     diaryx: Diaryx<DecoratedFs>,
-    /// Active WebSocket transport (Rust-owned connection).
-    #[cfg(feature = "sync")]
-    transport: RefCell<Option<crate::wasm_transport::WasmSyncTransport>>,
 }
 
 impl DiaryxBackend {
     /// Internal helper: build a DiaryxBackend from a StorageBackend.
     ///
-    /// When the `sync` feature is enabled, this creates the full CRDT stack
-    /// (CrdtFs, SyncPlugin, etc.). Without `sync`, it creates a lightweight
-    /// event-only filesystem stack.
-    #[cfg(feature = "sync")]
-    fn build_from_storage(
-        storage_backend: StorageBackend,
-        use_sqlite: bool,
-    ) -> std::result::Result<DiaryxBackend, JsValue> {
-        // Create event registries
-        let wasm_event_registry = Rc::new(WasmCallbackRegistry::new());
-        let rust_event_registry = Arc::new(CallbackRegistry::new());
-
-        WASM_EVENT_REGISTRY.with(|reg| {
-            *reg.borrow_mut() = Some(Rc::clone(&wasm_event_registry));
-        });
-
-        rust_event_registry.subscribe(create_event_bridge());
-
-        // CRDT storage
-        let crdt_storage: Arc<dyn CrdtStorage> = if use_sqlite {
-            match WasmSqliteStorage::new() {
-                Ok(storage) => {
-                    log::info!("✓ CRDT storage: Using persistent SQLite storage");
-                    Arc::new(storage)
-                }
-                Err(e) => {
-                    log::error!(
-                        "✗ CRDT storage: FALLBACK TO MEMORY - {:?}. This will cause data loss!",
-                        e
-                    );
-                    Arc::new(MemoryStorage::new())
-                }
-            }
-        } else {
-            Arc::new(MemoryStorage::new())
-        };
-
-        // Create shared CRDT instances with event callbacks
-        let workspace_crdt = {
-            let mut crdt = if use_sqlite {
-                WorkspaceCrdt::load(Arc::clone(&crdt_storage))
-                    .map_err(|e| JsValue::from_str(&format!("Failed to load CRDT: {}", e)))?
-            } else {
-                WorkspaceCrdt::new(Arc::clone(&crdt_storage))
-            };
-            let registry = Arc::clone(&rust_event_registry);
-            crdt.set_event_callback(Arc::new(move |event| {
-                registry.emit(event);
-            }));
-            Arc::new(crdt)
-        };
-
-        let body_doc_manager = {
-            let manager = BodyDocManager::new(Arc::clone(&crdt_storage));
-            let registry = Arc::clone(&rust_event_registry);
-            manager.set_event_callback(Arc::new(move |event| {
-                registry.emit(event);
-            }));
-            Arc::new(manager)
-        };
-
-        // Build decorator stack: EventEmittingFs<CrdtFs<StorageBackend>>
-        let crdt_fs = CrdtFs::new(
-            storage_backend,
-            Arc::clone(&workspace_crdt),
-            Arc::clone(&body_doc_manager),
-        );
-        let event_fs = EventEmittingFs::with_registry(crdt_fs, Arc::clone(&rust_event_registry));
-        let fs = Rc::new(event_fs);
-
-        // CRDT sync callback and subscription
-        setup_crdt_sync_callback(&wasm_event_registry);
-        let crdt_update_subscription = subscribe_to_crdt_updates(&workspace_crdt);
-
-        // Create SyncPlugin and extract sync_manager handle
-        let sync_plugin = SyncPlugin::with_instances(
-            (*fs).clone(),
-            Arc::clone(&workspace_crdt),
-            Arc::clone(&body_doc_manager),
-            Arc::clone(&crdt_storage),
-        );
-        let sync_manager = sync_plugin.sync_manager();
-        sync_manager.set_event_callback(create_event_bridge());
-
-        // Create shared Diaryx instance with plugins registered
-        let diaryx = {
-            let mut d = Diaryx::new((*fs).clone());
-            d.plugin_registry_mut()
-                .register_workspace_plugin(Arc::new(sync_plugin));
-            d.plugin_registry_mut().register_workspace_plugin(Arc::new(
-                diaryx_publish::PublishPlugin::new((*fs).clone()),
-            ));
-            d.set_workspace_root(PathBuf::from(""));
-            d
-        };
-
-        Ok(DiaryxBackend {
-            fs,
-            crdt_storage,
-            workspace_crdt,
-            body_doc_manager,
-            wasm_event_registry,
-            rust_event_registry,
-            crdt_update_subscription: Some(crdt_update_subscription),
-            sync_manager,
-            diaryx,
-            transport: RefCell::new(None),
-        })
-    }
-
-    /// Internal helper: build a DiaryxBackend without sync (no CrdtFs, no SyncPlugin).
-    #[cfg(not(feature = "sync"))]
+    /// Creates a lightweight event-emitting filesystem stack.
+    /// Sync and publish are handled by Extism plugins loaded at runtime.
     fn build_from_storage(
         storage_backend: StorageBackend,
         _use_sqlite: bool,
@@ -642,11 +439,9 @@ impl DiaryxBackend {
             EventEmittingFs::with_registry(storage_backend, Arc::clone(&rust_event_registry));
         let fs = Rc::new(event_fs);
 
+        // Note: Plugins (Publish, Sync) are loaded at runtime via the Extism browser plugin system.
         let diaryx = {
-            let mut d = Diaryx::new((*fs).clone());
-            d.plugin_registry_mut().register_workspace_plugin(Arc::new(
-                diaryx_publish::PublishPlugin::new((*fs).clone()),
-            ));
+            let d = Diaryx::new((*fs).clone());
             d.set_workspace_root(PathBuf::from(""));
             d
         };
@@ -731,32 +526,14 @@ impl DiaryxBackend {
     }
 
     // ========================================================================
-    // CrdtFs Control (sync feature only)
+    // CrdtFs Control (no-op — sync handled by Extism plugin)
     // ========================================================================
 
-    /// Enable or disable the CrdtFs decorator.
-    #[cfg(feature = "sync")]
-    #[wasm_bindgen(js_name = "setCrdtEnabled")]
-    pub fn set_crdt_enabled(&self, enabled: bool) {
-        self.fs.inner().set_enabled(enabled);
-        self.diaryx.fs().inner().set_enabled(enabled);
-        log::info!("[DiaryxBackend] CrdtFs enabled: {}", enabled);
-    }
-
-    /// Check whether CrdtFs is currently enabled.
-    #[cfg(feature = "sync")]
-    #[wasm_bindgen(js_name = "isCrdtEnabled")]
-    pub fn is_crdt_enabled(&self) -> bool {
-        self.diaryx.fs().inner().is_enabled()
-    }
-
-    /// No-op stub when sync is disabled.
-    #[cfg(not(feature = "sync"))]
+    /// No-op — CrdtFs is not used; sync handled by Extism plugin.
     #[wasm_bindgen(js_name = "setCrdtEnabled")]
     pub fn set_crdt_enabled(&self, _enabled: bool) {}
 
-    /// Always returns false when sync is disabled.
-    #[cfg(not(feature = "sync"))]
+    /// Always returns false — CrdtFs is not used; sync handled by Extism plugin.
     #[wasm_bindgen(js_name = "isCrdtEnabled")]
     pub fn is_crdt_enabled(&self) -> bool {
         false
@@ -1093,258 +870,8 @@ impl DiaryxBackend {
         self.wasm_event_registry.subscriber_count()
     }
 
-    // ========================================================================
-    // Sync API (sync feature only)
-    // ========================================================================
-
-    /// Start sync — Rust owns the WebSocket connection.
-    ///
-    /// Creates a `WasmSyncTransport`, connects to the server, and subscribes
-    /// to local CRDT updates.
-    #[cfg(feature = "sync")]
-    #[wasm_bindgen(js_name = "startSync")]
-    pub fn start_sync(
-        &self,
-        server_url: String,
-        workspace_id: String,
-        auth_token: Option<String>,
-        session_code: Option<String>,
-    ) {
-        // Stop existing transport if any
-        self.stop_sync();
-
-        log::info!(
-            "[DiaryxBackend] Starting sync for workspace: {}",
-            workspace_id
-        );
-
-        let transport = crate::wasm_transport::WasmSyncTransport::new(
-            server_url,
-            workspace_id,
-            auth_token,
-            session_code,
-            Arc::clone(&self.sync_manager),
-            Rc::clone(&self.wasm_event_registry),
-        );
-
-        transport.subscribe_to_local_updates();
-        transport.connect();
-
-        *self.transport.borrow_mut() = Some(transport);
-    }
-
-    /// Stop sync — disconnect and drop the transport.
-    #[cfg(feature = "sync")]
-    #[wasm_bindgen(js_name = "stopSync")]
-    pub fn stop_sync(&self) {
-        if let Some(transport) = self.transport.borrow_mut().take() {
-            transport.disconnect();
-            log::info!("[DiaryxBackend] Sync stopped");
-        }
-    }
-
-    /// Focus on specific files for body sync.
-    #[cfg(feature = "sync")]
-    #[wasm_bindgen(js_name = "focusSyncFiles")]
-    pub fn focus_sync_files(&self, files: Vec<String>) {
-        if let Some(ref transport) = *self.transport.borrow() {
-            transport.focus_files(files);
-        }
-    }
-
-    /// Unfocus specific files.
-    #[cfg(feature = "sync")]
-    #[wasm_bindgen(js_name = "unfocusSyncFiles")]
-    pub fn unfocus_sync_files(&self, files: Vec<String>) {
-        if let Some(ref transport) = *self.transport.borrow() {
-            transport.unfocus_files(files);
-        }
-    }
-
-    /// Request body sync for specific files.
-    #[cfg(feature = "sync")]
-    #[wasm_bindgen(js_name = "requestBodySync")]
-    pub fn request_body_sync(&self, files: Vec<String>) {
-        if let Some(ref transport) = *self.transport.borrow() {
-            transport.request_body_sync(files);
-        }
-    }
-
-    /// Notify that a snapshot has been imported by the TS side.
-    /// Called after `importFromZip()` completes.
-    #[cfg(feature = "sync")]
-    #[wasm_bindgen(js_name = "notifySnapshotImported")]
-    pub fn notify_snapshot_imported(&self) {
-        if let Some(ref transport) = *self.transport.borrow() {
-            transport.notify_snapshot_imported();
-        }
-    }
-
-    // ========================================================================
-    // Share Session REST API
-    // ========================================================================
-
-    /// Create a share session via REST API.
-    /// Returns the join code as a string.
-    #[cfg(feature = "sync")]
-    #[wasm_bindgen(js_name = "createShareSession")]
-    pub async fn create_share_session(
-        &self,
-        server_url: String,
-        workspace_id: String,
-        auth_token: String,
-        read_only: bool,
-    ) -> Result<JsValue, JsValue> {
-        use crate::wasm_http::WasmHttpClient;
-        use diaryx_sync::ShareSessionClient;
-
-        let client = ShareSessionClient::new(WasmHttpClient, server_url, Some(auth_token));
-
-        match client.create_session(&workspace_id, read_only).await {
-            Ok(resp) => {
-                let obj = js_sys::Object::new();
-                let _ = js_sys::Reflect::set(&obj, &"code".into(), &resp.code.into());
-                let _ =
-                    js_sys::Reflect::set(&obj, &"workspace_id".into(), &resp.workspace_id.into());
-                let _ = js_sys::Reflect::set(&obj, &"read_only".into(), &resp.read_only.into());
-                Ok(obj.into())
-            }
-            Err(e) => Err(JsValue::from_str(&e)),
-        }
-    }
-
-    /// Look up a share session by join code.
-    #[cfg(feature = "sync")]
-    #[wasm_bindgen(js_name = "lookupShareSession")]
-    pub async fn lookup_share_session(
-        &self,
-        server_url: String,
-        join_code: String,
-        auth_token: Option<String>,
-    ) -> Result<JsValue, JsValue> {
-        use crate::wasm_http::WasmHttpClient;
-        use diaryx_sync::ShareSessionClient;
-
-        let client = ShareSessionClient::new(WasmHttpClient, server_url, auth_token);
-
-        match client.lookup_session(&join_code).await {
-            Ok(resp) => {
-                let obj = js_sys::Object::new();
-                let _ = js_sys::Reflect::set(&obj, &"code".into(), &resp.code.into());
-                let _ =
-                    js_sys::Reflect::set(&obj, &"workspace_id".into(), &resp.workspace_id.into());
-                let _ = js_sys::Reflect::set(&obj, &"read_only".into(), &resp.read_only.into());
-                let _ = js_sys::Reflect::set(
-                    &obj,
-                    &"peer_count".into(),
-                    &(resp.peer_count as u32).into(),
-                );
-                Ok(obj.into())
-            }
-            Err(e) => Err(JsValue::from_str(&e)),
-        }
-    }
-
-    /// Delete a share session (owner only).
-    #[cfg(feature = "sync")]
-    #[wasm_bindgen(js_name = "deleteShareSession")]
-    pub async fn delete_share_session(
-        &self,
-        server_url: String,
-        join_code: String,
-        auth_token: String,
-    ) -> Result<(), JsValue> {
-        use crate::wasm_http::WasmHttpClient;
-        use diaryx_sync::ShareSessionClient;
-
-        let client = ShareSessionClient::new(WasmHttpClient, server_url, Some(auth_token));
-
-        client
-            .delete_session(&join_code)
-            .await
-            .map_err(|e| JsValue::from_str(&e))
-    }
-
-    /// Update session read-only status (owner only).
-    #[cfg(feature = "sync")]
-    #[wasm_bindgen(js_name = "setShareSessionReadOnly")]
-    pub async fn set_share_session_read_only(
-        &self,
-        server_url: String,
-        join_code: String,
-        auth_token: String,
-        read_only: bool,
-    ) -> Result<(), JsValue> {
-        use crate::wasm_http::WasmHttpClient;
-        use diaryx_sync::ShareSessionClient;
-
-        let client = ShareSessionClient::new(WasmHttpClient, server_url, Some(auth_token));
-
-        client
-            .update_read_only(&join_code, read_only)
-            .await
-            .map_err(|e| JsValue::from_str(&e))
-    }
-
-    // ========================================================================
-    // Attachment Sync
-    // ========================================================================
-
-    /// Upload an attachment (full multipart flow).
-    #[cfg(feature = "sync")]
-    #[wasm_bindgen(js_name = "uploadAttachment")]
-    pub async fn upload_attachment(
-        &self,
-        server_url: String,
-        auth_token: String,
-        workspace_id: String,
-        entry_path: String,
-        attachment_path: String,
-        hash: String,
-        mime_type: String,
-        data: Vec<u8>,
-    ) -> Result<(), JsValue> {
-        use crate::wasm_http::WasmHttpClient;
-        use diaryx_sync::AttachmentSyncClient;
-
-        let client = AttachmentSyncClient::new(WasmHttpClient, server_url, auth_token);
-
-        client
-            .upload_full(
-                &workspace_id,
-                &entry_path,
-                &attachment_path,
-                &hash,
-                &mime_type,
-                &data,
-            )
-            .await
-            .map_err(|e| JsValue::from_str(&e))
-    }
-
-    /// Download an attachment by hash.
-    /// Returns the raw bytes as a Uint8Array.
-    #[cfg(feature = "sync")]
-    #[wasm_bindgen(js_name = "downloadAttachment")]
-    pub async fn download_attachment(
-        &self,
-        server_url: String,
-        auth_token: String,
-        workspace_id: String,
-        hash: String,
-    ) -> Result<Vec<u8>, JsValue> {
-        use crate::wasm_http::WasmHttpClient;
-        use diaryx_sync::AttachmentSyncClient;
-
-        let client = AttachmentSyncClient::new(WasmHttpClient, server_url, auth_token);
-
-        match client.download(&workspace_id, &hash).await {
-            Ok(resp) => Ok(resp.bytes),
-            Err(e) => Err(JsValue::from_str(&e)),
-        }
-    }
-
     /// Check if this backend has native sync support.
+    /// Always false — sync is handled by the Extism sync plugin loaded at runtime.
     #[wasm_bindgen(js_name = "hasNativeSync")]
     pub fn has_native_sync(&self) -> bool {
         false

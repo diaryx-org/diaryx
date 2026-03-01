@@ -29,6 +29,7 @@ export const BUILTIN_PLUGIN_IDS = new Set([
   "diaryx.ai",
   "diaryx.math",
   "publish",
+  "diaryx.sync",
 ]);
 
 /** Built-in plugin metadata for auto-install (fallback URLs in public/plugins/). */
@@ -36,6 +37,7 @@ export const BUILTIN_PLUGINS = [
   { url: "/plugins/diaryx_ai.wasm", id: "diaryx.ai", name: "AI Assistant" },
   { url: "/plugins/diaryx_math.wasm", id: "diaryx.math", name: "Math" },
   { url: "/plugins/diaryx_publish.wasm", id: "publish", name: "Publish" },
+  { url: "/plugins/diaryx_sync.wasm", id: "diaryx.sync", name: "Sync" },
 ];
 
 /** Check whether a plugin ID is a built-in plugin. */

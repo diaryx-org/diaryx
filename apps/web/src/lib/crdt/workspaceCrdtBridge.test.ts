@@ -31,17 +31,11 @@ vi.mock('./simpleSyncBridge', () => ({
   }),
 }))
 
-const transportMocks = vi.hoisted(() => ({
-  connect: vi.fn().mockResolvedValue(undefined),
-  destroy: vi.fn(),
-  queueLocalUpdate: vi.fn().mockResolvedValue(undefined),
-}))
-
 vi.mock('./unifiedSyncTransport', () => ({
   createUnifiedSyncTransport: vi.fn(() => ({
-    connect: transportMocks.connect,
-    destroy: transportMocks.destroy,
-    queueLocalUpdate: transportMocks.queueLocalUpdate,
+    connect: vi.fn().mockResolvedValue(undefined),
+    destroy: vi.fn(),
+    queueLocalUpdate: vi.fn().mockResolvedValue(undefined),
   })),
 }))
 
@@ -63,7 +57,6 @@ import {
   getWorkspaceServer,
   initWorkspace,
   destroyWorkspace,
-  discardQueuedLocalSyncUpdates,
   onFileChange,
   onFileRenamed,
   onSessionSync,
@@ -399,84 +392,6 @@ describe('workspaceCrdtBridge', () => {
       cleanup()
     })
 
-    it('should discard queued local sync updates captured before transport connect', async () => {
-      await initWorkspace({
-        rustApi: mockRustApi as any,
-      })
-      await setWorkspaceId('queued-test-workspace')
-
-      let eventHandler: ((event: any) => void) | null = null
-      const backend = {
-        onFileSystemEvent: vi.fn((cb: (event: any) => void) => {
-          eventHandler = cb
-          return 7
-        }),
-        offFileSystemEvent: vi.fn(),
-      }
-
-      const cleanup = initEventSubscription(backend as any)
-      expect(eventHandler).toBeTruthy()
-
-      // No transport is connected in this test, so sync messages are queued.
-      eventHandler!({
-        type: 'SendSyncMessage',
-        doc_name: 'README.md',
-        is_body: true,
-        message: new Uint8Array([1, 2, 3]),
-      })
-      eventHandler!({
-        type: 'SendSyncMessage',
-        doc_name: 'workspace',
-        is_body: false,
-        message: new Uint8Array([4, 5]),
-      })
-
-      // SendSyncMessage handling resolves canonical paths asynchronously.
-      await Promise.resolve()
-      await Promise.resolve()
-
-      expect(discardQueuedLocalSyncUpdates('test')).toBe(2)
-      expect(discardQueuedLocalSyncUpdates('test-empty')).toBe(0)
-
-      cleanup()
-    })
-
-    it('should flush queued local updates on connect', async () => {
-      await initWorkspace({
-        rustApi: mockRustApi as any,
-      })
-      await setWorkspaceId('flush-workspace')
-
-      let eventHandler: ((event: any) => void) | null = null
-      const backend = {
-        hasNativeSync: vi.fn(() => false),
-        onFileSystemEvent: vi.fn((cb: (event: any) => void) => {
-          eventHandler = cb
-          return 9
-        }),
-        offFileSystemEvent: vi.fn(),
-      }
-      setBackend(backend as any)
-
-      const cleanup = initEventSubscription(backend as any)
-      expect(eventHandler).toBeTruthy()
-
-      // Queue a local update before the transport exists.
-      eventHandler!({
-        type: 'SendSyncMessage',
-        doc_name: 'workspace',
-        is_body: false,
-        message: new Uint8Array([4, 5]),
-      })
-
-      await setWorkspaceServer('http://localhost:3030')
-
-      // Queued update should have been flushed through the transport
-      expect(transportMocks.queueLocalUpdate).toHaveBeenCalled()
-
-      cleanup()
-    })
-
     it('should canonicalize absolute paths using workspace root fallback', async () => {
       await initWorkspace({
         rustApi: mockRustApi as any,
@@ -624,7 +539,6 @@ describe('workspaceCrdtBridge', () => {
     it('should destroy workspace and reset state', async () => {
       await initWorkspace({
         rustApi: mockRustApi as any,
-        workspaceId: 'test-workspace',
       })
 
       expect(isWorkspaceInitialized()).toBe(true)

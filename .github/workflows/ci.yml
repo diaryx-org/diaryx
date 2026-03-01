@@ -130,6 +130,22 @@ jobs:
         if: steps.bindings-cache.outputs.cache-hit != 'true'
         run: nix develop --command cargo test -p diaryx_core
 
+      - name: Build plugin WASMs
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        run: |
+          nix develop --command bash -c '
+            PLUGIN_DIR=apps/web/public/plugins
+            mkdir -p "$PLUGIN_DIR"
+            for crate in diaryx_sync_extism diaryx_ai_extism diaryx_publish_extism diaryx_math_extism; do
+              echo "Building $crate..."
+              cargo build --target wasm32-unknown-unknown -p "$crate" --release
+            done
+            cp target/wasm32-unknown-unknown/release/diaryx_sync_extism.wasm "$PLUGIN_DIR/diaryx_sync.wasm"
+            cp target/wasm32-unknown-unknown/release/diaryx_ai_extism.wasm "$PLUGIN_DIR/diaryx_ai.wasm"
+            cp target/wasm32-unknown-unknown/release/diaryx_publish_extism.wasm "$PLUGIN_DIR/diaryx_publish.wasm"
+            cp target/wasm32-unknown-unknown/release/diaryx_math_extism.wasm "$PLUGIN_DIR/diaryx_math.wasm"
+          '
+
       - name: Upload WASM artifact
         uses: actions/upload-artifact@v4
         with:
@@ -266,6 +282,14 @@ jobs:
             "version": 1,
             "plugins": [
               {
+                "id": "diaryx.sync",
+                "name": "Sync",
+                "description": "Real-time workspace synchronization",
+                "version": "0.1.0",
+                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_sync.wasm",
+                "builtin": true
+              },
+              {
                 "id": "diaryx.ai",
                 "name": "AI Assistant",
                 "description": "AI-powered writing assistant",
@@ -375,7 +399,7 @@ jobs:
         run: cargo install wasm-pack
 
       - name: Build WASM (Node.js, no browser features)
-        run: wasm-pack build crates/diaryx_wasm --target web --no-default-features --features crdt
+        run: wasm-pack build crates/diaryx_wasm --target web --no-default-features
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

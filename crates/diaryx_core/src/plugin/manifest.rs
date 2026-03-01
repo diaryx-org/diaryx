@@ -28,6 +28,9 @@ pub struct PluginManifest {
     pub capabilities: Vec<PluginCapability>,
     /// UI extension points contributed by this plugin.
     pub ui: Vec<UiContribution>,
+    /// CLI subcommands contributed by this plugin.
+    #[serde(default)]
+    pub cli: Vec<CliCommand>,
 }
 
 /// A capability that a plugin can declare.
@@ -342,4 +345,94 @@ pub struct SelectOption {
     pub value: String,
     /// The label displayed to the user.
     pub label: String,
+}
+
+// ============================================================================
+// CLI extension types
+// ============================================================================
+
+fn default_true() -> bool {
+    true
+}
+
+/// A CLI subcommand declared by a plugin.
+///
+/// Plugins include these in their manifest to contribute commands to the
+/// `diaryx` CLI. The CLI reads cached manifests at startup and builds
+/// dynamic clap commands from these declarations.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub struct CliCommand {
+    /// Subcommand name (e.g., `"publish"`).
+    pub name: String,
+    /// Short help text shown in `--help`.
+    pub about: String,
+    /// Longer help text (shown with `--help` on the subcommand itself).
+    #[serde(default)]
+    pub long_about: Option<String>,
+    /// Alternative names for this command (e.g., `["pub"]`).
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    /// Positional and named arguments.
+    #[serde(default)]
+    pub args: Vec<CliArg>,
+    /// Nested subcommands.
+    #[serde(default)]
+    pub subcommands: Vec<CliCommand>,
+    /// Internal command name sent to `handle_command`.
+    /// Defaults to PascalCase of `name` if absent.
+    #[serde(default)]
+    pub command_name: Option<String>,
+    /// If `true`, the CLI resolves the workspace root and passes it.
+    #[serde(default = "default_true")]
+    pub requires_workspace: bool,
+    /// Use a native CLI handler instead of WASM dispatch.
+    /// Value is the handler ID (e.g., `"sync_start"`, `"preview"`).
+    #[serde(default)]
+    pub native_handler: Option<String>,
+}
+
+/// A CLI argument declared by a plugin command.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub struct CliArg {
+    /// Argument name (used as the clap ID).
+    pub name: String,
+    /// Help text.
+    pub help: String,
+    /// Value type for parsing.
+    #[serde(default)]
+    pub value_type: CliArgType,
+    /// Whether this argument is required.
+    #[serde(default)]
+    pub required: bool,
+    /// Default value as a string.
+    #[serde(default)]
+    pub default_value: Option<String>,
+    /// Single-character short flag (e.g., `'p'` for `-p`).
+    #[serde(default)]
+    pub short: Option<char>,
+    /// Long flag name (e.g., `"port"` for `--port`).
+    #[serde(default)]
+    pub long: Option<String>,
+    /// If `true`, this is a boolean flag (no value needed).
+    #[serde(default)]
+    pub is_flag: bool,
+}
+
+/// Value types for CLI arguments.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub enum CliArgType {
+    /// String value (default).
+    #[default]
+    String,
+    /// Integer value.
+    Integer,
+    /// Floating-point value.
+    Float,
+    /// Boolean value.
+    Boolean,
+    /// Filesystem path.
+    Path,
 }

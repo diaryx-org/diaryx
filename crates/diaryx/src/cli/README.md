@@ -24,10 +24,11 @@ attachments:
 - '[template.rs](/crates/diaryx/src/cli/template.rs)'
 - '[util.rs](/crates/diaryx/src/cli/util.rs)'
 - '[workspace.rs](/crates/diaryx/src/cli/workspace.rs)'
-- '[git.rs](/crates/diaryx/src/cli/git.rs)'
 - '[import.rs](/crates/diaryx/src/cli/import.rs)'
 - '[plugin_loader.rs](/crates/diaryx/src/cli/plugin_loader.rs)'
 - '[plugin_storage.rs](/crates/diaryx/src/cli/plugin_storage.rs)'
+- '[plugin_manager.rs](/crates/diaryx/src/cli/plugin_manager.rs)'
+- '[plugin_dispatch.rs](/crates/diaryx/src/cli/plugin_dispatch.rs)'
 - '[preview.rs](/crates/diaryx/src/cli/preview.rs)'
 - '[edit.rs](/crates/diaryx/src/cli/edit.rs)'
 exclude:
@@ -37,11 +38,22 @@ exclude:
 
 In the Diaryx CLI, this module provides the majority of the functionality.
 
-## Git Version History Commands
+## Plugin Management Commands
 
-- `diaryx commit` — Snapshot workspace state as a git commit.
-Options: `--message <msg>`, `--skip-validation`.
-- `diaryx log` — Show git commit history. Options: `--count <n>` (default: 20).
+- `diaryx plugin list` — List installed plugins.
+- `diaryx plugin install <id>` — Install a plugin from the registry.
+- `diaryx plugin remove <id>` — Remove an installed plugin.
+- `diaryx plugin search [query]` — Search the plugin registry.
+- `diaryx plugin update [id]` — Update installed plugins.
+- `diaryx plugin info <id>` — Show details about an installed plugin.
+
+## Dynamic Plugin Commands
+
+Installed plugins declare their own CLI subcommands via `CliCommand` in their manifest.
+At startup, the CLI scans `~/.diaryx/plugins/*.diaryx/manifest.json` and dynamically
+adds plugin-declared commands to the clap parser. Commands are dispatched to either
+a native handler (for commands needing native resources like WebSocket or HTTP) or
+routed to the plugin's WASM `handle_command` export.
 
 ## Import Commands
 

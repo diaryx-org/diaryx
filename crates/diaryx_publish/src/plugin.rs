@@ -383,6 +383,7 @@ fn publish_plugin_manifest() -> PluginManifest {
                 component_id: "publish.panel".into(),
             },
         }],
+        cli: vec![],
     }
 }
 

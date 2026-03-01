@@ -31,6 +31,9 @@ pub struct GuestManifest {
     /// Custom command names this plugin handles (e.g., `["word-count"]`).
     #[serde(default)]
     pub commands: Vec<String>,
+    /// CLI subcommand declarations (deserialized into `CliCommand` by the host).
+    #[serde(default)]
+    pub cli: Vec<serde_json::Value>,
 }
 
 /// Event sent to the guest's `on_event` function.
@@ -82,6 +85,7 @@ mod tests {
             capabilities: vec!["file_events".into(), "custom_commands".into()],
             ui: vec![],
             commands: vec!["do-thing".into()],
+            cli: vec![],
         };
         let json = serde_json::to_string(&manifest).unwrap();
         let parsed: GuestManifest = serde_json::from_str(&json).unwrap();

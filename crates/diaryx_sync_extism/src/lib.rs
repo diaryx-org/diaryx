@@ -99,6 +99,8 @@ struct GuestManifest {
     ui: Vec<JsonValue>,
     #[serde(default)]
     commands: Vec<String>,
+    #[serde(default)]
+    cli: Vec<JsonValue>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -213,6 +215,62 @@ pub fn manifest(_input: String) -> FnResult<String> {
             serde_json::to_value(&status_bar_item).unwrap_or_default(),
         ],
         commands: all_commands(),
+        cli: vec![serde_json::json!({
+            "name": "sync",
+            "about": "Sync workspace with remote server",
+            "aliases": ["sy"],
+            "subcommands": [
+                {
+                    "name": "login", "about": "Authenticate via magic link",
+                    "native_handler": "sync_login", "requires_workspace": false,
+                    "args": [
+                        {"name": "email", "required": true, "help": "Email address"},
+                        {"name": "server", "short": "s", "long": "server", "help": "Server URL"}
+                    ]
+                },
+                {
+                    "name": "verify", "about": "Complete authentication",
+                    "native_handler": "sync_verify", "requires_workspace": false,
+                    "args": [
+                        {"name": "token", "required": true, "help": "Verification token"},
+                        {"name": "device-name", "long": "device-name", "help": "Device name"}
+                    ]
+                },
+                {
+                    "name": "logout", "about": "Clear credentials",
+                    "native_handler": "sync_logout", "requires_workspace": false
+                },
+                {
+                    "name": "status", "about": "Show sync status",
+                    "native_handler": "sync_status"
+                },
+                {
+                    "name": "start", "about": "Start continuous sync",
+                    "native_handler": "sync_start",
+                    "args": [
+                        {"name": "background", "short": "b", "long": "background",
+                         "is_flag": true, "help": "Run in background"}
+                    ]
+                },
+                {
+                    "name": "push", "about": "Push local changes",
+                    "native_handler": "sync_push"
+                },
+                {
+                    "name": "pull", "about": "Pull remote changes",
+                    "native_handler": "sync_pull"
+                },
+                {
+                    "name": "config", "about": "Configure sync settings",
+                    "native_handler": "sync_config",
+                    "args": [
+                        {"name": "server", "long": "server", "help": "Set server URL"},
+                        {"name": "workspace-id", "long": "workspace-id", "help": "Set workspace ID"},
+                        {"name": "show", "long": "show", "is_flag": true, "help": "Show current config"}
+                    ]
+                }
+            ]
+        })],
     };
 
     Ok(serde_json::to_string(&manifest)?)

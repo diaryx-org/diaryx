@@ -195,6 +195,7 @@ fn sync_plugin_manifest() -> PluginManifest {
             icon: None,
             fields: vec![], // Rendered by Builtin component
         }],
+        cli: vec![],
     }
 }
 

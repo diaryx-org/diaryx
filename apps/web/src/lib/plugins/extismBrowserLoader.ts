@@ -30,6 +30,7 @@ export interface GuestManifest {
   capabilities: string[];
   ui: UiContribution[];
   commands: string[];
+  cli?: unknown[];
 }
 
 export interface GuestEvent {
@@ -379,6 +380,7 @@ function convertGuestManifest(guest: GuestManifest): PluginManifest {
     description: guest.description,
     capabilities,
     ui: guest.ui ?? [],
+    cli: [],
   };
 }
 

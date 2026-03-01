@@ -340,6 +340,19 @@ fn convert_guest_manifest(guest: &GuestManifest) -> PluginManifest {
         })
         .collect();
 
+    let cli = guest
+        .cli
+        .iter()
+        .filter_map(|val| {
+            serde_json::from_value(val.clone())
+                .map_err(|e| {
+                    log::warn!("Plugin {}: failed to parse CLI command: {e}", guest.id);
+                    e
+                })
+                .ok()
+        })
+        .collect();
+
     PluginManifest {
         id: PluginId(guest.id.clone()),
         name: guest.name.clone(),
@@ -347,5 +360,6 @@ fn convert_guest_manifest(guest: &GuestManifest) -> PluginManifest {
         description: guest.description.clone(),
         capabilities,
         ui,
+        cli,
     }
 }

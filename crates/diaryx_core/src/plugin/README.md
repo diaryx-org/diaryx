@@ -23,6 +23,7 @@ Plugins are registered in the `PluginRegistry`, which is stored on the `Diaryx<F
 | File | Description |
 |------|-------------|
 | `mod.rs` | Plugin traits (`Plugin`, `WorkspacePlugin`, `FilePlugin`), `PluginId`, `PluginError`, `PluginContext` |
+| `manifest.rs` | `PluginManifest`, `UiContribution`, `CliCommand`, `CliArg`, `CliArgType` |
 | `events.rs` | Event types for workspace and file lifecycle hooks |
 | `registry.rs` | `PluginRegistry` — collects plugins and dispatches events/commands |
 
@@ -81,13 +82,27 @@ Command::PluginCommand {
 
 The command handler routes these to the matching `WorkspacePlugin::handle_command`.
 
-### Typed dispatch (handle_typed_command)
+## CLI Commands
 
-Plugins can also intercept core `Command` variants directly via `handle_typed_command` (requires `crdt` feature). This avoids JSON serialization overhead for commands that carry binary data (e.g., CRDT updates).
+Plugins can declare CLI subcommands in their manifest via `CliCommand`:
 
-When `Diaryx::execute()` encounters a CRDT command, it first checks `PluginRegistry::try_typed_command()`. If a plugin returns `Some(result)`, that result is used directly. Otherwise, the command falls through to the existing inline handler code.
+```rust
+PluginManifest {
+    cli: vec![CliCommand {
+        name: "publish".into(),
+        about: "Publish workspace as HTML".into(),
+        native_handler: Some("publish".into()),
+        args: vec![CliArg { name: "destination".into(), required: true, .. }],
+        ..Default::default()
+    }],
+    ..
+}
+```
 
-`SyncPlugin` in `diaryx_sync` implements this to handle all ~50 CRDT command variants, making it the authoritative CRDT handler when registered.
+The CLI discovers installed plugin manifests at startup and dynamically builds
+clap commands from `CliCommand` declarations. Commands with a `native_handler`
+are dispatched to registered native Rust functions; pure WASM commands are
+dispatched to the plugin's `handle_command` export.
 
 ## Plugin-owned UI Surfaces
 

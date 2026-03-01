@@ -15,9 +15,6 @@ mod content;
 /// `today`, `yesterday`, `open`, `create` commands
 mod entry;
 
-/// Git version history commands
-mod git;
-
 /// `diaryx_core` export with audience filtering
 mod export;
 
@@ -61,13 +58,19 @@ mod plugin_storage;
 /// Plugin loading and context (Extism integration)
 mod plugin_loader;
 
+/// Plugin management (install, remove, list, search, update)
+mod plugin_manager;
+
+/// Generic plugin command dispatcher (native handlers + WASM)
+mod plugin_dispatch;
+
 /// Shared CLI utilities
 mod util;
 
 /// `diaryx_core` workspace index management
 mod workspace;
 
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches};
 use std::path::PathBuf;
 
 use diaryx_core::config::Config;
@@ -99,19 +102,55 @@ fn block_on<F: std::future::Future>(f: F) -> F::Output {
 pub use args::Cli;
 use args::Commands;
 
-/// Main entry point for the CLI
+/// Main entry point for the CLI.
+///
+/// Uses a two-phase parse:
+/// 1. Discover installed plugin manifests (fast JSON reads, no WASM)
+/// 2. Build augmented clap command with dynamic plugin commands
+/// 3. Parse args — if a core command, dispatch normally; if a plugin command,
+///    route through the generic plugin dispatcher
 pub fn run_cli() {
-    let cli = Cli::parse();
+    // Phase 1: Discover installed plugin manifests
+    let plugin_manifests = plugin_loader::discover_plugin_manifests();
 
+    // Phase 2: Build augmented clap command
+    let mut app = Cli::command();
+    for (plugin_id, manifest) in &plugin_manifests {
+        for cli_cmd in &manifest.cli {
+            app = app.subcommand(plugin_dispatch::build_plugin_command(cli_cmd, plugin_id));
+        }
+    }
+
+    let matches = app.get_matches();
+
+    // Phase 3: Try core command first
+    if let Ok(cli) = Cli::from_arg_matches(&matches) {
+        let success = dispatch_core_command(cli);
+        if !success {
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    // Phase 4: Must be a plugin command
+    if let Some((name, sub_matches)) = matches.subcommand() {
+        let success =
+            plugin_dispatch::dispatch_plugin_command(name, sub_matches, &plugin_manifests);
+        if !success {
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Dispatch a core (statically-defined) CLI command.
+fn dispatch_core_command(cli: Cli) -> bool {
     // Setup dependencies
-    // Use SyncToAsyncFs wrapper for the async-first core API
     let async_fs = SyncToAsyncFs::new(RealFileSystem);
     let _app = DiaryxApp::new(async_fs.clone());
     let app_sync = DiaryxAppSync::new(RealFileSystem);
     let ws = Workspace::new(async_fs);
 
-    // Execute commands and track success
-    let success = match cli.command {
+    match cli.command {
         Commands::Init {
             default_workspace,
             daily_folder,
@@ -219,48 +258,9 @@ pub fn run_cli() {
             true
         }
 
-        Commands::Publish {
-            destination,
-            audience,
-            format,
-            single_file,
-            title,
-            force,
-            no_copy_attachments,
-            dry_run,
-        } => {
-            publish::handle_publish(
-                destination,
-                cli.workspace,
-                audience,
-                &format,
-                single_file,
-                title,
-                force,
-                no_copy_attachments,
-                dry_run,
-            );
-            true
-        }
-
-        Commands::Preview {
-            port,
-            no_open,
-            audience,
-            title,
-        } => {
-            preview::handle_preview(cli.workspace, port, no_open, audience, title);
-            true
-        }
-
         Commands::Attachment { command } => {
             let current_dir = std::env::current_dir().unwrap_or_default();
             attachment::handle_attachment_command(command, &ws, &app_sync, &current_dir);
-            true
-        }
-
-        Commands::Sync { command } => {
-            sync::handle_sync_command(command, cli.workspace);
             true
         }
 
@@ -269,23 +269,15 @@ pub fn run_cli() {
             true
         }
 
+        Commands::Plugin { command } => {
+            plugin_manager::handle_plugin_command(command);
+            true
+        }
+
         Commands::Nav { path, depth } => {
             let current_dir = std::env::current_dir().unwrap_or_default();
             let config = Config::load().ok();
             nav::handle_nav(cli.workspace, &ws, &config, &current_dir, path, depth)
-        }
-
-        Commands::Commit {
-            message,
-            skip_validation,
-        } => {
-            let workspace_root = resolve_workspace_root(cli.workspace);
-            git::handle_commit(&workspace_root, message, skip_validation)
-        }
-
-        Commands::Log { count } => {
-            let workspace_root = resolve_workspace_root(cli.workspace);
-            git::handle_log(&workspace_root, count)
         }
 
         #[cfg(feature = "edit")]
@@ -298,10 +290,6 @@ pub fn run_cli() {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(edit::handle_edit(&workspace_root, url, port))
         }
-    };
-
-    if !success {
-        std::process::exit(1);
     }
 }
 

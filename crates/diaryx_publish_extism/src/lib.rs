@@ -69,6 +69,8 @@ struct GuestManifest {
     ui: Vec<JsonValue>,
     #[serde(default)]
     commands: Vec<String>,
+    #[serde(default)]
+    cli: Vec<JsonValue>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -136,6 +138,7 @@ pub fn manifest(_input: String) -> FnResult<String> {
             },
         ],
         ui: vec![sidebar, palette_export, palette_publish],
+        cli: vec![],
     };
 
     let manifest = GuestManifest {
@@ -150,6 +153,33 @@ pub fn manifest(_input: String) -> FnResult<String> {
             serde_json::to_value(&pm.ui[2]).unwrap_or_default(),
         ],
         commands: all_commands(),
+        cli: vec![
+            serde_json::json!({
+                "name": "publish", "about": "Publish workspace as HTML for sharing",
+                "aliases": ["pub"], "native_handler": "publish",
+                "args": [
+                    {"name": "destination", "required": true, "help": "Destination path", "value_type": "Path"},
+                    {"name": "audience", "short": "a", "long": "audience", "help": "Target audience"},
+                    {"name": "format", "short": "F", "long": "format", "default_value": "html", "help": "Output format"},
+                    {"name": "single-file", "long": "single-file", "is_flag": true, "help": "Single file output"},
+                    {"name": "title", "short": "t", "long": "title", "help": "Site title"},
+                    {"name": "force", "short": "f", "long": "force", "is_flag": true, "help": "Overwrite existing"},
+                    {"name": "no-copy-attachments", "long": "no-copy-attachments", "is_flag": true, "help": "Skip attachments"},
+                    {"name": "dry-run", "long": "dry-run", "is_flag": true, "help": "Show plan only"}
+                ]
+            }),
+            serde_json::json!({
+                "name": "preview", "about": "Preview workspace as local website with live reload",
+                "native_handler": "preview",
+                "args": [
+                    {"name": "port", "short": "p", "long": "port", "default_value": "3456",
+                     "value_type": "Integer", "help": "HTTP port"},
+                    {"name": "no-open", "long": "no-open", "is_flag": true, "help": "Don't auto-open browser"},
+                    {"name": "audience", "short": "a", "long": "audience", "help": "Target audience"},
+                    {"name": "title", "short": "t", "long": "title", "help": "Site title"}
+                ]
+            }),
+        ],
     };
 
     Ok(serde_json::to_string(&manifest)?)

@@ -229,73 +229,11 @@ pub enum Commands {
         command: TemplateCommands,
     },
 
-    /// Publish workspace as HTML for sharing
-    #[command(alias = "pub")]
-    Publish {
-        /// Destination path (directory for multi-file, file for single-file)
-        destination: PathBuf,
-
-        /// Target audience to publish for (filters files by audience property)
-        #[arg(short, long)]
-        audience: Option<String>,
-
-        /// Output format (html, docx, epub, pdf, latex, odt, rst).
-        /// Non-HTML formats require pandoc to be installed.
-        #[arg(short = 'F', long, default_value = "html")]
-        format: String,
-
-        /// Output as a single HTML file instead of multiple files
-        #[arg(long)]
-        single_file: bool,
-
-        /// Site title (defaults to workspace title)
-        #[arg(short, long)]
-        title: Option<String>,
-
-        /// Overwrite existing destination
-        #[arg(short, long)]
-        force: bool,
-
-        /// Don't copy attachment files to the output directory
-        #[arg(long)]
-        no_copy_attachments: bool,
-
-        /// Show what would be done without making changes
-        #[arg(long)]
-        dry_run: bool,
-    },
-
-    /// Preview workspace as a local website with live reload
-    Preview {
-        /// HTTP port to serve on
-        #[arg(short, long, default_value = "3456")]
-        port: u16,
-
-        /// Don't auto-open browser
-        #[arg(long)]
-        no_open: bool,
-
-        /// Target audience to preview for (filters files by audience property)
-        #[arg(short, long)]
-        audience: Option<String>,
-
-        /// Site title (defaults to workspace title)
-        #[arg(short, long)]
-        title: Option<String>,
-    },
-
     /// Manage attachments for entries
     #[command(alias = "att")]
     Attachment {
         #[command(subcommand)]
         command: AttachmentCommands,
-    },
-
-    /// Sync workspace with remote server
-    #[command(alias = "sy")]
-    Sync {
-        #[command(subcommand)]
-        command: SyncCommands,
     },
 
     /// Import data from external formats
@@ -305,22 +243,10 @@ pub enum Commands {
         command: ImportCommands,
     },
 
-    /// Create a git snapshot of the current workspace state
-    Commit {
-        /// Commit message (auto-generated if not provided)
-        #[arg(short, long)]
-        message: Option<String>,
-
-        /// Skip validation before committing
-        #[arg(long)]
-        skip_validation: bool,
-    },
-
-    /// Show git commit history for the workspace
-    Log {
-        /// Maximum number of commits to show (default: 10)
-        #[arg(short = 'n', long, default_value = "10")]
-        count: usize,
+    /// Manage plugins (install, remove, update, search)
+    Plugin {
+        #[command(subcommand)]
+        command: PluginCommands,
     },
 
     /// Navigate workspace hierarchy with interactive TUI
@@ -965,71 +891,6 @@ pub enum AttachmentCommands {
 }
 
 #[derive(Subcommand)]
-pub enum SyncCommands {
-    /// Authenticate via magic link flow
-    Login {
-        /// Email address to authenticate with
-        email: String,
-
-        /// Sync server URL (default: https://sync.diaryx.org)
-        #[arg(short, long)]
-        server: Option<String>,
-    },
-
-    /// Complete login by verifying magic link token
-    Verify {
-        /// Verification token from magic link email
-        token: String,
-
-        /// Optional device name for this login session
-        #[arg(long)]
-        device_name: Option<String>,
-    },
-
-    /// Clear stored credentials
-    Logout,
-
-    /// Show sync status (logged in, connected, file counts)
-    Status,
-
-    /// Start continuous sync (foreground WebSocket connection)
-    Start {
-        /// Run in background (not yet implemented)
-        #[arg(short, long)]
-        background: bool,
-    },
-
-    /// One-shot push of local changes
-    Push {
-        /// Force push (not yet implemented)
-        #[arg(short, long)]
-        force: bool,
-    },
-
-    /// One-shot pull of remote changes
-    Pull {
-        /// Force pull (not yet implemented)
-        #[arg(short, long)]
-        force: bool,
-    },
-
-    /// Configure sync settings
-    Config {
-        /// Set sync server URL
-        #[arg(long)]
-        server: Option<String>,
-
-        /// Set workspace ID
-        #[arg(long)]
-        workspace_id: Option<String>,
-
-        /// Show current sync configuration
-        #[arg(long)]
-        show: bool,
-    },
-}
-
-#[derive(Subcommand)]
 pub enum ImportCommands {
     /// Import emails from .eml files, directories of .eml files, or .mbox archives
     Email {
@@ -1084,5 +945,41 @@ pub enum ImportCommands {
         /// Print each file as it's processed
         #[arg(short, long)]
         verbose: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum PluginCommands {
+    /// List installed plugins
+    #[command(alias = "ls")]
+    List,
+    /// Install a plugin from the registry
+    Install {
+        /// Plugin ID, or "--defaults" for built-in plugins
+        id: String,
+    },
+    /// Remove an installed plugin
+    #[command(alias = "rm")]
+    Remove {
+        /// Plugin ID to remove
+        id: String,
+        /// Skip confirmation prompt
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+    /// Search the plugin registry
+    Search {
+        /// Search query (optional, lists all if omitted)
+        query: Option<String>,
+    },
+    /// Update installed plugins to latest versions
+    Update {
+        /// Specific plugin ID to update (updates all if omitted)
+        id: Option<String>,
+    },
+    /// Show details about an installed plugin
+    Info {
+        /// Plugin ID
+        id: String,
     },
 }

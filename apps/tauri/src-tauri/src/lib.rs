@@ -8,7 +8,7 @@ mod commands;
 
 #[cfg(feature = "extism-plugins")]
 use commands::ExtismSyncState;
-use commands::{CrdtState, GuestModeState, WebSocketSyncState};
+use commands::{AppState, GuestModeState};
 
 /// Cloud backup targets (S3, Google Drive, etc.)
 mod cloud;
@@ -76,9 +76,8 @@ pub fn run() {
 
     // Core state
     builder = builder
-        .manage(CrdtState::new())
-        .manage(GuestModeState::new())
-        .manage(WebSocketSyncState::new());
+        .manage(AppState::new())
+        .manage(GuestModeState::new());
 
     // Extism sync plugin state — only available with extism-plugins feature
     #[cfg(feature = "extism-plugins")]
@@ -138,15 +137,8 @@ pub fn run() {
             commands::start_guest_mode,
             commands::end_guest_mode,
             commands::is_guest_mode,
-            // CrdtFs Control
-            commands::set_crdt_enabled,
-            commands::is_crdt_enabled,
             // Workspace Reinitialization
             commands::reinitialize_workspace,
-            // WebSocket Sync
-            commands::start_websocket_sync,
-            commands::stop_websocket_sync,
-            commands::get_websocket_sync_status,
             // HTTP Proxy (iOS CORS bypass)
             commands::proxy_fetch,
             // Extism Sync Plugin (load/unload on demand)

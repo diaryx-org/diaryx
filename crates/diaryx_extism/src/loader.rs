@@ -153,6 +153,13 @@ pub fn load_plugin_from_wasm(
         }
     })?;
 
+    // Cache the manifest.json alongside the WASM for fast discovery.
+    let manifest_path = wasm_path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("manifest.json");
+    cache_manifest(&manifest_path, &guest_manifest);
+
     // Load config sidecar.
     let cfg_path = config_path.map(|p| p.to_path_buf()).unwrap_or_else(|| {
         wasm_path
@@ -215,12 +222,15 @@ fn load_single_plugin(
             }
         })?;
         let output_str = String::from_utf8_lossy(output);
-        serde_json::from_str::<GuestManifest>(&output_str).map_err(|e| {
+        let gm = serde_json::from_str::<GuestManifest>(&output_str).map_err(|e| {
             ExtismLoadError::ManifestParse {
                 plugin_name: plugin_name.into(),
                 source: e,
             }
-        })?
+        })?;
+        // Cache the manifest for fast discovery on next startup.
+        cache_manifest(&manifest_path, &gm);
+        gm
     };
 
     // Load config sidecar.
@@ -238,4 +248,19 @@ fn load_single_plugin(
         config,
         config_path,
     ))
+}
+
+/// Write the guest manifest as a JSON sidecar so the CLI can discover
+/// plugin metadata without loading the WASM module.
+fn cache_manifest(path: &Path, manifest: &GuestManifest) {
+    match serde_json::to_string_pretty(manifest) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(path, json) {
+                log::debug!("Could not cache manifest to {}: {e}", path.display());
+            }
+        }
+        Err(e) => {
+            log::debug!("Could not serialize manifest for caching: {e}");
+        }
+    }
 }

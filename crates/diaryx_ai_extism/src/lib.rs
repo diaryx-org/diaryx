@@ -24,6 +24,8 @@ struct GuestManifest {
     ui: Vec<JsonValue>,
     #[serde(default)]
     commands: Vec<String>,
+    #[serde(default)]
+    cli: Vec<JsonValue>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -270,6 +272,7 @@ pub fn manifest(_input: String) -> FnResult<String> {
             "new_conversation".into(),
             "delete_conversation".into(),
         ],
+        cli: vec![],
     };
 
     Ok(serde_json::to_string(&manifest)?)

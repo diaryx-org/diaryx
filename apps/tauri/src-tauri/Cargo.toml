@@ -16,7 +16,6 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 diaryx_core = { workspace = true, features = ["markdown", "live-sync", "native-pandoc"] }
 diaryx_publish = { workspace = true }
-diaryx_sync = { workspace = true, features = ["sqlite", "native-sync"] }
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml = "0.9"
@@ -62,4 +61,3 @@ iap = ["dep:tauri-plugin-iap"]
 extism-plugins = ["dep:diaryx_extism", "dep:dirs", "diaryx_extism/wasi-runner", "diaryx_extism/http"]
 
 [dev-dependencies]
-tempfile = "3"

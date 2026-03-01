@@ -2189,7 +2189,6 @@ dependencies = [
  "crossterm 0.28.1",
  "diaryx_core",
  "diaryx_extism",
- "diaryx_git",
  "diaryx_sync",
  "dirs 6.0.0",
  "env_logger",
@@ -2303,18 +2302,6 @@ dependencies = [
  "ureq 2.12.1",
  "wasi-common",
  "wasmtime",
-]
-
-[[package]]
-name = "diaryx_git"
-version = "1.2.1"
-dependencies = [
- "chrono",
- "diaryx_core",
- "git2",
- "serde",
- "serde_json",
- "tempfile",
 ]
 
 [[package]]
@@ -2471,7 +2458,6 @@ dependencies = [
  "diaryx_core",
  "diaryx_extism",
  "diaryx_publish",
- "diaryx_sync",
  "dirs 6.0.0",
  "dotenvy",
  "env_logger",
@@ -2490,7 +2476,6 @@ dependencies = [
  "tauri-plugin-google-auth",
  "tauri-plugin-iap",
  "tauri-plugin-shell",
- "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "uuid",

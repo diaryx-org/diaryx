@@ -101,83 +101,6 @@ fn resolve_attachment_storage_path(entry_path: &str, attachment_path: &str) -> P
 
 impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     // =========================================================================
-    // CRDT Command Classification
-    // =========================================================================
-
-    /// Returns `true` if the command is a CRDT-related variant that should be
-    /// delegated to a registered `SyncPlugin` via typed dispatch.
-    fn is_crdt_command(cmd: &Command) -> bool {
-        matches!(
-            cmd,
-            Command::InitializeWorkspaceCrdt { .. }
-                | Command::GetSyncState { .. }
-                | Command::ApplyRemoteUpdate { .. }
-                | Command::GetMissingUpdates { .. }
-                | Command::GetFullState { .. }
-                | Command::GetHistory { .. }
-                | Command::GetFileHistory { .. }
-                | Command::RestoreVersion { .. }
-                | Command::GetVersionDiff { .. }
-                | Command::GetStateAt { .. }
-                | Command::GetCrdtFile { .. }
-                | Command::SetCrdtFile { .. }
-                | Command::ListCrdtFiles { .. }
-                | Command::SaveCrdtState { .. }
-                | Command::GetBodyContent { .. }
-                | Command::SetBodyContent { .. }
-                | Command::ResetBodyDoc { .. }
-                | Command::GetBodySyncState { .. }
-                | Command::GetBodyFullState { .. }
-                | Command::ApplyBodyUpdate { .. }
-                | Command::GetBodyMissingUpdates { .. }
-                | Command::SaveBodyDoc { .. }
-                | Command::SaveAllBodyDocs
-                | Command::ListLoadedBodyDocs
-                | Command::UnloadBodyDoc { .. }
-                | Command::CreateSyncStep1 { .. }
-                | Command::HandleSyncMessage { .. }
-                | Command::CreateUpdateMessage { .. }
-                | Command::ConfigureSyncHandler { .. }
-                | Command::ApplyRemoteWorkspaceUpdateWithEffects { .. }
-                | Command::ApplyRemoteBodyUpdateWithEffects { .. }
-                | Command::GetStoragePath { .. }
-                | Command::GetCanonicalPath { .. }
-                | Command::HandleWorkspaceSyncMessage { .. }
-                | Command::HandleCrdtState { .. }
-                | Command::CreateWorkspaceSyncStep1
-                | Command::CreateWorkspaceUpdate { .. }
-                | Command::InitBodySync { .. }
-                | Command::CloseBodySync { .. }
-                | Command::HandleBodySyncMessage { .. }
-                | Command::CreateBodySyncStep1 { .. }
-                | Command::CreateBodyUpdate { .. }
-                | Command::IsSyncComplete
-                | Command::IsWorkspaceSynced
-                | Command::IsBodySynced { .. }
-                | Command::MarkSyncComplete
-                | Command::GetActiveSyncs
-                | Command::TrackContent { .. }
-                | Command::IsEcho { .. }
-                | Command::ClearTrackedContent { .. }
-                | Command::ResetSyncState
-                | Command::TriggerWorkspaceSync
-        )
-    }
-
-    /// Returns `true` if the command is a publish/export variant that should be
-    /// delegated to a registered `PublishPlugin` via typed dispatch.
-    fn is_publish_command(cmd: &Command) -> bool {
-        matches!(
-            cmd,
-            Command::PlanExport { .. }
-                | Command::GetAvailableAudiences { .. }
-                | Command::ExportToMemory { .. }
-                | Command::ExportToHtml { .. }
-                | Command::ExportBinaryAttachments { .. }
-        )
-    }
-
-    // =========================================================================
     // Path Conversion Helpers (Phase 1)
     // =========================================================================
 
@@ -469,28 +392,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     /// ```
     pub async fn execute(&self, mut command: Command) -> Result<Response> {
         command.normalize_paths(|p| self.to_workspace_relative(p));
-
-        // If a sync plugin is registered, delegate CRDT commands to it.
-        // This avoids duplicating CRDT logic and lets SyncPlugin be the
-        // authoritative handler once consumers register it.
-        if Self::is_crdt_command(&command) {
-            if let Some(result) = self.plugin_registry().try_typed_command(&command).await {
-                return result;
-            }
-            return Err(DiaryxError::Unsupported(
-                "CRDT command received but no SyncPlugin is registered".to_string(),
-            ));
-        }
-
-        // If a publish plugin is registered, delegate export commands to it.
-        if Self::is_publish_command(&command) {
-            if let Some(result) = self.plugin_registry().try_typed_command(&command).await {
-                return result;
-            }
-            return Err(DiaryxError::Unsupported(
-                "Export command received but no PublishPlugin is registered".to_string(),
-            ));
-        }
 
         match command {
             // === Entry Operations ===
@@ -2654,13 +2555,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 }
                 Err(DiaryxError::Plugin(format!("Plugin '{plugin}' not found")))
             }
-
-            // CRDT commands are dispatched above via try_typed_command() before the match.
-            // This wildcard arm satisfies exhaustiveness when extra Command variants exist.
-            // It should never be reached at runtime.
-            _ => unreachable!(
-                "Unhandled command variant — CRDT commands should be intercepted above"
-            ),
         }
     }
 

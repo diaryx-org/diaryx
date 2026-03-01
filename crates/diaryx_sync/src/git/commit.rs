@@ -5,12 +5,12 @@ use std::sync::Arc;
 use git2::{Oid, Repository, Signature};
 
 use crate::body_doc_manager::BodyDocManager;
+use crate::crdt_storage::CrdtStorage;
 use crate::materialize::materialize_workspace;
 use crate::sanity::validate_workspace;
 use crate::self_healing::{HealingAction, HealthTracker};
 use crate::workspace_doc::WorkspaceCrdt;
 use diaryx_core::error::DiaryxError;
-use diaryx_core::types::CrdtStorage;
 
 /// Options for a workspace commit.
 pub struct CommitOptions {

@@ -793,33 +793,33 @@ export const workerApi = {
 
   async getAvailableAudiences(rootPath: string): Promise<string[]> {
     return executeAndExtract(
-      "GetAvailableAudiences",
-      { root_path: rootPath },
-      "Strings",
+      "PluginCommand",
+      { plugin: "publish", command: "GetAvailableAudiences", params: { root_path: rootPath } },
+      "PluginResult",
     );
   },
 
   async planExport(rootPath: string, audience: string): Promise<any> {
     return executeAndExtract(
-      "PlanExport",
-      { root_path: rootPath, audience },
-      "ExportPlan",
+      "PluginCommand",
+      { plugin: "publish", command: "PlanExport", params: { root_path: rootPath, audience } },
+      "PluginResult",
     );
   },
 
   async exportToMemory(rootPath: string, audience: string): Promise<any[]> {
     return executeAndExtract(
-      "ExportToMemory",
-      { root_path: rootPath, audience },
-      "ExportedFiles",
+      "PluginCommand",
+      { plugin: "publish", command: "ExportToMemory", params: { root_path: rootPath, audience } },
+      "PluginResult",
     );
   },
 
   async exportToHtml(rootPath: string, audience: string): Promise<any[]> {
     return executeAndExtract(
-      "ExportToHtml",
-      { root_path: rootPath, audience },
-      "ExportedFiles",
+      "PluginCommand",
+      { plugin: "publish", command: "ExportToHtml", params: { root_path: rootPath, audience } },
+      "PluginResult",
     );
   },
 
@@ -828,9 +828,9 @@ export const workerApi = {
     audience: string,
   ): Promise<{ source_path: string; relative_path: string }[]> {
     return executeAndExtract(
-      "ExportBinaryAttachments",
-      { root_path: rootPath, audience },
-      "BinaryFilePaths",
+      "PluginCommand",
+      { plugin: "publish", command: "ExportBinaryAttachments", params: { root_path: rootPath, audience } },
+      "PluginResult",
     );
   },
 

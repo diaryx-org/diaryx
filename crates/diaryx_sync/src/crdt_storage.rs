@@ -1,10 +1,72 @@
 //! Storage abstraction for CRDT persistence.
 //!
-//! This module defines the [`CrdtStorage`] trait which abstracts over different
-//! storage backends (SQLite, in-memory) for persisting CRDT documents and updates.
+//! This module defines the [`CrdtStorage`] trait, [`CrdtUpdate`], and [`UpdateOrigin`]
+//! which abstracts over different storage backends (SQLite, in-memory) for persisting
+//! CRDT documents and updates.
 
-use diaryx_core::types::{CrdtUpdate, UpdateOrigin};
 use diaryx_core::error::DiaryxError;
+use serde::{Deserialize, Serialize};
+
+/// A CRDT update record, stored for history and sync purposes.
+#[derive(Debug, Clone)]
+pub struct CrdtUpdate {
+    /// Unique identifier for this update
+    pub update_id: i64,
+
+    /// Name of the document this update belongs to
+    pub doc_name: String,
+
+    /// Binary yrs update data
+    pub data: Vec<u8>,
+
+    /// Unix timestamp when this update was created (milliseconds)
+    pub timestamp: i64,
+
+    /// Origin of this update (local edit, remote sync, etc.)
+    pub origin: UpdateOrigin,
+
+    /// Device ID that created this update (for multi-device attribution)
+    pub device_id: Option<String>,
+
+    /// Human-readable device name (e.g., "MacBook Pro", "iPhone")
+    pub device_name: Option<String>,
+}
+
+/// Origin of a CRDT update, used to distinguish local vs remote changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UpdateOrigin {
+    /// Update originated from local user action
+    Local,
+
+    /// Update received from a remote peer
+    Remote,
+
+    /// Update from initial sync handshake
+    Sync,
+}
+
+impl std::fmt::Display for UpdateOrigin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UpdateOrigin::Local => write!(f, "local"),
+            UpdateOrigin::Remote => write!(f, "remote"),
+            UpdateOrigin::Sync => write!(f, "sync"),
+        }
+    }
+}
+
+impl std::str::FromStr for UpdateOrigin {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "local" => Ok(UpdateOrigin::Local),
+            "remote" => Ok(UpdateOrigin::Remote),
+            "sync" => Ok(UpdateOrigin::Sync),
+            _ => Err(format!("Unknown update origin: {}", s)),
+        }
+    }
+}
 
 /// Result type for storage operations.
 pub type StorageResult<T> = Result<T, DiaryxError>;

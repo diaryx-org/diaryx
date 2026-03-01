@@ -19,7 +19,7 @@ use std::sync::RwLock;
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
 
-use diaryx_core::command::{BinaryFileInfo, Command, ExportedFile, Response};
+use diaryx_core::command::{BinaryFileInfo, ExportedFile};
 use diaryx_core::error::DiaryxError;
 use diaryx_core::export::Exporter;
 use diaryx_core::fs::AsyncFileSystem;
@@ -79,63 +79,6 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
     /// Create a Workspace accessor using our filesystem.
     fn workspace(&self) -> Workspace<FS> {
         Workspace::new(self.fs.clone())
-    }
-
-    /// Dispatch a typed Command and return a typed Response.
-    async fn dispatch_typed(&self, cmd: &Command) -> Result<Response, DiaryxError> {
-        match cmd {
-            Command::PlanExport {
-                root_path,
-                audience,
-            } => {
-                let resolved = self.resolve_path(root_path);
-                let plan = self
-                    .exporter()
-                    .plan_export(&resolved, audience, Path::new("/tmp/export"))
-                    .await?;
-                Ok(Response::ExportPlan(plan))
-            }
-
-            Command::GetAvailableAudiences { root_path } => {
-                let resolved = self.resolve_path(root_path);
-                let audiences = self.collect_audiences(&resolved).await;
-                let mut result: Vec<String> = audiences.into_iter().collect();
-                result.sort();
-                Ok(Response::Strings(result))
-            }
-
-            Command::ExportToMemory {
-                root_path,
-                audience,
-            } => {
-                let resolved = self.resolve_path(root_path);
-                let files = self.export_to_memory(&resolved, audience).await?;
-                Ok(Response::ExportedFiles(files))
-            }
-
-            Command::ExportToHtml {
-                root_path,
-                audience,
-            } => {
-                let resolved = self.resolve_path(root_path);
-                let files = self.export_to_html(&resolved, audience).await?;
-                Ok(Response::ExportedFiles(files))
-            }
-
-            Command::ExportBinaryAttachments {
-                root_path,
-                audience: _,
-            } => {
-                let resolved = self.resolve_path(root_path);
-                let attachments = self.export_binary_attachments(&resolved).await;
-                Ok(Response::BinaryFilePaths(attachments))
-            }
-
-            _ => Err(DiaryxError::Unsupported(format!(
-                "PublishPlugin does not handle command: {:?}",
-                std::mem::discriminant(cmd)
-            ))),
-        }
     }
 
     /// Collect all unique audience tags from a workspace tree.
@@ -442,18 +385,6 @@ fn publish_plugin_manifest() -> PluginManifest {
     }
 }
 
-/// Returns `true` if the command should be dispatched to the PublishPlugin.
-pub fn is_publish_command(cmd: &Command) -> bool {
-    matches!(
-        cmd,
-        Command::PlanExport { .. }
-            | Command::GetAvailableAudiences { .. }
-            | Command::ExportToMemory { .. }
-            | Command::ExportToHtml { .. }
-            | Command::ExportBinaryAttachments { .. }
-    )
-}
-
 // ============================================================================
 // Plugin + WorkspacePlugin trait implementations
 // ============================================================================
@@ -512,13 +443,6 @@ impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> WorkspacePlugin for Pu
     ) -> Option<Result<JsonValue, PluginError>> {
         Some(self.dispatch(cmd, params).await)
     }
-
-    async fn handle_typed_command(&self, cmd: &Command) -> Option<Result<Response, DiaryxError>> {
-        if !is_publish_command(cmd) {
-            return None;
-        }
-        Some(self.dispatch_typed(cmd).await)
-    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -534,13 +458,6 @@ impl<FS: AsyncFileSystem + Clone + 'static> WorkspacePlugin for PublishPlugin<FS
         params: JsonValue,
     ) -> Option<Result<JsonValue, PluginError>> {
         Some(self.dispatch(cmd, params).await)
-    }
-
-    async fn handle_typed_command(&self, cmd: &Command) -> Option<Result<Response, DiaryxError>> {
-        if !is_publish_command(cmd) {
-            return None;
-        }
-        Some(self.dispatch_typed(cmd).await)
     }
 }
 
@@ -657,33 +574,6 @@ mod tests {
         assert_eq!(manifest.id.0, "publish");
         assert_eq!(manifest.name, "Publish");
         assert!(!manifest.ui.is_empty());
-    }
-
-    #[test]
-    fn test_is_publish_command() {
-        assert!(is_publish_command(&Command::PlanExport {
-            root_path: "test".into(),
-            audience: "*".into(),
-        }));
-        assert!(is_publish_command(&Command::GetAvailableAudiences {
-            root_path: "test".into(),
-        }));
-        assert!(is_publish_command(&Command::ExportToMemory {
-            root_path: "test".into(),
-            audience: "*".into(),
-        }));
-        assert!(is_publish_command(&Command::ExportToHtml {
-            root_path: "test".into(),
-            audience: "*".into(),
-        }));
-        assert!(is_publish_command(&Command::ExportBinaryAttachments {
-            root_path: "test".into(),
-            audience: "*".into(),
-        }));
-        // Non-publish commands
-        assert!(!is_publish_command(&Command::GetEntry {
-            path: "test".into(),
-        }));
     }
 
     #[test]

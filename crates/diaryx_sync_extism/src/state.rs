@@ -6,8 +6,9 @@
 use std::cell::RefCell;
 use std::sync::Arc;
 
-use diaryx_core::types::CrdtStorage;
-use diaryx_sync::{MemoryStorage, SyncEvent, SyncPlugin, SyncSession, SyncSessionConfig};
+use diaryx_sync::{
+    CrdtStorage, MemoryStorage, SyncEvent, SyncPlugin, SyncSession, SyncSessionConfig,
+};
 
 use crate::host_bridge;
 use crate::host_fs::HostFs;

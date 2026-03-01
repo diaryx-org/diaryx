@@ -30,12 +30,14 @@ mod sync_types;
 mod time;
 mod workspace_doc;
 
+// CRDT storage types and trait
+mod crdt_storage;
+
 // Filesystem decorators (CRDT-aware FS layer)
 mod crdt_fs;
 mod decorator_stack;
 
 // Plugin
-mod conversions;
 mod sync_plugin;
 
 // ==================== Feature-gated modules ====================
@@ -69,9 +71,9 @@ pub mod storage;
 
 // ==================== Re-exports ====================
 
-// Core types — re-export from diaryx_core::types (always available, no feature gate)
-pub use diaryx_core::types::{BinaryRef, CrdtUpdate, FileMetadata, UpdateOrigin};
-pub use diaryx_core::types::{CrdtStorage, StorageResult};
+// Core types — FileMetadata and BinaryRef from diaryx_core, CRDT storage types from local modules
+pub use crdt_storage::{CrdtStorage, CrdtUpdate, StorageResult, UpdateOrigin};
+pub use diaryx_core::types::{BinaryRef, FileMetadata};
 
 // Body documents
 pub use body_doc::BodyDoc;

@@ -85,6 +85,19 @@ function expectResponse<T extends Response['type']>(
  * Create a typed API wrapper around a Backend instance.
  */
 export function createApi(backend: Backend) {
+  // Helper to execute a plugin command and extract the result
+  async function pluginCommand(
+    plugin: string,
+    command: string,
+    params: JsonValue = null
+  ): Promise<JsonValue> {
+    const response = await backend.execute({
+      type: 'PluginCommand',
+      params: { plugin, command, params },
+    } as any);
+    return expectResponse(response, 'PluginResult').data;
+  }
+
   return {
     // =========================================================================
     // Entry Operations
@@ -552,47 +565,46 @@ export function createApi(backend: Backend) {
 
     /** Get available audiences. */
     async getAvailableAudiences(rootPath: string): Promise<string[]> {
-      const response = await backend.execute({
-        type: 'GetAvailableAudiences',
-        params: { root_path: rootPath },
+      const result = await pluginCommand('publish', 'GetAvailableAudiences', {
+        root_path: rootPath,
       });
-      return expectResponse(response, 'Strings').data;
+      return (result ?? []) as string[];
     },
 
     /** Plan an export operation. */
     async planExport(rootPath: string, audience: string): Promise<ExportPlan> {
-      const response = await backend.execute({
-        type: 'PlanExport',
-        params: { root_path: rootPath, audience },
+      const result = await pluginCommand('publish', 'PlanExport', {
+        root_path: rootPath,
+        audience,
       });
-      return expectResponse(response, 'ExportPlan').data;
+      return result as ExportPlan;
     },
 
     /** Export to memory. */
     async exportToMemory(rootPath: string, audience: string): Promise<ExportedFile[]> {
-      const response = await backend.execute({
-        type: 'ExportToMemory',
-        params: { root_path: rootPath, audience },
+      const result = await pluginCommand('publish', 'ExportToMemory', {
+        root_path: rootPath,
+        audience,
       });
-      return expectResponse(response, 'ExportedFiles').data;
+      return (result ?? []) as ExportedFile[];
     },
 
     /** Export to HTML. */
     async exportToHtml(rootPath: string, audience: string): Promise<ExportedFile[]> {
-      const response = await backend.execute({
-        type: 'ExportToHtml',
-        params: { root_path: rootPath, audience },
+      const result = await pluginCommand('publish', 'ExportToHtml', {
+        root_path: rootPath,
+        audience,
       });
-      return expectResponse(response, 'ExportedFiles').data;
+      return (result ?? []) as ExportedFile[];
     },
 
     /** Export binary attachments (returns paths only, use readBinary to get data). */
     async exportBinaryAttachments(rootPath: string, audience: string): Promise<BinaryFileInfo[]> {
-      const response = await backend.execute({
-        type: 'ExportBinaryAttachments',
-        params: { root_path: rootPath, audience },
+      const result = await pluginCommand('publish', 'ExportBinaryAttachments', {
+        root_path: rootPath,
+        audience,
       });
-      return expectResponse(response, 'BinaryFilePaths').data;
+      return (result ?? []) as BinaryFileInfo[];
     },
 
     // =========================================================================
@@ -853,11 +865,11 @@ export function createApi(backend: Backend) {
      * @returns Status message with number of files populated
      */
     async initializeWorkspaceCrdt(workspacePath: string, audience?: string): Promise<string> {
-      const response = await backend.execute({
-        type: 'InitializeWorkspaceCrdt',
-        params: { workspace_path: workspacePath, audience: audience ?? null },
+      const result = await pluginCommand('sync', 'InitializeWorkspaceCrdt', {
+        workspace_path: workspacePath,
+        audience: audience ?? null,
       });
-      return expectResponse(response, 'String').data;
+      return (result as string) ?? '';
     },
 
     // =========================================================================
@@ -890,17 +902,7 @@ export function createApi(backend: Backend) {
     },
 
     /** Execute a plugin-specific command. */
-    async executePluginCommand(
-      plugin: string,
-      command: string,
-      params: JsonValue = null
-    ): Promise<JsonValue> {
-      const response = await backend.execute({
-        type: 'PluginCommand',
-        params: { plugin, command, params },
-      });
-      return expectResponse(response, 'PluginResult').data;
-    },
+    executePluginCommand: pluginCommand,
   };
 }
 

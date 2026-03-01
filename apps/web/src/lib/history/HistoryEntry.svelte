@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { CrdtHistoryEntry } from '$lib/backend/generated';
+  import type { CrdtHistoryEntry } from '$lib/crdt/types';
 
   interface Props {
     entry: CrdtHistoryEntry;

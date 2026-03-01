@@ -16,9 +16,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use super::body_doc::{BodyDoc, SyncCallback};
+use crate::crdt_storage::{CrdtStorage, StorageResult, UpdateOrigin};
 use diaryx_core::fs::FileSystemEvent;
-use diaryx_core::types::UpdateOrigin;
-use diaryx_core::types::{CrdtStorage, StorageResult};
 
 /// Manager for multiple body document CRDTs.
 ///

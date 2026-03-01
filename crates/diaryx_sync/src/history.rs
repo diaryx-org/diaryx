@@ -36,7 +36,8 @@ use yrs::{Doc, Map, ReadTxn, StateVector, Transact, Update};
 
 use diaryx_core::error::DiaryxError;
 use diaryx_core::types::FileMetadata;
-use diaryx_core::types::{CrdtStorage, StorageResult};
+
+use crate::crdt_storage::{CrdtStorage, StorageResult};
 
 /// Maximum number of cached snapshots per document
 const SNAPSHOT_CACHE_MAX_SIZE: usize = 10;

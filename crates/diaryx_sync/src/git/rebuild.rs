@@ -5,11 +5,11 @@ use std::sync::Arc;
 use git2::{Oid, Repository};
 
 use crate::body_doc_manager::BodyDocManager;
+use crate::crdt_storage::CrdtStorage;
 use crate::materialize::{MaterializedFile, parse_snapshot_markdown};
 use crate::workspace_doc::WorkspaceCrdt;
 use diaryx_core::error::DiaryxError;
 use diaryx_core::metadata_writer::FrontmatterMetadata;
-use diaryx_core::types::CrdtStorage;
 
 /// Rebuild CRDT state from a git commit.
 ///

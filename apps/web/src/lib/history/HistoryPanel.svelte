@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { RustCrdtApi } from '$lib/crdt/rustCrdtApi';
-  import type { CrdtHistoryEntry, FileDiff } from '$lib/backend/generated';
+  import type { CrdtHistoryEntry, FileDiff } from '$lib/crdt/types';
   import HistoryEntry from './HistoryEntry.svelte';
   import VersionDiff from './VersionDiff.svelte';
 

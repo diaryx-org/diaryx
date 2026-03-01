@@ -12,10 +12,9 @@ use yrs::{
     updates::encoder::Encode,
 };
 
+use crate::crdt_storage::{CrdtStorage, CrdtUpdate, StorageResult, UpdateOrigin};
 use diaryx_core::error::DiaryxError;
 use diaryx_core::fs::FileSystemEvent;
-use diaryx_core::types::UpdateOrigin;
-use diaryx_core::types::{CrdtStorage, StorageResult};
 
 /// Name of the Y.Text holding the document body content.
 const BODY_TEXT_NAME: &str = "body";
@@ -560,16 +559,13 @@ impl BodyDoc {
     // ==================== History ====================
 
     /// Get the update history for this document.
-    pub fn get_history(&self) -> StorageResult<Vec<diaryx_core::types::CrdtUpdate>> {
+    pub fn get_history(&self) -> StorageResult<Vec<CrdtUpdate>> {
         let doc_name = self.doc_name.read().unwrap();
         self.storage.get_all_updates(&doc_name)
     }
 
     /// Get updates since a given ID.
-    pub fn get_updates_since(
-        &self,
-        since_id: i64,
-    ) -> StorageResult<Vec<diaryx_core::types::CrdtUpdate>> {
+    pub fn get_updates_since(&self, since_id: i64) -> StorageResult<Vec<CrdtUpdate>> {
         let doc_name = self.doc_name.read().unwrap();
         self.storage.get_updates_since(&doc_name, since_id)
     }

@@ -1,35 +1,68 @@
 /**
  * Type-safe API wrapper for Rust CRDT commands.
  *
- * This module provides ergonomic access to the CRDT functionality
- * implemented in the Rust backend (diaryx_core/crdt).
+ * All CRDT commands are routed through PluginCommand { plugin: "sync", ... }.
+ * Responses come back as PluginResult(json) where the json is the raw
+ * response from the sync plugin's dispatch() method.
  */
 
 import type { Backend } from '../backend/interface';
 import { generateUUID } from '$lib/utils';
-import type {
-  CrdtHistoryEntry,
-  FileDiff,
-  FileMetadata,
-} from '../backend/generated';
-import type { JsonValue } from '../backend/generated/serde_json/JsonValue';
-import type { CrdtCommand, CrdtResponse } from './types';
+import type { FileMetadata } from '../backend/generated';
+import type { CrdtHistoryEntry, FileDiff } from './types';
 
-// Helper to extract response data with type checking
-function expectResponse<T extends CrdtResponse['type']>(
-  response: CrdtResponse,
-  expectedType: T
-): Extract<CrdtResponse, { type: T }> {
-  if (response.type !== expectedType) {
-    throw new Error(`Expected response type '${expectedType}', got '${response.type}'`);
+/**
+ * Execute a sync plugin command via PluginCommand routing.
+ * Returns the raw JSON data from the sync plugin.
+ */
+async function executeSyncCommand(
+  backend: Backend,
+  command: string,
+  params: Record<string, unknown> = {}
+): Promise<unknown> {
+  const response = await backend.execute({
+    type: 'PluginCommand',
+    params: { plugin: 'sync', command, params },
+  } as any);
+
+  // Response is { type: 'PluginResult', data: <json from plugin> }
+  if (response.type === 'PluginResult') {
+    return response.data;
   }
-  return response as Extract<CrdtResponse, { type: T }>;
+  if (response.type === 'Ok') {
+    return null;
+  }
+  throw new Error(`Expected PluginResult, got ${response.type}: ${JSON.stringify(response)}`);
 }
 
-// Type-safe execute helper that accepts CRDT commands
-async function executeCrdt(backend: Backend, command: CrdtCommand): Promise<CrdtResponse> {
-  // Cast to any since the Backend interface only knows about generated Command type
-  return await backend.execute(command as any) as CrdtResponse;
+/** Decode base64 string to Uint8Array. */
+function decodeBase64(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+/** Encode Uint8Array to base64 string. */
+function encodeBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+/** Extract base64-encoded binary data from a plugin response. */
+function extractBinary(result: unknown, context: string): Uint8Array {
+  if (result == null) return new Uint8Array(0);
+  const obj = result as Record<string, unknown>;
+  const b64 = obj.data;
+  if (typeof b64 !== 'string') {
+    throw new Error(`Expected base64 'data' field for ${context}, got: ${JSON.stringify(result)}`);
+  }
+  return decodeBase64(b64);
 }
 
 /**
@@ -42,133 +75,92 @@ export class RustCrdtApi {
   // Workspace CRDT Operations
   // ===========================================================================
 
-  /**
-   * Get the sync state vector for the workspace CRDT.
-   * Used to initiate sync with a remote peer.
-   */
   async getSyncState(docName: string = 'workspace'): Promise<Uint8Array> {
-    const response = await executeCrdt(this.backend, {
-      type: 'GetSyncState',
-      params: { doc_name: docName },
-    });
-    const data = expectResponse(response, 'Binary').data;
-    return new Uint8Array(data);
+    const result = await executeSyncCommand(this.backend, 'GetSyncState', { doc_name: docName });
+    return extractBinary(result, 'GetSyncState');
   }
 
-  /**
-   * Apply an update received from a remote peer.
-   * Returns the update ID assigned to this update.
-   */
   async applyRemoteUpdate(
     update: Uint8Array,
     docName: string = 'workspace'
   ): Promise<bigint | null> {
-    const response = await executeCrdt(this.backend, {
-      type: 'ApplyRemoteUpdate',
-      params: { doc_name: docName, update: Array.from(update) },
+    const result = await executeSyncCommand(this.backend, 'ApplyRemoteUpdate', {
+      doc_name: docName,
+      update: encodeBase64(update),
     });
-    return expectResponse(response, 'UpdateId').data;
+    const obj = result as Record<string, unknown> | null;
+    return obj?.update_id != null ? BigInt(obj.update_id as number) : null;
   }
 
-  /**
-   * Get updates that a remote peer is missing.
-   * Send these updates to sync the remote peer.
-   */
   async getMissingUpdates(
     remoteStateVector: Uint8Array,
     docName: string = 'workspace'
   ): Promise<Uint8Array> {
-    const response = await executeCrdt(this.backend, {
-      type: 'GetMissingUpdates',
-      params: { doc_name: docName, remote_state_vector: Array.from(remoteStateVector) },
+    const result = await executeSyncCommand(this.backend, 'GetMissingUpdates', {
+      doc_name: docName,
+      remote_state_vector: encodeBase64(remoteStateVector),
     });
-    const data = expectResponse(response, 'Binary').data;
-    return new Uint8Array(data);
+    return extractBinary(result, 'GetMissingUpdates');
   }
 
-  /**
-   * Get the full CRDT state as an update.
-   * Can be used to initialize a new peer.
-   */
   async getFullState(docName: string = 'workspace'): Promise<Uint8Array> {
-    const response = await executeCrdt(this.backend, {
-      type: 'GetFullState',
-      params: { doc_name: docName },
-    });
-    const data = expectResponse(response, 'Binary').data;
-    return new Uint8Array(data);
+    const result = await executeSyncCommand(this.backend, 'GetFullState', { doc_name: docName });
+    return extractBinary(result, 'GetFullState');
   }
 
   // ===========================================================================
   // History Operations
   // ===========================================================================
 
-  /**
-   * Get the version history for a document.
-   */
   async getHistory(docName: string = 'workspace', limit?: number): Promise<CrdtHistoryEntry[]> {
     console.log('[RustCrdtApi] getHistory:', docName, 'limit:', limit);
-    const response = await executeCrdt(this.backend, {
-      type: 'GetHistory',
-      params: { doc_name: docName, limit: limit ?? null },
+    const result = await executeSyncCommand(this.backend, 'GetHistory', {
+      doc_name: docName,
+      limit: limit ?? null,
     });
-    const history = expectResponse(response, 'CrdtHistory').data;
+    const history = (result ?? []) as CrdtHistoryEntry[];
     console.log('[RustCrdtApi] getHistory result:', history.length, 'entries');
     return history;
   }
 
-  /**
-   * Get the version history for a specific file, combining body and workspace changes.
-   */
   async getFileHistory(filePath: string, limit?: number): Promise<CrdtHistoryEntry[]> {
     console.log('[RustCrdtApi] getFileHistory:', filePath, 'limit:', limit);
-    const response = await executeCrdt(this.backend, {
-      type: 'GetFileHistory',
-      params: { file_path: filePath, limit: limit ?? null },
+    const result = await executeSyncCommand(this.backend, 'GetFileHistory', {
+      file_path: filePath,
+      limit: limit ?? null,
     });
-    const history = expectResponse(response, 'CrdtHistory').data;
+    const history = (result ?? []) as CrdtHistoryEntry[];
     console.log('[RustCrdtApi] getFileHistory result:', history.length, 'entries');
     return history;
   }
 
-  /**
-   * Restore a document to a previous version.
-   */
   async restoreVersion(updateId: bigint, docName: string = 'workspace'): Promise<void> {
-    await executeCrdt(this.backend, {
-      type: 'RestoreVersion',
-      params: { doc_name: docName, update_id: updateId },
+    await executeSyncCommand(this.backend, 'RestoreVersion', {
+      doc_name: docName,
+      update_id: Number(updateId),
     });
   }
 
-  /**
-   * Get the diff between two versions of a document.
-   */
   async getVersionDiff(
     fromId: bigint,
     toId: bigint,
     docName: string = 'workspace'
   ): Promise<FileDiff[]> {
-    const response = await executeCrdt(this.backend, {
-      type: 'GetVersionDiff',
-      params: { doc_name: docName, from_id: fromId, to_id: toId },
+    const result = await executeSyncCommand(this.backend, 'GetVersionDiff', {
+      doc_name: docName,
+      from_id: Number(fromId),
+      to_id: Number(toId),
     });
-    return expectResponse(response, 'VersionDiff').data;
+    return (result ?? []) as FileDiff[];
   }
 
-  /**
-   * Get the state of a document at a specific point in history.
-   */
   async getStateAt(updateId: bigint, docName: string = 'workspace'): Promise<Uint8Array | null> {
-    const response = await executeCrdt(this.backend, {
-      type: 'GetStateAt',
-      params: { doc_name: docName, update_id: updateId },
+    const result = await executeSyncCommand(this.backend, 'GetStateAt', {
+      doc_name: docName,
+      update_id: Number(updateId),
     });
-    // Return null if response is not Binary (e.g., error, not found, or Ok with no data)
-    if (response.type !== 'Binary') {
-      return null;
-    }
-    return new Uint8Array(response.data);
+    if (result == null) return null;
+    return extractBinary(result, 'GetStateAt');
   }
 
   // ===========================================================================
@@ -180,17 +172,10 @@ export class RustCrdtApi {
    * @deprecated Use getFileById() for doc-ID based access
    */
   async getFile(path: string): Promise<FileMetadata | null> {
-    const response = await executeCrdt(this.backend, {
-      type: 'GetCrdtFile',
-      params: { path },
-    });
-    return expectResponse(response, 'CrdtFile').data;
+    const result = await executeSyncCommand(this.backend, 'GetCrdtFile', { path });
+    return (result ?? null) as FileMetadata | null;
   }
 
-  /**
-   * Get file metadata from the CRDT by doc_id.
-   * In the doc-ID based system, this is the primary way to access files.
-   */
   async getFileById(docId: string): Promise<FileMetadata | null> {
     return this.getFile(docId);
   }
@@ -201,62 +186,37 @@ export class RustCrdtApi {
    */
   async setFile(path: string, metadata: FileMetadata): Promise<void> {
     console.log('[RustCrdtApi] setFile:', path);
-    await executeCrdt(this.backend, {
-      type: 'SetCrdtFile',
-      params: { path, metadata: metadata as unknown as JsonValue },
+    await executeSyncCommand(this.backend, 'SetCrdtFile', {
+      path,
+      metadata: metadata as unknown,
     });
     console.log('[RustCrdtApi] setFile complete:', path);
   }
 
-  /**
-   * Set file metadata in the CRDT by doc_id.
-   * In the doc-ID based system, this is the primary way to update files.
-   */
   async setFileById(docId: string, metadata: FileMetadata): Promise<void> {
     return this.setFile(docId, metadata);
   }
 
-  /**
-   * Create a new file with a generated UUID as the key.
-   * Returns the generated doc_id.
-   *
-   * Note: The metadata should have `filename` set to the desired filename.
-   */
   async createFile(metadata: FileMetadata): Promise<string> {
-    // For now, we generate the UUID on the client side and use setFile
-    // In the future, this could be a dedicated command on the Rust side
     const docId = generateUUID();
     await this.setFile(docId, metadata);
     console.log('[RustCrdtApi] createFile: generated doc_id', docId);
     return docId;
   }
 
-  /**
-   * List all files in the CRDT.
-   * Returns tuples of [key, metadata] where key is either doc_id or path.
-   */
   async listFiles(includeDeleted: boolean = false): Promise<[string, FileMetadata][]> {
-    const response = await executeCrdt(this.backend, {
-      type: 'ListCrdtFiles',
-      params: { include_deleted: includeDeleted },
+    const result = await executeSyncCommand(this.backend, 'ListCrdtFiles', {
+      include_deleted: includeDeleted,
     });
-    return expectResponse(response, 'CrdtFiles').data;
+    return (result ?? []) as [string, FileMetadata][];
   }
 
-  /**
-   * Find a doc_id by filesystem path.
-   * Walks the tree to find a file with the matching path.
-   *
-   * Note: This is a client-side implementation. For better performance,
-   * consider caching the path-to-docId mapping.
-   */
   async findDocIdByPath(path: string): Promise<string | null> {
     const files = await this.listFiles(false);
     const pathParts = path.split('/').filter(p => p.length > 0);
 
     if (pathParts.length === 0) return null;
 
-    // Build a map of filename -> [docId, metadata]
     const filesByFilename = new Map<string, [string, FileMetadata][]>();
     for (const [docId, meta] of files) {
       const existing = filesByFilename.get(meta.filename) || [];
@@ -264,19 +224,16 @@ export class RustCrdtApi {
       filesByFilename.set(meta.filename, existing);
     }
 
-    // Try to match the full path by walking from root
     const targetFilename = pathParts[pathParts.length - 1];
     const candidates = filesByFilename.get(targetFilename) || [];
 
     for (const [docId] of candidates) {
-      // Reconstruct path and compare
       const derivedPath = await this.getPathForDocId(docId);
       if (derivedPath === path) {
         return docId;
       }
     }
 
-    // Fallback: check if path is used directly as key (legacy mode)
     const legacyMatch = files.find(([key]) => key === path);
     if (legacyMatch) {
       return legacyMatch[0];
@@ -285,11 +242,6 @@ export class RustCrdtApi {
     return null;
   }
 
-  /**
-   * Derive the filesystem path from a doc_id by walking the parent chain.
-   *
-   * Returns the path as a string (e.g., "workspace/notes/my-note.md").
-   */
   async getPathForDocId(docId: string): Promise<string | null> {
     const files = await this.listFiles(false);
     const fileMap = new Map(files);
@@ -307,7 +259,6 @@ export class RustCrdtApi {
 
       const meta = fileMap.get(current);
       if (!meta) {
-        // Key might be a legacy path
         if (current.includes('/')) {
           parts.unshift(...current.split('/'));
           break;
@@ -323,9 +274,7 @@ export class RustCrdtApi {
       parts.unshift(meta.filename);
 
       if (meta.part_of) {
-        // Check if part_of is a UUID or a path
         if (meta.part_of.includes('/') || meta.part_of.endsWith('.md')) {
-          // Legacy path reference - prepend the directory portion
           const parentDir = meta.part_of.split('/').slice(0, -1).join('/');
           if (parentDir) {
             parts.unshift(...parentDir.split('/'));
@@ -341,14 +290,8 @@ export class RustCrdtApi {
     return parts.join('/');
   }
 
-  /**
-   * Save CRDT state to persistent storage.
-   */
   async saveCrdtState(docName: string = 'workspace'): Promise<void> {
-    await executeCrdt(this.backend, {
-      type: 'SaveCrdtState',
-      params: { doc_name: docName },
-    });
+    await executeSyncCommand(this.backend, 'SaveCrdtState', { doc_name: docName });
   }
 
   // ===========================================================================
@@ -356,195 +299,110 @@ export class RustCrdtApi {
   // ===========================================================================
 
   /**
-   * Get body content from a document CRDT.
-   * @param docName - The document name (doc_id or path)
    * @deprecated Use getBodyContentById() for doc-ID based access
    */
   async getBodyContent(docName: string): Promise<string> {
-    const response = await executeCrdt(this.backend, {
-      type: 'GetBodyContent',
-      params: { doc_name: docName },
-    });
-    return expectResponse(response, 'String').data;
+    const result = await executeSyncCommand(this.backend, 'GetBodyContent', { doc_name: docName });
+    const obj = result as Record<string, unknown> | null;
+    return (obj?.content as string) ?? '';
   }
 
-  /**
-   * Get body content by doc_id.
-   * In the doc-ID based system, body documents are keyed by the file's doc_id.
-   */
   async getBodyContentById(docId: string): Promise<string> {
     return this.getBodyContent(docId);
   }
 
   /**
-   * Set body content in a document CRDT.
    * @deprecated Use setBodyContentById() for doc-ID based access
    */
   async setBodyContent(docName: string, content: string): Promise<void> {
-    await executeCrdt(this.backend, {
-      type: 'SetBodyContent',
-      params: { doc_name: docName, content },
-    });
+    await executeSyncCommand(this.backend, 'SetBodyContent', { doc_name: docName, content });
   }
 
-  /**
-   * Set body content by doc_id.
-   * In the doc-ID based system, body documents are keyed by the file's doc_id.
-   */
   async setBodyContentById(docId: string, content: string): Promise<void> {
     return this.setBodyContent(docId, content);
   }
 
-  /**
-   * Reset a body document to a fresh empty Y.Doc.
-   *
-   * Unlike setBodyContent('', ...) which creates DELETE operations,
-   * this replaces the doc with a brand new one that has no operations at all.
-   */
   async resetBodyDoc(docName: string): Promise<void> {
-    await executeCrdt(this.backend, {
-      type: 'ResetBodyDoc',
-      params: { doc_name: docName },
-    });
+    await executeSyncCommand(this.backend, 'ResetBodyDoc', { doc_name: docName });
   }
 
-  /**
-   * Get sync state (state vector) for a body document.
-   */
   async getBodySyncState(docName: string): Promise<Uint8Array> {
-    const response = await executeCrdt(this.backend, {
-      type: 'GetBodySyncState',
-      params: { doc_name: docName },
-    });
-    const data = expectResponse(response, 'Binary').data;
-    return new Uint8Array(data);
+    const result = await executeSyncCommand(this.backend, 'GetBodySyncState', { doc_name: docName });
+    return extractBinary(result, 'GetBodySyncState');
   }
 
-  /**
-   * Get full state of a body document as an update.
-   */
   async getBodyFullState(docName: string): Promise<Uint8Array> {
-    const response = await executeCrdt(this.backend, {
-      type: 'GetBodyFullState',
-      params: { doc_name: docName },
-    });
-    const data = expectResponse(response, 'Binary').data;
-    return new Uint8Array(data);
+    const result = await executeSyncCommand(this.backend, 'GetBodyFullState', { doc_name: docName });
+    return extractBinary(result, 'GetBodyFullState');
   }
 
-  /**
-   * Apply an update to a body document.
-   * Returns the update ID assigned to this update.
-   */
   async applyBodyUpdate(docName: string, update: Uint8Array): Promise<bigint | null> {
-    const response = await executeCrdt(this.backend, {
-      type: 'ApplyBodyUpdate',
-      params: { doc_name: docName, update: Array.from(update) },
+    const result = await executeSyncCommand(this.backend, 'ApplyBodyUpdate', {
+      doc_name: docName,
+      update: encodeBase64(update),
     });
-    return expectResponse(response, 'UpdateId').data;
+    const obj = result as Record<string, unknown> | null;
+    return obj?.update_id != null ? BigInt(obj.update_id as number) : null;
   }
 
-  /**
-   * Get updates needed by a remote peer for a body document.
-   */
   async getBodyMissingUpdates(
     docName: string,
     remoteStateVector: Uint8Array
   ): Promise<Uint8Array> {
-    const response = await executeCrdt(this.backend, {
-      type: 'GetBodyMissingUpdates',
-      params: { doc_name: docName, remote_state_vector: Array.from(remoteStateVector) },
+    const result = await executeSyncCommand(this.backend, 'GetBodyMissingUpdates', {
+      doc_name: docName,
+      remote_state_vector: encodeBase64(remoteStateVector),
     });
-    const data = expectResponse(response, 'Binary').data;
-    return new Uint8Array(data);
+    return extractBinary(result, 'GetBodyMissingUpdates');
   }
 
-  /**
-   * Save a body document to storage.
-   */
   async saveBodyDoc(docName: string): Promise<void> {
-    await executeCrdt(this.backend, {
-      type: 'SaveBodyDoc',
-      params: { doc_name: docName },
-    });
+    await executeSyncCommand(this.backend, 'SaveBodyDoc', { doc_name: docName });
   }
 
-  /**
-   * Save all body documents to storage.
-   */
   async saveAllBodyDocs(): Promise<void> {
-    await executeCrdt(this.backend, { type: 'SaveAllBodyDocs' });
+    await executeSyncCommand(this.backend, 'SaveAllBodyDocs');
   }
 
-  /**
-   * Get list of loaded body documents.
-   */
   async listLoadedBodyDocs(): Promise<string[]> {
-    const response = await executeCrdt(this.backend, { type: 'ListLoadedBodyDocs' });
-    return expectResponse(response, 'Strings').data;
+    const result = await executeSyncCommand(this.backend, 'ListLoadedBodyDocs');
+    return (result ?? []) as string[];
   }
 
-  /**
-   * Unload a body document from memory.
-   */
   async unloadBodyDoc(docName: string): Promise<void> {
-    await executeCrdt(this.backend, {
-      type: 'UnloadBodyDoc',
-      params: { doc_name: docName },
-    });
+    await executeSyncCommand(this.backend, 'UnloadBodyDoc', { doc_name: docName });
   }
 
   // ===========================================================================
   // Sync Protocol Operations
   // ===========================================================================
 
-  /**
-   * Create a SyncStep1 message for initiating sync.
-   * Returns the encoded message that should be sent to the sync server.
-   */
   async createSyncStep1(docName: string = 'workspace'): Promise<Uint8Array> {
-    const response = await executeCrdt(this.backend, {
-      type: 'CreateSyncStep1',
-      params: { doc_name: docName },
-    });
-    const data = expectResponse(response, 'Binary').data;
-    return new Uint8Array(data);
+    const result = await executeSyncCommand(this.backend, 'CreateSyncStep1', { doc_name: docName });
+    return extractBinary(result, 'CreateSyncStep1');
   }
 
-  /**
-   * Handle an incoming sync message.
-   * Returns an optional response message to send back, or null if no response needed.
-   *
-   * @param message - The incoming sync message bytes
-   * @param docName - The document name (defaults to 'workspace')
-   * @param writeToDisk - If true, write changed files to disk after applying updates
-   */
   async handleSyncMessage(
     message: Uint8Array,
     docName: string = 'workspace',
     writeToDisk: boolean = false
   ): Promise<Uint8Array | null> {
-    const response = await executeCrdt(this.backend, {
-      type: 'HandleSyncMessage',
-      params: { doc_name: docName, message: Array.from(message), write_to_disk: writeToDisk },
+    const result = await executeSyncCommand(this.backend, 'HandleSyncMessage', {
+      doc_name: docName,
+      message: encodeBase64(message),
+      write_to_disk: writeToDisk,
     });
-    if (response.type === 'Ok') {
-      return null;
-    }
-    const data = expectResponse(response, 'Binary').data;
-    return data.length > 0 ? new Uint8Array(data) : null;
+    if (result == null) return null;
+    const bytes = extractBinary(result, 'HandleSyncMessage');
+    return bytes.length > 0 ? bytes : null;
   }
 
-  /**
-   * Create an update message to broadcast local changes.
-   */
   async createUpdateMessage(update: Uint8Array, docName: string = 'workspace'): Promise<Uint8Array> {
-    const response = await executeCrdt(this.backend, {
-      type: 'CreateUpdateMessage',
-      params: { doc_name: docName, update: Array.from(update) },
+    const result = await executeSyncCommand(this.backend, 'CreateUpdateMessage', {
+      doc_name: docName,
+      update: encodeBase64(update),
     });
-    const data = expectResponse(response, 'Binary').data;
-    return new Uint8Array(data);
+    return extractBinary(result, 'CreateUpdateMessage');
   }
 }
 

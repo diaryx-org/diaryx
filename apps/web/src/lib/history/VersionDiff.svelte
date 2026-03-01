@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { FileDiff, ChangeType } from '$lib/backend/generated';
+  import type { FileDiff, ChangeType } from '$lib/crdt/types';
 
   interface Props {
     diffs: FileDiff[];

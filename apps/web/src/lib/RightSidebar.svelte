@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { EntryData } from "./backend";
   import type { RustCrdtApi } from "$lib/crdt/rustCrdtApi";
-  import type { CrdtHistoryEntry, FileDiff } from "$lib/backend/generated";
+  import type { CrdtHistoryEntry, FileDiff } from "$lib/crdt/types";
   import type { Api } from "$lib/backend/api";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";

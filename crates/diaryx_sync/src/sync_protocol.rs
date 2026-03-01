@@ -47,9 +47,8 @@
 use yrs::{ReadTxn, Transact, Update, updates::decoder::Decode, updates::encoder::Encode};
 
 use super::workspace_doc::WorkspaceCrdt;
+use crate::crdt_storage::{StorageResult, UpdateOrigin};
 use diaryx_core::error::DiaryxError;
-use diaryx_core::types::StorageResult;
-use diaryx_core::types::UpdateOrigin;
 
 // ===========================================================================
 // VarUint encoding/decoding (y-protocols compatible)

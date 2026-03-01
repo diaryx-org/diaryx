@@ -23,7 +23,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use ts_rs::TS;
 
-use crate::export::ExportPlan;
 use crate::link_parser::LinkFormat;
 use crate::search::SearchResults;
 use crate::validate::{FixResult, ValidationResult, ValidationResultWithMeta};
@@ -368,45 +367,6 @@ pub enum Command {
         workspace_root: String,
     },
 
-    // === Export ===
-    /// Get available audiences.
-    GetAvailableAudiences {
-        /// Root path to scan.
-        root_path: String,
-    },
-
-    /// Plan an export operation.
-    PlanExport {
-        /// Root path.
-        root_path: String,
-        /// Target audience.
-        audience: String,
-    },
-
-    /// Export to memory.
-    ExportToMemory {
-        /// Root path.
-        root_path: String,
-        /// Target audience.
-        audience: String,
-    },
-
-    /// Export to HTML.
-    ExportToHtml {
-        /// Root path.
-        root_path: String,
-        /// Target audience.
-        audience: String,
-    },
-
-    /// Export binary attachments.
-    ExportBinaryAttachments {
-        /// Root path.
-        root_path: String,
-        /// Target audience.
-        audience: String,
-    },
-
     // === Templates ===
     /// List available templates.
     ListTemplates {
@@ -596,414 +556,6 @@ pub enum Command {
     /// Get storage usage information.
     GetStorageUsage,
 
-    // === CRDT Initialization ===
-    /// Initialize workspace CRDT by scanning filesystem and populating state.
-    ///
-    /// This replaces the frontend's `setupWorkspaceCrdt()` logic by:
-    /// 1. Finding the root index file
-    /// 2. Recursively scanning all files in the workspace tree
-    /// 3. Populating the CRDT with file metadata and body content
-    ///
-    /// If `audience` is provided, only files visible to that audience are included
-    /// (uses the same filtering logic as `PlanExport`).
-    ///
-    /// Returns the number of files populated.
-    InitializeWorkspaceCrdt {
-        /// Path to workspace root (directory or root index file).
-        workspace_path: String,
-        /// Optional audience filter. If provided, only files visible to this audience
-        /// are included in CRDT (e.g., "family", "public", or "*" for all non-private).
-        audience: Option<String>,
-    },
-
-    // === CRDT Sync Operations ===
-    /// Get the CRDT state vector for sync.
-    GetSyncState {
-        /// Document name (e.g., "workspace").
-        doc_name: String,
-    },
-
-    /// Apply an update from a remote peer.
-    ApplyRemoteUpdate {
-        /// Document name.
-        doc_name: String,
-        /// Binary update data.
-        update: Vec<u8>,
-    },
-
-    /// Get updates since a given state for sync.
-    GetMissingUpdates {
-        /// Document name.
-        doc_name: String,
-        /// Remote state vector to diff against.
-        remote_state_vector: Vec<u8>,
-    },
-
-    /// Get the full encoded state as an update.
-    GetFullState {
-        /// Document name.
-        doc_name: String,
-    },
-
-    // === CRDT History Operations ===
-    /// Get the version history for a document.
-    GetHistory {
-        /// Document name.
-        doc_name: String,
-        /// Optional limit on number of entries.
-        limit: Option<usize>,
-    },
-
-    /// Get the history for a specific file, combining body and workspace changes.
-    GetFileHistory {
-        /// File path in workspace.
-        file_path: String,
-        /// Optional limit on number of entries.
-        limit: Option<usize>,
-    },
-
-    /// Restore a document to a previous version.
-    RestoreVersion {
-        /// Document name.
-        doc_name: String,
-        /// Update ID to restore to.
-        update_id: i64,
-    },
-
-    /// Get the diff between two versions of a document.
-    GetVersionDiff {
-        /// Document name.
-        doc_name: String,
-        /// Starting update ID.
-        from_id: i64,
-        /// Ending update ID.
-        to_id: i64,
-    },
-
-    /// Get the state of a document at a specific point in history.
-    GetStateAt {
-        /// Document name.
-        doc_name: String,
-        /// Update ID to reconstruct state at.
-        update_id: i64,
-    },
-
-    // === CRDT File Metadata Operations ===
-    /// Get file metadata from CRDT.
-    GetCrdtFile {
-        /// File path in workspace.
-        path: String,
-    },
-
-    /// Set file metadata in CRDT.
-    SetCrdtFile {
-        /// File path in workspace.
-        path: String,
-        /// File metadata as JSON.
-        metadata: serde_json::Value,
-    },
-
-    /// List all files in CRDT.
-    ListCrdtFiles {
-        /// Whether to include deleted files.
-        #[serde(default)]
-        include_deleted: bool,
-    },
-
-    /// Save CRDT state to persistent storage.
-    SaveCrdtState {
-        /// Document name.
-        doc_name: String,
-    },
-
-    // ==================== Body Document Commands ====================
-    /// Get body content from a document CRDT.
-    GetBodyContent {
-        /// Document name (file path).
-        doc_name: String,
-    },
-
-    /// Set body content in a document CRDT.
-    SetBodyContent {
-        /// Document name (file path).
-        doc_name: String,
-        /// New content.
-        content: String,
-    },
-
-    /// Reset a body document CRDT to a fresh empty state.
-    ///
-    /// This replaces the cached body doc with a brand new empty Y.Doc,
-    /// discarding all local operations (inserts AND deletes). Unlike
-    /// `SetBodyContent { content: "" }` which creates DELETE operations,
-    /// this produces a doc with no operations at all — ensuring that
-    /// Y-sync will only receive the server's content without phantom deletes.
-    ResetBodyDoc {
-        /// Document name (file path).
-        doc_name: String,
-    },
-
-    /// Get sync state (state vector) for a body document.
-    GetBodySyncState {
-        /// Document name (file path).
-        doc_name: String,
-    },
-
-    /// Get full state of a body document as an update.
-    GetBodyFullState {
-        /// Document name (file path).
-        doc_name: String,
-    },
-
-    /// Apply an update to a body document.
-    ApplyBodyUpdate {
-        /// Document name (file path).
-        doc_name: String,
-        /// Binary update data.
-        update: Vec<u8>,
-    },
-
-    /// Get updates needed by a remote peer for a body document.
-    GetBodyMissingUpdates {
-        /// Document name (file path).
-        doc_name: String,
-        /// Remote state vector.
-        remote_state_vector: Vec<u8>,
-    },
-
-    /// Save a body document to storage.
-    SaveBodyDoc {
-        /// Document name (file path).
-        doc_name: String,
-    },
-
-    /// Save all body documents to storage.
-    SaveAllBodyDocs,
-
-    /// Get list of loaded body documents.
-    ListLoadedBodyDocs,
-
-    /// Unload a body document from memory.
-    UnloadBodyDoc {
-        /// Document name (file path).
-        doc_name: String,
-    },
-
-    // ==================== Sync Protocol Commands ====================
-    /// Create a SyncStep1 message for initiating sync.
-    ///
-    /// Returns the encoded message that should be sent to the sync server.
-    CreateSyncStep1 {
-        /// Document name (use "workspace" for workspace CRDT).
-        doc_name: String,
-    },
-
-    /// Handle an incoming sync message.
-    ///
-    /// Returns an optional response message to send back.
-    /// If `write_to_disk` is true, writes changed files to disk after applying updates.
-    HandleSyncMessage {
-        /// Document name (use "workspace" for workspace CRDT).
-        doc_name: String,
-        /// The incoming message bytes.
-        message: Vec<u8>,
-        /// If true, write changed files to disk after applying updates.
-        #[serde(default)]
-        write_to_disk: bool,
-    },
-
-    /// Create an update message to broadcast local changes.
-    CreateUpdateMessage {
-        /// Document name (use "workspace" for workspace CRDT).
-        doc_name: String,
-        /// The update bytes to send.
-        update: Vec<u8>,
-    },
-
-    // ==================== Sync Handler Commands ====================
-    /// Configure the sync handler for guest mode.
-    ///
-    /// In guest mode, storage paths are prefixed to isolate guest data.
-    ConfigureSyncHandler {
-        /// Guest join code (None to disable guest mode).
-        guest_join_code: Option<String>,
-        /// Whether the guest uses OPFS (requires path prefixing).
-        #[serde(default)]
-        uses_opfs: bool,
-    },
-
-    /// Apply a remote workspace update with disk write side effects.
-    ///
-    /// This processes a remote CRDT update and optionally writes the
-    /// changed files to disk, emitting FileSystemEvents.
-    ApplyRemoteWorkspaceUpdateWithEffects {
-        /// Binary update data.
-        update: Vec<u8>,
-        /// If true, write changed files to disk. If false, only apply to CRDT.
-        #[serde(default)]
-        write_to_disk: bool,
-    },
-
-    /// Apply a remote body update with disk write side effects.
-    ///
-    /// This processes a remote body CRDT update and optionally writes
-    /// the body content to disk.
-    ApplyRemoteBodyUpdateWithEffects {
-        /// Document name (file path).
-        doc_name: String,
-        /// Binary update data.
-        update: Vec<u8>,
-        /// If true, write body to disk. If false, only apply to CRDT.
-        #[serde(default)]
-        write_to_disk: bool,
-    },
-
-    /// Convert a canonical path to a storage path.
-    ///
-    /// For guests using OPFS, this prefixes with `guest/{join_code}/`.
-    /// For hosts or in-memory guests, returns the path unchanged.
-    GetStoragePath {
-        /// Canonical path (e.g., "notes/hello.md").
-        canonical_path: String,
-    },
-
-    /// Convert a storage path to a canonical path.
-    ///
-    /// Strips the `guest/{join_code}/` prefix if present for OPFS guests.
-    GetCanonicalPath {
-        /// Storage path (possibly with guest prefix).
-        storage_path: String,
-    },
-
-    // ==================== Sync Manager Commands ====================
-    // These commands use the unified RustSyncManager
-    /// Handle an incoming workspace sync message via RustSyncManager.
-    ///
-    /// This processes Y-sync protocol messages for workspace metadata sync.
-    /// Returns response bytes to send back, list of changed files, and sync status.
-    HandleWorkspaceSyncMessage {
-        /// The incoming message bytes.
-        message: Vec<u8>,
-        /// If true, write changed files to disk after applying updates.
-        #[serde(default)]
-        write_to_disk: bool,
-    },
-
-    /// Handle CRDT state from server's handshake protocol.
-    ///
-    /// This is called after receiving the CrdtState message from the server.
-    /// The state is the full CRDT state that should be applied (not merged)
-    /// to ensure consistency with the server.
-    ///
-    /// Returns the number of files in the workspace after applying the state.
-    HandleCrdtState {
-        /// The full CRDT state bytes (Y-update v1 encoded).
-        state: Vec<u8>,
-    },
-
-    /// Create a SyncStep1 message for initiating workspace sync.
-    ///
-    /// Returns the encoded Y-sync message to send to the server.
-    CreateWorkspaceSyncStep1,
-
-    /// Create a workspace update message for local changes.
-    ///
-    /// If `since_state_vector` is provided, returns only updates since that state.
-    /// Otherwise returns the full state as an update.
-    CreateWorkspaceUpdate {
-        /// Optional state vector to diff against (base64 or raw bytes).
-        since_state_vector: Option<Vec<u8>>,
-    },
-
-    /// Initialize body sync for a document via RustSyncManager.
-    InitBodySync {
-        /// Document name (file path).
-        doc_name: String,
-    },
-
-    /// Close body sync for a document via RustSyncManager.
-    CloseBodySync {
-        /// Document name (file path).
-        doc_name: String,
-    },
-
-    /// Handle an incoming body sync message via RustSyncManager.
-    ///
-    /// This processes Y-sync protocol messages for body content sync.
-    /// Returns response bytes, new content if changed, and echo detection status.
-    HandleBodySyncMessage {
-        /// Document name (file path).
-        doc_name: String,
-        /// The incoming message bytes.
-        message: Vec<u8>,
-        /// If true, write body to disk after applying updates.
-        #[serde(default)]
-        write_to_disk: bool,
-    },
-
-    /// Create a SyncStep1 message for initiating body sync.
-    CreateBodySyncStep1 {
-        /// Document name (file path).
-        doc_name: String,
-    },
-
-    /// Create a body update message for local changes.
-    CreateBodyUpdate {
-        /// Document name (file path).
-        doc_name: String,
-        /// New content to sync.
-        content: String,
-    },
-
-    /// Check if initial sync is complete via RustSyncManager.
-    IsSyncComplete,
-
-    /// Check if workspace sync is complete.
-    IsWorkspaceSynced,
-
-    /// Check if body sync is complete for a document.
-    IsBodySynced {
-        /// Document name (file path).
-        doc_name: String,
-    },
-
-    /// Mark initial sync as complete.
-    MarkSyncComplete,
-
-    /// Get list of active body syncs.
-    GetActiveSyncs,
-
-    /// Track content for echo detection.
-    TrackContent {
-        /// File path.
-        path: String,
-        /// Content to track.
-        content: String,
-    },
-
-    /// Check if content is an echo of a previous update.
-    IsEcho {
-        /// File path.
-        path: String,
-        /// Content to check.
-        content: String,
-    },
-
-    /// Clear tracked content for echo detection.
-    ClearTrackedContent {
-        /// File path.
-        path: String,
-    },
-
-    /// Reset all sync state in RustSyncManager.
-    ResetSyncState,
-
-    /// Trigger workspace sync by creating an update message for local changes.
-    ///
-    /// Returns a SyncMessage that can be sent to the sync server.
-    /// This is useful after batch operations to force a sync.
-    TriggerWorkspaceSync,
-
     // ==================== Workspace Configuration Commands ====================
     /// Get the link format setting from the workspace root index.
     ///
@@ -1118,8 +670,7 @@ pub enum Command {
     /// Execute a plugin-specific command.
     ///
     /// Routes to the named plugin via the [`PluginRegistry`](crate::plugin::PluginRegistry).
-    /// Existing CRDT command variants stay and route internally; new plugin-specific
-    /// commands use this variant.
+    /// All plugin commands (sync, publish, custom) use this variant.
     PluginCommand {
         /// Plugin identifier (e.g., `"sync"`, `"publish"`).
         plugin: String,
@@ -1297,15 +848,6 @@ impl Command {
 
             Command::FixAll { .. } => {}
 
-            // --- Export ---
-            Command::GetAvailableAudiences { root_path }
-            | Command::PlanExport { root_path, .. }
-            | Command::ExportToMemory { root_path, .. }
-            | Command::ExportToHtml { root_path, .. }
-            | Command::ExportBinaryAttachments { root_path, .. } => {
-                *root_path = normalizer(root_path);
-            }
-
             // --- Templates (workspace_path is a directory, joins with _templates) ---
             Command::ListTemplates { .. }
             | Command::GetTemplate { .. }
@@ -1397,76 +939,6 @@ impl Command {
             | Command::GetPluginManifests
             | Command::GetPluginConfig { .. }
             | Command::SetPluginConfig { .. } => {}
-
-            // --- CRDT commands with filesystem path fields ---
-            Command::InitializeWorkspaceCrdt { .. } => {
-                // workspace_path can be a file or directory; handler has its own logic
-            }
-
-            Command::GetFileHistory { file_path, .. } => {
-                *file_path = normalizer(file_path);
-            }
-
-            Command::GetCrdtFile { path } | Command::SetCrdtFile { path, .. } => {
-                *path = normalizer(path);
-            }
-
-            Command::TrackContent { path, .. }
-            | Command::IsEcho { path, .. }
-            | Command::ClearTrackedContent { path } => {
-                *path = normalizer(path);
-            }
-
-            // --- CRDT commands with `doc_name` fields (workspace or body docs) ---
-            Command::GetSyncState { doc_name }
-            | Command::ApplyRemoteUpdate { doc_name, .. }
-            | Command::GetMissingUpdates { doc_name, .. }
-            | Command::GetFullState { doc_name }
-            | Command::GetHistory { doc_name, .. }
-            | Command::RestoreVersion { doc_name, .. }
-            | Command::GetVersionDiff { doc_name, .. }
-            | Command::GetStateAt { doc_name, .. }
-            | Command::SaveCrdtState { doc_name }
-            | Command::GetBodyContent { doc_name }
-            | Command::SetBodyContent { doc_name, .. }
-            | Command::ResetBodyDoc { doc_name }
-            | Command::GetBodySyncState { doc_name }
-            | Command::GetBodyFullState { doc_name }
-            | Command::ApplyBodyUpdate { doc_name, .. }
-            | Command::GetBodyMissingUpdates { doc_name, .. }
-            | Command::SaveBodyDoc { doc_name }
-            | Command::UnloadBodyDoc { doc_name }
-            | Command::CreateSyncStep1 { doc_name }
-            | Command::HandleSyncMessage { doc_name, .. }
-            | Command::CreateUpdateMessage { doc_name, .. }
-            | Command::ApplyRemoteBodyUpdateWithEffects { doc_name, .. }
-            | Command::InitBodySync { doc_name }
-            | Command::CloseBodySync { doc_name }
-            | Command::HandleBodySyncMessage { doc_name, .. }
-            | Command::CreateBodySyncStep1 { doc_name }
-            | Command::CreateBodyUpdate { doc_name, .. }
-            | Command::IsBodySynced { doc_name } => {
-                *doc_name = normalizer(doc_name);
-            }
-
-            // --- CRDT commands without filesystem path fields ---
-            Command::ListCrdtFiles { .. }
-            | Command::SaveAllBodyDocs
-            | Command::ListLoadedBodyDocs
-            | Command::ConfigureSyncHandler { .. }
-            | Command::ApplyRemoteWorkspaceUpdateWithEffects { .. }
-            | Command::GetStoragePath { .. }
-            | Command::GetCanonicalPath { .. }
-            | Command::HandleWorkspaceSyncMessage { .. }
-            | Command::HandleCrdtState { .. }
-            | Command::CreateWorkspaceSyncStep1
-            | Command::CreateWorkspaceUpdate { .. }
-            | Command::IsSyncComplete
-            | Command::IsWorkspaceSynced
-            | Command::MarkSyncComplete
-            | Command::GetActiveSyncs
-            | Command::ResetSyncState
-            | Command::TriggerWorkspaceSync => {}
         }
     }
 }
@@ -1534,18 +1006,6 @@ pub enum Response {
     /// Fix summary response.
     FixSummary(FixSummary),
 
-    /// Export plan response.
-    ExportPlan(ExportPlan),
-
-    /// Exported files response.
-    ExportedFiles(Vec<ExportedFile>),
-
-    /// Binary files response (includes data - use for small files only).
-    BinaryFiles(Vec<BinaryExportFile>),
-
-    /// Binary file paths response (no data - for efficient listing).
-    BinaryFilePaths(Vec<BinaryFileInfo>),
-
     /// Templates list response.
     Templates(Vec<TemplateInfo>),
 
@@ -1584,47 +1044,6 @@ pub enum Response {
 
     /// Plugin manifests response.
     PluginManifests(Vec<crate::plugin::PluginManifest>),
-
-    /// Binary data response (for CRDT state vectors, updates).
-    Binary(Vec<u8>),
-
-    /// CRDT file metadata response.
-    CrdtFile(Option<crate::types::FileMetadata>),
-
-    /// CRDT files list response.
-    CrdtFiles(Vec<(String, crate::types::FileMetadata)>),
-
-    /// CRDT history response.
-    CrdtHistory(Vec<CrdtHistoryEntry>),
-
-    /// Update ID response.
-    UpdateId(Option<i64>),
-
-    /// Version diff response.
-    VersionDiff(Vec<crate::types::FileDiff>),
-
-    /// History entries response (newer format with more details).
-    HistoryEntries(Vec<crate::types::HistoryEntry>),
-
-    /// Workspace sync message result.
-    WorkspaceSyncResult {
-        /// Optional response bytes to send back.
-        response: Option<Vec<u8>>,
-        /// List of file paths that were changed.
-        changed_files: Vec<String>,
-        /// Whether sync is now complete.
-        sync_complete: bool,
-    },
-
-    /// Body sync message result.
-    BodySyncResult {
-        /// Optional response bytes to send back.
-        response: Option<Vec<u8>>,
-        /// New content if it changed.
-        content: Option<String>,
-        /// Whether this is an echo of our own update.
-        is_echo: bool,
-    },
 }
 
 // ============================================================================
@@ -1862,24 +1281,6 @@ pub enum LinkParserResult {
     String(String),
 }
 
-/// CRDT history entry for version tracking.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
-pub struct CrdtHistoryEntry {
-    /// Update ID.
-    pub update_id: i64,
-    /// Timestamp of the update (Unix milliseconds).
-    pub timestamp: i64,
-    /// Origin of the update.
-    pub origin: String,
-    /// Files that were changed in this update.
-    pub files_changed: Vec<String>,
-    /// Device ID that created this update (for multi-device attribution).
-    pub device_id: Option<String>,
-    /// Human-readable device name.
-    pub device_name: Option<String>,
-}
-
 // ============================================================================
 // Tests
 // ============================================================================
@@ -1939,19 +1340,18 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_paths_normalizes_body_doc_name() {
-        let mut cmd = Command::SetBodyContent {
-            doc_name: "/workspace/notes/day.md".to_string(),
-            content: "hello".to_string(),
+    fn test_normalize_paths_normalizes_entry_path() {
+        let mut cmd = Command::GetEntry {
+            path: "/workspace/notes/day.md".to_string(),
         };
 
         cmd.normalize_paths(|p| p.trim_start_matches("/workspace/").to_string());
 
         match cmd {
-            Command::SetBodyContent { doc_name, .. } => {
-                assert_eq!(doc_name, "notes/day.md");
+            Command::GetEntry { path } => {
+                assert_eq!(path, "notes/day.md");
             }
-            other => panic!("Expected SetBodyContent, got {:?}", other),
+            other => panic!("Expected GetEntry, got {:?}", other),
         }
     }
 }

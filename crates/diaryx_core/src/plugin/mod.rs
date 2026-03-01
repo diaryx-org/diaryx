@@ -183,19 +183,6 @@ pub trait WorkspacePlugin: Plugin {
         None
     }
 
-    /// Handle a typed command directly, bypassing JSON serialization.
-    ///
-    /// Returns `Some(result)` if this plugin handles the command, `None` otherwise.
-    /// This allows plugins to intercept core `Command` variants and return typed
-    /// `Response` values without the overhead of JSON roundtrips.
-    async fn handle_typed_command(
-        &self,
-        cmd: &crate::command::Command,
-    ) -> Option<Result<crate::command::Response, crate::error::DiaryxError>> {
-        let _ = cmd;
-        None
-    }
-
     // ====================================================================
     // CRDT side-effect hooks (default: no-op)
     // ====================================================================

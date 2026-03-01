@@ -604,26 +604,39 @@ pub fn sync_body_files(input: String) -> FnResult<Vec<u8>> {
 
 /// Execute a typed Command (same format as Diaryx::execute).
 ///
-/// Takes a full serialized Command JSON, calls handle_typed_command on the
-/// inner SyncPlugin, and returns a full serialized Response JSON.
+/// Takes a JSON object with `type` and optional `params` fields, extracts
+/// them, and calls `handle_command` on the inner SyncPlugin.
+/// Returns the result as a serialized JSON string.
 /// Returns empty string if the command is not handled by this plugin.
 #[plugin_fn]
 pub fn execute_typed_command(input: String) -> FnResult<String> {
-    use diaryx_core::command::Command;
+    let parsed: serde_json::Value = serde_json::from_str(&input)
+        .map_err(|e| extism_pdk::Error::msg(format!("Invalid JSON: {e}")))?;
 
-    let cmd: Command = serde_json::from_str(&input)
-        .map_err(|e| extism_pdk::Error::msg(format!("Invalid command: {e}")))?;
+    // Extract command type and params from the tagged enum format
+    // Commands are serialized as { "type": "CommandName", "params": { ... } }
+    let cmd_type = parsed["type"]
+        .as_str()
+        .ok_or_else(|| extism_pdk::Error::msg("Missing 'type' field in command"))?;
+
+    let params = parsed
+        .get("params")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
 
     let result = state::with_state(|s| {
-        poll_future(diaryx_core::plugin::WorkspacePlugin::handle_typed_command(
+        poll_future(diaryx_core::plugin::WorkspacePlugin::handle_command(
             &s.sync_plugin,
-            &cmd,
+            cmd_type,
+            params,
         ))
     })
     .map_err(|e| extism_pdk::Error::msg(e))?;
 
     match result {
-        Some(Ok(response)) => {
+        Some(Ok(value)) => {
+            // Wrap as PluginResult for consistency with the Response enum
+            let response = serde_json::json!({ "type": "PluginResult", "data": value });
             let json = serde_json::to_string(&response)
                 .map_err(|e| extism_pdk::Error::msg(format!("Serialize error: {e}")))?;
             Ok(json)

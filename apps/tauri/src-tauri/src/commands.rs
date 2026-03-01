@@ -2488,9 +2488,12 @@ pub async fn finish_import_upload<R: Runtime>(
             )));
 
         // Initialize CRDT by scanning workspace
-        let cmd = Command::InitializeWorkspaceCrdt {
-            workspace_path: workspace.to_string_lossy().to_string(),
-            audience: None,
+        let cmd = Command::PluginCommand {
+            plugin: "sync".into(),
+            command: "InitializeWorkspaceCrdt".into(),
+            params: serde_json::json!({
+                "workspace_path": workspace.to_string_lossy().to_string(),
+            }),
         };
 
         match diaryx.execute(cmd).await {
@@ -3887,9 +3890,12 @@ mod tests {
         }
 
         // Initialize workspace CRDT (populate with files)
-        let cmd = Command::InitializeWorkspaceCrdt {
-            workspace_path: workspace_path.to_string_lossy().to_string(),
-            audience: None,
+        let cmd = Command::PluginCommand {
+            plugin: "sync".into(),
+            command: "InitializeWorkspaceCrdt".into(),
+            params: serde_json::json!({
+                "workspace_path": workspace_path.to_string_lossy().to_string(),
+            }),
         };
         let _ = diaryx_setup.execute(cmd).await;
         drop(diaryx_setup);

@@ -1,6 +1,12 @@
 #![doc = include_str!(concat!(env!("OUT_DIR"), "/README.md"))]
 #![warn(missing_docs)]
 
+/// Authentication module for sync server
+pub mod auth;
+
+/// Billing tier model and feature gates
+pub mod billing;
+
 /// Command pattern API for unified command execution
 pub mod command;
 pub use command::{Command, Response};

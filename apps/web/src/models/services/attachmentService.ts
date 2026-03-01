@@ -7,7 +7,7 @@
 
 import type { Api } from '$lib/backend/api';
 import heic2any from 'heic2any';
-import { getServerAttachmentUrl, getAttachmentMetadata, sha256Hex } from './attachmentSyncService';
+import { getServerAttachmentUrl, getAttachmentMetadata, sha256Hex } from '$lib/sync/attachmentSyncService';
 
 // ============================================================================
 // State

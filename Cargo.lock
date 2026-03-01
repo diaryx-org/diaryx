@@ -2182,6 +2182,7 @@ dependencies = [
 name = "diaryx"
 version = "1.2.1"
 dependencies = [
+ "async-trait",
  "axum",
  "base64 0.22.1",
  "chrono",
@@ -2282,6 +2283,7 @@ dependencies = [
  "thiserror 2.0.18",
  "toml 0.9.12+spec-1.1.0",
  "ts-rs",
+ "urlencoding",
  "zip",
 ]
 

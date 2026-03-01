@@ -33,8 +33,8 @@ use diaryx_core::fs::AsyncFileSystem;
 use diaryx_core::link_parser::{self, LinkFormat};
 use diaryx_core::path_utils::normalize_sync_path;
 use diaryx_core::plugin::{
-    Plugin, PluginCapability, PluginContext, PluginError, PluginId, PluginManifest, UiContribution,
-    WorkspaceOpenedEvent, WorkspacePlugin,
+    ComponentRef, Plugin, PluginCapability, PluginContext, PluginError, PluginId, PluginManifest,
+    UiContribution, WorkspaceOpenedEvent, WorkspacePlugin,
 };
 use diaryx_core::types::{BinaryRef, FileMetadata};
 
@@ -193,7 +193,10 @@ fn sync_plugin_manifest() -> PluginManifest {
             id: "sync-settings".into(),
             label: "Sync".into(),
             icon: None,
-            fields: vec![], // Rendered by Builtin component
+            fields: vec![],
+            component: Some(ComponentRef::Builtin {
+                component_id: "sync.settings".into(),
+            }),
         }],
         cli: vec![],
     }

@@ -82,7 +82,7 @@ mod custom_random {
 use extism_pdk::*;
 use serde_json::Value as JsonValue;
 
-use diaryx_core::plugin::{ComponentRef, SettingsField, SidebarSide, UiContribution};
+use diaryx_core::plugin::{ComponentRef, SidebarSide, UiContribution};
 use diaryx_sync::IncomingEvent;
 
 // Re-export the protocol types from diaryx_extism for compatibility
@@ -145,17 +145,10 @@ pub fn manifest(_input: String) -> FnResult<String> {
         id: "sync-settings".into(),
         label: "Sync".into(),
         icon: None,
-        fields: vec![
-            SettingsField::Section {
-                label: "Sync Configuration".into(),
-                description: Some("Configure real-time synchronization across devices".into()),
-            },
-            SettingsField::Toggle {
-                key: "enabled".into(),
-                label: "Enable Sync".into(),
-                description: Some("Sync your workspace across devices in real-time".into()),
-            },
-        ],
+        fields: vec![],
+        component: Some(ComponentRef::Builtin {
+            component_id: "sync.settings".into(),
+        }),
     };
 
     let share_tab = UiContribution::SidebarTab {

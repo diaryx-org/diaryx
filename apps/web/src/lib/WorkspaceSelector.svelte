@@ -17,6 +17,7 @@
   } from "$lib/auth";
   import {
     isWorkspaceLocal,
+    getServerWorkspaceId,
     addLocalWorkspace,
     setCurrentWorkspaceId,
     getLocalWorkspaces,
@@ -48,29 +49,40 @@
   let allLocalWorkspaces = $derived(getLocalWorkspaces());
 
   // Merge server and local workspaces into a unified list.
-  // When logged in: workspaces on server with isLocal=false are 'server', rest are 'local'.
-  // When logged out: all workspaces are 'local' (no syncing possible).
-  // Deduplicates by ID defensively (server may return duplicates).
+  // When logged in: local workspaces with sync metadata matching a server workspace are 'server'.
+  // When logged out: all workspaces are 'local'.
+  // Server workspaces without a local entry are shown as cloud-only (downloadable).
   type UnifiedWorkspace = { id: string; name: string; source: 'server' | 'local' };
   let allWorkspaces = $derived.by(() => {
     const merged: UnifiedWorkspace[] = [];
     const seen = new Set<string>();
+    // Build a map of server UUID → server workspace for matching
+    const serverById = new Map(serverWorkspaces.map(sw => [sw.id, sw]));
+    // Track which server workspaces have been matched to local entries
+    const matchedServerIds = new Set<string>();
+
+    // All local workspaces first — check if any are synced to a server workspace
+    for (const ws of allLocalWorkspaces) {
+      if (seen.has(ws.id)) continue;
+      const serverId = getServerWorkspaceId(ws.id);
+      if (serverId && serverById.has(serverId)) {
+        merged.push({ id: ws.id, name: ws.name, source: 'server' });
+        matchedServerIds.add(serverId);
+      } else {
+        merged.push({ id: ws.id, name: ws.name, source: 'local' });
+      }
+      seen.add(ws.id);
+    }
 
     if (authState.isAuthenticated) {
-      // Server workspaces that aren't flagged local in registry
-      for (const ws of serverWorkspaces) {
-        if (seen.has(ws.id)) continue;
-        const localEntry = allLocalWorkspaces.find(lw => lw.id === ws.id);
-        const isLocalOnly = localEntry?.isLocal ?? false;
-        merged.push({ id: ws.id, name: ws.name, source: isLocalOnly ? 'local' : 'server' });
-        seen.add(ws.id);
-      }
-    }
-    // All local-registry workspaces not already added
-    for (const ws of allLocalWorkspaces) {
-      if (!seen.has(ws.id)) {
-        merged.push({ id: ws.id, name: ws.name, source: 'local' });
-        seen.add(ws.id);
+      // Server workspaces that aren't linked to a local entry (cloud-only, downloadable)
+      for (const sw of serverWorkspaces) {
+        if (matchedServerIds.has(sw.id)) continue;
+        // Use the server UUID as the display ID for undownloaded workspaces
+        if (!seen.has(sw.id)) {
+          merged.push({ id: sw.id, name: sw.name, source: 'server' });
+          seen.add(sw.id);
+        }
       }
     }
     return merged;

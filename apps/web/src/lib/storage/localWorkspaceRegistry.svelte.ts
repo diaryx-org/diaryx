@@ -1,9 +1,9 @@
 /**
  * Local Workspace Registry — tracks workspaces available on this device.
  *
- * Stored in localStorage so it persists across sessions. Supports both:
- * - **Local-only workspaces** (`isLocal: true`): created client-side, no server backing
- * - **Synced workspaces** (`isLocal: false`): downloaded from a server, identified by server UUID
+ * Stored in localStorage so it persists across sessions. All workspaces have
+ * stable `local-<uuid>` IDs. Sync status is determined by plugin metadata:
+ * a workspace with `pluginMetadata.sync.serverId` is synced.
  *
  * Uses Svelte 5 $state for reactivity — any component using $derived(getLocalWorkspaces())
  * will automatically update when the registry changes.
@@ -16,12 +16,19 @@ import { generateUUID } from '$lib/utils';
 // Types
 // ============================================================================
 
+/** Per-plugin metadata stored on a workspace. Keyed by plugin ID. */
+export type PluginMetadataMap = Record<string, Record<string, unknown>>;
+
 export interface LocalWorkspace {
-  /** Workspace identifier. Server UUID for synced workspaces, "local-<uuid>" for local-only. */
+  /** Workspace identifier. Always "local-<uuid>" — stable across sync operations. */
   id: string;
   /** Display name (also used as OPFS directory name) */
   name: string;
-  /** Whether this workspace is local-only (not synced to server) */
+  /**
+   * Whether this workspace is local-only (not synced to server).
+   * @deprecated Check `pluginMetadata?.sync?.serverId` instead, or use `isWorkspaceSynced()`.
+   * Kept for backward compatibility during migration.
+   */
   isLocal: boolean;
   /** Storage backend for this workspace. Undefined = inherit global default. */
   storageType?: import('$lib/backend/storageType').StorageType;
@@ -31,6 +38,8 @@ export interface LocalWorkspace {
   downloadedAt: number;
   /** When the user last opened this workspace */
   lastOpenedAt: number;
+  /** Per-plugin metadata. Plugins store opaque data here (e.g. sync stores serverId). */
+  pluginMetadata?: PluginMetadataMap;
 }
 
 // ============================================================================
@@ -54,12 +63,49 @@ function loadFromLocalStorage(): LocalWorkspace[] {
     const raw = localStorage.getItem(REGISTRY_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as LocalWorkspace[];
-    // Migration: add isLocal field to entries that don't have it (default true = local)
+
+    let needsSave = false;
+
     for (const ws of parsed) {
+      // Migration 1: add isLocal field to entries that don't have it (default true = local)
       if (ws.isLocal === undefined) {
         (ws as any).isLocal = true;
+        needsSave = true;
+      }
+
+      // Migration 2: server-UUID workspaces → local ID + sync plugin metadata
+      // If a workspace has a non-local ID and isLocal === false, it was synced
+      // with the old ID scheme. Give it a stable local ID and store the server
+      // UUID in pluginMetadata.
+      if (!ws.id.startsWith('local-') && !ws.isLocal) {
+        const serverUuid = ws.id;
+        const newLocalId = `local-${generateUUID()}`;
+
+        // Store server UUID as sync plugin metadata
+        if (!ws.pluginMetadata) ws.pluginMetadata = {};
+        ws.pluginMetadata['sync'] = {
+          ...(ws.pluginMetadata['sync'] || {}),
+          serverId: serverUuid,
+          syncEnabled: true,
+        };
+
+        // Update current workspace ID if it pointed to the old server UUID
+        const currentId = localStorage.getItem(CURRENT_KEY);
+        if (currentId === serverUuid) {
+          localStorage.setItem(CURRENT_KEY, newLocalId);
+        }
+
+        ws.id = newLocalId;
+        ws.isLocal = true; // isLocal is now always true (derived from plugin metadata)
+        needsSave = true;
+        console.log(`[WorkspaceRegistry] Migrated workspace "${ws.name}" from server UUID ${serverUuid} to ${newLocalId}`);
       }
     }
+
+    if (needsSave) {
+      localStorage.setItem(REGISTRY_KEY, JSON.stringify(parsed));
+    }
+
     return parsed.sort((a, b) => b.lastOpenedAt - a.lastOpenedAt);
   } catch {
     return [];
@@ -102,10 +148,28 @@ export function getCurrentWorkspaceId(): string | null {
 }
 
 /**
- * Check whether a workspace is downloaded locally.
+ * Check whether a workspace is downloaded locally (exists in the registry).
  */
 export function isWorkspaceLocal(id: string): boolean {
   return registryState.some(w => w.id === id);
+}
+
+/**
+ * Check whether a workspace is synced to a server.
+ * A workspace is synced if it has sync plugin metadata with a serverId.
+ */
+export function isWorkspaceSynced(id: string): boolean {
+  const ws = registryState.find(w => w.id === id);
+  return !!ws?.pluginMetadata?.['sync']?.serverId;
+}
+
+/**
+ * Get the server workspace ID for a synced workspace, or null if not synced.
+ */
+export function getServerWorkspaceId(id: string): string | null {
+  const ws = registryState.find(w => w.id === id);
+  const serverId = ws?.pluginMetadata?.['sync']?.serverId;
+  return typeof serverId === 'string' ? serverId : null;
 }
 
 /**
@@ -154,7 +218,7 @@ export function addLocalWorkspace(ws: { id: string; name: string; isLocal?: bool
     list.push({
       id: ws.id,
       name: ws.name,
-      isLocal: ws.isLocal ?? false,
+      isLocal: ws.isLocal ?? true,
       storageType: ws.storageType,
       ...(ws.path ? { path: ws.path } : {}),
       downloadedAt: Date.now(),
@@ -222,17 +286,75 @@ export function renameLocalWorkspace(id: string, newName: string): void {
 }
 
 /**
- * Set whether a workspace is local-only or synced.
- * When set to true, the workspace stops syncing but local data is preserved.
- * When set to false, the workspace is eligible for syncing.
+ * Set sync status for a workspace via plugin metadata.
+ * When synced: stores serverId in pluginMetadata.sync.
+ * When unsynced: removes the sync plugin metadata.
+ * @deprecated Use setPluginMetadata() with "sync" plugin ID directly.
  */
 export function setWorkspaceIsLocal(id: string, isLocal: boolean): void {
+  if (isLocal) {
+    // Remove sync metadata to mark as local-only
+    setPluginMetadata(id, 'sync', null);
+  }
+  // If setting to synced (isLocal=false), the caller should also call
+  // setPluginMetadata(id, 'sync', { serverId: ... }) to provide the server ID.
+  // The isLocal field is kept in sync for backward compat.
   const list = [...registryState];
   const ws = list.find(w => w.id === id);
   if (ws) {
     ws.isLocal = isLocal;
     saveRegistry(list);
   }
+}
+
+// ============================================================================
+// Plugin Metadata
+// ============================================================================
+
+/**
+ * Get plugin metadata for a workspace.
+ * Returns the metadata object for the given plugin, or undefined if not set.
+ */
+export function getPluginMetadata(workspaceId: string, pluginId: string): Record<string, unknown> | undefined {
+  const ws = registryState.find(w => w.id === workspaceId);
+  return ws?.pluginMetadata?.[pluginId];
+}
+
+/**
+ * Set plugin metadata for a workspace.
+ * Merges the provided data into the existing metadata for the plugin.
+ * Pass null to remove the plugin's metadata entirely.
+ */
+export function setPluginMetadata(workspaceId: string, pluginId: string, data: Record<string, unknown> | null): void {
+  const list = [...registryState];
+  const ws = list.find(w => w.id === workspaceId);
+  if (!ws) return;
+
+  if (data === null) {
+    // Remove plugin metadata
+    if (ws.pluginMetadata) {
+      delete ws.pluginMetadata[pluginId];
+      if (Object.keys(ws.pluginMetadata).length === 0) {
+        delete ws.pluginMetadata;
+      }
+    }
+  } else {
+    // Merge plugin metadata
+    if (!ws.pluginMetadata) {
+      ws.pluginMetadata = {};
+    }
+    ws.pluginMetadata[pluginId] = {
+      ...(ws.pluginMetadata[pluginId] || {}),
+      ...data,
+    };
+  }
+
+  // Keep isLocal in sync for backward compat
+  if (pluginId === 'sync') {
+    ws.isLocal = !ws.pluginMetadata?.['sync']?.serverId;
+  }
+
+  saveRegistry(list);
 }
 
 // ============================================================================
@@ -260,22 +382,16 @@ export function createLocalWorkspace(name: string, storageType?: StorageType, pa
 }
 
 /**
- * Promote a local-only workspace to a synced workspace.
- * Updates the ID from "local-xxx" to the server UUID and sets isLocal to false.
- * The OPFS directory name stays the same (name-based).
+ * Link a local workspace to a server workspace by storing the server UUID
+ * in the sync plugin metadata. The local workspace ID stays stable.
+ *
+ * @deprecated Use setPluginMetadata(workspaceId, 'sync', { serverId, syncEnabled: true }) directly.
  */
 export function promoteLocalWorkspace(localId: string, serverUuid: string): void {
-  const list = [...registryState];
-  const ws = list.find(w => w.id === localId);
-  if (ws) {
-    ws.id = serverUuid;
-    ws.isLocal = false;
-    saveRegistry(list);
-    // Update current workspace ID if this was the active one
-    if (getCurrentWorkspaceId() === localId) {
-      localStorage.setItem(CURRENT_KEY, serverUuid);
-    }
-  }
+  setPluginMetadata(localId, 'sync', {
+    serverId: serverUuid,
+    syncEnabled: true,
+  });
 }
 
 /**

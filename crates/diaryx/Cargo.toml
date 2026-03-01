@@ -19,6 +19,7 @@ diaryx_core = { workspace = true, features = ["native-pandoc", "import-email", "
 diaryx_extism = { workspace = true, features = ["http"] }
 # diaryx_sync only needed for `edit` feature (local siphonophore server)
 diaryx_sync = { workspace = true, features = ["sqlite", "native-sync", "git"], optional = true }
+async-trait = "0.1"
 clap = { version = "4.5", features = ["derive", "env"] }
 chrono.workspace = true
 serde.workspace = true

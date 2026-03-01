@@ -57,7 +57,7 @@
     getAttachmentMetadata,
     enqueueAttachmentDownload,
     isAttachmentSyncEnabled,
-  } from "@/models/services/attachmentSyncService";
+  } from "$lib/sync/attachmentSyncService";
 
   // Platform detection for keyboard shortcut display
   const isMac =

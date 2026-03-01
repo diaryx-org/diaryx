@@ -89,4 +89,4 @@ export {
   sha256Hex,
   isTerminalAttachmentSyncError,
   getAttachmentSyncQueueSnapshot,
-} from './attachmentSyncService';
+} from '$lib/sync/attachmentSyncService';

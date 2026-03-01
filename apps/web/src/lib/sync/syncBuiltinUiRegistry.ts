@@ -2,6 +2,9 @@ import type { ComponentRef, UiContribution } from "$lib/backend/generated";
 
 export const SYNC_PLUGIN_ID = "sync";
 
+/** Built-in component ID for the sync settings tab. */
+export const SYNC_BUILTIN_SETTINGS_COMPONENT_ID = "sync.settings";
+
 export const SYNC_BUILTIN_TABS = {
   share: {
     tabId: "share",

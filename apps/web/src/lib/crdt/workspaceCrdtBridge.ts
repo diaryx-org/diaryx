@@ -31,7 +31,7 @@ import {
   setAttachmentSyncBackend,
   setAttachmentSyncContext,
   indexAttachmentRefs,
-} from '../../models/services/attachmentSyncService';
+} from '$lib/sync/attachmentSyncService';
 import {
   setCurrentWorkspaceId as registrySetCurrentWorkspaceId,
   addLocalWorkspace,

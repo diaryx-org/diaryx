@@ -9,7 +9,7 @@
   import * as Drawer from "$lib/components/ui/drawer";
   import * as Tabs from "$lib/components/ui/tabs";
   import { Button } from "$lib/components/ui/button";
-  import { Settings, Eye, FolderOpen, FileText, RefreshCw, Database, Bug, User, CreditCard, Puzzle } from "@lucide/svelte";
+  import { Settings, Eye, FolderOpen, FileText, Database, Bug, User, CreditCard, Puzzle } from "@lucide/svelte";
   import { getMobileState } from "./hooks/useMobile.svelte";
   import { getAuthState } from "$lib/auth";
   import { getCurrentWorkspaceId, getLocalWorkspace } from "$lib/storage/localWorkspaceRegistry.svelte";
@@ -35,7 +35,7 @@
   import PluginsSettings from "./settings/PluginsSettings.svelte";
   import PluginSettingsTab from "./settings/PluginSettingsTab.svelte";
   import { getPluginStore } from "../models/stores/pluginStore.svelte";
-  import { isSyncPluginId } from "$lib/sync/syncBuiltinUiRegistry";
+  import { SYNC_BUILTIN_SETTINGS_COMPONENT_ID } from "$lib/sync/syncBuiltinUiRegistry";
   import { getPlugin as getBrowserPlugin } from "$lib/plugins/browserPluginManager.svelte";
   import type { Api } from "$lib/backend/api";
   import type { JsonValue } from "$lib/backend/generated/serde_json/JsonValue";
@@ -68,13 +68,10 @@
   let currentWorkspaceId = $derived(getCurrentWorkspaceId() ?? '');
   let currentWorkspaceName = $derived(getLocalWorkspace(currentWorkspaceId)?.name ?? 'My Journal');
 
-  // Plugin store
+  // Plugin store — all plugin-contributed settings tabs are rendered dynamically.
+  // Plugins with a Builtin ComponentRef (like sync) get their host-provided component.
   const pluginStore = getPluginStore();
-  // Filter out the sync plugin's SettingsTab — the hardcoded "Sync" tab renders the
-  // richer SyncSettings component, so we don't need the plugin's declarative duplicate.
-  const pluginSettingsTabs = $derived(
-    pluginStore.settingsTabs.filter((tab) => !isSyncPluginId(tab.pluginId))
-  );
+  const pluginSettingsTabs = $derived(pluginStore.settingsTabs);
 
   // Plugin config state: keyed by pluginId
   let pluginConfigs = $state<Record<string, Record<string, JsonValue>>>({});
@@ -140,11 +137,11 @@
         <FileText class="size-4 mr-1.5 hidden sm:inline" />
         Templates
       </Tabs.Trigger>
-      <Tabs.Trigger value="sync" class="shrink-0">
-        <RefreshCw class="size-4 mr-1.5 hidden sm:inline" />
-        Sync
-        <span class="text-[9px] font-semibold uppercase ml-1 px-1 py-0.5 rounded-full bg-blue-500/15 text-blue-600 dark:text-blue-400">Beta</span>
-      </Tabs.Trigger>
+      {#each pluginSettingsTabs as tab}
+        <Tabs.Trigger value={`plugin-${tab.contribution.id}`} class="shrink-0">
+          {tab.contribution.label}
+        </Tabs.Trigger>
+      {/each}
       <Tabs.Trigger value="account" class="shrink-0">
         <User class="size-4 mr-1.5 hidden sm:inline" />
         Account
@@ -167,11 +164,6 @@
         <Bug class="size-4 mr-1.5 hidden sm:inline" />
         Debug
       </Tabs.Trigger>
-      {#each pluginSettingsTabs as tab}
-        <Tabs.Trigger value={`plugin-${tab.contribution.id}`} class="shrink-0">
-          {tab.contribution.label}
-        </Tabs.Trigger>
-      {/each}
     </Tabs.List>
 
     <Tabs.Content value="general">
@@ -193,12 +185,6 @@
     <Tabs.Content value="templates">
       <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
         <TemplateSettings workspaceRootIndex={workspacePath} />
-      </div>
-    </Tabs.Content>
-
-    <Tabs.Content value="sync">
-      <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
-        <SyncSettings {onAddWorkspace} />
       </div>
     </Tabs.Content>
 
@@ -240,7 +226,10 @@
     {#each pluginSettingsTabs as tab}
       <Tabs.Content value={`plugin-${tab.contribution.id}`}>
         <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
-          {#if tab.contribution.fields.length > 0}
+          {#if tab.contribution.component?.type === "Builtin" && tab.contribution.component.component_id === SYNC_BUILTIN_SETTINGS_COMPONENT_ID}
+            <!-- Sync plugin: render the host-provided SyncSettings component -->
+            <SyncSettings {onAddWorkspace} />
+          {:else if tab.contribution.fields.length > 0}
             {#await loadPluginConfig(tab.pluginId) then}
               <PluginSettingsTab
                 fields={tab.contribution.fields}

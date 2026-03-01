@@ -31,7 +31,7 @@ vi.mock("../models/services/attachmentService", () => ({
   bytesToBase64: vi.fn(),
 }));
 
-vi.mock("../models/services/attachmentSyncService", () => ({
+vi.mock("$lib/sync/attachmentSyncService", () => ({
   enqueueAttachmentUpload: enqueueAttachmentUploadMock,
   isAttachmentSyncEnabled: isAttachmentSyncEnabledMock,
   onQueueItemStateChange: vi.fn(),

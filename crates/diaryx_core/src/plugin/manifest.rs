@@ -68,7 +68,17 @@ pub enum UiContribution {
         /// Optional icon name.
         icon: Option<String>,
         /// How to render this tab's content.
+        ///
+        /// If `component` is set, the host renders that component and ignores `fields`.
+        /// Otherwise, the host renders a declarative form from `fields`.
         fields: Vec<SettingsField>,
+        /// Optional component reference for rendering the tab's content.
+        ///
+        /// When present, the host renders this component instead of a declarative
+        /// form from `fields`. Use `ComponentRef::Builtin` to reference a host-provided
+        /// component (e.g., `"sync.settings"`).
+        #[serde(default)]
+        component: Option<ComponentRef>,
     },
     /// A tab in one of the sidebars.
     SidebarTab {
@@ -141,6 +151,21 @@ pub enum UiContribution {
         position: StatusBarPosition,
         /// Optional plugin command to execute on click.
         plugin_command: Option<String>,
+    },
+    /// A dialog that can be triggered by a plugin command.
+    ///
+    /// The host renders the component as a modal dialog. Plugins use this
+    /// for complex multi-step flows (e.g., sync setup wizard).
+    Dialog {
+        /// Unique identifier for this dialog.
+        id: String,
+        /// Dialog title / label.
+        label: String,
+        /// Component reference for rendering the dialog content.
+        component: ComponentRef,
+        /// Optional plugin command that triggers this dialog.
+        /// If set, the host opens the dialog when this command is executed.
+        trigger_command: Option<String>,
     },
     /// An editor extension (TipTap node/mark) contributed by a plugin.
     ///

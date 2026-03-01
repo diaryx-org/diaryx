@@ -25,8 +25,8 @@ import {
   sha256Hex,
   isAttachmentSyncEnabled,
   onQueueItemStateChange,
-} from '../models/services/attachmentSyncService';
-import type { QueueItemEvent } from '../models/services/attachmentSyncService';
+} from '$lib/sync/attachmentSyncService';
+import type { QueueItemEvent } from '$lib/sync/attachmentSyncService';
 import { showLoading } from '../models/services/toastService';
 import { getCurrentWorkspace } from '../lib/auth/authStore.svelte';
 import { getFileMetadata, getWorkspaceId, setFileMetadata } from '../lib/crdt';

@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-03-02T18:53:39Z
+updated: 2026-03-02T22:43:58Z
 part_of: '[README](/README.md)'
 ---
 # Instructions for AI agents
@@ -25,14 +25,14 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │   │   │   ├── Backend - Backend abstraction layer for WASM and Tauri - apps/web/src/lib/backend/README.md
 │   │   │   │   ├── Components - Reusable Svelte components - apps/web/src/lib/components/README.md
 │   │   │   │   │   └── UI Components - shadcn-svelte based UI primitives - apps/web/src/lib/components/ui/README.md
-│   │   │   │   ├── CRDT - CRDT synchronization bridge - apps/web/src/lib/crdt/README.md
+│   │   │   │   ├── CRDT - Legacy placeholder for removed web CRDT host layer - apps/web/src/lib/crdt/README.md
 │   │   │   │   ├── Device - Device identification - apps/web/src/lib/device/README.md
 │   │   │   │   ├── Extensions - TipTap editor extensions - apps/web/src/lib/extensions/README.md
 │   │   │   │   ├── History - Version history components - apps/web/src/lib/history/README.md
 │   │   │   │   ├── Hooks - Svelte hooks - apps/web/src/lib/hooks/README.md
 │   │   │   │   ├── Publish - Publishing and export UI components - apps/web/src/lib/publish/README.md
 │   │   │   │   ├── Settings - Settings panel components - apps/web/src/lib/settings/README.md
-│   │   │   │   ├── Share - Share session components - apps/web/src/lib/share/README.md
+│   │   │   │   ├── Share - Legacy share/publish panel module - apps/web/src/lib/share/README.md
 │   │   │   │   ├── Storage - Storage abstraction layer - apps/web/src/lib/storage/README.md
 │   │   │   │   ├── Lib Stores - Svelte stores for UI preferences - apps/web/src/lib/stores/README.md
 │   │   │   │   └── diaryx_wasm - WASM bindings for diaryx_core - apps/web/src/lib/wasm/README.md

@@ -1,5 +1,12 @@
 <script lang="ts">
-  import type { FileDiff, ChangeType } from '$lib/crdt/types';
+  type ChangeType = 'Added' | 'Modified' | 'Deleted' | 'Restored' | string;
+
+  interface FileDiff {
+    path: string;
+    change_type: ChangeType;
+    old_value?: string | null;
+    new_value?: string | null;
+  }
 
   interface Props {
     diffs: FileDiff[];

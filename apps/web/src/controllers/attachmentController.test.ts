@@ -1,21 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
-  getFileMetadataMock,
-  setFileMetadataMock,
-  getWorkspaceIdMock,
-  getCurrentWorkspaceMock,
+  getCurrentWorkspaceIdMock,
+  getServerWorkspaceIdMock,
   enqueueAttachmentUploadMock,
   isAttachmentSyncEnabledMock,
   sha256HexMock,
+  indexAttachmentRefsMock,
 } = vi.hoisted(() => ({
-  getFileMetadataMock: vi.fn(),
-  setFileMetadataMock: vi.fn(),
-  getWorkspaceIdMock: vi.fn(),
-  getCurrentWorkspaceMock: vi.fn(),
+  getCurrentWorkspaceIdMock: vi.fn(),
+  getServerWorkspaceIdMock: vi.fn(),
   enqueueAttachmentUploadMock: vi.fn(),
   isAttachmentSyncEnabledMock: vi.fn(() => false),
   sha256HexMock: vi.fn(),
+  indexAttachmentRefsMock: vi.fn(),
 }));
 
 vi.mock("../models/stores", () => ({
@@ -35,18 +33,13 @@ vi.mock("$lib/sync/attachmentSyncService", () => ({
   enqueueAttachmentUpload: enqueueAttachmentUploadMock,
   isAttachmentSyncEnabled: isAttachmentSyncEnabledMock,
   onQueueItemStateChange: vi.fn(),
-  indexAttachmentRefs: vi.fn(),
+  indexAttachmentRefs: indexAttachmentRefsMock,
   sha256Hex: sha256HexMock,
 }));
 
-vi.mock("../lib/auth/authStore.svelte", () => ({
-  getCurrentWorkspace: getCurrentWorkspaceMock,
-}));
-
-vi.mock("../lib/crdt", () => ({
-  getFileMetadata: getFileMetadataMock,
-  getWorkspaceId: getWorkspaceIdMock,
-  setFileMetadata: setFileMetadataMock,
+vi.mock("$lib/storage/localWorkspaceRegistry.svelte", () => ({
+  getCurrentWorkspaceId: getCurrentWorkspaceIdMock,
+  getServerWorkspaceId: getServerWorkspaceIdMock,
 }));
 
 import { enqueueIncrementalAttachmentUpload } from "./attachmentController";
@@ -63,35 +56,11 @@ describe("enqueueIncrementalAttachmentUpload", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     sha256HexMock.mockResolvedValue("a".repeat(64));
-    getFileMetadataMock.mockResolvedValue({
-      filename: "my-journal.md",
-      title: "My Journal",
-      part_of: null,
-      contents: null,
-      attachments: [
-        {
-          path: "my-journal/_attachments/image.png",
-          source: "local",
-          hash: "",
-          mime_type: "",
-          size: 0n,
-          uploaded_at: null,
-          deleted: false,
-        },
-      ],
-      deleted: false,
-      audience: null,
-      description: null,
-      extra: {},
-      modified_at: 1n,
-    });
-    setFileMetadataMock.mockResolvedValue(undefined);
+    getCurrentWorkspaceIdMock.mockReturnValue("local-workspace-1");
+    getServerWorkspaceIdMock.mockReturnValue("server-workspace-1");
   });
 
-  it("updates BinaryRef metadata using canonical attachment path and enqueues with upload path", async () => {
-    getWorkspaceIdMock.mockReturnValue("ws-active");
-    getCurrentWorkspaceMock.mockReturnValue({ id: "ws-default", name: "default" });
-
+  it("indexes attachment metadata and enqueues upload for synced workspaces", async () => {
     const file = makeMockFile([1, 2, 3]);
 
     await enqueueIncrementalAttachmentUpload(
@@ -100,15 +69,11 @@ describe("enqueueIncrementalAttachmentUpload", () => {
       file
     );
 
-    expect(setFileMetadataMock).toHaveBeenCalledTimes(1);
-    const updatedMetadata = setFileMetadataMock.mock.calls[0][1];
-    expect(updatedMetadata.attachments[0].path).toBe("my-journal/_attachments/image.png");
-    expect(updatedMetadata.attachments[0].hash).toBe("a".repeat(64));
-    expect(updatedMetadata.attachments[0].mime_type).toBe("image/png");
+    expect(indexAttachmentRefsMock).toHaveBeenCalledTimes(1);
 
     expect(enqueueAttachmentUploadMock).toHaveBeenCalledTimes(1);
     expect(enqueueAttachmentUploadMock).toHaveBeenCalledWith({
-      workspaceId: "ws-active",
+      workspaceId: "server-workspace-1",
       entryPath: "my-journal.md",
       attachmentPath: "my-journal/_attachments/image.png",
       hash: "a".repeat(64),
@@ -117,9 +82,9 @@ describe("enqueueIncrementalAttachmentUpload", () => {
     });
   });
 
-  it("still updates CRDT hash metadata when workspace id is unavailable", async () => {
-    getWorkspaceIdMock.mockReturnValue(null);
-    getCurrentWorkspaceMock.mockReturnValue(null);
+  it("skips upload when the current workspace is not linked to sync", async () => {
+    getCurrentWorkspaceIdMock.mockReturnValue("local-workspace-1");
+    getServerWorkspaceIdMock.mockReturnValue(null);
 
     const file = makeMockFile([7, 8, 9]);
 
@@ -129,7 +94,7 @@ describe("enqueueIncrementalAttachmentUpload", () => {
       file
     );
 
-    expect(setFileMetadataMock).toHaveBeenCalledTimes(1);
+    expect(indexAttachmentRefsMock).not.toHaveBeenCalled();
     expect(enqueueAttachmentUploadMock).not.toHaveBeenCalled();
   });
 });

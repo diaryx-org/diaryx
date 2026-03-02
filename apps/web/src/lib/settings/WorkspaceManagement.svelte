@@ -37,12 +37,6 @@
     getServerWorkspaceId,
   } from "$lib/storage/localWorkspaceRegistry.svelte";
   import { deleteLocalWorkspaceData } from "$lib/settings/clearData";
-  import {
-    completeSyncActionStatus,
-    getSyncActionStatus,
-    resetSyncActionStatus,
-    setSyncActionStatus,
-  } from "./syncActionStatusStore.svelte";
   import { toast } from "svelte-sonner";
   import { getPluginStore } from "@/models/stores/pluginStore.svelte";
   import {
@@ -81,13 +75,63 @@
   });
 
   let hasAnyWorkspaces = $derived(syncedWorkspaces.length > 0 || localWorkspaces.length > 0);
-  let syncActionStatus = $derived(getSyncActionStatus());
+  type ActionTone = "info" | "success" | "error";
+  let syncActionStatus = $state<{
+    active: boolean;
+    workspaceId: string | null;
+    workspaceName: string | null;
+    progress: number;
+    tone: ActionTone;
+    message: string | null;
+  }>({
+    active: false,
+    workspaceId: null,
+    workspaceName: null,
+    progress: 0,
+    tone: "info",
+    message: null,
+  });
+
+  function setSyncActionStatus(patch: Partial<typeof syncActionStatus>): void {
+    syncActionStatus = { ...syncActionStatus, ...patch };
+  }
+
+  function completeSyncActionStatus(tone: ActionTone, message: string): void {
+    syncActionStatus = {
+      ...syncActionStatus,
+      active: false,
+      progress: 100,
+      tone,
+      message,
+    };
+  }
+
+  function resetSyncActionStatus(): void {
+    syncActionStatus = {
+      active: false,
+      workspaceId: null,
+      workspaceName: null,
+      progress: 0,
+      tone: "info",
+      message: null,
+    };
+  }
 
   // Default provider for link button
   let defaultProvider = $derived(workspaceProviders[0] ?? null);
-  let providerReady = $derived(
-    defaultProvider ? getProviderStatus(defaultProvider.contribution.id).ready : false,
-  );
+  let providerReady = $state(false);
+
+  $effect(() => {
+    const provider = defaultProvider;
+    if (!provider) {
+      providerReady = false;
+      return;
+    }
+    void (async () => {
+      const status = await getProviderStatus(provider.contribution.id);
+      providerReady = status.ready;
+    })();
+  });
 
   // Rename state
   let renamingId = $state<string | null>(null);

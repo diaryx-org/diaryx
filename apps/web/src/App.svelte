@@ -3,26 +3,6 @@
   import { getBackend, isTauri } from "./lib/backend";
   import { createApi, type Api } from "./lib/backend/api";
   import type { JsonValue } from "./lib/backend/generated/serde_json/JsonValue";
-  // New Rust CRDT module imports
-  import { RustCrdtApi } from "./lib/crdt/rustCrdtApi";
-  import {
-    disconnectWorkspace,
-    setWorkspaceId,
-    setBackendApi,
-    setBackend,
-    onSessionSync,
-    onBodyChange,
-    onFileChange,
-    onFileRenamed,
-    onSyncProgress,
-    onSyncStatus,
-    getTreeFromCrdt,
-    initEventSubscription,
-    waitForInitialSync,
-    getCanonicalPathForSync,
-    closeBodySync,
-    ensureBodySync,
-  } from "./lib/crdt/workspaceCrdtBridge";
   // Note: YDoc and HocuspocusProvider types are now handled by collaborationStore
   import LeftSidebar from "./lib/LeftSidebar.svelte";
   import RightSidebar from "./lib/RightSidebar.svelte";
@@ -75,12 +55,95 @@
   // Import services
   import {
     revokeBlobUrls,
-    initializeWorkspaceCrdt,
-    updateCrdtFileMetadata,
-    setShareServerUrl,
-    joinShareSession,
   } from "./models/services";
   import { getMimeType, isHeicFile, convertHeicToJpeg } from "./models/services/attachmentService";
+
+  // Sync/CRDT orchestration is plugin-owned. The host keeps filesystem refresh logic.
+  function setBackendApi(_api: Api): void {}
+  function setBackend(_backend: unknown): void {}
+  function disconnectWorkspace(): void {}
+  function setWorkspaceId(_workspaceId: string | null): void {}
+  async function waitForInitialSync(_timeoutMs: number): Promise<boolean> { return false; }
+  async function getTreeFromCrdt(): Promise<any | null> { return null; }
+  async function joinShareSession(_joinCode: string): Promise<void> {}
+  function setShareServerUrl(_url: string | null): void {}
+  function onSessionSync(_callback: () => void | Promise<void>): () => void { return () => {}; }
+  function onBodyChange(
+    _callback: (path: string, body: string) => void | Promise<void>,
+  ): () => void {
+    return () => {};
+  }
+  function onFileChange(
+    _callback: (path: string | null, metadata: any | null) => void | Promise<void>,
+  ): () => void {
+    return () => {};
+  }
+  function onFileRenamed(
+    _callback: (oldPath: string, newPath: string) => void | Promise<void>,
+  ): () => void {
+    return () => {};
+  }
+  function onSyncProgress(
+    _callback: (completed: number, total: number) => void | Promise<void>,
+  ): () => void {
+    return () => {};
+  }
+  function onSyncStatus(
+    _callback: (status: any, error?: string | null) => void | Promise<void>,
+  ): () => void {
+    return () => {};
+  }
+  async function getCanonicalPathForSync(path: string): Promise<string> { return path; }
+  async function ensureBodySync(_path: string): Promise<void> {}
+  function closeBodySync(_path: string): void {}
+  function updateCrdtFileMetadata(
+    _path: string,
+    _frontmatter: Record<string, unknown>,
+  ): void {}
+  function initEventSubscription(backendInstance: any): () => void {
+    if (!backendInstance?.onFileSystemEvent) {
+      return () => {};
+    }
+
+    const subscriptionId = backendInstance.onFileSystemEvent(async (event: any) => {
+      const current = entryStore.currentEntry;
+      const activeApi = workspaceStore.backend ? createApi(workspaceStore.backend) : null;
+
+      if (event?.type === "FileRenamed" && current && current.path === event.old_path && event.new_path) {
+        entryStore.setCurrentEntry({
+          ...current,
+          path: event.new_path,
+          title: current.title ?? null,
+          content: current.content ?? "",
+          frontmatter: current.frontmatter ?? {},
+        });
+      }
+
+      const touchesCurrent =
+        !!current &&
+        (event?.path === current.path ||
+          event?.old_path === current.path ||
+          event?.new_path === current.path);
+
+      if (touchesCurrent && activeApi) {
+        const refreshPath = event?.new_path ?? current.path;
+        try {
+          const refreshed = await activeApi.getEntry(refreshPath);
+          refreshed.frontmatter = normalizeFrontmatter(refreshed.frontmatter);
+          entryStore.setCurrentEntry(refreshed);
+          entryStore.setDisplayContent(refreshed.content);
+        } catch {
+          // Ignore transient read failures.
+        }
+      }
+
+      debouncedRefreshTree();
+    });
+
+    return () => {
+      backendInstance.offFileSystemEvent?.(subscriptionId);
+    };
+  }
 
   // Import controllers
   import {
@@ -102,7 +165,6 @@
     handleDeleteAttachment as deleteAttachmentHandler,
     handleAttachmentInsert as attachmentInsertHandler,
     handleMoveAttachment as moveAttachmentHandler,
-    populateCrdtBeforeHost,
     handleLinkClick as linkClickHandler,
   } from "./controllers";
 
@@ -147,9 +209,8 @@
   // Right sidebar tab control (built-in tabs or plugin tab IDs)
   let requestedSidebarTab: string | null = $state(null);
 
-  // Left sidebar tab/session control (share + snapshots are workspace-level)
+  // Left sidebar tab control (plugin-owned tabs)
   let requestedLeftTab: string | null = $state(null);
-  let triggerStartSession = $state(false);
 
   // Add workspace dialog
   let showAddWorkspace = $state(false);
@@ -186,8 +247,8 @@
   // API wrapper - uses execute() internally for all operations
   let api: Api | null = $derived(backend ? createApi(backend) : null);
 
-  // Rust CRDT API instance
-  let rustApi: RustCrdtApi | null = $state(null);
+  // Reserved for plugin-provided history panels that may need host context.
+  let rustApi: any | null = $state(null);
 
   // Track whether initial guest sync has completed (to avoid re-opening root on every update)
   let guestInitialSyncDone = $state(false);
@@ -199,7 +260,6 @@
 
   // Collaboration state - proxied from collaborationStore
   let collaborationEnabled = $derived(collaborationStore.collaborationEnabled);
-  let collaborationServerUrl = $derived(collaborationStore.collaborationServerUrl);
 
   // Note: Per-document YDocProxy removed - sync now happens at workspace level
 
@@ -634,8 +694,7 @@
       // Initialize filesystem event subscription for automatic UI updates
       cleanupEventSubscription = initEventSubscription(backendInstance);
 
-      // Initialize Rust CRDT API
-      rustApi = new RustCrdtApi(backendInstance);
+      rustApi = null;
 
       // Initialize workspace CRDT (unless disabled or in local edit mode)
       if (localEditParams) {
@@ -1006,7 +1065,7 @@
     // Re-initialize references: get the new backend from the singleton
     const newBackend = await getBackend();
     workspaceStore.setBackend(newBackend);
-    rustApi = new RustCrdtApi(newBackend);
+    rustApi = null;
     // Refresh tree and validation from new workspace
     await refreshTree();
     // Navigate to the root entry of the new workspace
@@ -1020,87 +1079,10 @@
 
   // Initialize the workspace CRDT
   async function setupWorkspaceCrdt() {
-    if (!api || !backend || !rustApi) return;
-
-    try {
-      // Get workspace ID from auth store (server is source of truth)
-      // When authenticated, the server generates and stores the workspace UUID
-      // For local-only mode (not signed in), we use null
-      const defaultWorkspace = getCurrentWorkspace();
-      const sharedWorkspaceId = defaultWorkspace?.id ?? null;
-
-      if (sharedWorkspaceId) {
-        console.log("[App] Using workspace_id from server:", sharedWorkspaceId);
-      } else {
-        console.log("[App] No authenticated workspace, using local-only mode");
-      }
-
-      // Get the workspace directory from the backend, then find the actual root index
-      const workspaceDir = backend.getWorkspacePath().replace(/\/index\.md$/, '').replace(/\/README\.md$/, '');
-      console.log("[App] Workspace directory:", workspaceDir);
-
-      let workspacePath: string | undefined;
-      try {
-        const foundRoot = await api.findRootIndex(workspaceDir);
-        if (!foundRoot) {
-          throw new Error("Root index not found");
-        }
-        workspacePath = foundRoot;
-        console.log("[App] Found root index at:", workspacePath);
-      } catch (e) {
-        console.warn("[App] Could not find root index (workspace may be empty):", e);
-        // No auto-creation — the EditorEmptyState will offer a "Create Root Index" button
-      }
-
-      // IMPORTANT: Populate CRDT from filesystem BEFORE connecting to server
-      // This ensures our local files are available to sync to other devices
-      // At startup, reconciles file mtime vs CRDT modified_at - if file is newer, CRDT is updated
-      // Skipped for local-only workspaces (sharedWorkspaceId=null) — they don't sync
-      // and the tree is built from the filesystem directly.
-      if (sharedWorkspaceId && workspacePath) {
-        console.log("[App] Initializing CRDT from filesystem via Rust command...");
-        try {
-          const result = await api.initializeWorkspaceCrdt(workspacePath);
-          console.log("[App] CRDT initialized:", result);
-          // Show toast if files were updated from disk (external edits detected)
-          if (result.includes("updated from disk")) {
-            toast.info(result);
-          }
-        } catch (e) {
-          console.warn("[App] Failed to initialize CRDT from filesystem:", e);
-          // Continue anyway - server sync may bring in data
-        }
-      }
-
-      // Set workspace ID for per-file document room naming
-      // If null, rooms will be "doc:{path}" instead of "{id}:doc:{path}"
-      setWorkspaceId(sharedWorkspaceId);
-
-      // Initialize workspace CRDT using service with Rust API
-      // Only for shared workspaces (skip for local-only and empty workspaces)
-      if (workspacePath && sharedWorkspaceId) {
-        const initialized = await initializeWorkspaceCrdt(
-          sharedWorkspaceId,
-          workspacePath,
-          collaborationServerUrl,
-          collaborationEnabled,
-          rustApi,
-          {
-            onConnectionChange: (connected: boolean) => {
-              console.log("[App] Workspace CRDT connection:", connected ? "online" : "offline");
-              collaborationStore.setConnected(connected);
-            },
-          },
-        );
-        workspaceStore.setWorkspaceCrdtInitialized(initialized);
-      } else {
-        console.log("[App] Skipping CRDT init — no root index found (empty workspace)");
-        workspaceStore.setWorkspaceCrdtInitialized(false);
-      }
-    } catch (e) {
-      console.error("[App] Failed to initialize workspace CRDT:", e);
-      workspaceStore.setWorkspaceCrdtInitialized(false);
-    }
+    const sharedWorkspaceId = getCurrentWorkspace()?.id ?? null;
+    setWorkspaceId(sharedWorkspaceId);
+    workspaceStore.setWorkspaceId(sharedWorkspaceId);
+    workspaceStore.setWorkspaceCrdtInitialized(false);
   }
 
   // Open an entry - thin wrapper that handles auto-save and delegates to controller
@@ -1192,7 +1174,7 @@
   }
 
   // Handle content changes - triggers debounced auto-save
-  // Note: CRDT sync happens at save time via workspaceCrdtBridge, not on each keystroke
+  // Sync propagation is handled by plugin-owned filesystem event processing.
   function handleContentChange(markdown: string) {
     if (suppressRemoteEditorOnChange) {
       suppressRemoteEditorOnChange = false;
@@ -1297,7 +1279,7 @@
 
   /**
    * Handle magic link token verification from URL.
-   * Verifies the token automatically and shows sync progress in SyncStatusIndicator.
+   * Verifies the token automatically and updates plugin-owned sync status surfaces.
    */
   async function handleMagicLinkToken(token: string) {
     // Show connecting status while verifying
@@ -1308,7 +1290,7 @@
       // Note: URL token is cleared before this function is called to prevent double verification
       await verifyMagicLink(token);
 
-      // Set status to idle - workspace CRDT will update to 'synced' when connected
+      // Set status to idle; sync plugin status updates to 'synced' when connected.
       collaborationStore.setSyncStatus('idle');
 
       // Show success toast. If sync isn't set up yet (new device), the wizard will
@@ -1419,7 +1401,7 @@
       // Just refresh UI state.
       const newBackend = await getBackend();
       workspaceStore.setBackend(newBackend);
-      rustApi = new RustCrdtApi(newBackend);
+      rustApi = null;
 
       await refreshTree();
 
@@ -1451,7 +1433,7 @@
     const apiInstance = createApi(backendInstance);
     setBackendApi(apiInstance);
     setBackend(backendInstance);
-    rustApi = new RustCrdtApi(backendInstance);
+    rustApi = null;
 
     cleanupEventSubscription = initEventSubscription(backendInstance);
 
@@ -1900,11 +1882,6 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
   // Attachment Handlers - Thin wrappers that delegate to controllers
   // ========================================================================
 
-  async function handlePopulateCrdtBeforeHost(audience: string | null = null) {
-    if (!api) return;
-    await populateCrdtBeforeHost(api, tree?.path ?? null, audience);
-  }
-
   function handleAddAttachment(entryPath: string) {
     addAttachmentHandler(entryPath, attachmentFileInput);
   }
@@ -2337,12 +2314,8 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
     onWorkspaceSwitchComplete={handleWorkspaceSwitchComplete}
     onInitializeWorkspace={handleInitializeWorkspace}
     onSetAudience={handleSetAudience}
-    onBeforeHost={async (audience) => await handlePopulateCrdtBeforeHost(audience)}
-    onOpenEntry2={async (path) => await openEntry(path)}
     requestedTab={requestedLeftTab}
     onRequestedTabConsumed={() => (requestedLeftTab = null)}
-    {triggerStartSession}
-    onTriggerStartSessionConsumed={() => (triggerStartSession = false)}
   />
 
   <!-- Hidden file input for attachments (accepts all file types) -->
@@ -2378,7 +2351,7 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
         onPrevDay={handlePrevDay}
         onNextDay={handleNextDay}
         onGoToToday={handleGoToToday}
-        onAddWorkspace={() => (showAddWorkspace = true)}
+        {api}
         onPluginToolbarAction={handlePluginToolbarAction}
       />
 

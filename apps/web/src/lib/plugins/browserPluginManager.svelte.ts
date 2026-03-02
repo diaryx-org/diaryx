@@ -31,7 +31,7 @@ export const BUILTIN_PLUGIN_IDS = new Set([
   "diaryx.math",
   "diaryx.spoiler",
   "publish",
-  "diaryx.sync",
+  "sync",
   "diaryx.storage.s3",
   "diaryx.storage.gdrive",
 ]);
@@ -46,7 +46,7 @@ export const BUILTIN_PLUGINS = [
     name: "Spoiler",
   },
   { url: "/plugins/diaryx_publish.wasm", id: "publish", name: "Publish" },
-  { url: "/plugins/diaryx_sync.wasm", id: "diaryx.sync", name: "Sync" },
+  { url: "/plugins/diaryx_sync.wasm", id: "sync", name: "Sync" },
   {
     url: "/plugins/diaryx_storage_s3.wasm",
     id: "diaryx.storage.s3",

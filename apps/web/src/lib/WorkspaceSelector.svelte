@@ -13,9 +13,10 @@
     getServerWorkspaceId,
     getLocalWorkspaces,
     getWorkspaceStorageType,
+    getCurrentWorkspaceId,
   } from "$lib/storage/localWorkspaceRegistry.svelte";
   import type { StorageType } from "$lib/backend/storageType";
-  import { switchWorkspace } from "$lib/crdt/workspaceCrdtBridge";
+  import { switchWorkspace } from "$lib/workspace/switchWorkspace";
   import { getAuthState } from "$lib/auth";
   import { toast } from "svelte-sonner";
   import { getPluginStore } from "@/models/stores/pluginStore.svelte";
@@ -78,9 +79,9 @@
 
   let showSelector = $derived(workspaces.length > 0);
 
-  // Current workspace ID (reactive via auth state, updated by switchWorkspace)
+  // Current workspace ID (reactive via auth state + local registry state)
   let authState = $derived(getAuthState());
-  let currentWsId = $derived(authState.activeWorkspaceId);
+  let currentWsId = $derived(authState.activeWorkspaceId ?? getCurrentWorkspaceId());
 
   // Display name
   let displayName = $derived.by(() => {
@@ -105,10 +106,10 @@
     );
 
     for (const provider of workspaceProviders) {
-      const status = getProviderStatus(provider.contribution.id);
+      const status = await getProviderStatus(provider.contribution.id);
       if (!status.ready) continue;
 
-      const unlinked = listUnlinkedRemoteWorkspaces(
+      const unlinked = await listUnlinkedRemoteWorkspaces(
         provider.contribution.id,
         localServerIds,
       );

@@ -8,7 +8,6 @@
  * - Deleting attachments
  * - Inserting attachments into editor
  * - Moving attachments between entries
- * - Populating CRDT before hosting
  */
 
 import type { Api, EntryData } from '../lib/backend';
@@ -28,8 +27,7 @@ import {
 } from '$lib/sync/attachmentSyncService';
 import type { QueueItemEvent } from '$lib/sync/attachmentSyncService';
 import { showLoading } from '../models/services/toastService';
-import { getCurrentWorkspace } from '../lib/auth/authStore.svelte';
-import { getFileMetadata, getWorkspaceId, setFileMetadata } from '../lib/crdt';
+import { getCurrentWorkspaceId, getServerWorkspaceId } from '$lib/storage/localWorkspaceRegistry.svelte';
 import { toast } from 'svelte-sonner';
 
 // ============================================================================
@@ -117,56 +115,35 @@ export function fileToBase64(file: File): Promise<string> {
   });
 }
 
-async function updateAttachmentRefMetadata(
+function getActiveSyncWorkspaceId(): string | null {
+  const localWorkspaceId = getCurrentWorkspaceId();
+  if (!localWorkspaceId) return null;
+  return getServerWorkspaceId(localWorkspaceId);
+}
+
+function indexAttachmentMetadata(
   entryPath: string,
   attachmentPath: string,
   hash: string,
   mimeType: string,
   sizeBytes: number,
-): Promise<void> {
-  const metadata = await getFileMetadata(entryPath);
-  if (!metadata) {
-    console.warn('[AttachmentController] Missing CRDT metadata while updating attachment hash:', entryPath);
-    return;
-  }
-
-  let matchedAttachmentRef = false;
-  const updatedAttachments = metadata.attachments.map((attachment) => {
-    if (attachment.path !== attachmentPath) return attachment;
-    matchedAttachmentRef = true;
-    return {
-      ...attachment,
-      hash,
-      mime_type: mimeType || attachment.mime_type,
-      size: BigInt(sizeBytes),
-      uploaded_at: BigInt(Date.now()),
-      deleted: false,
-    };
-  });
-  if (!matchedAttachmentRef) {
-    // Ensure a BinaryRef exists for newly uploaded attachments before syncing hash metadata.
-    updatedAttachments.push({
-      path: attachmentPath,
-      source: 'local',
-      hash,
-      mime_type: mimeType || getMimeType(attachmentPath),
-      size: BigInt(sizeBytes),
-      uploaded_at: BigInt(Date.now()),
-      deleted: false,
-    });
-  }
-
-  const updatedMetadata = {
-    ...metadata,
-    attachments: updatedAttachments,
-    modified_at: BigInt(Date.now()),
-  };
-  await setFileMetadata(entryPath, updatedMetadata);
-
-  const workspaceId = getWorkspaceId() ?? getCurrentWorkspace()?.id;
-  if (workspaceId) {
-    indexAttachmentRefs(entryPath, updatedAttachments, workspaceId);
-  }
+  workspaceId: string,
+): void {
+  indexAttachmentRefs(
+    entryPath,
+    [
+      {
+        path: attachmentPath,
+        source: 'local',
+        hash,
+        mime_type: mimeType || getMimeType(attachmentPath),
+        size: BigInt(sizeBytes),
+        uploaded_at: BigInt(Date.now()),
+        deleted: false,
+      },
+    ],
+    workspaceId,
+  );
 }
 
 export async function enqueueIncrementalAttachmentUpload(
@@ -176,15 +153,16 @@ export async function enqueueIncrementalAttachmentUpload(
 ): Promise<void> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const hash = await sha256Hex(bytes);
-  await updateAttachmentRefMetadata(
+  const workspaceId = getActiveSyncWorkspaceId();
+  if (!workspaceId) return;
+  indexAttachmentMetadata(
     entryPath,
     attachmentMetadataPath,
     hash,
     file.type || getMimeType(file.name),
     file.size,
+    workspaceId,
   );
-  const workspaceId = getWorkspaceId() ?? getCurrentWorkspace()?.id;
-  if (!workspaceId) return;
   const syncEnabled = isAttachmentSyncEnabled();
   console.log('[AttachmentController] enqueue: workspaceId=', workspaceId, 'syncEnabled=', syncEnabled);
   const queueId = enqueueAttachmentUpload({
@@ -449,10 +427,6 @@ export async function handleDeleteAttachment(
     if (onEntryUpdate) {
       onEntryUpdate(entry);
     }
-    const workspaceId = getCurrentWorkspace()?.id;
-    if (workspaceId) {
-      indexAttachmentRefs(currentEntry.path, (entry.frontmatter.attachments as any[]) ?? [], workspaceId);
-    }
     attachmentError = null;
   } catch (e) {
     attachmentError = e instanceof Error ? e.message : String(e);
@@ -510,7 +484,7 @@ export async function handleMoveAttachment(
   if (sourceEntryPath === targetEntryPath) return;
 
   try {
-    const movedPath = await api.moveAttachment(sourceEntryPath, targetEntryPath, attachmentPath);
+    await api.moveAttachment(sourceEntryPath, targetEntryPath, attachmentPath);
 
     // Refresh current entry if it was affected
     if (
@@ -525,34 +499,6 @@ export async function handleMoveAttachment(
       }
     }
 
-    const workspaceId = getCurrentWorkspace()?.id;
-    if (workspaceId) {
-      const sourceMetadata = await getFileMetadata(sourceEntryPath);
-      if (sourceMetadata) {
-        indexAttachmentRefs(sourceEntryPath, sourceMetadata.attachments, workspaceId);
-      }
-      const targetMetadata = await getFileMetadata(targetEntryPath);
-      if (targetMetadata) {
-        indexAttachmentRefs(targetEntryPath, targetMetadata.attachments, workspaceId);
-      }
-      if (movedPath && targetMetadata) {
-        const movedRef = targetMetadata.attachments.find((attachment) => attachment.path === movedPath);
-        if (movedRef?.hash) {
-          const queueId = enqueueAttachmentUpload({
-            workspaceId,
-            entryPath: targetEntryPath,
-            attachmentPath: movedPath,
-            hash: movedRef.hash,
-            mimeType: movedRef.mime_type || getMimeType(movedPath),
-            sizeBytes: Number(movedRef.size ?? 0n),
-          });
-          if (isAttachmentSyncEnabled()) {
-            trackUpload(queueId);
-          }
-        }
-      }
-    }
-
     toast.success('Attachment moved successfully');
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
@@ -561,36 +507,15 @@ export async function handleMoveAttachment(
 }
 
 /**
- * Populate the CRDT with files from the filesystem.
- * Called before hosting a share session to ensure all files are available.
+ * Deprecated no-op maintained for API compatibility with legacy share flows.
  *
  * @param api - API instance
- * @param treePath - Path to the workspace root index
- * @param audience - If provided, only include files accessible to this audience
+ * Share/session orchestration is sync-plugin-owned.
  */
 export async function populateCrdtBeforeHost(
-  api: Api,
-  treePath: string | null,
-  audience: string | null = null
+  _api: Api,
+  _treePath: string | null,
+  _audience: string | null = null
 ): Promise<void> {
-  if (!treePath) {
-    console.warn('[AttachmentController] Cannot populate CRDT: treePath not available');
-    return;
-  }
-
-  console.log(
-    '[AttachmentController] Populating CRDT from filesystem before hosting, audience:',
-    audience
-  );
-
-  try {
-    // Use Rust command which handles audience filtering internally
-    const result = await api.initializeWorkspaceCrdt(
-      treePath,
-      audience ?? undefined
-    );
-    console.log('[AttachmentController] CRDT populated:', result);
-  } catch (e) {
-    console.error('[AttachmentController] Failed to populate CRDT:', e);
-  }
+  // Share/session orchestration is now sync-plugin-owned.
 }

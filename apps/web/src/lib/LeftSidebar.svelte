@@ -43,15 +43,9 @@
   import WorkspaceSelector from "./WorkspaceSelector.svelte";
   import AudienceFilter from "./components/AudienceFilter.svelte";
   import PluginSidebarPanel from "./components/PluginSidebarPanel.svelte";
-  import ShareTab from "./share/ShareTab.svelte";
   import PublishTab from "./publish/PublishTab.svelte";
-  import GitHistoryPanel from "./history/GitHistoryPanel.svelte";
   import { Share2, History, FolderTree, Globe } from "@lucide/svelte";
   import { getPluginStore } from "@/models/stores/pluginStore.svelte";
-  import {
-    SYNC_BUILTIN_TABS,
-    getSyncBuiltinTabKeyByComponentId,
-  } from "$lib/sync/syncBuiltinUiRegistry";
   import { getPublishBuiltinTabKeyByComponentId } from "$lib/publish/publishBuiltinUiRegistry";
 
   interface Props {
@@ -90,13 +84,8 @@
     onWorkspaceSwitchComplete?: () => void;
     onInitializeWorkspace?: () => void;
     onSetAudience?: (path: string) => void;
-    // Share props (workspace-level)
-    onBeforeHost?: (audience: string | null) => Promise<void>;
-    onOpenEntry2?: (path: string) => Promise<void>;
     requestedTab?: string | null;
     onRequestedTabConsumed?: () => void;
-    triggerStartSession?: boolean;
-    onTriggerStartSessionConsumed?: () => void;
   }
 
   let {
@@ -135,12 +124,8 @@
     onWorkspaceSwitchComplete,
     onInitializeWorkspace,
     onSetAudience,
-    onBeforeHost,
-    onOpenEntry2,
     requestedTab = null,
     onRequestedTabConsumed,
-    triggerStartSession = false,
-    onTriggerStartSessionConsumed,
   }: Props = $props();
 
   // Platform detection for keyboard shortcut display
@@ -162,14 +147,12 @@
   // Auth state for profile icon
   const authState = $derived(getAuthState());
 
-  type SyncBuiltinTabKey = keyof typeof SYNC_BUILTIN_TABS;
   type LeftSidebarTabDescriptor = {
     id: string;
     label: string;
     icon: string | null;
     pluginId: PluginId | null;
     component: ComponentRef | null;
-    syncBuiltinKey: SyncBuiltinTabKey | null;
     publishBuiltinKey: "publish" | null;
   };
 
@@ -204,10 +187,6 @@
     for (const tab of pluginStore.leftSidebarTabs) {
       if (tab.contribution.id === "files") continue;
       const component = tab.contribution.component;
-      const syncBuiltinKey =
-        component.type === "Builtin"
-          ? getSyncBuiltinTabKeyByComponentId(component.component_id)
-          : null;
       const publishBuiltinKey =
         component.type === "Builtin"
           ? getPublishBuiltinTabKeyByComponentId(component.component_id)
@@ -218,7 +197,6 @@
         icon: tab.contribution.icon,
         pluginId: tab.pluginId,
         component,
-        syncBuiltinKey,
         publishBuiltinKey,
       });
     }
@@ -230,7 +208,6 @@
         icon: "files",
         pluginId: null,
         component: null,
-        syncBuiltinKey: null,
         publishBuiltinKey: null,
       },
       ...Array.from(tabMap.values()),
@@ -1219,9 +1196,9 @@
         >
           {#if tab.id === "files"}
             <FolderTree class="size-3" />
-          {:else if tab.syncBuiltinKey === "share" || tab.icon === "share"}
+          {:else if tab.icon === "share"}
             <Share2 class="size-3" />
-          {:else if tab.syncBuiltinKey === "snapshots" || tab.icon === "history"}
+          {:else if tab.icon === "history"}
             <History class="size-3" />
           {:else if tab.publishBuiltinKey === "publish" || tab.icon === "globe"}
             <Globe class="size-3" />
@@ -1268,17 +1245,7 @@
       {/if}
     {:else}
       {@const activePluginTab = leftTabs.find((tab) => tab.id === leftTab) ?? null}
-      {#if activePluginTab?.syncBuiltinKey === "share"}
-        <ShareTab
-          {onBeforeHost}
-          onOpenEntry={onOpenEntry2}
-          {api}
-          triggerStart={triggerStartSession}
-          onTriggerStartConsumed={onTriggerStartSessionConsumed}
-        />
-      {:else if activePluginTab?.syncBuiltinKey === "snapshots"}
-        <GitHistoryPanel />
-      {:else if activePluginTab?.publishBuiltinKey === "publish"}
+      {#if activePluginTab?.publishBuiltinKey === "publish"}
         <PublishTab
           rootPath={tree?.path ?? "."}
           {api}

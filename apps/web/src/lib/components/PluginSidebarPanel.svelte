@@ -12,7 +12,6 @@
   import type { EntryData } from "$lib/backend/interface";
   import PluginSettingsTab from "$lib/settings/PluginSettingsTab.svelte";
   import PluginIframe from "$lib/components/PluginIframe.svelte";
-  import { getSyncBuiltinTabKeyByComponentId } from "$lib/sync/syncBuiltinUiRegistry";
   import { getPlugin as getBrowserPlugin } from "$lib/plugins/browserPluginManager.svelte";
 
   interface Props {
@@ -25,12 +24,6 @@
   let { pluginId, component, api, entry = null }: Props = $props();
 
   let config = $state<Record<string, JsonValue>>({});
-  const builtinComponentId = $derived(
-    component.type === "Builtin" ? component.component_id : null,
-  );
-  const syncBuiltinKey = $derived(
-    builtinComponentId ? getSyncBuiltinTabKeyByComponentId(builtinComponentId) : null,
-  );
 
   $effect(() => {
     // Only load config for Declarative components that actually use it.
@@ -81,10 +74,6 @@
         {config}
         onConfigChange={handleConfigChange}
       />
-    {:else if component.type === "Builtin" && syncBuiltinKey}
-      <p class="text-sm text-muted-foreground">
-        This built-in panel is rendered directly by the host sidebar slot.
-      </p>
     {:else if component.type === "Builtin"}
       <p class="text-sm text-muted-foreground">
         Built-in component: {component.component_id}

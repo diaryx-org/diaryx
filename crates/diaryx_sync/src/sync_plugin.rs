@@ -454,6 +454,18 @@ impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
             // === Materialization ===
             "MaterializeWorkspace" => self.cmd_materialize_workspace(),
 
+            // === Sync Status / Provider / Share ===
+            "GetSyncStatus" => self.cmd_get_sync_status(params),
+            "GetProviderStatus" => self.cmd_get_provider_status(params),
+            "ListRemoteWorkspaces" => self.cmd_list_remote_workspaces(params),
+            "LinkWorkspace" => self.cmd_link_workspace(params),
+            "UnlinkWorkspace" => self.cmd_unlink_workspace(params),
+            "DownloadWorkspace" => self.cmd_download_workspace(params),
+            "CreateShareSession" => self.cmd_create_share_session(params),
+            "JoinShareSession" => self.cmd_join_share_session(params),
+            "EndShareSession" => self.cmd_end_share_session(params),
+            "SetShareReadOnly" => self.cmd_set_share_read_only(params),
+
             other => Err(PluginError::CommandError(format!(
                 "Unknown sync command: {other}"
             ))),
@@ -586,6 +598,64 @@ impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
     fn cmd_save_crdt_state(&self, _params: JsonValue) -> Result<JsonValue, PluginError> {
         self.workspace_crdt.save().map_err(map_err)?;
         Ok(JsonValue::Null)
+    }
+}
+
+// ============================================================================
+// Command handlers — Sync Status / Provider / Share
+// ============================================================================
+
+impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
+    fn cmd_get_sync_status(&self, _params: JsonValue) -> Result<JsonValue, PluginError> {
+        Ok(serde_json::json!({
+            "state": "idle",
+            "label": "Idle",
+            "detail": JsonValue::Null,
+            "progress": JsonValue::Null
+        }))
+    }
+
+    fn host_runtime_only(command: &str) -> PluginError {
+        PluginError::CommandError(format!(
+            "{command} is only available in host-integrated runtimes"
+        ))
+    }
+
+    fn cmd_get_provider_status(&self, _params: JsonValue) -> Result<JsonValue, PluginError> {
+        Err(Self::host_runtime_only("GetProviderStatus"))
+    }
+
+    fn cmd_list_remote_workspaces(&self, _params: JsonValue) -> Result<JsonValue, PluginError> {
+        Err(Self::host_runtime_only("ListRemoteWorkspaces"))
+    }
+
+    fn cmd_link_workspace(&self, _params: JsonValue) -> Result<JsonValue, PluginError> {
+        Err(Self::host_runtime_only("LinkWorkspace"))
+    }
+
+    fn cmd_unlink_workspace(&self, _params: JsonValue) -> Result<JsonValue, PluginError> {
+        Err(Self::host_runtime_only("UnlinkWorkspace"))
+    }
+
+    fn cmd_download_workspace(&self, _params: JsonValue) -> Result<JsonValue, PluginError> {
+        Err(Self::host_runtime_only("DownloadWorkspace"))
+    }
+
+    fn cmd_create_share_session(&self, _params: JsonValue) -> Result<JsonValue, PluginError> {
+        Err(Self::host_runtime_only("CreateShareSession"))
+    }
+
+    fn cmd_join_share_session(&self, _params: JsonValue) -> Result<JsonValue, PluginError> {
+        Err(Self::host_runtime_only("JoinShareSession"))
+    }
+
+    fn cmd_end_share_session(&self, _params: JsonValue) -> Result<JsonValue, PluginError> {
+        Err(Self::host_runtime_only("EndShareSession"))
+    }
+
+    fn cmd_set_share_read_only(&self, params: JsonValue) -> Result<JsonValue, PluginError> {
+        let read_only = get_bool(&params, "read_only");
+        Ok(serde_json::json!({ "read_only": read_only }))
     }
 }
 

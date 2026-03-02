@@ -32,12 +32,7 @@
     isStorageTypeSupported,
     storeWorkspaceFileSystemHandle,
   } from "$lib/backend/storageType";
-  import {
-    switchWorkspace,
-  } from "$lib/crdt/workspaceCrdtBridge";
-  import {
-    findWorkspaceRootPath,
-  } from "$lib/settings/workspaceSnapshotUpload";
+  import { switchWorkspace } from "$lib/workspace/switchWorkspace";
   import { getPluginStore } from "@/models/stores/pluginStore.svelte";
   import {
     getProviderStatus,
@@ -71,6 +66,7 @@
   // Provider (sync) state
   let selectedProviderId = $state<string | null>(null);
   let providerStatus = $state<ProviderStatus | null>(null);
+  let providerStatusLoading = $state(false);
 
   // Import from ZIP state
   let importZipFile = $state<File | null>(null);
@@ -172,12 +168,16 @@
     return `${base} ${index}`;
   }
 
-  function handleProviderChange(providerId: string | null) {
+  async function handleProviderChange(providerId: string | null) {
     selectedProviderId = providerId;
     if (providerId) {
-      providerStatus = getProviderStatus(providerId);
+      providerStatusLoading = true;
+      providerStatus = { ready: false, message: "Checking provider..." };
+      providerStatus = await getProviderStatus(providerId);
+      providerStatusLoading = false;
     } else {
       providerStatus = null;
+      providerStatusLoading = false;
     }
   }
 
@@ -192,6 +192,7 @@
 
   function isSubmitDisabled(): boolean {
     if (isInitializing) return true;
+    if (providerStatusLoading) return true;
     if (selectedProviderId && providerStatus && !providerStatus.ready) return true;
     if (!newWorkspaceName.trim()) return true;
     if (contentSource === 'import_zip' && !importZipFile) return true;
@@ -386,18 +387,6 @@
 
     await ensureRootIndexForCurrentWorkspace(wsName, localWs.path);
 
-    // Re-initialize CRDT from the filesystem now that the root index exists.
-    const backend = await getBackend();
-    const api = createApi(backend);
-    const rootPath = await findWorkspaceRootPath(api, backend);
-    if (rootPath) {
-      try {
-        await api.initializeWorkspaceCrdt(rootPath);
-      } catch (e) {
-        console.warn('[AddWorkspace] CRDT re-init after open folder:', e);
-      }
-    }
-
     importProgress = selectedProviderId ? 10 : 100;
     progressMessage = selectedProviderId ? "Folder opened." : "Done.";
   }
@@ -516,7 +505,7 @@
               <select
                 class="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 value={selectedProviderId ?? ""}
-                onchange={(e) => handleProviderChange((e.target as HTMLSelectElement).value || null)}
+                onchange={(e) => void handleProviderChange((e.target as HTMLSelectElement).value || null)}
               >
                 <option value="">None (local only)</option>
                 {#each workspaceProviders as provider (provider.contribution.id)}

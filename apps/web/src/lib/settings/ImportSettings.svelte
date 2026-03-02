@@ -13,24 +13,6 @@
   import type { Backend } from "$lib/backend/interface";
   import { Upload, Loader2, Check, AlertCircle, AlertTriangle } from "@lucide/svelte";
   import { getBackend } from "../backend";
-  import {
-    isSyncEnabled,
-    isAuthenticated,
-    uploadWorkspaceSnapshot,
-    getCurrentWorkspace,
-    getServerUrl,
-  } from "$lib/auth";
-  import {
-    getCurrentWorkspaceId,
-    getLocalWorkspace,
-  } from "$lib/storage/localWorkspaceRegistry.svelte";
-  import {
-    disconnectWorkspace,
-    waitForInitialSync,
-    setWorkspaceServer,
-    setWorkspaceId,
-    markAllCrdtFilesAsDeleted,
-  } from "$lib/crdt/workspaceCrdtBridge";
 
   interface Props {
     workspacePath?: string | null;
@@ -56,32 +38,6 @@
 
   // Reference to hidden file input
   let fileInputRef: HTMLInputElement | null = $state(null);
-
-  // Derived: sync import path is only active for authenticated, sync-enabled,
-  // server-backed workspaces. Local-only workspaces should import locally.
-  let syncActive = $derived.by(() => {
-    if (!isSyncEnabled() || !isAuthenticated()) {
-      return false;
-    }
-
-    const currentWorkspaceId = getCurrentWorkspaceId();
-    if (!currentWorkspaceId) {
-      // Be conservative: unknown workspace selection should never force server import.
-      return false;
-    }
-
-    const localWorkspace = getLocalWorkspace(currentWorkspaceId);
-    if (localWorkspace?.isLocal) {
-      return false;
-    }
-
-    const serverWorkspace = getCurrentWorkspace();
-    if (!serverWorkspace) {
-      return false;
-    }
-
-    return serverWorkspace.id === currentWorkspaceId;
-  });
 
   function triggerFileInput() {
     fileInputRef?.click();
@@ -121,14 +77,6 @@
     if (status !== undefined) {
       importStatusText = status;
     }
-  }
-
-  function formatBytes(bytes: number): string {
-    if (bytes <= 0) return "0 B";
-    const units = ["B", "KB", "MB", "GB", "TB"];
-    const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
-    const value = bytes / Math.pow(1024, index);
-    return `${value.toFixed(value < 10 && index > 0 ? 1 : 0)} ${units[index]}`;
   }
 
   /**
@@ -231,11 +179,7 @@
     setImportProgress(2, "Preparing import...");
 
     try {
-      if (syncActive) {
-        await importViaServer(selectedFile);
-      } else {
-        await importLocally(selectedFile);
-      }
+      await importLocally(selectedFile);
     } catch (e) {
       console.error("Import failed:", e);
       setImportProgress(0, "Import failed");
@@ -250,102 +194,10 @@
   }
 
   /**
-   * Sync-enabled path: upload ZIP to server, then resync CRDT state.
-   */
-  async function importViaServer(file: File) {
-    const workspace = getCurrentWorkspace();
-    if (!workspace) throw new Error("No active workspace — cannot upload to server");
-
-    const mode = deleteExisting ? 'replace' : 'merge';
-    setImportProgress(8, "Preparing sync import...");
-
-    // Step 1: Tombstone local CRDT entries if replacing
-    if (deleteExisting) {
-      setImportProgress(14, "Clearing existing files...");
-      const tombstoned = await markAllCrdtFilesAsDeleted();
-      console.log(`[Import] Tombstoned ${tombstoned} local CRDT entries`);
-    }
-
-    // Step 2: Upload ZIP to server
-    setImportProgress(30, "Uploading to sync server...");
-    const result = await uploadWorkspaceSnapshot(
-      workspace.id,
-      file,
-      mode,
-      true,
-      (uploadedBytes, totalBytes) => {
-        const ratio = totalBytes > 0 ? uploadedBytes / totalBytes : 0;
-        const percent = 30 + ratio * 32;
-        setImportProgress(
-          percent,
-          totalBytes > 0
-            ? `Uploading to sync server (${formatBytes(uploadedBytes)} / ${formatBytes(totalBytes)})...`
-            : "Uploading to sync server...",
-        );
-      },
-    );
-    if (!result) throw new Error("Upload failed — server returned no result");
-
-    console.log(`[Import] Server imported ${result.files_imported} files`);
-    setImportProgress(62, "Snapshot uploaded");
-
-    // Step 3: Disconnect and reconnect to pull fresh CRDT state
-    setImportProgress(72, "Reconnecting sync...");
-    const serverUrl = getServerUrl();
-    disconnectWorkspace();
-
-    if (deleteExisting) {
-      setImportProgress(80, "Applying imported snapshot locally...");
-      try {
-        const backend = await getBackend();
-        const workspaceDir = await resolveImportWorkspaceDir(backend);
-        if (workspaceDir) {
-          await backend.execute({ type: 'ClearDirectory', params: { path: workspaceDir } });
-        } else {
-          console.warn("[Import] Could not resolve workspace root for local clear; skipping clear step");
-        }
-      } catch (e) {
-        console.warn("[Import] Failed to clear local workspace before resync:", e);
-      }
-    }
-
-    await setWorkspaceId(workspace.id);
-    if (serverUrl) {
-      await setWorkspaceServer(serverUrl);
-    }
-
-    // Step 4: Wait for files to arrive
-    setImportProgress(90, "Syncing files from server...");
-    const synced = await waitForInitialSync(30000);
-    if (!synced) {
-      console.warn("[Import] Sync timed out, continuing in background");
-    }
-    setImportProgress(100, "Import complete");
-
-    importResult = {
-      success: true,
-      files_imported: result.files_imported,
-    };
-
-    window.dispatchEvent(
-      new CustomEvent("import:complete", { detail: importResult }),
-    );
-  }
-
-  /**
    * Local-only path: extract ZIP and write files directly.
    */
   async function importLocally(file: File) {
     const backend = await getBackend();
-    const currentWorkspaceId = getCurrentWorkspaceId();
-    const localWorkspace = currentWorkspaceId
-      ? getLocalWorkspace(currentWorkspaceId)
-      : null;
-    if (localWorkspace?.isLocal) {
-      // Defensive: ensure no stale sync transport remains connected for local-only workspaces.
-      disconnectWorkspace();
-      await setWorkspaceId(null);
-    }
     const workspaceDir = await resolveImportWorkspaceDir(backend);
     setImportProgress(8, "Preparing local import...");
 
@@ -461,9 +313,6 @@
       <Dialog.Description>
         {#if selectedFile}
           Import files from <span class="font-medium">{selectedFile.name}</span> into your workspace.
-          {#if syncActive}
-            The ZIP will be uploaded to the sync server and files will be synced to your device.
-          {/if}
         {/if}
       </Dialog.Description>
     </Dialog.Header>

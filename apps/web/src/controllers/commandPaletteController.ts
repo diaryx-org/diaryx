@@ -13,8 +13,8 @@
 
 import { tick } from 'svelte';
 import type { TreeNode, Api, EntryData } from '../lib/backend';
-import { workspaceStore, shareSessionStore } from '../models/stores';
-import { reverseBlobUrlsToAttachmentPaths, joinShareSession } from '../models/services';
+import { workspaceStore } from '../models/stores';
+import { reverseBlobUrlsToAttachmentPaths } from '../models/services';
 import { toast } from 'svelte-sonner';
 
 /**
@@ -211,10 +211,6 @@ export async function handleStartShareSession(
   setRequestedTab: (tab: string | null) => void,
   setTriggerStartSession: (trigger: boolean) => void
 ): Promise<void> {
-  if (shareSessionStore.mode !== 'idle') {
-    toast.info('Session already active', { description: 'End current session first' });
-    return;
-  }
   // Open left sidebar, navigate to share tab, and trigger session start
   setLeftSidebarCollapsed(false);
   setRequestedTab('share');
@@ -227,23 +223,7 @@ export async function handleStartShareSession(
  * Join a share session (prompt for code).
  */
 export async function handleJoinShareSession(): Promise<void> {
-  if (shareSessionStore.mode !== 'idle') {
-    toast.info('Session already active', { description: 'End current session first' });
-    return;
-  }
-  const joinCode = window.prompt('Enter join code:');
-  if (!joinCode?.trim()) return;
-
-  try {
-    workspaceStore.saveTreeState();
-    await joinShareSession(joinCode.trim());
-    toast.success('Joined session', { description: `Code: ${joinCode.trim()}` });
-  } catch (e) {
-    workspaceStore.clearSavedTreeState();
-    toast.error('Failed to join', {
-      description: e instanceof Error ? e.message : String(e),
-    });
-  }
+  toast.info('Open the Share tab to join a session.');
 }
 
 /**

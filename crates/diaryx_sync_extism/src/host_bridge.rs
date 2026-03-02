@@ -44,6 +44,9 @@ extern "ExtismHost" {
 
     /// Optional forward-compatible bridge for plugin-initiated websocket ops.
     pub fn host_ws_request(input: String) -> String;
+
+    /// Perform an HTTP request via the host runtime.
+    pub fn host_http_request(input: String) -> String;
 }
 
 // ============================================================================
@@ -158,4 +161,27 @@ pub fn get_timestamp() -> Result<u64, String> {
 pub fn ws_request(payload: &str) -> Result<String, String> {
     unsafe { host_ws_request(payload.to_string()) }
         .map_err(|e| format!("host_ws_request failed: {e}"))
+}
+
+/// Perform an HTTP request via the host runtime and parse the JSON response.
+pub fn http_request(
+    method: &str,
+    url: &str,
+    headers: &[(String, String)],
+    body_json: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let header_map: serde_json::Map<String, serde_json::Value> = headers
+        .iter()
+        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+        .collect();
+    let input = serde_json::json!({
+        "url": url,
+        "method": method,
+        "headers": header_map,
+        "body": body_json.map(|b| b.to_string()),
+    })
+    .to_string();
+    let raw = unsafe { host_http_request(input) }
+        .map_err(|e| format!("host_http_request failed: {e}"))?;
+    serde_json::from_str(&raw).map_err(|e| format!("Failed to parse host_http_request: {e}"))
 }

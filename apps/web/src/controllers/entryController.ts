@@ -18,12 +18,10 @@ import {
   revokeBlobUrls,
   reverseBlobUrlsToAttachmentPaths,
 } from '../models/services';
-import {
-  ensureBodySync,
-  closeBodySync,
-} from '../lib/crdt/workspaceCrdtBridge';
-// Note: CRDT sync for entry operations (save, create, delete, rename) is now handled by Rust.
-// TypeScript only manages body sync bridges for real-time collaboration.
+
+// Sync/body orchestration is plugin-owned; host keeps local filesystem workflows.
+async function ensureBodySync(_path: string): Promise<void> {}
+function closeBodySync(_path: string): void {}
 
 const SAVE_RETRY_DELAYS_MS = [100, 200, 400, 800, 1600, 3200];
 

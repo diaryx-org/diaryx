@@ -20,7 +20,6 @@
   import WorkspaceSettings from "./settings/WorkspaceSettings.svelte";
   import LinkSettings from "./settings/LinkSettings.svelte";
   import StorageSettings from "./settings/StorageSettings.svelte";
-  import SyncSettings from "./settings/SyncSettings.svelte";
   import AccountSettings from "./settings/AccountSettings.svelte";
   import BackupSettings from "./settings/BackupSettings.svelte";
   import ImportSettings from "./settings/ImportSettings.svelte";
@@ -32,8 +31,8 @@
   import AppearanceSettings from "./settings/AppearanceSettings.svelte";
   import PluginsSettings from "./settings/PluginsSettings.svelte";
   import PluginSettingsTab from "./settings/PluginSettingsTab.svelte";
+  import PluginIframe from "./components/PluginIframe.svelte";
   import { getPluginStore } from "../models/stores/pluginStore.svelte";
-  import { SYNC_BUILTIN_SETTINGS_COMPONENT_ID } from "$lib/sync/syncBuiltinUiRegistry";
   import S3StorageSettings from "./settings/S3StorageSettings.svelte";
   import GoogleDriveStorageSettings from "./settings/GoogleDriveStorageSettings.svelte";
   import { getPlugin as getBrowserPlugin } from "$lib/plugins/browserPluginManager.svelte";
@@ -69,7 +68,7 @@
   let currentWorkspaceName = $derived(getLocalWorkspace(currentWorkspaceId)?.name ?? 'My Journal');
 
   // Plugin store — all plugin-contributed settings tabs are rendered dynamically.
-  // Plugins with a Builtin ComponentRef (like sync) get their host-provided component.
+  // Builtin ComponentRef mappings are reserved for host-owned plugin UIs (for example storage settings).
   const pluginStore = getPluginStore();
   const pluginSettingsTabs = $derived(pluginStore.settingsTabs);
 
@@ -224,9 +223,13 @@
     {#each pluginSettingsTabs as tab}
       <Tabs.Content value={`plugin-${tab.contribution.id}`}>
         <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
-          {#if tab.contribution.component?.type === "Builtin" && tab.contribution.component.component_id === SYNC_BUILTIN_SETTINGS_COMPONENT_ID}
-            <!-- Sync plugin: render the host-provided SyncSettings component -->
-            <SyncSettings {onAddWorkspace} />
+          {#if tab.contribution.component?.type === "Iframe"}
+            <div class="h-[320px]">
+              <PluginIframe
+                pluginId={tab.pluginId as unknown as string}
+                componentId={tab.contribution.component.component_id}
+              />
+            </div>
           {:else if tab.contribution.component?.type === "Builtin" && tab.contribution.component.component_id === "storage.s3.settings"}
             <S3StorageSettings />
           {:else if tab.contribution.component?.type === "Builtin" && tab.contribution.component.component_id === "storage.gdrive.settings"}

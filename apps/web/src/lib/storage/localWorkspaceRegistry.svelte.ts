@@ -55,6 +55,8 @@ const CURRENT_KEY = 'diaryx_current_workspace';
 
 /** In-memory reactive copy of the registry, kept in sync with localStorage. */
 let registryState: LocalWorkspace[] = $state(loadFromLocalStorage());
+/** Reactive current workspace ID, mirrored to localStorage. */
+let currentWorkspaceIdState: string | null = $state(loadCurrentWorkspaceId());
 
 /** Load and migrate the registry from localStorage. */
 function loadFromLocalStorage(): LocalWorkspace[] {
@@ -112,6 +114,11 @@ function loadFromLocalStorage(): LocalWorkspace[] {
   }
 }
 
+function loadCurrentWorkspaceId(): string | null {
+  if (typeof localStorage === 'undefined') return null;
+  return localStorage.getItem(CURRENT_KEY);
+}
+
 /** Persist the list to localStorage and update reactive state. */
 function saveRegistry(list: LocalWorkspace[]): void {
   if (typeof localStorage === 'undefined') return;
@@ -143,8 +150,7 @@ export function getLocalWorkspace(id: string): LocalWorkspace | null {
  * Get the currently active workspace ID, or null if none selected.
  */
 export function getCurrentWorkspaceId(): string | null {
-  if (typeof localStorage === 'undefined') return null;
-  return localStorage.getItem(CURRENT_KEY);
+  return currentWorkspaceIdState;
 }
 
 /**
@@ -247,8 +253,10 @@ export function removeLocalWorkspace(id: string): void {
  * Also updates `lastOpenedAt` and keeps localStorage workspace name in sync.
  */
 export function setCurrentWorkspaceId(id: string): void {
-  if (typeof localStorage === 'undefined') return;
-  localStorage.setItem(CURRENT_KEY, id);
+  currentWorkspaceIdState = id;
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem(CURRENT_KEY, id);
+  }
 
   // Update lastOpenedAt and keep workspace name in sync
   const list = [...registryState];
@@ -257,7 +265,9 @@ export function setCurrentWorkspaceId(id: string): void {
     ws.lastOpenedAt = Date.now();
     saveRegistry(list);
     // Keep localStorage workspace name in sync for page reloads
-    localStorage.setItem('diaryx-workspace-name', ws.name);
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('diaryx-workspace-name', ws.name);
+    }
   }
 }
 
@@ -265,6 +275,7 @@ export function setCurrentWorkspaceId(id: string): void {
  * Clear the current workspace selection.
  */
 export function clearCurrentWorkspaceId(): void {
+  currentWorkspaceIdState = null;
   if (typeof localStorage === 'undefined') return;
   localStorage.removeItem(CURRENT_KEY);
 }

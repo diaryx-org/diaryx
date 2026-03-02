@@ -16,7 +16,6 @@
     fetchPluginRegistry,
     type RegistryPlugin,
   } from "$lib/plugins/pluginRegistry";
-  import { isSyncPluginId } from "$lib/sync/syncBuiltinUiRegistry";
   import { getBackend, isTauri } from "$lib/backend";
   import type { Backend } from "$lib/backend/interface";
 
@@ -40,6 +39,10 @@
 
   const browserPluginSupport = $derived(getBrowserPluginSupport());
   const browserPluginSupportError = $derived(getBrowserPluginSupportError());
+
+  function isSyncPluginId(pluginId: string): boolean {
+    return pluginId === "sync";
+  }
 
   /** All installed plugin IDs (from all sources). */
   const installedIds = $derived(

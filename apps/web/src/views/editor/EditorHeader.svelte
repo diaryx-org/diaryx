@@ -12,8 +12,9 @@
   import { Button } from "$lib/components/ui/button";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import * as Kbd from "$lib/components/ui/kbd";
+  import type { Api } from "$lib/backend/api";
+  import PluginStatusItems from "$lib/components/PluginStatusItems.svelte";
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
-  import SyncStatusIndicator from "$lib/SyncStatusIndicator.svelte";
   import {
     Check,
     Circle,
@@ -59,8 +60,8 @@
     onNextDay?: () => void;
     /** Navigate to today's daily entry */
     onGoToToday?: () => void;
-    /** Open sync setup wizard (for sync indicator) */
-    onAddWorkspace?: () => void;
+    /** API wrapper for plugin status bar commands */
+    api?: Api | null;
     /** Plugin toolbar button clicked */
     onPluginToolbarAction?: (pluginId: string, command: string) => void;
   }
@@ -85,7 +86,7 @@
     onPrevDay,
     onNextDay,
     onGoToToday,
-    onAddWorkspace,
+    api = null,
     onPluginToolbarAction,
   }: Props = $props();
 
@@ -271,7 +272,9 @@
 
   <!-- Right side: actions -->
   <div class="flex items-center gap-1 md:gap-2 ml-2 shrink-0">
-    <SyncStatusIndicator onAddWorkspace={onAddWorkspace} />
+    {#if api}
+      <PluginStatusItems {api} />
+    {/if}
 
     {#if readonly}
       <!-- View-only indicator for read-only mode -->

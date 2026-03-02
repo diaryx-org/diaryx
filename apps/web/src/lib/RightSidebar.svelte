@@ -1,7 +1,5 @@
 <script lang="ts">
   import type { EntryData } from "./backend";
-  import type { RustCrdtApi } from "$lib/crdt/rustCrdtApi";
-  import type { CrdtHistoryEntry, FileDiff } from "$lib/crdt/types";
   import type { Api } from "$lib/backend/api";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -52,12 +50,26 @@
   import { workspaceStore } from "@/models/stores/workspaceStore.svelte";
   import { getPluginStore } from "@/models/stores/pluginStore.svelte";
   import PluginSidebarPanel from "$lib/components/PluginSidebarPanel.svelte";
-  import { isSyncBuiltinSidebarTab } from "$lib/sync/syncBuiltinUiRegistry";
   import {
     getAttachmentMetadata,
     enqueueAttachmentDownload,
     isAttachmentSyncEnabled,
   } from "$lib/sync/attachmentSyncService";
+
+  interface CrdtHistoryEntry {
+    update_id: bigint;
+    timestamp: bigint;
+    origin: string;
+    device_name?: string | null;
+    summary?: string | null;
+  }
+
+  interface FileDiff {
+    path: string;
+    change_type: string;
+    old_value?: string | null;
+    new_value?: string | null;
+  }
 
   // Platform detection for keyboard shortcut display
   const isMac =
@@ -84,7 +96,7 @@
     // Navigation
     onOpenEntry?: (path: string) => Promise<void>;
     // History props
-    rustApi?: RustCrdtApi | null;
+    rustApi?: any | null;
     onHistoryRestore?: () => void;
     // API for properties tab
     api?: Api | null;
@@ -121,19 +133,10 @@
 
   // Plugin store for right sidebar tabs
   const pluginStore = getPluginStore();
-  const pluginHistoryTab = $derived(
-    pluginStore.rightSidebarTabs.find((tab) =>
-      isSyncBuiltinSidebarTab(tab.contribution, "history")
-    ) ?? null
-  );
-  const historyTabId = $derived(pluginHistoryTab?.contribution.id ?? null);
-  const historyTabLabel = $derived(pluginHistoryTab?.contribution.label ?? "History");
+  const historyTabId = $derived<string | null>(null);
+  const historyTabLabel = $derived("History");
   const nonHistoryPluginTabs = $derived.by(() => {
-    return pluginStore.rightSidebarTabs.filter(
-      (tab) =>
-        !isSyncBuiltinSidebarTab(tab.contribution, "history") &&
-        (historyTabId === null || tab.contribution.id !== historyTabId),
-    );
+    return pluginStore.rightSidebarTabs;
   });
 
   // Tab state — built-in "properties"/"history" + plugin tab IDs

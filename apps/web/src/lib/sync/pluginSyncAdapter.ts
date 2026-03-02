@@ -82,7 +82,7 @@ function decodeActions(buf: Uint8Array): DecodedAction[] {
 
 /**
  * Convert a SyncEvent (from the Rust sync session, serialized as camelCase JSON)
- * to a FileSystemEvent (consumed by workspaceCrdtBridge's handleFileSystemEvent).
+ * to a FileSystemEvent (consumed by the host event subscription pipeline).
  */
 function syncEventToFileSystemEvent(
   syncEvent: any,

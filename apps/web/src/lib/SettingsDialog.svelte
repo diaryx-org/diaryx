@@ -26,7 +26,6 @@
   import BackupSettings from "./settings/BackupSettings.svelte";
   import ImportSettings from "./settings/ImportSettings.svelte";
   import FormatImportSettings from "./settings/FormatImportSettings.svelte";
-  import CloudBackupSettings from "./settings/CloudBackupSettings.svelte";
   import ClearDataSettings from "./settings/ClearDataSettings.svelte";
   import DebugInfo from "./settings/DebugInfo.svelte";
   import TemplateSettings from "./settings/TemplateSettings.svelte";
@@ -36,6 +35,8 @@
   import PluginSettingsTab from "./settings/PluginSettingsTab.svelte";
   import { getPluginStore } from "../models/stores/pluginStore.svelte";
   import { SYNC_BUILTIN_SETTINGS_COMPONENT_ID } from "$lib/sync/syncBuiltinUiRegistry";
+  import S3StorageSettings from "./settings/S3StorageSettings.svelte";
+  import GoogleDriveStorageSettings from "./settings/GoogleDriveStorageSettings.svelte";
   import { getPlugin as getBrowserPlugin } from "$lib/plugins/browserPluginManager.svelte";
   import type { Api } from "$lib/backend/api";
   import type { JsonValue } from "$lib/backend/generated/serde_json/JsonValue";
@@ -206,7 +207,6 @@
         <BackupSettings {workspacePath} />
         <ImportSettings {workspacePath} />
         <FormatImportSettings {workspacePath} />
-        <CloudBackupSettings {workspacePath} />
         <ClearDataSettings />
       </div>
     </Tabs.Content>
@@ -229,6 +229,10 @@
           {#if tab.contribution.component?.type === "Builtin" && tab.contribution.component.component_id === SYNC_BUILTIN_SETTINGS_COMPONENT_ID}
             <!-- Sync plugin: render the host-provided SyncSettings component -->
             <SyncSettings {onAddWorkspace} />
+          {:else if tab.contribution.component?.type === "Builtin" && tab.contribution.component.component_id === "storage.s3.settings"}
+            <S3StorageSettings />
+          {:else if tab.contribution.component?.type === "Builtin" && tab.contribution.component.component_id === "storage.gdrive.settings"}
+            <GoogleDriveStorageSettings />
           {:else if tab.contribution.fields.length > 0}
             {#await loadPluginConfig(tab.pluginId) then}
               <PluginSettingsTab

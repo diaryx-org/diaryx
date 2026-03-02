@@ -10,9 +10,6 @@ mod commands;
 use commands::ExtismSyncState;
 use commands::{AppState, GuestModeState};
 
-/// Cloud backup targets (S3, Google Drive, etc.)
-mod cloud;
-
 /// Configure the iOS WKWebView to render edge-to-edge, extending content into
 /// safe areas. Without this, the webview stops at the bottom safe area boundary,
 /// leaving a visible gap above the home indicator.
@@ -64,7 +61,6 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_google_auth::init())
         // Native iOS keyboard toolbar for TipTap editor (no-op on desktop)
         .plugin(tauri_plugin_editor_toolbar::init());
 
@@ -99,29 +95,13 @@ pub fn run() {
             // ============================================================
             // PLATFORM-SPECIFIC COMMANDS
             // These cannot be moved to execute() as they require platform
-            // features (file dialogs, cloud auth, app paths, etc.)
+            // features (file dialogs, app paths, etc.)
             // ============================================================
 
             // App initialization (iOS-compatible)
             commands::initialize_app,
             commands::get_app_paths,
             commands::pick_workspace_folder,
-            // Backup (local filesystem)
-            commands::backup_workspace,
-            commands::restore_workspace,
-            commands::list_backup_targets,
-            // Cloud Backup (S3)
-            commands::test_s3_connection,
-            commands::backup_to_s3,
-            commands::restore_from_s3,
-            // Cloud Backup (Google Drive)
-            commands::get_google_auth_config,
-            commands::backup_to_google_drive,
-            // Cloud Sync (bidirectional)
-            commands::sync_to_s3,
-            commands::sync_to_google_drive,
-            commands::get_sync_status,
-            commands::resolve_sync_conflict,
             // Export
             commands::export_to_zip,
             commands::export_to_format,

@@ -30,17 +30,9 @@ base64 = "0.22"
 chrono = "0.4"
 pathdiff = "0.2"
 
-# Cloud backup (S3)
-aws-sdk-s3 = "1"
-aws-config = "1"
-aws-smithy-types = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 uuid = { version = "1", features = ["v4"] }
-bytes = "1"
-futures = "0.3"
-# Cloud backup (Google Drive)
-tauri-plugin-google-auth = "0.3"
 
 # Apple IAP (StoreKit 2) — optional, only for App Store builds
 tauri-plugin-iap = { path = "../../../crates/tauri-plugin-iap", optional = true }

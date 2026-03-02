@@ -136,7 +136,7 @@ jobs:
           nix develop --command bash -c '
             PLUGIN_DIR=apps/web/public/plugins
             mkdir -p "$PLUGIN_DIR"
-            for crate in diaryx_sync_extism diaryx_ai_extism diaryx_publish_extism diaryx_math_extism; do
+            for crate in diaryx_sync_extism diaryx_ai_extism diaryx_publish_extism diaryx_math_extism diaryx_storage_s3_extism diaryx_storage_gdrive_extism; do
               echo "Building $crate..."
               cargo build --target wasm32-unknown-unknown -p "$crate" --release
             done
@@ -144,6 +144,8 @@ jobs:
             cp target/wasm32-unknown-unknown/release/diaryx_ai_extism.wasm "$PLUGIN_DIR/diaryx_ai.wasm"
             cp target/wasm32-unknown-unknown/release/diaryx_publish_extism.wasm "$PLUGIN_DIR/diaryx_publish.wasm"
             cp target/wasm32-unknown-unknown/release/diaryx_math_extism.wasm "$PLUGIN_DIR/diaryx_math.wasm"
+            cp target/wasm32-unknown-unknown/release/diaryx_storage_s3_extism.wasm "$PLUGIN_DIR/diaryx_storage_s3.wasm"
+            cp target/wasm32-unknown-unknown/release/diaryx_storage_gdrive_extism.wasm "$PLUGIN_DIR/diaryx_storage_gdrive.wasm"
           '
 
       - name: Upload WASM artifact

@@ -30,6 +30,8 @@ export const BUILTIN_PLUGIN_IDS = new Set([
   "diaryx.math",
   "publish",
   "diaryx.sync",
+  "diaryx.storage.s3",
+  "diaryx.storage.gdrive",
 ]);
 
 /** Built-in plugin metadata for auto-install (fallback URLs in public/plugins/). */
@@ -38,6 +40,16 @@ export const BUILTIN_PLUGINS = [
   { url: "/plugins/diaryx_math.wasm", id: "diaryx.math", name: "Math" },
   { url: "/plugins/diaryx_publish.wasm", id: "publish", name: "Publish" },
   { url: "/plugins/diaryx_sync.wasm", id: "diaryx.sync", name: "Sync" },
+  {
+    url: "/plugins/diaryx_storage_s3.wasm",
+    id: "diaryx.storage.s3",
+    name: "S3 Storage",
+  },
+  {
+    url: "/plugins/diaryx_storage_gdrive.wasm",
+    id: "diaryx.storage.gdrive",
+    name: "Google Drive Storage",
+  },
 ];
 
 /** Check whether a plugin ID is a built-in plugin. */

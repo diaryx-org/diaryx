@@ -2349,6 +2349,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "diaryx_storage_gdrive_extism"
+version = "1.2.1"
+dependencies = [
+ "base64 0.22.1",
+ "extism-pdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "diaryx_storage_s3_extism"
+version = "1.2.1"
+dependencies = [
+ "base64 0.22.1",
+ "extism-pdk",
+ "hex",
+ "hmac",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "diaryx_sync"
 version = "1.2.1"
 dependencies = [
@@ -2451,11 +2474,7 @@ dependencies = [
 name = "diaryx_tauri"
 version = "1.2.1"
 dependencies = [
- "aws-config",
- "aws-sdk-s3",
- "aws-smithy-types",
  "base64 0.22.1",
- "bytes",
  "chrono",
  "diaryx_core",
  "diaryx_extism",
@@ -2463,7 +2482,6 @@ dependencies = [
  "dirs 6.0.0",
  "dotenvy",
  "env_logger",
- "futures",
  "log",
  "pathdiff",
  "reqwest 0.12.28",
@@ -2475,7 +2493,6 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-editor-toolbar",
  "tauri-plugin-fs",
- "tauri-plugin-google-auth",
  "tauri-plugin-iap",
  "tauri-plugin-shell",
  "thiserror 2.0.18",
@@ -5259,26 +5276,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c7398b9c8b70908f6371f47ed36737907c87c52af34c268fed0bf0ceb92ead9"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "oauth2"
-version = "5.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51e219e79014df21a225b1860a479e2dcd7cbd9130f4defd4bd0e191ea31d67d"
-dependencies = [
- "base64 0.22.1",
- "chrono",
- "getrandom 0.2.17",
- "http 1.4.0",
- "rand 0.8.5",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "serde_path_to_error",
- "sha2",
- "thiserror 1.0.69",
- "url",
 ]
 
 [[package]]
@@ -8142,23 +8139,6 @@ dependencies = [
  "thiserror 2.0.18",
  "toml 0.9.12+spec-1.1.0",
  "url",
-]
-
-[[package]]
-name = "tauri-plugin-google-auth"
-version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6c1ceb4fd24140312cf5ca328167360299c3bc22e6d179a8ba65e9c2bbcfe57"
-dependencies = [
- "oauth2",
- "open",
- "serde",
- "serde_json",
- "tauri",
- "tauri-plugin",
- "thiserror 2.0.18",
- "url",
- "uuid",
 ]
 
 [[package]]

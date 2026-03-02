@@ -1,0 +1,380 @@
+//! Extism WASM guest plugin — S3-compatible storage as AsyncFileSystem.
+//!
+//! This plugin exposes S3 operations as commands that map 1:1 to the
+//! `AsyncFileSystem` trait methods. Frontend or native adapters dispatch
+//! these commands to create an S3-backed filesystem.
+
+mod host_bridge;
+mod s3_ops;
+mod sigv4;
+
+use extism_pdk::*;
+use s3_ops::S3Config;
+use serde_json::Value as JsonValue;
+use std::cell::RefCell;
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    static CONFIG: RefCell<Option<S3Config>> = const { RefCell::new(None) };
+}
+
+fn with_config<F, R>(f: F) -> Result<R, String>
+where
+    F: FnOnce(&S3Config) -> R,
+{
+    CONFIG.with(|c| {
+        let borrow = c.borrow();
+        let config = borrow.as_ref().ok_or("S3 plugin not configured")?;
+        Ok(f(config))
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Protocol types
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct GuestManifest {
+    id: String,
+    name: String,
+    version: String,
+    description: String,
+    capabilities: Vec<String>,
+    #[serde(default)]
+    ui: Vec<JsonValue>,
+    #[serde(default)]
+    commands: Vec<String>,
+    #[serde(default)]
+    cli: Vec<JsonValue>,
+}
+
+#[derive(serde::Deserialize)]
+struct CommandRequest {
+    command: String,
+    params: JsonValue,
+}
+
+#[derive(serde::Serialize)]
+struct CommandResponse {
+    success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<JsonValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+impl CommandResponse {
+    fn ok(data: JsonValue) -> Self {
+        Self {
+            success: true,
+            data: Some(data),
+            error: None,
+        }
+    }
+    fn ok_empty() -> Self {
+        Self {
+            success: true,
+            data: None,
+            error: None,
+        }
+    }
+    fn err(msg: impl Into<String>) -> Self {
+        Self {
+            success: false,
+            data: None,
+            error: Some(msg.into()),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Plugin exports
+// ---------------------------------------------------------------------------
+
+#[plugin_fn]
+pub fn manifest(_input: String) -> FnResult<String> {
+    let m = GuestManifest {
+        id: "diaryx.storage.s3".into(),
+        name: "S3 Storage".into(),
+        version: env!("CARGO_PKG_VERSION").into(),
+        description: "S3-compatible object storage as a filesystem backend".into(),
+        capabilities: vec!["custom_commands".into()],
+        ui: vec![serde_json::json!({
+            "slot": "SettingsTab",
+            "label": "S3 Storage",
+            "icon": "cloud",
+            "component": {
+                "Builtin": { "component_id": "storage.s3.settings" }
+            }
+        })],
+        commands: vec![
+            "ReadFile".into(),
+            "WriteFile".into(),
+            "DeleteFile".into(),
+            "Exists".into(),
+            "ListFiles".into(),
+            "ListMdFiles".into(),
+            "CreateDirAll".into(),
+            "IsDir".into(),
+            "MoveFile".into(),
+            "ReadBinary".into(),
+            "WriteBinary".into(),
+            "GetModifiedTime".into(),
+            "TestConnection".into(),
+            "GetConfig".into(),
+            "SetConfig".into(),
+        ],
+        cli: vec![],
+    };
+    Ok(serde_json::to_string(&m)?)
+}
+
+#[plugin_fn]
+pub fn init(_input: String) -> FnResult<String> {
+    // Try to load config from storage
+    if let Ok(Some(data)) = host_bridge::storage_get("s3_config") {
+        if let Ok(config) = serde_json::from_slice::<S3Config>(&data) {
+            CONFIG.with(|c| *c.borrow_mut() = Some(config));
+        }
+    }
+    Ok(String::new())
+}
+
+#[plugin_fn]
+pub fn shutdown(_input: String) -> FnResult<String> {
+    CONFIG.with(|c| *c.borrow_mut() = None);
+    Ok(String::new())
+}
+
+#[plugin_fn]
+pub fn handle_command(input: String) -> FnResult<String> {
+    let req: CommandRequest = serde_json::from_str(&input)?;
+    let resp = dispatch_command(&req.command, &req.params);
+    Ok(serde_json::to_string(&resp)?)
+}
+
+#[plugin_fn]
+pub fn on_event(_input: String) -> FnResult<String> {
+    Ok(String::new())
+}
+
+#[plugin_fn]
+pub fn get_config(_input: String) -> FnResult<String> {
+    let config = CONFIG.with(|c| c.borrow().clone());
+    match config {
+        Some(c) => {
+            // Redact secret key for display
+            let mut display = serde_json::to_value(&c)?;
+            if let Some(obj) = display.as_object_mut() {
+                if obj.contains_key("secret_access_key") {
+                    obj.insert(
+                        "secret_access_key".to_string(),
+                        serde_json::Value::String("***".to_string()),
+                    );
+                }
+            }
+            Ok(serde_json::to_string(&display)?)
+        }
+        None => Ok("{}".into()),
+    }
+}
+
+#[plugin_fn]
+pub fn set_config(input: String) -> FnResult<String> {
+    let config: S3Config = serde_json::from_str(&input)?;
+    // Persist to plugin storage
+    let data = serde_json::to_vec(&config)?;
+    let _ = host_bridge::storage_set("s3_config", &data);
+    CONFIG.with(|c| *c.borrow_mut() = Some(config));
+    Ok(String::new())
+}
+
+// ---------------------------------------------------------------------------
+// Command dispatch
+// ---------------------------------------------------------------------------
+
+fn dispatch_command(command: &str, params: &JsonValue) -> CommandResponse {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as BASE64;
+
+    match command {
+        "ReadFile" => {
+            let path = match params.get("path").and_then(|v| v.as_str()) {
+                Some(p) => p,
+                None => return CommandResponse::err("Missing 'path' parameter"),
+            };
+            match with_config(|c| s3_ops::read_file(c, path)) {
+                Ok(Ok(content)) => CommandResponse::ok(serde_json::json!({ "content": content })),
+                Ok(Err(e)) => CommandResponse::err(e),
+                Err(e) => CommandResponse::err(e),
+            }
+        }
+
+        "WriteFile" => {
+            let path = match params.get("path").and_then(|v| v.as_str()) {
+                Some(p) => p,
+                None => return CommandResponse::err("Missing 'path' parameter"),
+            };
+            let content = match params.get("content").and_then(|v| v.as_str()) {
+                Some(c) => c,
+                None => return CommandResponse::err("Missing 'content' parameter"),
+            };
+            match with_config(|c| s3_ops::write_file(c, path, content)) {
+                Ok(Ok(())) => CommandResponse::ok_empty(),
+                Ok(Err(e)) => CommandResponse::err(e),
+                Err(e) => CommandResponse::err(e),
+            }
+        }
+
+        "DeleteFile" => {
+            let path = match params.get("path").and_then(|v| v.as_str()) {
+                Some(p) => p,
+                None => return CommandResponse::err("Missing 'path' parameter"),
+            };
+            match with_config(|c| s3_ops::delete_file(c, path)) {
+                Ok(Ok(())) => CommandResponse::ok_empty(),
+                Ok(Err(e)) => CommandResponse::err(e),
+                Err(e) => CommandResponse::err(e),
+            }
+        }
+
+        "Exists" => {
+            let path = match params.get("path").and_then(|v| v.as_str()) {
+                Some(p) => p,
+                None => return CommandResponse::err("Missing 'path' parameter"),
+            };
+            match with_config(|c| s3_ops::exists(c, path)) {
+                Ok(Ok(exists)) => CommandResponse::ok(serde_json::json!({ "exists": exists })),
+                Ok(Err(e)) => CommandResponse::err(e),
+                Err(e) => CommandResponse::err(e),
+            }
+        }
+
+        "ListFiles" => {
+            let dir = params.get("dir").and_then(|v| v.as_str()).unwrap_or("");
+            match with_config(|c| s3_ops::list_files(c, dir)) {
+                Ok(Ok(files)) => CommandResponse::ok(serde_json::json!({ "files": files })),
+                Ok(Err(e)) => CommandResponse::err(e),
+                Err(e) => CommandResponse::err(e),
+            }
+        }
+
+        "ListMdFiles" => {
+            let dir = params.get("dir").and_then(|v| v.as_str()).unwrap_or("");
+            match with_config(|c| s3_ops::list_md_files(c, dir)) {
+                Ok(Ok(files)) => CommandResponse::ok(serde_json::json!({ "files": files })),
+                Ok(Err(e)) => CommandResponse::err(e),
+                Err(e) => CommandResponse::err(e),
+            }
+        }
+
+        "CreateDirAll" => {
+            // No-op for S3 — directories are implicit via key prefixes
+            CommandResponse::ok_empty()
+        }
+
+        "IsDir" => {
+            let path = match params.get("path").and_then(|v| v.as_str()) {
+                Some(p) => p,
+                None => return CommandResponse::err("Missing 'path' parameter"),
+            };
+            match with_config(|c| s3_ops::is_dir(c, path)) {
+                Ok(Ok(is_dir)) => CommandResponse::ok(serde_json::json!({ "isDir": is_dir })),
+                Ok(Err(e)) => CommandResponse::err(e),
+                Err(e) => CommandResponse::err(e),
+            }
+        }
+
+        "MoveFile" => {
+            let from = match params.get("from").and_then(|v| v.as_str()) {
+                Some(p) => p,
+                None => return CommandResponse::err("Missing 'from' parameter"),
+            };
+            let to = match params.get("to").and_then(|v| v.as_str()) {
+                Some(p) => p,
+                None => return CommandResponse::err("Missing 'to' parameter"),
+            };
+            match with_config(|c| s3_ops::move_file(c, from, to)) {
+                Ok(Ok(())) => CommandResponse::ok_empty(),
+                Ok(Err(e)) => CommandResponse::err(e),
+                Err(e) => CommandResponse::err(e),
+            }
+        }
+
+        "ReadBinary" => {
+            let path = match params.get("path").and_then(|v| v.as_str()) {
+                Some(p) => p,
+                None => return CommandResponse::err("Missing 'path' parameter"),
+            };
+            match with_config(|c| s3_ops::read_binary(c, path)) {
+                Ok(Ok(data)) => {
+                    let encoded = BASE64.encode(&data);
+                    CommandResponse::ok(serde_json::json!({ "data": encoded }))
+                }
+                Ok(Err(e)) => CommandResponse::err(e),
+                Err(e) => CommandResponse::err(e),
+            }
+        }
+
+        "WriteBinary" => {
+            let path = match params.get("path").and_then(|v| v.as_str()) {
+                Some(p) => p,
+                None => return CommandResponse::err("Missing 'path' parameter"),
+            };
+            let data_b64 = match params.get("data").and_then(|v| v.as_str()) {
+                Some(d) => d,
+                None => return CommandResponse::err("Missing 'data' parameter (base64)"),
+            };
+            let data = match BASE64.decode(data_b64) {
+                Ok(d) => d,
+                Err(e) => return CommandResponse::err(format!("Invalid base64: {e}")),
+            };
+            match with_config(|c| s3_ops::write_binary(c, path, &data)) {
+                Ok(Ok(())) => CommandResponse::ok_empty(),
+                Ok(Err(e)) => CommandResponse::err(e),
+                Err(e) => CommandResponse::err(e),
+            }
+        }
+
+        "GetModifiedTime" => {
+            let path = match params.get("path").and_then(|v| v.as_str()) {
+                Some(p) => p,
+                None => return CommandResponse::err("Missing 'path' parameter"),
+            };
+            match with_config(|c| s3_ops::get_modified_time(c, path)) {
+                Ok(Ok(time)) => CommandResponse::ok(serde_json::json!({ "time": time })),
+                Ok(Err(e)) => CommandResponse::err(e),
+                Err(e) => CommandResponse::err(e),
+            }
+        }
+
+        "TestConnection" => match with_config(|c| s3_ops::test_connection(c)) {
+            Ok(Ok(())) => CommandResponse::ok(serde_json::json!({ "connected": true })),
+            Ok(Err(e)) => CommandResponse::err(e),
+            Err(e) => CommandResponse::err(e),
+        },
+
+        "GetConfig" => {
+            let config = CONFIG.with(|c| c.borrow().clone());
+            match config {
+                Some(c) => CommandResponse::ok(serde_json::to_value(c).unwrap_or_default()),
+                None => CommandResponse::ok(serde_json::json!({})),
+            }
+        }
+
+        "SetConfig" => match serde_json::from_value::<S3Config>(params.clone()) {
+            Ok(config) => {
+                let data = serde_json::to_vec(&config).unwrap_or_default();
+                let _ = host_bridge::storage_set("s3_config", &data);
+                CONFIG.with(|c| *c.borrow_mut() = Some(config));
+                CommandResponse::ok_empty()
+            }
+            Err(e) => CommandResponse::err(format!("Invalid S3 config: {e}")),
+        },
+
+        _ => CommandResponse::err(format!("Unknown command: {command}")),
+    }
+}

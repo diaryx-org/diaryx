@@ -606,6 +606,8 @@ fn host_http_request(
         method: String,
         headers: std::collections::HashMap<String, String>,
         body: Option<String>,
+        /// Base64-encoded binary body. Takes priority over `body` when present.
+        body_base64: Option<String>,
     }
 
     #[derive(serde::Serialize)]
@@ -625,7 +627,14 @@ fn host_http_request(
         request = request.set(key, value);
     }
 
-    let response = if let Some(body) = &parsed.body {
+    let response = if let Some(b64) = &parsed.body_base64 {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .map_err(|e| ExtismError::msg(format!("host_http_request: base64 decode: {e}")))?;
+        request
+            .send_bytes(&bytes)
+            .map_err(|e| ExtismError::msg(format!("host_http_request: {e}")))?
+    } else if let Some(body) = &parsed.body {
         request
             .send_string(&body)
             .map_err(|e| ExtismError::msg(format!("host_http_request: {e}")))?

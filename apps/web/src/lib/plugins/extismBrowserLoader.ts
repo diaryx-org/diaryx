@@ -225,16 +225,28 @@ function buildHostFunctions() {
                 method: string;
                 headers: Record<string, string>;
                 body?: string;
+                body_base64?: string;
               }
             | undefined;
           if (!input)
             return cp.store(
               JSON.stringify({ status: 0, headers: {}, body: "no input" }),
             );
+          let fetchBody: BodyInit | undefined;
+          if (input.body_base64) {
+            const binary = atob(input.body_base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+              bytes[i] = binary.charCodeAt(i);
+            }
+            fetchBody = bytes;
+          } else {
+            fetchBody = input.body ?? undefined;
+          }
           const resp = await fetch(input.url, {
             method: input.method,
             headers: input.headers,
-            body: input.body ?? undefined,
+            body: fetchBody,
           });
           const respHeaders: Record<string, string> = {};
           resp.headers.forEach((v, k) => {

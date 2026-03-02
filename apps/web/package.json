@@ -19,7 +19,6 @@
     "tauri:setup": "mkdir -p src/lib/wasm && cp src/lib/wasm-stub.js src/lib/wasm/diaryx_wasm.js"
   },
   "dependencies": {
-    "@choochmeque/tauri-plugin-google-auth-api": "^0.3.6",
     "@bjorn3/browser_wasi_shim": "^0.4.2",
     "@extism/extism": "^2.0.0-rc13",
     "@choochmeque/tauri-plugin-iap-api": "^0.8.0",

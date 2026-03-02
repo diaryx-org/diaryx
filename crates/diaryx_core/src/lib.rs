@@ -20,9 +20,6 @@ mod command_handler;
 /// Configuration options
 pub mod config;
 
-/// Backup system for persisting workspace data
-pub mod backup;
-
 /// Entry docs
 pub mod entry;
 
@@ -83,15 +80,6 @@ pub mod import;
 
 /// Plugin architecture for modular feature composition
 pub mod plugin;
-
-/// Cloud storage module for bidirectional file synchronization
-pub mod cloud;
-
-// Re-export key cloud types for convenience
-pub use cloud::conflict::ConflictResolution;
-pub use cloud::engine::CloudSyncProvider;
-pub use cloud::manifest::SyncManifest;
-pub use cloud::{CloudSyncResult, RemoteFileInfo};
 
 // Re-exports for backwards compatibility
 pub use utils::date;

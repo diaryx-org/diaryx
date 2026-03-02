@@ -8,15 +8,14 @@ attachments:
   - "[BackupSettings.svelte](/apps/web/src/lib/settings/BackupSettings.svelte)"
   - "[BillingSettings.svelte](/apps/web/src/lib/settings/BillingSettings.svelte)"
   - "[ClearDataSettings.svelte](/apps/web/src/lib/settings/ClearDataSettings.svelte)"
-  - "[CloudBackupSettings.svelte](/apps/web/src/lib/settings/CloudBackupSettings.svelte)"
   - "[DebugInfo.svelte](/apps/web/src/lib/settings/DebugInfo.svelte)"
   - "[DisplaySettings.svelte](/apps/web/src/lib/settings/DisplaySettings.svelte)"
   - "[FormattingSettings.svelte](/apps/web/src/lib/settings/FormattingSettings.svelte)"
-  - "[GoogleDriveSettings.svelte](/apps/web/src/lib/settings/GoogleDriveSettings.svelte)"
   - "[FormatImportSettings.svelte](/apps/web/src/lib/settings/FormatImportSettings.svelte)"
   - "[ImportSettings.svelte](/apps/web/src/lib/settings/ImportSettings.svelte)"
   - "[LinkSettings.svelte](/apps/web/src/lib/settings/LinkSettings.svelte)"
-  - "[S3BackupSettings.svelte](/apps/web/src/lib/settings/S3BackupSettings.svelte)"
+  - "[S3StorageSettings.svelte](/apps/web/src/lib/settings/S3StorageSettings.svelte)"
+  - "[GoogleDriveStorageSettings.svelte](/apps/web/src/lib/settings/GoogleDriveStorageSettings.svelte)"
   - "[StorageSettings.svelte](/apps/web/src/lib/settings/StorageSettings.svelte)"
   - "[SyncSettings.svelte](/apps/web/src/lib/settings/SyncSettings.svelte)"
   - "[syncActionStatusStore.svelte.ts](/apps/web/src/lib/settings/syncActionStatusStore.svelte.ts)"
@@ -45,15 +44,14 @@ Settings panel components for the settings dialog.
 | `BackupSettings.svelte`           | Local backup settings                                                                          |
 | `BillingSettings.svelte`          | Subscription and billing settings (Stripe + Apple IAP)                                         |
 | `ClearDataSettings.svelte`        | Clear data controls                                                                            |
-| `CloudBackupSettings.svelte`      | Cloud backup configuration                                                                     |
 | `DebugInfo.svelte`                | Debug information display                                                                      |
 | `DisplaySettings.svelte`          | Display preferences (theme + focus mode)                                                       |
 | `FormattingSettings.svelte`       | Text formatting options                                                                        |
-| `GoogleDriveSettings.svelte`      | Google Drive integration                                                                       |
 | `FormatImportSettings.svelte`     | Import from Day One or Markdown formats (uses WASM parsers + ImportEntries command)            |
 | `ImportSettings.svelte`           | Import from file (raw ZIP extraction)                                                          |
 | `LinkSettings.svelte`             | Bulk conversion for `part_of`/`contents`/`attachments` using the current workspace link format |
-| `S3BackupSettings.svelte`         | S3 backup configuration                                                                        |
+| `S3StorageSettings.svelte`        | S3-compatible storage plugin settings (Extism)                                                 |
+| `GoogleDriveStorageSettings.svelte` | Google Drive storage plugin settings (Extism)                                                |
 | `StorageSettings.svelte`          | Storage backend settings                                                                       |
 | `SyncSettings.svelte`             | Sync server settings + synced attachment storage usage                                         |
 | `syncActionStatusStore.svelte.ts` | Shared progress/status state for settings-driven sync actions                                  |

@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-03-01T20:37:05Z
+updated: 2026-03-02T00:25:51Z
 part_of: '[README](/README.md)'
 ---
 # Instructions for AI agents
@@ -59,7 +59,6 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │   └── diaryx_apple src - Source code for the Apple UniFFI bridge crate - crates/diaryx_apple/src/README.md
 │   ├── diaryx_core - Core library shared by Diaryx clients - crates/diaryx_core/README.md
 │   │   └── diaryx_core src - Source code for the core Diaryx library - crates/diaryx_core/src/README.md
-│   │       ├── Cloud Sync - Bidirectional file synchronization with cloud storage - crates/diaryx_core/src/cloud/README.md
 │   │       ├── Entry module - Entry manipulation functionality - crates/diaryx_core/src/entry/README.md
 │   │       ├── Filesystem module - Filesystem abstraction layer - crates/diaryx_core/src/fs/README.md
 │   │       ├── crates/diaryx_core/src/plugin/README.md
@@ -77,7 +76,9 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │       ├── Database module - SQLite database schema and repository - crates/diaryx_sync_server/src/db/README.md
 │   │       ├── Email module - SMTP email sending for magic links - crates/diaryx_sync_server/src/email/README.md
 │   │       └── Handlers module - HTTP route handlers - crates/diaryx_sync_server/src/handlers/README.md
-│   └── diaryx_sync - crates/diaryx_sync/README.md
+│   ├── diaryx_sync - crates/diaryx_sync/README.md
+│   ├── crates/diaryx_storage_s3_extism/README.md
+│   └── crates/diaryx_storage_gdrive_extism/README.md
 ├── ROADMAP - The plan for future Diaryx features - ROADMAP.md
 └── Scripts - scripts/scripts.md
 ```
@@ -99,6 +100,8 @@ Read the root README.md first. For specific projects, use these entry points:
 | Sync engine      | crates/diaryx_sync/README.md        |
 | Sync server      | crates/diaryx_sync_server/README.md |
 | Extism plugins   | crates/diaryx_extism/README.md      |
+| S3 storage       | crates/diaryx_storage_s3_extism/README.md |
+| GDrive storage   | crates/diaryx_storage_gdrive_extism/README.md |
 
 
 ## Commands

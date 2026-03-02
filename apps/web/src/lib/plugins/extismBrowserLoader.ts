@@ -17,6 +17,11 @@ import type {
   UiContribution,
 } from "$lib/backend/generated";
 import { getBackendSync } from "$lib/backend";
+import {
+  permissionStore,
+  type PermissionType,
+  type PluginConfig,
+} from "@/models/stores/permissionStore.svelte";
 
 // ============================================================================
 // Protocol types (mirrors diaryx_extism::protocol)
@@ -87,7 +92,46 @@ export interface BrowserExtismPlugin {
 // Host function definitions
 // ============================================================================
 
-function buildHostFunctions() {
+/** Options for building host functions with permission support. */
+export interface HostFunctionOptions {
+  /** Plugin ID for permission checks. */
+  pluginId: string;
+  /** Plugin display name for permission banners. */
+  pluginName: string;
+  /** Callback to get current workspace plugin config. Returns undefined if not available. */
+  getPluginsConfig?: () => Record<string, PluginConfig> | undefined;
+}
+
+/**
+ * Check a permission, showing a banner if needed.
+ * Returns true if allowed, throws an error string if denied.
+ */
+async function checkBrowserPermission(
+  opts: HostFunctionOptions,
+  permType: PermissionType,
+  target: string,
+): Promise<void> {
+  const pluginsConfig = opts.getPluginsConfig?.();
+  const allowed = await permissionStore.requestPermission(
+    opts.pluginId,
+    opts.pluginName,
+    permType,
+    target,
+    pluginsConfig,
+  );
+  if (!allowed) {
+    throw new Error(
+      JSON.stringify({
+        error: "permission_denied",
+        permission: permType,
+        target,
+        plugin: opts.pluginId,
+      }),
+    );
+  }
+}
+
+function buildHostFunctions(opts?: HostFunctionOptions) {
   return {
     "extism:host/user": {
       host_log(cp: CallContext, offs: bigint) {
@@ -119,6 +163,7 @@ function buildHostFunctions() {
         try {
           const input = cp.read(offs)?.json() as { path: string } | undefined;
           if (!input) return cp.store("");
+          if (opts) await checkBrowserPermission(opts, "read_files", input.path);
           const backend = getBackendSync();
           const response: any = await backend.execute({
             type: "ReadFile",
@@ -137,6 +182,7 @@ function buildHostFunctions() {
           const input = cp.read(offs)?.json() as { prefix: string } | undefined;
           if (!input) return cp.store("[]");
           const prefix = typeof input.prefix === "string" ? input.prefix : "";
+          if (opts) await checkBrowserPermission(opts, "read_files", prefix);
           const backend = getBackendSync();
           const response: any = await backend.execute({
             type: "GetFilesystemTree",
@@ -173,6 +219,7 @@ function buildHostFunctions() {
         try {
           const input = cp.read(offs)?.json() as { path: string } | undefined;
           if (!input) return cp.store("false");
+          if (opts) await checkBrowserPermission(opts, "read_files", input.path);
           const backend = getBackendSync();
           const response: any = await backend.execute({
             type: "FileExists",
@@ -186,10 +233,11 @@ function buildHostFunctions() {
           return cp.store("false");
         }
       },
-      host_storage_get(cp: CallContext, offs: bigint) {
+      async host_storage_get(cp: CallContext, offs: bigint) {
         try {
           const input = cp.read(offs)?.json() as { key: string } | undefined;
           if (!input?.key) return cp.store("");
+          if (opts) await checkBrowserPermission(opts, "plugin_storage", input.key);
           const raw = localStorage.getItem(`diaryx-plugin:${input.key}`);
           if (!raw) return cp.store("");
           // Return in the same {data: base64} format the Rust host uses
@@ -198,12 +246,13 @@ function buildHostFunctions() {
           return cp.store("");
         }
       },
-      host_storage_set(cp: CallContext, offs: bigint) {
+      async host_storage_set(cp: CallContext, offs: bigint) {
         try {
           const input = cp.read(offs)?.json() as
             | { key: string; data: string }
             | undefined;
           if (!input?.key) return cp.store("");
+          if (opts) await checkBrowserPermission(opts, "plugin_storage", input.key);
           // Store the base64 data wrapped in JSON matching Rust host format
           localStorage.setItem(
             `diaryx-plugin:${input.key}`,
@@ -232,6 +281,7 @@ function buildHostFunctions() {
             return cp.store(
               JSON.stringify({ status: 0, headers: {}, body: "no input" }),
             );
+          if (opts) await checkBrowserPermission(opts, "http_requests", input.url);
           let fetchBody: BodyInit | undefined;
           if (input.body_base64) {
             const binary = atob(input.body_base64);
@@ -285,6 +335,7 @@ function buildHostFunctions() {
             | { path: string; content: string }
             | undefined;
           if (!input) return cp.store("");
+          if (opts) await checkBrowserPermission(opts, "edit_files", input.path);
           const backend = getBackendSync();
           await backend.execute({
             type: "WriteFile",
@@ -301,6 +352,7 @@ function buildHostFunctions() {
             | { path: string; content: string }
             | undefined;
           if (!input) return cp.store("");
+          if (opts) await checkBrowserPermission(opts, "edit_files", input.path);
           // Decode base64 to Uint8Array
           const binary = atob(input.content);
           const bytes = new Uint8Array(binary.length);
@@ -458,9 +510,14 @@ export function getBrowserPluginRuntimeSupport(): BrowserPluginRuntimeSupport {
  *
  * Creates an Extism plugin instance with WASI support and host functions
  * for filesystem access (routed through the backend worker).
+ *
+ * @param wasmBytes - Raw WASM binary
+ * @param hostOpts - Optional permission context. If provided, host functions
+ *   will check permissions via the permissionStore before proceeding.
  */
 export async function loadBrowserPlugin(
   wasmBytes: ArrayBuffer,
+  hostOpts?: HostFunctionOptions,
 ): Promise<BrowserExtismPlugin> {
   const support = getBrowserPluginRuntimeSupport();
   if (!support.supported) {
@@ -472,7 +529,7 @@ export async function loadBrowserPlugin(
   const plugin: ExtismPlugin = await createPlugin(wasmBytes, {
     useWasi: true,
     runInWorker: support.useWorkerFallback ?? false,
-    functions: buildHostFunctions(),
+    functions: buildHostFunctions(hostOpts),
   });
 
   // Call guest `manifest` export to get the plugin's manifest.

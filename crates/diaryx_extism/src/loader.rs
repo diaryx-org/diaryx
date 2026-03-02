@@ -128,6 +128,8 @@ pub fn load_plugin_from_wasm(
         fs: host_context.fs.clone(),
         storage: host_context.storage.clone(),
         event_emitter: host_context.event_emitter.clone(),
+        plugin_id: plugin_name.clone(),
+        permission_checker: host_context.permission_checker.clone(),
     });
 
     let builder = PluginBuilder::new(extism_manifest).with_wasi(true);
@@ -195,6 +197,8 @@ fn load_single_plugin(
         fs: host_context.fs.clone(),
         storage: host_context.storage.clone(),
         event_emitter: host_context.event_emitter.clone(),
+        plugin_id: plugin_name.to_string(),
+        permission_checker: host_context.permission_checker.clone(),
     });
 
     let builder = PluginBuilder::new(extism_manifest).with_wasi(true);

@@ -8,6 +8,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use diaryx_core::fs::AsyncFileSystem;
+use diaryx_core::plugin::permissions::PermissionType;
 use extism::{CurrentPlugin, Error as ExtismError, UserData, Val, ValType};
 
 /// Trait for persisting plugin state (CRDT snapshots, config, etc.).
@@ -46,6 +47,23 @@ impl EventEmitter for NoopEventEmitter {
     fn emit(&self, _event_json: &str) {}
 }
 
+/// Trait for checking plugin permissions before allowing host function calls.
+///
+/// Implementations may check static config, prompt the user, or consult
+/// a session-level cache.
+pub trait PermissionChecker: Send + Sync {
+    /// Check if a plugin has permission for an action.
+    ///
+    /// Returns `Ok(())` if allowed, `Err(message)` if denied.
+    /// The `target` is context-dependent: file path, URL, command name, etc.
+    fn check_permission(
+        &self,
+        plugin_id: &str,
+        permission_type: PermissionType,
+        target: &str,
+    ) -> Result<(), String>;
+}
+
 /// Context shared with host functions via Extism's `UserData` mechanism.
 ///
 /// Provides guest plugins with controlled access to the workspace filesystem,
@@ -57,6 +75,10 @@ pub struct HostContext {
     pub storage: Arc<dyn PluginStorage>,
     /// Event emitter for sync events.
     pub event_emitter: Arc<dyn EventEmitter>,
+    /// Which plugin this context belongs to.
+    pub plugin_id: String,
+    /// Permission checker (None = allow all, for backwards compatibility).
+    pub permission_checker: Option<Arc<dyn PermissionChecker>>,
 }
 
 impl HostContext {
@@ -66,6 +88,19 @@ impl HostContext {
             fs,
             storage: Arc::new(NoopStorage),
             event_emitter: Arc::new(NoopEventEmitter),
+            plugin_id: String::new(),
+            permission_checker: None,
+        }
+    }
+
+    /// Check a permission, returning an Extism error if denied.
+    fn check_perm(&self, perm: PermissionType, target: &str) -> Result<(), ExtismError> {
+        if let Some(checker) = &self.permission_checker {
+            checker
+                .check_permission(&self.plugin_id, perm, target)
+                .map_err(|msg| ExtismError::msg(msg))
+        } else {
+            Ok(())
         }
     }
 }
@@ -229,6 +264,7 @@ fn host_read_file(
 
     let ctx = user_data.get()?;
     let ctx = ctx.lock().unwrap();
+    ctx.check_perm(PermissionType::ReadFiles, &parsed.path)?;
     let content = futures_lite::future::block_on(ctx.fs.read_to_string(Path::new(&parsed.path)))
         .map_err(|e| ExtismError::msg(format!("host_read_file: {e}")))?;
 
@@ -257,6 +293,7 @@ fn host_list_files(
 
     let ctx = user_data.get()?;
     let ctx = ctx.lock().unwrap();
+    ctx.check_perm(PermissionType::ReadFiles, &parsed.prefix)?;
     let files =
         futures_lite::future::block_on(ctx.fs.list_all_files_recursive(Path::new(&parsed.prefix)))
             .map_err(|e| ExtismError::msg(format!("host_list_files: {e}")))?;
@@ -293,6 +330,7 @@ fn host_file_exists(
 
     let ctx = user_data.get()?;
     let ctx = ctx.lock().unwrap();
+    ctx.check_perm(PermissionType::ReadFiles, &parsed.path)?;
     // exists() returns bool directly (not Result<bool>)
     let exists = futures_lite::future::block_on(ctx.fs.exists(Path::new(&parsed.path)));
 
@@ -325,6 +363,14 @@ fn host_write_file(
 
     let ctx = user_data.get()?;
     let ctx = ctx.lock().unwrap();
+    // Check edit or create based on whether the file exists
+    let exists = futures_lite::future::block_on(ctx.fs.exists(Path::new(&parsed.path)));
+    let perm = if exists {
+        PermissionType::EditFiles
+    } else {
+        PermissionType::CreateFiles
+    };
+    ctx.check_perm(perm, &parsed.path)?;
     futures_lite::future::block_on(ctx.fs.write_file(Path::new(&parsed.path), &parsed.content))
         .map_err(|e| ExtismError::msg(format!("host_write_file: {e}")))?;
 
@@ -360,6 +406,13 @@ fn host_write_binary(
 
     let ctx = user_data.get()?;
     let ctx = ctx.lock().unwrap();
+    let exists = futures_lite::future::block_on(ctx.fs.exists(Path::new(&parsed.path)));
+    let perm = if exists {
+        PermissionType::EditFiles
+    } else {
+        PermissionType::CreateFiles
+    };
+    ctx.check_perm(perm, &parsed.path)?;
     futures_lite::future::block_on(ctx.fs.write_binary(Path::new(&parsed.path), &bytes))
         .map_err(|e| ExtismError::msg(format!("host_write_binary: {e}")))?;
 
@@ -409,6 +462,7 @@ fn host_storage_get(
 
     let ctx = user_data.get()?;
     let ctx = ctx.lock().unwrap();
+    ctx.check_perm(PermissionType::PluginStorage, &parsed.key)?;
 
     let result = match ctx.storage.get(&parsed.key) {
         Some(data) => {
@@ -450,6 +504,7 @@ fn host_storage_set(
 
     let ctx = user_data.get()?;
     let ctx = ctx.lock().unwrap();
+    ctx.check_perm(PermissionType::PluginStorage, &parsed.key)?;
     ctx.storage.set(&parsed.key, &bytes);
 
     plugin.memory_set_val(&mut outputs[0], "")?;
@@ -594,7 +649,7 @@ fn host_http_request(
     plugin: &mut CurrentPlugin,
     inputs: &[Val],
     outputs: &mut [Val],
-    _user_data: UserData<HostContext>,
+    user_data: UserData<HostContext>,
 ) -> Result<(), ExtismError> {
     use base64::Engine as _;
 
@@ -621,6 +676,12 @@ fn host_http_request(
 
     let parsed: HttpInput = serde_json::from_str(&input)
         .map_err(|e| ExtismError::msg(format!("host_http_request: invalid input: {e}")))?;
+
+    {
+        let ctx = user_data.get()?;
+        let ctx = ctx.lock().unwrap();
+        ctx.check_perm(PermissionType::HttpRequests, &parsed.url)?;
+    }
 
     let mut request = ureq::request(&parsed.method, &parsed.url);
     for (key, value) in &parsed.headers {

@@ -25,6 +25,7 @@ Plugins are registered in the `PluginRegistry`, which is stored on the `Diaryx<F
 | `mod.rs` | Plugin traits (`Plugin`, `WorkspacePlugin`, `FilePlugin`), `PluginId`, `PluginError`, `PluginContext` |
 | `manifest.rs` | `PluginManifest`, `UiContribution`, `CliCommand`, `CliArg`, `CliArgType` |
 | `events.rs` | Event types for workspace and file lifecycle hooks |
+| `permissions.rs` | Permission types, config structs, and permission checking functions |
 | `registry.rs` | `PluginRegistry` — collects plugins and dispatches events/commands |
 
 ## Registration Dedup
@@ -120,6 +121,61 @@ that plugin as an option in the workspace creation dialog's "Sync" dropdown and
 in the workspace management "Link to provider" button. The host queries provider
 readiness via `getProviderStatus()` and delegates link/unlink/download operations
 to `workspaceProviderService.ts`.
+
+## Permission System
+
+Plugins are sandboxed via a permission model stored in the workspace root index
+frontmatter under a `plugins` key. Each plugin has an entry with `download` URL
+and `permissions` object.
+
+### Permission Types
+
+| Permission | Covers | Scope values |
+|------------|--------|--------------|
+| `read_files` | `host_read_file`, `host_list_files`, `host_file_exists` | file/folder links, `all` |
+| `edit_files` | `host_write_file` (existing), `SaveEntry` | file/folder links, `all` |
+| `create_files` | `CreateEntry`, `host_write_file` (new) | folder links, `all` |
+| `delete_files` | `DeleteEntry` | file/folder links, `all` |
+| `move_files` | `MoveEntry`, `RenameEntry` | file/folder links, `all` |
+| `http_requests` | `host_http_request` | domain patterns, `all` |
+| `plugin_storage` | `host_storage_get`, `host_storage_set` | `all` |
+
+### Resolution Rules
+
+- `all` in include = allow everything (except explicit excludes)
+- Folder links = allow all descendants
+- File links = allow that specific file (and siblings in same dir)
+- Exclude wins over include
+- Missing permission type = not configured (triggers permission UI)
+- Missing plugin entry = not configured
+
+### Enforcement
+
+On native (Extism): `HostContext` holds a `plugin_id` and optional
+`PermissionChecker` trait object. Each host function checks permissions
+before proceeding.
+
+On browser: `extismBrowserLoader.ts` host functions check permissions via
+the `permissionStore`, showing a `PermissionBanner` for user approval.
+
+### YAML Example
+
+```yaml
+plugins:
+  diaryx.ai:
+    download: 'https://cdn.diaryx.org/plugins/diaryx_ai'
+    permissions:
+      read_files:
+        include:
+          - '[Daily](/journal/daily/daily.md)'
+        exclude:
+          - '[Sensitive](/private/sensitive.md)'
+      http_requests:
+        include:
+          - 'openrouter.ai'
+      plugin_storage:
+        include: [all]
+```
 
 ## EditorExtension Slot
 

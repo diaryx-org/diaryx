@@ -289,6 +289,8 @@ pub async fn load_sync_plugin<R: Runtime>(
         fs,
         storage: Arc::new(diaryx_extism::NoopStorage),
         event_emitter,
+        plugin_id: String::new(),
+        permission_checker: None,
     });
 
     // Load the plugin

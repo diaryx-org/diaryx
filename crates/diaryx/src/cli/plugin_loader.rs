@@ -339,6 +339,8 @@ fn create_host_context(workspace_root: &Path) -> Arc<HostContext> {
         fs: Arc::new(fs),
         storage,
         event_emitter,
+        plugin_id: String::new(),
+        permission_checker: None,
     })
 }
 

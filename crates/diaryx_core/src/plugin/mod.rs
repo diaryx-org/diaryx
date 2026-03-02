@@ -18,6 +18,7 @@
 
 pub mod events;
 pub mod manifest;
+pub mod permissions;
 pub mod registry;
 
 use std::fmt;

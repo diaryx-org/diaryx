@@ -30,6 +30,8 @@ pub mod protocol;
 pub mod wasi_runner;
 
 pub use adapter::ExtismPluginAdapter;
-pub use host_fns::{EventEmitter, HostContext, NoopEventEmitter, NoopStorage, PluginStorage};
+pub use host_fns::{
+    EventEmitter, HostContext, NoopEventEmitter, NoopStorage, PermissionChecker, PluginStorage,
+};
 pub use loader::{ExtismLoadError, load_plugin_from_wasm, load_plugins_from_dir};
 pub use plugin_fs::PluginFileSystem;

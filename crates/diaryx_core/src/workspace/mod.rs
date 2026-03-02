@@ -3133,6 +3133,7 @@ mod tests {
             audience: None,
             attachments: None,
             exclude: None,
+            plugins: None,
             extra: std::collections::HashMap::new(),
         };
         assert!(root_fm.is_root());
@@ -3146,6 +3147,7 @@ mod tests {
             audience: None,
             attachments: None,
             exclude: None,
+            plugins: None,
             extra: std::collections::HashMap::new(),
         };
         assert!(!non_root_fm.is_root());

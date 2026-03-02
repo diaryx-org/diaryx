@@ -1282,10 +1282,8 @@ export async function switchWorkspace(
 
   // 6. Create new backend with workspace-isolated storage (use name for OPFS dir)
   const { getBackend } = await import('$lib/backend/index');
-  const { createApi } = await import('$lib/backend/api');
   const { getWorkspaceStorageType } = await import('$lib/storage/localWorkspaceRegistry.svelte');
   const backend = await getBackend(newWorkspaceId, newWorkspaceName, getWorkspaceStorageType(newWorkspaceId));
-  const api = createApi(backend);
 
   // 7. Set up the new backend on the bridge
   setBackend(backend);
@@ -1293,33 +1291,13 @@ export async function switchWorkspace(
   // 8. Create new RustCrdtApi
   const newRustApi = new RustCrdtApi(backend);
 
-  // 9. Find workspace root in the new storage
-  let workspacePath: string | null;
-  try {
-    // Use workspace path from backend when available (Tauri), fall back to '.'
-    const searchDir = backend.getWorkspacePath?.()?.replace(/\/(index|README)\.md$/, '') ?? '.';
-    workspacePath = await api.findRootIndex(searchDir);
-  } catch {
-    workspacePath = null;
-  }
+  // 9. (CRDT initialization is handled by the sync plugin during initWorkspace below)
 
-  // 10. Initialize CRDT from filesystem (only if a root index exists)
-  if (workspacePath) {
-    try {
-      const result = await api.initializeWorkspaceCrdt(workspacePath);
-      console.log('[WorkspaceCrdtBridge] CRDT initialized for new workspace:', result);
-    } catch (e) {
-      console.warn('[WorkspaceCrdtBridge] Failed to initialize CRDT from filesystem:', e);
-    }
-  } else {
-    console.log('[WorkspaceCrdtBridge] Skipping CRDT init — workspace is empty (no root index)');
-  }
-
-  // 11. Set workspace ID and reconnect
+  // 10. Set workspace ID and reconnect
   _workspaceId = newWorkspaceId;
   refreshAttachmentSyncContext();
 
-  // 12. Re-initialize the workspace bridge with sync
+  // 11. Re-initialize the workspace bridge with sync
   const savedServerUrl = serverUrl;
   serverUrl = null; // Reset so initWorkspace re-establishes connection
   await initWorkspace({
@@ -1329,7 +1307,7 @@ export async function switchWorkspace(
     onReady: options?.onReady,
   });
 
-  // 13. Update local workspace registry and reactive state
+  // 12. Update local workspace registry and reactive state
   // Include the workspace path so the Tauri backend can find this workspace on restart
   const wsPath = backend.getWorkspacePath?.()?.replace(/\/(index|README)\.md$/, '');
   addLocalWorkspace({ id: newWorkspaceId, name: newWorkspaceName, path: wsPath || undefined });

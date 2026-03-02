@@ -28,7 +28,6 @@ use diaryx_core::plugin::{
     Plugin, PluginCapability, PluginContext, PluginError, PluginId, PluginManifest, UiContribution,
     WorkspaceOpenedEvent, WorkspacePlugin,
 };
-use diaryx_core::workspace::Workspace;
 
 // ============================================================================
 // PublishPlugin struct
@@ -74,81 +73,6 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
     /// Create an Exporter using our filesystem.
     fn exporter(&self) -> Exporter<FS> {
         Exporter::new(self.fs.clone())
-    }
-
-    /// Create a Workspace accessor using our filesystem.
-    fn workspace(&self) -> Workspace<FS> {
-        Workspace::new(self.fs.clone())
-    }
-
-    /// Collect all unique audience tags from a workspace tree.
-    async fn collect_audiences(&self, root_path: &Path) -> HashSet<String> {
-        let ws = self.workspace();
-        let mut audiences = HashSet::new();
-        let mut visited = HashSet::new();
-
-        let workspace_root = root_path.parent().unwrap_or(Path::new(".")).to_path_buf();
-        let link_format = *self.link_format.read().unwrap();
-        let link_format_opt = Some(link_format);
-
-        Self::collect_audiences_recursive(
-            &ws,
-            root_path,
-            &mut audiences,
-            &mut visited,
-            &workspace_root,
-            link_format_opt,
-        )
-        .await;
-
-        audiences
-    }
-
-    async fn collect_audiences_recursive(
-        ws: &Workspace<FS>,
-        path: &Path,
-        audiences: &mut HashSet<String>,
-        visited: &mut HashSet<PathBuf>,
-        workspace_root: &Path,
-        link_format: Option<LinkFormat>,
-    ) {
-        if visited.contains(path) {
-            return;
-        }
-        visited.insert(path.to_path_buf());
-
-        if let Ok(index) = ws.parse_index_with_hint(path, link_format).await {
-            if let Some(file_audiences) = &index.frontmatter.audience {
-                for a in file_audiences {
-                    let trimmed = a.trim();
-                    if !trimmed.is_empty() {
-                        audiences.insert(a.clone());
-                    }
-                }
-            }
-
-            if index.frontmatter.is_index() {
-                for child_rel in index.frontmatter.contents_list() {
-                    let child_path = index.resolve_path(child_rel);
-                    let absolute_child_path = if child_path.is_absolute() {
-                        child_path
-                    } else {
-                        workspace_root.join(&child_path)
-                    };
-                    if ws.fs_ref().exists(&absolute_child_path).await {
-                        Box::pin(Self::collect_audiences_recursive(
-                            ws,
-                            &absolute_child_path,
-                            audiences,
-                            visited,
-                            workspace_root,
-                            link_format,
-                        ))
-                        .await;
-                    }
-                }
-            }
-        }
     }
 
     /// Export files to memory as markdown, with body template rendering.
@@ -367,7 +291,6 @@ fn publish_plugin_manifest() -> PluginManifest {
                     "ExportToHtml".into(),
                     "ExportToMemory".into(),
                     "PlanExport".into(),
-                    "GetAvailableAudiences".into(),
                     "ExportBinaryAttachments".into(),
                     "GetExportFormats".into(),
                     "PublishWorkspace".into(),
@@ -482,17 +405,6 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                     .await
                     .map_err(|e| PluginError::CommandError(e.to_string()))?;
                 serde_json::to_value(plan).map_err(|e| PluginError::CommandError(e.to_string()))
-            }
-
-            "GetAvailableAudiences" => {
-                let root_path = params["root_path"]
-                    .as_str()
-                    .ok_or_else(|| PluginError::CommandError("missing root_path".into()))?;
-                let resolved = self.resolve_path(root_path);
-                let audiences = self.collect_audiences(&resolved).await;
-                let mut result: Vec<String> = audiences.into_iter().collect();
-                result.sort();
-                serde_json::to_value(result).map_err(|e| PluginError::CommandError(e.to_string()))
             }
 
             "ExportToMemory" => {

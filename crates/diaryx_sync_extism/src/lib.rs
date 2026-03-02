@@ -82,7 +82,7 @@ mod custom_random {
 use extism_pdk::*;
 use serde_json::Value as JsonValue;
 
-use diaryx_core::plugin::{ComponentRef, SidebarSide, UiContribution};
+use diaryx_core::plugin::{ComponentRef, SidebarSide, StatusBarPosition, UiContribution};
 use diaryx_sync::IncomingEvent;
 
 // Re-export the protocol types from diaryx_extism for compatibility
@@ -184,8 +184,14 @@ pub fn manifest(_input: String) -> FnResult<String> {
     let status_bar_item = UiContribution::StatusBarItem {
         id: "sync-status".into(),
         label: "Sync".into(),
-        position: diaryx_core::plugin::StatusBarPosition::Right,
+        position: StatusBarPosition::Right,
         plugin_command: Some("get_sync_status".into()),
+    };
+
+    let workspace_provider = UiContribution::WorkspaceProvider {
+        id: "diaryx.sync".into(),
+        label: "Diaryx Sync".into(),
+        icon: Some("cloud".into()),
     };
 
     let manifest = GuestManifest {
@@ -206,6 +212,7 @@ pub fn manifest(_input: String) -> FnResult<String> {
             serde_json::to_value(&snapshots_tab).unwrap_or_default(),
             serde_json::to_value(&history_tab).unwrap_or_default(),
             serde_json::to_value(&status_bar_item).unwrap_or_default(),
+            serde_json::to_value(&workspace_provider).unwrap_or_default(),
         ],
         commands: all_commands(),
         cli: vec![serde_json::json!({
@@ -762,6 +769,12 @@ fn all_commands() -> Vec<String> {
         "InitializeWorkspaceCrdt",
         // Status
         "get_sync_status",
+        // Workspace Provider
+        "GetProviderStatus",
+        "ListRemoteWorkspaces",
+        "LinkWorkspace",
+        "UnlinkWorkspace",
+        "DownloadWorkspace",
     ]
     .into_iter()
     .map(String::from)

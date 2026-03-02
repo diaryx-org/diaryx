@@ -2349,6 +2349,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "diaryx_spoiler_extism"
+version = "1.2.1"
+dependencies = [
+ "extism-pdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "diaryx_storage_gdrive_extism"
 version = "1.2.1"
 dependencies = [

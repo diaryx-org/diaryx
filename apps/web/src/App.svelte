@@ -55,7 +55,6 @@
     shareSessionStore
   } from "./models/stores";
   import { getPluginStore } from "./models/stores/pluginStore.svelte";
-  import { getFormattingStore } from "./lib/stores/formattingStore.svelte";
   import { getTemplateContextStore } from "./lib/stores/templateContextStore.svelte";
   import { getAppearanceStore } from "./lib/stores/appearance.svelte";
 
@@ -66,9 +65,6 @@
 
   // Initialize theme store immediately
   getThemeStore();
-
-  // Initialize formatting store
-  const formattingStore = getFormattingStore();
 
   // Initialize template context store (feeds live values to editor template variables)
   const templateContextStore = getTemplateContextStore();
@@ -631,18 +627,6 @@
         await m.loadAllPlugins().catch((e: unknown) =>
           console.warn('[App] Failed to load browser plugins:', e),
         );
-        // Always re-install built-in plugins so dev rebuilds take effect
-        for (const bp of m.BUILTIN_PLUGINS) {
-          try {
-            const resp = await fetch(bp.url);
-            if (resp.ok) {
-              const bytes = await resp.arrayBuffer();
-              await m.installPlugin(bytes, bp.name);
-            }
-          } catch (e) {
-            console.warn(`[App] ${bp.name} plugin not available:`, e);
-          }
-        }
         // Eagerly load icons for plugin insert commands so they're cached before menus open.
         getPluginStore().preloadInsertCommandIcons();
       });
@@ -1025,6 +1009,11 @@
     rustApi = new RustCrdtApi(newBackend);
     // Refresh tree and validation from new workspace
     await refreshTree();
+    // Navigate to the root entry of the new workspace
+    if (tree && !currentEntry) {
+      workspaceStore.expandNode(tree.path);
+      await openEntry(tree.path);
+    }
     await runValidation();
     entryStore.setLoading(false);
   }
@@ -1088,8 +1077,8 @@
       setWorkspaceId(sharedWorkspaceId);
 
       // Initialize workspace CRDT using service with Rust API
-      // Only if we have a valid workspace path (skip for empty workspaces)
-      if (workspacePath) {
+      // Only for shared workspaces (skip for local-only and empty workspaces)
+      if (workspacePath && sharedWorkspaceId) {
         const initialized = await initializeWorkspaceCrdt(
           sharedWorkspaceId,
           workspacePath,
@@ -2224,8 +2213,8 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
       // Came from the welcome screen — dismiss it and re-initialize
       await handleWelcomeComplete("", "");
     } else {
-      // Let final sync writes settle, then refresh tree.
-      debouncedRefreshTree();
+      // Re-initialize backend references and refresh tree for the new workspace.
+      await handleWorkspaceSwitchComplete();
     }
   }}
 />
@@ -2406,7 +2395,7 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
         onAttachmentInsert={handleAttachmentInsert}
         onFileDrop={handleEditorFileDrop}
         onLinkClick={handleLinkClick}
-        enableSpoilers={formattingStore.enableSpoilers}
+
       />
       {#if loadingTargetPath}
         <div

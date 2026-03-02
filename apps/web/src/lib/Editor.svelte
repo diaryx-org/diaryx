@@ -32,8 +32,6 @@
   import { AttachmentPickerNode } from "./extensions/AttachmentPickerNode";
   // Custom extension for inline block picker (replaces FloatingMenu expanded state)
   import { BlockPickerNode } from "./extensions/BlockPickerNode";
-  // Custom extension for Discord-style spoiler syntax
-  import { SpoilerMark } from "./extensions/SpoilerMark";
   // Custom extension for raw HTML blocks
   import { HtmlBlock } from "./extensions/HtmlBlock";
   // Custom extension for inline drawing blocks
@@ -81,8 +79,6 @@
       blobUrl?: string;
       sourceEntryPath: string;
     }) => void;
-    // Formatting options
-    enableSpoilers?: boolean;
   }
 
   let {
@@ -97,7 +93,6 @@
     entryPath = "",
     api = null,
     onAttachmentInsert,
-    enableSpoilers = true,
   }: Props = $props();
 
   let element: HTMLDivElement;
@@ -122,7 +117,6 @@
   // This avoids constantly recreating the editor (which can lead to blank content/races).
   let lastReadonly: boolean | null = null;
   let lastPlaceholder: string | null = null;
-  let lastEnableSpoilers: boolean | null = null;
 
   function destroyEditor() {
     editor?.destroy();
@@ -165,9 +159,6 @@
         //transformCopiedText: true,
         markedOptions: { gfm: true },
       }),
-      // Always load SpoilerMark to ensure consistent parsing (tokenizer stays registered in marked.js)
-      // Pass enabled option to control visual behavior
-      SpoilerMark.configure({ enabled: enableSpoilers }),
       Link.configure({
         openOnClick: false,
         HTMLAttributes: {
@@ -817,7 +808,6 @@
         editorInitialized = true;
         lastReadonly = readonly;
         lastPlaceholder = placeholder;
-        lastEnableSpoilers = enableSpoilers;
       }
       return;
     }
@@ -835,7 +825,6 @@
       editorInitialized = true;
       lastReadonly = readonly;
       lastPlaceholder = placeholder;
-      lastEnableSpoilers = enableSpoilers;
     }
   });
 
@@ -850,7 +839,7 @@
     destroyEditor();
   });
 
-  // Rebuild editor when readonly, placeholder, or enableSpoilers changes
+  // Rebuild editor when readonly or placeholder changes
   $effect(() => {
     if (!element) return;
     // Skip if we haven't done initial creation yet
@@ -858,15 +847,13 @@
 
     const needsRebuild =
       readonly !== lastReadonly ||
-      placeholder !== lastPlaceholder ||
-      enableSpoilers !== lastEnableSpoilers;
+      placeholder !== lastPlaceholder;
 
     if (!needsRebuild) return;
 
     // Update tracking for what we're about to build
     lastReadonly = readonly;
     lastPlaceholder = placeholder;
-    lastEnableSpoilers = enableSpoilers;
 
     createEditor();
   });
@@ -945,7 +932,7 @@
 <!-- BubbleMenu for inline formatting (appears when text is selected) -->
 <!-- On iOS Tauri, a native UIToolbar above the keyboard replaces this -->
 {#if !readonly && !useNativeToolbar}
-  <BubbleMenuComponent {editor} bind:element={bubbleMenuElement} {enableSpoilers} {entryPath} {api} />
+  <BubbleMenuComponent {editor} bind:element={bubbleMenuElement} {entryPath} {api} />
 {/if}
 
 <style global>
@@ -1145,41 +1132,6 @@
   /* Template variable styles (fallback for renderHTML path) */
   :global(.template-variable) {
     display: inline;
-  }
-
-  /* Spoiler mark styles */
-  :global(.spoiler-mark) {
-    border-radius: 4px;
-    padding: 0 2px;
-    transition: all 0.2s ease;
-  }
-
-  :global(.spoiler-hidden) {
-    background: var(--foreground);
-    color: transparent;
-    user-select: none;
-    cursor: pointer;
-  }
-
-  :global(.spoiler-revealed) {
-    background: var(--muted);
-    color: var(--foreground);
-    cursor: pointer;
-  }
-
-  /* When spoilers are disabled, show || around the text */
-  :global(.spoiler-disabled)::before {
-    content: "||";
-    opacity: 0.5;
-  }
-
-  :global(.spoiler-disabled)::after {
-    content: "||";
-    opacity: 0.5;
-  }
-
-  :global(.spoiler-hidden:hover) {
-    opacity: 0.8;
   }
 
   /* Table styles */

@@ -10,7 +10,6 @@ attachments:
   - "[ClearDataSettings.svelte](/apps/web/src/lib/settings/ClearDataSettings.svelte)"
   - "[DebugInfo.svelte](/apps/web/src/lib/settings/DebugInfo.svelte)"
   - "[DisplaySettings.svelte](/apps/web/src/lib/settings/DisplaySettings.svelte)"
-  - "[FormattingSettings.svelte](/apps/web/src/lib/settings/FormattingSettings.svelte)"
   - "[FormatImportSettings.svelte](/apps/web/src/lib/settings/FormatImportSettings.svelte)"
   - "[ImportSettings.svelte](/apps/web/src/lib/settings/ImportSettings.svelte)"
   - "[LinkSettings.svelte](/apps/web/src/lib/settings/LinkSettings.svelte)"
@@ -46,7 +45,6 @@ Settings panel components for the settings dialog.
 | `ClearDataSettings.svelte`        | Clear data controls                                                                            |
 | `DebugInfo.svelte`                | Debug information display                                                                      |
 | `DisplaySettings.svelte`          | Display preferences (theme + focus mode)                                                       |
-| `FormattingSettings.svelte`       | Text formatting options                                                                        |
 | `FormatImportSettings.svelte`     | Import from Day One or Markdown formats (uses WASM parsers + ImportEntries command)            |
 | `ImportSettings.svelte`           | Import from file (raw ZIP extraction)                                                          |
 | `LinkSettings.svelte`             | Bulk conversion for `part_of`/`contents`/`attachments` using the current workspace link format |
@@ -83,20 +81,12 @@ Settings panel components for the settings dialog.
 
 `WorkspaceManagement.svelte` behavior:
 
-- stopping sync on the currently open workspace now also disconnects the live
-  sync transport and clears the active sync workspace ID, preventing local-only
-  edits/imports from continuing to upload
-- local workspace rows now surface when a cloud copy still exists and provide a
-  direct "delete cloud copy" action, so localized workspaces can reclaim server
-  attachment storage without re-enabling sync
-- starting sync for a local workspace first attempts to relink an existing cloud
-  workspace by ID/name before creating a new server workspace, avoiding false
-  name-conflict failures when sync was previously stopped or server state was stale
-- for current-workspace local→cloud migration, seeds newly created cloud
-  workspaces with a snapshot upload before enabling sync to avoid expensive
-  regular CRDT bootstrap in the browser
-- publishes staged + byte-level upload progress to the shared sync status bar
-  so users can see migration progress from both Account and Sync tabs
+- provider-agnostic: uses `workspaceProviderService` for link/unlink operations
+- "Link to provider" button uses the first available `WorkspaceProvider` from
+  `pluginStore.workspaceProviders` (falls back to hidden when no provider enabled)
+- "Unlink" disconnects live sync and marks workspace as local-only
+- synced workspace classification is derived from `getServerWorkspaceId()` presence
+- publishes staged progress to the shared sync status bar via `syncActionStatusStore`
 
 `ImportSettings.svelte` behavior:
 
@@ -115,12 +105,14 @@ Settings panel components for the settings dialog.
 - emits `import:complete`; the app forces a full tree refresh after import so
   left-sidebar tree state updates immediately
 
-`AddWorkspaceDialog.svelte` ZIP-import behavior:
+`AddWorkspaceDialog.svelte` behavior:
 
-- uploads the selected ZIP to the server with byte-level progress and explicit
-  "server is importing" feedback once upload bytes are complete
-- applies the same ZIP locally (instead of re-downloading a snapshot) before
-  CRDT initialization, reducing a large network roundtrip during setup
+- local-first: workspaces are always created locally first
+- optional provider dropdown ("None / local only" default) to link via
+  `workspaceProviderService.linkWorkspace()` after local creation
+- three content sources: Start fresh, Import ZIP, Open folder
+- removed: auth/upgrade screens, existing_workspace content source, sync mode
+  toggle (replaced by provider dropdown)
 
 `BillingSettings.svelte` behavior:
 

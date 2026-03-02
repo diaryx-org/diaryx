@@ -112,3 +112,26 @@ that component as the command palette UI instead of the built-in command list.
 When a plugin contributes `UiContribution::ContextMenu { target: LeftSidebarTree, ... }`,
 the web host routes left-sidebar tree context menu interactions to the plugin-owned
 surface component.
+
+## WorkspaceProvider Slot
+
+When a plugin contributes `UiContribution::WorkspaceProvider`, the web host shows
+that plugin as an option in the workspace creation dialog's "Sync" dropdown and
+in the workspace management "Link to provider" button. The host queries provider
+readiness via `getProviderStatus()` and delegates link/unlink/download operations
+to `workspaceProviderService.ts`.
+
+## EditorExtension Slot
+
+Plugins can contribute TipTap editor extensions via `UiContribution::EditorExtension`.
+Three `EditorNodeType` variants are supported:
+
+- **`InlineAtom`** — Inline atom node (e.g., inline math `$...$`). Requires
+  `render_export` and `edit_mode`. The host generates a TipTap `Node` with a
+  Svelte node view that calls the plugin's WASM render function.
+- **`BlockAtom`** — Block atom node (e.g., block math `$$...$$`). Same as
+  `InlineAtom` but renders as a block element.
+- **`InlineMark`** — Inline mark that wraps rich text (e.g., spoiler `||text||`).
+  No `render_export` needed. The host generates a TipTap `Mark` with input/paste
+  rules, optional `keyboard_shortcut`, and optional `click_behavior` (e.g.,
+  `ToggleClass` for hidden/revealed states). CSS is injected from the manifest.

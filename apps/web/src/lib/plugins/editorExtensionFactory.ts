@@ -2,13 +2,16 @@
  * Editor Extension Factory — generates TipTap extensions from plugin manifest declarations.
  *
  * When a plugin declares `EditorExtension` entries in its manifest, this factory
- * creates corresponding TipTap `Node` extensions with:
- * - Markdown tokenizer/parser/renderer (generated from declared open/close delimiters)
- * - Node views (Svelte components for rendering + editing)
- * - Async rendering via the plugin's exported render function
+ * creates corresponding TipTap extensions:
+ * - **Atom nodes** (`InlineAtom`, `BlockAtom`): TipTap `Node` with Svelte node views
+ *   and async rendering via the plugin's exported render function.
+ * - **Inline marks** (`InlineMark`): TipTap `Mark` that wraps rich text with
+ *   input/paste rules, keyboard shortcuts, and optional click behavior.
  */
 
-import { Node } from "@tiptap/core";
+import { Mark, Node, mergeAttributes } from "@tiptap/core";
+import { markInputRule, markPasteRule } from "@tiptap/core";
+import { Plugin as ProseMirrorPlugin, PluginKey } from "@tiptap/pm/state";
 import { mount, unmount } from "svelte";
 import type { BrowserExtismPlugin } from "./extismBrowserLoader";
 import MathInlineNodeView from "$lib/components/MathInlineNodeView.svelte";
@@ -21,19 +24,26 @@ import MathBlockNodeView from "$lib/components/MathBlockNodeView.svelte";
 export interface EditorExtensionManifest {
   slot: "EditorExtension";
   extension_id: string;
-  node_type: "InlineAtom" | "BlockAtom";
+  node_type: "InlineAtom" | "BlockAtom" | "InlineMark";
   markdown: {
     level: "Inline" | "Block";
     open: string;
     close: string;
   };
-  render_export: string;
-  edit_mode: "Popover" | "SourceToggle";
+  render_export: string | null;
+  edit_mode: "Popover" | "SourceToggle" | null;
   css: string | null;
   insert_command?: {
     label: string;
     icon?: string | null;
     description?: string | null;
+  } | null;
+  keyboard_shortcut?: string | null;
+  click_behavior?: {
+    ToggleClass: {
+      hidden_class: string;
+      revealed_class: string;
+    };
   } | null;
 }
 
@@ -81,7 +91,7 @@ export function createExtensionFromManifest(
     source: string,
     displayMode: boolean,
   ): Promise<{ html?: string; error?: string }> => {
-    return plugin.callRender(ext.render_export, source, {
+    return plugin.callRender(ext.render_export!, source, {
       display_mode: displayMode,
     });
   };
@@ -240,6 +250,186 @@ export function createExtensionFromManifest(
         return `${ext.markdown.open}\n${source}\n${ext.markdown.close}\n`;
       }
       return `${ext.markdown.open}${source}${ext.markdown.close}`;
+    },
+  });
+}
+
+// ============================================================================
+// Mark factory (InlineMark)
+// ============================================================================
+
+/**
+ * Create a TipTap Mark extension from a manifest declaration.
+ *
+ * The generated mark:
+ * 1. Wraps inline content (supports rich text children)
+ * 2. Generates input/paste rules from open/close delimiters
+ * 3. Adds keyboard shortcut and click behavior from manifest
+ * 4. Generates markdown tokenizer/parser/renderer
+ */
+export function createMarkFromManifest(
+  ext: EditorExtensionManifest,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): any {
+  const openEsc = escapeRegex(ext.markdown.open);
+  const closeEsc = escapeRegex(ext.markdown.close);
+
+  // Input rule: matches ||text|| at end of input
+  const inputRegex = new RegExp(`${openEsc}([^${escapeRegex(ext.markdown.open[0])}]+)${closeEsc}$`);
+  // Paste rule: matches ||text|| globally
+  const pasteRegex = new RegExp(`${openEsc}([^${escapeRegex(ext.markdown.open[0])}]+)${closeEsc}`, "g");
+
+  // Extract click behavior classes
+  const clickBehavior = ext.click_behavior?.ToggleClass ?? null;
+  const hiddenClass = clickBehavior?.hidden_class ?? `${ext.extension_id}-hidden`;
+  const revealedClass = clickBehavior?.revealed_class ?? `${ext.extension_id}-revealed`;
+
+  // Inject CSS if declared
+  if (ext.css) {
+    injectCss(ext.extension_id, ext.css);
+  }
+
+  // PascalCase name for commands (e.g., "spoiler" → "Spoiler")
+  const pascalName = ext.extension_id.charAt(0).toUpperCase() + ext.extension_id.slice(1);
+
+  return Mark.create({
+    name: ext.extension_id,
+
+    parseHTML() {
+      return [{ tag: `span[data-${ext.extension_id}]` }];
+    },
+
+    renderHTML({ HTMLAttributes }) {
+      return [
+        "span",
+        mergeAttributes(HTMLAttributes, {
+          [`data-${ext.extension_id}`]: "",
+          class: `${ext.extension_id}-mark ${hiddenClass}`,
+        }),
+        0,
+      ];
+    },
+
+    addCommands() {
+      return {
+        [`set${pascalName}`]:
+          () =>
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ({ commands }: any) => {
+            return commands.setMark(ext.extension_id);
+          },
+        [`toggle${pascalName}`]:
+          () =>
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ({ commands }: any) => {
+            return commands.toggleMark(ext.extension_id);
+          },
+        [`unset${pascalName}`]:
+          () =>
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ({ commands }: any) => {
+            return commands.unsetMark(ext.extension_id);
+          },
+      };
+    },
+
+    addKeyboardShortcuts() {
+      if (!ext.keyboard_shortcut) return {};
+      return {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        [ext.keyboard_shortcut]: () => (this as any).editor.commands[`toggle${pascalName}`](),
+      };
+    },
+
+    addInputRules() {
+      return [
+        markInputRule({
+          find: inputRegex,
+          type: this.type,
+        }),
+      ];
+    },
+
+    addPasteRules() {
+      return [
+        markPasteRule({
+          find: pasteRegex,
+          type: this.type,
+        }),
+      ];
+    },
+
+    addProseMirrorPlugins() {
+      if (!clickBehavior) return [];
+
+      const dataAttr = `data-${ext.extension_id}`;
+
+      return [
+        new ProseMirrorPlugin({
+          key: new PluginKey(`${ext.extension_id}Click`),
+          props: {
+            handleClick: (view, _pos, event) => {
+              const target = event.target as HTMLElement;
+              const markEl = target.closest(`[${dataAttr}]`) as HTMLElement | null;
+
+              if (markEl) {
+                // Toggle reveal state
+                if (markEl.classList.contains(hiddenClass)) {
+                  markEl.classList.remove(hiddenClass);
+                  markEl.classList.add(revealedClass);
+                } else {
+                  markEl.classList.remove(revealedClass);
+                  markEl.classList.add(hiddenClass);
+                }
+                return true;
+              }
+
+              // Click elsewhere: hide all revealed marks of this type
+              const editorDom = view.dom;
+              const revealed = editorDom.querySelectorAll(`.${revealedClass}`);
+              revealed.forEach((el) => {
+                el.classList.remove(revealedClass);
+                el.classList.add(hiddenClass);
+              });
+
+              return false;
+            },
+          },
+        }),
+      ];
+    },
+
+    // Custom tokenizer for parsing delimited text from markdown
+    // @ts-ignore - markdownTokenizer is a custom field for @tiptap/markdown
+    markdownTokenizer: {
+      name: ext.extension_id,
+      level: "inline",
+      start: ext.markdown.open,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      tokenize(src: string, _tokens: any[], helper: any) {
+        const re = new RegExp(`^${openEsc}([^${escapeRegex(ext.markdown.open[0])}]+)${closeEsc}`);
+        const match = re.exec(src);
+        if (!match) return undefined;
+        return {
+          type: ext.extension_id,
+          raw: match[0],
+          tokens: helper.inlineTokens(match[1]),
+        };
+      },
+    },
+
+    // Parse the token into a mark result
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    parseMarkdown(token: any, helpers: any) {
+      const content = token.tokens ? helpers.parseInline(token.tokens) : [];
+      return helpers.applyMark(ext.extension_id, content);
+    },
+  }).extend({
+    // Render mark → markdown
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    renderMarkdown(node: any, helpers: any) {
+      const content = helpers.renderChildren(node);
+      return `${ext.markdown.open}${content}${ext.markdown.close}`;
     },
   });
 }

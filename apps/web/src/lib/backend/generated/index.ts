@@ -35,6 +35,7 @@ export type { LinkFormat } from './LinkFormat';
 export type { LinkParserOperation } from './LinkParserOperation';
 export type { LinkParserResult } from './LinkParserResult';
 export type { LinkPathType } from './LinkPathType';
+export type { MarkClickBehavior } from './MarkClickBehavior';
 export type { MarkdownLevel } from './MarkdownLevel';
 export type { MarkdownSyntax } from './MarkdownSyntax';
 export type { ParsedLinkResult } from './ParsedLinkResult';

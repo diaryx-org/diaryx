@@ -793,9 +793,9 @@ export const workerApi = {
 
   async getAvailableAudiences(rootPath: string): Promise<string[]> {
     return executeAndExtract(
-      "PluginCommand",
-      { plugin: "publish", command: "GetAvailableAudiences", params: { root_path: rootPath } },
-      "PluginResult",
+      "GetAvailableAudiences",
+      { path: rootPath },
+      "Strings",
     );
   },
 

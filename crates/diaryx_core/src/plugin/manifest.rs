@@ -167,30 +167,57 @@ pub enum UiContribution {
         /// If set, the host opens the dialog when this command is executed.
         trigger_command: Option<String>,
     },
+    /// A workspace provider contributed by a plugin.
+    ///
+    /// Plugins declaring this slot appear in workspace creation/management UIs
+    /// as sync providers. The host queries provider readiness and delegates
+    /// link/unlink/download operations to the provider.
+    WorkspaceProvider {
+        /// Unique provider identifier (usually the plugin ID).
+        id: String,
+        /// Human-readable label shown in provider dropdowns.
+        label: String,
+        /// Optional icon name (Lucide kebab-case).
+        icon: Option<String>,
+    },
     /// An editor extension (TipTap node/mark) contributed by a plugin.
     ///
     /// The host generates a TipTap extension from this declaration and calls
-    /// the plugin's `render_export` function to render content.
+    /// the plugin's `render_export` function to render content (for atom nodes).
+    /// For marks (`InlineMark`), no render export is needed — the host wraps
+    /// inline content directly.
     EditorExtension {
-        /// Unique extension ID (becomes the TipTap node name).
+        /// Unique extension ID (becomes the TipTap node/mark name).
         extension_id: String,
         /// What kind of editor node this creates.
         node_type: EditorNodeType,
         /// Markdown syntax delimiters for parsing and serialization.
         markdown: MarkdownSyntax,
         /// Name of the plugin's WASM export to call for rendering.
-        render_export: String,
+        /// Required for atom nodes (`InlineAtom`, `BlockAtom`), unused for marks.
+        #[serde(default)]
+        render_export: Option<String>,
         /// How the user edits the source content.
-        edit_mode: EditMode,
+        /// Required for atom nodes, unused for marks.
+        #[serde(default)]
+        edit_mode: Option<EditMode>,
         /// Optional CSS to inject for rendered output.
         css: Option<String>,
         /// Optional insert command for editor menu integration.
         ///
         /// When present, the host adds a button in the appropriate editor menu
-        /// (MoreStylesPicker for inline atoms, BlockPicker for block atoms)
-        /// to insert an empty node of this type.
+        /// (MoreStylesPicker for inline atoms/marks, BlockPicker for block atoms)
+        /// to insert or toggle this extension.
         #[serde(default)]
         insert_command: Option<InsertCommand>,
+        /// Optional keyboard shortcut (e.g., `"Mod-Shift-s"`).
+        /// Used primarily by mark extensions.
+        #[serde(default)]
+        keyboard_shortcut: Option<String>,
+        /// Optional click behavior for mark extensions.
+        /// Defines how clicking on the mark toggles visual state.
+        #[serde(default)]
+        click_behavior: Option<MarkClickBehavior>,
     },
 }
 
@@ -232,6 +259,8 @@ pub enum EditorNodeType {
     InlineAtom,
     /// Block atom node (like an HTML block).
     BlockAtom,
+    /// Inline mark that wraps rich text (like bold, spoiler).
+    InlineMark,
 }
 
 /// Markdown syntax delimiters for an editor extension.
@@ -264,6 +293,19 @@ pub enum EditMode {
     Popover,
     /// Click toggles between source textarea and rendered preview (for block nodes).
     SourceToggle,
+}
+
+/// Click behavior for an inline mark extension.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub enum MarkClickBehavior {
+    /// Toggle between two CSS classes on click (e.g., hidden ↔ revealed).
+    ToggleClass {
+        /// Class applied when the mark is in its default (hidden) state.
+        hidden_class: String,
+        /// Class applied when the mark has been clicked (revealed) state.
+        revealed_class: String,
+    },
 }
 
 /// Metadata for an insert button in the editor menus.

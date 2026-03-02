@@ -184,6 +184,54 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         }
     }
 
+    /// Recursively collect all unique audience tags from a workspace tree.
+    async fn collect_audiences_recursive<F: AsyncFileSystem>(
+        ws: &crate::workspace::Workspace<F>,
+        path: &Path,
+        audiences: &mut std::collections::HashSet<String>,
+        visited: &mut std::collections::HashSet<PathBuf>,
+        workspace_root: &Path,
+        link_format: Option<crate::link_parser::LinkFormat>,
+    ) {
+        if visited.contains(path) {
+            return;
+        }
+        visited.insert(path.to_path_buf());
+
+        if let Ok(index) = ws.parse_index_with_hint(path, link_format).await {
+            if let Some(file_audiences) = &index.frontmatter.audience {
+                for a in file_audiences {
+                    let trimmed = a.trim();
+                    if !trimmed.is_empty() {
+                        audiences.insert(a.clone());
+                    }
+                }
+            }
+
+            if index.frontmatter.is_index() {
+                for child_rel in index.frontmatter.contents_list() {
+                    let child_path = index.resolve_path(child_rel);
+                    let absolute_child_path = if child_path.is_absolute() {
+                        child_path
+                    } else {
+                        workspace_root.join(&child_path)
+                    };
+                    if ws.fs_ref().exists(&absolute_child_path).await {
+                        Box::pin(Self::collect_audiences_recursive(
+                            ws,
+                            &absolute_child_path,
+                            audiences,
+                            visited,
+                            workspace_root,
+                            link_format,
+                        ))
+                        .await;
+                    }
+                }
+            }
+        }
+    }
+
     /// Strip the workspace root from a path if present, returning a workspace-relative path.
     ///
     /// On Tauri, entry paths from the frontend may be absolute OS paths (e.g.,
@@ -826,6 +874,29 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     Some(path) => Ok(Response::String(path.to_string_lossy().to_string())),
                     None => Err(DiaryxError::WorkspaceNotFound(PathBuf::from(&directory))),
                 }
+            }
+
+            Command::GetAvailableAudiences { path } => {
+                let resolved = self.resolve_fs_path(&path);
+                let ws = self.workspace().inner();
+                let link_format = Some(self.link_format());
+                let mut audiences = std::collections::HashSet::new();
+                let mut visited = std::collections::HashSet::new();
+                let workspace_root = resolved.parent().unwrap_or(Path::new(".")).to_path_buf();
+
+                Self::collect_audiences_recursive(
+                    &ws,
+                    &resolved,
+                    &mut audiences,
+                    &mut visited,
+                    &workspace_root,
+                    link_format,
+                )
+                .await;
+
+                let mut result: Vec<String> = audiences.into_iter().collect();
+                result.sort();
+                Ok(Response::Strings(result))
             }
 
             Command::GetWorkspaceTree {

@@ -4,37 +4,44 @@
     Ellipsis,
     Strikethrough,
     Code,
-    EyeOff,
     Superscript,
   } from "@lucide/svelte";
   import { getPluginStore } from "@/models/stores/pluginStore.svelte";
 
   interface Props {
     editor: Editor | null;
-    enableSpoilers?: boolean;
     open?: boolean;
     onOpen?: () => void;
   }
 
-  let { editor, enableSpoilers = true, open = $bindable(false), onOpen }: Props = $props();
+  let { editor, open = $bindable(false), onOpen }: Props = $props();
   let wrapperElement: HTMLDivElement | null = $state(null);
   let showBelow = $state(false);
 
   const pluginInlineCommands = $derived(getPluginStore().editorInsertCommands.inline);
+  const pluginMarkCommands = $derived(getPluginStore().editorInsertCommands.mark);
 
   let isStrikeActive = $state(false);
   let isCodeActive = $state(false);
-  let isSpoilerActive = $state(false);
+  /** Active state per mark extension ID. */
+  let markActiveStates = $state<Record<string, boolean>>({});
   let mounted = $state(true);
 
   // True if any of the overflow items is active (to show indicator on the button)
-  let hasActiveItem = $derived(isStrikeActive || isCodeActive || isSpoilerActive);
+  let hasActiveItem = $derived(
+    isStrikeActive || isCodeActive || Object.values(markActiveStates).some(Boolean),
+  );
 
   function updateActiveStates() {
     if (!editor || !mounted) return;
     isStrikeActive = editor.isActive("strike");
     isCodeActive = editor.isActive("code");
-    isSpoilerActive = editor.isActive("spoiler");
+    // Update plugin mark active states
+    const next: Record<string, boolean> = {};
+    for (const cmd of pluginMarkCommands) {
+      next[cmd.extensionId] = editor.isActive(cmd.extensionId);
+    }
+    markActiveStates = next;
   }
 
   $effect(() => {
@@ -50,11 +57,6 @@
 
   function handleCode() {
     editor?.chain().focus().toggleCode().run();
-    updateActiveStates();
-  }
-
-  function handleSpoiler() {
-    editor?.chain().focus().toggleSpoiler().run();
     updateActiveStates();
   }
 
@@ -178,24 +180,25 @@
         <span>Inline Code</span>
       </button>
 
-      {#if enableSpoilers}
+      {#each pluginMarkCommands as cmd (cmd.extensionId)}
         <button
           type="button"
           class="more-styles-option"
-          class:active={isSpoilerActive}
+          class:active={markActiveStates[cmd.extensionId]}
           onmousedown={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            handleSpoiler();
+            editor?.chain().focus().toggleMark(cmd.extensionId).run();
+            updateActiveStates();
           }}
-          title="Spoiler"
-          aria-checked={isSpoilerActive}
+          title={cmd.description ?? cmd.label}
+          aria-checked={markActiveStates[cmd.extensionId] ?? false}
           role="menuitemcheckbox"
         >
-          <EyeOff class="size-4" />
-          <span>Spoiler</span>
+          <cmd.icon class="size-4" />
+          <span>{cmd.label}</span>
         </button>
-      {/if}
+      {/each}
 
       <button
         type="button"

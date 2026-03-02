@@ -455,7 +455,6 @@ pub fn execute_typed_command(input: String) -> FnResult<String> {
 fn all_commands() -> Vec<String> {
     [
         "PlanExport",
-        "GetAvailableAudiences",
         "ExportToMemory",
         "ExportToHtml",
         "ExportBinaryAttachments",

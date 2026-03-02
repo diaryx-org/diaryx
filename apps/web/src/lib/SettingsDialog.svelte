@@ -17,7 +17,6 @@
   // Import modular settings components
   import DisplaySettings from "./settings/DisplaySettings.svelte";
   import BillingSettings from "./settings/BillingSettings.svelte";
-  import FormattingSettings from "./settings/FormattingSettings.svelte";
   import WorkspaceSettings from "./settings/WorkspaceSettings.svelte";
   import LinkSettings from "./settings/LinkSettings.svelte";
   import StorageSettings from "./settings/StorageSettings.svelte";
@@ -171,7 +170,6 @@
       <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
         <DisplaySettings bind:focusMode />
         <AppearanceSettings />
-        <FormattingSettings />
       </div>
     </Tabs.Content>
 

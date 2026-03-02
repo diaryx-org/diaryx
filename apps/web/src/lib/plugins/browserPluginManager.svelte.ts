@@ -16,6 +16,7 @@ import type { PluginManifest } from "$lib/backend/generated";
 import { getPluginStore } from "@/models/stores/pluginStore.svelte";
 import {
   createExtensionFromManifest,
+  createMarkFromManifest,
   isEditorExtension,
   type EditorExtensionManifest,
 } from "./editorExtensionFactory";
@@ -28,6 +29,7 @@ import {
 export const BUILTIN_PLUGIN_IDS = new Set([
   "diaryx.ai",
   "diaryx.math",
+  "diaryx.spoiler",
   "publish",
   "diaryx.sync",
   "diaryx.storage.s3",
@@ -38,6 +40,11 @@ export const BUILTIN_PLUGIN_IDS = new Set([
 export const BUILTIN_PLUGINS = [
   { url: "/plugins/diaryx_ai.wasm", id: "diaryx.ai", name: "AI Assistant" },
   { url: "/plugins/diaryx_math.wasm", id: "diaryx.math", name: "Math" },
+  {
+    url: "/plugins/diaryx_spoiler.wasm",
+    id: "diaryx.spoiler",
+    name: "Spoiler",
+  },
   { url: "/plugins/diaryx_publish.wasm", id: "publish", name: "Publish" },
   { url: "/plugins/diaryx_sync.wasm", id: "diaryx.sync", name: "Sync" },
   {
@@ -312,10 +319,11 @@ export function getEditorExtensions(): any[] {
     for (const ui of uiEntries) {
       if (isEditorExtension(ui)) {
         try {
-          const ext = createExtensionFromManifest(
-            ui as EditorExtensionManifest,
-            plugin,
-          );
+          const manifest = ui as EditorExtensionManifest;
+          const ext =
+            manifest.node_type === "InlineMark"
+              ? createMarkFromManifest(manifest)
+              : createExtensionFromManifest(manifest, plugin);
           extensions.push(ext);
         } catch (e) {
           console.warn(

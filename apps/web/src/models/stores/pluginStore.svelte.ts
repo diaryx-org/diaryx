@@ -267,13 +267,30 @@ function getStatusBarItems(): Array<{
   );
 }
 
+/** Workspace provider contributions across all plugins. */
+function getWorkspaceProviders(): Array<{
+  pluginId: PluginId;
+  contribution: Extract<UiContribution, { slot: "WorkspaceProvider" }>;
+}> {
+  return manifests.flatMap((m) =>
+    m.ui
+      .filter(
+        (c): c is Extract<UiContribution, { slot: "WorkspaceProvider" }> =>
+          c.slot === "WorkspaceProvider",
+      )
+      .map((contribution) => ({ pluginId: m.id, contribution })),
+  );
+}
+
 /** Editor insert commands from EditorExtension entries with insert_command. */
 function getEditorInsertCommands(): {
   inline: PluginInsertCommand[];
   block: PluginInsertCommand[];
+  mark: PluginInsertCommand[];
 } {
   const inline: PluginInsertCommand[] = [];
   const block: PluginInsertCommand[] = [];
+  const mark: PluginInsertCommand[] = [];
 
   for (const manifest of manifests) {
     for (const ui of manifest.ui) {
@@ -292,7 +309,9 @@ function getEditorInsertCommands(): {
         nodeType: ext.node_type,
       };
 
-      if (ext.node_type === "InlineAtom") {
+      if (ext.node_type === "InlineMark") {
+        mark.push(cmd);
+      } else if (ext.node_type === "InlineAtom") {
         inline.push(cmd);
       } else {
         block.push(cmd);
@@ -300,7 +319,7 @@ function getEditorInsertCommands(): {
     }
   }
 
-  return { inline, block };
+  return { inline, block, mark };
 }
 
 /** Eagerly load icons for all plugin insert commands. Call after plugins load. */
@@ -390,6 +409,9 @@ export function getPluginStore() {
     },
     get statusBarItems() {
       return getStatusBarItems();
+    },
+    get workspaceProviders() {
+      return getWorkspaceProviders();
     },
     get editorInsertCommands() {
       return getEditorInsertCommands();

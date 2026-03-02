@@ -206,6 +206,12 @@ pub enum Command {
         directory: String,
     },
 
+    /// Get all unique audience tags used in a workspace.
+    GetAvailableAudiences {
+        /// Path to the workspace root index file.
+        path: String,
+    },
+
     /// Get the workspace tree structure.
     GetWorkspaceTree {
         /// Optional path to a specific workspace.
@@ -732,7 +738,8 @@ impl Command {
             | Command::DeleteFile { path }
             | Command::ClearDirectory { path }
             | Command::WriteFileWithMetadata { path, .. }
-            | Command::UpdateFileMetadata { path, .. } => {
+            | Command::UpdateFileMetadata { path, .. }
+            | Command::GetAvailableAudiences { path } => {
                 *path = normalizer(path);
             }
 

@@ -10,25 +10,21 @@
     Cloud,
   } from "@lucide/svelte";
   import {
-    getAuthState,
-    getWorkspaces,
-    getWorkspaceLimit,
-    downloadWorkspaceSnapshot,
-  } from "$lib/auth";
-  import {
-    isWorkspaceLocal,
     getServerWorkspaceId,
-    addLocalWorkspace,
-    setCurrentWorkspaceId,
     getLocalWorkspaces,
     getWorkspaceStorageType,
   } from "$lib/storage/localWorkspaceRegistry.svelte";
   import type { StorageType } from "$lib/backend/storageType";
   import { switchWorkspace } from "$lib/crdt/workspaceCrdtBridge";
-  import { getBackend } from "$lib/backend";
-  import { createApi } from "$lib/backend/api";
+  import { getAuthState } from "$lib/auth";
   import { toast } from "svelte-sonner";
-  import type { Workspace } from "$lib/auth/authService";
+  import { getPluginStore } from "@/models/stores/pluginStore.svelte";
+  import {
+    getProviderStatus,
+    listUnlinkedRemoteWorkspaces,
+    downloadWorkspace,
+    type RemoteWorkspace,
+  } from "$lib/sync/workspaceProviderService";
 
   interface Props {
     onSwitchStart?: () => void;
@@ -40,56 +36,30 @@
 
   let open = $state(false);
   let switching = $state(false);
-  let downloading = $state<string | null>(null);
+
+  const pluginStore = getPluginStore();
 
   // Derived state
-  let authState = $derived(getAuthState());
-  let serverWorkspaces = $derived(getWorkspaces());
-  let workspaceLimit = $derived(getWorkspaceLimit());
   let allLocalWorkspaces = $derived(getLocalWorkspaces());
+  let workspaceProviders = $derived(pluginStore.workspaceProviders);
 
-  // Merge server and local workspaces into a unified list.
-  // When logged in: local workspaces with sync metadata matching a server workspace are 'server'.
-  // When logged out: all workspaces are 'local'.
-  // Server workspaces without a local entry are shown as cloud-only (downloadable).
-  type UnifiedWorkspace = { id: string; name: string; source: 'server' | 'local' };
-  let allWorkspaces = $derived.by(() => {
-    const merged: UnifiedWorkspace[] = [];
-    const seen = new Set<string>();
-    // Build a map of server UUID → server workspace for matching
-    const serverById = new Map(serverWorkspaces.map(sw => [sw.id, sw]));
-    // Track which server workspaces have been matched to local entries
-    const matchedServerIds = new Set<string>();
+  // Remote extras: unlinked remote workspaces per provider
+  let remoteExtras = $state<Record<string, RemoteWorkspace[]>>({});
 
-    // All local workspaces first — check if any are synced to a server workspace
+  // RemoteWorkspacePicker state
+  let pickerProvider = $state<{ pluginId: string; label: string; workspaces: RemoteWorkspace[] } | null>(null);
+  let downloading = $state<string | null>(null);
+
+  // Local workspace list with sync indicator
+  type LocalWorkspaceEntry = { id: string; name: string; synced: boolean };
+  let workspaces = $derived.by(() => {
+    const result: LocalWorkspaceEntry[] = [];
     for (const ws of allLocalWorkspaces) {
-      if (seen.has(ws.id)) continue;
       const serverId = getServerWorkspaceId(ws.id);
-      if (serverId && serverById.has(serverId)) {
-        merged.push({ id: ws.id, name: ws.name, source: 'server' });
-        matchedServerIds.add(serverId);
-      } else {
-        merged.push({ id: ws.id, name: ws.name, source: 'local' });
-      }
-      seen.add(ws.id);
+      result.push({ id: ws.id, name: ws.name, synced: !!serverId });
     }
-
-    if (authState.isAuthenticated) {
-      // Server workspaces that aren't linked to a local entry (cloud-only, downloadable)
-      for (const sw of serverWorkspaces) {
-        if (matchedServerIds.has(sw.id)) continue;
-        // Use the server UUID as the display ID for undownloaded workspaces
-        if (!seen.has(sw.id)) {
-          merged.push({ id: sw.id, name: sw.name, source: 'server' });
-          seen.add(sw.id);
-        }
-      }
-    }
-    return merged;
+    return result;
   });
-
-  let syncedCount = $derived(serverWorkspaces.length);
-  let localCount = $derived(allWorkspaces.filter(w => w.source === 'local').length);
 
   // Show storage badges only when workspaces use mixed storage types
   let showStorageBadges = $derived.by(() => {
@@ -106,18 +76,16 @@
     }
   }
 
-  // Always show selector so users can create new workspaces
-  let showSelector = $derived(allWorkspaces.length > 0);
+  let showSelector = $derived(workspaces.length > 0);
 
-  // Current workspace ID (from reactive auth state, updated by switchWorkspace)
+  // Current workspace ID (reactive via auth state, updated by switchWorkspace)
+  let authState = $derived(getAuthState());
   let currentWsId = $derived(authState.activeWorkspaceId);
 
-  // Display name: look up from the merged allWorkspaces list so local-only workspaces
-  // resolve correctly. getCurrentWorkspace() only searches server workspaces and would
-  // fall back to the first server workspace for local-only IDs, showing the wrong name.
+  // Display name
   let displayName = $derived.by(() => {
     if (currentWsId) {
-      const found = allWorkspaces.find(w => w.id === currentWsId);
+      const found = workspaces.find(w => w.id === currentWsId);
       if (found) return found.name;
     }
     const storedId = typeof localStorage !== 'undefined' ? localStorage.getItem('diaryx_current_workspace') : null;
@@ -127,77 +95,42 @@
     return localWs?.name ?? 'My Journal';
   });
 
-  function isLocal(id: string): boolean {
-    return isWorkspaceLocal(id);
+  // Fetch remote extras when popover opens
+  async function onPopoverOpen() {
+    const extras: Record<string, RemoteWorkspace[]> = {};
+    const localServerIds = new Set(
+      allLocalWorkspaces
+        .map(w => getServerWorkspaceId(w.id))
+        .filter((id): id is string => !!id),
+    );
+
+    for (const provider of workspaceProviders) {
+      const status = getProviderStatus(provider.contribution.id);
+      if (!status.ready) continue;
+
+      const unlinked = listUnlinkedRemoteWorkspaces(
+        provider.contribution.id,
+        localServerIds,
+      );
+      if (unlinked.length > 0) {
+        extras[provider.contribution.id] = unlinked;
+      }
+    }
+    remoteExtras = extras;
   }
 
-  async function handleSelect(ws: UnifiedWorkspace) {
+  $effect(() => {
+    if (open) {
+      onPopoverOpen();
+    }
+  });
+
+  async function handleSelect(ws: LocalWorkspaceEntry) {
     if (currentWsId === ws.id) {
       open = false;
       return;
     }
-
-    if (ws.source === 'local') {
-      // Local workspace — switch directly
-      await doSwitch(ws.id, ws.name);
-      return;
-    }
-
-    if (!isLocal(ws.id)) {
-      // Server workspace not downloaded — download first
-      await handleDownloadAndSwitch(ws as Workspace);
-      return;
-    }
-
-    // Switch to locally-available server workspace
     await doSwitch(ws.id, ws.name);
-  }
-
-  async function handleDownloadAndSwitch(ws: Workspace) {
-    downloading = ws.id;
-    try {
-      // Download the snapshot
-      const blob = await downloadWorkspaceSnapshot(ws.id, true);
-      if (!blob) {
-        toast.error("Failed to download workspace");
-        return;
-      }
-
-      // Register locally
-      addLocalWorkspace({ id: ws.id, name: ws.name });
-      setCurrentWorkspaceId(ws.id);
-
-      // Create backend for this workspace and import the snapshot
-      const backend = await getBackend(ws.id, ws.name, getWorkspaceStorageType(ws.id));
-      const api = createApi(backend);
-
-      // Create workspace structure
-      const workspaceDir = backend.getWorkspacePath()
-        .replace(/\/index\.md$/, '')
-        .replace(/\/README\.md$/, '');
-
-      // Update registry with the resolved filesystem path (Tauri)
-      if (workspaceDir && workspaceDir !== '.') {
-        addLocalWorkspace({ id: ws.id, name: ws.name, path: workspaceDir });
-      }
-      try {
-        await api.createWorkspace(workspaceDir, ws.name);
-      } catch {
-        // May already exist
-      }
-
-      // Import the snapshot
-      const file = new File([blob], "snapshot.zip", { type: "application/zip" });
-      await backend.importFromZip(file);
-
-      // Now switch to it
-      await doSwitch(ws.id, ws.name);
-    } catch (e) {
-      console.error("[WorkspaceSelector] Download failed:", e);
-      toast.error("Failed to download workspace");
-    } finally {
-      downloading = null;
-    }
   }
 
   async function doSwitch(id: string, name: string) {
@@ -206,9 +139,7 @@
     onSwitchStart?.();
     try {
       await switchWorkspace(id, name, {
-        onTeardownComplete: () => {
-          // UI state clearing handled by App.svelte via onSwitchStart
-        },
+        onTeardownComplete: () => {},
         onReady: () => {
           console.log("[WorkspaceSelector] Switch complete");
         },
@@ -222,8 +153,36 @@
     }
   }
 
+  function openRemotePicker(pluginId: string) {
+    const provider = workspaceProviders.find(p => p.contribution.id === pluginId);
+    if (!provider) return;
+    const ws = remoteExtras[pluginId] ?? [];
+    pickerProvider = { pluginId, label: provider.contribution.label, workspaces: ws };
+  }
+
+  async function handleDownloadRemote(remoteId: string, name: string) {
+    downloading = remoteId;
+    try {
+      const { localId } = await downloadWorkspace(
+        pickerProvider!.pluginId,
+        { remoteId, name, link: true },
+        () => {}, // progress not shown in selector
+      );
+      pickerProvider = null;
+      open = false;
+      await doSwitch(localId, name);
+      toast.success("Workspace downloaded", { description: `"${name}" is ready.` });
+    } catch (e) {
+      console.error("[WorkspaceSelector] Download failed:", e);
+      toast.error("Failed to download workspace");
+    } finally {
+      downloading = null;
+    }
+  }
+
   async function handleCreateWorkspace() {
     open = false;
+    pickerProvider = null;
     await tick();
     onAddWorkspace?.();
   }
@@ -245,64 +204,100 @@
       </button>
     </Popover.Trigger>
     <Popover.Content class="w-64 p-0" align="start" side="bottom">
-      <div class="p-2">
-        <p class="px-2 py-1 text-xs font-medium text-muted-foreground">
-          Workspaces
-        </p>
-      </div>
-      <div class="max-h-64 overflow-y-auto">
-        {#each allWorkspaces as ws (ws.id)}
-          <button
-            type="button"
-            class="flex items-center gap-2 w-full px-4 py-2 text-sm text-left hover:bg-accent transition-colors"
-            disabled={switching || downloading === ws.id}
-            onclick={() => handleSelect(ws)}
-          >
-            <span class="size-4 shrink-0 flex items-center justify-center">
-              {#if currentWsId === ws.id}
-                <Check class="size-3.5" />
-              {/if}
-            </span>
-            <!-- Icon indicating local vs synced -->
-            {#if ws.source === 'local'}
-              <HardDrive class="size-3.5 shrink-0 text-muted-foreground" />
-            {:else}
+      {#if pickerProvider}
+        <!-- Remote Workspace Picker -->
+        <div class="p-2">
+          <p class="px-2 py-1 text-xs font-medium text-muted-foreground">
+            {pickerProvider.label}
+          </p>
+        </div>
+        <div class="max-h-64 overflow-y-auto">
+          {#each pickerProvider.workspaces as ws (ws.id)}
+            <button
+              type="button"
+              class="flex items-center gap-2 w-full px-4 py-2 text-sm text-left hover:bg-accent transition-colors"
+              disabled={downloading === ws.id}
+              onclick={() => handleDownloadRemote(ws.id, ws.name)}
+            >
               <Cloud class="size-3.5 shrink-0 text-muted-foreground" />
-            {/if}
-            <span class="truncate flex-1">{ws.name}</span>
-            {#if showStorageBadges && isLocal(ws.id)}
-              <span class="text-[9px] px-1 py-0.5 rounded bg-muted text-muted-foreground shrink-0 font-medium">{storageLabel(getWorkspaceStorageType(ws.id))}</span>
-            {/if}
-            {#if downloading === ws.id}
-              <Loader2 class="size-3.5 animate-spin shrink-0 text-muted-foreground" />
-            {:else if ws.source === 'server' && !isLocal(ws.id)}
-              <span class="text-[10px] px-1 py-0.5 rounded bg-muted text-muted-foreground shrink-0">cloud</span>
-            {/if}
-          </button>
-        {/each}
-      </div>
-
-      <!-- Footer: counts + create -->
-      <div class="border-t">
-        {#if authState.isAuthenticated}
-          <div class="px-4 py-1.5 text-[10px] text-muted-foreground flex items-center gap-3">
-            <span class="flex items-center gap-1"><Cloud class="size-3" /> {syncedCount}/{workspaceLimit} synced</span>
-            {#if localCount > 0}
-              <span class="flex items-center gap-1"><HardDrive class="size-3" /> {localCount} local</span>
-            {/if}
-          </div>
-        {/if}
-        <div class="p-2 {authState.isAuthenticated ? '' : 'pt-2'}">
+              <span class="truncate flex-1">{ws.name}</span>
+              {#if downloading === ws.id}
+                <Loader2 class="size-3.5 animate-spin shrink-0 text-muted-foreground" />
+              {:else}
+                <span class="text-[10px] px-1 py-0.5 rounded bg-muted text-muted-foreground shrink-0">download</span>
+              {/if}
+            </button>
+          {/each}
+        </div>
+        <div class="border-t p-2">
           <button
             type="button"
             class="flex items-center gap-2 w-full px-2 py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-accent rounded-md transition-colors"
-            onclick={handleCreateWorkspace}
+            onclick={() => { pickerProvider = null; }}
           >
-            <Plus class="size-3.5" />
-            New workspace
+            Back
           </button>
         </div>
-      </div>
+      {:else}
+        <!-- Local Workspace List -->
+        <div class="p-2">
+          <p class="px-2 py-1 text-xs font-medium text-muted-foreground">
+            Workspaces
+          </p>
+        </div>
+        <div class="max-h-64 overflow-y-auto">
+          {#each workspaces as ws (ws.id)}
+            <button
+              type="button"
+              class="flex items-center gap-2 w-full px-4 py-2 text-sm text-left hover:bg-accent transition-colors"
+              disabled={switching}
+              onclick={() => handleSelect(ws)}
+            >
+              <span class="size-4 shrink-0 flex items-center justify-center">
+                {#if currentWsId === ws.id}
+                  <Check class="size-3.5" />
+                {/if}
+              </span>
+              {#if ws.synced}
+                <Cloud class="size-3.5 shrink-0 text-muted-foreground" />
+              {:else}
+                <HardDrive class="size-3.5 shrink-0 text-muted-foreground" />
+              {/if}
+              <span class="truncate flex-1">{ws.name}</span>
+              {#if showStorageBadges}
+                <span class="text-[9px] px-1 py-0.5 rounded bg-muted text-muted-foreground shrink-0 font-medium">{storageLabel(getWorkspaceStorageType(ws.id))}</span>
+              {/if}
+            </button>
+          {/each}
+        </div>
+
+        <!-- Footer: provider extras + create -->
+        <div class="border-t">
+          {#each Object.entries(remoteExtras) as [pluginId, extras] (pluginId)}
+            {@const provider = workspaceProviders.find(p => p.contribution.id === pluginId)}
+            {#if provider && extras.length > 0}
+              <button
+                type="button"
+                class="flex items-center gap-2 w-full px-4 py-1.5 text-[10px] text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                onclick={() => openRemotePicker(pluginId)}
+              >
+                <Cloud class="size-3" />
+                {extras.length} more on {provider.contribution.label}
+              </button>
+            {/if}
+          {/each}
+          <div class="p-2">
+            <button
+              type="button"
+              class="flex items-center gap-2 w-full px-2 py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-accent rounded-md transition-colors"
+              onclick={handleCreateWorkspace}
+            >
+              <Plus class="size-3.5" />
+              New workspace
+            </button>
+          </div>
+        </div>
+      {/if}
     </Popover.Content>
   </Popover.Root>
 {/if}

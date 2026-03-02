@@ -565,10 +565,11 @@ export function createApi(backend: Backend) {
 
     /** Get available audiences. */
     async getAvailableAudiences(rootPath: string): Promise<string[]> {
-      const result = await pluginCommand('publish', 'GetAvailableAudiences', {
-        root_path: rootPath,
+      const response = await backend.execute({
+        type: 'GetAvailableAudiences',
+        params: { path: rootPath },
       });
-      return (result ?? []) as string[];
+      return expectResponse(response, 'Strings').data;
     },
 
     /** Plan an export operation. */

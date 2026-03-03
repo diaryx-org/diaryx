@@ -51,7 +51,6 @@ export type { SettingsField } from './SettingsField';
 export type { SidebarSide } from './SidebarSide';
 export type { StatusBarPosition } from './StatusBarPosition';
 export type { StorageInfo } from './StorageInfo';
-export type { TemplateInfo } from './TemplateInfo';
 export type { TreeNode } from './TreeNode';
 export type { UiContribution } from './UiContribution';
 export type { ValidationError } from './ValidationError';

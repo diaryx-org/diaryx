@@ -20,7 +20,6 @@ export type {
 
 export interface Config {
   default_workspace: string;
-  daily_entry_folder?: string;
   editor?: string;
 }
 
@@ -263,7 +262,11 @@ export type FileSystemEvent =
   | { type: 'SyncStatusChanged'; status: string; error?: string }
   | { type: 'SyncProgress'; completed: number; total: number }
   // Send sync message event - emitted by Rust after CRDT updates
-  | { type: 'SendSyncMessage'; doc_name: string; message: number[]; is_body: boolean };
+  | { type: 'SendSyncMessage'; doc_name: string; message: number[]; is_body: boolean }
+  // Peer/session events from Rust sync
+  | { type: 'PeerJoined'; peer_count: number }
+  | { type: 'PeerLeft'; peer_count: number }
+  | { type: 'FocusListChanged'; files: string[] };
 
 /**
  * Callback type for filesystem event subscriptions.
@@ -490,17 +493,18 @@ export interface Backend {
 
   /**
    * Start native WebSocket sync to a server.
-   * Only available in Tauri - uses the native Rust sync client.
+   * Available in Tauri (native Rust sync client) and WASM (Rust-owned WebSocket).
    *
    * @param serverUrl The WebSocket server URL (will be converted to ws:// if http://)
-   * @param docName The document name for sync (e.g., "workspace" or "workspaceId:workspace")
+   * @param docNameOrWorkspaceId The document name (Tauri) or workspace ID (WASM) for sync
    * @param authToken Optional JWT auth token
+   * @param sessionCode Optional share session code (WASM only)
    */
-  startSync?(serverUrl: string, docName: string, authToken?: string): Promise<void>;
+  startSync?(serverUrl: string, docNameOrWorkspaceId: string, authToken?: string, sessionCode?: string): Promise<void>;
 
   /**
-   * Stop native WebSocket sync.
-   * Only available in Tauri.
+   * Stop WebSocket sync.
+   * Available in Tauri and WASM.
    */
   stopSync?(): Promise<void>;
 
@@ -527,42 +531,29 @@ export interface Backend {
    */
   onSyncEvent?(callback: SyncEventCallback): () => void;
 
+  /**
+   * Focus on specific files for body sync.
+   * Available in Tauri (native Rust sync).
+   * For WASM, body sync is handled by the PluginSyncAdapter.
+   */
+  focusSyncFiles?(files: string[]): Promise<void>;
+
+  /**
+   * Request body sync for specific files.
+   * Available in Tauri (native Rust sync).
+   * For WASM, body sync is handled by the PluginSyncAdapter.
+   */
+  requestBodySync?(files: string[]): Promise<void>;
+
   // =========================================================================
-  // WasmSyncClient (inject/poll bridge for WASM/web)
+  // Plugin Management (Tauri only)
   // =========================================================================
 
-  /** Create a WasmSyncClient in the worker. */
-  createSyncClient?(serverUrl: string, workspaceId: string, authToken?: string): Promise<void>;
-  /** Destroy the sync client. */
-  destroySyncClient?(): Promise<void>;
-  /** Get the WebSocket URL for the sync client. */
-  syncGetWsUrl?(): Promise<string>;
-  /** Set the session code on the sync client. */
-  syncSetSessionCode?(code: string): Promise<void>;
-  /** Notify connected — returns void; drain outgoing after. */
-  syncOnConnected?(): Promise<void>;
-  /** Inject a binary WebSocket message. */
-  syncOnBinaryMessage?(data: Uint8Array): Promise<void>;
-  /** Inject a batch of binary WebSocket messages (single Comlink round-trip). */
-  syncOnBinaryMessages?(messages: Uint8Array[]): Promise<void>;
-  /** Inject a text WebSocket message. */
-  syncOnTextMessage?(text: string): Promise<void>;
-  /** Inject a batch of text WebSocket messages (single Comlink round-trip). */
-  syncOnTextMessages?(messages: string[]): Promise<void>;
-  /** Notify disconnected. */
-  syncOnDisconnected?(): Promise<void>;
-  /** Notify snapshot imported. */
-  syncOnSnapshotImported?(): Promise<void>;
-  /** Queue a local CRDT update for sending. */
-  syncQueueLocalUpdate?(docId: string, data: Uint8Array): Promise<void>;
-  /** Drain all outgoing data and events from the sync client. */
-  syncDrain?(): Promise<{ binary: Uint8Array[]; text: string[]; events: string[] }>;
-  /** Send focus messages. */
-  syncFocusFiles?(files: string[]): Promise<void>;
-  /** Send unfocus messages. */
-  syncUnfocusFiles?(files: string[]): Promise<void>;
-  /** Request body sync for specific files (lazy sync on demand). */
-  syncBodyFiles?(files: string[]): Promise<void>;
+  /** Install a user plugin from WASM bytes. Returns the manifest JSON string. */
+  installPlugin?(wasmBytes: Uint8Array): Promise<string>;
+  /** Uninstall a user plugin by ID. */
+  uninstallPlugin?(pluginId: string): Promise<void>;
+
 }
 
 // ============================================================================

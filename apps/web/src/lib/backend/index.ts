@@ -80,8 +80,7 @@ function setBackendStorageType(type: StorageType | undefined): void {
  * When `workspaceId` is provided and differs from the current backend's workspace,
  * the existing backend is discarded and a new one is created with isolated storage.
  * Callers switching workspaces should use the `switchWorkspace()` orchestrator
- * (in workspaceCrdtBridge) instead of calling this directly — it handles teardown
- * of sync, CRDT state, and UI before creating the new backend.
+ * (in `lib/workspace/switchWorkspace.ts`) instead of calling this directly.
  *
  * Usage:
  * ```ts

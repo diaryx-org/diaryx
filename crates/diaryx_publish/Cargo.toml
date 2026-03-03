@@ -1,0 +1,36 @@
+[package]
+name = "diaryx_publish"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license-file.workspace = true
+description = "Publishing pipeline for Diaryx workspaces — converts markdown to HTML"
+keywords = ["diary", "journal", "markdown", "publish", "html"]
+
+[dependencies]
+diaryx_core = { workspace = true }
+diaryx_templating = { workspace = true }
+comrak = "0.49"
+indexmap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+async-trait = "0.1"
+log = "0.4"
+pathdiff = "0.2"
+
+[features]
+# comrak is always included — markdown-to-HTML is the core purpose of this crate.
+# The "markdown" feature exists for compatibility with cfg gates inherited from diaryx_core.
+markdown = []
+
+# Enable render-time body templating via diaryx_templating
+templating = []
+
+default = ["markdown"]
+
+[dev-dependencies]
+tempfile = "3"
+futures-lite = "2"

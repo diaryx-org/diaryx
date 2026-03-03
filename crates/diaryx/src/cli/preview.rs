@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
 use axum::Router;
-use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
-use diaryx_core::publish::{PublishOptions, Publisher};
 use tower_http::services::ServeDir;
+
+use crate::cli::plugin_loader::CliPublishContext;
 
 /// RAII guard that removes a temp directory on drop.
 struct TempDirGuard(PathBuf);
@@ -65,26 +65,40 @@ pub fn handle_preview(
     });
 }
 
-/// Publish workspace to the destination directory.
+/// Publish workspace to the destination directory via the publish plugin.
 fn do_publish(
     workspace_root: &Path,
     dest: &Path,
     audience: &Option<String>,
     title: &Option<String>,
 ) -> bool {
-    let fs = SyncToAsyncFs::new(RealFileSystem);
-    let publisher = Publisher::new(fs);
-    let options = PublishOptions {
-        single_file: false,
-        title: title.clone(),
-        audience: audience.clone(),
-        force: true,
-        copy_attachments: true,
+    let ctx = match CliPublishContext::load(workspace_root) {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            eprintln!("Failed to load publish plugin: {}", e);
+            return false;
+        }
     };
 
-    match futures_lite::future::block_on(publisher.publish(workspace_root, dest, &options)) {
+    match ctx.cmd(
+        "PublishWorkspace",
+        serde_json::json!({
+            "workspace_root": workspace_root.to_string_lossy(),
+            "destination": dest.to_string_lossy(),
+            "single_file": false,
+            "title": title,
+            "audience": audience,
+            "force": true,
+            "copy_attachments": true,
+        }),
+    ) {
         Ok(result) => {
-            if result.files_processed == 0 {
+            let files_processed = result
+                .get("files_processed")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+
+            if files_processed == 0 {
                 eprintln!("No files to publish");
                 if audience.is_some() {
                     eprintln!("  (no files match the specified audience)");

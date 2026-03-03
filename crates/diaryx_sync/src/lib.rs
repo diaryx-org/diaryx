@@ -1,17 +1,132 @@
-//! # Diaryx Sync Protocol Engine
+//! # Diaryx Sync Engine
 //!
-//! Shared sync protocol layer for Diaryx, built on [`siphonophore`].
+//! Sync engine for Diaryx, providing CRDT types, sync protocol, and server infrastructure.
 //!
-//! This crate provides:
-//! - **Protocol types**: Document type parsing, control messages, handshake state
-//! - **Storage**: Per-workspace CRDT storage cache
-//! - **Hooks**: Pluggable sync hook system via [`SyncHookDelegate`] trait
-//! - **Local server**: Lightweight server for CLI-based web editing
+//! ## Feature flags
 //!
-//! Used by both `diaryx_sync_server` (cloud) and `diaryx` CLI (local editing).
+//! - **default** — CRDT types and protocol only (WASM-compatible)
+//! - **sqlite** — SQLite-backed CRDT storage
+//! - **server** — Siphonophore hooks, axum WebSocket server, StorageCache
+//! - **native-sync** — Native sync transport (tokio-tungstenite)
+//! - **git** — Git-backed version history
 
+// ==================== CRDT core (always available, WASM-compatible) ====================
+
+pub mod attachment_sync;
+mod body_doc;
+mod body_doc_manager;
+pub mod control_message;
+mod history;
+pub mod materialize;
+mod memory_storage;
+pub mod sanity;
+pub mod self_healing;
+pub mod share_session;
+mod sync_handler;
+mod sync_manager;
+mod sync_protocol;
+mod sync_session;
+mod sync_types;
+mod time;
+mod workspace_doc;
+
+// CRDT storage types and trait
+mod crdt_storage;
+
+// Filesystem decorators (CRDT-aware FS layer)
+mod crdt_fs;
+mod decorator_stack;
+
+// Plugin
+mod sync_plugin;
+
+// ==================== Feature-gated modules ====================
+
+// SqliteStorage implementation (native only, sqlite feature)
+#[cfg(all(not(target_arch = "wasm32"), feature = "sqlite"))]
+mod sqlite_storage;
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "git"))]
+pub mod git;
+
+// Native sync client (CLI, Tauri) — not available on WASM
+#[cfg(all(not(target_arch = "wasm32"), feature = "native-sync"))]
+mod sync_client;
+#[cfg(all(not(target_arch = "wasm32"), feature = "native-sync"))]
+mod tokio_transport;
+#[cfg(all(not(target_arch = "wasm32"), feature = "native-sync"))]
+mod transport;
+
+// Server infrastructure (siphonophore hooks, axum WebSocket)
+#[cfg(feature = "server")]
 pub mod hooks;
+#[cfg(feature = "server")]
 pub mod local;
+#[cfg(feature = "server")]
 pub mod protocol;
+#[cfg(feature = "server")]
 pub mod server;
+#[cfg(feature = "server")]
 pub mod storage;
+
+// ==================== Re-exports ====================
+
+// Core types — FileMetadata and BinaryRef from diaryx_core, CRDT storage types from local modules
+pub use crdt_storage::{CrdtStorage, CrdtUpdate, StorageResult, UpdateOrigin};
+pub use diaryx_core::types::{BinaryRef, FileMetadata};
+
+// Body documents
+pub use body_doc::BodyDoc;
+pub use body_doc_manager::BodyDocManager;
+
+// Workspace CRDT
+pub use workspace_doc::WorkspaceCrdt;
+
+// Storage implementations
+// SqliteStorage lives in diaryx_sync (local implementation)
+pub use memory_storage::MemoryStorage;
+#[cfg(all(not(target_arch = "wasm32"), feature = "sqlite"))]
+pub use sqlite_storage::SqliteStorage;
+
+// Sync protocol
+pub use sync_protocol::{
+    BodySyncProtocol, DocIdKind, SyncMessage, SyncProtocol, format_body_doc_id,
+    format_workspace_doc_id, frame_body_message, frame_message_v2, parse_doc_id,
+    unframe_body_message, unframe_message_v2,
+};
+
+// Sync handler + manager
+pub use sync_handler::{GuestConfig, SyncHandler};
+pub use sync_manager::{BodySyncResult, RustSyncManager, SyncMessageResult};
+
+// History, materialization, validation, self-healing
+pub use history::{ChangeType, FileDiff, HistoryEntry, HistoryManager};
+pub use materialize::{
+    MaterializationResult, MaterializedFile, materialize_workspace, parse_snapshot_markdown,
+};
+pub use sanity::{IssueKind, SanityIssue, SanityReport, validate_workspace};
+pub use self_healing::{HealingAction, HealthTracker};
+
+// Shared sync types (all platforms)
+pub use attachment_sync::AttachmentSyncClient;
+pub use control_message::ControlMessage;
+pub use share_session::{
+    HttpClient, HttpResponse, SessionCreatedResponse, SessionInfoResponse, ShareSessionClient,
+};
+pub use sync_session::{IncomingEvent, SessionAction, SyncSession};
+pub use sync_types::{SyncEvent, SyncSessionConfig, SyncStatus};
+
+// CrdtFs and decorator stack
+pub use crdt_fs::CrdtFs;
+pub use decorator_stack::{DecoratedFs, DecoratedFsBuilder, EventOnlyFs};
+
+// Plugin
+pub use sync_plugin::SyncPlugin;
+
+// Native sync client re-exports
+#[cfg(all(not(target_arch = "wasm32"), feature = "native-sync"))]
+pub use sync_client::{ReconnectConfig, SyncClient, SyncClientConfig, SyncEventHandler, SyncStats};
+#[cfg(all(not(target_arch = "wasm32"), feature = "native-sync"))]
+pub use tokio_transport::{TokioConnector, TokioTransport};
+#[cfg(all(not(target_arch = "wasm32"), feature = "native-sync"))]
+pub use transport::{SyncTransport, TransportConnector, TransportError, WsMessage};

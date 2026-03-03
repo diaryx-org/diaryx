@@ -1,0 +1,551 @@
+//! Plugin manifest types for declarative plugin metadata and UI contributions.
+//!
+//! Each plugin declares a [`PluginManifest`] that describes its identity,
+//! capabilities, and UI contributions. The frontend reads these manifests
+//! to dynamically render settings tabs, sidebar panels, command palette items, etc.
+
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
+use super::PluginId;
+
+/// Declarative metadata for a plugin.
+///
+/// Returned by [`Plugin::manifest()`](super::Plugin::manifest) and consumed
+/// by the frontend to build extension-point UI.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub struct PluginManifest {
+    /// Unique plugin identifier.
+    pub id: PluginId,
+    /// Human-readable name.
+    pub name: String,
+    /// SemVer version string.
+    pub version: String,
+    /// Short description of what this plugin does.
+    pub description: String,
+    /// Capabilities this plugin provides.
+    pub capabilities: Vec<PluginCapability>,
+    /// UI extension points contributed by this plugin.
+    pub ui: Vec<UiContribution>,
+    /// CLI subcommands contributed by this plugin.
+    #[serde(default)]
+    pub cli: Vec<CliCommand>,
+}
+
+/// A capability that a plugin can declare.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub enum PluginCapability {
+    /// Listens to file lifecycle events (create, save, delete, move).
+    FileEvents,
+    /// Listens to workspace lifecycle events (open, close, change, commit).
+    WorkspaceEvents,
+    /// Handles CRDT-related commands (sync, body docs, etc.).
+    CrdtCommands,
+    /// Provides sync transport (WebSocket, etc.).
+    SyncTransport,
+    /// Provides custom commands.
+    CustomCommands {
+        /// Names of the custom commands this plugin handles.
+        commands: Vec<String>,
+    },
+    /// Contributes editor extensions (TipTap nodes/marks).
+    EditorExtension,
+}
+
+/// A UI extension point contributed by a plugin.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+#[serde(tag = "slot")]
+pub enum UiContribution {
+    /// A tab in the settings dialog.
+    SettingsTab {
+        /// Unique identifier for this tab.
+        id: String,
+        /// Tab label displayed in the settings sidebar.
+        label: String,
+        /// Optional icon name.
+        icon: Option<String>,
+        /// How to render this tab's content.
+        ///
+        /// If `component` is set, the host renders that component and ignores `fields`.
+        /// Otherwise, the host renders a declarative form from `fields`.
+        fields: Vec<SettingsField>,
+        /// Optional component reference for rendering the tab's content.
+        ///
+        /// When present, the host renders this component instead of a declarative
+        /// form from `fields`. Use `ComponentRef::Builtin` to reference a host-provided
+        /// component (e.g., `"sync.settings"`).
+        #[serde(default)]
+        component: Option<ComponentRef>,
+    },
+    /// A tab in one of the sidebars.
+    SidebarTab {
+        /// Unique identifier for this tab.
+        id: String,
+        /// Tab label.
+        label: String,
+        /// Optional icon name.
+        icon: Option<String>,
+        /// Which sidebar this tab appears in.
+        side: SidebarSide,
+        /// Component reference for rendering.
+        component: ComponentRef,
+    },
+    /// An item in the command palette.
+    CommandPaletteItem {
+        /// Unique identifier for this item.
+        id: String,
+        /// Label displayed in the palette.
+        label: String,
+        /// Optional group name for categorization.
+        group: Option<String>,
+        /// Plugin command to execute when selected.
+        plugin_command: String,
+    },
+    /// A plugin-owned command palette surface.
+    ///
+    /// When present, the host renders this component instead of the built-in
+    /// command palette command list.
+    CommandPalette {
+        /// Unique identifier for this contribution.
+        id: String,
+        /// Optional label shown by host UIs.
+        label: Option<String>,
+        /// Component reference for rendering.
+        component: ComponentRef,
+    },
+    /// A plugin-owned context menu surface.
+    ///
+    /// When present, the host renders this component for the target context
+    /// menu surface instead of built-in menu items.
+    ContextMenu {
+        /// Unique identifier for this contribution.
+        id: String,
+        /// Optional label shown by host UIs.
+        label: Option<String>,
+        /// Target menu surface this contribution owns.
+        target: ContextMenuTarget,
+        /// Component reference for rendering.
+        component: ComponentRef,
+    },
+    /// A button in the editor toolbar.
+    ToolbarButton {
+        /// Unique identifier for this button.
+        id: String,
+        /// Button label / tooltip.
+        label: String,
+        /// Optional icon name.
+        icon: Option<String>,
+        /// Plugin command to execute on click.
+        plugin_command: String,
+    },
+    /// An item in the status bar.
+    StatusBarItem {
+        /// Unique identifier for this item.
+        id: String,
+        /// Label displayed in the status bar.
+        label: String,
+        /// Where in the status bar this item appears.
+        position: StatusBarPosition,
+        /// Optional plugin command to execute on click.
+        plugin_command: Option<String>,
+    },
+    /// A dialog that can be triggered by a plugin command.
+    ///
+    /// The host renders the component as a modal dialog. Plugins use this
+    /// for complex multi-step flows (e.g., sync setup wizard).
+    Dialog {
+        /// Unique identifier for this dialog.
+        id: String,
+        /// Dialog title / label.
+        label: String,
+        /// Component reference for rendering the dialog content.
+        component: ComponentRef,
+        /// Optional plugin command that triggers this dialog.
+        /// If set, the host opens the dialog when this command is executed.
+        trigger_command: Option<String>,
+    },
+    /// A workspace provider contributed by a plugin.
+    ///
+    /// Plugins declaring this slot appear in workspace creation/management UIs
+    /// as sync providers. The host queries provider readiness and delegates
+    /// link/unlink/download operations to the provider.
+    WorkspaceProvider {
+        /// Unique provider identifier (usually the plugin ID).
+        id: String,
+        /// Human-readable label shown in provider dropdowns.
+        label: String,
+        /// Optional icon name (Lucide kebab-case).
+        icon: Option<String>,
+    },
+    /// An editor extension (TipTap node/mark) contributed by a plugin.
+    ///
+    /// The host generates a TipTap extension from this declaration and calls
+    /// the plugin's `render_export` function to render content (for atom nodes).
+    /// For marks (`InlineMark`), no render export is needed — the host wraps
+    /// inline content directly.
+    EditorExtension {
+        /// Unique extension ID (becomes the TipTap node/mark name).
+        extension_id: String,
+        /// What kind of editor node this creates.
+        node_type: EditorNodeType,
+        /// Markdown syntax delimiters for parsing and serialization.
+        markdown: MarkdownSyntax,
+        /// Name of the plugin's WASM export to call for rendering.
+        /// Required for atom nodes (`InlineAtom`, `BlockAtom`), unused for marks.
+        #[serde(default)]
+        render_export: Option<String>,
+        /// How the user edits the source content.
+        /// Required for atom nodes, unused for marks.
+        #[serde(default)]
+        edit_mode: Option<EditMode>,
+        /// Optional CSS to inject for rendered output.
+        css: Option<String>,
+        /// Optional insert command for editor menu integration.
+        ///
+        /// When present, the host adds a button in the appropriate editor menu
+        /// (MoreStylesPicker for inline atoms/marks, BlockPicker for block atoms)
+        /// to insert or toggle this extension.
+        #[serde(default)]
+        insert_command: Option<InsertCommand>,
+        /// Optional keyboard shortcut (e.g., `"Mod-Shift-s"`).
+        /// Used primarily by mark extensions.
+        #[serde(default)]
+        keyboard_shortcut: Option<String>,
+        /// Optional click behavior for mark extensions.
+        /// Defines how clicking on the mark toggles visual state.
+        #[serde(default)]
+        click_behavior: Option<MarkClickBehavior>,
+    },
+    /// An item in the block picker menu (the "More" submenu).
+    ///
+    /// Plugins declare these to add custom block types to the editor's
+    /// block picker. The host renders them dynamically and calls the
+    /// specified editor command with optional params and user prompt.
+    BlockPickerItem {
+        /// Unique identifier for this item.
+        id: String,
+        /// Label displayed in the block picker menu.
+        label: String,
+        /// Optional Lucide icon name (kebab-case).
+        icon: Option<String>,
+        /// TipTap editor command to execute (e.g., `"insertConditionalBlock"`).
+        editor_command: String,
+        /// Static params passed to the editor command.
+        #[serde(default)]
+        params: Option<serde_json::Value>,
+        /// Optional prompt shown to collect user input before executing.
+        #[serde(default)]
+        prompt: Option<BlockPickerPrompt>,
+    },
+}
+
+/// Which sidebar a tab appears in.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub enum SidebarSide {
+    /// Left sidebar.
+    Left,
+    /// Right sidebar.
+    Right,
+}
+
+/// Where a status bar item appears.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub enum StatusBarPosition {
+    /// Left-aligned.
+    Left,
+    /// Centered.
+    Center,
+    /// Right-aligned.
+    Right,
+}
+
+/// Which host context menu surface a plugin contribution targets.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub enum ContextMenuTarget {
+    /// Context menu for entry nodes in the left sidebar file tree.
+    LeftSidebarTree,
+}
+
+/// The kind of TipTap node an [`EditorExtension`](UiContribution::EditorExtension) creates.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub enum EditorNodeType {
+    /// Inline atom node (like a footnote reference).
+    InlineAtom,
+    /// Block atom node (like an HTML block).
+    BlockAtom,
+    /// Inline mark that wraps rich text (like bold, spoiler).
+    InlineMark,
+    /// Host-provided extension too complex for declarative manifest.
+    ///
+    /// The host looks up a pre-registered TypeScript extension by ID.
+    /// For `Builtin` type, the `markdown`, `render_export`, `edit_mode`
+    /// fields are ignored — the TypeScript extension handles everything.
+    Builtin {
+        /// ID of the host-side extension factory.
+        host_extension_id: String,
+    },
+}
+
+/// Markdown syntax delimiters for an editor extension.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub struct MarkdownSyntax {
+    /// Whether this is an inline or block-level syntax.
+    pub level: MarkdownLevel,
+    /// Opening delimiter (e.g., `"$"` or `"$$"`).
+    pub open: String,
+    /// Closing delimiter (e.g., `"$"` or `"$$"`).
+    pub close: String,
+}
+
+/// Whether a markdown syntax is inline or block-level.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub enum MarkdownLevel {
+    /// Inline-level (within a paragraph).
+    Inline,
+    /// Block-level (standalone paragraph).
+    Block,
+}
+
+/// How the user edits the source content of an editor extension node.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub enum EditMode {
+    /// Click opens a popover with a source text input (for inline nodes).
+    Popover,
+    /// Click toggles between source textarea and rendered preview (for block nodes).
+    SourceToggle,
+}
+
+/// Click behavior for an inline mark extension.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub enum MarkClickBehavior {
+    /// Toggle between two CSS classes on click (e.g., hidden ↔ revealed).
+    ToggleClass {
+        /// Class applied when the mark is in its default (hidden) state.
+        hidden_class: String,
+        /// Class applied when the mark has been clicked (revealed) state.
+        revealed_class: String,
+    },
+}
+
+/// A prompt shown to the user before inserting a block picker item.
+///
+/// When present on a [`BlockPickerItem`](UiContribution::BlockPickerItem),
+/// the host shows a `window.prompt()` dialog and merges the result into
+/// the editor command params at `param_key`.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub struct BlockPickerPrompt {
+    /// Message shown in the prompt dialog.
+    pub message: String,
+    /// Default value pre-filled in the prompt input.
+    pub default_value: String,
+    /// Key in the params object where the user's input is stored.
+    pub param_key: String,
+}
+
+/// Metadata for an insert button in the editor menus.
+///
+/// When present on an [`EditorExtension`](UiContribution::EditorExtension),
+/// the host renders a button in the appropriate menu (MoreStylesPicker for
+/// inline atoms, BlockPicker/BlockStylePicker for block atoms).
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub struct InsertCommand {
+    /// Button label shown in the menu.
+    pub label: String,
+    /// Lucide icon name in kebab-case (e.g., `"sigma"`, `"square-sigma"`).
+    /// Falls back to a generic plugin icon if unrecognized.
+    pub icon: Option<String>,
+    /// Tooltip / description for the button.
+    pub description: Option<String>,
+}
+
+/// How to render a plugin-contributed UI panel.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+#[serde(tag = "type")]
+pub enum ComponentRef {
+    /// Use an existing built-in component by ID.
+    Builtin {
+        /// ID of the built-in component to render.
+        component_id: String,
+    },
+    /// Render a form from declarative field definitions.
+    Declarative {
+        /// Fields to render as form controls.
+        fields: Vec<SettingsField>,
+    },
+    /// Render plugin-provided HTML in a sandboxed iframe.
+    ///
+    /// The host calls the guest's `get_component_html` export with the
+    /// given `component_id` to obtain the HTML content.
+    Iframe {
+        /// Identifier passed to the guest export to retrieve the HTML.
+        component_id: String,
+    },
+}
+
+/// A declarative settings field rendered as a form control.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+#[serde(tag = "type")]
+pub enum SettingsField {
+    /// Text input.
+    Text {
+        /// Config key this field writes to.
+        key: String,
+        /// Label displayed next to the input.
+        label: String,
+        /// Optional description / help text.
+        description: Option<String>,
+    },
+    /// Boolean toggle.
+    Toggle {
+        /// Config key this field writes to.
+        key: String,
+        /// Label displayed next to the toggle.
+        label: String,
+        /// Optional description / help text.
+        description: Option<String>,
+    },
+    /// Dropdown select.
+    Select {
+        /// Config key this field writes to.
+        key: String,
+        /// Label displayed above the select.
+        label: String,
+        /// Available options.
+        options: Vec<SelectOption>,
+        /// Optional description / help text.
+        description: Option<String>,
+    },
+    /// Numeric input.
+    Number {
+        /// Config key this field writes to.
+        key: String,
+        /// Label displayed next to the input.
+        label: String,
+        /// Optional minimum value.
+        min: Option<f64>,
+        /// Optional maximum value.
+        max: Option<f64>,
+    },
+    /// Section header (non-interactive).
+    Section {
+        /// Section heading text.
+        label: String,
+        /// Optional description.
+        description: Option<String>,
+    },
+}
+
+/// A select dropdown option.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub struct SelectOption {
+    /// The value stored when selected.
+    pub value: String,
+    /// The label displayed to the user.
+    pub label: String,
+}
+
+// ============================================================================
+// CLI extension types
+// ============================================================================
+
+fn default_true() -> bool {
+    true
+}
+
+/// A CLI subcommand declared by a plugin.
+///
+/// Plugins include these in their manifest to contribute commands to the
+/// `diaryx` CLI. The CLI reads cached manifests at startup and builds
+/// dynamic clap commands from these declarations.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub struct CliCommand {
+    /// Subcommand name (e.g., `"publish"`).
+    pub name: String,
+    /// Short help text shown in `--help`.
+    pub about: String,
+    /// Longer help text (shown with `--help` on the subcommand itself).
+    #[serde(default)]
+    pub long_about: Option<String>,
+    /// Alternative names for this command (e.g., `["pub"]`).
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    /// Positional and named arguments.
+    #[serde(default)]
+    pub args: Vec<CliArg>,
+    /// Nested subcommands.
+    #[serde(default)]
+    pub subcommands: Vec<CliCommand>,
+    /// Internal command name sent to `handle_command`.
+    /// Defaults to PascalCase of `name` if absent.
+    #[serde(default)]
+    pub command_name: Option<String>,
+    /// If `true`, the CLI resolves the workspace root and passes it.
+    #[serde(default = "default_true")]
+    pub requires_workspace: bool,
+    /// Use a native CLI handler instead of WASM dispatch.
+    /// Value is the handler ID (e.g., `"sync_start"`, `"preview"`).
+    #[serde(default)]
+    pub native_handler: Option<String>,
+}
+
+/// A CLI argument declared by a plugin command.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub struct CliArg {
+    /// Argument name (used as the clap ID).
+    pub name: String,
+    /// Help text.
+    pub help: String,
+    /// Value type for parsing.
+    #[serde(default)]
+    pub value_type: CliArgType,
+    /// Whether this argument is required.
+    #[serde(default)]
+    pub required: bool,
+    /// Default value as a string.
+    #[serde(default)]
+    pub default_value: Option<String>,
+    /// Single-character short flag (e.g., `'p'` for `-p`).
+    #[serde(default)]
+    pub short: Option<char>,
+    /// Long flag name (e.g., `"port"` for `--port`).
+    #[serde(default)]
+    pub long: Option<String>,
+    /// If `true`, this is a boolean flag (no value needed).
+    #[serde(default)]
+    pub is_flag: bool,
+}
+
+/// Value types for CLI arguments.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub enum CliArgType {
+    /// String value (default).
+    #[default]
+    String,
+    /// Integer value.
+    Integer,
+    /// Floating-point value.
+    Float,
+    /// Boolean value.
+    Boolean,
+    /// Filesystem path.
+    Path,
+}

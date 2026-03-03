@@ -5,16 +5,14 @@
  * - Workspace validation with feedback
  * - Tree refresh
  * - Entry operations (duplicate, rename, delete, move)
- * - Share session management
  * - Clipboard operations
  * - Word count and find
  * - View markdown source
  */
 
-import { tick } from 'svelte';
 import type { TreeNode, Api, EntryData } from '../lib/backend';
-import { workspaceStore, shareSessionStore } from '../models/stores';
-import { reverseBlobUrlsToAttachmentPaths, joinShareSession } from '../models/services';
+import { workspaceStore } from '../models/stores';
+import { reverseBlobUrlsToAttachmentPaths } from '../models/services';
 import { toast } from 'svelte-sonner';
 
 /**
@@ -200,50 +198,6 @@ export async function handleCreateChildUnderCurrent(
   }
   await createChildEntryFn(currentEntry.path);
   toast.success('Child entry created');
-}
-
-/**
- * Start a share session.
- * Opens left sidebar and triggers session start.
- */
-export async function handleStartShareSession(
-  setLeftSidebarCollapsed: (collapsed: boolean) => void,
-  setRequestedTab: (tab: string | null) => void,
-  setTriggerStartSession: (trigger: boolean) => void
-): Promise<void> {
-  if (shareSessionStore.mode !== 'idle') {
-    toast.info('Session already active', { description: 'End current session first' });
-    return;
-  }
-  // Open left sidebar, navigate to share tab, and trigger session start
-  setLeftSidebarCollapsed(false);
-  setRequestedTab('share');
-  // Wait for sidebar to render before triggering session start
-  await tick();
-  setTriggerStartSession(true);
-}
-
-/**
- * Join a share session (prompt for code).
- */
-export async function handleJoinShareSession(): Promise<void> {
-  if (shareSessionStore.mode !== 'idle') {
-    toast.info('Session already active', { description: 'End current session first' });
-    return;
-  }
-  const joinCode = window.prompt('Enter join code:');
-  if (!joinCode?.trim()) return;
-
-  try {
-    workspaceStore.saveTreeState();
-    await joinShareSession(joinCode.trim());
-    toast.success('Joined session', { description: `Code: ${joinCode.trim()}` });
-  } catch (e) {
-    workspaceStore.clearSavedTreeState();
-    toast.error('Failed to join', {
-      description: e instanceof Error ? e.message : String(e),
-    });
-  }
 }
 
 /**

@@ -105,12 +105,19 @@ jobs:
           path: apps/web/src/lib/wasm/
           key: wasm-${{ hashFiles('crates/diaryx_core/src/**', 'crates/diaryx_core/Cargo.toml', 'crates/diaryx_wasm/src/**', 'crates/diaryx_wasm/Cargo.toml', 'Cargo.lock') }}
 
+      - name: Cache TypeScript bindings
+        id: bindings-cache
+        uses: actions/cache@v4
+        with:
+          path: crates/diaryx_core/bindings/
+          key: ts-bindings-${{ hashFiles('crates/diaryx_core/src/**', 'crates/diaryx_core/Cargo.toml', 'Cargo.lock') }}
+
       - name: Install Nix
-        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        if: steps.wasm-cache.outputs.cache-hit != 'true' || steps.bindings-cache.outputs.cache-hit != 'true'
         uses: DeterminateSystems/nix-installer-action@main
 
       - name: Setup Nix cache
-        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        if: steps.wasm-cache.outputs.cache-hit != 'true' || steps.bindings-cache.outputs.cache-hit != 'true'
         uses: DeterminateSystems/magic-nix-cache-action@main
 
       - name: Build WASM
@@ -119,11 +126,48 @@ jobs:
           cd apps/web
           nix develop --command bash -c "bun install && ../../scripts/build-wasm.sh"
 
+      - name: Generate TypeScript bindings
+        if: steps.bindings-cache.outputs.cache-hit != 'true'
+        run: nix develop --command cargo test -p diaryx_core
+
+      - name: Build plugin WASMs
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        run: |
+          nix develop --command bash -c '
+            PLUGIN_DIR=apps/web/public/plugins
+            mkdir -p "$PLUGIN_DIR"
+            for crate in diaryx_sync_extism diaryx_ai_extism diaryx_publish_extism diaryx_math_extism diaryx_spoiler_extism diaryx_templating_extism diaryx_daily_extism diaryx_storage_s3_extism diaryx_storage_gdrive_extism; do
+              echo "Building $crate..."
+              cargo build --target wasm32-unknown-unknown -p "$crate" --release
+            done
+            cp target/wasm32-unknown-unknown/release/diaryx_sync_extism.wasm "$PLUGIN_DIR/diaryx_sync.wasm"
+            cp target/wasm32-unknown-unknown/release/diaryx_ai_extism.wasm "$PLUGIN_DIR/diaryx_ai.wasm"
+            cp target/wasm32-unknown-unknown/release/diaryx_publish_extism.wasm "$PLUGIN_DIR/diaryx_publish.wasm"
+            cp target/wasm32-unknown-unknown/release/diaryx_math_extism.wasm "$PLUGIN_DIR/diaryx_math.wasm"
+            cp target/wasm32-unknown-unknown/release/diaryx_spoiler_extism.wasm "$PLUGIN_DIR/diaryx_spoiler.wasm"
+            cp target/wasm32-unknown-unknown/release/diaryx_templating_extism.wasm "$PLUGIN_DIR/diaryx_templating.wasm"
+            cp target/wasm32-unknown-unknown/release/diaryx_daily_extism.wasm "$PLUGIN_DIR/diaryx_daily.wasm"
+            cp target/wasm32-unknown-unknown/release/diaryx_storage_s3_extism.wasm "$PLUGIN_DIR/diaryx_storage_s3.wasm"
+            cp target/wasm32-unknown-unknown/release/diaryx_storage_gdrive_extism.wasm "$PLUGIN_DIR/diaryx_storage_gdrive.wasm"
+          '
+
       - name: Upload WASM artifact
         uses: actions/upload-artifact@v4
         with:
           name: wasm-package
           path: apps/web/src/lib/wasm/
+
+      - name: Upload plugin WASM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-wasm
+          path: apps/web/public/plugins/
+
+      - name: Upload bindings artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ts-bindings
+          path: crates/diaryx_core/bindings/
 
   # Web app build and checks
   web:
@@ -146,6 +190,12 @@ jobs:
         with:
           name: wasm-package
           path: apps/web/src/lib/wasm/
+
+      - name: Download bindings artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ts-bindings
+          path: crates/diaryx_core/bindings/
 
       - name: Install dependencies
         run: |
@@ -184,6 +234,12 @@ jobs:
           name: wasm-package
           path: wasm-output/
 
+      - name: Download plugin WASM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: plugin-wasm
+          path: plugin-output/
+
       - name: Upload WASM to CDN (SHA)
         uses: ./.github/actions/upload-wasm-cdn
         with:
@@ -203,6 +259,76 @@ jobs:
           r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           r2-endpoint: ${{ secrets.R2_ENDPOINT }}
           r2-bucket: ${{ secrets.R2_BUCKET }}
+
+      - name: Upload plugins to CDN and generate registry
+        if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          ENDPOINT="${{ secrets.R2_ENDPOINT }}"
+          BUCKET="${{ secrets.R2_BUCKET }}"
+          CDN_BASE="https://cdn.diaryx.org/plugins"
+
+          # Upload each plugin WASM to plugins/ prefix
+          for f in plugin-output/*.wasm; do
+            [ -f "$f" ] || continue
+            echo "Uploading $(basename "$f") to plugins/"
+            aws s3 cp "$f" "s3://${BUCKET}/plugins/$(basename "$f")" \
+              --endpoint-url "${ENDPOINT}" \
+              --content-type "application/wasm" \
+              --cache-control "public, max-age=300"
+          done
+
+          # Generate plugins.json registry from the built plugin files
+          cat > plugins.json <<'REGISTRY'
+          {
+            "version": 1,
+            "plugins": [
+              {
+                "id": "diaryx.sync",
+                "name": "Sync",
+                "description": "Real-time workspace synchronization",
+                "version": "0.1.0",
+                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_sync.wasm",
+                "builtin": true
+              },
+              {
+                "id": "diaryx.ai",
+                "name": "AI Assistant",
+                "description": "AI-powered writing assistant",
+                "version": "0.1.0",
+                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_ai.wasm",
+                "builtin": true
+              },
+              {
+                "id": "diaryx.math",
+                "name": "Math",
+                "description": "LaTeX math rendering",
+                "version": "0.1.0",
+                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_math.wasm",
+                "builtin": true
+              },
+              {
+                "id": "publish",
+                "name": "Publish",
+                "description": "Export and publish workspaces",
+                "version": "0.1.0",
+                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_publish.wasm",
+                "builtin": true
+              }
+            ]
+          }
+          REGISTRY
+          sed -i "s|CDN_BASE_PLACEHOLDER|${CDN_BASE}|g" plugins.json
+
+          aws s3 cp plugins.json "s3://${BUCKET}/plugins/plugins.json" \
+            --endpoint-url "${ENDPOINT}" \
+            --content-type "application/json" \
+            --cache-control "public, max-age=300"
+
+          echo "Plugin registry uploaded: ${CDN_BASE}/plugins.json"
 
   # Publish WASM bindings to npm (JS glue + types, no .wasm binary)
   publish-wasm-npm:
@@ -278,7 +404,7 @@ jobs:
         run: cargo install wasm-pack
 
       - name: Build WASM (Node.js, no browser features)
-        run: wasm-pack build crates/diaryx_wasm --target web --no-default-features --features crdt
+        run: wasm-pack build crates/diaryx_wasm --target web --no-default-features
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -334,6 +460,12 @@ jobs:
           name: wasm-package
           path: apps/web/src/lib/wasm/
 
+      - name: Download bindings artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ts-bindings
+          path: crates/diaryx_core/bindings/
+
       - name: Install dependencies
         run: |
           cd apps/web
@@ -377,6 +509,12 @@ jobs:
           name: wasm-package
           path: apps/web/src/lib/wasm/
 
+      - name: Download bindings artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ts-bindings
+          path: crates/diaryx_core/bindings/
+
       - name: Install dependencies
         run: |
           cd apps/web
@@ -391,7 +529,7 @@ jobs:
         run: |
           cd apps/web
           nix develop --command bunx playwright test --project=chromium \
-            e2e/editor.spec.ts e2e/workspace.spec.ts e2e/attachments.spec.ts e2e/share.spec.ts
+            e2e/editor.spec.ts e2e/workspace.spec.ts e2e/attachments.spec.ts
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@v4

@@ -6,27 +6,22 @@
 //! All workspace operations go through the unified `execute()` command,
 //! which routes to the appropriate handler in diaryx_core.
 //!
-//! Platform-specific commands (backup, cloud sync, import) are handled
-//! separately as they require Tauri plugins or system APIs.
+//! Platform-specific commands (import) are handled separately as they
+//! require Tauri plugins or system APIs.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use diaryx_core::{
     Command,
     config::Config,
-    crdt::{CrdtStorage, SqliteStorage},
     diaryx::Diaryx,
     error::SerializableError,
-    fs::{
-        CrdtFs, DecoratedFs, DecoratedFsBuilder, EventEmittingFs, FileSystem, InMemoryFileSystem,
-        RealFileSystem, SyncToAsyncFs,
-    },
+    fs::{FileSystem, InMemoryFileSystem, RealFileSystem, SyncToAsyncFs},
     workspace::Workspace,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 // ============================================================================
@@ -46,76 +41,45 @@ pub struct AppPaths {
     pub config_path: PathBuf,
     /// Whether this is a mobile platform (iOS/Android)
     pub is_mobile: bool,
-    /// Whether CRDT storage was successfully initialized
-    pub crdt_initialized: bool,
-    /// Error message if CRDT initialization failed
-    pub crdt_error: Option<String>,
-}
-
-/// Google Auth configuration
-#[derive(Debug, Serialize)]
-pub struct GoogleAuthConfig {
-    pub client_id: Option<String>,
-    pub client_secret: Option<String>,
 }
 
 /// Base filesystem type for Tauri (real filesystem wrapped for async).
 type TauriBaseFs = SyncToAsyncFs<RealFileSystem>;
 
-/// Fully decorated filesystem stack: EventEmittingFs<CrdtFs<TauriBaseFs>>.
-type TauriDiaryxFs = EventEmittingFs<CrdtFs<TauriBaseFs>>;
-
 /// Base filesystem type for guest mode (in-memory filesystem wrapped for async).
 type GuestBaseFs = SyncToAsyncFs<InMemoryFileSystem>;
 
-/// Fully decorated filesystem stack for guest mode.
-type GuestDiaryxFs = EventEmittingFs<CrdtFs<GuestBaseFs>>;
-
-/// Global state for CRDT-enabled Diaryx instances.
+/// Global application state for the Tauri backend.
 ///
-/// This stores the SQLite storage backend shared across all execute() calls,
-/// allowing CRDT state to persist across commands.
-///
-/// The `diaryx` field caches a fully-initialized Diaryx instance, avoiding
-/// expensive CRDT state reload from SQLite on every command. This is critical
-/// for performance - without caching, each command would take seconds to load.
-pub struct CrdtState {
+/// Stores the active workspace path and a cached Diaryx instance that is
+/// reused across `execute()` calls for performance.
+pub struct AppState {
     /// Path to the active workspace
     pub workspace_path: Mutex<Option<PathBuf>>,
-    /// CRDT storage backend (shared across calls)
-    /// Note: CrdtStorage trait already requires Send + Sync
-    pub storage: Mutex<Option<Arc<dyn CrdtStorage>>>,
-    /// The decorated filesystem stack (CrdtFs + EventEmittingFs).
-    /// Holds shared CRDT instances that are also used by Diaryx.
-    pub decorated_fs: Mutex<Option<DecoratedFs<TauriBaseFs>>>,
-    /// Cached Diaryx instance with CRDT support.
-    /// Uses the decorated FS stack for file writes to update CRDTs.
-    pub diaryx: Mutex<Option<Arc<Diaryx<TauriDiaryxFs>>>>,
+    /// Cached Diaryx instance.
+    pub diaryx: Mutex<Option<Arc<Diaryx<TauriBaseFs>>>>,
 }
 
-impl CrdtState {
+impl AppState {
     pub fn new() -> Self {
         Self {
             workspace_path: Mutex::new(None),
-            storage: Mutex::new(None),
-            decorated_fs: Mutex::new(None),
             diaryx: Mutex::new(None),
         }
     }
 }
 
-impl Default for CrdtState {
+impl Default for AppState {
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// State for guest mode - holds an in-memory filesystem and CRDT state when active.
+/// State for guest mode - holds an in-memory filesystem when active.
 ///
 /// When a Tauri user joins a share session as a guest, this state holds
-/// the in-memory filesystem and CRDT instances that all operations are routed through.
-/// This prevents guest session files from affecting the user's local workspace
-/// while maintaining persistent CRDT state across commands for the session duration.
+/// the in-memory filesystem that all operations are routed through.
+/// This prevents guest session files from affecting the user's local workspace.
 pub struct GuestModeState {
     /// Whether guest mode is currently active
     pub active: Mutex<bool>,
@@ -123,11 +87,8 @@ pub struct GuestModeState {
     pub filesystem: Mutex<Option<InMemoryFileSystem>>,
     /// The join code of the current guest session
     pub join_code: Mutex<Option<String>>,
-    /// The decorated filesystem stack for guest mode (CrdtFs + EventEmittingFs).
-    /// Holds shared CRDT instances that persist across commands.
-    pub decorated_fs: Mutex<Option<DecoratedFs<GuestBaseFs>>>,
     /// Cached Diaryx instance for guest mode.
-    pub diaryx: Mutex<Option<Arc<Diaryx<GuestDiaryxFs>>>>,
+    pub diaryx: Mutex<Option<Arc<Diaryx<GuestBaseFs>>>>,
 }
 
 impl GuestModeState {
@@ -136,7 +97,6 @@ impl GuestModeState {
             active: Mutex::new(false),
             filesystem: Mutex::new(None),
             join_code: Mutex::new(None),
-            decorated_fs: Mutex::new(None),
             diaryx: Mutex::new(None),
         }
     }
@@ -155,6 +115,457 @@ fn acquire_lock<T>(mutex: &Mutex<T>) -> Result<std::sync::MutexGuard<'_, T>, Ser
     mutex.lock().map_err(|e| SerializableError {
         kind: "LockError".to_string(),
         message: format!("Failed to acquire lock: mutex is poisoned - {}", e),
+        path: None,
+    })
+}
+
+#[cfg(feature = "extism-plugins")]
+fn make_permission_checker(
+    workspace_root: Option<PathBuf>,
+) -> Arc<dyn diaryx_extism::PermissionChecker> {
+    Arc::new(diaryx_extism::FrontmatterPermissionChecker::from_workspace_root(workspace_root))
+}
+
+// ============================================================================
+// Extism Third-Party Plugin Loading
+// ============================================================================
+
+/// Load and register any third-party Extism WASM plugins from the user's
+/// plugin directory (`~/.diaryx/plugins/`).
+///
+/// Each subdirectory containing a `plugin.wasm` file is loaded as a plugin
+/// and registered as both a WorkspacePlugin and FilePlugin. Errors during
+/// loading are logged and skipped (not fatal).
+#[cfg(feature = "extism-plugins")]
+fn register_extism_plugins<FS: diaryx_core::fs::AsyncFileSystem + 'static>(
+    diaryx: &mut Diaryx<FS>,
+) {
+    let plugins_dir = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("diaryx")
+        .join("plugins");
+    if !plugins_dir.exists() {
+        return;
+    }
+
+    // Use a basic real filesystem for host function file access.
+    let fs: Arc<dyn diaryx_core::fs::AsyncFileSystem> =
+        Arc::new(SyncToAsyncFs::new(RealFileSystem));
+    let host_ctx = Arc::new(diaryx_extism::HostContext {
+        fs,
+        storage: Arc::new(diaryx_extism::NoopStorage),
+        event_emitter: Arc::new(diaryx_extism::NoopEventEmitter),
+        plugin_id: String::new(),
+        permission_checker: Some(make_permission_checker(diaryx.workspace_root())),
+    });
+    match diaryx_extism::load_plugins_from_dir(&plugins_dir, host_ctx) {
+        Ok(plugins) => {
+            for plugin in plugins {
+                let arc = Arc::new(plugin);
+                diaryx
+                    .plugin_registry_mut()
+                    .register_workspace_plugin(arc.clone());
+                diaryx.plugin_registry_mut().register_file_plugin(arc);
+            }
+        }
+        Err(e) => {
+            log::warn!("Failed to load extism plugins: {e}");
+        }
+    }
+}
+
+// ============================================================================
+// Extism Sync Plugin Loading
+// ============================================================================
+
+/// Tauri event emitter for the Extism sync plugin.
+///
+/// Forwards `host_emit_event` calls from the guest plugin to the Tauri frontend
+/// via `AppHandle::emit()`.
+#[cfg(feature = "extism-plugins")]
+struct TauriEventEmitter<R: Runtime> {
+    app: AppHandle<R>,
+}
+
+#[cfg(feature = "extism-plugins")]
+impl<R: Runtime> diaryx_extism::EventEmitter for TauriEventEmitter<R> {
+    fn emit(&self, event_json: &str) {
+        // Try to parse the event to route to the right Tauri event name.
+        // Falls back to a generic "sync-plugin-event" if parsing fails.
+        if let Ok(event) = serde_json::from_str::<serde_json::Value>(event_json) {
+            let event_type = event
+                .get("type")
+                .and_then(|t| t.as_str())
+                .unwrap_or("unknown");
+
+            match event_type {
+                "status_changed" => {
+                    let _ = self.app.emit("sync-status-changed", event_json);
+                }
+                "files_changed" => {
+                    let _ = self.app.emit("sync-files-changed", event_json);
+                }
+                "body_changed" => {
+                    let _ = self.app.emit("sync-body-changed", event_json);
+                }
+                _ => {
+                    let _ = self.app.emit("sync-plugin-event", event_json);
+                }
+            }
+        } else {
+            let _ = self.app.emit("sync-plugin-event", event_json);
+        }
+    }
+}
+
+/// State for the Extism sync plugin (loaded on demand).
+///
+/// Holds the loaded [`ExtismPluginAdapter`] so it can be used for sync operations
+/// (binary message handling, drain, etc.) and registered as a WorkspacePlugin.
+#[cfg(feature = "extism-plugins")]
+pub struct ExtismSyncState {
+    /// The loaded Extism sync plugin adapter.
+    pub plugin: Mutex<Option<Arc<diaryx_extism::ExtismPluginAdapter>>>,
+}
+
+#[cfg(feature = "extism-plugins")]
+impl ExtismSyncState {
+    pub fn new() -> Self {
+        Self {
+            plugin: Mutex::new(None),
+        }
+    }
+}
+
+#[cfg(feature = "extism-plugins")]
+impl Default for ExtismSyncState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Load the Extism sync plugin from the bundled WASM file.
+///
+/// Creates a [`diaryx_extism::HostContext`] with:
+/// - Filesystem: real filesystem via `SyncToAsyncFs<RealFileSystem>`
+/// - Storage: SQLite-backed `SqlitePluginStorage` from the active CRDT storage
+/// - Events: `TauriEventEmitter` forwarding to the Tauri frontend
+///
+/// The loaded plugin is registered as a WorkspacePlugin on the cached Diaryx
+/// instance, and stored in `ExtismSyncState` for binary sync operations.
+#[cfg(feature = "extism-plugins")]
+#[tauri::command]
+pub async fn load_sync_plugin<R: Runtime>(
+    app: AppHandle<R>,
+    wasm_path: Option<String>,
+) -> Result<(), SerializableError> {
+    log::info!("[load_sync_plugin] Loading Extism sync plugin");
+
+    // Determine WASM path: explicit, bundled, or default location
+    let wasm_file = if let Some(path) = wasm_path {
+        PathBuf::from(path)
+    } else {
+        // Check bundled location first, then user plugins dir
+        let bundled = app
+            .path()
+            .resource_dir()
+            .ok()
+            .map(|d| d.join("plugins").join("diaryx_sync.wasm"));
+        let user_plugins = dirs::data_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("diaryx")
+            .join("plugins")
+            .join("diaryx_sync")
+            .join("plugin.wasm");
+
+        bundled.filter(|p| p.exists()).unwrap_or(user_plugins)
+    };
+
+    if !wasm_file.exists() {
+        return Err(SerializableError {
+            kind: "PluginError".to_string(),
+            message: format!("Sync plugin WASM not found at {}", wasm_file.display()),
+            path: None,
+        });
+    }
+
+    log::info!("[load_sync_plugin] Loading from {}", wasm_file.display());
+
+    // Build HostContext with event emitter (plugin manages its own state)
+    let event_emitter: Arc<dyn diaryx_extism::EventEmitter> =
+        Arc::new(TauriEventEmitter { app: app.clone() });
+
+    let fs: Arc<dyn diaryx_core::fs::AsyncFileSystem> =
+        Arc::new(SyncToAsyncFs::new(RealFileSystem));
+
+    let workspace_root = app
+        .try_state::<AppState>()
+        .and_then(|state| state.workspace_path.lock().ok().and_then(|v| (*v).clone()));
+
+    let host_ctx = Arc::new(diaryx_extism::HostContext {
+        fs,
+        storage: Arc::new(diaryx_extism::NoopStorage),
+        event_emitter,
+        plugin_id: String::new(),
+        permission_checker: Some(make_permission_checker(workspace_root)),
+    });
+
+    // Load the plugin
+    let adapter =
+        diaryx_extism::load_plugin_from_wasm(&wasm_file, host_ctx, None).map_err(|e| {
+            SerializableError {
+                kind: "PluginError".to_string(),
+                message: format!("Failed to load sync plugin: {e}"),
+                path: None,
+            }
+        })?;
+
+    let adapter = Arc::new(adapter);
+
+    // Store in ExtismSyncState
+    let extism_sync_state = app.state::<ExtismSyncState>();
+    {
+        let mut plugin_guard = acquire_lock(&extism_sync_state.plugin)?;
+        *plugin_guard = Some(Arc::clone(&adapter));
+    }
+
+    // Clear cached Diaryx instance so next execute() picks up the plugin
+    let app_state = app.state::<AppState>();
+    {
+        let mut diaryx_guard = acquire_lock(&app_state.diaryx)?;
+        *diaryx_guard = None;
+    }
+
+    {
+        use diaryx_core::plugin::Plugin;
+        log::info!(
+            "[load_sync_plugin] Sync plugin loaded: {} ({})",
+            adapter.manifest().name,
+            adapter.manifest().id,
+        );
+    }
+
+    Ok(())
+}
+
+/// Unload the Extism sync plugin.
+#[cfg(feature = "extism-plugins")]
+#[tauri::command]
+pub async fn unload_sync_plugin<R: Runtime>(app: AppHandle<R>) -> Result<(), SerializableError> {
+    log::info!("[unload_sync_plugin] Unloading Extism sync plugin");
+
+    let extism_sync_state = app.state::<ExtismSyncState>();
+    {
+        let mut plugin_guard = acquire_lock(&extism_sync_state.plugin)?;
+        *plugin_guard = None;
+    }
+
+    // Clear cached Diaryx to remove the registered plugin
+    let app_state = app.state::<AppState>();
+    {
+        let mut diaryx_guard = acquire_lock(&app_state.diaryx)?;
+        *diaryx_guard = None;
+    }
+
+    log::info!("[unload_sync_plugin] Sync plugin unloaded");
+    Ok(())
+}
+
+/// Stub: load_sync_plugin when extism-plugins feature is disabled.
+#[cfg(not(feature = "extism-plugins"))]
+#[tauri::command]
+pub async fn load_sync_plugin<R: Runtime>(
+    _app: AppHandle<R>,
+    _wasm_path: Option<String>,
+) -> Result<(), SerializableError> {
+    Err(SerializableError {
+        kind: "Unsupported".to_string(),
+        message: "Extism plugin support is not enabled. Build with --features extism-plugins."
+            .to_string(),
+        path: None,
+    })
+}
+
+/// Stub: unload_sync_plugin when extism-plugins feature is disabled.
+#[cfg(not(feature = "extism-plugins"))]
+#[tauri::command]
+pub async fn unload_sync_plugin<R: Runtime>(_app: AppHandle<R>) -> Result<(), SerializableError> {
+    Err(SerializableError {
+        kind: "Unsupported".to_string(),
+        message: "Extism plugin support is not enabled. Build with --features extism-plugins."
+            .to_string(),
+        path: None,
+    })
+}
+
+// ============================================================================
+// User Plugin Install/Uninstall
+// ============================================================================
+
+/// Install a user plugin from raw WASM bytes.
+///
+/// Writes the WASM to `~/.diaryx/plugins/{plugin_id}/plugin.wasm`, loads it
+/// to extract the manifest, then clears the cached Diaryx instance so the
+/// plugin is picked up on the next `execute()` call.
+///
+/// Returns the plugin manifest as a JSON string.
+#[cfg(feature = "extism-plugins")]
+#[tauri::command]
+pub async fn install_user_plugin<R: Runtime>(
+    app: AppHandle<R>,
+    wasm_bytes: Vec<u8>,
+) -> Result<String, SerializableError> {
+    use diaryx_core::plugin::Plugin;
+
+    log::info!(
+        "[install_user_plugin] Installing plugin ({} KB)",
+        wasm_bytes.len() / 1024
+    );
+
+    // Write to a temp location first so we can call load_plugin_from_wasm (file-based).
+    let tmp_dir = std::env::temp_dir().join("diaryx-plugin-install");
+    std::fs::create_dir_all(&tmp_dir).map_err(|e| SerializableError {
+        kind: "IoError".to_string(),
+        message: format!("Failed to create temp directory: {e}"),
+        path: None,
+    })?;
+    let tmp_wasm = tmp_dir.join("plugin.wasm");
+    std::fs::write(&tmp_wasm, &wasm_bytes).map_err(|e| SerializableError {
+        kind: "IoError".to_string(),
+        message: format!("Failed to write temp WASM: {e}"),
+        path: None,
+    })?;
+
+    // Load to extract the manifest.
+    let fs: Arc<dyn diaryx_core::fs::AsyncFileSystem> =
+        Arc::new(SyncToAsyncFs::new(RealFileSystem));
+    let host_ctx = Arc::new(diaryx_extism::HostContext {
+        fs,
+        storage: Arc::new(diaryx_extism::NoopStorage),
+        event_emitter: Arc::new(diaryx_extism::NoopEventEmitter),
+        plugin_id: String::new(),
+        permission_checker: Some(Arc::new(diaryx_extism::DenyAllPermissionChecker)),
+    });
+
+    let adapter = diaryx_extism::load_plugin_from_wasm(&tmp_wasm, host_ctx, None).map_err(|e| {
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        SerializableError {
+            kind: "PluginError".to_string(),
+            message: format!("Invalid WASM plugin: {e}"),
+            path: None,
+        }
+    })?;
+
+    let manifest = adapter.manifest();
+    let plugin_id = manifest.id.0.clone();
+    let manifest_json = serde_json::to_string(&manifest).map_err(|e| SerializableError {
+        kind: "SerializationError".to_string(),
+        message: format!("Failed to serialize manifest: {e}"),
+        path: None,
+    })?;
+
+    // Persist WASM to ~/.diaryx/plugins/{plugin_id}/plugin.wasm
+    let plugins_dir = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("diaryx")
+        .join("plugins")
+        .join(&plugin_id);
+    std::fs::create_dir_all(&plugins_dir).map_err(|e| SerializableError {
+        kind: "IoError".to_string(),
+        message: format!("Failed to create plugin directory: {e}"),
+        path: Some(plugins_dir.clone()),
+    })?;
+
+    let wasm_path = plugins_dir.join("plugin.wasm");
+    std::fs::rename(&tmp_wasm, &wasm_path)
+        .or_else(|_| {
+            // rename fails across filesystems; fall back to copy+delete
+            std::fs::copy(&tmp_wasm, &wasm_path).map(|_| ())
+        })
+        .map_err(|e| SerializableError {
+            kind: "IoError".to_string(),
+            message: format!("Failed to write plugin WASM: {e}"),
+            path: Some(wasm_path.clone()),
+        })?;
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+
+    // Clear cached Diaryx so next execute() picks up the new plugin.
+    let app_state = app.state::<AppState>();
+    {
+        let mut diaryx_guard = acquire_lock(&app_state.diaryx)?;
+        *diaryx_guard = None;
+    }
+
+    log::info!(
+        "[install_user_plugin] Installed: {} ({})",
+        manifest.name,
+        plugin_id
+    );
+    Ok(manifest_json)
+}
+
+/// Uninstall a user plugin by ID.
+///
+/// Deletes `~/.diaryx/plugins/{plugin_id}/` and clears the cached Diaryx instance.
+#[cfg(feature = "extism-plugins")]
+#[tauri::command]
+pub async fn uninstall_user_plugin<R: Runtime>(
+    app: AppHandle<R>,
+    plugin_id: String,
+) -> Result<(), SerializableError> {
+    log::info!("[uninstall_user_plugin] Uninstalling plugin: {}", plugin_id);
+
+    let plugins_dir = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("diaryx")
+        .join("plugins")
+        .join(&plugin_id);
+
+    if plugins_dir.exists() {
+        std::fs::remove_dir_all(&plugins_dir).map_err(|e| SerializableError {
+            kind: "IoError".to_string(),
+            message: format!("Failed to remove plugin directory: {e}"),
+            path: Some(plugins_dir.clone()),
+        })?;
+    }
+
+    // Clear cached Diaryx so the plugin is no longer registered.
+    let app_state = app.state::<AppState>();
+    {
+        let mut diaryx_guard = acquire_lock(&app_state.diaryx)?;
+        *diaryx_guard = None;
+    }
+
+    log::info!("[uninstall_user_plugin] Uninstalled: {}", plugin_id);
+    Ok(())
+}
+
+/// Stub: install_user_plugin when extism-plugins feature is disabled.
+#[cfg(not(feature = "extism-plugins"))]
+#[tauri::command]
+pub async fn install_user_plugin<R: Runtime>(
+    _app: AppHandle<R>,
+    _wasm_bytes: Vec<u8>,
+) -> Result<String, SerializableError> {
+    Err(SerializableError {
+        kind: "Unsupported".to_string(),
+        message: "Extism plugin support is not enabled. Build with --features extism-plugins."
+            .to_string(),
+        path: None,
+    })
+}
+
+/// Stub: uninstall_user_plugin when extism-plugins feature is disabled.
+#[cfg(not(feature = "extism-plugins"))]
+#[tauri::command]
+pub async fn uninstall_user_plugin<R: Runtime>(
+    _app: AppHandle<R>,
+    _plugin_id: String,
+) -> Result<(), SerializableError> {
+    Err(SerializableError {
+        kind: "Unsupported".to_string(),
+        message: "Extism plugin support is not enabled. Build with --features extism-plugins."
+            .to_string(),
         path: None,
     })
 }
@@ -223,13 +634,13 @@ pub async fn execute<R: Runtime>(
             e.to_serializable()
         })?
     } else {
-        // Normal mode: use real filesystem with optional CRDT support
+        // Normal mode: use real filesystem
         // Try to use cached Diaryx instance for performance
-        let crdt_state = app.state::<CrdtState>();
+        let app_state = app.state::<AppState>();
 
         // First, try to get cached diaryx (fast path)
         let cached_diaryx = {
-            let diaryx_guard = acquire_lock(&crdt_state.diaryx)?;
+            let diaryx_guard = acquire_lock(&app_state.diaryx)?;
             diaryx_guard.as_ref().map(Arc::clone)
         };
 
@@ -240,48 +651,39 @@ pub async fn execute<R: Runtime>(
             // No cached instance - need to create one (slow path, only happens once)
             log::debug!("[execute] No cached Diaryx, creating new instance");
             let workspace_path = {
-                let ws_guard = acquire_lock(&crdt_state.workspace_path)?;
+                let ws_guard = acquire_lock(&app_state.workspace_path)?;
                 ws_guard.clone()
             };
 
-            let new_diaryx = {
-                let decorated_guard = acquire_lock(&crdt_state.decorated_fs)?;
-                if let Some(ref decorated) = *decorated_guard {
-                    // Use DecoratedFs — file writes will update CRDTs and emit events
-                    let d = Diaryx::with_crdt_instances(
-                        decorated.fs.clone(),
-                        Arc::clone(&decorated.workspace_crdt),
-                        Arc::clone(&decorated.body_doc_manager),
-                    );
-                    if let Some(ref ws_path) = workspace_path {
-                        log::debug!("[execute] Setting workspace root: {:?}", ws_path);
-                        d.set_workspace_root(ws_path.clone());
-                        decorated.set_workspace_root(ws_path.clone());
+            let base_fs = SyncToAsyncFs::new(RealFileSystem);
+            let mut d = Diaryx::new(base_fs);
+            if let Some(ref ws_path) = workspace_path {
+                log::debug!("[execute] Setting workspace root: {:?}", ws_path);
+                d.set_workspace_root(ws_path.clone());
+            }
+            #[cfg(feature = "extism-plugins")]
+            register_extism_plugins(&mut d);
+            #[cfg(feature = "extism-plugins")]
+            {
+                if let Some(extism_sync_state) = app.try_state::<ExtismSyncState>() {
+                    if let Ok(guard) = extism_sync_state.plugin.lock() {
+                        if let Some(ref plugin) = *guard {
+                            d.plugin_registry_mut()
+                                .register_workspace_plugin(Arc::clone(plugin)
+                                    as Arc<dyn diaryx_core::plugin::WorkspacePlugin>);
+                            log::debug!("[execute] Registered Extism sync plugin");
+                        }
                     }
-                    log::debug!("[execute] Created Diaryx with DecoratedFs");
-                    Arc::new(d)
-                } else {
-                    // Fallback: no DecoratedFs yet (before initialize_app).
-                    // Build a minimal DecoratedFs with in-memory CRDT to match the type.
-                    log::debug!("[execute] No DecoratedFs, building minimal decorated stack");
-                    let base_fs = SyncToAsyncFs::new(RealFileSystem);
-                    let decorated = DecoratedFsBuilder::new(base_fs).crdt_enabled(false).build();
-                    let d = Diaryx::with_crdt_instances(
-                        decorated.fs.clone(),
-                        Arc::clone(&decorated.workspace_crdt),
-                        Arc::clone(&decorated.body_doc_manager),
-                    );
-                    if let Some(ref ws_path) = workspace_path {
-                        d.set_workspace_root(ws_path.clone());
-                        decorated.set_workspace_root(ws_path.clone());
-                    }
-                    Arc::new(d)
                 }
-            };
+            }
+            let new_diaryx = Arc::new(d);
+
+            // Initialize plugins (seeds workspace root and link format)
+            new_diaryx.init_plugins().await.ok();
 
             // Cache the new instance for future commands
             {
-                let mut diaryx_guard = acquire_lock(&crdt_state.diaryx)?;
+                let mut diaryx_guard = acquire_lock(&app_state.diaryx)?;
                 *diaryx_guard = Some(Arc::clone(&new_diaryx));
                 log::debug!("[execute] Cached Diaryx instance for future commands");
             }
@@ -314,7 +716,8 @@ pub async fn execute<R: Runtime>(
 // ============================================================================
 
 /// Get platform-appropriate paths for the app
-/// On iOS/Android, uses Tauri's app_data_dir which is within the app sandbox
+/// On mobile, user workspace files are rooted in `document_dir` for Files app access,
+/// while internal config remains in `app_data_dir`.
 /// On desktop, uses the standard dirs crate locations
 fn get_platform_paths<R: Runtime>(app: &AppHandle<R>) -> Result<AppPaths, SerializableError> {
     let path_resolver = app.path();
@@ -352,8 +755,6 @@ fn get_platform_paths<R: Runtime>(app: &AppHandle<R>) -> Result<AppPaths, Serial
             default_workspace,
             config_path,
             is_mobile: true,
-            crdt_initialized: false,
-            crdt_error: None,
         })
     } else {
         // On desktop, use standard locations
@@ -395,8 +796,6 @@ fn get_platform_paths<R: Runtime>(app: &AppHandle<R>) -> Result<AppPaths, Serial
             default_workspace,
             config_path,
             is_mobile: false,
-            crdt_initialized: false,
-            crdt_error: None,
         })
     }
 }
@@ -407,33 +806,13 @@ pub fn get_app_paths<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, Serializ
     get_platform_paths(&app)
 }
 
-/// Get Google Auth configuration from environment variables
-///
-/// Checks compile-time env vars first (for release builds), then runtime env vars.
-#[tauri::command]
-pub fn get_google_auth_config() -> GoogleAuthConfig {
-    // First try compile-time environment variables (embedded in binary)
-    let client_id = option_env!("GOOGLE_CLIENT_ID").map(String::from);
-    let client_secret = option_env!("GOOGLE_CLIENT_SECRET").map(String::from);
-
-    // If not found at compile time, try runtime environment variables
-    let client_id = client_id.or_else(|| {
-        let _ = dotenvy::dotenv(); // Load .env file if it exists
-        std::env::var("GOOGLE_CLIENT_ID").ok()
-    });
-    let client_secret = client_secret.or_else(|| std::env::var("GOOGLE_CLIENT_SECRET").ok());
-
-    GoogleAuthConfig {
-        client_id,
-        client_secret,
-    }
-}
-
 /// Pick a folder using native dialog and set it as workspace
 #[tauri::command]
 pub async fn pick_workspace_folder<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<Option<AppPaths>, SerializableError> {
+    // Suppress unused warning on iOS (app is used on other platforms)
+    let _ = &app;
     // Folder picking is not supported on iOS
     #[cfg(target_os = "ios")]
     {
@@ -512,15 +891,12 @@ pub async fn pick_workspace_folder<R: Runtime>(
                 .map_err(|e| e.to_serializable())?;
         }
 
-        // Return updated paths (CRDT not initialized for new workspace yet)
         Ok(Some(AppPaths {
             data_dir: paths.data_dir,
             document_dir: paths.document_dir,
             default_workspace: selected_path,
             config_path: paths.config_path,
             is_mobile: paths.is_mobile,
-            crdt_initialized: false,
-            crdt_error: None,
         }))
     }
 }
@@ -655,533 +1031,23 @@ pub async fn initialize_app<R: Runtime>(app: AppHandle<R>) -> Result<AppPaths, S
 
     log::info!("[initialize_app] Initialization complete!");
 
-    // Initialize CRDT storage and DecoratedFs for the workspace
-    let (crdt_initialized, crdt_error) = {
-        let crdt_state = app.state::<CrdtState>();
-        let crdt_dir = actual_workspace.join(".diaryx");
+    // Store workspace path in AppState
+    {
+        let app_state = app.state::<AppState>();
+        let mut ws_lock = acquire_lock(&app_state.workspace_path)?;
+        *ws_lock = Some(actual_workspace.clone());
+        // Force re-creation of Diaryx on next execute()
+        let mut diaryx_lock = acquire_lock(&app_state.diaryx)?;
+        *diaryx_lock = None;
+    }
 
-        match std::fs::create_dir_all(&crdt_dir) {
-            Err(e) => {
-                let error_msg = format!("Failed to create CRDT directory {:?}: {}", crdt_dir, e);
-                log::warn!("[initialize_app] {}", error_msg);
-                (false, Some(error_msg))
-            }
-            Ok(_) => {
-                let db_path = crdt_dir.join("crdt.db");
-                match SqliteStorage::open(&db_path) {
-                    Ok(storage) => {
-                        let storage = Arc::new(storage);
-
-                        // Build DecoratedFs stack (CrdtFs + EventEmittingFs)
-                        let base_fs = SyncToAsyncFs::new(RealFileSystem);
-                        match DecoratedFsBuilder::new(base_fs)
-                            .with_crdt(Arc::clone(&storage) as Arc<dyn CrdtStorage>)
-                            .crdt_enabled(false) // Enabled after sync handshake
-                            .build_with_load()
-                        {
-                            Ok(decorated) => {
-                                match (
-                                    acquire_lock(&crdt_state.workspace_path),
-                                    acquire_lock(&crdt_state.storage),
-                                    acquire_lock(&crdt_state.decorated_fs),
-                                    acquire_lock(&crdt_state.diaryx),
-                                ) {
-                                    (
-                                        Ok(mut ws_lock),
-                                        Ok(mut storage_lock),
-                                        Ok(mut decorated_lock),
-                                        Ok(mut diaryx_lock),
-                                    ) => {
-                                        *ws_lock = Some(actual_workspace.clone());
-                                        *storage_lock = Some(storage);
-                                        *decorated_lock = Some(decorated);
-                                        *diaryx_lock = None; // Force re-creation on next execute()
-                                        log::info!(
-                                            "[initialize_app] DecoratedFs initialized at {:?}",
-                                            db_path
-                                        );
-                                        (true, None)
-                                    }
-                                    _ => {
-                                        let error_msg =
-                                            "Failed to acquire CRDT state locks".to_string();
-                                        log::error!("[initialize_app] {}", error_msg);
-                                        (false, Some(error_msg))
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                let error_msg = format!(
-                                    "Failed to build DecoratedFs at {:?}: {:?}",
-                                    db_path, e
-                                );
-                                log::warn!("[initialize_app] {}", error_msg);
-                                (false, Some(error_msg))
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        let error_msg = format!(
-                            "Failed to initialize CRDT storage at {:?}: {:?}",
-                            db_path, e
-                        );
-                        log::warn!("[initialize_app] {}", error_msg);
-                        (false, Some(error_msg))
-                    }
-                }
-            }
-        }
-    };
-
-    // Return paths with the actual workspace from config and CRDT status
+    // Return paths with the actual workspace from config
     Ok(AppPaths {
         data_dir: paths.data_dir,
         document_dir: paths.document_dir,
         default_workspace: actual_workspace,
         config_path: paths.config_path,
         is_mobile: paths.is_mobile,
-        crdt_initialized,
-        crdt_error,
-    })
-}
-
-// ============================================================================
-// Backup Commands
-// ============================================================================
-
-/// Status of a backup operation
-#[derive(Debug, Serialize)]
-pub struct BackupStatus {
-    pub target_name: String,
-    pub success: bool,
-    pub files_processed: usize,
-    pub error: Option<String>,
-}
-
-/// Progress event for backup operations (emitted via Tauri events)
-#[derive(Debug, Clone, Serialize)]
-pub struct BackupProgressEvent {
-    /// Current stage: "preparing", "zipping", "uploading", "complete", "error"
-    pub stage: String,
-    /// Progress percentage (0-100)
-    pub percent: u8,
-    /// Optional message for additional context
-    pub message: Option<String>,
-}
-
-/// Progress event for sync operations (emitted via Tauri events)
-#[derive(Debug, Clone, Serialize)]
-pub struct SyncProgressEvent {
-    /// Current stage: "detecting_local", "detecting_remote", "uploading", "downloading", "deleting", "complete", "error"
-    pub stage: String,
-    /// Current item being processed
-    pub current: usize,
-    /// Total items in this stage
-    pub total: usize,
-    /// Progress percentage (0-100)
-    pub percent: u8,
-    /// Optional message for additional context
-    pub message: Option<String>,
-}
-
-/// Backup workspace to all configured targets
-#[tauri::command]
-pub async fn backup_workspace<R: Runtime>(
-    app: AppHandle<R>,
-    workspace_path: Option<String>,
-) -> Result<Vec<BackupStatus>, SerializableError> {
-    use diaryx_core::backup::{BackupManager, LocalDriveTarget};
-
-    let paths = get_platform_paths(&app)?;
-    let workspace = workspace_path
-        .map(PathBuf::from)
-        .unwrap_or_else(|| paths.default_workspace.clone());
-
-    // Create backup manager with default local target
-    let backup_dir = paths.data_dir.join("backups");
-    let target = LocalDriveTarget::new("Local Backup", backup_dir);
-
-    let mut manager = BackupManager::new();
-    manager.add_target(Box::new(target));
-
-    // Run backup
-    let results = manager
-        .backup_all(&SyncToAsyncFs::new(RealFileSystem), &workspace)
-        .await;
-
-    Ok(results
-        .into_iter()
-        .zip(manager.target_names())
-        .map(|(result, name)| BackupStatus {
-            target_name: name.to_string(),
-            success: result.success,
-            files_processed: result.files_processed,
-            error: result.error,
-        })
-        .collect())
-}
-
-/// Restore workspace from a backup target
-#[tauri::command]
-pub async fn restore_workspace<R: Runtime>(
-    app: AppHandle<R>,
-    workspace_path: Option<String>,
-    _target_name: Option<String>,
-) -> Result<BackupStatus, SerializableError> {
-    use diaryx_core::backup::{BackupManager, LocalDriveTarget};
-
-    let paths = get_platform_paths(&app)?;
-    let workspace = workspace_path
-        .map(PathBuf::from)
-        .unwrap_or_else(|| paths.default_workspace.clone());
-
-    // Create backup manager with default local target
-    let backup_dir = paths.data_dir.join("backups");
-    let target = LocalDriveTarget::new("Local Backup", backup_dir);
-
-    let mut manager = BackupManager::new();
-    manager.add_target(Box::new(target));
-
-    // Restore from primary
-    match manager
-        .restore_from_primary(&SyncToAsyncFs::new(RealFileSystem), &workspace)
-        .await
-    {
-        Some(result) => Ok(BackupStatus {
-            target_name: manager.primary_name().unwrap_or("Unknown").to_string(),
-            success: result.success,
-            files_processed: result.files_processed,
-            error: result.error,
-        }),
-        None => Err(SerializableError {
-            kind: "NoBackupTarget".to_string(),
-            message: "No backup target configured".to_string(),
-            path: None,
-        }),
-    }
-}
-
-/// List available backup targets
-#[tauri::command]
-pub fn list_backup_targets<R: Runtime>(
-    app: AppHandle<R>,
-) -> Result<Vec<String>, SerializableError> {
-    use diaryx_core::backup::{BackupManager, LocalDriveTarget};
-
-    let paths = get_platform_paths(&app)?;
-    let backup_dir = paths.data_dir.join("backups");
-    let target = LocalDriveTarget::new("Local Backup", backup_dir);
-
-    let mut manager = BackupManager::new();
-    manager.add_target(Box::new(target));
-
-    Ok(manager
-        .target_names()
-        .into_iter()
-        .map(String::from)
-        .collect())
-}
-
-// ============================================================================
-// Cloud Backup Commands (S3)
-// ============================================================================
-
-/// S3 configuration request
-#[derive(Debug, Deserialize)]
-pub struct S3ConfigRequest {
-    pub name: String,
-    pub bucket: String,
-    pub region: String,
-    pub prefix: Option<String>,
-    pub endpoint: Option<String>,
-    pub access_key: String,
-    pub secret_key: String,
-}
-
-/// Test S3 connection
-#[tauri::command]
-pub fn test_s3_connection(config: S3ConfigRequest) -> Result<bool, SerializableError> {
-    use crate::cloud::S3Target;
-    use diaryx_core::backup::{BackupTarget, CloudBackupConfig, CloudProvider};
-
-    let cloud_config = CloudBackupConfig {
-        id: "test".to_string(),
-        name: config.name,
-        provider: CloudProvider::S3 {
-            bucket: config.bucket,
-            region: config.region,
-            prefix: config.prefix,
-            endpoint: config.endpoint,
-        },
-        enabled: true,
-    };
-
-    let target = S3Target::new_blocking(cloud_config, config.access_key, config.secret_key)
-        .map_err(|e| SerializableError {
-            kind: "S3ConfigError".to_string(),
-            message: e,
-            path: None,
-        })?;
-
-    Ok(target.is_available())
-}
-
-/// Backup workspace to S3
-#[tauri::command]
-pub async fn backup_to_s3<R: Runtime>(
-    app: AppHandle<R>,
-    workspace_path: Option<String>,
-    config: S3ConfigRequest,
-) -> Result<BackupStatus, SerializableError> {
-    use crate::cloud::S3Target;
-    use diaryx_core::backup::{CloudBackupConfig, CloudProvider};
-    use tokio::sync::mpsc;
-
-    let paths = get_platform_paths(&app)?;
-    let workspace = workspace_path
-        .map(PathBuf::from)
-        .unwrap_or(paths.default_workspace);
-
-    let config_name = config.name.clone();
-
-    // Create a channel to send progress from the background thread
-    let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<BackupProgressEvent>();
-
-    // Clone app for the event emission task
-    let app_clone = app.clone();
-
-    // Spawn a task to forward progress events to the frontend
-    let event_task = tauri::async_runtime::spawn(async move {
-        while let Some(event) = progress_rx.recv().await {
-            let _ = app_clone.emit("backup_progress", &event);
-        }
-    });
-
-    // Run backup in a blocking thread to not freeze the UI
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let fs = RealFileSystem;
-
-        // Emit preparing stage
-        let _ = progress_tx.send(BackupProgressEvent {
-            stage: "preparing".to_string(),
-            percent: 5,
-            message: Some("Preparing backup...".to_string()),
-        });
-
-        let cloud_config = CloudBackupConfig {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: config.name.clone(),
-            provider: CloudProvider::S3 {
-                bucket: config.bucket,
-                region: config.region,
-                prefix: config.prefix,
-                endpoint: config.endpoint,
-            },
-            enabled: true,
-        };
-
-        let target = S3Target::new_blocking(cloud_config, config.access_key, config.secret_key)
-            .map_err(|e| SerializableError {
-                kind: "S3ConfigError".to_string(),
-                message: e,
-                path: None,
-            })?;
-
-        // Use backup_with_progress to get per-file progress callbacks
-        let result =
-            target.backup_with_progress(&fs, &workspace, |stage, current, total, percent| {
-                let message = match stage {
-                    "preparing" => Some("Preparing backup...".to_string()),
-                    "zipping" => Some(format!("Zipping files: {}/{}", current, total)),
-                    "uploading" => Some("Uploading to S3...".to_string()),
-                    "complete" => Some("Backup complete!".to_string()),
-                    "error" => Some("Backup failed".to_string()),
-                    _ => None,
-                };
-
-                let _ = progress_tx.send(BackupProgressEvent {
-                    stage: stage.to_string(),
-                    percent,
-                    message,
-                });
-            });
-
-        Ok::<_, SerializableError>(result)
-    })
-    .await
-    .map_err(|e| SerializableError {
-        kind: "SpawnError".to_string(),
-        message: e.to_string(),
-        path: None,
-    })??;
-
-    // Wait for event task to finish
-    let _ = event_task.await;
-
-    Ok(BackupStatus {
-        target_name: config_name,
-        success: result.success,
-        files_processed: result.files_processed,
-        error: result.error,
-    })
-}
-
-/// Restore workspace from S3
-#[tauri::command]
-pub async fn restore_from_s3<R: Runtime>(
-    app: AppHandle<R>,
-    workspace_path: Option<String>,
-    config: S3ConfigRequest,
-) -> Result<BackupStatus, SerializableError> {
-    use crate::cloud::S3Target;
-    use diaryx_core::backup::{BackupTarget, CloudBackupConfig, CloudProvider};
-
-    let paths = get_platform_paths(&app)?;
-    let workspace = workspace_path
-        .map(PathBuf::from)
-        .unwrap_or(paths.default_workspace);
-    let fs = SyncToAsyncFs::new(RealFileSystem);
-
-    let cloud_config = CloudBackupConfig {
-        id: "restore".to_string(),
-        name: config.name.clone(),
-        provider: CloudProvider::S3 {
-            bucket: config.bucket,
-            region: config.region,
-            prefix: config.prefix,
-            endpoint: config.endpoint,
-        },
-        enabled: true,
-    };
-
-    let target = S3Target::new(cloud_config, config.access_key, config.secret_key)
-        .await
-        .map_err(|e| SerializableError {
-            kind: "S3ConfigError".to_string(),
-            message: e,
-            path: None,
-        })?;
-
-    let result = target.restore(&fs, &workspace).await;
-
-    Ok(BackupStatus {
-        target_name: config.name,
-        success: result.success,
-        files_processed: result.files_processed,
-        error: result.error,
-    })
-}
-
-// ============================================================================
-// Cloud Backup Commands (Google Drive)
-// ============================================================================
-
-/// Google Drive configuration request from frontend
-#[derive(Debug, Deserialize)]
-pub struct GoogleDriveConfigRequest {
-    pub name: String,
-    pub access_token: String,
-    pub folder_id: Option<String>,
-}
-
-/// Backup workspace to Google Drive
-#[tauri::command]
-pub async fn backup_to_google_drive<R: Runtime>(
-    app: AppHandle<R>,
-    workspace_path: Option<String>,
-    config: GoogleDriveConfigRequest,
-) -> Result<BackupStatus, SerializableError> {
-    use crate::cloud::GoogleDriveTarget;
-    use diaryx_core::backup::{CloudBackupConfig, CloudProvider};
-    use tokio::sync::mpsc;
-
-    let paths = get_platform_paths(&app)?;
-    let workspace = workspace_path
-        .map(PathBuf::from)
-        .unwrap_or(paths.default_workspace);
-
-    let config_name = config.name.clone();
-    let access_token = config.access_token.clone();
-    let folder_id = config.folder_id.clone();
-
-    // Create a channel to send progress from the background thread
-    let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<BackupProgressEvent>();
-
-    // Clone app for the event emission task
-    let app_clone = app.clone();
-
-    // Spawn a task to forward progress events to the frontend
-    let event_task = tauri::async_runtime::spawn(async move {
-        while let Some(event) = progress_rx.recv().await {
-            let _ = app_clone.emit("backup_progress", &event);
-        }
-    });
-
-    // Run backup in a blocking thread
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let fs = RealFileSystem;
-
-        // Emit preparing stage
-        let _ = progress_tx.send(BackupProgressEvent {
-            stage: "preparing".to_string(),
-            percent: 5,
-            message: Some("Preparing backup...".to_string()),
-        });
-
-        let cloud_config = CloudBackupConfig {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: config.name.clone(),
-            provider: CloudProvider::GoogleDrive {
-                folder_id: folder_id.clone(),
-            },
-            enabled: true,
-        };
-
-        let target =
-            GoogleDriveTarget::new(cloud_config, access_token, folder_id).map_err(|e| {
-                SerializableError {
-                    kind: "GoogleDriveConfigError".to_string(),
-                    message: e,
-                    path: None,
-                }
-            })?;
-
-        // Use backup_with_progress for progress callbacks
-        let result =
-            target.backup_with_progress(&fs, &workspace, |stage, current, total, percent| {
-                let message = match stage {
-                    "preparing" => Some("Preparing backup...".to_string()),
-                    "zipping" => Some(format!("Zipping files: {}/{}", current, total)),
-                    "uploading" => Some("Uploading to Google Drive...".to_string()),
-                    "complete" => Some("Backup complete!".to_string()),
-                    "error" => Some("Backup failed".to_string()),
-                    _ => None,
-                };
-
-                let _ = progress_tx.send(BackupProgressEvent {
-                    stage: stage.to_string(),
-                    percent,
-                    message,
-                });
-            });
-
-        Ok::<_, SerializableError>(result)
-    })
-    .await
-    .map_err(|e| SerializableError {
-        kind: "SpawnError".to_string(),
-        message: e.to_string(),
-        path: None,
-    })??;
-
-    // Wait for event task to finish
-    let _ = event_task.await;
-
-    Ok(BackupStatus {
-        target_name: config_name,
-        success: result.success,
-        files_processed: result.files_processed,
-        error: result.error,
     })
 }
 
@@ -1755,7 +1621,7 @@ pub async fn append_import_chunk(
 /// Finish a chunked upload and import the zip file
 #[tauri::command]
 pub async fn finish_import_upload<R: Runtime>(
-    app: AppHandle<R>,
+    _app: AppHandle<R>,
     session_id: String,
     workspace_path: Option<String>,
 ) -> Result<ImportResult, SerializableError> {
@@ -1932,39 +1798,6 @@ pub async fn finish_import_upload<R: Runtime>(
         files_imported,
         files_skipped
     );
-
-    // Populate CRDT
-    log::info!("[Import] Populating CRDT state...");
-    let crdt_state = app.state::<CrdtState>();
-    let storage = {
-        let storage_guard = acquire_lock(&crdt_state.storage)?;
-        storage_guard.as_ref().map(Arc::clone)
-    };
-
-    if let Some(storage) = storage {
-        let diaryx = Diaryx::with_crdt_load(SyncToAsyncFs::new(RealFileSystem), storage)
-            .unwrap_or_else(|e| {
-                log::warn!("[Import] Failed to load CRDT state: {:?}", e);
-                Diaryx::new(SyncToAsyncFs::new(RealFileSystem))
-            });
-
-        // Initialize CRDT by scanning workspace
-        let cmd = Command::InitializeWorkspaceCrdt {
-            workspace_path: workspace.to_string_lossy().to_string(),
-            audience: None,
-        };
-
-        match diaryx.execute(cmd).await {
-            Ok(response) => {
-                log::info!("[Import] CRDT populated successfully: {:?}", response);
-            }
-            Err(e) => {
-                log::error!("[Import] Failed to populate CRDT: {:?}", e);
-            }
-        }
-    } else {
-        log::warn!("[Import] CRDT storage not available, skipping population");
-    }
 
     Ok(ImportResult {
         success: true,
@@ -2344,349 +2177,6 @@ pub async fn export_to_format<R: Runtime>(
 }
 
 // ============================================================================
-// Cloud Sync Commands
-// ============================================================================
-
-/// Result of a sync operation
-#[derive(Debug, Serialize)]
-pub struct SyncStatus {
-    pub provider: String,
-    pub success: bool,
-    pub files_uploaded: usize,
-    pub files_downloaded: usize,
-    pub files_deleted: usize,
-    pub conflicts: Vec<SyncConflict>,
-    pub error: Option<String>,
-}
-
-/// Information about a sync conflict
-#[derive(Debug, Serialize)]
-pub struct SyncConflict {
-    pub path: String,
-    pub local_modified: Option<i64>,
-    pub remote_modified: Option<String>,
-}
-
-/// Sync workspace with S3
-#[tauri::command]
-pub async fn sync_to_s3<R: Runtime>(
-    app: AppHandle<R>,
-    workspace_path: Option<String>,
-    config: S3ConfigRequest,
-) -> Result<SyncStatus, SerializableError> {
-    use crate::cloud::S3Target;
-    use diaryx_core::backup::{CloudBackupConfig, CloudProvider};
-    use diaryx_core::cloud::engine::SyncEngine;
-    use diaryx_core::cloud::{SyncProgress, SyncStage};
-    use tokio::sync::mpsc;
-
-    let paths = get_platform_paths(&app)?;
-    let workspace = workspace_path
-        .map(PathBuf::from)
-        .unwrap_or(paths.default_workspace);
-
-    let provider_id = format!("s3:{}", config.bucket);
-
-    // Create cloud config
-    let cloud_config = CloudBackupConfig {
-        id: uuid::Uuid::new_v4().to_string(),
-        name: config.name.clone(),
-        provider: CloudProvider::S3 {
-            bucket: config.bucket.clone(),
-            region: config.region.clone(),
-            prefix: config.prefix.clone(),
-            endpoint: config.endpoint.clone(),
-        },
-        enabled: true,
-    };
-
-    // Create S3 target
-    let target = S3Target::new(cloud_config, config.access_key, config.secret_key)
-        .await
-        .map_err(|e| SerializableError {
-            kind: "SyncError".to_string(),
-            message: e,
-            path: None,
-        })?;
-
-    // Create manifest path
-    let manifest_path = workspace.join(".diaryx").join("sync_manifest_s3.json");
-
-    // Create sync engine
-    let mut engine = SyncEngine::new(target, manifest_path);
-
-    // Create async filesystem wrapper
-    let fs = SyncToAsyncFs::new(RealFileSystem);
-
-    // Load existing manifest
-    if let Err(e) = engine.load_manifest(&fs).await {
-        log::warn!("Failed to load manifest: {}", e);
-    }
-
-    // Create channel for progress events
-    let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<SyncProgressEvent>();
-
-    // Clone app for the event emission task
-    let app_clone = app.clone();
-
-    // Spawn a task to forward progress events to the frontend
-    let event_task = tauri::async_runtime::spawn(async move {
-        while let Some(event) = progress_rx.recv().await {
-            let _ = app_clone.emit("sync_progress", &event);
-        }
-    });
-
-    // Run sync with progress callback
-    let result = engine
-        .sync_with_progress(&fs, &workspace, |progress: SyncProgress| {
-            let stage_str = match progress.stage {
-                SyncStage::DetectingLocal => "detecting_local",
-                SyncStage::DetectingRemote => "detecting_remote",
-                SyncStage::Uploading => "uploading",
-                SyncStage::Downloading => "downloading",
-                SyncStage::Deleting => "deleting",
-                SyncStage::Complete => "complete",
-                SyncStage::Error => "error",
-            };
-            let _ = progress_tx.send(SyncProgressEvent {
-                stage: stage_str.to_string(),
-                current: progress.current,
-                total: progress.total,
-                percent: progress.percent,
-                message: progress.message,
-            });
-        })
-        .await;
-
-    // Drop sender to close channel
-    drop(progress_tx);
-
-    // Wait for event task to finish
-    let _ = event_task.await;
-
-    // Convert conflicts
-    let conflicts: Vec<SyncConflict> = result
-        .conflicts
-        .iter()
-        .map(|c| SyncConflict {
-            path: c.path.clone(),
-            local_modified: c.local_modified_at,
-            remote_modified: c.remote_modified_at.map(|dt| dt.to_rfc3339()),
-        })
-        .collect();
-
-    Ok(SyncStatus {
-        provider: provider_id,
-        success: result.success,
-        files_uploaded: result.files_uploaded,
-        files_downloaded: result.files_downloaded,
-        files_deleted: result.files_deleted,
-        conflicts,
-        error: result.error,
-    })
-}
-
-/// Sync workspace with Google Drive
-#[tauri::command]
-pub async fn sync_to_google_drive<R: Runtime>(
-    app: AppHandle<R>,
-    workspace_path: Option<String>,
-    config: GoogleDriveConfigRequest,
-) -> Result<SyncStatus, SerializableError> {
-    use crate::cloud::GoogleDriveTarget;
-    use diaryx_core::backup::{CloudBackupConfig, CloudProvider};
-    use diaryx_core::cloud::engine::SyncEngine;
-    use diaryx_core::cloud::{SyncProgress, SyncStage};
-    use tokio::sync::mpsc;
-
-    let paths = get_platform_paths(&app)?;
-    let workspace = workspace_path
-        .map(PathBuf::from)
-        .unwrap_or(paths.default_workspace);
-
-    let provider_id = format!("gdrive:{}", config.folder_id.as_deref().unwrap_or("root"));
-
-    // Create cloud config
-    let cloud_config = CloudBackupConfig {
-        id: uuid::Uuid::new_v4().to_string(),
-        name: config.name.clone(),
-        provider: CloudProvider::GoogleDrive {
-            folder_id: config.folder_id.clone(),
-        },
-        enabled: true,
-    };
-
-    // Create Google Drive target
-    let target = GoogleDriveTarget::new(cloud_config, config.access_token, config.folder_id)
-        .map_err(|e| SerializableError {
-            kind: "SyncError".to_string(),
-            message: e,
-            path: None,
-        })?;
-
-    // Create manifest path
-    let manifest_path = workspace.join(".diaryx").join("sync_manifest_gdrive.json");
-
-    // Create sync engine
-    let mut engine = SyncEngine::new(target, manifest_path);
-
-    // Create async filesystem wrapper
-    let fs = SyncToAsyncFs::new(RealFileSystem);
-
-    // Load existing manifest
-    if let Err(e) = engine.load_manifest(&fs).await {
-        log::warn!("Failed to load manifest: {}", e);
-    }
-
-    // Create channel for progress events
-    let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<SyncProgressEvent>();
-
-    // Clone app for the event emission task
-    let app_clone = app.clone();
-
-    // Spawn a task to forward progress events to the frontend
-    let event_task = tauri::async_runtime::spawn(async move {
-        while let Some(event) = progress_rx.recv().await {
-            let _ = app_clone.emit("sync_progress", &event);
-        }
-    });
-
-    // Run sync with progress callback
-    let result = engine
-        .sync_with_progress(&fs, &workspace, |progress: SyncProgress| {
-            let stage_str = match progress.stage {
-                SyncStage::DetectingLocal => "detecting_local",
-                SyncStage::DetectingRemote => "detecting_remote",
-                SyncStage::Uploading => "uploading",
-                SyncStage::Downloading => "downloading",
-                SyncStage::Deleting => "deleting",
-                SyncStage::Complete => "complete",
-                SyncStage::Error => "error",
-            };
-            let _ = progress_tx.send(SyncProgressEvent {
-                stage: stage_str.to_string(),
-                current: progress.current,
-                total: progress.total,
-                percent: progress.percent,
-                message: progress.message,
-            });
-        })
-        .await;
-
-    // Drop sender to close channel
-    drop(progress_tx);
-
-    // Wait for event task to finish
-    let _ = event_task.await;
-
-    // Convert conflicts
-    let conflicts: Vec<SyncConflict> = result
-        .conflicts
-        .iter()
-        .map(|c| SyncConflict {
-            path: c.path.clone(),
-            local_modified: c.local_modified_at,
-            remote_modified: c.remote_modified_at.map(|dt| dt.to_rfc3339()),
-        })
-        .collect();
-
-    Ok(SyncStatus {
-        provider: provider_id,
-        success: result.success,
-        files_uploaded: result.files_uploaded,
-        files_downloaded: result.files_downloaded,
-        files_deleted: result.files_deleted,
-        conflicts,
-        error: result.error,
-    })
-}
-
-/// Get sync status (last sync time, pending changes)
-#[tauri::command]
-pub async fn get_sync_status<R: Runtime>(
-    app: AppHandle<R>,
-    provider: String,
-    workspace_path: Option<String>,
-) -> Result<SyncStatusInfo, SerializableError> {
-    use diaryx_core::cloud::SyncManifest;
-
-    let paths = get_platform_paths(&app)?;
-    let workspace = workspace_path
-        .map(PathBuf::from)
-        .unwrap_or(paths.default_workspace);
-
-    let manifest_filename = match provider.as_str() {
-        "s3" => "sync_manifest_s3.json",
-        "google_drive" | "gdrive" => "sync_manifest_gdrive.json",
-        _ => {
-            return Err(SerializableError {
-                kind: "SyncError".to_string(),
-                message: format!("Unknown provider: {}", provider),
-                path: None,
-            });
-        }
-    };
-
-    let manifest_path = workspace.join(".diaryx").join(manifest_filename);
-    let fs = SyncToAsyncFs::new(RealFileSystem);
-
-    let manifest = (SyncManifest::load_from_file(&fs, &manifest_path).await).ok();
-
-    Ok(SyncStatusInfo {
-        provider,
-        last_sync: manifest
-            .as_ref()
-            .and_then(|m| m.last_sync.map(|dt| dt.to_rfc3339())),
-        files_synced: manifest.as_ref().map(|m| m.files.len()).unwrap_or(0),
-        is_configured: manifest.is_some(),
-    })
-}
-
-/// Sync status information
-#[derive(Debug, Serialize)]
-pub struct SyncStatusInfo {
-    pub provider: String,
-    pub last_sync: Option<String>,
-    pub files_synced: usize,
-    pub is_configured: bool,
-}
-
-/// Resolve a sync conflict
-#[tauri::command]
-pub async fn resolve_sync_conflict<R: Runtime>(
-    app: AppHandle<R>,
-    provider: String,
-    path: String,
-    resolution: String,
-    _workspace_path: Option<String>,
-    _config: Option<serde_json::Value>,
-) -> Result<bool, SerializableError> {
-    use diaryx_core::cloud::conflict::ConflictResolution;
-
-    let _paths = get_platform_paths(&app)?;
-
-    let resolution = ConflictResolution::from_str(&resolution).map_err(|_| SerializableError {
-        kind: "SyncError".to_string(),
-        message: format!(
-            "Invalid resolution: {}. Use 'local', 'remote', 'both', or 'skip'",
-            resolution
-        ),
-        path: None,
-    })?;
-
-    // For now, just return success - the actual resolution would need to be implemented
-    // with the full sync engine context
-    log::info!(
-        "Conflict resolution requested for {} in {}: {:?}",
-        path,
-        provider,
-        resolution
-    );
-
-    Ok(true)
-}
-
-// ============================================================================
 // Guest Mode Commands
 // ============================================================================
 
@@ -2711,24 +2201,14 @@ pub async fn start_guest_mode<R: Runtime>(
         });
     }
 
-    // Build DecoratedFs stack with in-memory storage for CRDT persistence
+    // Create in-memory filesystem for guest mode
     let mem_fs = InMemoryFileSystem::new();
     let base_fs = SyncToAsyncFs::new(mem_fs.clone());
-    let decorated = DecoratedFsBuilder::new(base_fs)
-        .crdt_enabled(false) // Enabled after sync handshake
-        .build();
-
-    // Create and cache a Diaryx instance with shared CRDT instances
-    let diaryx = Diaryx::with_crdt_instances(
-        decorated.fs.clone(),
-        Arc::clone(&decorated.workspace_crdt),
-        Arc::clone(&decorated.body_doc_manager),
-    );
+    let diaryx = Diaryx::new(base_fs);
 
     *active = true;
     *acquire_lock(&guest_state.filesystem)? = Some(mem_fs);
     *acquire_lock(&guest_state.join_code)? = Some(join_code.clone());
-    *acquire_lock(&guest_state.decorated_fs)? = Some(decorated);
     *acquire_lock(&guest_state.diaryx)? = Some(Arc::new(diaryx));
 
     log::info!("[guest_mode] Started guest mode for session: {}", join_code);
@@ -2751,7 +2231,6 @@ pub async fn end_guest_mode<R: Runtime>(app: AppHandle<R>) -> Result<(), Seriali
     *acquire_lock(&guest_state.join_code)? = None;
     *acquire_lock(&guest_state.filesystem)? = None;
     *acquire_lock(&guest_state.diaryx)? = None;
-    *acquire_lock(&guest_state.decorated_fs)? = None;
 
     if was_active {
         log::info!(
@@ -2774,69 +2253,30 @@ pub fn is_guest_mode<R: Runtime>(app: AppHandle<R>) -> Result<bool, Serializable
 }
 
 // ============================================================================
-// CrdtFs Control Commands
-// ============================================================================
-
-/// Enable or disable CRDT updates on the decorated filesystem.
-///
-/// When enabled, file writes will populate CRDTs for sync.
-/// Should be called after sync handshake completes.
-#[tauri::command]
-pub async fn set_crdt_enabled<R: Runtime>(
-    app: AppHandle<R>,
-    enabled: bool,
-) -> Result<(), SerializableError> {
-    log::info!("[set_crdt_enabled] Setting CRDT enabled: {}", enabled);
-    let state = app.state::<CrdtState>();
-    let guard = acquire_lock(&state.decorated_fs)?;
-    if let Some(ref decorated) = *guard {
-        decorated.set_crdt_enabled(enabled);
-    }
-    Ok(())
-}
-
-/// Check if CRDT updates are currently enabled.
-#[tauri::command]
-pub async fn is_crdt_enabled<R: Runtime>(app: AppHandle<R>) -> Result<bool, SerializableError> {
-    let state = app.state::<CrdtState>();
-    let guard = acquire_lock(&state.decorated_fs)?;
-    Ok(guard.as_ref().map(|d| d.is_crdt_enabled()).unwrap_or(false))
-}
-
-// ============================================================================
 // Workspace Reinitialization
 // ============================================================================
 
 /// Reinitialize the app for a different workspace directory.
 ///
-/// Used when switching workspaces in Tauri. Stops any running sync,
-/// clears cached state, and builds a new DecoratedFs for the given path.
+/// Used when switching workspaces in Tauri. Clears cached state so
+/// the next `execute()` call creates a fresh Diaryx instance.
 #[tauri::command]
 pub async fn reinitialize_workspace<R: Runtime>(
     app: AppHandle<R>,
     workspace_path: String,
-    needs_crdt: Option<bool>,
 ) -> Result<AppPaths, SerializableError> {
-    let needs_crdt = needs_crdt.unwrap_or(true);
     log::info!(
-        "[reinitialize_workspace] Reinitializing for workspace: {} (needs_crdt: {})",
+        "[reinitialize_workspace] Reinitializing for workspace: {}",
         workspace_path,
-        needs_crdt,
     );
 
-    // 1. Stop any running sync
-    stop_websocket_sync(app.clone()).await?;
-
-    // 2. Clear cached diaryx (forces re-creation on next execute())
-    let state = app.state::<CrdtState>();
+    // 1. Clear cached diaryx (forces re-creation on next execute())
+    let state = app.state::<AppState>();
     {
         *acquire_lock(&state.diaryx)? = None;
     }
-    {
-        *acquire_lock(&state.decorated_fs)? = None;
-    }
 
-    // 3. Ensure workspace directory exists
+    // 2. Ensure workspace directory exists
     let ws_path = PathBuf::from(&workspace_path);
 
     // On iOS, the sandbox container UUID changes between launches, so stored
@@ -2862,57 +2302,12 @@ pub async fn reinitialize_workspace<R: Runtime>(
         path: Some(ws_path.clone()),
     })?;
 
-    // 4. Initialize CRDT storage (only if needed for sync)
-    let storage: Option<Arc<SqliteStorage>> = if needs_crdt {
-        let crdt_dir = ws_path.join(".diaryx");
-        std::fs::create_dir_all(&crdt_dir).map_err(|e| SerializableError {
-            kind: "IoError".to_string(),
-            message: format!("Failed to create CRDT directory: {}", e),
-            path: Some(crdt_dir.clone()),
-        })?;
-        let db_path = crdt_dir.join("crdt.db");
-        Some(Arc::new(SqliteStorage::open(&db_path).map_err(|e| {
-            SerializableError {
-                kind: "CrdtError".to_string(),
-                message: format!("Failed to open CRDT storage: {:?}", e),
-                path: Some(db_path.clone()),
-            }
-        })?))
-    } else {
-        None
-    };
-
-    // 5. Build DecoratedFs (with or without CRDT)
-    let base_fs = SyncToAsyncFs::new(RealFileSystem);
-    let mut builder = DecoratedFsBuilder::new(base_fs);
-    if let Some(ref s) = storage {
-        builder = builder.with_crdt(Arc::clone(s) as Arc<dyn CrdtStorage>);
-    }
-    let decorated =
-        builder
-            .crdt_enabled(false)
-            .build_with_load()
-            .map_err(|e| SerializableError {
-                kind: "CrdtError".to_string(),
-                message: format!("Failed to build DecoratedFs: {:?}", e),
-                path: None,
-            })?;
-
-    // 6. Update CrdtState
-    // Set workspace root on CrdtFs so absolute filesystem paths are normalized
-    // to workspace-relative CRDT keys (e.g., README.md instead of /Users/.../README.md)
-    decorated.set_workspace_root(ws_path.clone());
+    // 3. Update AppState
     {
         *acquire_lock(&state.workspace_path)? = Some(ws_path.clone());
     }
-    {
-        *acquire_lock(&state.storage)? = storage.map(|s| s as Arc<dyn CrdtStorage>);
-    }
-    {
-        *acquire_lock(&state.decorated_fs)? = Some(decorated);
-    }
 
-    // 7. Return AppPaths
+    // 4. Return AppPaths
     let paths = get_platform_paths(&app)?;
     Ok(AppPaths {
         data_dir: paths.data_dir,
@@ -2920,252 +2315,7 @@ pub async fn reinitialize_workspace<R: Runtime>(
         default_workspace: ws_path,
         config_path: paths.config_path,
         is_mobile: paths.is_mobile,
-        crdt_initialized: needs_crdt,
-        crdt_error: None,
     })
-}
-
-// ============================================================================
-// WebSocket Sync Commands (V2 — single WebSocket to /sync2, via SyncClient)
-// ============================================================================
-
-use std::sync::atomic::{AtomicBool, Ordering};
-
-use diaryx_core::crdt::{
-    ReconnectConfig, SyncClient, SyncClientConfig, SyncEvent, SyncEventHandler,
-    SyncStatus as WsSyncStatus, TokioConnector,
-};
-
-/// State for WebSocket sync connections (V2 protocol).
-///
-/// Holds the background sync task handle and atomic flags for status.
-pub struct WebSocketSyncState {
-    /// Handle to the background sync task.
-    task_handle: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
-    /// Whether the sync loop is running.
-    running: Arc<AtomicBool>,
-    /// Whether the WebSocket is currently connected.
-    connected: Arc<AtomicBool>,
-}
-
-impl WebSocketSyncState {
-    pub fn new() -> Self {
-        Self {
-            task_handle: tokio::sync::Mutex::new(None),
-            running: Arc::new(AtomicBool::new(false)),
-            connected: Arc::new(AtomicBool::new(false)),
-        }
-    }
-}
-
-impl Default for WebSocketSyncState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Tauri event handler that forwards SyncEvents to the frontend via Tauri events.
-struct TauriEventHandler<R: Runtime> {
-    app: AppHandle<R>,
-    connected: Arc<AtomicBool>,
-}
-
-impl<R: Runtime> SyncEventHandler for TauriEventHandler<R> {
-    fn on_event(&self, event: SyncEvent) {
-        match event {
-            SyncEvent::StatusChanged { status } => {
-                // Map SyncStatus to { metadata, body } format expected by TypeScript.
-                // - Connected = WS open, handshake starting → metadata still connecting
-                // - Syncing = workspace metadata synced → metadata connected
-                // - Synced = everything synced → both connected
-                let (metadata, body) = match &status {
-                    WsSyncStatus::Connecting => ("connecting", "disconnected"),
-                    WsSyncStatus::Connected => ("connecting", "disconnected"),
-                    WsSyncStatus::Syncing => ("connected", "connecting"),
-                    WsSyncStatus::Synced => ("connected", "connected"),
-                    WsSyncStatus::Reconnecting { .. } => ("disconnected", "disconnected"),
-                    WsSyncStatus::Disconnected => ("disconnected", "disconnected"),
-                };
-                self.connected.store(
-                    matches!(
-                        status,
-                        WsSyncStatus::Connected | WsSyncStatus::Syncing | WsSyncStatus::Synced
-                    ),
-                    Ordering::SeqCst,
-                );
-                let _ = self.app.emit(
-                    "sync-status-changed",
-                    serde_json::json!({ "metadata": metadata, "body": body }),
-                );
-            }
-            SyncEvent::Progress { completed, total } => {
-                let _ = self.app.emit(
-                    "sync-progress",
-                    serde_json::json!({ "completed": completed, "total": total }),
-                );
-            }
-            SyncEvent::FilesChanged { files } => {
-                let _ = self.app.emit("sync-files-changed", &files);
-            }
-            SyncEvent::BodyChanged { file_path } => {
-                let _ = self.app.emit("sync-body-changed", &file_path);
-            }
-            SyncEvent::Error { message } => {
-                let _ = self.app.emit("sync-error", &message);
-            }
-        }
-    }
-}
-
-/// Start WebSocket sync connection using V2 protocol (single WS to /sync2).
-///
-/// Connects to the specified sync server and begins real-time sync using the
-/// siphonophore multiplexed wire format via the centralized `SyncClient`.
-#[tauri::command]
-pub async fn start_websocket_sync<R: Runtime>(
-    app: AppHandle<R>,
-    server_url: String,
-    doc_name: String,
-    auth_token: Option<String>,
-) -> Result<(), SerializableError> {
-    log::info!(
-        "[start_websocket_sync] Starting V2 sync to {} with doc {}",
-        server_url,
-        doc_name
-    );
-
-    // Stop any existing sync first
-    stop_websocket_sync(app.clone()).await?;
-
-    let crdt_state = app.state::<CrdtState>();
-
-    let workspace_root = {
-        let ws_guard = crdt_state
-            .workspace_path
-            .lock()
-            .map_err(|e| SerializableError {
-                kind: "SyncError".to_string(),
-                message: format!("Failed to acquire workspace_path lock: {}", e),
-                path: None,
-            })?;
-        ws_guard.clone()
-    };
-
-    // Extract sync_manager from cached Diaryx instance.
-    let sync_manager = {
-        let diaryx_guard = crdt_state.diaryx.lock().map_err(|e| SerializableError {
-            kind: "SyncError".to_string(),
-            message: format!("Failed to acquire diaryx lock: {}", e),
-            path: None,
-        })?;
-
-        let diaryx = diaryx_guard.as_ref().ok_or_else(|| SerializableError {
-            kind: "SyncError".to_string(),
-            message: "No sync_manager available - CRDT not initialized".to_string(),
-            path: None,
-        })?;
-
-        // Ensure sync path canonicalization can strip absolute workspace prefixes.
-        if let Some(root) = workspace_root.clone() {
-            diaryx.set_workspace_root(root);
-        }
-
-        diaryx
-            .sync_manager()
-            .cloned()
-            .ok_or_else(|| SerializableError {
-                kind: "SyncError".to_string(),
-                message: "No sync_manager available - CRDT not initialized".to_string(),
-                path: None,
-            })?
-    };
-
-    let ws_state = app.state::<WebSocketSyncState>();
-    let running = ws_state.running.clone();
-    let connected = ws_state.connected.clone();
-    running.store(true, Ordering::SeqCst);
-    connected.store(false, Ordering::SeqCst);
-
-    let config = SyncClientConfig {
-        server_url,
-        workspace_id: doc_name,
-        auth_token,
-        reconnect: ReconnectConfig::default(),
-    };
-
-    let event_handler: Arc<dyn SyncEventHandler> = Arc::new(TauriEventHandler {
-        app: app.clone(),
-        connected: connected.clone(),
-    });
-
-    let client = SyncClient::new(config, sync_manager, event_handler, TokioConnector);
-    let task_running = running.clone();
-
-    // Spawn the background sync loop
-    let task = tokio::spawn(async move {
-        client.run_persistent(task_running).await;
-        running.store(false, Ordering::SeqCst);
-        connected.store(false, Ordering::SeqCst);
-    });
-
-    // Store task handle
-    let mut handle_guard = ws_state.task_handle.lock().await;
-    *handle_guard = Some(task);
-
-    log::info!("[start_websocket_sync] V2 sync started successfully");
-    Ok(())
-}
-
-/// Stop WebSocket sync connection.
-#[tauri::command]
-pub async fn stop_websocket_sync<R: Runtime>(app: AppHandle<R>) -> Result<(), SerializableError> {
-    log::info!("[stop_websocket_sync] Stopping sync");
-
-    // Clear the event callback on the sync_manager
-    let crdt_state = app.state::<CrdtState>();
-    if let Ok(guard) = crdt_state.diaryx.lock() {
-        if let Some(ref diaryx) = *guard {
-            if let Some(sync_manager) = diaryx.sync_manager() {
-                sync_manager.clear_event_callback();
-            }
-        }
-    }
-
-    let ws_state = app.state::<WebSocketSyncState>();
-
-    // Signal the loop to stop
-    ws_state.running.store(false, Ordering::SeqCst);
-
-    // Abort the background task
-    let mut handle_guard = ws_state.task_handle.lock().await;
-    if let Some(handle) = handle_guard.take() {
-        handle.abort();
-    }
-    ws_state.connected.store(false, Ordering::SeqCst);
-
-    log::info!("[stop_websocket_sync] Sync stopped");
-    Ok(())
-}
-
-/// Get WebSocket sync status.
-#[tauri::command]
-pub async fn get_websocket_sync_status<R: Runtime>(
-    app: AppHandle<R>,
-) -> Result<WebSocketSyncStatusResponse, SerializableError> {
-    let ws_state = app.state::<WebSocketSyncState>();
-    Ok(WebSocketSyncStatusResponse {
-        connected: ws_state.connected.load(Ordering::SeqCst),
-        running: ws_state.running.load(Ordering::SeqCst),
-    })
-}
-
-/// WebSocket sync status response.
-#[derive(Debug, Serialize)]
-pub struct WebSocketSyncStatusResponse {
-    /// Whether the WebSocket is currently connected.
-    pub connected: bool,
-    /// Whether the sync loop is running (may be reconnecting).
-    pub running: bool,
 }
 
 // ============================================================================
@@ -3284,167 +2434,4 @@ pub async fn proxy_fetch(
         headers: resp_headers,
         body_base64,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use diaryx_core::crdt::SqliteStorage;
-    use std::time::Instant;
-
-    /// Performance test to verify CRDT caching works.
-    ///
-    /// This test validates that:
-    /// 1. First command execution (cold start) loads CRDT from storage
-    /// 2. Subsequent commands reuse the cached Diaryx instance and are fast
-    #[tokio::test]
-    async fn test_crdt_caching_performance() {
-        // Setup: create temp directory with SQLite storage and files
-        let temp_dir = tempfile::tempdir().unwrap();
-        let db_path = temp_dir.path().join("crdt.sqlite");
-        let workspace_path = temp_dir.path().join("workspace");
-        std::fs::create_dir_all(&workspace_path).unwrap();
-
-        // Create SQLite storage
-        let storage = Arc::new(SqliteStorage::open(&db_path).unwrap());
-
-        // Create workspace with ~50 test files to simulate real usage
-        let diaryx_setup = Diaryx::with_crdt(
-            SyncToAsyncFs::new(RealFileSystem),
-            Arc::clone(&storage) as Arc<dyn CrdtStorage>,
-        );
-        diaryx_setup.set_workspace_root(workspace_path.clone());
-
-        // Create index file
-        let index_path = workspace_path.join("index.md");
-        std::fs::write(&index_path, "---\ntitle: Test Workspace\n---\n# Test\n").unwrap();
-
-        // Create 50 test files to simulate a real workspace
-        for i in 0..50 {
-            let file_path = workspace_path.join(format!("note_{}.md", i));
-            std::fs::write(
-                &file_path,
-                format!(
-                    "---\ntitle: Note {}\n---\n# Note {}\n\nContent for note {}.\n",
-                    i, i, i
-                ),
-            )
-            .unwrap();
-        }
-
-        // Initialize workspace CRDT (populate with files)
-        let cmd = Command::InitializeWorkspaceCrdt {
-            workspace_path: workspace_path.to_string_lossy().to_string(),
-            audience: None,
-        };
-        let _ = diaryx_setup.execute(cmd).await;
-        drop(diaryx_setup);
-
-        // Build DecoratedFs like Tauri does
-        let base_fs = SyncToAsyncFs::new(RealFileSystem);
-        let decorated = DecoratedFsBuilder::new(base_fs)
-            .with_crdt(Arc::clone(&storage) as Arc<dyn CrdtStorage>)
-            .crdt_enabled(false)
-            .build_with_load()
-            .unwrap();
-
-        // Setup CrdtState like Tauri does
-        let crdt_state = CrdtState {
-            workspace_path: Mutex::new(Some(workspace_path.clone())),
-            storage: Mutex::new(Some(Arc::clone(&storage) as Arc<dyn CrdtStorage>)),
-            decorated_fs: Mutex::new(Some(decorated)),
-            diaryx: Mutex::new(None), // Start with no cached instance
-        };
-
-        // Helper to execute a command using the CrdtState (simulating execute() logic)
-        async fn execute_with_state(
-            state: &CrdtState,
-            cmd: Command,
-        ) -> Result<diaryx_core::command::Response, diaryx_core::error::DiaryxError> {
-            // Try cached diaryx first
-            let cached = {
-                let guard = state.diaryx.lock().unwrap();
-                guard.as_ref().map(Arc::clone)
-            };
-
-            let diaryx = if let Some(cached) = cached {
-                cached
-            } else {
-                // Build from DecoratedFs (slow path)
-                let ws_path = {
-                    let guard = state.workspace_path.lock().unwrap();
-                    guard.clone()
-                };
-
-                let new = {
-                    let decorated_guard = state.decorated_fs.lock().unwrap();
-                    if let Some(ref decorated) = *decorated_guard {
-                        let d = Diaryx::with_crdt_instances(
-                            decorated.fs.clone(),
-                            Arc::clone(&decorated.workspace_crdt),
-                            Arc::clone(&decorated.body_doc_manager),
-                        );
-                        if let Some(ref ws) = ws_path {
-                            d.set_workspace_root(ws.clone());
-                            decorated.set_workspace_root(ws.clone());
-                        }
-                        Arc::new(d)
-                    } else {
-                        let base_fs = SyncToAsyncFs::new(RealFileSystem);
-                        let decorated =
-                            DecoratedFsBuilder::new(base_fs).crdt_enabled(false).build();
-                        Arc::new(Diaryx::with_crdt_instances(
-                            decorated.fs.clone(),
-                            Arc::clone(&decorated.workspace_crdt),
-                            Arc::clone(&decorated.body_doc_manager),
-                        ))
-                    }
-                };
-
-                // Cache it
-                {
-                    let mut guard = state.diaryx.lock().unwrap();
-                    *guard = Some(Arc::clone(&new));
-                }
-                new
-            };
-
-            diaryx.execute(cmd).await
-        }
-
-        // Test 1: First command should work (may take time to load CRDT)
-        let first_cmd = Command::GetEntry {
-            path: index_path.to_string_lossy().to_string(),
-        };
-        let start = Instant::now();
-        let result = execute_with_state(&crdt_state, first_cmd).await;
-        let first_duration = start.elapsed();
-        assert!(result.is_ok(), "First command should succeed");
-        println!("First command (cold): {:?}", first_duration);
-
-        // Test 2: Subsequent commands should be fast (cached)
-        let mut total_warm_duration = std::time::Duration::ZERO;
-        for i in 0..10 {
-            let cmd = Command::GetEntry {
-                path: workspace_path
-                    .join(format!("note_{}.md", i % 50))
-                    .to_string_lossy()
-                    .to_string(),
-            };
-            let start = Instant::now();
-            let result = execute_with_state(&crdt_state, cmd).await;
-            total_warm_duration += start.elapsed();
-            assert!(result.is_ok(), "Subsequent command {} should succeed", i);
-        }
-        let avg_warm_duration = total_warm_duration / 10;
-        println!("Average warm command: {:?}", avg_warm_duration);
-
-        // Assert: warm commands should be significantly faster than 100ms each
-        // (Before fix: each command could take 10+ seconds due to CRDT reload)
-        assert!(
-            avg_warm_duration.as_millis() < 100,
-            "Cached commands should complete in <100ms, got {:?}",
-            avg_warm_duration
-        );
-    }
 }

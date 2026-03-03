@@ -65,7 +65,7 @@ describe('api', () => {
 
       expect(mockBackend.execute).toHaveBeenCalledWith({
         type: 'SaveEntry',
-        params: { path: 'test.md', content: '# Updated Content', root_index_path: null },
+        params: { path: 'test.md', content: '# Updated Content', root_index_path: null, detect_h1_title: false },
       })
     })
   })
@@ -97,7 +97,7 @@ describe('api', () => {
 
       await api.createEntry('new-entry.md', {
         title: 'New Entry',
-        template: 'daily',
+        template: 'note',
         part_of: 'index.md',
       })
 
@@ -105,7 +105,7 @@ describe('api', () => {
         type: 'CreateEntry',
         params: {
           path: 'new-entry.md',
-          options: { title: 'New Entry', part_of: 'index.md', template: 'daily', root_index_path: null },
+          options: { title: 'New Entry', part_of: 'index.md', template: 'note', root_index_path: null },
         },
       })
     })
@@ -372,37 +372,37 @@ describe('api', () => {
   })
 
   describe('template operations', () => {
-    it('should list templates', async () => {
+    it('should list templates via plugin command', async () => {
       const mockTemplates = [
-        { name: 'daily', path: 'templates/daily.md', source: 'workspace' },
+        { name: 'note', path: 'templates/note.md', source: 'workspace' },
       ]
       vi.mocked(mockBackend.execute).mockResolvedValue({
-        type: 'Templates',
+        type: 'PluginResult',
         data: mockTemplates,
       })
 
       const result = await api.listTemplates()
 
       expect(mockBackend.execute).toHaveBeenCalledWith({
-        type: 'ListTemplates',
-        params: { workspace_path: null },
+        type: 'PluginCommand',
+        params: { plugin: 'diaryx.templating', command: 'ListTemplates', params: { workspace_path: null } },
       })
       expect(result).toEqual(mockTemplates)
     })
 
-    it('should get template content', async () => {
+    it('should get template content via plugin command', async () => {
       vi.mocked(mockBackend.execute).mockResolvedValue({
-        type: 'String',
-        data: '# Daily Entry\n\nDate: {{date}}',
+        type: 'PluginResult',
+        data: '# Note\n\n{{content}}',
       })
 
-      const result = await api.getTemplate('daily')
+      const result = await api.getTemplate('note')
 
       expect(mockBackend.execute).toHaveBeenCalledWith({
-        type: 'GetTemplate',
-        params: { name: 'daily', workspace_path: null },
+        type: 'PluginCommand',
+        params: { plugin: 'diaryx.templating', command: 'GetTemplate', params: { name: 'note', workspace_path: null } },
       })
-      expect(result).toBe('# Daily Entry\n\nDate: {{date}}')
+      expect(result).toBe('# Note\n\n{{content}}')
     })
   })
 

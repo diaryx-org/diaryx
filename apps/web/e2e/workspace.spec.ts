@@ -17,27 +17,19 @@ test.describe('Workspace', () => {
     await expect(editor).toBeVisible()
   })
 
-  test('should display the right sidebar with tabs', async ({ page }) => {
-    const propsTab = page.locator('button').filter({ hasText: 'Props' })
-    const historyTab = page.locator('button').filter({ hasText: 'History' })
-    const shareTab = page.locator('button').filter({ hasText: 'Share' })
+  test('should display the right sidebar', async ({ page }) => {
+    // The right sidebar should be visible with the properties content.
+    // Tab bar is hidden when there is only one tab (no plugins loaded).
+    const sidebar = page.locator('aside.border-l')
+    await expect(sidebar).toBeVisible()
 
-    await expect(propsTab).toBeVisible()
-    await expect(historyTab).toBeVisible()
-    await expect(shareTab).toBeVisible()
+    // Properties content should be shown by default
+    const addPropertyButton = page.locator('aside').locator('button').filter({ hasText: 'Add Property' })
+    await expect(addPropertyButton).toBeVisible()
   })
 
-  test('should switch between sidebar tabs', async ({ page }) => {
-    const historyTab = page.locator('button').filter({ hasText: 'History' })
-    await historyTab.click()
-    await expect(page.locator('text=Version History')).toBeVisible()
-
-    const shareTab = page.locator('button').filter({ hasText: 'Share' })
-    await shareTab.click()
-    await expect(page.getByRole('heading', { name: 'Live Collaboration' })).toBeVisible()
-
-    const propsTab = page.locator('button').filter({ hasText: 'Props' })
-    await propsTab.click()
+  test('should show properties panel by default', async ({ page }) => {
+    // Without plugins, the right sidebar defaults to the properties view
     const hasProperties = await page.locator('text=Add Property').isVisible()
     expect(hasProperties).toBe(true)
   })
@@ -67,9 +59,7 @@ test.describe('Workspace Entry Properties', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/')
     await waitForAppReady(page)
-
-    const propsTab = page.locator('button').filter({ hasText: 'Props' })
-    await propsTab.click()
+    // Properties is the default right sidebar view; no tab click needed
   })
 
   test('should show attachments section in properties', async ({ page }) => {

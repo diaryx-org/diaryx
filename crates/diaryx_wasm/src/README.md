@@ -11,7 +11,6 @@ attachments:
   - '[js_async_fs.rs](/crates/diaryx_wasm/src/js_async_fs.rs)'
   - '[opfs_fs.rs](/crates/diaryx_wasm/src/opfs_fs.rs)'
   - '[utils.rs](/crates/diaryx_wasm/src/utils.rs)'
-  - '[wasm_sqlite_storage.rs](/crates/diaryx_wasm/src/wasm_sqlite_storage.rs)'
 exclude:
   - '*.lock'
 ---
@@ -32,13 +31,14 @@ This directory contains the source code for the WASM bindings.
 | `js_async_fs.rs` | JavaScript async filesystem adapter |
 | `opfs_fs.rs` | Origin Private File System filesystem |
 | `utils.rs` | Utility functions for WASM |
-| `wasm_sqlite_storage.rs` | SQLite storage for WASM CRDT |
 
-`backend.rs` keeps `setCrdtEnabled` synchronized between the control-side
-filesystem handle and the command-execution `Diaryx` filesystem handle so guest
-session edits correctly emit CRDT updates after sync bootstrap.
+## Architecture
 
-`backend.rs` also exposes import parsing functions (`parseDayOneJson`, `parseMarkdownFile`)
+`diaryx_wasm` depends only on `diaryx_core`. Sync and publish functionality
+are provided by Extism guest plugins (`diaryx_sync.wasm`, `diaryx_publish.wasm`)
+loaded at runtime by the browser plugin manager.
+
+`backend.rs` exposes import parsing functions (`parseDayOneJson`, `parseMarkdownFile`)
 that take raw file bytes from JavaScript and return parsed entries as JSON. These
 are used by the web UI's `FormatImportSettings` component. The actual entry
 writing is handled by the `ImportEntries` command through `execute()`/`executeJs()`.

@@ -11,6 +11,7 @@
   import { ColoredHighlightMark } from "./extensions/ColoredHighlightMark";
   import Typography from "@tiptap/extension-typography";
   import Image from "@tiptap/extension-image";
+  import { getPathForBlobUrl, getBlobUrl, isVideoFile, isAudioFile, queueResolveAttachment } from "../models/services/attachmentService";
   import { Table } from "@tiptap/extension-table";
   import { TableRow } from "@tiptap/extension-table-row";
   import { TableHeader } from "@tiptap/extension-table-header";
@@ -31,8 +32,6 @@
   import { AttachmentPickerNode } from "./extensions/AttachmentPickerNode";
   // Custom extension for inline block picker (replaces FloatingMenu expanded state)
   import { BlockPickerNode } from "./extensions/BlockPickerNode";
-  // Custom extension for Discord-style spoiler syntax
-  import { SpoilerMark } from "./extensions/SpoilerMark";
   // Custom extension for raw HTML blocks
   import { HtmlBlock } from "./extensions/HtmlBlock";
   // Custom extension for inline drawing blocks
@@ -41,16 +40,14 @@
   import { TableControls } from "./extensions/TableControls";
   // Custom extension for markdown footnotes
   import { FootnoteRef, preprocessFootnotes, appendFootnoteDefinitions } from "./extensions/FootnoteRef";
-  // Custom extension for template variables ({{ variable }} syntax)
-  import { TemplateVariable } from "./extensions/TemplateVariable";
-  // Custom extension for conditional block markers ({{#if}}, {{#for-audience}}, etc.)
-  import { ConditionalBlock } from "./extensions/ConditionalBlock";
   import { getTemplateContextStore } from "./stores/templateContextStore.svelte";
+  import { getEditorExtensions } from "$lib/plugins/browserPluginManager.svelte";
   import type { Api } from "$lib/backend/api";
   import { isTauri } from "$lib/backend/interface";
   import { isIOS } from "$lib/hooks/useMobile.svelte";
   import { workspaceStore } from "@/models/stores/workspaceStore.svelte";
   import { getLinkFormatStore } from "$lib/stores/linkFormatStore.svelte";
+  import { getPluginStore } from "@/models/stores/pluginStore.svelte";
   import type { TreeNode } from "$lib/backend";
 
   // On iOS Tauri, a native UIToolbar replaces the web BubbleMenu
@@ -79,8 +76,6 @@
       blobUrl?: string;
       sourceEntryPath: string;
     }) => void;
-    // Formatting options
-    enableSpoilers?: boolean;
   }
 
   let {
@@ -95,7 +90,6 @@
     entryPath = "",
     api = null,
     onAttachmentInsert,
-    enableSpoilers = true,
   }: Props = $props();
 
   let element: HTMLDivElement;
@@ -120,7 +114,6 @@
   // This avoids constantly recreating the editor (which can lead to blank content/races).
   let lastReadonly: boolean | null = null;
   let lastPlaceholder: string | null = null;
-  let lastEnableSpoilers: boolean | null = null;
 
   function destroyEditor() {
     editor?.destroy();
@@ -141,8 +134,8 @@
   function createEditor() {
     destroyEditor();
 
-    // In non-readonly mode, require FloatingMenu element
-    if (!readonly && !floatingMenuElement) {
+    // In non-readonly mode, require FloatingMenu unless native iOS toolbar is active
+    if (!readonly && !useNativeToolbar && !floatingMenuElement) {
       if (debugMenus) {
         console.log(
           "[Editor] FloatingMenu element not ready, deferring editor creation",
@@ -163,9 +156,6 @@
         //transformCopiedText: true,
         markedOptions: { gfm: true },
       }),
-      // Always load SpoilerMark to ensure consistent parsing (tokenizer stays registered in marked.js)
-      // Pass enabled option to control visual behavior
-      SpoilerMark.configure({ enabled: enableSpoilers }),
       Link.configure({
         openOnClick: false,
         HTMLAttributes: {
@@ -230,6 +220,117 @@
         allowBase64: true,
         HTMLAttributes: {
           class: "editor-image",
+          loading: "lazy",
+        },
+      }).extend({
+        addNodeView() {
+          // Capture entryPath and api from the outer scope (Editor props)
+          const ep = entryPath;
+          const epApi = api;
+          return ({ node, HTMLAttributes }) => {
+            const src = node.attrs.src || "";
+            const alt = node.attrs.alt || "";
+            const title = node.attrs.title || "";
+
+            const isLocalPath = src && !src.startsWith('blob:') && !src.startsWith('http://') && !src.startsWith('https://') && !src.startsWith('data:');
+
+            // For local paths, check media type from the raw path
+            // For blob URLs, look up the original path
+            const originalPath = isLocalPath ? src : getPathForBlobUrl(src);
+            const checkPath = originalPath || src;
+            const isVideo = isVideoFile(checkPath);
+            const isAudio = isAudioFile(checkPath);
+
+            // Transparent 1x1 GIF used as placeholder src for loading images.
+            // Without a real src, <img> elements create "dead zones" in
+            // contenteditable that capture mouse events and block text selection.
+            const PLACEHOLDER_SRC = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
+            /** Mark an element as loading: add shimmer class and disable pointer events. */
+            function setLoading(el: HTMLElement) {
+              el.classList.add("editor-image--loading");
+            }
+            /** Clear loading state and restore pointer events. */
+            function clearLoading(el: HTMLElement) {
+              el.classList.remove("editor-image--loading");
+            }
+
+            let dom: HTMLElement;
+
+            if (isVideo) {
+              const video = document.createElement("video");
+              video.controls = true;
+              video.preload = "metadata";
+              video.className = "editor-image editor-video";
+              if (title) video.title = title;
+              if (isLocalPath && epApi) {
+                const cached = getBlobUrl(src);
+                if (cached) {
+                  video.src = cached;
+                } else {
+                  setLoading(video);
+                  queueResolveAttachment(epApi, ep, src).then((blobUrl) => {
+                    if (blobUrl) {
+                      video.src = blobUrl;
+                      clearLoading(video);
+                    }
+                  });
+                }
+              } else {
+                video.src = src;
+              }
+              dom = video;
+            } else if (isAudio) {
+              const audio = document.createElement("audio");
+              audio.controls = true;
+              audio.preload = "metadata";
+              audio.className = "editor-audio";
+              if (title) audio.title = title;
+              if (isLocalPath && epApi) {
+                const cached = getBlobUrl(src);
+                if (cached) {
+                  audio.src = cached;
+                } else {
+                  setLoading(audio);
+                  queueResolveAttachment(epApi, ep, src).then((blobUrl) => {
+                    if (blobUrl) {
+                      audio.src = blobUrl;
+                      clearLoading(audio);
+                    }
+                  });
+                }
+              } else {
+                audio.src = src;
+              }
+              dom = audio;
+            } else {
+              const img = document.createElement("img");
+              img.alt = alt;
+              img.loading = "lazy";
+              img.className = HTMLAttributes.class || "editor-image";
+              if (title) img.title = title;
+              if (isLocalPath && epApi) {
+                const cached = getBlobUrl(src);
+                if (cached) {
+                  img.src = cached;
+                } else {
+                  img.src = PLACEHOLDER_SRC;
+                  setLoading(img);
+                  queueResolveAttachment(epApi, ep, src).then((blobUrl) => {
+                    if (blobUrl) {
+                      img.src = blobUrl;
+                      clearLoading(img);
+                    }
+                  });
+                }
+              } else {
+                img.src = src;
+              }
+              dom = img;
+            }
+
+            return { dom };
+          };
         },
       }),
       Table.configure({ resizable: false }).extend({
@@ -318,10 +419,6 @@
       TableControls,
       // Footnote extension
       FootnoteRef,
-      // Template variable extension ({{ variable }} with live value resolution)
-      TemplateVariable,
-      // Conditional block markers ({{#if}}, {{#for-audience}}, {{else}}, {{/if}})
-      ConditionalBlock.configure({ enabled: true }),
       // Raw HTML block extension
       HtmlBlock.configure({
         entryPath,
@@ -346,10 +443,13 @@
           ? () => editor?.commands.insertAttachmentPicker()
           : undefined,
       }),
+      // Plugin-generated editor extensions (e.g., math blocks)
+      ...getEditorExtensions(),
     ];
 
     // Add FloatingMenu extension (for block formatting on empty lines)
-    if (!readonly) {
+    // On iOS Tauri, the native toolbar includes a block picker button instead
+    if (!readonly && !useNativeToolbar) {
       extensions.push(
         FloatingMenu.configure({
           element: floatingMenuElement,
@@ -563,11 +663,17 @@
 
     // Expose link picker helpers for the native iOS toolbar
     if (useNativeToolbar) {
-      function flattenTree(node: TreeNode | null): { path: string; name: string }[] {
+      function flattenTree(node: TreeNode | null): { path: string; name: string; displayPath: string }[] {
         if (!node) return [];
-        const entries: { path: string; name: string }[] = [];
+        // Use the directory containing the root node as the workspace root
+        const lastSlash = node.path.lastIndexOf('/');
+        const rootDir = lastSlash >= 0 ? node.path.slice(0, lastSlash + 1) : '';
+        const entries: { path: string; name: string; displayPath: string }[] = [];
         function traverse(n: TreeNode) {
-          entries.push({ path: n.path, name: n.name });
+          const displayPath = rootDir && n.path.startsWith(rootDir)
+            ? n.path.slice(rootDir.length)
+            : n.path;
+          entries.push({ path: n.path, name: n.name, displayPath });
           for (const child of n.children) traverse(child);
         }
         traverse(node);
@@ -596,6 +702,39 @@
           } else {
             editor?.chain().focus().setLink({ href: path }).run();
           }
+        },
+        getPluginCommands: () => {
+          const store = getPluginStore();
+          const cmds = store.editorInsertCommands;
+          return {
+            marks: cmds.mark.map(c => ({
+              extensionId: c.extensionId,
+              label: c.label,
+              iconName: c.iconName,
+            })),
+            inlineAtoms: cmds.inline.map(c => ({
+              extensionId: c.extensionId,
+              label: c.label,
+              iconName: c.iconName,
+            })),
+            blockAtoms: cmds.block.map(c => ({
+              extensionId: c.extensionId,
+              label: c.label,
+              iconName: c.iconName,
+            })),
+            blockPickerItems: store.blockPickerItems.map(item => ({
+              id: item.contribution.id,
+              label: item.contribution.label,
+              iconName: item.contribution.icon,
+              editorCommand: item.contribution.editor_command,
+              params: item.contribution.params,
+              prompt: item.contribution.prompt ? {
+                message: item.contribution.prompt.message,
+                defaultValue: item.contribution.prompt.default_value,
+                paramKey: item.contribution.prompt.param_key,
+              } : null,
+            })),
+          };
         },
       };
     }
@@ -702,14 +841,14 @@
         editorInitialized = true;
         lastReadonly = readonly;
         lastPlaceholder = placeholder;
-        lastEnableSpoilers = enableSpoilers;
       }
       return;
     }
 
-    // In edit mode, wait for menu elements (native toolbar replaces BubbleMenu on iOS Tauri)
+    // In edit mode, wait for menu elements (native toolbar replaces BubbleMenu + FloatingMenu on iOS Tauri)
     const bubbleMenuReady = useNativeToolbar || hasBubbleMenu;
-    if (!editorInitialized && hasEditorElement && hasFloatingMenu && bubbleMenuReady) {
+    const floatingMenuReady = useNativeToolbar || hasFloatingMenu;
+    if (!editorInitialized && hasEditorElement && floatingMenuReady && bubbleMenuReady) {
       if (debugMenus) {
         console.log("[Editor] Menu elements ready, creating editor", {
           floatingMenuElement,
@@ -720,7 +859,6 @@
       editorInitialized = true;
       lastReadonly = readonly;
       lastPlaceholder = placeholder;
-      lastEnableSpoilers = enableSpoilers;
     }
   });
 
@@ -735,7 +873,7 @@
     destroyEditor();
   });
 
-  // Rebuild editor when readonly, placeholder, or enableSpoilers changes
+  // Rebuild editor when readonly or placeholder changes
   $effect(() => {
     if (!element) return;
     // Skip if we haven't done initial creation yet
@@ -743,15 +881,13 @@
 
     const needsRebuild =
       readonly !== lastReadonly ||
-      placeholder !== lastPlaceholder ||
-      enableSpoilers !== lastEnableSpoilers;
+      placeholder !== lastPlaceholder;
 
     if (!needsRebuild) return;
 
     // Update tracking for what we're about to build
     lastReadonly = readonly;
     lastPlaceholder = placeholder;
-    lastEnableSpoilers = enableSpoilers;
 
     createEditor();
   });
@@ -819,7 +955,8 @@
 
 <!-- FloatingMenu for block formatting (appears on empty lines) -->
 <!-- Element must exist before editor creation for extension to bind to it -->
-{#if !readonly}
+<!-- On iOS Tauri, the native toolbar includes a block picker button instead -->
+{#if !readonly && !useNativeToolbar}
   <FloatingMenuComponent
     bind:this={floatingMenuRef}
     {editor}
@@ -830,7 +967,7 @@
 <!-- BubbleMenu for inline formatting (appears when text is selected) -->
 <!-- On iOS Tauri, a native UIToolbar above the keyboard replaces this -->
 {#if !readonly && !useNativeToolbar}
-  <BubbleMenuComponent {editor} bind:element={bubbleMenuElement} {enableSpoilers} {entryPath} {api} />
+  <BubbleMenuComponent {editor} bind:element={bubbleMenuElement} {entryPath} {api} />
 {/if}
 
 <style global>
@@ -985,6 +1122,32 @@
     margin: 0.5em 0;
   }
 
+  :global(.editor-video) {
+    max-width: 100%;
+    height: auto;
+    border-radius: 6px;
+    margin: 0.5em 0;
+  }
+
+  :global(.editor-audio) {
+    max-width: 100%;
+    margin: 0.5em 0;
+  }
+
+  :global(.editor-image--loading) {
+    min-height: 100px;
+    min-width: 200px;
+    background: var(--muted);
+    border-radius: 6px;
+    animation: shimmer 1.5s ease-in-out infinite;
+    pointer-events: none;
+  }
+
+  @keyframes shimmer {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 0.7; }
+  }
+
   /* Footnote ref styles */
   :global(.footnote-ref) {
     font-size: 0.75em;
@@ -1004,41 +1167,6 @@
   /* Template variable styles (fallback for renderHTML path) */
   :global(.template-variable) {
     display: inline;
-  }
-
-  /* Spoiler mark styles */
-  :global(.spoiler-mark) {
-    border-radius: 4px;
-    padding: 0 2px;
-    transition: all 0.2s ease;
-  }
-
-  :global(.spoiler-hidden) {
-    background: var(--foreground);
-    color: transparent;
-    user-select: none;
-    cursor: pointer;
-  }
-
-  :global(.spoiler-revealed) {
-    background: var(--muted);
-    color: var(--foreground);
-    cursor: pointer;
-  }
-
-  /* When spoilers are disabled, show || around the text */
-  :global(.spoiler-disabled)::before {
-    content: "||";
-    opacity: 0.5;
-  }
-
-  :global(.spoiler-disabled)::after {
-    content: "||";
-    opacity: 0.5;
-  }
-
-  :global(.spoiler-hidden:hover) {
-    opacity: 0.8;
   }
 
   /* Table styles */

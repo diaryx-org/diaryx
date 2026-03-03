@@ -4,7 +4,7 @@
  * Orthogonal to the theme (light/dark/system) store. A user picks a preset
  * AND a mode independently.
  *
- * Follows the singleton pattern used by formattingStore.svelte.ts.
+ * Follows the singleton pattern used by other lib stores.
  */
 
 import type {

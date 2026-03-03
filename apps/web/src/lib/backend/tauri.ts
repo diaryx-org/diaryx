@@ -745,4 +745,20 @@ export class TauriBackend implements Backend {
       }
     }
   }
+
+  // =========================================================================
+  // Plugin Management
+  // =========================================================================
+
+  async installPlugin(wasmBytes: Uint8Array): Promise<string> {
+    const invoke = this.getInvoke();
+    return invoke<string>("install_user_plugin", {
+      wasmBytes: Array.from(wasmBytes),
+    });
+  }
+
+  async uninstallPlugin(pluginId: string): Promise<void> {
+    const invoke = this.getInvoke();
+    await invoke("uninstall_user_plugin", { pluginId });
+  }
 }

@@ -16,15 +16,12 @@ import type { JsonValue } from '../lib/backend/generated/serde_json/JsonValue';
 import { entryStore, uiStore, collaborationStore } from '../models/stores';
 import {
   revokeBlobUrls,
-  transformAttachmentPaths,
   reverseBlobUrlsToAttachmentPaths,
 } from '../models/services';
-import {
-  ensureBodySync,
-  closeBodySync,
-} from '../lib/crdt/workspaceCrdtBridge';
-// Note: CRDT sync for entry operations (save, create, delete, rename) is now handled by Rust.
-// TypeScript only manages body sync bridges for real-time collaboration.
+
+// Sync/body orchestration is plugin-owned; host keeps local filesystem workflows.
+async function ensureBodySync(_path: string): Promise<void> {}
+function closeBodySync(_path: string): void {}
 
 const SAVE_RETRY_DELAYS_MS = [100, 200, 400, 800, 1600, 3200];
 
@@ -84,12 +81,16 @@ export async function openEntry(
   collaborationEnabled: boolean,
   options?: {
     onBeforeOpen?: () => Promise<void>;
+    isCurrentRequest?: () => boolean;
   }
 ): Promise<void> {
+  const isCurrentRequest = options?.isCurrentRequest ?? (() => true);
+
   // Call before open callback (e.g., save current entry)
   if (options?.onBeforeOpen) {
     await options.onBeforeOpen();
   }
+  if (!isCurrentRequest()) return;
 
   try {
     entryStore.setLoading(true);
@@ -98,6 +99,7 @@ export async function openEntry(
     revokeBlobUrls();
 
     const entry = await api.getEntry(path);
+    if (!isCurrentRequest()) return;
     // Normalize frontmatter to Object
     entry.frontmatter = normalizeFrontmatter(entry.frontmatter);
     entryStore.setCurrentEntry(entry);
@@ -105,23 +107,40 @@ export async function openEntry(
 
     console.log('[EntryController] Loaded entry:', entry);
 
-    // Eagerly create body sync bridge to receive remote body updates.
-    // This is critical for new clients syncing from the server - without this,
-    // files would appear empty because the body bridge wasn't created yet.
-    // For guests, body content arrives via sync after this point and the editor
-    // updates via the onBodyChange callback (ContentsChanged event).
-    await ensureBodySync(path);
-
-    // Transform attachment paths to blob URLs for display
+    // Show content immediately — NodeViews resolve attachments lazily.
+    // Clear loading state so the editor is visible before sync setup.
     if (entry) {
-      const displayContent = await transformAttachmentPaths(
-        entry.content,
-        entry.path,
-        api
-      );
-      entryStore.setDisplayContent(displayContent);
+      entryStore.setDisplayContent(entry.content);
+    } else {
+      entryStore.setDisplayContent('');
+    }
+    entryStore.markClean();
+    uiStore.clearError();
+  } catch (e) {
+    if (isCurrentRequest()) {
+      uiStore.setError(e instanceof Error ? e.message : String(e));
+    }
+  } finally {
+    if (isCurrentRequest()) {
+      entryStore.setLoading(false);
+    }
+  }
+  if (!isCurrentRequest()) return;
 
-      // Calculate collaboration room path for tracking
+  // Non-blocking: set up body sync bridge and collaboration tracking.
+  // The bridge must exist to receive remote body updates (onBodyChange callback),
+  // but it doesn't need to complete before the editor is visible.
+  try {
+    await ensureBodySync(path);
+  } catch (e) {
+    console.warn('[EntryController] Body sync setup failed:', e);
+  }
+  if (!isCurrentRequest()) return;
+
+  // Collaboration path tracking (doesn't affect content display)
+  try {
+    const entry = entryStore.currentEntry;
+    if (entry && entry.path === path) {
       let workspaceDir = tree?.path || '';
       if (workspaceDir.endsWith('/')) {
         workspaceDir = workspaceDir.slice(0, -1);
@@ -137,30 +156,21 @@ export async function openEntry(
         newRelativePath = entry.path.substring(workspaceDir.length + 1);
       }
 
-      // Update collaboration path tracking (sync happens at workspace level via workspaceCrdtBridge)
       const currentCollaborationPath = collaborationStore.currentCollaborationPath;
       if (currentCollaborationPath !== newRelativePath) {
         collaborationStore.clearCollaborationSession();
         await tick();
       }
 
-      // Set the collaboration path for tracking which file is being edited
-      // Note: Actual sync is handled by workspaceCrdtBridge, not per-document sessions
       if (collaborationEnabled) {
         collaborationStore.setCollaborationPath(newRelativePath);
         console.log('[EntryController] Collaboration path:', newRelativePath);
       }
-    } else {
-      entryStore.setDisplayContent('');
+    } else if (!entry) {
       collaborationStore.clearCollaborationSession();
     }
-
-    entryStore.markClean();
-    uiStore.clearError();
   } catch (e) {
-    uiStore.setError(e instanceof Error ? e.message : String(e));
-  } finally {
-    entryStore.setLoading(false);
+    console.warn('[EntryController] Collaboration setup failed:', e);
   }
 }
 
@@ -239,27 +249,6 @@ export async function createEntry(
     return null;
   } finally {
     uiStore.closeNewEntryModal();
-  }
-}
-
-/**
- * Create or open today's daily entry.
- */
-export async function ensureDailyEntry(
-  api: Api,
-  workspacePath: string,
-  dailyEntryFolder?: string,
-  onSuccess?: (path: string) => Promise<void>
-): Promise<string | null> {
-  try {
-    const path = await api.ensureDailyEntry(workspacePath, dailyEntryFolder);
-    if (onSuccess) {
-      await onSuccess(path);
-    }
-    return path;
-  } catch (e) {
-    uiStore.setError(e instanceof Error ? e.message : String(e));
-    return null;
   }
 }
 

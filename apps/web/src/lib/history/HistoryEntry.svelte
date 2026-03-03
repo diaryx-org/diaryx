@@ -1,5 +1,11 @@
 <script lang="ts">
-  import type { CrdtHistoryEntry } from '$lib/backend/generated';
+  interface CrdtHistoryEntry {
+    update_id: bigint;
+    timestamp: bigint;
+    origin: string;
+    device_name?: string | null;
+    summary?: string | null;
+  }
 
   interface Props {
     entry: CrdtHistoryEntry;

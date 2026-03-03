@@ -10,18 +10,10 @@
   import { getThemeStore, type ThemeMode } from "../stores/theme.svelte";
 
   interface Props {
-    showUnlinkedFiles?: boolean;
-    showHiddenFiles?: boolean;
-    showEditorTitle?: boolean;
-    showEditorPath?: boolean;
     focusMode?: boolean;
   }
 
   let {
-    showUnlinkedFiles = $bindable(false),
-    showHiddenFiles = $bindable(false),
-    showEditorTitle = $bindable(false),
-    showEditorPath = $bindable(false),
     focusMode = $bindable(true),
   }: Props = $props();
 
@@ -60,32 +52,6 @@
     </select>
   </div>
 
-  <!-- Editor Header: Show Title -->
-  <div class="flex items-center justify-between gap-4 px-1">
-    <Label for="show-editor-title" class="text-sm cursor-pointer flex flex-col gap-0.5">
-      <span>Show title in editor</span>
-      <span class="font-normal text-xs text-muted-foreground">
-        Display the entry title in the editor header.
-      </span>
-    </Label>
-    <Switch id="show-editor-title" bind:checked={showEditorTitle} />
-  </div>
-
-  <!-- Editor Header: Show Path -->
-  <div class="flex items-center justify-between gap-4 px-1">
-    <Label for="show-editor-path" class="text-sm cursor-pointer flex flex-col gap-0.5">
-      <span>Show filename in editor</span>
-      <span class="font-normal text-xs text-muted-foreground">
-        Display the file path below the title.
-      </span>
-    </Label>
-    <Switch
-      id="show-editor-path"
-      bind:checked={showEditorPath}
-      disabled={!showEditorTitle}
-    />
-  </div>
-
   <!-- Focus Mode -->
   <div class="flex items-center justify-between gap-4 px-1">
     <Label for="focus-mode" class="text-sm cursor-pointer flex flex-col gap-0.5">
@@ -95,31 +61,5 @@
       </span>
     </Label>
     <Switch id="focus-mode" bind:checked={focusMode} />
-  </div>
-
-  <!-- Show Unlinked Files (temporarily disabled) -->
-  <div class="flex items-center justify-between gap-4 px-1 opacity-50">
-    <Label for="show-unlinked" class="text-sm flex flex-col gap-0.5">
-      <span>Show all files</span>
-      <span class="font-normal text-xs text-muted-foreground">
-        Temporarily disabled. Will show files not linked in hierarchy.
-      </span>
-    </Label>
-    <Switch id="show-unlinked" bind:checked={showUnlinkedFiles} disabled />
-  </div>
-
-  <!-- Show Hidden Files -->
-  <div class="flex items-center justify-between gap-4 px-1">
-    <Label for="show-hidden" class="text-sm cursor-pointer flex flex-col gap-0.5">
-      <span>Show hidden files</span>
-      <span class="font-normal text-xs text-muted-foreground">
-        Show files starting with dot (.git, .DS_Store) in filesystem view.
-      </span>
-    </Label>
-    <Switch
-      id="show-hidden"
-      bind:checked={showHiddenFiles}
-      disabled={!showUnlinkedFiles}
-    />
   </div>
 </div>

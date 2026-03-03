@@ -115,6 +115,24 @@ pub enum FileSystemEvent {
         /// Whether this is a body doc (true) or workspace (false)
         is_body: bool,
     },
+
+    /// A peer joined the sync session.
+    PeerJoined {
+        /// Current number of connected peers.
+        peer_count: usize,
+    },
+
+    /// A peer left the sync session.
+    PeerLeft {
+        /// Current number of connected peers.
+        peer_count: usize,
+    },
+
+    /// The server's focus list changed.
+    FocusListChanged {
+        /// Currently focused file paths.
+        files: Vec<String>,
+    },
 }
 
 impl FileSystemEvent {
@@ -216,6 +234,21 @@ impl FileSystemEvent {
         }
     }
 
+    /// Create a PeerJoined event.
+    pub fn peer_joined(peer_count: usize) -> Self {
+        Self::PeerJoined { peer_count }
+    }
+
+    /// Create a PeerLeft event.
+    pub fn peer_left(peer_count: usize) -> Self {
+        Self::PeerLeft { peer_count }
+    }
+
+    /// Create a FocusListChanged event.
+    pub fn focus_list_changed(files: Vec<String>) -> Self {
+        Self::FocusListChanged { files }
+    }
+
     /// Get the primary path associated with this event.
     /// Returns None for sync events which don't have a path.
     pub fn path(&self) -> Option<&PathBuf> {
@@ -232,6 +265,9 @@ impl FileSystemEvent {
             Self::SyncStatusChanged { .. } => None,
             Self::SyncProgress { .. } => None,
             Self::SendSyncMessage { .. } => None,
+            Self::PeerJoined { .. } => None,
+            Self::PeerLeft { .. } => None,
+            Self::FocusListChanged { .. } => None,
         }
     }
 
@@ -249,6 +285,9 @@ impl FileSystemEvent {
             Self::SyncStatusChanged { .. } => "SyncStatusChanged",
             Self::SyncProgress { .. } => "SyncProgress",
             Self::SendSyncMessage { .. } => "SendSyncMessage",
+            Self::PeerJoined { .. } => "PeerJoined",
+            Self::PeerLeft { .. } => "PeerLeft",
+            Self::FocusListChanged { .. } => "FocusListChanged",
         }
     }
 }

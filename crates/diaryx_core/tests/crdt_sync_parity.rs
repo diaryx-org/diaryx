@@ -1,21 +1,25 @@
-#![cfg(feature = "crdt")]
+#![cfg(not(target_arch = "wasm32"))]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
 
+use base64::Engine;
 use diaryx_core::command::{Command, Response};
-use diaryx_core::crdt::{BodyDocManager, FileMetadata, WorkspaceCrdt, parse_snapshot_markdown};
 use diaryx_core::diaryx::Diaryx;
 use diaryx_core::fs::{
-    AsyncFileSystem, CrdtFs, DecoratedFsBuilder, EventEmittingFs, FileSystem, InMemoryFileSystem,
-    SyncToAsyncFs,
+    AsyncFileSystem, EventEmittingFs, FileSystem, InMemoryFileSystem, SyncToAsyncFs,
 };
 use diaryx_core::path_utils::normalize_sync_path;
+use diaryx_sync::{BodyDocManager, CrdtFs, DecoratedFsBuilder, SyncPlugin, WorkspaceCrdt};
+use diaryx_sync::{FileMetadata, parse_snapshot_markdown};
 use futures_lite::future::block_on;
+use serde_json::json;
 
 type BaseFs = SyncToAsyncFs<InMemoryFileSystem>;
 type StackFs = EventEmittingFs<CrdtFs<BaseFs>>;
+
+const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STANDARD;
 
 struct TestNode {
     diaryx: Diaryx<StackFs>,
@@ -33,11 +37,17 @@ impl TestNode {
         let base_fs = decorated.base_fs().clone();
         let workspace_crdt = Arc::clone(&decorated.workspace_crdt);
         let body_docs = Arc::clone(&decorated.body_doc_manager);
-        let diaryx = Diaryx::with_crdt_instances(
+
+        let sync_plugin = SyncPlugin::with_instances(
             fs.clone(),
             Arc::clone(&workspace_crdt),
             Arc::clone(&body_docs),
+            Arc::clone(&decorated.storage),
         );
+        let mut diaryx = Diaryx::new(fs.clone());
+        diaryx
+            .plugin_registry_mut()
+            .register_workspace_plugin(Arc::new(sync_plugin));
 
         Self {
             diaryx,
@@ -53,10 +63,25 @@ fn execute(node: &TestNode, command: Command) -> Response {
     block_on(node.diaryx.execute(command)).expect("command should succeed")
 }
 
-fn expect_binary(response: Response, context: &str) -> Vec<u8> {
+fn plugin_cmd(command: &str, params: serde_json::Value) -> Command {
+    Command::PluginCommand {
+        plugin: "sync".into(),
+        command: command.into(),
+        params,
+    }
+}
+
+fn expect_plugin_binary(response: Response, context: &str) -> Vec<u8> {
     match response {
-        Response::Binary(bytes) => bytes,
-        other => panic!("expected binary response for {context}, got {other:?}"),
+        Response::PluginResult(json) => {
+            let b64_str = json
+                .get("data")
+                .and_then(|v| v.as_str())
+                .unwrap_or_else(|| panic!("expected 'data' field in PluginResult for {context}"));
+            B64.decode(b64_str)
+                .unwrap_or_else(|e| panic!("invalid base64 in PluginResult for {context}: {e}"))
+        }
+        other => panic!("expected PluginResult for {context}, got {other:?}"),
     }
 }
 
@@ -205,38 +230,42 @@ fn assert_replicas_match(source: &TestNode, target: &TestNode) {
 }
 
 fn sync_source_to_target(source: &TestNode, target: &TestNode) {
-    let target_state = expect_binary(
-        execute(
-            target,
-            Command::GetSyncState {
-                doc_name: "workspace".to_string(),
-            },
-        ),
+    let target_state = expect_plugin_binary(
+        execute(target, plugin_cmd("GetSyncState", json!({}))),
         "GetSyncState",
     );
 
-    let workspace_update = expect_binary(
+    let workspace_update = expect_plugin_binary(
         execute(
             source,
-            Command::GetMissingUpdates {
-                doc_name: "workspace".to_string(),
-                remote_state_vector: target_state,
-            },
+            plugin_cmd(
+                "GetMissingUpdates",
+                json!({ "remote_state_vector": B64.encode(&target_state) }),
+            ),
         ),
         "GetMissingUpdates",
     );
 
     if !workspace_update.is_empty() {
-        match execute(
+        let response = execute(
             target,
-            Command::ApplyRemoteWorkspaceUpdateWithEffects {
-                update: workspace_update,
-                write_to_disk: true,
-            },
-        ) {
-            Response::UpdateId(_) => {}
+            plugin_cmd(
+                "ApplyRemoteWorkspaceUpdateWithEffects",
+                json!({
+                    "update": B64.encode(&workspace_update),
+                    "write_to_disk": true,
+                }),
+            ),
+        );
+        match response {
+            Response::PluginResult(ref json) => {
+                assert!(
+                    json.get("update_id").is_some(),
+                    "expected update_id in response for ApplyRemoteWorkspaceUpdateWithEffects"
+                );
+            }
             other => panic!(
-                "expected update-id response for ApplyRemoteWorkspaceUpdateWithEffects, got {other:?}"
+                "expected PluginResult for ApplyRemoteWorkspaceUpdateWithEffects, got {other:?}"
             ),
         }
     }
@@ -250,12 +279,10 @@ fn sync_source_to_target(source: &TestNode, target: &TestNode) {
     active_paths.sort();
 
     for path in active_paths {
-        let body_state = expect_binary(
+        let body_state = expect_plugin_binary(
             execute(
                 source,
-                Command::GetBodyFullState {
-                    doc_name: path.clone(),
-                },
+                plugin_cmd("GetBodyFullState", json!({ "doc_name": path })),
             ),
             "GetBodyFullState",
         );
@@ -264,18 +291,27 @@ fn sync_source_to_target(source: &TestNode, target: &TestNode) {
             continue;
         }
 
-        match execute(
+        let response = execute(
             target,
-            Command::ApplyRemoteBodyUpdateWithEffects {
-                doc_name: path,
-                update: body_state,
-                write_to_disk: true,
-            },
-        ) {
-            Response::UpdateId(_) => {}
-            other => panic!(
-                "expected update-id response for ApplyRemoteBodyUpdateWithEffects, got {other:?}"
+            plugin_cmd(
+                "ApplyRemoteBodyUpdateWithEffects",
+                json!({
+                    "doc_name": path,
+                    "update": B64.encode(&body_state),
+                    "write_to_disk": true,
+                }),
             ),
+        );
+        match response {
+            Response::PluginResult(ref json) => {
+                assert!(
+                    json.get("update_id").is_some(),
+                    "expected update_id in response for ApplyRemoteBodyUpdateWithEffects"
+                );
+            }
+            other => {
+                panic!("expected PluginResult for ApplyRemoteBodyUpdateWithEffects, got {other:?}")
+            }
         }
     }
 }

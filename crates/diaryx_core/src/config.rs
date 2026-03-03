@@ -7,7 +7,6 @@
 //! # Key Configuration Fields
 //!
 //! - `default_workspace`: Primary workspace directory path
-//! - `daily_entry_folder`: Optional subfolder for daily entries
 //! - `editor`: Preferred editor command
 //! - `link_format`: Format for `part_of`/`contents`/`attachments` links
 //! - `sync_*`: Cloud synchronization settings
@@ -31,7 +30,7 @@
 //! let config = Config::load()?;
 //!
 //! // Access config values
-//! let daily_dir = config.daily_entry_dir();
+//! let workspace = config.default_workspace.clone();
 //! ```
 
 use serde::{Deserialize, Serialize};
@@ -42,6 +41,7 @@ use crate::fs::AsyncFileSystem;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::fs::{FileSystem, SyncToAsyncFs};
 use crate::link_parser::LinkFormat;
+use crate::workspace_registry::{WorkspaceEntry, WorkspaceRegistry};
 
 /// `Config` is a data structure that represents the parts of Diaryx that the user can configure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,12 +50,6 @@ pub struct Config {
     /// This is the main directory for your workspace/journal
     #[serde(alias = "base_dir")]
     pub default_workspace: PathBuf,
-
-    /// Subfolder within the workspace for daily entries (optional)
-    /// If not set, daily entries are created in the workspace root
-    /// Example: "Daily" or "Journal/Daily"
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub daily_entry_folder: Option<String>,
 
     /// Preferred editor (falls back to $EDITOR if not set)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -91,6 +85,13 @@ pub struct Config {
     /// Git-backed version history settings
     #[serde(default, skip_serializing_if = "GitConfig::is_default")]
     pub git: GitConfig,
+
+    // ========================================================================
+    // Multi-workspace registry
+    // ========================================================================
+    /// Registered workspaces. Each entry has a stable `local-<uuid>` ID.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workspaces: Vec<WorkspaceEntry>,
 }
 
 /// Configuration for git-backed version history.
@@ -129,20 +130,6 @@ fn is_default_link_format(format: &LinkFormat) -> bool {
 }
 
 impl Config {
-    /// Get the directory where daily entries should be created
-    /// Returns daily_entry_folder joined with default_workspace, or just default_workspace
-    pub fn daily_entry_dir(&self) -> PathBuf {
-        match &self.daily_entry_folder {
-            Some(folder) => {
-                // Strip leading slashes to ensure proper path joining
-                // A leading "/" would make this an absolute path instead of relative
-                let normalized = folder.trim_start_matches('/');
-                self.default_workspace.join(normalized)
-            }
-            None => self.default_workspace.clone(),
-        }
-    }
-
     /// Alias for backwards compatibility
     pub fn base_dir(&self) -> &PathBuf {
         &self.default_workspace
@@ -152,7 +139,6 @@ impl Config {
     pub fn new(default_workspace: PathBuf) -> Self {
         Self {
             default_workspace,
-            daily_entry_folder: None,
             editor: None,
             link_format: LinkFormat::default(),
             sync_server_url: None,
@@ -160,20 +146,18 @@ impl Config {
             sync_email: None,
             sync_workspace_id: None,
             git: GitConfig::default(),
+            workspaces: Vec::new(),
         }
     }
 
-    /// Create a config with workspace directory and daily entry folder
+    /// Create a config with workspace directory and optional editor/template values
     pub fn with_options(
         default_workspace: PathBuf,
-        daily_entry_folder: Option<String>,
         editor: Option<String>,
         _default_template: Option<String>,
-        _daily_template: Option<String>,
     ) -> Self {
         Self {
             default_workspace,
-            daily_entry_folder,
             editor,
             link_format: LinkFormat::default(),
             sync_server_url: None,
@@ -181,6 +165,36 @@ impl Config {
             sync_email: None,
             sync_workspace_id: None,
             git: GitConfig::default(),
+            workspaces: Vec::new(),
+        }
+    }
+
+    /// Build a [`WorkspaceRegistry`] from the config's workspace list.
+    ///
+    /// If `workspaces` is empty but `default_workspace` exists, a synthetic
+    /// entry is included so callers always see at least one workspace.
+    pub fn workspace_registry(&self) -> WorkspaceRegistry {
+        let mut reg = WorkspaceRegistry {
+            entries: self.workspaces.clone(),
+            default_id: None,
+        };
+
+        // Find the entry whose path matches default_workspace and mark it as default
+        if let Some(entry) = reg.find_by_path(&self.default_workspace) {
+            reg.default_id = Some(entry.id.clone());
+        }
+
+        reg
+    }
+
+    /// Write registry changes back into the config fields.
+    pub fn apply_registry(&mut self, registry: &WorkspaceRegistry) {
+        self.workspaces = registry.entries.clone();
+        // Update default_workspace path if the registry has a default with a path
+        if let Some(entry) = registry.default_entry()
+            && let Some(ref path) = entry.path
+        {
+            self.default_workspace = path.clone();
         }
     }
 
@@ -280,7 +294,6 @@ impl Default for Config {
 
         Self {
             default_workspace: default_base,
-            daily_entry_folder: None,
             editor: None,
             link_format: LinkFormat::default(),
             sync_server_url: None,
@@ -288,6 +301,7 @@ impl Default for Config {
             sync_email: None,
             sync_workspace_id: None,
             git: GitConfig::default(),
+            workspaces: Vec::new(),
         }
     }
 }
@@ -334,18 +348,14 @@ impl Config {
     /// Initialize config with user-provided values
     /// Only available on native platforms
     pub fn init(default_workspace: PathBuf) -> Result<Self> {
-        Self::init_with_options(default_workspace, None)
+        Self::init_with_options(default_workspace)
     }
 
-    /// Initialize config with user-provided values including daily folder
+    /// Initialize config with user-provided values.
     /// Only available on native platforms
-    pub fn init_with_options(
-        default_workspace: PathBuf,
-        daily_entry_folder: Option<String>,
-    ) -> Result<Self> {
+    pub fn init_with_options(default_workspace: PathBuf) -> Result<Self> {
         let config = Config {
             default_workspace,
-            daily_entry_folder,
             editor: None,
             link_format: LinkFormat::default(),
             sync_server_url: None,
@@ -353,6 +363,7 @@ impl Config {
             sync_email: None,
             sync_workspace_id: None,
             git: GitConfig::default(),
+            workspaces: Vec::new(),
         };
 
         config.save()?;
@@ -371,7 +382,6 @@ impl Default for Config {
         // The actual workspace location will be virtual
         Self {
             default_workspace: PathBuf::from("/workspace"),
-            daily_entry_folder: None,
             editor: None,
             link_format: LinkFormat::default(),
             sync_server_url: None,
@@ -379,6 +389,71 @@ impl Default for Config {
             sync_email: None,
             sync_workspace_id: None,
             git: GitConfig::default(),
+            workspaces: Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workspace_registry_from_empty_config() {
+        let config = Config::new(PathBuf::from("/home/user/journal"));
+        let reg = config.workspace_registry();
+        assert!(reg.entries.is_empty());
+        assert!(reg.default_id.is_none());
+    }
+
+    #[test]
+    fn workspace_registry_marks_default() {
+        let mut config = Config::new(PathBuf::from("/home/user/journal"));
+        config.workspaces.push(WorkspaceEntry {
+            id: "local-abc".into(),
+            name: "journal".into(),
+            path: Some(PathBuf::from("/home/user/journal")),
+        });
+        let reg = config.workspace_registry();
+        assert_eq!(reg.default_id.as_deref(), Some("local-abc"));
+    }
+
+    #[test]
+    fn apply_registry_updates_default_workspace() {
+        let mut config = Config::new(PathBuf::from("/old"));
+        let mut reg = WorkspaceRegistry::default();
+        let id = reg
+            .register("new-ws".into(), Some(PathBuf::from("/new")))
+            .id
+            .clone();
+        reg.set_default(&id);
+        config.apply_registry(&reg);
+        assert_eq!(config.default_workspace, PathBuf::from("/new"));
+        assert_eq!(config.workspaces.len(), 1);
+    }
+
+    #[test]
+    fn toml_round_trip_with_workspaces() {
+        let mut config = Config::new(PathBuf::from("/ws"));
+        config.workspaces.push(WorkspaceEntry {
+            id: "local-123".into(),
+            name: "personal".into(),
+            path: Some(PathBuf::from("/ws")),
+        });
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.workspaces.len(), 1);
+        assert_eq!(parsed.workspaces[0].id, "local-123");
+        assert_eq!(parsed.workspaces[0].name, "personal");
+    }
+
+    #[test]
+    fn toml_round_trip_without_workspaces() {
+        let config = Config::new(PathBuf::from("/ws"));
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        // workspaces should be omitted when empty
+        assert!(!toml_str.contains("workspaces"));
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert!(parsed.workspaces.is_empty());
     }
 }

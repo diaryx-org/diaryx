@@ -24,11 +24,6 @@ vi.mock('../models/services', () => ({
   revokeBlobUrls: vi.fn(),
 }));
 
-vi.mock('../lib/crdt/workspaceCrdtBridge', () => ({
-  ensureBodySync: vi.fn(),
-  closeBodySync: vi.fn(),
-}));
-
 import { saveEntryWithSync } from './entryController';
 
 describe('entryController saveEntryWithSync', () => {

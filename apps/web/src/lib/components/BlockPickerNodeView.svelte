@@ -14,9 +14,9 @@
     Table2,
     Pencil,
     Ellipsis,
-    GitBranch,
-    Users,
   } from "@lucide/svelte";
+  import { getPluginStore } from "@/models/stores/pluginStore.svelte";
+  import { getCachedPluginIcon } from "$lib/plugins/pluginIconResolver";
 
   interface Props {
     editor: Editor;
@@ -27,6 +27,10 @@
   }
 
   let { editor, showAttachment, onSelect, onInsertAttachment, onCancel }: Props = $props();
+
+  const pluginStore = getPluginStore();
+  const pluginBlockCommands = $derived(pluginStore.editorInsertCommands.block);
+  const pluginBlockPickerItems = $derived(pluginStore.blockPickerItems);
 
   let menuElement: HTMLDivElement | undefined = $state();
   let focusedIndex = $state(0);
@@ -133,26 +137,21 @@
     onInsertAttachment?.();
   }
 
-  function handleIfElse() {
-    const condition = window.prompt("Variable name to check:", "draft");
-    if (!condition) return;
-    onSelect(() =>
-      editor.commands.insertConditionalBlock({
-        helperType: "if",
-        condition: condition.trim(),
-      })
-    );
-  }
-
-  function handleForAudience() {
-    const audience = window.prompt("Audience name:", "public");
-    if (!audience) return;
-    onSelect(() =>
-      editor.commands.insertConditionalBlock({
-        helperType: "for-audience",
-        condition: audience.trim(),
-      })
-    );
+  function handleBlockPickerItem(item: (typeof pluginBlockPickerItems)[number]) {
+    const { contribution } = item;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const params: Record<string, any> = { ...(contribution.params as Record<string, unknown> ?? {}) };
+    if (contribution.prompt) {
+      const input = window.prompt(contribution.prompt.message, contribution.prompt.default_value);
+      if (!input) return;
+      params[contribution.prompt.param_key] = input.trim();
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const commands = editor.commands as Record<string, any>;
+    const commandFn = commands[contribution.editor_command];
+    if (typeof commandFn === "function") {
+      onSelect(() => commandFn(params));
+    }
   }
 
   function handleMenuItemClick(
@@ -299,13 +298,29 @@
           <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleDrawing(); }}>
             <Pencil class="size-3.5" /> Drawing
           </button>
-          <div class="submenu-divider"></div>
-          <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleIfElse(); }}>
-            <GitBranch class="size-3.5" /> If / Else
-          </button>
-          <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleForAudience(); }}>
-            <Users class="size-3.5" /> For Audience
-          </button>
+          {#if pluginBlockPickerItems.length > 0}
+            <div class="submenu-divider"></div>
+            {#each pluginBlockPickerItems as item (item.contribution.id)}
+              {@const Icon = getCachedPluginIcon(item.contribution.icon)}
+              <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleBlockPickerItem(item); }}>
+                <Icon class="size-3.5" /> {item.contribution.label}
+              </button>
+            {/each}
+          {/if}
+          {#if pluginBlockCommands.length > 0}
+            <div class="submenu-divider"></div>
+            {#each pluginBlockCommands as cmd (cmd.extensionId)}
+              <button type="button" class="submenu-item" onclick={(e) => {
+                e.stopPropagation();
+                onSelect(() => editor.chain().focus().insertContent({
+                  type: cmd.extensionId,
+                  attrs: { source: '' },
+                }).run());
+              }}>
+                <cmd.icon class="size-3.5" /> {cmd.label}
+              </button>
+            {/each}
+          {/if}
         </div>
       {/if}
     </div>

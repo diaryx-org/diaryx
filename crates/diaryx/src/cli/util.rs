@@ -156,42 +156,6 @@ pub fn format_workspace_link(
     calculate_relative_path(from_path, to_path)
 }
 
-/// Parse a `link_format` string from frontmatter.
-pub fn parse_link_format(raw: &str) -> Option<LinkFormat> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "markdown_root" => Some(LinkFormat::MarkdownRoot),
-        "markdown_relative" => Some(LinkFormat::MarkdownRelative),
-        "plain_relative" => Some(LinkFormat::PlainRelative),
-        "plain_canonical" => Some(LinkFormat::PlainCanonical),
-        _ => None,
-    }
-}
-
-/// Detect workspace link format from the root index file if available.
-pub fn detect_workspace_link_format(workspace_root: &Path) -> Option<LinkFormat> {
-    for index_name in ["README.md", "index.md"] {
-        let path = workspace_root.join(index_name);
-        if !path.exists() {
-            continue;
-        }
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(parsed) = diaryx_core::frontmatter::parse_or_empty(&content) else {
-            continue;
-        };
-        if let Some(raw) = parsed
-            .frontmatter
-            .get("link_format")
-            .and_then(|v| v.as_str())
-            && let Some(format) = parse_link_format(raw)
-        {
-            return Some(format);
-        }
-    }
-    None
-}
-
 /// Resolve a frontmatter reference to canonical workspace-relative path.
 pub fn canonicalize_frontmatter_reference(
     raw_value: &str,
@@ -627,9 +591,8 @@ pub fn is_glob_pattern(path: &str) -> bool {
 /// - `.` resolves to all files in the current workspace (traversing from local index)
 /// - `title:...` or `t:...` resolves files by their frontmatter title property (fuzzy matching)
 /// - Glob patterns (`*.md`, `**/*.md`) match files by pattern
-/// - Date strings (via chrono-english) resolve to dated entry paths
 /// - Literal paths are returned as-is
-pub fn resolve_paths(path: &str, config: &Config, app: &CliDiaryxAppSync) -> Vec<PathBuf> {
+pub fn resolve_paths(path: &str, _config: &Config, _app: &CliDiaryxAppSync) -> Vec<PathBuf> {
     // Check for title: or t: prefix
     if let Some(title_query) = path
         .strip_prefix("title:")
@@ -661,27 +624,16 @@ pub fn resolve_paths(path: &str, config: &Config, app: &CliDiaryxAppSync) -> Vec
             }
         }
     } else {
-        // Try to resolve as date or literal path first
-        let resolved = app.resolve_path(path, config);
+        let resolved = PathBuf::from(path);
 
-        // If the resolved path exists, use it
-        if resolved.exists() {
-            return vec![resolved];
-        }
-
-        // If path doesn't exist and doesn't look like a date, try fuzzy matching
-        // (date resolution would have returned a path in daily_entry_dir)
-        if !resolved.starts_with(config.daily_entry_dir())
-            || path.contains('/')
-            || path.contains('\\')
+        // If path doesn't exist and doesn't look hierarchical, try fuzzy matching
+        if !resolved.exists()
+            && !path.contains('/')
+            && !path.contains('\\')
+            && let Some(matches) = fuzzy_match_files(path)
+            && !matches.is_empty()
         {
-            // This was likely meant as a literal path that doesn't exist
-            // Try fuzzy matching in current directory
-            if let Some(matches) = fuzzy_match_files(path)
-                && !matches.is_empty()
-            {
-                return matches;
-            }
+            return matches;
         }
 
         // Fall back to the resolved path (may not exist, but that's the user's intent)
@@ -905,27 +857,10 @@ pub fn load_config() -> Option<Config> {
     }
 }
 
-/// Merge workspace-level config into the file-based Config.
+/// Apply workspace-level overrides into the file-based Config.
 ///
-/// Reads the workspace root index and applies `daily_entry_folder` from the
-/// workspace config. Workspace config takes priority; the global config value
-/// is only used as a fallback when the workspace doesn't set it.
-pub fn apply_workspace_config(mut config: Config) -> Config {
-    let fs = SyncToAsyncFs::new(RealFileSystem);
-    let ws = Workspace::new(fs);
-
-    let root_index = block_on(ws.find_root_index_in_dir(&config.default_workspace))
-        .ok()
-        .flatten();
-
-    if let Some(root_index) = root_index {
-        if let Ok(ws_cfg) = block_on(ws.get_workspace_config(&root_index)) {
-            if ws_cfg.daily_entry_folder.is_some() {
-                config.daily_entry_folder = ws_cfg.daily_entry_folder;
-            }
-        }
-    }
-
+/// No-op for now; kept as a stable hook while workspace and global config are unified.
+pub fn apply_workspace_config(config: Config) -> Config {
     config
 }
 

@@ -4,7 +4,7 @@
    *
    * Allows users to:
    * - Configure template folder location
-   * - Set default templates for new entries and daily entries
+   * - Set default templates for new entries
    * - View, create, edit, and delete workspace templates
    */
   import { Button } from "$lib/components/ui/button";
@@ -21,7 +21,7 @@
   } from "@lucide/svelte";
   import { getBackend } from "../backend";
   import { createApi } from "../backend/api";
-  import type { TemplateInfo } from "../backend/generated/TemplateInfo";
+  import type { TemplateInfo } from "../backend/interface";
   import TemplateEditorDialog from "../components/TemplateEditorDialog.svelte";
   import { getWorkspaceConfigStore } from "../stores/workspaceConfigStore.svelte";
 
@@ -42,7 +42,6 @@
 
   // Default templates: read from workspace config, with localStorage migration
   let defaultTemplate = $state("note");
-  let dailyTemplate = $state("daily");
 
   // UI state
   let templates = $state<TemplateInfo[]>([]);
@@ -50,7 +49,6 @@
   let error = $state<string | null>(null);
   let folderSaved = $state(false);
   let defaultSaved = $state(false);
-  let dailySaved = $state(false);
 
   // Editor dialog state
   let editorOpen = $state(false);
@@ -84,22 +82,6 @@
         localStorage.removeItem("diaryx-default-template");
       }
 
-      // Daily template migration
-      const configDaily = configStore.config.daily_template ?? "";
-      const localDaily = typeof window !== "undefined"
-        ? localStorage.getItem("diaryx-daily-template") || ""
-        : "";
-
-      if (configDaily) {
-        dailyTemplate = configDaily;
-        if (localDaily && typeof window !== "undefined") {
-          localStorage.removeItem("diaryx-daily-template");
-        }
-      } else if (localDaily) {
-        dailyTemplate = localDaily;
-        configStore.setField("daily_template", localDaily);
-        localStorage.removeItem("diaryx-daily-template");
-      }
     }
   });
 
@@ -163,18 +145,6 @@
     }, 2000);
   }
 
-  async function saveDailyTemplateSetting() {
-    await configStore.setField("daily_template", dailyTemplate);
-    // Clear localStorage if it was previously used
-    if (typeof window !== "undefined") {
-      localStorage.removeItem("diaryx-daily-template");
-    }
-    dailySaved = true;
-    setTimeout(() => {
-      dailySaved = false;
-    }, 2000);
-  }
-
   function openNewTemplateEditor() {
     isNewTemplate = true;
     editingTemplate = {
@@ -192,7 +162,7 @@ created: {{timestamp}}
   }
 
   async function openEditTemplateEditor(templateInfo: TemplateInfo) {
-    if (templateInfo.source === "built-in") {
+    if (templateInfo.source === "builtin") {
       // Can't edit built-in templates, but can view them
       isNewTemplate = false;
     } else {
@@ -228,7 +198,7 @@ created: {{timestamp}}
   }
 
   async function deleteTemplate(templateInfo: TemplateInfo) {
-    if (templateInfo.source === "built-in") return;
+    if (templateInfo.source === "builtin") return;
 
     if (!confirm(`Delete template "${templateInfo.name}"?`)) return;
 
@@ -246,7 +216,7 @@ created: {{timestamp}}
 
   function getSourceBadgeClass(source: string): string {
     switch (source) {
-      case "built-in":
+      case "builtin":
         return "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200";
       case "workspace":
         return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
@@ -324,30 +294,6 @@ created: {{timestamp}}
       </div>
     </div>
 
-    <!-- Default for Daily Entries -->
-    <div class="flex items-center justify-between gap-4 px-1">
-      <Label for="daily-template" class="text-sm flex flex-col gap-0.5">
-        <span>Daily entries</span>
-        <span class="font-normal text-xs text-muted-foreground">
-          Template for daily journal entries.
-        </span>
-      </Label>
-      <div class="flex items-center gap-2">
-        <select
-          id="daily-template"
-          class="w-auto px-2 py-1 text-sm border rounded bg-background"
-          bind:value={dailyTemplate}
-          onchange={saveDailyTemplateSetting}
-        >
-          {#each templates as t}
-            <option value={t.name}>{t.name}</option>
-          {/each}
-        </select>
-        {#if dailySaved}
-          <Check class="size-4 text-green-600" />
-        {/if}
-      </div>
-    </div>
   </div>
 
   <!-- Template List -->
@@ -392,11 +338,11 @@ created: {{timestamp}}
                 size="sm"
                 class="h-7 w-7 p-0"
                 onclick={() => openEditTemplateEditor(template)}
-                title={template.source === "built-in" ? "View template" : "Edit template"}
+                title={template.source === "builtin" ? "View template" : "Edit template"}
               >
                 <Pencil class="size-3.5" />
               </Button>
-              {#if template.source !== "built-in"}
+              {#if template.source !== "builtin"}
                 <Button
                   variant="ghost"
                   size="sm"
@@ -419,7 +365,7 @@ created: {{timestamp}}
   bind:open={editorOpen}
   template={editingTemplate}
   isNew={isNewTemplate}
-  readOnly={editingTemplate !== null && !isNewTemplate && templates.find(t => t.name === editingTemplate?.name)?.source === "built-in"}
+  readOnly={editingTemplate !== null && !isNewTemplate && templates.find(t => t.name === editingTemplate?.name)?.source === "builtin"}
   onSave={handleSaveTemplate}
   onClose={() => {
     editorOpen = false;

@@ -1,6 +1,6 @@
 [package]
 name = "diaryx_sync"
-description = "Sync protocol engine for Diaryx - siphonophore hooks, CRDT persistence, and local server"
+description = "Sync engine for Diaryx - CRDT types, sync protocol, siphonophore hooks, and local server"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,32 +10,66 @@ readme = "README.md"
 license-file.workspace = true
 
 [dependencies]
-# Internal crate
-diaryx_core = { workspace = true, features = ["crdt", "crdt-sqlite"] }
+# Internal crate (types module used for FileMetadata, BinaryRef, CrdtStorage, etc.)
+diaryx_core = { workspace = true }
 
-# Web framework (for WebSocket router)
-axum = { version = "0.8", features = ["ws"] }
-tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.6", features = ["cors"] }
-
-# Database (for StorageCache)
-rusqlite = { version = "0.34", features = ["bundled"] }
-
-# Serialization
+# Always-on: CRDT types and sync protocol (WASM-compatible)
+yrs = { version = "0.25", features = ["sync"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-
-# Y-sync v2 (siphonophore-based)
-siphonophore = { version = "0.1.0", package = "diaryx-siphonophore" }
-kameo = "0.19"
+serde_yaml = { workspace = true }
 async-trait = "0.1"
-yrs = "0.24"
-
-# Utilities
-rand = "0.8"
-base64 = "0.22"
 tracing = "0.1"
-futures = "0.3"
+log = "0.4"
+base64 = "0.22"
+chrono = { workspace = true }
+thiserror = { workspace = true }
+indexmap = { workspace = true }
+ts-rs = { version = "10", features = ["serde-json-impl", "indexmap-impl", "no-serde-warnings"] }
+
+# Server feature: siphonophore hooks, axum WebSocket, StorageCache
+siphonophore = { version = "0.1.0", package = "diaryx-siphonophore", optional = true }
+kameo = { version = "0.19", optional = true }
+axum = { version = "0.8", features = ["ws"], optional = true }
+tokio = { version = "1", features = ["full"], optional = true }
+tower-http = { version = "0.6", features = ["cors"], optional = true }
+rand = { version = "0.8", optional = true }
+futures = { version = "0.3", optional = true }
+
+# SQLite storage feature
+rusqlite = { version = "0.34", features = ["bundled"], optional = true }
+
+# Native sync transport feature
+tokio-tungstenite = { version = "0.26", optional = true, features = ["rustls-tls-webpki-roots"] }
+url = { version = "2", optional = true }
+futures-util = { version = "0.3", optional = true }
+
+# Git feature
+git2 = { version = "0.19", optional = true, default-features = false }
+
+# Non-WASM only: futures-lite for blocking sync wrappers
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+futures-lite = "2"
+
+[features]
+default = []
+
+# Browser WASM support (uuid/js via diaryx_core, getrandom/js for browser crypto).
+# Enable this when compiling for wasm32 with a JS host (wasm-bindgen / wasm-pack).
+# Do NOT enable for Extism guest plugins (wasmtime, no JS).
+browser-js = ["diaryx_core/browser-js"]
+
+# SQLite CRDT storage (native only)
+sqlite = ["dep:rusqlite", "diaryx_core/database"]
+
+# Siphonophore-based server (hooks, axum WebSocket, StorageCache)
+server = ["sqlite", "dep:siphonophore", "dep:kameo", "dep:axum", "dep:tokio", "dep:tower-http", "dep:rand", "dep:futures"]
+
+# Native sync transport (tokio-tungstenite WebSocket)
+native-sync = ["dep:tokio", "dep:tokio-tungstenite", "dep:url", "dep:futures-util"]
+
+# Git-backed version history
+git = ["sqlite", "dep:git2"]
 
 [dev-dependencies]
 tempfile = "3"

@@ -10,7 +10,6 @@ export {
   loadNodeChildren,
   runValidation,
   validatePath,
-  setupWorkspaceCrdt,
 } from './workspaceController';
 
 export {
@@ -21,7 +20,6 @@ export {
   createChildEntryWithSync,
   createEntry,
   createEntryWithSync,
-  ensureDailyEntry,
   deleteEntry,
   deleteEntryWithSync,
   moveEntry,
@@ -40,8 +38,6 @@ export {
   handleDeleteCurrentEntry,
   handleMoveCurrentEntry,
   handleCreateChildUnderCurrent,
-  handleStartShareSession,
-  handleJoinShareSession,
   handleFindInFile,
   handleWordCount,
   handleImportFromClipboard,
@@ -58,7 +54,6 @@ export {
   handleDeleteAttachment,
   handleAttachmentInsert,
   handleMoveAttachment,
-  populateCrdtBeforeHost,
   fileToBase64,
   getPendingAttachmentPath,
   setPendingAttachmentPath,

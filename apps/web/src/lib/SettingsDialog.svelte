@@ -9,7 +9,7 @@
   import * as Drawer from "$lib/components/ui/drawer";
   import * as Tabs from "$lib/components/ui/tabs";
   import { Button } from "$lib/components/ui/button";
-  import { Settings, Eye, FolderOpen, FileText, RefreshCw, Database, Bug, User, CreditCard } from "@lucide/svelte";
+  import { Settings, Eye, FolderOpen, Database, Bug, User, CreditCard, Puzzle } from "@lucide/svelte";
   import { getMobileState } from "./hooks/useMobile.svelte";
   import { getAuthState } from "$lib/auth";
   import { getCurrentWorkspaceId, getLocalWorkspace } from "$lib/storage/localWorkspaceRegistry.svelte";
@@ -17,46 +17,47 @@
   // Import modular settings components
   import DisplaySettings from "./settings/DisplaySettings.svelte";
   import BillingSettings from "./settings/BillingSettings.svelte";
-  import FormattingSettings from "./settings/FormattingSettings.svelte";
   import WorkspaceSettings from "./settings/WorkspaceSettings.svelte";
   import LinkSettings from "./settings/LinkSettings.svelte";
   import StorageSettings from "./settings/StorageSettings.svelte";
-  import SyncSettings from "./settings/SyncSettings.svelte";
   import AccountSettings from "./settings/AccountSettings.svelte";
   import BackupSettings from "./settings/BackupSettings.svelte";
   import ImportSettings from "./settings/ImportSettings.svelte";
   import FormatImportSettings from "./settings/FormatImportSettings.svelte";
-  import CloudBackupSettings from "./settings/CloudBackupSettings.svelte";
   import ClearDataSettings from "./settings/ClearDataSettings.svelte";
   import DebugInfo from "./settings/DebugInfo.svelte";
   import TemplateSettings from "./settings/TemplateSettings.svelte";
   import WorkspaceManagement from "./settings/WorkspaceManagement.svelte";
   import AppearanceSettings from "./settings/AppearanceSettings.svelte";
+  import PluginsSettings from "./settings/PluginsSettings.svelte";
+  import PluginSettingsTab from "./settings/PluginSettingsTab.svelte";
+  import PluginIframe from "./components/PluginIframe.svelte";
+  import { getPluginStore } from "../models/stores/pluginStore.svelte";
+  import S3StorageSettings from "./settings/S3StorageSettings.svelte";
+  import GoogleDriveStorageSettings from "./settings/GoogleDriveStorageSettings.svelte";
+  import { getPlugin as getBrowserPlugin } from "$lib/plugins/browserPluginManager.svelte";
+  import type { Api } from "$lib/backend/api";
+  import type { JsonValue } from "$lib/backend/generated/serde_json/JsonValue";
 
   interface Props {
     open?: boolean;
-    showUnlinkedFiles?: boolean;
-    showHiddenFiles?: boolean;
-    showEditorTitle?: boolean;
-    showEditorPath?: boolean;
     focusMode?: boolean;
     workspacePath?: string | null;
     /** Tab to show when the dialog opens */
     initialTab?: string;
     /** Callback to open the sync setup wizard */
     onAddWorkspace?: () => void;
+    /** API wrapper for plugin config operations */
+    api?: Api | null;
   }
 
   let {
     open = $bindable(),
-    showUnlinkedFiles = $bindable(),
-    showHiddenFiles = $bindable(false),
-    showEditorTitle = $bindable(false),
-    showEditorPath = $bindable(false),
     focusMode = $bindable(true),
     workspacePath = null,
     initialTab,
     onAddWorkspace,
+    api = null,
   }: Props = $props();
 
   const mobileState = getMobileState();
@@ -65,6 +66,49 @@
   // Current workspace info for per-workspace settings
   let currentWorkspaceId = $derived(getCurrentWorkspaceId() ?? '');
   let currentWorkspaceName = $derived(getLocalWorkspace(currentWorkspaceId)?.name ?? 'My Journal');
+
+  // Plugin store — all plugin-contributed settings tabs are rendered dynamically.
+  // Builtin ComponentRef mappings are reserved for host-owned plugin UIs (for example storage settings).
+  const pluginStore = getPluginStore();
+  const pluginSettingsTabs = $derived(pluginStore.settingsTabs);
+
+  // Plugin config state: keyed by pluginId
+  let pluginConfigs = $state<Record<string, Record<string, JsonValue>>>({});
+
+  async function loadPluginConfig(pluginId: string) {
+    try {
+      // Browser-loaded plugins store config via their own get/setConfig
+      const browserPlugin = getBrowserPlugin(pluginId);
+      if (browserPlugin) {
+        const raw = await browserPlugin.getConfig();
+        pluginConfigs = { ...pluginConfigs, [pluginId]: (raw as Record<string, JsonValue>) ?? {} };
+        return;
+      }
+      if (!api) return;
+      const raw = await api.getPluginConfig(pluginId);
+      pluginConfigs = { ...pluginConfigs, [pluginId]: (raw as Record<string, JsonValue>) ?? {} };
+    } catch {
+      pluginConfigs = { ...pluginConfigs, [pluginId]: {} };
+    }
+  }
+
+  async function handlePluginConfigChange(pluginId: string, key: string, value: JsonValue) {
+    const current = pluginConfigs[pluginId] ?? {};
+    const updated = { ...current, [key]: value };
+    pluginConfigs = { ...pluginConfigs, [pluginId]: updated };
+    try {
+      // Browser-loaded plugins store config via their own get/setConfig
+      const browserPlugin = getBrowserPlugin(pluginId);
+      if (browserPlugin) {
+        await browserPlugin.setConfig(updated as Record<string, unknown>);
+        return;
+      }
+      if (!api) return;
+      await api.setPluginConfig(pluginId, updated);
+    } catch (e) {
+      console.error(`[Settings] Failed to save plugin config for ${pluginId}:`, e);
+    }
+  }
 
   // Track active tab
   let activeTab = $state("general");
@@ -88,15 +132,11 @@
         <FolderOpen class="size-4 mr-1.5 hidden sm:inline" />
         Workspace
       </Tabs.Trigger>
-      <Tabs.Trigger value="templates" class="shrink-0">
-        <FileText class="size-4 mr-1.5 hidden sm:inline" />
-        Templates
-      </Tabs.Trigger>
-      <Tabs.Trigger value="sync" class="shrink-0">
-        <RefreshCw class="size-4 mr-1.5 hidden sm:inline" />
-        Sync
-        <span class="text-[9px] font-semibold uppercase ml-1 px-1 py-0.5 rounded-full bg-blue-500/15 text-blue-600 dark:text-blue-400">Beta</span>
-      </Tabs.Trigger>
+      {#each pluginSettingsTabs as tab}
+        <Tabs.Trigger value={`plugin-${tab.contribution.id}`} class="shrink-0">
+          {tab.contribution.label}
+        </Tabs.Trigger>
+      {/each}
       <Tabs.Trigger value="account" class="shrink-0">
         <User class="size-4 mr-1.5 hidden sm:inline" />
         Account
@@ -111,6 +151,10 @@
         <Database class="size-4 mr-1.5 hidden sm:inline" />
         Data
       </Tabs.Trigger>
+      <Tabs.Trigger value="plugins" class="shrink-0">
+        <Puzzle class="size-4 mr-1.5 hidden sm:inline" />
+        Plugins
+      </Tabs.Trigger>
       <Tabs.Trigger value="debug" class="shrink-0">
         <Bug class="size-4 mr-1.5 hidden sm:inline" />
         Debug
@@ -119,15 +163,8 @@
 
     <Tabs.Content value="general">
       <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
-        <DisplaySettings
-          bind:showUnlinkedFiles
-          bind:showHiddenFiles
-          bind:showEditorTitle
-          bind:showEditorPath
-          bind:focusMode
-        />
+        <DisplaySettings bind:focusMode />
         <AppearanceSettings />
-        <FormattingSettings />
       </div>
     </Tabs.Content>
 
@@ -136,18 +173,6 @@
         <WorkspaceSettings workspaceRootIndex={workspacePath} />
         <LinkSettings workspaceRootIndex={workspacePath} />
         <StorageSettings workspaceId={currentWorkspaceId} workspaceName={currentWorkspaceName} />
-      </div>
-    </Tabs.Content>
-
-    <Tabs.Content value="templates">
-      <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
-        <TemplateSettings workspaceRootIndex={workspacePath} />
-      </div>
-    </Tabs.Content>
-
-    <Tabs.Content value="sync">
-      <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
-        <SyncSettings {onAddWorkspace} />
       </div>
     </Tabs.Content>
 
@@ -169,8 +194,13 @@
         <BackupSettings {workspacePath} />
         <ImportSettings {workspacePath} />
         <FormatImportSettings {workspacePath} />
-        <CloudBackupSettings {workspacePath} />
         <ClearDataSettings />
+      </div>
+    </Tabs.Content>
+
+    <Tabs.Content value="plugins">
+      <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
+        <PluginsSettings />
       </div>
     </Tabs.Content>
 
@@ -179,6 +209,39 @@
         <DebugInfo />
       </div>
     </Tabs.Content>
+
+    {#each pluginSettingsTabs as tab}
+      <Tabs.Content value={`plugin-${tab.contribution.id}`}>
+        <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
+          {#if tab.contribution.component?.type === "Iframe"}
+            <div class="h-[320px]">
+              <PluginIframe
+                pluginId={tab.pluginId as unknown as string}
+                componentId={tab.contribution.component.component_id}
+              />
+            </div>
+          {:else if tab.contribution.component?.type === "Builtin" && tab.contribution.component.component_id === "storage.s3.settings"}
+            <S3StorageSettings />
+          {:else if tab.contribution.component?.type === "Builtin" && tab.contribution.component.component_id === "storage.gdrive.settings"}
+            <GoogleDriveStorageSettings />
+          {:else if tab.contribution.component?.type === "Builtin" && tab.contribution.component.component_id === "templating.settings"}
+            <TemplateSettings workspaceRootIndex={workspacePath} />
+          {:else if tab.contribution.fields.length > 0}
+            {#await loadPluginConfig(tab.pluginId) then}
+              <PluginSettingsTab
+                fields={tab.contribution.fields}
+                config={pluginConfigs[tab.pluginId] ?? {}}
+                onConfigChange={(key, value) => handlePluginConfigChange(tab.pluginId, key, value)}
+              />
+            {/await}
+          {:else}
+            <p class="text-sm text-muted-foreground">
+              No configurable settings for this plugin.
+            </p>
+          {/if}
+        </div>
+      </Tabs.Content>
+    {/each}
   </Tabs.Root>
 
   <div class="flex justify-end pt-4 border-t mt-4">

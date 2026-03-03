@@ -29,7 +29,7 @@
 //! ```
 
 use axum::extract::ws::{Message, WebSocket};
-use diaryx_core::crdt::{CrdtStorage, SqliteStorage};
+use diaryx_sync::{CrdtStorage, SqliteStorage};
 use futures::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},

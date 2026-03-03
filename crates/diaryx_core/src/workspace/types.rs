@@ -13,6 +13,7 @@ use serde_yaml::Value;
 use ts_rs::TS;
 
 use crate::link_parser::{self, LinkFormat};
+use crate::plugin::permissions::PluginConfig;
 
 /// Normalize a path by resolving `.` and `..` components without filesystem access.
 /// This is necessary for web/WASM where the virtual filesystem doesn't handle `..` in paths.
@@ -150,6 +151,11 @@ pub struct IndexFrontmatter {
     /// Example: `["*.lock", "*.toml", "build/*"]`
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exclude: Option<Vec<String>>,
+
+    /// Per-plugin configuration with permissions.
+    /// Only meaningful on root index files; ignored on non-root entries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<HashMap<String, PluginConfig>>,
 
     /// Additional frontmatter properties
     #[serde(flatten)]

@@ -138,3 +138,10 @@ See [PUBLISHING.md](PUBLISHING.md) for the full guide to publishing to the App S
 - Android (via Tauri mobile)
 
 Mobile platforms use platform-appropriate paths within app sandboxes.
+
+On iOS, workspace files are stored in the app `Documents` directory and surfaced in the Files app under "On My iPhone" by enabling:
+
+- `UIFileSharingEnabled`
+- `LSSupportsOpeningDocumentsInPlace`
+
+These keys are set via `src-tauri/Info.ios.plist` and merged through `bundle.iOS.infoPlist` in `src-tauri/tauri.conf.json`.

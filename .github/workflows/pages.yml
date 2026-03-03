@@ -44,11 +44,20 @@ jobs:
           bun install
           ../../scripts/build-wasm.sh
 
+      - name: Generate TypeScript bindings
+        run: cargo test -p diaryx_core
+
       - name: Upload WASM artifact
         uses: actions/upload-artifact@v4
         with:
           name: wasm-package
           path: apps/web/src/lib/wasm/
+
+      - name: Upload bindings artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ts-bindings
+          path: crates/diaryx_core/bindings/
 
   # Upload WASM to CDN with version tag + latest
   upload-wasm-cdn:
@@ -113,6 +122,12 @@ jobs:
         with:
           name: wasm-package
           path: apps/web/src/lib/wasm/
+
+      - name: Download bindings artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ts-bindings
+          path: crates/diaryx_core/bindings/
 
       - name: Install dependencies
         run: |

@@ -20,7 +20,7 @@
     getWorkspaceStorageType,
     setWorkspaceStorageType,
   } from "$lib/storage/localWorkspaceRegistry.svelte";
-  import { switchWorkspace } from "$lib/crdt/workspaceCrdtBridge";
+  import { switchWorkspace } from "$lib/workspace/switchWorkspace";
   import { isTauri } from "$lib/backend/interface";
 
   interface Props {

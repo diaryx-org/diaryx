@@ -12,11 +12,8 @@ mod config;
 /// Body content manipulation
 mod content;
 
-/// `today`, `yesterday`, `open`, `create` commands
+/// `open` and `create` commands
 mod entry;
-
-/// Git version history commands
-mod git;
 
 /// `diaryx_core` export with audience filtering
 mod export;
@@ -49,11 +46,23 @@ mod sync;
 mod nav;
 
 /// Web-based editing via local sync server
-#[cfg(feature = "web-edit")]
+#[cfg(feature = "edit")]
 mod edit;
 
 /// Template management
 mod template;
+
+/// Plugin storage for Extism plugins
+mod plugin_storage;
+
+/// Plugin loading and context (Extism integration)
+mod plugin_loader;
+
+/// Plugin management (install, remove, list, search, update)
+mod plugin_manager;
+
+/// Generic plugin command dispatcher (native handlers + WASM)
+mod plugin_dispatch;
 
 /// Shared CLI utilities
 mod util;
@@ -61,7 +70,7 @@ mod util;
 /// `diaryx_core` workspace index management
 mod workspace;
 
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches};
 use std::path::PathBuf;
 
 use diaryx_core::config::Config;
@@ -79,7 +88,7 @@ pub type AsyncFs = SyncToAsyncFs<RealFileSystem>;
 pub type CliDiaryxApp = DiaryxApp<AsyncFs>;
 
 /// Type alias for the sync DiaryxApp.
-/// Used for operations that haven't been migrated to async yet (templates, daily entries).
+/// Used for operations that haven't been migrated to async yet.
 pub type CliDiaryxAppSync = DiaryxAppSync<RealFileSystem>;
 
 /// Type alias for Workspace with the CLI's async filesystem.
@@ -93,29 +102,60 @@ fn block_on<F: std::future::Future>(f: F) -> F::Output {
 pub use args::Cli;
 use args::Commands;
 
-/// Main entry point for the CLI
+/// Main entry point for the CLI.
+///
+/// Uses a two-phase parse:
+/// 1. Discover installed plugin manifests (fast JSON reads, no WASM)
+/// 2. Build augmented clap command with dynamic plugin commands
+/// 3. Parse args — if a core command, dispatch normally; if a plugin command,
+///    route through the generic plugin dispatcher
 pub fn run_cli() {
-    let cli = Cli::parse();
+    // Phase 1: Discover installed plugin manifests
+    let plugin_manifests = plugin_loader::discover_plugin_manifests();
 
+    // Phase 2: Build augmented clap command
+    let mut app = Cli::command();
+    for (plugin_id, manifest) in &plugin_manifests {
+        for cli_cmd in &manifest.cli {
+            app = app.subcommand(plugin_dispatch::build_plugin_command(cli_cmd, plugin_id));
+        }
+    }
+
+    let matches = app.get_matches();
+
+    // Phase 3: Try core command first
+    if let Ok(cli) = Cli::from_arg_matches(&matches) {
+        let success = dispatch_core_command(cli);
+        if !success {
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    // Phase 4: Must be a plugin command
+    if let Some((name, sub_matches)) = matches.subcommand() {
+        let success =
+            plugin_dispatch::dispatch_plugin_command(name, sub_matches, &plugin_manifests);
+        if !success {
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Dispatch a core (statically-defined) CLI command.
+fn dispatch_core_command(cli: Cli) -> bool {
     // Setup dependencies
-    // Use SyncToAsyncFs wrapper for the async-first core API
     let async_fs = SyncToAsyncFs::new(RealFileSystem);
     let _app = DiaryxApp::new(async_fs.clone());
     let app_sync = DiaryxAppSync::new(RealFileSystem);
     let ws = Workspace::new(async_fs);
 
-    // Execute commands and track success
-    let success = match cli.command {
+    match cli.command {
         Commands::Init {
             default_workspace,
-            daily_folder,
             title,
             description,
-        } => handle_init(default_workspace, daily_folder, title, description, &ws),
-
-        Commands::Today { template } => entry::handle_today(&app_sync, template),
-
-        Commands::Yesterday { template } => entry::handle_yesterday(&app_sync, template),
+        } => handle_init(default_workspace, title, description, &ws),
 
         Commands::Open { path } => entry::handle_open(&app_sync, &path),
 
@@ -213,53 +253,19 @@ pub fn run_cli() {
             true
         }
 
-        Commands::Publish {
-            destination,
-            audience,
-            format,
-            single_file,
-            title,
-            force,
-            no_copy_attachments,
-            dry_run,
-        } => {
-            publish::handle_publish(
-                destination,
-                cli.workspace,
-                audience,
-                &format,
-                single_file,
-                title,
-                force,
-                no_copy_attachments,
-                dry_run,
-            );
-            true
-        }
-
-        Commands::Preview {
-            port,
-            no_open,
-            audience,
-            title,
-        } => {
-            preview::handle_preview(cli.workspace, port, no_open, audience, title);
-            true
-        }
-
         Commands::Attachment { command } => {
             let current_dir = std::env::current_dir().unwrap_or_default();
             attachment::handle_attachment_command(command, &ws, &app_sync, &current_dir);
             true
         }
 
-        Commands::Sync { command } => {
-            sync::handle_sync_command(command, cli.workspace);
+        Commands::Import { command } => {
+            import::handle_import_command(command, cli.workspace);
             true
         }
 
-        Commands::Import { command } => {
-            import::handle_import_command(command, cli.workspace);
+        Commands::Plugin { command } => {
+            plugin_manager::handle_plugin_command(command);
             true
         }
 
@@ -269,20 +275,7 @@ pub fn run_cli() {
             nav::handle_nav(cli.workspace, &ws, &config, &current_dir, path, depth)
         }
 
-        Commands::Commit {
-            message,
-            skip_validation,
-        } => {
-            let workspace_root = resolve_workspace_root(cli.workspace);
-            git::handle_commit(&workspace_root, message, skip_validation)
-        }
-
-        Commands::Log { count } => {
-            let workspace_root = resolve_workspace_root(cli.workspace);
-            git::handle_log(&workspace_root, count)
-        }
-
-        #[cfg(feature = "web-edit")]
+        #[cfg(feature = "edit")]
         Commands::Edit { url, port } => {
             // Edit defaults to the current directory (not the configured default workspace)
             // since it's meant for editing local files in a web editor.
@@ -292,16 +285,32 @@ pub fn run_cli() {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(edit::handle_edit(&workspace_root, url, port))
         }
-    };
-
-    if !success {
-        std::process::exit(1);
     }
 }
 
 /// Resolve the workspace root directory from CLI arg or config.
+///
+/// Accepts a filesystem path **or** a registered workspace name. If the value
+/// exists on disk it is used directly; otherwise we try to match it against the
+/// workspace registry by name.
 fn resolve_workspace_root(workspace_arg: Option<PathBuf>) -> PathBuf {
     if let Some(ws) = workspace_arg {
+        // If the path exists on disk, use it directly
+        if ws.exists() {
+            return ws;
+        }
+        // Try matching as a registered workspace name
+        if let Some(name) = ws.to_str() {
+            if let Ok(cfg) = Config::load() {
+                let reg = cfg.workspace_registry();
+                if let Some(entry) = reg.find_by_name(name) {
+                    if let Some(ref path) = entry.path {
+                        return path.clone();
+                    }
+                }
+            }
+        }
+        // Fall through to literal path (backward compat)
         return ws;
     }
     Config::load()
@@ -379,7 +388,6 @@ fn handle_uninstall(yes: bool) -> bool {
 /// Returns true on success, false on error
 fn handle_init(
     default_workspace: Option<PathBuf>,
-    daily_folder: Option<String>,
     title: Option<String>,
     description: Option<String>,
     ws: &Workspace<SyncToAsyncFs<RealFileSystem>>,
@@ -391,13 +399,10 @@ fn handle_init(
     });
 
     // Initialize config
-    match Config::init_with_options(dir.clone(), daily_folder.clone()) {
+    match Config::init_with_options(dir.clone()) {
         Ok(_) => {
             println!("✓ Initialized diaryx configuration");
             println!("  Default workspace: {}", dir.display());
-            if let Some(ref folder) = daily_folder {
-                println!("  Daily entry folder: {}", folder);
-            }
             if let Some(config_path) = Config::config_path() {
                 println!("  Config file: {}", config_path.display());
             }
@@ -425,6 +430,25 @@ fn handle_init(
             } else {
                 println!("  Workspace already initialized");
             }
+        }
+    }
+
+    // Auto-register the workspace
+    let canonical = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+    if let Ok(mut cfg) = Config::load() {
+        let mut reg = cfg.workspace_registry();
+        if reg.find_by_path(&canonical).is_none() {
+            let display_name = title.unwrap_or_else(|| {
+                canonical
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "workspace".into())
+            });
+            let entry = reg.register(display_name, Some(canonical));
+            let id = entry.id.clone();
+            reg.set_default(&id);
+            cfg.apply_registry(&reg);
+            let _ = cfg.save();
         }
     }
 

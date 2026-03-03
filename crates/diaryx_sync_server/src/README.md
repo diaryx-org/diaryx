@@ -50,3 +50,6 @@ This directory contains the source code for the Diaryx sync server.
 - Attachment reconciliation now derives candidate paths from both markdown links
   and raw HTML `src`/`href` attributes (with percent-decoding), which improves
   publish-time attachment URL rewriting for HTML-embedded media.
+- Published site creation enforces `get_effective_published_site_limit(...)`.
+  Free-tier defaults can be `0`, so tests/seeds that create sites should set a
+  per-user override (or tier) first.

@@ -3,7 +3,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use diaryx_core::crdt::{BinaryRef, FileMetadata, WorkspaceCrdt};
+use diaryx_sync::{BinaryRef, FileMetadata, WorkspaceCrdt};
 use diaryx_sync_server::{
     auth::AuthExtractor,
     blob_store::{BlobStore, InMemoryBlobStore},

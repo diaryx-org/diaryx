@@ -5,7 +5,7 @@
  * Usage: `const api = createApi(backend); await api.getEntry(path);`
  */
 
-import type { Backend } from './interface';
+import type { Backend, TemplateInfo } from './interface';
 import type {
   Response,
   EntryData,
@@ -18,13 +18,13 @@ import type {
   ExportPlan,
   ExportedFile,
   BinaryFileInfo,
-  TemplateInfo,
   StorageInfo,
   SearchOptions,
   AncestorAttachmentsResult,
   CreateChildResult,
   LinkFormat,
   WorkspaceConfig,
+  PluginManifest,
 } from './generated';
 import type { JsonValue } from './generated/serde_json/JsonValue';
 
@@ -84,6 +84,19 @@ function expectResponse<T extends Response['type']>(
  * Create a typed API wrapper around a Backend instance.
  */
 export function createApi(backend: Backend) {
+  // Helper to execute a plugin command and extract the result
+  async function pluginCommand(
+    plugin: string,
+    command: string,
+    params: JsonValue = null
+  ): Promise<JsonValue> {
+    const response = await backend.execute({
+      type: 'PluginCommand',
+      params: { plugin, command, params },
+    } as any);
+    return expectResponse(response, 'PluginResult').data;
+  }
+
   return {
     // =========================================================================
     // Entry Operations
@@ -182,51 +195,6 @@ export function createApi(backend: Backend) {
         params: { entry_path: entryPath, parent_path: parentPath },
       });
       return expectResponse(response, 'String').data;
-    },
-
-    /** Ensure a daily entry exists for the given date (defaults to today). Returns the path to the daily entry. */
-    async ensureDailyEntry(
-      workspacePath: string,
-      dailyEntryFolder?: string,
-      template?: string,
-      date?: string,
-    ): Promise<string> {
-      const response = await backend.execute({
-        type: 'EnsureDailyEntry',
-        params: {
-          workspace_path: workspacePath,
-          daily_entry_folder: dailyEntryFolder ?? null,
-          template: template ?? null,
-          date: date ?? null,
-        },
-      });
-      return expectResponse(response, 'String').data;
-    },
-
-    /** Get the path to an adjacent daily entry. Returns null if not a daily entry. */
-    async getAdjacentDailyEntry(
-      path: string,
-      direction: 'prev' | 'next'
-    ): Promise<string | null> {
-      try {
-        const response = await backend.execute({
-          type: 'GetAdjacentDailyEntry',
-          params: { path, direction },
-        });
-        return expectResponse(response, 'String').data;
-      } catch {
-        // Returns null if not a daily entry
-        return null;
-      }
-    },
-
-    /** Check if a path is a daily entry. */
-    async isDailyEntry(path: string): Promise<boolean> {
-      const response = await backend.execute({
-        type: 'IsDailyEntry',
-        params: { path },
-      });
-      return expectResponse(response, 'Bool').data;
     },
 
     // =========================================================================
@@ -553,82 +521,82 @@ export function createApi(backend: Backend) {
     async getAvailableAudiences(rootPath: string): Promise<string[]> {
       const response = await backend.execute({
         type: 'GetAvailableAudiences',
-        params: { root_path: rootPath },
+        params: { path: rootPath },
       });
       return expectResponse(response, 'Strings').data;
     },
 
     /** Plan an export operation. */
     async planExport(rootPath: string, audience: string): Promise<ExportPlan> {
-      const response = await backend.execute({
-        type: 'PlanExport',
-        params: { root_path: rootPath, audience },
+      const result = await pluginCommand('publish', 'PlanExport', {
+        root_path: rootPath,
+        audience,
       });
-      return expectResponse(response, 'ExportPlan').data;
+      return result as ExportPlan;
     },
 
     /** Export to memory. */
     async exportToMemory(rootPath: string, audience: string): Promise<ExportedFile[]> {
-      const response = await backend.execute({
-        type: 'ExportToMemory',
-        params: { root_path: rootPath, audience },
+      const result = await pluginCommand('publish', 'ExportToMemory', {
+        root_path: rootPath,
+        audience,
       });
-      return expectResponse(response, 'ExportedFiles').data;
+      return (result ?? []) as ExportedFile[];
     },
 
     /** Export to HTML. */
     async exportToHtml(rootPath: string, audience: string): Promise<ExportedFile[]> {
-      const response = await backend.execute({
-        type: 'ExportToHtml',
-        params: { root_path: rootPath, audience },
+      const result = await pluginCommand('publish', 'ExportToHtml', {
+        root_path: rootPath,
+        audience,
       });
-      return expectResponse(response, 'ExportedFiles').data;
+      return (result ?? []) as ExportedFile[];
     },
 
     /** Export binary attachments (returns paths only, use readBinary to get data). */
     async exportBinaryAttachments(rootPath: string, audience: string): Promise<BinaryFileInfo[]> {
-      const response = await backend.execute({
-        type: 'ExportBinaryAttachments',
-        params: { root_path: rootPath, audience },
+      const result = await pluginCommand('publish', 'ExportBinaryAttachments', {
+        root_path: rootPath,
+        audience,
       });
-      return expectResponse(response, 'BinaryFilePaths').data;
+      return (result ?? []) as BinaryFileInfo[];
     },
 
     // =========================================================================
-    // Templates
+    // Templates (via diaryx.templating plugin)
     // =========================================================================
 
     /** List available templates. */
     async listTemplates(workspacePath?: string): Promise<TemplateInfo[]> {
-      const response = await backend.execute({
-        type: 'ListTemplates',
-        params: { workspace_path: workspacePath ?? null },
+      const result = await pluginCommand('diaryx.templating', 'ListTemplates', {
+        workspace_path: workspacePath ?? null,
       });
-      return expectResponse(response, 'Templates').data;
+      return (result ?? []) as unknown as TemplateInfo[];
     },
 
     /** Get a template's content. */
     async getTemplate(name: string, workspacePath?: string): Promise<string> {
-      const response = await backend.execute({
-        type: 'GetTemplate',
-        params: { name, workspace_path: workspacePath ?? null },
+      const result = await pluginCommand('diaryx.templating', 'GetTemplate', {
+        name,
+        workspace_path: workspacePath ?? null,
       });
-      return expectResponse(response, 'String').data;
+      return result as string;
     },
 
     /** Save a template. */
     async saveTemplate(name: string, content: string, workspacePath: string): Promise<void> {
-      await backend.execute({
-        type: 'SaveTemplate',
-        params: { name, content, workspace_path: workspacePath },
+      await pluginCommand('diaryx.templating', 'SaveTemplate', {
+        name,
+        content,
+        workspace_path: workspacePath,
       });
     },
 
     /** Delete a template. */
     async deleteTemplate(name: string, workspacePath: string): Promise<void> {
-      await backend.execute({
-        type: 'DeleteTemplate',
-        params: { name, workspace_path: workspacePath },
+      await pluginCommand('diaryx.templating', 'DeleteTemplate', {
+        name,
+        workspace_path: workspacePath,
       });
     },
 
@@ -666,6 +634,15 @@ export function createApi(backend: Backend) {
         params: { entry_path: entryPath, attachment_path: attachmentPath },
       });
       return expectResponse(response, 'Bytes').data;
+    },
+
+    /** Resolve an attachment path to its storage path (for use with readBinary). */
+    async resolveAttachmentStoragePath(entryPath: string, attachmentPath: string): Promise<string> {
+      const response = await backend.execute({
+        type: 'ResolveAttachmentPath',
+        params: { entry_path: entryPath, attachment_path: attachmentPath },
+      } as any);
+      return expectResponse(response, 'String').data;
     },
 
     /** Move an attachment from one entry to another. Returns the new attachment path. */
@@ -843,12 +820,44 @@ export function createApi(backend: Backend) {
      * @returns Status message with number of files populated
      */
     async initializeWorkspaceCrdt(workspacePath: string, audience?: string): Promise<string> {
-      const response = await backend.execute({
-        type: 'InitializeWorkspaceCrdt',
-        params: { workspace_path: workspacePath, audience: audience ?? null },
+      const result = await pluginCommand('sync', 'InitializeWorkspaceCrdt', {
+        workspace_path: workspacePath,
+        audience: audience ?? null,
       });
-      return expectResponse(response, 'String').data;
+      return (result as string) ?? '';
     },
+
+    // =========================================================================
+    // Plugin Operations
+    // =========================================================================
+
+    /** Get manifests for all registered plugins. */
+    async getPluginManifests(): Promise<PluginManifest[]> {
+      const response = await backend.execute({
+        type: 'GetPluginManifests',
+      } as any);
+      return expectResponse(response, 'PluginManifests').data;
+    },
+
+    /** Get a plugin's configuration. */
+    async getPluginConfig(plugin: string): Promise<JsonValue> {
+      const response = await backend.execute({
+        type: 'GetPluginConfig',
+        params: { plugin },
+      });
+      return expectResponse(response, 'PluginResult').data;
+    },
+
+    /** Set a plugin's configuration. */
+    async setPluginConfig(plugin: string, config: JsonValue): Promise<void> {
+      await backend.execute({
+        type: 'SetPluginConfig',
+        params: { plugin, config },
+      });
+    },
+
+    /** Execute a plugin-specific command. */
+    executePluginCommand: pluginCommand,
   };
 }
 

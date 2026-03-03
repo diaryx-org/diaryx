@@ -7,6 +7,7 @@
    */
 
   import type { Snippet } from 'svelte';
+  import PermissionBanner from '$lib/components/PermissionBanner.svelte';
 
   interface Props {
     leftSidebar?: Snippet;
@@ -33,6 +34,7 @@
   {/if}
 
   <main class="flex-1 flex flex-col overflow-hidden min-w-0">
+    <PermissionBanner />
     {#if mainContent}
       {@render mainContent()}
     {/if}

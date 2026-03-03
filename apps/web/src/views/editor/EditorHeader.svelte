@@ -12,8 +12,9 @@
   import { Button } from "$lib/components/ui/button";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import * as Kbd from "$lib/components/ui/kbd";
+  import type { Api } from "$lib/backend/api";
+  import PluginStatusItems from "$lib/components/PluginStatusItems.svelte";
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
-  import SyncStatusIndicator from "$lib/SyncStatusIndicator.svelte";
   import {
     Check,
     Circle,
@@ -22,10 +23,11 @@
     Menu,
     Loader2,
     Search,
-    ChevronLeft,
-    ChevronRight,
-    CalendarDays,
+    Sparkles,
+    Plug,
   } from "@lucide/svelte";
+  import { getPluginStore } from "@/models/stores/pluginStore.svelte";
+
 
   // Mobile state for hiding keyboard shortcut tooltips
   const mobileState = getMobileState();
@@ -41,22 +43,14 @@
     rightSidebarOpen: boolean;
     focusMode?: boolean;
     readonly?: boolean;
-    /** Whether the current entry is a daily entry (shows prev/next navigation) */
-    isDailyEntry?: boolean;
-    /** Whether the current daily entry is today's entry */
-    isTodayEntry?: boolean;
     onSave: () => void;
     onToggleLeftSidebar: () => void;
     onToggleRightSidebar: () => void;
     onOpenCommandPalette: () => void;
-    /** Navigate to the previous day's entry */
-    onPrevDay?: () => void;
-    /** Navigate to the next day's entry */
-    onNextDay?: () => void;
-    /** Navigate to today's daily entry */
-    onGoToToday?: () => void;
-    /** Open sync setup wizard (for sync indicator) */
-    onAddWorkspace?: () => void;
+    /** API wrapper for plugin status bar commands */
+    api?: Api | null;
+    /** Plugin toolbar button clicked */
+    onPluginToolbarAction?: (pluginId: string, command: string) => void;
   }
 
   let {
@@ -70,17 +64,21 @@
     rightSidebarOpen,
     focusMode = false,
     readonly = false,
-    isDailyEntry = false,
-    isTodayEntry = false,
     onSave,
     onToggleLeftSidebar,
     onToggleRightSidebar,
     onOpenCommandPalette,
-    onPrevDay,
-    onNextDay,
-    onGoToToday,
-    onAddWorkspace,
+    api = null,
+    onPluginToolbarAction,
   }: Props = $props();
+
+  const pluginStore = getPluginStore();
+
+  // Map icon names to Lucide components
+  const iconMap: Record<string, typeof Sparkles> = {
+    sparkles: Sparkles,
+    plug: Plug,
+  };
 
   // Focus mode: header is invisible when both sidebars are closed
   let bothSidebarsClosed = $derived(!leftSidebarOpen && !rightSidebarOpen);
@@ -146,101 +144,13 @@
     {/if}
 
     <!-- Title and path area -->
-    {#if showTitle || showPath || isDailyEntry}
+    {#if showTitle || showPath}
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-1">
-          <!-- Prev day button (only for daily entries) -->
-          {#if isDailyEntry && onPrevDay}
-            <Tooltip.Root>
-              <Tooltip.Trigger>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onclick={onPrevDay}
-                  class="size-7 shrink-0"
-                  aria-label="Previous day"
-                >
-                  <ChevronLeft class="size-4" />
-                </Button>
-              </Tooltip.Trigger>
-              {#if !mobileState.isMobile}
-                <Tooltip.Content>
-                  <div class="flex items-center gap-2">
-                    Previous day
-                    <Kbd.Group>
-                      <Kbd.Root>Alt</Kbd.Root>
-                      <span>+</span>
-                      <Kbd.Root>←</Kbd.Root>
-                    </Kbd.Group>
-                  </div>
-                </Tooltip.Content>
-              {/if}
-            </Tooltip.Root>
-          {/if}
-
           {#if showTitle}
             <h2 class="text-lg md:text-xl font-semibold text-foreground truncate">
               {title}
             </h2>
-          {/if}
-
-          <!-- Next day button (only for daily entries) -->
-          {#if isDailyEntry && onNextDay}
-            <Tooltip.Root>
-              <Tooltip.Trigger>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onclick={onNextDay}
-                  class="size-7 shrink-0"
-                  aria-label="Next day"
-                >
-                  <ChevronRight class="size-4" />
-                </Button>
-              </Tooltip.Trigger>
-              {#if !mobileState.isMobile}
-                <Tooltip.Content>
-                  <div class="flex items-center gap-2">
-                    Next day
-                    <Kbd.Group>
-                      <Kbd.Root>Alt</Kbd.Root>
-                      <span>+</span>
-                      <Kbd.Root>→</Kbd.Root>
-                    </Kbd.Group>
-                  </div>
-                </Tooltip.Content>
-              {/if}
-            </Tooltip.Root>
-          {/if}
-
-          <!-- Go to Today button (only for daily entries when not viewing today) -->
-          {#if isDailyEntry && !isTodayEntry && onGoToToday}
-            <Tooltip.Root>
-              <Tooltip.Trigger>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onclick={onGoToToday}
-                  class="h-7 px-2 shrink-0 text-xs"
-                  aria-label="Go to today"
-                >
-                  <CalendarDays class="size-3.5 mr-1" />
-                  Today
-                </Button>
-              </Tooltip.Trigger>
-              {#if !mobileState.isMobile}
-                <Tooltip.Content>
-                  <div class="flex items-center gap-2">
-                    Go to today
-                    <Kbd.Group>
-                      <Kbd.Root>Alt</Kbd.Root>
-                      <span>+</span>
-                      <Kbd.Root>T</Kbd.Root>
-                    </Kbd.Group>
-                  </div>
-                </Tooltip.Content>
-              {/if}
-            </Tooltip.Root>
           {/if}
         </div>
         {#if showPath}
@@ -256,8 +166,9 @@
 
   <!-- Right side: actions -->
   <div class="flex items-center gap-1 md:gap-2 ml-2 shrink-0">
-    <!-- Sync status indicator -->
-    <SyncStatusIndicator onAddWorkspace={onAddWorkspace} />
+    {#if api}
+      <PluginStatusItems {api} />
+    {/if}
 
     {#if readonly}
       <!-- View-only indicator for read-only mode -->
@@ -307,6 +218,29 @@
         {/if}
       </Tooltip.Root>
     {/if}
+
+    <!-- Plugin toolbar buttons -->
+    {#each pluginStore.toolbarButtons as btn}
+      {@const BtnIcon = iconMap[btn.contribution.icon ?? ""] ?? Plug}
+      <Tooltip.Root>
+        <Tooltip.Trigger>
+          <Button
+            variant="ghost"
+            size="icon"
+            onclick={() => onPluginToolbarAction?.(btn.pluginId as unknown as string, btn.contribution.plugin_command)}
+            class="size-8"
+            aria-label={btn.contribution.label}
+          >
+            <BtnIcon class="size-4" />
+          </Button>
+        </Tooltip.Trigger>
+        {#if !mobileState.isMobile}
+          <Tooltip.Content>
+            {btn.contribution.label}
+          </Tooltip.Content>
+        {/if}
+      </Tooltip.Root>
+    {/each}
 
     <!-- Command palette button with tooltip -->
     <Tooltip.Root>

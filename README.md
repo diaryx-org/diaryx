@@ -40,6 +40,8 @@ All of this logic is defined in the `diaryx_core` Rust crate, and is used by the
 ## Codebase organization
 
 - `[crates/diaryx_core](crates/diaryx_core/README.md)`: Core logic for all Diaryx apps.
+- `[crates/diaryx_daily](crates/diaryx_daily/README.md)`: Shared daily-entry domain logic for optional daily plugins.
+- `[crates/diaryx_daily_extism](crates/diaryx_daily_extism/README.md)`: Optional Extism daily plugin.
 - `[crates/diaryx](crates/diaryx/README.md)`: CLI frontend for Diaryx.
 - `[crates/diaryx_apple](crates/diaryx_apple/README.md)`: Apple bridge crate with UniFFI bindings over `diaryx_core`.
 - `[crates/diaryx_wasm](crates/diaryx_wasm/README.md)`: WebAssembly bindings for `diaryx_core`, used in `apps/web`.

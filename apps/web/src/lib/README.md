@@ -84,3 +84,10 @@ Key host pieces:
 which calls plugin commands (`GetProviderStatus`, `ListRemoteWorkspaces`,
 `LinkWorkspace`, `UnlinkWorkspace`, `DownloadWorkspace`) and keeps local
 workspace registry updates in the host.
+
+## iOS Editor Toolbar
+
+`Editor.svelte` switches to the native iOS toolbar when running in Tauri on iOS.
+In that mode, web `FloatingMenu`/`BubbleMenu` UI is not required for editor
+initialization; the editor must still mount even when those menu elements are
+not rendered.

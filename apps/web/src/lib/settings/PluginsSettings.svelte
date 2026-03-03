@@ -47,6 +47,8 @@
 
   const browserPluginSupport = $derived(getBrowserPluginSupport());
   const browserPluginSupportError = $derived(getBrowserPluginSupportError());
+  // In Tauri, plugins load natively — browser WASM support is irrelevant
+  const pluginsSupported = $derived(isTauri() || browserPluginSupport.supported);
 
   function isSyncPluginId(pluginId: string): boolean {
     return pluginId === "sync";
@@ -310,7 +312,7 @@
       variant="outline"
       size="sm"
       onclick={triggerFileUpload}
-      disabled={uploadingCustom || !browserPluginSupport.supported}
+      disabled={uploadingCustom || !pluginsSupported}
     >
       {#if uploadingCustom}
         <Loader2 class="size-3.5 mr-1.5 animate-spin" />
@@ -332,7 +334,7 @@
   />
 
   <!-- Browser support warning -->
-  {#if !browserPluginSupport.supported}
+  {#if !pluginsSupported}
     <div class="rounded-md border border-amber-500/40 bg-amber-500/5 p-2">
       <p class="text-xs text-amber-700 dark:text-amber-300">
         {browserPluginSupportError ?? browserPluginSupport.reason ?? 'Browser plugins are unavailable in this browser.'}
@@ -377,7 +379,7 @@
                   id={`plugin-enabled-${rp.id}`}
                   checked={isEnabled(rp.id)}
                   onCheckedChange={(checked) => setEnabled(rp.id, checked)}
-                  disabled={!browserPluginSupport.supported}
+                  disabled={!pluginsSupported}
                 />
                 <span class="text-xs text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
                   <Check class="size-3" />
@@ -388,7 +390,7 @@
                   variant="outline"
                   size="sm"
                   onclick={() => installFromRegistry(rp)}
-                  disabled={installing || !browserPluginSupport.supported}
+                  disabled={installing || !pluginsSupported}
                 >
                   {#if installing}
                     <Loader2 class="size-3.5 mr-1.5 animate-spin" />
@@ -434,7 +436,7 @@
                   id={`plugin-enabled-${pluginId}`}
                   checked={isEnabled(pluginId)}
                   onCheckedChange={(checked) => setEnabled(pluginId, checked)}
-                  disabled={!browserPluginSupport.supported}
+                  disabled={!pluginsSupported}
                 />
                 <Button
                   variant="ghost"

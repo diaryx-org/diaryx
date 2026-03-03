@@ -132,6 +132,8 @@ After uploading a build (iOS or macOS), it appears in [App Store Connect](https:
 ## Notes
 
 - iOS icons must not have alpha channels (transparency). If icons are regenerated, flatten them to RGB before building.
+- iOS Files app visibility for app `Documents` is enabled with `src-tauri/Info.ios.plist` (`UIFileSharingEnabled` + `LSSupportsOpeningDocumentsInPlace`) wired in `src-tauri/tauri.conf.json` under `bundle.iOS.infoPlist`.
+- If you update iOS plist overrides, recreate the iOS project so generated Xcode files pick up the change (`cargo tauri ios init`).
 - The `iap` feature flag is required for App Store builds to include the StoreKit 2 plugin.
 - Mac App Store builds require sandbox entitlements defined in `src-tauri/Entitlements.plist`.
 - The `bundle.category` in `tauri.conf.json` must be set (currently "Productivity") for Mac App Store submission.

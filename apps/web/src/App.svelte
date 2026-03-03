@@ -3,6 +3,7 @@
   import { getBackend, isTauri } from "./lib/backend";
   import { createApi, type Api } from "./lib/backend/api";
   import type { JsonValue } from "./lib/backend/generated/serde_json/JsonValue";
+  import { isIOS } from "$lib/hooks/useMobile.svelte";
   import LeftSidebar from "./lib/LeftSidebar.svelte";
   import RightSidebar from "./lib/RightSidebar.svelte";
   import NewEntryModal from "./lib/NewEntryModal.svelte";
@@ -458,6 +459,14 @@
           return;
         }
 
+        // On iOS Tauri, first-run should show onboarding explicitly.
+        // The user taps "Get Started" to create/open the starter workspace.
+        if (isTauri() && isIOS()) {
+          showWelcomeScreen = true;
+          entryStore.setLoading(false);
+          return;
+        }
+
         // No workspaces exist — auto-create a default workspace
         try {
           await autoCreateDefaultWorkspace();
@@ -512,6 +521,14 @@
       workspaceStore.setWorkspaceId(sharedWorkspaceId);
 
       await refreshTree();
+      const bootstrappedIosStarter = await maybeBootstrapIosStarterWorkspace(
+        apiInstance,
+        backendInstance,
+        wsName ?? "My Workspace",
+      );
+      if (bootstrappedIosStarter) {
+        await refreshTree();
+      }
 
       // Configure permission persistence + provider now that we have a root tree path.
       permissionStore.setPersistenceHandlers({
@@ -983,30 +1000,72 @@
     }
   }
 
-  /**
-   * Auto-create a default local workspace for first-time users.
-   * Returns { id, name } on success, or throws on failure.
-   */
-  async function autoCreateDefaultWorkspace(): Promise<{ id: string; name: string }> {
-    const ws = createLocalWorkspace("My Workspace");
-    setCurrentWorkspaceId(ws.id);
-
-    const backendInstance = await getBackend(ws.id, ws.name, ws.storageType);
-    workspaceStore.setBackend(backendInstance);
-
-    const apiInstance = createApi(backendInstance);
-    rustApi = null;
-
-    cleanupEventSubscription = initEventSubscription(backendInstance);
-
-    // Create workspace root structure
-    const workspaceDir = backendInstance.getWorkspacePath()
+  function getWorkspaceDirectoryPath(backendInstance: { getWorkspacePath(): string }): string {
+    return backendInstance
+      .getWorkspacePath()
       .replace(/\/index\.md$/, '')
       .replace(/\/README\.md$/, '');
-    await apiInstance.createWorkspace(workspaceDir, ws.name);
+  }
 
-    // Find the root index and overwrite with welcome content
-    const rootPath = await apiInstance.findRootIndex(workspaceDir);
+  function isWorkspaceAlreadyExistsError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return (
+      message.includes("Workspace already exists") ||
+      message.includes("WorkspaceAlreadyExists")
+    );
+  }
+
+  async function seedStarterWorkspaceContent(
+    apiInstance: Api,
+    workspaceDir: string,
+    workspaceName: string,
+  ): Promise<string> {
+    let rootPath: string;
+    let createdWorkspace = false;
+
+    try {
+      await apiInstance.createWorkspace(workspaceDir, workspaceName);
+      createdWorkspace = true;
+      rootPath = await apiInstance.findRootIndex(workspaceDir);
+    } catch (e) {
+      if (!isWorkspaceAlreadyExistsError(e)) {
+        throw e;
+      }
+      // Tauri iOS can pre-initialize a default workspace before this flow runs.
+      // Treat that as success and keep the existing workspace content intact.
+      rootPath = await apiInstance.findRootIndex(workspaceDir);
+    }
+
+    let shouldSeedStarterContent = createdWorkspace;
+
+    if (!createdWorkspace) {
+      try {
+        const existingRoot = await apiInstance.getEntry(rootPath);
+        const fm = normalizeFrontmatter(existingRoot.frontmatter);
+        const title =
+          (typeof fm.title === "string" && fm.title.trim()) || workspaceName;
+        const description =
+          typeof fm.description === "string" ? fm.description.trim() : "";
+        const contents = Array.isArray(fm.contents) ? fm.contents : [];
+        const body = existingRoot.content.trim();
+
+        // Treat a pristine backend-generated workspace as "not yet initialized"
+        // and replace it with Diaryx starter content.
+        const defaultBody = `# ${title}\n\nA diaryx workspace`;
+        const isDefaultScaffold =
+          description === "A diaryx workspace" &&
+          contents.length === 0 &&
+          body === defaultBody;
+
+        shouldSeedStarterContent = isDefaultScaffold;
+      } catch {
+        shouldSeedStarterContent = false;
+      }
+    }
+
+    if (!shouldSeedStarterContent) {
+      return rootPath;
+    }
 
     const rootContent = `Welcome to **Diaryx** — your personal knowledge workspace.
 
@@ -1024,9 +1083,12 @@ If you want all the details, explore [the detailed guide](</Detailed Guide.md>) 
     // Create a "Getting Started" child entry (handles part_of + parent contents automatically)
     const childResult = await apiInstance.createChildEntry(rootPath);
     let gettingStartedPath = childResult.child_path;
-    // Rename from "Untitled" to "Getting Started"
+    // Rename from "Untitled" to "Detailed Guide"
     const newPath = await apiInstance.setFrontmatterProperty(
-      gettingStartedPath, "title", "Detailed Guide" as any, rootPath
+      gettingStartedPath,
+      "title",
+      "Detailed Guide" as JsonValue,
+      rootPath,
     );
     if (newPath) gettingStartedPath = newPath;
 
@@ -1051,6 +1113,61 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
 | Ctrl/Cmd + ] | Toggle right sidebar        |`;
 
     await apiInstance.saveEntry(gettingStartedPath, gettingStartedContent, rootPath);
+    return rootPath;
+  }
+
+  async function maybeBootstrapIosStarterWorkspace(
+    apiInstance: Api,
+    backendInstance: Awaited<ReturnType<typeof getBackend>>,
+    workspaceName: string,
+  ): Promise<boolean> {
+    if (!(isTauri() && isIOS())) return false;
+
+    const workspaceDir = getWorkspaceDirectoryPath(backendInstance);
+
+    try {
+      await apiInstance.findRootIndex(workspaceDir);
+      return false;
+    } catch {
+      // Missing root index — continue with fallback checks.
+    }
+
+    try {
+      const fsTree = await apiInstance.getFilesystemTree(workspaceDir, false, 1);
+      const hasFiles = (fsTree.children?.length ?? 0) > 0;
+      if (hasFiles) {
+        console.log("[App] iOS workspace has files but no root index; skipping starter bootstrap");
+        return false;
+      }
+
+      await seedStarterWorkspaceContent(apiInstance, workspaceDir, workspaceName);
+      console.log("[App] Bootstrapped starter workspace content on iOS");
+      return true;
+    } catch (e) {
+      console.warn("[App] Failed to bootstrap starter workspace content on iOS:", e);
+      return false;
+    }
+  }
+
+  /**
+   * Auto-create a default local workspace for first-time users.
+   * Returns { id, name } on success, or throws on failure.
+   */
+  async function autoCreateDefaultWorkspace(): Promise<{ id: string; name: string }> {
+    const ws = createLocalWorkspace("My Workspace");
+    setCurrentWorkspaceId(ws.id);
+
+    const backendInstance = await getBackend(ws.id, ws.name, ws.storageType);
+    workspaceStore.setBackend(backendInstance);
+
+    const apiInstance = createApi(backendInstance);
+    rustApi = null;
+
+    cleanupEventSubscription = initEventSubscription(backendInstance);
+
+    // Create workspace root structure and starter entries.
+    const workspaceDir = getWorkspaceDirectoryPath(backendInstance);
+    await seedStarterWorkspaceContent(apiInstance, workspaceDir, ws.name);
 
     return { id: ws.id, name: ws.name };
   }

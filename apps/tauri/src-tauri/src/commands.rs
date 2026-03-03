@@ -657,9 +657,6 @@ pub async fn execute<R: Runtime>(
 
             let base_fs = SyncToAsyncFs::new(RealFileSystem);
             let mut d = Diaryx::new(base_fs);
-            d.plugin_registry_mut().register_workspace_plugin(Arc::new(
-                diaryx_publish::PublishPlugin::new(SyncToAsyncFs::new(RealFileSystem)),
-            ));
             if let Some(ref ws_path) = workspace_path {
                 log::debug!("[execute] Setting workspace root: {:?}", ws_path);
                 d.set_workspace_root(ws_path.clone());
@@ -719,7 +716,8 @@ pub async fn execute<R: Runtime>(
 // ============================================================================
 
 /// Get platform-appropriate paths for the app
-/// On iOS/Android, uses Tauri's app_data_dir which is within the app sandbox
+/// On mobile, user workspace files are rooted in `document_dir` for Files app access,
+/// while internal config remains in `app_data_dir`.
 /// On desktop, uses the standard dirs crate locations
 fn get_platform_paths<R: Runtime>(app: &AppHandle<R>) -> Result<AppPaths, SerializableError> {
     let path_resolver = app.path();

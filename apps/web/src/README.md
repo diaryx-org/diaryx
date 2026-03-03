@@ -50,3 +50,15 @@ bridge callbacks.
 - Saves unsaved body edits before rename
 - Updates `entryStore` with the new path/frontmatter
 - Remaps active collaboration path tracking to the renamed file
+
+## Starter Workspace Bootstrap
+
+`App.svelte` bootstraps starter content for first-run users.
+On iOS Tauri, first-run shows the welcome/onboarding screen before any
+workspace creation.
+On iOS Tauri, if the selected workspace directory exists but has no root index
+and no files, startup seeds the same starter workspace content used by the web
+first-run flow.
+If a workspace root already exists (for example, pre-initialized by the Tauri
+backend), the "Get Started" flow upgrades that default scaffold to starter
+content instead of opening the add-workspace wizard.

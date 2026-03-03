@@ -47,6 +47,7 @@
   import { isIOS } from "$lib/hooks/useMobile.svelte";
   import { workspaceStore } from "@/models/stores/workspaceStore.svelte";
   import { getLinkFormatStore } from "$lib/stores/linkFormatStore.svelte";
+  import { getPluginStore } from "@/models/stores/pluginStore.svelte";
   import type { TreeNode } from "$lib/backend";
 
   // On iOS Tauri, a native UIToolbar replaces the web BubbleMenu
@@ -133,8 +134,8 @@
   function createEditor() {
     destroyEditor();
 
-    // In non-readonly mode, require FloatingMenu element
-    if (!readonly && !floatingMenuElement) {
+    // In non-readonly mode, require FloatingMenu unless native iOS toolbar is active
+    if (!readonly && !useNativeToolbar && !floatingMenuElement) {
       if (debugMenus) {
         console.log(
           "[Editor] FloatingMenu element not ready, deferring editor creation",
@@ -447,7 +448,8 @@
     ];
 
     // Add FloatingMenu extension (for block formatting on empty lines)
-    if (!readonly) {
+    // On iOS Tauri, the native toolbar includes a block picker button instead
+    if (!readonly && !useNativeToolbar) {
       extensions.push(
         FloatingMenu.configure({
           element: floatingMenuElement,
@@ -661,11 +663,17 @@
 
     // Expose link picker helpers for the native iOS toolbar
     if (useNativeToolbar) {
-      function flattenTree(node: TreeNode | null): { path: string; name: string }[] {
+      function flattenTree(node: TreeNode | null): { path: string; name: string; displayPath: string }[] {
         if (!node) return [];
-        const entries: { path: string; name: string }[] = [];
+        // Use the directory containing the root node as the workspace root
+        const lastSlash = node.path.lastIndexOf('/');
+        const rootDir = lastSlash >= 0 ? node.path.slice(0, lastSlash + 1) : '';
+        const entries: { path: string; name: string; displayPath: string }[] = [];
         function traverse(n: TreeNode) {
-          entries.push({ path: n.path, name: n.name });
+          const displayPath = rootDir && n.path.startsWith(rootDir)
+            ? n.path.slice(rootDir.length)
+            : n.path;
+          entries.push({ path: n.path, name: n.name, displayPath });
           for (const child of n.children) traverse(child);
         }
         traverse(node);
@@ -694,6 +702,39 @@
           } else {
             editor?.chain().focus().setLink({ href: path }).run();
           }
+        },
+        getPluginCommands: () => {
+          const store = getPluginStore();
+          const cmds = store.editorInsertCommands;
+          return {
+            marks: cmds.mark.map(c => ({
+              extensionId: c.extensionId,
+              label: c.label,
+              iconName: c.iconName,
+            })),
+            inlineAtoms: cmds.inline.map(c => ({
+              extensionId: c.extensionId,
+              label: c.label,
+              iconName: c.iconName,
+            })),
+            blockAtoms: cmds.block.map(c => ({
+              extensionId: c.extensionId,
+              label: c.label,
+              iconName: c.iconName,
+            })),
+            blockPickerItems: store.blockPickerItems.map(item => ({
+              id: item.contribution.id,
+              label: item.contribution.label,
+              iconName: item.contribution.icon,
+              editorCommand: item.contribution.editor_command,
+              params: item.contribution.params,
+              prompt: item.contribution.prompt ? {
+                message: item.contribution.prompt.message,
+                defaultValue: item.contribution.prompt.default_value,
+                paramKey: item.contribution.prompt.param_key,
+              } : null,
+            })),
+          };
         },
       };
     }
@@ -804,9 +845,10 @@
       return;
     }
 
-    // In edit mode, wait for menu elements (native toolbar replaces BubbleMenu on iOS Tauri)
+    // In edit mode, wait for menu elements (native toolbar replaces BubbleMenu + FloatingMenu on iOS Tauri)
     const bubbleMenuReady = useNativeToolbar || hasBubbleMenu;
-    if (!editorInitialized && hasEditorElement && hasFloatingMenu && bubbleMenuReady) {
+    const floatingMenuReady = useNativeToolbar || hasFloatingMenu;
+    if (!editorInitialized && hasEditorElement && floatingMenuReady && bubbleMenuReady) {
       if (debugMenus) {
         console.log("[Editor] Menu elements ready, creating editor", {
           floatingMenuElement,
@@ -913,7 +955,8 @@
 
 <!-- FloatingMenu for block formatting (appears on empty lines) -->
 <!-- Element must exist before editor creation for extension to bind to it -->
-{#if !readonly}
+<!-- On iOS Tauri, the native toolbar includes a block picker button instead -->
+{#if !readonly && !useNativeToolbar}
   <FloatingMenuComponent
     bind:this={floatingMenuRef}
     {editor}

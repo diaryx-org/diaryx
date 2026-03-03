@@ -29,6 +29,7 @@ attachments:
   - "[template.rs](/crates/diaryx_core/src/template.rs)"
   - "[test_utils.rs](/crates/diaryx_core/src/test_utils.rs)"
   - "[validate.rs](/crates/diaryx_core/src/validate.rs)"
+  - "[workspace_registry.rs](/crates/diaryx_core/src/workspace_registry.rs)"
 exclude:
   - "*.lock"
 ---
@@ -57,6 +58,7 @@ This directory contains the source code for the core Diaryx library.
 | `template.rs`        | Creation-time template management                      |
 | `test_utils.rs`      | Feature-gated test utilities                           |
 | `validate.rs`        | Workspace validation and fixing                        |
+| `workspace_registry.rs` | Multi-workspace registry types (shared across frontends) |
 
 ## Modules
 

@@ -24,6 +24,7 @@ toml = "0.9.8"
 thiserror.workspace = true
 async-trait = "0.1"
 urlencoding = "2"
+uuid = { version = "1", features = ["v4"] }
 
 
 # TypeScript bindings generation

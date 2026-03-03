@@ -10,6 +10,7 @@
  */
 
 import { getStorageType, type StorageType } from '$lib/backend/storageType';
+import type { WorkspaceEntry } from '$lib/backend/generated';
 import { generateUUID } from '$lib/utils';
 
 // ============================================================================
@@ -19,11 +20,13 @@ import { generateUUID } from '$lib/utils';
 /** Per-plugin metadata stored on a workspace. Keyed by plugin ID. */
 export type PluginMetadataMap = Record<string, Record<string, unknown>>;
 
-export interface LocalWorkspace {
-  /** Workspace identifier. Always "local-<uuid>" — stable across sync operations. */
-  id: string;
-  /** Display name (also used as OPFS directory name) */
-  name: string;
+/**
+ * Local workspace — extends the shared core `WorkspaceEntry` with
+ * platform-specific fields (storage type, timestamps, plugin metadata).
+ *
+ * Core fields (`id`, `name`, `path`) come from the generated type.
+ */
+export interface LocalWorkspace extends WorkspaceEntry {
   /**
    * Whether this workspace is local-only (not synced to server).
    * @deprecated Check `pluginMetadata?.sync?.serverId` instead, or use `isWorkspaceSynced()`.
@@ -31,9 +34,7 @@ export interface LocalWorkspace {
    */
   isLocal: boolean;
   /** Storage backend for this workspace. Undefined = inherit global default. */
-  storageType?: import('$lib/backend/storageType').StorageType;
-  /** Tauri only: real filesystem path for this workspace. Undefined for web (OPFS). */
-  path?: string;
+  storageType?: StorageType;
   /** When this workspace was first created/downloaded to this device */
   downloadedAt: number;
   /** When the user last opened this workspace */

@@ -294,8 +294,28 @@ fn dispatch_core_command(cli: Cli) -> bool {
 }
 
 /// Resolve the workspace root directory from CLI arg or config.
+///
+/// Accepts a filesystem path **or** a registered workspace name. If the value
+/// exists on disk it is used directly; otherwise we try to match it against the
+/// workspace registry by name.
 fn resolve_workspace_root(workspace_arg: Option<PathBuf>) -> PathBuf {
     if let Some(ws) = workspace_arg {
+        // If the path exists on disk, use it directly
+        if ws.exists() {
+            return ws;
+        }
+        // Try matching as a registered workspace name
+        if let Some(name) = ws.to_str() {
+            if let Ok(cfg) = Config::load() {
+                let reg = cfg.workspace_registry();
+                if let Some(entry) = reg.find_by_name(name) {
+                    if let Some(ref path) = entry.path {
+                        return path.clone();
+                    }
+                }
+            }
+        }
+        // Fall through to literal path (backward compat)
         return ws;
     }
     Config::load()
@@ -419,6 +439,25 @@ fn handle_init(
             } else {
                 println!("  Workspace already initialized");
             }
+        }
+    }
+
+    // Auto-register the workspace
+    let canonical = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+    if let Ok(mut cfg) = Config::load() {
+        let mut reg = cfg.workspace_registry();
+        if reg.find_by_path(&canonical).is_none() {
+            let display_name = title.unwrap_or_else(|| {
+                canonical
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "workspace".into())
+            });
+            let entry = reg.register(display_name, Some(canonical));
+            let id = entry.id.clone();
+            reg.set_default(&id);
+            cfg.apply_registry(&reg);
+            let _ = cfg.save();
         }
     }
 

@@ -571,6 +571,36 @@ pub enum PropertyCommands {
 
 #[derive(Subcommand)]
 pub enum WorkspaceCommands {
+    /// List registered workspaces, marking the default
+    #[command(alias = "ls")]
+    List,
+
+    /// Register a workspace directory in the multi-workspace registry
+    Register {
+        /// Path to the workspace directory
+        path: PathBuf,
+
+        /// Display name (defaults to directory name)
+        #[arg(short, long)]
+        name: Option<String>,
+    },
+
+    /// Remove a workspace from the registry (does not delete files)
+    Unregister {
+        /// Workspace name or path
+        name_or_path: String,
+
+        /// Skip confirmation prompt
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
+    /// Show or set the default workspace
+    Default {
+        /// Workspace name or path to set as default (omit to show current)
+        name_or_path: Option<String>,
+    },
+
     /// Show workspace info as a tree
     Info {
         /// Path to show tree for (use "." for current directory's index)

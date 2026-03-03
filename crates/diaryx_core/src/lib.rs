@@ -64,6 +64,9 @@ pub mod utils;
 /// Workspace (specify a directory to work in)
 pub mod workspace;
 
+/// Multi-workspace registry types shared across frontends
+pub mod workspace_registry;
+
 /// Core data types (FileMetadata, BinaryRef, CrdtStorage trait, history types)
 pub mod types;
 

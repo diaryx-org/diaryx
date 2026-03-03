@@ -6,9 +6,9 @@
 /// Where all the Tauri `invoke` functions are defined.
 mod commands;
 
-#[cfg(feature = "extism-plugins")]
-use commands::ExtismSyncState;
 use commands::{AppState, GuestModeState};
+#[cfg(feature = "extism-plugins")]
+use commands::{ExtismSyncState, PluginAdapters};
 
 /// Configure the iOS WKWebView to render edge-to-edge, extending content into
 /// safe areas. Without this, the webview stops at the bottom safe area boundary,
@@ -75,10 +75,12 @@ pub fn run() {
         .manage(AppState::new())
         .manage(GuestModeState::new());
 
-    // Extism sync plugin state — only available with extism-plugins feature
+    // Extism plugin states — only available with extism-plugins feature
     #[cfg(feature = "extism-plugins")]
     {
-        builder = builder.manage(ExtismSyncState::new());
+        builder = builder
+            .manage(ExtismSyncState::new())
+            .manage(PluginAdapters::new());
     }
 
     builder
@@ -127,6 +129,8 @@ pub fn run() {
             // Extism User Plugin Management
             commands::install_user_plugin,
             commands::uninstall_user_plugin,
+            // Extism Plugin Render (IPC for Tauri/iOS when browser Extism unavailable)
+            commands::call_plugin_render,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

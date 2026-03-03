@@ -23,6 +23,7 @@ import {
   getBuiltinExtension,
   isEditorExtension,
   type EditorExtensionManifest,
+  type RenderFn,
 } from "./editorExtensionFactory";
 
 // ============================================================================
@@ -157,6 +158,9 @@ let runtimeSupportError = $state<string | null>(null);
 let pluginsConfigProvider:
   | (() => Record<string, PluginConfig> | undefined)
   | null = null;
+
+/** Reactive version counter — incremented when browser plugins finish loading. */
+let pluginExtensionsVersion = $state(0);
 
 // ============================================================================
 // Public API
@@ -294,6 +298,9 @@ export async function loadAllPlugins(): Promise<void> {
       e,
     );
   }
+
+  // Signal that browser plugin extensions may have changed
+  pluginExtensionsVersion++;
 }
 
 /** Configure how browser plugins read workspace permission config. */
@@ -346,6 +353,15 @@ export function getBrowserPluginSupportError(): string | null {
   return runtimeSupportError;
 }
 
+/**
+ * Reactive version counter for plugin extensions.
+ * Incremented each time browser plugins finish loading.
+ * Used by the editor to detect when extensions need rebuilding.
+ */
+export function getPluginExtensionsVersion(): number {
+  return pluginExtensionsVersion;
+}
+
 // ============================================================================
 // Editor extension generation
 // ============================================================================
@@ -393,11 +409,18 @@ export function getEditorExtensions(): any[] {
             continue;
           }
 
-          const ext =
-            manifest.node_type === "InlineMark"
-              ? createMarkFromManifest(manifest)
-              : createExtensionFromManifest(manifest, plugin);
-          extensions.push(ext);
+          if (manifest.node_type === "InlineMark") {
+            extensions.push(createMarkFromManifest(manifest));
+          } else if (manifest.render_export) {
+            const renderExport = manifest.render_export;
+            const renderFn: RenderFn = (source, displayMode) =>
+              plugin.callRender(renderExport, source, {
+                display_mode: displayMode,
+              });
+            extensions.push(
+              createExtensionFromManifest(manifest, renderFn),
+            );
+          }
         } catch (e) {
           console.warn(
             `[browserPluginManager] Failed to create editor extension ${ui.extension_id}:`,

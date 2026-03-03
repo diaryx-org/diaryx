@@ -18,7 +18,7 @@
     onChange: (value: string[] | null) => void;
   }
 
-  let { audience, entryPath, rootPath, api, onChange }: Props = $props();
+  let { audience, entryPath: _, rootPath, api, onChange }: Props = $props();
 
   const mobileState = getMobileState();
   const templateContextStore = getTemplateContextStore();

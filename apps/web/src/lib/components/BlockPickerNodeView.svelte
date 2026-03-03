@@ -158,10 +158,6 @@
     }
   }
 
-  function handleAudienceCancel() {
-    showAudienceSelector = false;
-  }
-
   function handleMenuItemClick(
     event: MouseEvent | TouchEvent,
     action: () => void,

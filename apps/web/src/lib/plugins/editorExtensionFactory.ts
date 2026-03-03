@@ -13,7 +13,6 @@ import { Mark, Node, mergeAttributes } from "@tiptap/core";
 import { markInputRule, markPasteRule } from "@tiptap/core";
 import { Plugin as ProseMirrorPlugin, PluginKey } from "@tiptap/pm/state";
 import { mount, unmount } from "svelte";
-import type { BrowserExtismPlugin } from "./extismBrowserLoader";
 import MathInlineNodeView from "$lib/components/MathInlineNodeView.svelte";
 import MathBlockNodeView from "$lib/components/MathBlockNodeView.svelte";
 import { TemplateVariable } from "$lib/extensions/TemplateVariable";
@@ -91,18 +90,24 @@ export function isEditorExtension(ui: unknown): ui is EditorExtensionManifest {
 // Extension factory
 // ============================================================================
 
+/** Generic render function signature accepted by the extension factory. */
+export type RenderFn = (
+  source: string,
+  displayMode: boolean,
+) => Promise<{ html?: string; error?: string }>;
+
 /**
- * Create a TipTap Node extension from a manifest declaration and plugin reference.
+ * Create a TipTap Node extension from a manifest declaration and a render function.
  *
  * The generated extension:
  * 1. Defines a Node with `{ source: string }` attribute
  * 2. Generates markdown tokenizer from open/close delimiters
- * 3. Mounts a Svelte node view that calls the plugin's render export
+ * 3. Mounts a Svelte node view that calls the provided render function
  * 4. Supports source editing (popover for inline, source toggle for block)
  */
 export function createExtensionFromManifest(
   ext: EditorExtensionManifest,
-  plugin: BrowserExtismPlugin,
+  renderFn: RenderFn,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): any {
   const isInline = ext.node_type === "InlineAtom";
@@ -116,16 +121,6 @@ export function createExtensionFromManifest(
   if (ext.css) {
     injectCss(ext.extension_id, ext.css);
   }
-
-  // Build the render function that calls the plugin
-  const renderFn = async (
-    source: string,
-    displayMode: boolean,
-  ): Promise<{ html?: string; error?: string }> => {
-    return plugin.callRender(ext.render_export!, source, {
-      display_mode: displayMode,
-    });
-  };
 
   const NodeComponent = isInline ? MathInlineNodeView : MathBlockNodeView;
 

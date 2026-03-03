@@ -510,7 +510,9 @@
       const apiInstance = createApi(backendInstance);
 
       // Initialize plugin store (fetch manifests for UI extension points)
-      getPluginStore().init(apiInstance);
+      // Awaited so backend manifests are available before the editor is created
+      // (needed for Tauri iOS where browser Extism isn't available).
+      await getPluginStore().init(apiInstance);
 
       // Initialize filesystem event subscription for automatic UI updates
       cleanupEventSubscription = initEventSubscription(backendInstance);

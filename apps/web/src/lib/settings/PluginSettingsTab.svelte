@@ -8,16 +8,42 @@
   import { Switch } from "$lib/components/ui/switch";
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
+  import { Button } from "$lib/components/ui/button";
+  import { Loader2, Check, AlertCircle } from "@lucide/svelte";
+  import { dispatchCommand, getPlugin } from "$lib/plugins/browserPluginManager.svelte";
   import type { SettingsField, SelectOption } from "$lib/backend/generated";
   import type { JsonValue } from "$lib/backend/generated/serde_json/JsonValue";
 
   interface Props {
+    pluginId: string;
     fields: SettingsField[];
     config: Record<string, JsonValue>;
     onConfigChange: (key: string, value: JsonValue) => void;
   }
 
-  let { fields, config, onConfigChange }: Props = $props();
+  let { pluginId, fields, config, onConfigChange }: Props = $props();
+
+  // Button state: keyed by command name
+  let buttonStates = $state<Record<string, { loading: boolean; result?: { success: boolean; message: string } }>>({});
+
+  async function handleButtonClick(command: string) {
+    buttonStates = { ...buttonStates, [command]: { loading: true } };
+    try {
+      // Save current config first
+      const browserPlugin = getPlugin(pluginId);
+      if (browserPlugin) {
+        await browserPlugin.setConfig(config as Record<string, unknown>);
+      }
+      const result = await dispatchCommand(pluginId, command, {});
+      if (result.success) {
+        buttonStates = { ...buttonStates, [command]: { loading: false, result: { success: true, message: "Success" } } };
+      } else {
+        buttonStates = { ...buttonStates, [command]: { loading: false, result: { success: false, message: result.error ?? "Failed" } } };
+      }
+    } catch (e) {
+      buttonStates = { ...buttonStates, [command]: { loading: false, result: { success: false, message: String(e) } } };
+    }
+  }
 </script>
 
 <div class="space-y-4">
@@ -54,6 +80,23 @@
         <Input
           id={field.key}
           type="text"
+          placeholder={field.placeholder ?? undefined}
+          value={(config[field.key] as string) ?? ""}
+          oninput={(e) => onConfigChange(field.key, (e.target as HTMLInputElement).value)}
+        />
+      </div>
+    {:else if field.type === "Password"}
+      <div class="space-y-1.5 px-1">
+        <Label for={field.key} class="text-sm flex flex-col gap-0.5">
+          <span>{field.label}</span>
+          {#if field.description}
+            <span class="font-normal text-xs text-muted-foreground">{field.description}</span>
+          {/if}
+        </Label>
+        <Input
+          id={field.key}
+          type="password"
+          placeholder={field.placeholder ?? undefined}
           value={(config[field.key] as string) ?? ""}
           oninput={(e) => onConfigChange(field.key, (e.target as HTMLInputElement).value)}
         />
@@ -88,6 +131,30 @@
             <option value={opt.value}>{opt.label}</option>
           {/each}
         </select>
+      </div>
+    {:else if field.type === "Button"}
+      {@const state = buttonStates[field.command]}
+      <div class="flex items-center gap-3 px-1 pt-1">
+        <Button
+          variant={field.variant === "destructive" ? "destructive" : field.variant === "outline" ? "outline" : "default"}
+          disabled={state?.loading}
+          onclick={() => handleButtonClick(field.command)}
+        >
+          {#if state?.loading}
+            <Loader2 class="size-4 mr-1.5 animate-spin" />
+          {/if}
+          {field.label}
+        </Button>
+        {#if state?.result}
+          <span class="flex items-center gap-1 text-sm" class:text-green-600={state.result.success} class:text-destructive={!state.result.success}>
+            {#if state.result.success}
+              <Check class="size-4" />
+            {:else}
+              <AlertCircle class="size-4" />
+            {/if}
+            {state.result.message}
+          </span>
+        {/if}
       </div>
     {/if}
   {/each}

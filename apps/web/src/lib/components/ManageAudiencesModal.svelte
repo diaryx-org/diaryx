@@ -298,6 +298,7 @@
 
                 {#if isEditing}
                   <!-- Edit mode -->
+                  <!-- svelte-ignore a11y_autofocus -->
                   <input
                     class="flex-1 min-w-0 bg-transparent border-b border-border focus:border-primary outline-none text-sm py-0.5"
                     bind:value={editValue}
@@ -390,6 +391,7 @@
                   colorStore.audienceColors,
                 )}"
               ></span>
+              <!-- svelte-ignore a11y_autofocus -->
               <input
                 class="flex-1 min-w-0 bg-transparent border-b border-border focus:border-primary outline-none text-sm py-0.5 placeholder:text-muted-foreground"
                 placeholder="New audience name…"

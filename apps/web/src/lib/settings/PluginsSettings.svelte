@@ -194,6 +194,14 @@
     wasmBytes: ArrayBuffer,
     fallbackName?: string,
   ): Promise<void> {
+    // On Tauri, the native backend handles WASM loading/inspection — browser
+    // Extism isn't available on iOS. Skip browser-side inspect and install
+    // directly; the backend extracts the manifest and returns it.
+    if (isTauri()) {
+      await platformInstall(wasmBytes, fallbackName);
+      return;
+    }
+
     const inspected = await inspectPluginWasm(wasmBytes);
     const pluginId = inspected.pluginId;
     const pluginName = inspected.pluginName || fallbackName || pluginId;

@@ -130,22 +130,34 @@ fn make_permission_checker(
 // Extism Third-Party Plugin Loading
 // ============================================================================
 
-/// Load and register any third-party Extism WASM plugins from the user's
-/// plugin directory (`~/.diaryx/plugins/`).
+/// Resolve the workspace-local plugins directory: `{workspace_root}/.diaryx/plugins/`.
+#[cfg(feature = "extism-plugins")]
+fn workspace_plugins_dir<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    let app_state = app.state::<AppState>();
+    let ws_path = app_state.workspace_path.lock().ok()?.clone()?;
+    Some(ws_path.join(".diaryx").join("plugins"))
+}
+
+/// Load and register any third-party Extism WASM plugins from the workspace-local
+/// plugin directory (`{workspace_root}/.diaryx/plugins/`).
 ///
 /// Each subdirectory containing a `plugin.wasm` file is loaded as a plugin
 /// and registered as both a WorkspacePlugin and FilePlugin. Errors during
 /// loading are logged and skipped (not fatal).
+///
+/// Returns the loaded adapters so they can also be stored in [`PluginAdapters`]
+/// for render IPC calls.
 #[cfg(feature = "extism-plugins")]
 fn register_extism_plugins<FS: diaryx_core::fs::AsyncFileSystem + 'static>(
     diaryx: &mut Diaryx<FS>,
-) {
-    let plugins_dir = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("diaryx")
-        .join("plugins");
+) -> Vec<Arc<diaryx_extism::ExtismPluginAdapter>> {
+    let workspace_root = match diaryx.workspace_root() {
+        Some(root) => root,
+        None => return Vec::new(),
+    };
+    let plugins_dir = workspace_root.join(".diaryx").join("plugins");
     if !plugins_dir.exists() {
-        return;
+        return Vec::new();
     }
 
     // Use a basic real filesystem for host function file access.
@@ -158,6 +170,7 @@ fn register_extism_plugins<FS: diaryx_core::fs::AsyncFileSystem + 'static>(
         plugin_id: String::new(),
         permission_checker: Some(make_permission_checker(diaryx.workspace_root())),
     });
+    let mut adapters = Vec::new();
     match diaryx_extism::load_plugins_from_dir(&plugins_dir, host_ctx) {
         Ok(plugins) => {
             for plugin in plugins {
@@ -165,13 +178,17 @@ fn register_extism_plugins<FS: diaryx_core::fs::AsyncFileSystem + 'static>(
                 diaryx
                     .plugin_registry_mut()
                     .register_workspace_plugin(arc.clone());
-                diaryx.plugin_registry_mut().register_file_plugin(arc);
+                diaryx
+                    .plugin_registry_mut()
+                    .register_file_plugin(arc.clone());
+                adapters.push(arc);
             }
         }
         Err(e) => {
             log::warn!("Failed to load extism plugins: {e}");
         }
     }
+    adapters
 }
 
 // ============================================================================
@@ -215,6 +232,31 @@ impl<R: Runtime> diaryx_extism::EventEmitter for TauriEventEmitter<R> {
         } else {
             let _ = self.app.emit("sync-plugin-event", event_json);
         }
+    }
+}
+
+/// Holds loaded [`ExtismPluginAdapter`] instances by plugin ID for render IPC calls.
+///
+/// The frontend can call `call_plugin_render` to invoke a plugin's render export
+/// (e.g., math rendering) without needing browser Extism support.
+#[cfg(feature = "extism-plugins")]
+pub struct PluginAdapters {
+    pub adapters: Mutex<HashMap<String, Arc<diaryx_extism::ExtismPluginAdapter>>>,
+}
+
+#[cfg(feature = "extism-plugins")]
+impl PluginAdapters {
+    pub fn new() -> Self {
+        Self {
+            adapters: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+#[cfg(feature = "extism-plugins")]
+impl Default for PluginAdapters {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -265,20 +307,19 @@ pub async fn load_sync_plugin<R: Runtime>(
     let wasm_file = if let Some(path) = wasm_path {
         PathBuf::from(path)
     } else {
-        // Check bundled location first, then user plugins dir
+        // Check bundled location first, then workspace-local plugins dir
         let bundled = app
             .path()
             .resource_dir()
             .ok()
             .map(|d| d.join("plugins").join("diaryx_sync.wasm"));
-        let user_plugins = dirs::data_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("diaryx")
-            .join("plugins")
-            .join("diaryx_sync")
-            .join("plugin.wasm");
+        let workspace_local =
+            workspace_plugins_dir(&app).map(|d| d.join("diaryx_sync").join("plugin.wasm"));
 
-        bundled.filter(|p| p.exists()).unwrap_or(user_plugins)
+        bundled
+            .filter(|p| p.exists())
+            .or_else(|| workspace_local.filter(|p| p.exists()))
+            .unwrap_or_else(|| PathBuf::from("diaryx_sync.wasm"))
     };
 
     if !wasm_file.exists() {
@@ -464,12 +505,13 @@ pub async fn install_user_plugin<R: Runtime>(
         path: None,
     })?;
 
-    // Persist WASM to ~/.diaryx/plugins/{plugin_id}/plugin.wasm
-    let plugins_dir = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("diaryx")
-        .join("plugins")
-        .join(&plugin_id);
+    // Persist WASM to {workspace_root}/.diaryx/plugins/{plugin_id}/plugin.wasm
+    let base_dir = workspace_plugins_dir(&app).ok_or_else(|| SerializableError {
+        kind: "NotFound".to_string(),
+        message: "No workspace is open — cannot install plugin".to_string(),
+        path: None,
+    })?;
+    let plugins_dir = base_dir.join(&plugin_id);
     std::fs::create_dir_all(&plugins_dir).map_err(|e| SerializableError {
         kind: "IoError".to_string(),
         message: format!("Failed to create plugin directory: {e}"),
@@ -506,7 +548,7 @@ pub async fn install_user_plugin<R: Runtime>(
 
 /// Uninstall a user plugin by ID.
 ///
-/// Deletes `~/.diaryx/plugins/{plugin_id}/` and clears the cached Diaryx instance.
+/// Deletes `{workspace_root}/.diaryx/plugins/{plugin_id}/` and clears the cached Diaryx instance.
 #[cfg(feature = "extism-plugins")]
 #[tauri::command]
 pub async fn uninstall_user_plugin<R: Runtime>(
@@ -515,11 +557,12 @@ pub async fn uninstall_user_plugin<R: Runtime>(
 ) -> Result<(), SerializableError> {
     log::info!("[uninstall_user_plugin] Uninstalling plugin: {}", plugin_id);
 
-    let plugins_dir = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("diaryx")
-        .join("plugins")
-        .join(&plugin_id);
+    let base_dir = workspace_plugins_dir(&app).ok_or_else(|| SerializableError {
+        kind: "NotFound".to_string(),
+        message: "No workspace is open — cannot uninstall plugin".to_string(),
+        path: None,
+    })?;
+    let plugins_dir = base_dir.join(&plugin_id);
 
     if plugins_dir.exists() {
         std::fs::remove_dir_all(&plugins_dir).map_err(|e| SerializableError {
@@ -562,6 +605,61 @@ pub async fn uninstall_user_plugin<R: Runtime>(
     _app: AppHandle<R>,
     _plugin_id: String,
 ) -> Result<(), SerializableError> {
+    Err(SerializableError {
+        kind: "Unsupported".to_string(),
+        message: "Extism plugin support is not enabled. Build with --features extism-plugins."
+            .to_string(),
+        path: None,
+    })
+}
+
+// ============================================================================
+// Plugin Render IPC
+// ============================================================================
+
+/// Call a plugin's render export function via IPC.
+///
+/// Used by the frontend to render plugin content (e.g., math blocks) when
+/// browser Extism plugins aren't available (iOS) or haven't loaded yet.
+/// The plugin must have been loaded by `register_extism_plugins` and stored
+/// in [`PluginAdapters`].
+#[cfg(feature = "extism-plugins")]
+#[tauri::command]
+pub async fn call_plugin_render<R: Runtime>(
+    app: AppHandle<R>,
+    plugin_id: String,
+    export_name: String,
+    input: String,
+) -> Result<String, SerializableError> {
+    let adapters = app.state::<PluginAdapters>();
+    let guard = adapters.adapters.lock().map_err(|e| SerializableError {
+        kind: "LockError".to_string(),
+        message: format!("Failed to lock plugin adapters: {e}"),
+        path: None,
+    })?;
+    let adapter = guard.get(&plugin_id).ok_or_else(|| SerializableError {
+        kind: "NotFound".to_string(),
+        message: format!("Plugin '{}' not loaded", plugin_id),
+        path: None,
+    })?;
+    adapter
+        .call_guest(&export_name, &input)
+        .map_err(|e| SerializableError {
+            kind: "PluginError".to_string(),
+            message: e.to_string(),
+            path: None,
+        })
+}
+
+/// Stub: call_plugin_render when extism-plugins feature is disabled.
+#[cfg(not(feature = "extism-plugins"))]
+#[tauri::command]
+pub async fn call_plugin_render<R: Runtime>(
+    _app: AppHandle<R>,
+    _plugin_id: String,
+    _export_name: String,
+    _input: String,
+) -> Result<String, SerializableError> {
     Err(SerializableError {
         kind: "Unsupported".to_string(),
         message: "Extism plugin support is not enabled. Build with --features extism-plugins."
@@ -662,7 +760,17 @@ pub async fn execute<R: Runtime>(
                 d.set_workspace_root(ws_path.clone());
             }
             #[cfg(feature = "extism-plugins")]
-            register_extism_plugins(&mut d);
+            {
+                let adapters = register_extism_plugins(&mut d);
+                if let Some(plugin_adapters) = app.try_state::<PluginAdapters>() {
+                    if let Ok(mut guard) = plugin_adapters.adapters.lock() {
+                        for adapter in adapters {
+                            use diaryx_core::plugin::Plugin;
+                            guard.insert(adapter.manifest().id.0.clone(), adapter);
+                        }
+                    }
+                }
+            }
             #[cfg(feature = "extism-plugins")]
             {
                 if let Some(extism_sync_state) = app.try_state::<ExtismSyncState>() {

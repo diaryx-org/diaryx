@@ -41,7 +41,8 @@
   // Custom extension for markdown footnotes
   import { FootnoteRef, preprocessFootnotes, appendFootnoteDefinitions } from "./extensions/FootnoteRef";
   import { getTemplateContextStore } from "./stores/templateContextStore.svelte";
-  import { getEditorExtensions } from "$lib/plugins/browserPluginManager.svelte";
+  import { getEditorExtensions, getPluginExtensionsVersion } from "$lib/plugins/browserPluginManager.svelte";
+  import { getTauriEditorExtensions } from "$lib/plugins/tauriEditorExtensions";
   import type { Api } from "$lib/backend/api";
   import { isTauri } from "$lib/backend/interface";
   import { isIOS } from "$lib/hooks/useMobile.svelte";
@@ -114,6 +115,7 @@
   // This avoids constantly recreating the editor (which can lead to blank content/races).
   let lastReadonly: boolean | null = null;
   let lastPlaceholder: string | null = null;
+  let lastPluginVersion: number | null = null;
 
   function destroyEditor() {
     editor?.destroy();
@@ -444,7 +446,9 @@
           : undefined,
       }),
       // Plugin-generated editor extensions (e.g., math blocks)
-      ...getEditorExtensions(),
+      // Tauri: use native backend (plugins loaded synchronously, available immediately)
+      // Web: use browser Extism plugins (loaded async, editor rebuilds when ready)
+      ...(isTauri() ? getTauriEditorExtensions() : getEditorExtensions()),
     ];
 
     // Add FloatingMenu extension (for block formatting on empty lines)
@@ -873,21 +877,24 @@
     destroyEditor();
   });
 
-  // Rebuild editor when readonly or placeholder changes
+  // Rebuild editor when readonly, placeholder, or plugin extensions change
   $effect(() => {
     if (!element) return;
     // Skip if we haven't done initial creation yet
     if (!editorInitialized) return;
 
+    const pluginVersion = getPluginExtensionsVersion();
     const needsRebuild =
       readonly !== lastReadonly ||
-      placeholder !== lastPlaceholder;
+      placeholder !== lastPlaceholder ||
+      pluginVersion !== lastPluginVersion;
 
     if (!needsRebuild) return;
 
     // Update tracking for what we're about to build
     lastReadonly = readonly;
     lastPlaceholder = placeholder;
+    lastPluginVersion = pluginVersion;
 
     createEditor();
   });

@@ -13,7 +13,6 @@ attachments:
   - "[FormatImportSettings.svelte](/apps/web/src/lib/settings/FormatImportSettings.svelte)"
   - "[ImportSettings.svelte](/apps/web/src/lib/settings/ImportSettings.svelte)"
   - "[LinkSettings.svelte](/apps/web/src/lib/settings/LinkSettings.svelte)"
-  - "[S3StorageSettings.svelte](/apps/web/src/lib/settings/S3StorageSettings.svelte)"
   - "[GoogleDriveStorageSettings.svelte](/apps/web/src/lib/settings/GoogleDriveStorageSettings.svelte)"
   - "[StorageSettings.svelte](/apps/web/src/lib/settings/StorageSettings.svelte)"
   - "[TemplateSettings.svelte](/apps/web/src/lib/settings/TemplateSettings.svelte)"
@@ -39,7 +38,7 @@ Settings panel components for `SettingsDialog.svelte`.
 | `DisplaySettings.svelte` / `AppearanceSettings.svelte` | Display, typography, and theme preferences. |
 | `WorkspaceSettings.svelte` / `WorkspaceManagement.svelte` | Workspace config and provider link/unlink management. |
 | `StorageSettings.svelte` | Local storage backend settings. |
-| `S3StorageSettings.svelte` / `GoogleDriveStorageSettings.svelte` | Storage plugin-specific settings. |
+| `GoogleDriveStorageSettings.svelte` | Google Drive storage plugin-specific settings (requires OAuth popup). |
 | `ImportSettings.svelte` / `FormatImportSettings.svelte` | ZIP import and format import flows. |
 | `AccountSettings.svelte` / `BillingSettings.svelte` | Authentication/account and billing surfaces. |
 | `PluginsSettings.svelte` | Plugin enable/disable + install/remove controls, including install-time permission review and default-permission persistence to root frontmatter. |

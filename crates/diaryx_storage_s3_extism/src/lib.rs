@@ -104,11 +104,20 @@ pub fn manifest(_input: String) -> FnResult<String> {
         capabilities: vec!["custom_commands".into()],
         ui: vec![serde_json::json!({
             "slot": "SettingsTab",
+            "id": "s3-storage-settings",
             "label": "S3 Storage",
             "icon": "cloud",
-            "component": {
-                "Builtin": { "component_id": "storage.s3.settings" }
-            }
+            "fields": [
+                { "type": "Section", "label": "S3 Configuration" },
+                { "type": "Text", "key": "bucket", "label": "Bucket", "placeholder": "my-diaryx-bucket" },
+                { "type": "Text", "key": "region", "label": "Region", "placeholder": "us-east-1" },
+                { "type": "Text", "key": "prefix", "label": "Prefix", "description": "Key prefix within the bucket (e.g., \"diaryx/workspace1/\")", "placeholder": "diaryx/" },
+                { "type": "Text", "key": "endpoint", "label": "Custom Endpoint", "description": "For S3-compatible services: MinIO, Cloudflare R2, Backblaze B2, etc.", "placeholder": "https://s3.example.com" },
+                { "type": "Text", "key": "access_key_id", "label": "Access Key ID", "placeholder": "AKIAIOSFODNN7EXAMPLE" },
+                { "type": "Password", "key": "secret_access_key", "label": "Secret Access Key", "placeholder": "••••••••" },
+                { "type": "Toggle", "key": "path_style", "label": "Use path-style addressing" },
+                { "type": "Button", "label": "Test Connection", "command": "TestConnection", "variant": "outline" }
+            ]
         })],
         commands: vec![
             "ReadFile".into(),
@@ -165,19 +174,7 @@ pub fn on_event(_input: String) -> FnResult<String> {
 pub fn get_config(_input: String) -> FnResult<String> {
     let config = CONFIG.with(|c| c.borrow().clone());
     match config {
-        Some(c) => {
-            // Redact secret key for display
-            let mut display = serde_json::to_value(&c)?;
-            if let Some(obj) = display.as_object_mut() {
-                if obj.contains_key("secret_access_key") {
-                    obj.insert(
-                        "secret_access_key".to_string(),
-                        serde_json::Value::String("***".to_string()),
-                    );
-                }
-            }
-            Ok(serde_json::to_string(&display)?)
-        }
+        Some(c) => Ok(serde_json::to_string(&c)?),
         None => Ok("{}".into()),
     }
 }

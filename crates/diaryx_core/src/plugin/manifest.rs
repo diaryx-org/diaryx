@@ -409,6 +409,21 @@ pub enum SettingsField {
         label: String,
         /// Optional description / help text.
         description: Option<String>,
+        /// Optional placeholder text.
+        #[serde(default)]
+        placeholder: Option<String>,
+    },
+    /// Password input (rendered as `type="password"`).
+    Password {
+        /// Config key this field writes to.
+        key: String,
+        /// Label displayed next to the input.
+        label: String,
+        /// Optional description / help text.
+        description: Option<String>,
+        /// Optional placeholder text.
+        #[serde(default)]
+        placeholder: Option<String>,
     },
     /// Boolean toggle.
     Toggle {
@@ -447,6 +462,16 @@ pub enum SettingsField {
         label: String,
         /// Optional description.
         description: Option<String>,
+    },
+    /// Action button that dispatches a plugin command.
+    Button {
+        /// Button label.
+        label: String,
+        /// Plugin command to dispatch on click.
+        command: String,
+        /// Button style variant: `"default"`, `"outline"`, or `"destructive"`.
+        #[serde(default)]
+        variant: Option<String>,
     },
 }
 

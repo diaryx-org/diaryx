@@ -76,6 +76,7 @@
   <div class="p-4 space-y-4">
     {#if component.type === "Declarative"}
       <PluginSettingsTab
+        pluginId={pluginId as unknown as string}
         fields={component.fields}
         {config}
         onConfigChange={handleConfigChange}

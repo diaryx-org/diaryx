@@ -317,6 +317,46 @@ jobs:
                 "version": "0.1.0",
                 "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_publish.wasm",
                 "builtin": true
+              },
+              {
+                "id": "diaryx.spoiler",
+                "name": "Spoiler",
+                "description": "Discord-style ||spoiler|| hidden text",
+                "version": "0.1.0",
+                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_spoiler.wasm",
+                "builtin": true
+              },
+              {
+                "id": "diaryx.templating",
+                "name": "Templating",
+                "description": "Entry templating functionality",
+                "version": "0.1.0",
+                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_templating.wasm",
+                "builtin": true
+              },
+              {
+                "id": "diaryx.daily",
+                "name": "Daily",
+                "description": "Daily entry management",
+                "version": "0.1.0",
+                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_daily.wasm",
+                "builtin": false
+              },
+              {
+                "id": "diaryx.storage.s3",
+                "name": "S3 Storage",
+                "description": "S3-compatible storage backend",
+                "version": "0.1.0",
+                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_storage_s3.wasm",
+                "builtin": true
+              },
+              {
+                "id": "diaryx.storage.gdrive",
+                "name": "Google Drive Storage",
+                "description": "Google Drive storage backend",
+                "version": "0.1.0",
+                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_storage_gdrive.wasm",
+                "builtin": true
               }
             ]
           }

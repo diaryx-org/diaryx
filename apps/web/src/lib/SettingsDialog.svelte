@@ -33,7 +33,6 @@
   import PluginSettingsTab from "./settings/PluginSettingsTab.svelte";
   import PluginIframe from "./components/PluginIframe.svelte";
   import { getPluginStore } from "../models/stores/pluginStore.svelte";
-  import S3StorageSettings from "./settings/S3StorageSettings.svelte";
   import GoogleDriveStorageSettings from "./settings/GoogleDriveStorageSettings.svelte";
   import { getPlugin as getBrowserPlugin } from "$lib/plugins/browserPluginManager.svelte";
   import type { Api } from "$lib/backend/api";
@@ -220,8 +219,6 @@
                 componentId={tab.contribution.component.component_id}
               />
             </div>
-          {:else if tab.contribution.component?.type === "Builtin" && tab.contribution.component.component_id === "storage.s3.settings"}
-            <S3StorageSettings />
           {:else if tab.contribution.component?.type === "Builtin" && tab.contribution.component.component_id === "storage.gdrive.settings"}
             <GoogleDriveStorageSettings />
           {:else if tab.contribution.component?.type === "Builtin" && tab.contribution.component.component_id === "templating.settings"}
@@ -229,6 +226,7 @@
           {:else if tab.contribution.fields.length > 0}
             {#await loadPluginConfig(tab.pluginId) then}
               <PluginSettingsTab
+                pluginId={tab.pluginId}
                 fields={tab.contribution.fields}
                 config={pluginConfigs[tab.pluginId] ?? {}}
                 onConfigChange={(key, value) => handlePluginConfigChange(tab.pluginId, key, value)}

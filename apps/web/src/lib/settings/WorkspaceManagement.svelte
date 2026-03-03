@@ -29,6 +29,8 @@
     renameServerWorkspace,
     deleteServerWorkspace,
   } from "$lib/auth";
+  import { isTierLimitError } from "$lib/billing";
+  import UpgradeBanner from "$lib/components/UpgradeBanner.svelte";
   import {
     removeLocalWorkspace,
     renameLocalWorkspace,
@@ -48,6 +50,7 @@
   const pluginStore = getPluginStore();
 
   let authState = $derived(getAuthState());
+  let isPlus = $derived(authState.tier === "plus");
   let serverWorkspaces = $derived(getWorkspaces());
   let currentId = $derived(authState.activeWorkspaceId ?? getCurrentWorkspaceId());
   let allLocal = $derived(getLocalWorkspaces());
@@ -228,7 +231,9 @@
       completeSyncActionStatus("success", `Workspace "${normalizedName}" is now synced.`);
       toast.success("Workspace is now synced");
     } catch (e: any) {
-      const message = e?.message || "Failed to sync workspace";
+      const message = isTierLimitError(e)
+        ? "Sync requires a Plus subscription. Upgrade to enable sync."
+        : (e?.message || "Failed to sync workspace");
       completeSyncActionStatus("error", message);
       toast.error(message);
     } finally {
@@ -503,7 +508,7 @@
                     >
                       <Pencil class="size-3" />
                     </Button>
-                    {#if defaultProvider && providerReady}
+                    {#if defaultProvider && providerReady && isPlus}
                       <Button
                         variant="ghost"
                         size="icon"
@@ -536,7 +541,13 @@
           {/each}
         </div>
 
-        {#if defaultProvider}
+        {#if defaultProvider && !isPlus}
+          <UpgradeBanner
+            feature="Sync"
+            description="Upgrade to sync workspaces across devices."
+            icon={Cloud}
+          />
+        {:else if defaultProvider}
           <p class="text-xs text-muted-foreground">
             Local workspaces are stored on this device only.
           </p>

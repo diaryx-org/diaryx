@@ -67,6 +67,23 @@
     }
 
     const subscriptionId = backendInstance.onFileSystemEvent(async (event: any) => {
+      // Bridge sync status events to the collaboration store
+      if (event?.type === "SyncStatusChanged") {
+        if (event.status === "error" && event.error) {
+          collaborationStore.setSyncError(event.error);
+        } else {
+          collaborationStore.setSyncStatus(event.status);
+        }
+        return;
+      }
+      if (event?.type === "SyncProgress") {
+        collaborationStore.setSyncProgress({
+          total: event.total ?? 0,
+          completed: event.completed ?? 0,
+        });
+        return;
+      }
+
       const current = entryStore.currentEntry;
       const activeApi = workspaceStore.backend ? createApi(workspaceStore.backend) : null;
 

@@ -24,6 +24,9 @@
   import { untrack } from "svelte";
   import { getBackend, createApi } from "./backend";
   import { isTauri } from "$lib/backend/interface";
+  import { getAuthState } from "$lib/auth";
+  import { isTierLimitError } from "$lib/billing";
+  import UpgradeBanner from "$lib/components/UpgradeBanner.svelte";
   import {
     getLocalWorkspaces,
     createLocalWorkspace,
@@ -93,6 +96,7 @@
   // ========================================================================
 
   let workspaceProviders = $derived(pluginStore.workspaceProviders);
+  let isPlus = $derived(getAuthState().tier === "plus");
   let showOpenFolder = $derived(isTauri() || isStorageTypeSupported('filesystem-access'));
 
   // ========================================================================
@@ -352,7 +356,9 @@
       onComplete?.();
     } catch (e) {
       console.error("[AddWorkspace] Initialization error:", e);
-      if (e instanceof Error) {
+      if (isTierLimitError(e)) {
+        error = "Sync requires a Plus subscription. Upgrade to enable sync.";
+      } else if (e instanceof Error) {
         error = e.message || "Unknown error";
       } else {
         error = String(e) || "Initialization failed";
@@ -498,29 +504,37 @@
             </div>
           {/if}
 
-          <!-- Provider Dropdown -->
+          <!-- Provider Dropdown (Plus only) -->
           {#if workspaceProviders.length > 0}
-            <div class="space-y-2">
-              <Label class="text-sm">Sync</Label>
-              <select
-                class="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                value={selectedProviderId ?? ""}
-                onchange={(e) => void handleProviderChange((e.target as HTMLSelectElement).value || null)}
-              >
-                <option value="">None (local only)</option>
-                {#each workspaceProviders as provider (provider.contribution.id)}
-                  <option value={provider.contribution.id}>
-                    {provider.contribution.label}
-                  </option>
-                {/each}
-              </select>
-              {#if selectedProviderId && providerStatus && !providerStatus.ready}
-                <p class="text-xs text-muted-foreground">
-                  {providerStatus.message ?? "Provider not ready."}
-                  Configure in Settings.
-                </p>
-              {/if}
-            </div>
+            {#if isPlus}
+              <div class="space-y-2">
+                <Label class="text-sm">Sync</Label>
+                <select
+                  class="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  value={selectedProviderId ?? ""}
+                  onchange={(e) => void handleProviderChange((e.target as HTMLSelectElement).value || null)}
+                >
+                  <option value="">None (local only)</option>
+                  {#each workspaceProviders as provider (provider.contribution.id)}
+                    <option value={provider.contribution.id}>
+                      {provider.contribution.label}
+                    </option>
+                  {/each}
+                </select>
+                {#if selectedProviderId && providerStatus && !providerStatus.ready}
+                  <p class="text-xs text-muted-foreground">
+                    {providerStatus.message ?? "Provider not ready."}
+                    Configure in Settings.
+                  </p>
+                {/if}
+              </div>
+            {:else}
+              <UpgradeBanner
+                feature="Sync"
+                description="Upgrade to sync workspaces across devices."
+                icon={Cloud}
+              />
+            {/if}
           {/if}
 
           <!-- Content Source -->

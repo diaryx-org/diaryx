@@ -23,17 +23,8 @@
   import {
     getServerUrl,
     getAuthState,
-    createCheckoutSession,
-    verifyAppleTransaction,
-    restoreApplePurchases,
   } from '$lib/auth';
-  import {
-    getBillingProvider,
-    openStripeUrl,
-    purchasePlus,
-    restoreIapPurchases,
-    getPlusProductId,
-  } from '$lib/billing';
+  import UpgradeBanner from '$lib/components/UpgradeBanner.svelte';
 
   interface Props {
     onAddWorkspace?: () => void;
@@ -43,9 +34,6 @@
   let { onAddWorkspace, api }: Props = $props();
 
   const templateContextStore = getTemplateContextStore();
-  const billingProvider = getBillingProvider();
-  let isUpgrading = $state(false);
-  let upgradeError = $state<string | null>(null);
 
   let site = $derived(sitePublishingStore.site);
   let publishedAudiences = $derived(sitePublishingStore.audiences);
@@ -275,86 +263,11 @@
       <Loader2 class="size-5 animate-spin text-muted-foreground" />
     </div>
   {:else if !isConfigured && getAuthState().tier !== "plus"}
-    <div class="text-center space-y-3 py-8">
-      <Globe class="size-8 mx-auto text-muted-foreground" />
-      <h3 class="font-medium text-sm">Publishing Requires Plus</h3>
-      <p class="text-xs text-muted-foreground">
-        Upgrade to publish your workspace as a website.
-      </p>
-      {#if upgradeError}
-        <p class="text-xs text-destructive">{upgradeError}</p>
-      {/if}
-      {#if billingProvider === "apple_iap"}
-        <Button
-          variant="default"
-          size="sm"
-          onclick={async () => {
-            isUpgrading = true;
-            upgradeError = null;
-            try {
-              const userId = getAuthState().user?.id;
-              if (!userId) throw new Error("Not signed in");
-              const result = await purchasePlus(userId);
-              if (!result) return;
-              await verifyAppleTransaction(result.signedTransaction, getPlusProductId());
-            } catch (e) {
-              upgradeError = e instanceof Error ? e.message : String(e);
-            } finally {
-              isUpgrading = false;
-            }
-          }}
-          disabled={isUpgrading}
-        >
-          {#if isUpgrading}
-            <Loader2 class="size-4 mr-2 animate-spin" />
-            Loading...
-          {:else}
-            Upgrade to Plus — $5/month
-          {/if}
-        </Button>
-        <button
-          type="button"
-          class="text-xs text-muted-foreground hover:text-foreground transition-colors"
-          onclick={async () => {
-            isUpgrading = true;
-            upgradeError = null;
-            try {
-              const transactions = await restoreIapPurchases();
-              if (transactions.length === 0) { upgradeError = "No purchases found to restore."; return; }
-              const result = await restoreApplePurchases(transactions);
-              if (result.restored_count === 0) { upgradeError = "No active subscriptions found."; }
-            } catch (e) {
-              upgradeError = e instanceof Error ? e.message : "Failed to restore purchases";
-            } finally {
-              isUpgrading = false;
-            }
-          }}
-          disabled={isUpgrading}
-        >
-          Restore Purchases
-        </button>
-        <p class="text-[10px] text-muted-foreground/70 text-center leading-tight">
-          $4.99/month. Auto-renews monthly. Cancel anytime in Settings &gt; Apple&nbsp;ID &gt; Subscriptions.
-          <a href="https://diaryx.org/terms" class="underline" target="_blank" rel="noopener">Terms</a> &
-          <a href="https://diaryx.org/privacy" class="underline" target="_blank" rel="noopener">Privacy</a>.
-        </p>
-      {:else}
-        <Button
-          variant="default"
-          size="sm"
-          onclick={async () => {
-            try {
-              const url = await createCheckoutSession();
-              await openStripeUrl(url);
-            } catch {
-              // handled by auth layer
-            }
-          }}
-        >
-          Upgrade to Plus — $5/month
-        </Button>
-      {/if}
-    </div>
+    <UpgradeBanner
+      feature="Publishing"
+      description="Upgrade to publish your workspace as a website."
+      icon={Globe}
+    />
   {:else if !isConfigured}
     <div class="space-y-3">
       <div class="text-center space-y-1">

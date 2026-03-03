@@ -10,6 +10,7 @@
 
 import type { BrowserExtismPlugin } from "$lib/plugins/extismBrowserLoader";
 import type { Backend, FileSystemEvent } from "$lib/backend/interface";
+import { refreshUserInfo, getAuthState } from "$lib/auth";
 
 // ============================================================================
 // Binary action protocol (mirrors diaryx_sync_extism::binary_protocol)
@@ -175,6 +176,10 @@ export class PluginSyncAdapter {
   private maxReconnectDelay = 30_000;
   private shouldReconnect = false;
   private _connected = false;
+  /** Tracks whether ws.onopen ever fired for the current connect() lifecycle. */
+  private _everConnected = false;
+  private _lastUrl = "";
+  private _lastWorkspaceId = "";
 
   constructor(options: PluginSyncAdapterOptions) {
     this.syncPlugin = options.syncPlugin;
@@ -193,6 +198,7 @@ export class PluginSyncAdapter {
     sessionCode?: string,
   ): Promise<void> {
     this.shouldReconnect = true;
+    this._everConnected = false;
 
     // Initialize the sync plugin
     await this.syncPlugin.callCommand("init", {
@@ -302,12 +308,15 @@ export class PluginSyncAdapter {
   // ==========================================================================
 
   private openWebSocket(url: string, workspaceId: string): void {
+    this._lastUrl = url;
+    this._lastWorkspaceId = workspaceId;
     const ws = new WebSocket(url);
     ws.binaryType = "arraybuffer";
     this.ws = ws;
 
     ws.onopen = async () => {
       this._connected = true;
+      this._everConnected = true;
       this.reconnectAttempt = 0;
 
       // Notify plugin of connection
@@ -386,6 +395,14 @@ export class PluginSyncAdapter {
       `[PluginSyncAdapter] Reconnecting in ${Math.round(delay)}ms (attempt ${this.reconnectAttempt})`,
     );
 
+    // If the server keeps rejecting us (connection never established) after
+    // 2 attempts, check whether the user is on the free tier. If so, stop
+    // reconnecting and surface a clear error instead of spinning forever.
+    if (!this._everConnected && this.reconnectAttempt >= 2) {
+      void this.checkTierAndMaybeStop();
+      return;
+    }
+
     // Emit reconnecting status
     this.backend.emitFileSystemEvent?.({
       type: "SyncStatusChanged",
@@ -398,6 +415,41 @@ export class PluginSyncAdapter {
         this.openWebSocket(url, workspaceId);
       }
     }, delay);
+  }
+
+  private async checkTierAndMaybeStop(): Promise<void> {
+    try {
+      await refreshUserInfo();
+    } catch {
+      // If refresh fails, fall through and keep reconnecting.
+    }
+
+    if (getAuthState().tier !== "plus") {
+      this.shouldReconnect = false;
+      console.warn(
+        "[PluginSyncAdapter] Free tier detected after repeated failures — stopping reconnect.",
+      );
+      this.backend.emitFileSystemEvent?.({
+        type: "SyncStatusChanged",
+        status: "error",
+        error: "Sync requires a Plus subscription. Upgrade to enable sync.",
+      } as FileSystemEvent);
+      return;
+    }
+
+    // User is Plus — keep trying (server may be temporarily down).
+    this.backend.emitFileSystemEvent?.({
+      type: "SyncStatusChanged",
+      status: "connecting",
+    } as FileSystemEvent);
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.shouldReconnect) {
+        this.reconnectAttempt = 0;
+        this.openWebSocket(this._lastUrl, this._lastWorkspaceId);
+      }
+    }, 5000);
   }
 
   private async executeActions(response: Uint8Array): Promise<void> {

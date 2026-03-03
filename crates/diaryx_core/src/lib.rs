@@ -88,5 +88,8 @@ pub mod plugin;
 pub use utils::date;
 pub use utils::path as path_utils;
 
+/// Re-export uuid so downstream crates don't need a separate dependency.
+pub use uuid;
+
 #[cfg(test)]
 pub mod test_utils;

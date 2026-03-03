@@ -2411,7 +2411,6 @@ dependencies = [
  "tracing",
  "ts-rs",
  "url",
- "uuid",
  "yrs 0.25.0",
 ]
 

@@ -24,7 +24,7 @@ toml = "0.9.8"
 thiserror.workspace = true
 async-trait = "0.1"
 urlencoding = "2"
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "rng-getrandom"] }
 
 
 # TypeScript bindings generation
@@ -81,6 +81,9 @@ import-markdown = []
 
 # Enable render-time body templating via Handlebars
 templating = ["dep:handlebars"]
+
+# Browser WASM support (uuid/js for browser crypto)
+browser-js = ["uuid/js"]
 
 # Default features for the library
 default = []

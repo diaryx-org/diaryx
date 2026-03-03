@@ -441,7 +441,7 @@ impl WorkspaceCrdt {
     /// # Returns
     /// The generated doc_id (UUID) for the new file.
     pub fn create_file(&self, metadata: FileMetadata) -> StorageResult<String> {
-        let doc_id = uuid::Uuid::new_v4().to_string();
+        let doc_id = diaryx_core::uuid::Uuid::new_v4().to_string();
         self.set_file(&doc_id, metadata)?;
         Ok(doc_id)
     }
@@ -747,7 +747,7 @@ impl WorkspaceCrdt {
         // Generate UUIDs for all existing files
         let mut path_to_id: HashMap<String, String> = HashMap::new();
         for (path, _) in &old_files {
-            path_to_id.insert(path.clone(), uuid::Uuid::new_v4().to_string());
+            path_to_id.insert(path.clone(), diaryx_core::uuid::Uuid::new_v4().to_string());
         }
 
         // Migrate each file

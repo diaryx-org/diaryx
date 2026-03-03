@@ -1015,12 +1015,9 @@ In Diaryx, every note can also be a folder. And all notes are attached to at lea
 - The **left sidebar** is the big picture view: the whole workspace. You can see the filetree and other commands that affect all your files.
 - The **right sidebar** is the entry-specific view: you can see metadata for the specific
 
-A few tips to get started:
+Just start writing! Things should work intuitively.
 
-- Press **Ctrl+K** (or **Cmd+K** on Mac) to open the command palette
-- Right click on a file/folder on the **left sidebar** to open a context menu—or tap the ⠇button on mobile.
-
-Explore [the **Getting Started** guide](</Getting Started.md>) for more details.`;
+If you want all the details, explore [the detailed guide](</Detailed Guide.md>) for more.`;
 
     await apiInstance.saveEntry(rootPath, rootContent, rootPath);
 
@@ -1029,7 +1026,7 @@ Explore [the **Getting Started** guide](</Getting Started.md>) for more details.
     let gettingStartedPath = childResult.child_path;
     // Rename from "Untitled" to "Getting Started"
     const newPath = await apiInstance.setFrontmatterProperty(
-      gettingStartedPath, "title", "Getting Started" as any, rootPath
+      gettingStartedPath, "title", "Detailed Guide" as any, rootPath
     );
     if (newPath) gettingStartedPath = newPath;
 
@@ -1040,10 +1037,6 @@ Create new entries from the sidebar **+** button or by pressing **Ctrl+K** and t
 ## Organizing Your Workspace
 
 Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, or use the **contents** property to define child pages in order.
-
-## Optional Sync
-
-Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to configure sync when you're ready.
 
 ## Keyboard Shortcuts
 

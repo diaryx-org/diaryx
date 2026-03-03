@@ -105,6 +105,13 @@ export const BlockPickerNode = Node.create<BlockPickerNodeOptions>({
 
       return {
         dom,
+        // Tell ProseMirror not to handle events that land inside this node
+        // view's DOM (buttons, inputs, etc.). Without this, ProseMirror
+        // intercepts keydown/mousedown from inside the block picker and treats
+        // them as editor commands — the exact same fix used by HtmlBlock.ts.
+        stopEvent(event: Event) {
+          return dom.contains(event.target as globalThis.Node);
+        },
         destroy() {
           if (svelteComponent) {
             unmount(svelteComponent);

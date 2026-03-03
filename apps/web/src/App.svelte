@@ -13,6 +13,7 @@
   import AddWorkspaceDialog from "./lib/AddWorkspaceDialog.svelte";
   import ImagePreviewDialog from "./lib/ImagePreviewDialog.svelte";
   import AudienceEditor from "./lib/components/AudienceEditor.svelte";
+  import DocumentAudiencePill from "./lib/components/DocumentAudiencePill.svelte";
   import MarkdownPreviewDialog from "./lib/MarkdownPreviewDialog.svelte";
     import EditorHeader from "./views/editor/EditorHeader.svelte";
   import EditorEmptyState from "./views/editor/EditorEmptyState.svelte";
@@ -2039,6 +2040,25 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
         {api}
         onPluginToolbarAction={handlePluginToolbarAction}
       />
+
+      <!-- Document-level audience pill: sits directly under the title bar -->
+      <div class="shrink-0 px-4 md:px-6 py-1 border-b border-border/50">
+        <div class="mx-auto" style:max-width="var(--editor-content-max-width)">
+          <DocumentAudiencePill
+            audience={currentEntry.frontmatter.audience as string[] | null ?? null}
+            entryPath={currentEntry.path}
+            rootPath={tree?.path ?? ""}
+            {api}
+            onChange={(value) => {
+              if (value === null) {
+                handlePropertyRemove("audience");
+              } else {
+                handlePropertyChange("audience", value);
+              }
+            }}
+          />
+        </div>
+      </div>
 
       <EditorContent
         {Editor}

@@ -6,6 +6,7 @@
   import { Button } from "$lib/components/ui/button";
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
   import { Plus, X, ArrowUpRight, Loader2 } from "@lucide/svelte";
+  import { getTemplateContextStore } from "$lib/stores/templateContextStore.svelte";
 
   interface Props {
     /** null = not set (inherits), [] = explicitly empty, [...] = explicit tags */
@@ -27,6 +28,7 @@
   }: Props = $props();
 
   const mobileState = getMobileState();
+  const templateContextStore = getTemplateContextStore();
 
   // Combobox state
   let open = $state(false);
@@ -131,12 +133,17 @@
     const trimmed = tag.trim();
     if (!trimmed) return;
 
+    const isNew = !availableAudiences.some(
+      (a) => a.toLowerCase() === trimmed.toLowerCase(),
+    );
+
     if (audience === null) {
       // First tag on an inheriting entry — start explicit with just this tag
       onChange([trimmed]);
     } else {
       onChange([...audience, trimmed]);
     }
+    if (isNew) templateContextStore.bumpAudiencesVersion();
     open = false;
     searchValue = "";
   }

@@ -36,6 +36,7 @@
   let focusedIndex = $state(0);
   let focusableItems: HTMLElement[] = $state([]);
   let openSubmenu = $state<"heading" | "list" | "more" | null>(null);
+  let showAudienceSelector = $state(false);
 
   function updateFocusableItems() {
     focusableItems = Array.from(
@@ -61,7 +62,9 @@
     switch (event.key) {
       case "Escape":
         event.preventDefault();
-        if (openSubmenu) {
+        if (showAudienceSelector) {
+          showAudienceSelector = false;
+        } else if (openSubmenu) {
           openSubmenu = null;
         } else {
           onCancel();
@@ -85,6 +88,7 @@
   function toggleSubmenu(menu: "heading" | "list" | "more", event: MouseEvent | TouchEvent) {
     event.stopPropagation();
     openSubmenu = openSubmenu === menu ? null : menu;
+    showAudienceSelector = false;
   }
 
   function handleHeading(level: 1 | 2 | 3) {
@@ -152,6 +156,10 @@
     if (typeof commandFn === "function") {
       onSelect(() => commandFn(params));
     }
+  }
+
+  function handleAudienceCancel() {
+    showAudienceSelector = false;
   }
 
   function handleMenuItemClick(

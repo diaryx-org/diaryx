@@ -13,6 +13,7 @@ export type TemplateContext = Record<string, unknown>;
 function createTemplateContextStore() {
   let context = $state<TemplateContext>({});
   let previewAudience = $state<string | null>(null);
+  let audiencesVersion = $state(0);
 
   return {
     get context() {
@@ -24,6 +25,14 @@ function createTemplateContextStore() {
       return previewAudience;
     },
 
+    /**
+     * Monotonically increasing counter. Incremented whenever a brand-new audience
+     * tag is created so that AudienceFilter can re-fetch the available list.
+     */
+    get audiencesVersion() {
+      return audiencesVersion;
+    },
+
     setContext(newContext: TemplateContext) {
       context = newContext;
     },
@@ -31,6 +40,11 @@ function createTemplateContextStore() {
     /** Set a specific audience to preview, or null to exit preview mode. */
     setPreviewAudience(audience: string | null) {
       previewAudience = audience;
+    },
+
+    /** Call after creating a brand-new audience tag to notify the sidebar to refresh. */
+    bumpAudiencesVersion() {
+      audiencesVersion += 1;
     },
 
     /**
@@ -62,8 +76,12 @@ export function getTemplateContextStore() {
       get previewAudience(): string | null {
         return null;
       },
+      get audiencesVersion(): number {
+        return 0;
+      },
       setContext: (_ctx: TemplateContext) => {},
       setPreviewAudience: (_audience: string | null) => {},
+      bumpAudiencesVersion: () => {},
       resolve: (_name: string): string | null => null,
       clear: () => {},
     };

@@ -6,8 +6,11 @@
    * and markers, showing only what that audience would see.
    */
   import * as Select from "$lib/components/ui/select";
-  import { Eye } from "@lucide/svelte";
+  import { Eye, Globe } from "@lucide/svelte";
   import { getTemplateContextStore } from "../stores/templateContextStore.svelte";
+  import { getAudienceColorStore } from "$lib/stores/audienceColorStore.svelte";
+  import { getAudienceColor } from "$lib/utils/audienceDotColor";
+  import ManageAudiencesModal from "./ManageAudiencesModal.svelte";
   import type { Api } from "../backend";
 
   interface Props {
@@ -18,8 +21,10 @@
   let { api, rootPath }: Props = $props();
 
   const templateContextStore = getTemplateContextStore();
+  const colorStore = getAudienceColorStore();
 
   let audiences = $state<string[]>([]);
+  let showManageModal = $state(false);
 
   async function loadAudiences() {
     if (!api || !rootPath) {
@@ -28,14 +33,19 @@
     }
     try {
       audiences = await api.getAvailableAudiences(rootPath);
+      // Ensure every existing audience has a persisted color (no-op for already-assigned)
+      for (const name of audiences) colorStore.assignColor(name);
     } catch (e) {
       console.warn("[AudienceFilter] Failed to load audiences:", e);
       audiences = [];
     }
   }
 
-  // Load audiences when rootPath changes
+  // Reload when rootPath changes or a new audience tag is created anywhere
   $effect(() => {
+    // Reading audiencesVersion here makes this effect re-run when it is bumped
+    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+    templateContextStore.audiencesVersion;
     if (rootPath) {
       loadAudiences();
     }
@@ -64,6 +74,12 @@
         <span class="audience-filter-label">
           <Eye class="size-3.5" />
           {#if isFiltering}
+            <span
+              class="dot {getAudienceColor(
+                templateContextStore.previewAudience!,
+                colorStore.audienceColors,
+              )}"
+            ></span>
             {templateContextStore.previewAudience}
           {:else}
             All audiences
@@ -71,14 +87,40 @@
         </span>
       </Select.Trigger>
       <Select.Content>
-        <Select.Item value="__all__">All audiences</Select.Item>
+        <Select.Item value="__all__">
+          <Globe class="size-3.5 text-muted-foreground" />
+          All audiences
+        </Select.Item>
         <Select.Separator />
         {#each audiences as audience}
-          <Select.Item value={audience}>{audience}</Select.Item>
+          <Select.Item value={audience}>
+            <span class="dot {getAudienceColor(audience, colorStore.audienceColors)}"></span>
+            {audience}
+          </Select.Item>
         {/each}
+        <Select.Separator />
+        <div class="manage-row">
+          <button
+            type="button"
+            class="manage-btn"
+            onclick={() => { showManageModal = true; }}
+          >
+            Manage audiences…
+          </button>
+        </div>
       </Select.Content>
     </Select.Root>
   </div>
+{/if}
+
+<!-- Manage Audiences Modal -->
+{#if api && rootPath}
+  <ManageAudiencesModal
+    open={showManageModal}
+    {api}
+    rootPath={rootPath}
+    onClose={() => { showManageModal = false; loadAudiences(); }}
+  />
 {/if}
 
 <style>
@@ -119,5 +161,35 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .manage-row {
+    padding: 2px 4px 4px;
+  }
+
+  .manage-btn {
+    width: 100%;
+    text-align: left;
+    padding: 4px 8px;
+    font-size: 12px;
+    color: var(--muted-foreground);
+    background: none;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: color 0.15s ease;
+  }
+
+  .manage-btn:hover {
+    color: var(--foreground);
+    text-decoration: underline;
   }
 </style>

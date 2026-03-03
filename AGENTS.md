@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-03-03T02:34:03Z
+updated: 2026-03-03T03:01:07Z
 part_of: '[README](/README.md)'
 ---
 # Instructions for AI agents
@@ -95,6 +95,7 @@ Read the root README.md first. For specific projects, use these entry points:
 | Entire workspace | README.md                           |
 | Core library     | crates/diaryx_core/README.md        |
 | Daily domain     | crates/diaryx_daily/README.md       |
+| Templating       | crates/diaryx_templating/README.md  |
 | Publish pipeline | crates/diaryx_publish/README.md     |
 | CLI              | crates/diaryx/README.md             |
 | Web app          | apps/web/README.md                  |
@@ -104,6 +105,7 @@ Read the root README.md first. For specific projects, use these entry points:
 | Sync server      | crates/diaryx_sync_server/README.md |
 | Extism plugins   | crates/diaryx_extism/README.md      |
 | Daily plugin guest | crates/diaryx_daily_extism/README.md |
+| Templating plugin guest | crates/diaryx_templating_extism/README.md |
 | S3 storage       | crates/diaryx_storage_s3_extism/README.md |
 | GDrive storage   | crates/diaryx_storage_gdrive_extism/README.md |
 

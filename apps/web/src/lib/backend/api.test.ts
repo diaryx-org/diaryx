@@ -372,35 +372,35 @@ describe('api', () => {
   })
 
   describe('template operations', () => {
-    it('should list templates', async () => {
+    it('should list templates via plugin command', async () => {
       const mockTemplates = [
         { name: 'note', path: 'templates/note.md', source: 'workspace' },
       ]
       vi.mocked(mockBackend.execute).mockResolvedValue({
-        type: 'Templates',
+        type: 'PluginResult',
         data: mockTemplates,
       })
 
       const result = await api.listTemplates()
 
       expect(mockBackend.execute).toHaveBeenCalledWith({
-        type: 'ListTemplates',
-        params: { workspace_path: null },
+        type: 'PluginCommand',
+        params: { plugin: 'diaryx.templating', command: 'ListTemplates', params: { workspace_path: null } },
       })
       expect(result).toEqual(mockTemplates)
     })
 
-    it('should get template content', async () => {
+    it('should get template content via plugin command', async () => {
       vi.mocked(mockBackend.execute).mockResolvedValue({
-        type: 'String',
+        type: 'PluginResult',
         data: '# Note\n\n{{content}}',
       })
 
       const result = await api.getTemplate('note')
 
       expect(mockBackend.execute).toHaveBeenCalledWith({
-        type: 'GetTemplate',
-        params: { name: 'note', workspace_path: null },
+        type: 'PluginCommand',
+        params: { plugin: 'diaryx.templating', command: 'GetTemplate', params: { name: 'note', workspace_path: null } },
       })
       expect(result).toBe('# Note\n\n{{content}}')
     })

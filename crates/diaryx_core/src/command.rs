@@ -340,39 +340,6 @@ pub enum Command {
         workspace_root: String,
     },
 
-    // === Templates ===
-    /// List available templates.
-    ListTemplates {
-        /// Optional workspace path.
-        workspace_path: Option<String>,
-    },
-
-    /// Get a template's content.
-    GetTemplate {
-        /// Template name.
-        name: String,
-        /// Optional workspace path.
-        workspace_path: Option<String>,
-    },
-
-    /// Save a template.
-    SaveTemplate {
-        /// Template name.
-        name: String,
-        /// Template content.
-        content: String,
-        /// Workspace path.
-        workspace_path: String,
-    },
-
-    /// Delete a template.
-    DeleteTemplate {
-        /// Template name.
-        name: String,
-        /// Workspace path.
-        workspace_path: String,
-    },
-
     // === Attachments ===
     /// Get attachments for an entry.
     GetAttachments {
@@ -812,12 +779,6 @@ impl Command {
 
             Command::FixAll { .. } => {}
 
-            // --- Templates (workspace_path is a directory, joins with _templates) ---
-            Command::ListTemplates { .. }
-            | Command::GetTemplate { .. }
-            | Command::SaveTemplate { .. }
-            | Command::DeleteTemplate { .. } => {}
-
             // --- Attachments (entry_path only; attachment_path is a link ref) ---
             Command::UploadAttachment { entry_path, .. }
             | Command::DeleteAttachment { entry_path, .. }
@@ -970,9 +931,6 @@ pub enum Response {
     /// Fix summary response.
     FixSummary(FixSummary),
 
-    /// Templates list response.
-    Templates(Vec<TemplateInfo>),
-
     /// String array response.
     Strings(Vec<String>),
 
@@ -1089,18 +1047,6 @@ pub struct BinaryFileInfo {
     pub source_path: String,
     /// Relative path (for zip file structure).
     pub relative_path: String,
-}
-
-/// Information about a template.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
-pub struct TemplateInfo {
-    /// Template name.
-    pub name: String,
-    /// Path to template file (None for built-in).
-    pub path: Option<PathBuf>,
-    /// Source of the template.
-    pub source: String,
 }
 
 /// Information about storage usage.

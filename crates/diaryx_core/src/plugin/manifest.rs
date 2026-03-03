@@ -261,6 +261,15 @@ pub enum EditorNodeType {
     BlockAtom,
     /// Inline mark that wraps rich text (like bold, spoiler).
     InlineMark,
+    /// Host-provided extension too complex for declarative manifest.
+    ///
+    /// The host looks up a pre-registered TypeScript extension by ID.
+    /// For `Builtin` type, the `markdown`, `render_export`, `edit_mode`
+    /// fields are ignored — the TypeScript extension handles everything.
+    Builtin {
+        /// ID of the host-side extension factory.
+        host_extension_id: String,
+    },
 }
 
 /// Markdown syntax delimiters for an editor extension.

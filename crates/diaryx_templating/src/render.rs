@@ -1,9 +1,9 @@
 //! Render-time body templating using Handlebars.
 //!
 //! This module provides template rendering for entry bodies at view/publish time.
-//! It is separate from the creation-time [`template`](crate::template) module:
+//! It is separate from the creation-time [`creation`](crate::creation) module:
 //!
-//! - **Creation-time** (`template.rs`): Runs once when creating an entry. Operates on
+//! - **Creation-time** (`creation.rs`): Runs once when creating an entry. Operates on
 //!   template files. Variables are date/time/title. Syntax is resolved and removed.
 //! - **Render-time** (this module): Runs on every view/publish. Operates on entry files.
 //!   Variables come from frontmatter. Raw `{{ }}` syntax is preserved in the file.
@@ -24,8 +24,6 @@ use handlebars::{
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
 use serde_yaml::Value as YamlValue;
-
-use crate::error::{DiaryxError, Result};
 
 /// Render-time body template renderer.
 ///
@@ -54,10 +52,10 @@ impl BodyTemplateRenderer {
     /// Render template expressions in an entry body.
     ///
     /// Returns the rendered body with all `{{ }}` expressions resolved.
-    pub fn render(&self, body: &str, context: &JsonValue) -> Result<String> {
+    pub fn render(&self, body: &str, context: &JsonValue) -> Result<String, String> {
         self.handlebars
             .render_template(body, context)
-            .map_err(|e| DiaryxError::Validation(format!("Template render error: {e}")))
+            .map_err(|e| format!("Template render error: {e}"))
     }
 }
 
@@ -142,14 +140,14 @@ pub fn render(
     frontmatter: &IndexMap<String, YamlValue>,
     file_path: &Path,
     workspace_root: Option<&Path>,
-) -> Result<String> {
+) -> Result<String, String> {
     let renderer = BodyTemplateRenderer::new();
     let context = build_context(frontmatter, file_path, workspace_root);
     renderer.render(body, &context)
 }
 
 /// Convert a `serde_yaml::Value` to a `serde_json::Value`.
-fn yaml_to_json(value: &YamlValue) -> JsonValue {
+pub fn yaml_to_json(value: &YamlValue) -> JsonValue {
     match value {
         YamlValue::Null => JsonValue::Null,
         YamlValue::Bool(b) => JsonValue::Bool(*b),

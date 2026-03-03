@@ -479,8 +479,10 @@
   });
 
   // Sync current entry's frontmatter to the template context store
-  // so template variable NodeViews and conditional block decorations update live
+  // so template variable NodeViews and conditional block decorations update live.
+  // Only active when the templating plugin is loaded.
   $effect(() => {
+    if (!getPluginStore().isPluginEnabled("diaryx.templating")) return;
     if (currentEntry?.frontmatter) {
       templateContextStore.setContext(normalizeFrontmatter(currentEntry.frontmatter));
     } else {

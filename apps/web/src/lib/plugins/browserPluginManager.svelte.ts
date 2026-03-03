@@ -17,6 +17,7 @@ import { getPluginStore } from "@/models/stores/pluginStore.svelte";
 import {
   createExtensionFromManifest,
   createMarkFromManifest,
+  getBuiltinExtension,
   isEditorExtension,
   type EditorExtensionManifest,
 } from "./editorExtensionFactory";
@@ -30,6 +31,7 @@ export const BUILTIN_PLUGIN_IDS = new Set([
   "diaryx.ai",
   "diaryx.math",
   "diaryx.spoiler",
+  "diaryx.templating",
   "publish",
   "sync",
   "diaryx.storage.s3",
@@ -44,6 +46,11 @@ export const BUILTIN_PLUGINS = [
     url: "/plugins/diaryx_spoiler.wasm",
     id: "diaryx.spoiler",
     name: "Spoiler",
+  },
+  {
+    url: "/plugins/diaryx_templating.wasm",
+    id: "diaryx.templating",
+    name: "Templating",
   },
   { url: "/plugins/diaryx_publish.wasm", id: "publish", name: "Publish" },
   { url: "/plugins/diaryx_sync.wasm", id: "sync", name: "Sync" },
@@ -320,6 +327,21 @@ export function getEditorExtensions(): any[] {
       if (isEditorExtension(ui)) {
         try {
           const manifest = ui as EditorExtensionManifest;
+
+          // Check for Builtin node type — use host-registered extensions
+          if (
+            typeof manifest.node_type === "object" &&
+            "Builtin" in manifest.node_type
+          ) {
+            const builtinExts = getBuiltinExtension(
+              manifest.node_type.Builtin.host_extension_id,
+            );
+            if (builtinExts) {
+              extensions.push(...builtinExts);
+            }
+            continue;
+          }
+
           const ext =
             manifest.node_type === "InlineMark"
               ? createMarkFromManifest(manifest)

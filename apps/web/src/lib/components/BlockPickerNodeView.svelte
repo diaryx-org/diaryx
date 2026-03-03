@@ -302,13 +302,15 @@
           <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleDrawing(); }}>
             <Pencil class="size-3.5" /> Drawing
           </button>
-          <div class="submenu-divider"></div>
-          <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleIfElse(); }}>
-            <GitBranch class="size-3.5" /> If / Else
-          </button>
-          <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleForAudience(); }}>
-            <Users class="size-3.5" /> For Audience
-          </button>
+          {#if getPluginStore().isPluginEnabled("diaryx.templating")}
+            <div class="submenu-divider"></div>
+            <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleIfElse(); }}>
+              <GitBranch class="size-3.5" /> If / Else
+            </button>
+            <button type="button" class="submenu-item" onclick={(e) => { e.stopPropagation(); handleForAudience(); }}>
+              <Users class="size-3.5" /> For Audience
+            </button>
+          {/if}
           {#if pluginBlockCommands.length > 0}
             <div class="submenu-divider"></div>
             {#each pluginBlockCommands as cmd (cmd.extensionId)}

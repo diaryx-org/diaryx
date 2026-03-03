@@ -105,18 +105,18 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                     // so {{#for-audience}} blocks resolve. For "all" (*), leave raw.
                     #[cfg(feature = "templating")]
                     let content = if audience != "*"
-                        && diaryx_core::body_template::has_templates(&content)
+                        && diaryx_templating::render::has_templates(&content)
                     {
                         match diaryx_core::frontmatter::parse_or_empty(&content) {
                             Ok(parsed) => {
-                                let context = diaryx_core::body_template::build_publish_context(
+                                let context = diaryx_templating::render::build_publish_context(
                                     &parsed.frontmatter,
                                     &included.source_path,
                                     Some(root_path),
                                     audience,
                                 );
                                 let rendered =
-                                    diaryx_core::body_template::BodyTemplateRenderer::new()
+                                    diaryx_templating::render::BodyTemplateRenderer::new()
                                         .render(&parsed.body, &context)
                                         .unwrap_or_else(|_| parsed.body.clone());
                                 diaryx_core::frontmatter::serialize(&parsed.frontmatter, &rendered)

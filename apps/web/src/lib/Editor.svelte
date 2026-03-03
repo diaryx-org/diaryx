@@ -40,10 +40,6 @@
   import { TableControls } from "./extensions/TableControls";
   // Custom extension for markdown footnotes
   import { FootnoteRef, preprocessFootnotes, appendFootnoteDefinitions } from "./extensions/FootnoteRef";
-  // Custom extension for template variables ({{ variable }} syntax)
-  import { TemplateVariable } from "./extensions/TemplateVariable";
-  // Custom extension for conditional block markers ({{#if}}, {{#for-audience}}, etc.)
-  import { ConditionalBlock } from "./extensions/ConditionalBlock";
   import { getTemplateContextStore } from "./stores/templateContextStore.svelte";
   import { getEditorExtensions } from "$lib/plugins/browserPluginManager.svelte";
   import type { Api } from "$lib/backend/api";
@@ -422,10 +418,6 @@
       TableControls,
       // Footnote extension
       FootnoteRef,
-      // Template variable extension ({{ variable }} with live value resolution)
-      TemplateVariable,
-      // Conditional block markers ({{#if}}, {{#for-audience}}, {{else}}, {{/if}})
-      ConditionalBlock.configure({ enabled: true }),
       // Raw HTML block extension
       HtmlBlock.configure({
         entryPath,

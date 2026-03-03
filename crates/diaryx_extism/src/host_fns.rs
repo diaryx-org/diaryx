@@ -154,6 +154,13 @@ pub fn register_host_functions(
             host_write_file,
         )
         .with_function(
+            "host_delete_file",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_delete_file,
+        )
+        .with_function(
             "host_write_binary",
             [ValType::I64],
             [ValType::I64],
@@ -373,6 +380,35 @@ fn host_write_file(
     ctx.check_perm(perm, &parsed.path)?;
     futures_lite::future::block_on(ctx.fs.write_file(Path::new(&parsed.path), &parsed.content))
         .map_err(|e| ExtismError::msg(format!("host_write_file: {e}")))?;
+
+    plugin.memory_set_val(&mut outputs[0], "")?;
+    Ok(())
+}
+
+/// Host function: `host_delete_file(input: {path}) -> ""`
+///
+/// Deletes a file from the workspace.
+fn host_delete_file(
+    plugin: &mut CurrentPlugin,
+    inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    let input: String = plugin.memory_get_val(&inputs[0])?;
+
+    #[derive(serde::Deserialize)]
+    struct DeleteInput {
+        path: String,
+    }
+
+    let parsed: DeleteInput = serde_json::from_str(&input)
+        .map_err(|e| ExtismError::msg(format!("host_delete_file: invalid input: {e}")))?;
+
+    let ctx = user_data.get()?;
+    let ctx = ctx.lock().unwrap();
+    ctx.check_perm(PermissionType::DeleteFiles, &parsed.path)?;
+    futures_lite::future::block_on(ctx.fs.delete_file(Path::new(&parsed.path)))
+        .map_err(|e| ExtismError::msg(format!("host_delete_file: {e}")))?;
 
     plugin.memory_set_val(&mut outputs[0], "")?;
     Ok(())

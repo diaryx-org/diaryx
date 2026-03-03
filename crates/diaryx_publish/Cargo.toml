@@ -11,6 +11,7 @@ keywords = ["diary", "journal", "markdown", "publish", "html"]
 
 [dependencies]
 diaryx_core = { workspace = true }
+diaryx_templating = { workspace = true }
 comrak = "0.49"
 indexmap.workspace = true
 serde.workspace = true
@@ -25,8 +26,8 @@ pathdiff = "0.2"
 # The "markdown" feature exists for compatibility with cfg gates inherited from diaryx_core.
 markdown = []
 
-# Enable render-time body templating (passes through to diaryx_core/templating)
-templating = ["diaryx_core/templating"]
+# Enable render-time body templating via diaryx_templating
+templating = []
 
 default = ["markdown"]
 

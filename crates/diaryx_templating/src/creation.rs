@@ -5,17 +5,13 @@
 //!
 //! This module handles **creation-time** templates that run once when an entry is
 //! created. For **render-time** body templating (Handlebars `{{#each}}`, `{{#if}}`,
-//! custom helpers) that runs on every view/publish, see `diaryx_templating::render`.
+//! custom helpers) that runs on every view/publish, see [`render`](crate::render).
 
 use chrono::{Local, NaiveDate};
 use indexmap::IndexMap;
 use serde_yaml::Value;
-use std::path::{Path, PathBuf};
 
-use crate::error::{DiaryxError, Result};
-use crate::fs::FileSystem;
-
-/// Available template variables and their descriptions
+/// Available template variables and their descriptions.
 pub const TEMPLATE_VARIABLES: &[(&str, &str)] = &[
     ("title", "The entry title"),
     ("filename", "The filename without extension"),
@@ -42,7 +38,7 @@ pub const TEMPLATE_VARIABLES: &[(&str, &str)] = &[
     ("weekday", "Current weekday name (e.g., Monday)"),
 ];
 
-/// Built-in default template for notes
+/// Built-in default template for notes.
 pub const DEFAULT_NOTE_TEMPLATE: &str = r#"---
 title: "{{title}}"
 created: {{timestamp}}
@@ -52,17 +48,17 @@ created: {{timestamp}}
 
 "#;
 
-/// A parsed template with frontmatter and body
+/// A parsed template with frontmatter and body.
 #[derive(Debug, Clone)]
 pub struct Template {
-    /// Template name (derived from filename)
+    /// Template name (derived from filename).
     pub name: String,
-    /// Raw template content (before variable substitution)
+    /// Raw template content (before variable substitution).
     pub raw_content: String,
 }
 
 impl Template {
-    /// Create a new template from raw content
+    /// Create a new template from raw content.
     pub fn new(name: impl Into<String>, raw_content: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -70,100 +66,84 @@ impl Template {
         }
     }
 
-    /// Load a template from a file
-    pub fn from_file<FS: FileSystem>(fs: &FS, path: &Path) -> Result<Self> {
-        let content = fs.read_to_string(path).map_err(|e| DiaryxError::FileRead {
-            path: path.to_path_buf(),
-            source: e,
-        })?;
-
-        let name = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("unknown")
-            .to_string();
-
-        Ok(Self::new(name, content))
-    }
-
-    /// Get the built-in note template
+    /// Get the built-in note template.
     pub fn builtin_note() -> Self {
         Self::new("note", DEFAULT_NOTE_TEMPLATE)
     }
 
-    /// Render the template with the given context
+    /// Render the template with the given context.
     pub fn render(&self, context: &TemplateContext) -> String {
         substitute_variables(&self.raw_content, context)
     }
 
-    /// Render and parse into frontmatter and body
+    /// Render and parse into frontmatter and body.
     pub fn render_parsed(
         &self,
         context: &TemplateContext,
-    ) -> Result<(IndexMap<String, Value>, String)> {
+    ) -> Result<(IndexMap<String, Value>, String), String> {
         let rendered = self.render(context);
         parse_rendered_template(&rendered)
     }
 }
 
-/// Context for template variable substitution
+/// Context for template variable substitution.
 #[derive(Debug, Clone, Default)]
 pub struct TemplateContext {
-    /// Title for the entry
+    /// Title for the entry.
     pub title: Option<String>,
-    /// Filename (without extension)
+    /// Filename (without extension).
     pub filename: Option<String>,
-    /// Date to use (defaults to today)
+    /// Date to use (defaults to today).
     pub date: Option<NaiveDate>,
-    /// Part of reference (for hierarchical entries)
+    /// Part of reference (for hierarchical entries).
     pub part_of: Option<String>,
-    /// Custom variables
+    /// Custom variables.
     pub custom: IndexMap<String, String>,
 }
 
 impl TemplateContext {
-    /// Create a new empty context
+    /// Create a new empty context.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Set the title
+    /// Set the title.
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
         self
     }
 
-    /// Set the filename
+    /// Set the filename.
     pub fn with_filename(mut self, filename: impl Into<String>) -> Self {
         self.filename = Some(filename.into());
         self
     }
 
-    /// Set the date
+    /// Set the date.
     pub fn with_date(mut self, date: NaiveDate) -> Self {
         self.date = Some(date);
         self
     }
 
-    /// Set the part_of reference
+    /// Set the part_of reference.
     pub fn with_part_of(mut self, part_of: impl Into<String>) -> Self {
         self.part_of = Some(part_of.into());
         self
     }
 
-    /// Add a custom variable
+    /// Add a custom variable.
     pub fn with_custom(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.custom.insert(key.into(), value.into());
         self
     }
 
-    /// Get the effective date (provided or today)
-    fn effective_date(&self) -> NaiveDate {
+    /// Get the effective date (provided or today).
+    pub fn effective_date(&self) -> NaiveDate {
         self.date.unwrap_or_else(|| Local::now().date_naive())
     }
 
-    /// Get the effective title (provided, filename, or "Untitled")
-    fn effective_title(&self) -> String {
+    /// Get the effective title (provided, filename, or "Untitled").
+    pub fn effective_title(&self) -> String {
         self.title
             .clone()
             .or_else(|| self.filename.clone())
@@ -171,8 +151,8 @@ impl TemplateContext {
     }
 }
 
-/// Substitute template variables in a string
-fn substitute_variables(content: &str, context: &TemplateContext) -> String {
+/// Substitute template variables in a string.
+pub fn substitute_variables(content: &str, context: &TemplateContext) -> String {
     let mut result = content.to_string();
     let now = Local::now();
     let date = context.effective_date();
@@ -212,8 +192,8 @@ fn substitute_variables(content: &str, context: &TemplateContext) -> String {
     result
 }
 
-/// Substitute variables with format specifiers like {{var:FORMAT}}
-fn substitute_formatted_variables<F>(content: &str, var_name: &str, formatter: F) -> String
+/// Substitute variables with format specifiers like `{{var:FORMAT}}`.
+pub fn substitute_formatted_variables<F>(content: &str, var_name: &str, formatter: F) -> String
 where
     F: Fn(&str) -> String,
 {
@@ -235,8 +215,8 @@ where
     result
 }
 
-/// Parse rendered template content into frontmatter and body
-fn parse_rendered_template(content: &str) -> Result<(IndexMap<String, Value>, String)> {
+/// Parse rendered template content into frontmatter and body.
+pub fn parse_rendered_template(content: &str) -> Result<(IndexMap<String, Value>, String), String> {
     // Check if content starts with frontmatter delimiter
     if !content.starts_with("---\n") && !content.starts_with("---\r\n") {
         // No frontmatter, entire content is body
@@ -252,7 +232,8 @@ fn parse_rendered_template(content: &str) -> Result<(IndexMap<String, Value>, St
             let frontmatter_str = &rest[..idx];
             let body = &rest[idx + 5..]; // Skip "\n---\n"
 
-            let frontmatter: IndexMap<String, Value> = serde_yaml::from_str(frontmatter_str)?;
+            let frontmatter: IndexMap<String, Value> = serde_yaml::from_str(frontmatter_str)
+                .map_err(|e| format!("Failed to parse frontmatter YAML: {e}"))?;
             Ok((frontmatter, body.to_string()))
         }
         None => {
@@ -262,221 +243,13 @@ fn parse_rendered_template(content: &str) -> Result<(IndexMap<String, Value>, St
     }
 }
 
-/// Template manager for loading and managing templates
-pub struct TemplateManager<FS> {
-    fs: FS,
-    /// User templates directory (~/.config/diaryx/templates/)
-    user_templates_dir: Option<PathBuf>,
-    /// Workspace templates directory (`<workspace>/.diaryx/templates/`)
-    workspace_templates_dir: Option<PathBuf>,
-}
-
-impl<FS: FileSystem> TemplateManager<FS> {
-    /// Create a new template manager
-    /// On native platforms, uses the system config directory for user templates
-    /// On WASM, user_templates_dir will be None (use with_user_templates_dir to set)
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn new(fs: FS) -> Self {
-        let user_templates_dir = dirs::config_dir().map(|d| d.join("diaryx").join("templates"));
-
-        Self {
-            fs,
-            user_templates_dir,
-            workspace_templates_dir: None,
-        }
-    }
-
-    /// Create a new template manager (WASM version)
-    /// User templates directory must be set explicitly with with_user_templates_dir
-    #[cfg(target_arch = "wasm32")]
-    pub fn new(fs: FS) -> Self {
-        Self {
-            fs,
-            user_templates_dir: None,
-            workspace_templates_dir: None,
-        }
-    }
-
-    /// Set the user templates directory explicitly
-    /// Useful for WASM or when you want to override the default location
-    pub fn with_user_templates_dir(mut self, dir: PathBuf) -> Self {
-        self.user_templates_dir = Some(dir);
-        self
-    }
-
-    /// Set the workspace templates directory
-    pub fn with_workspace_dir(mut self, workspace_dir: &Path) -> Self {
-        self.workspace_templates_dir = Some(workspace_dir.join(".diaryx").join("templates"));
-        self
-    }
-
-    /// Get the user templates directory path
-    pub fn user_templates_dir(&self) -> Option<&Path> {
-        self.user_templates_dir.as_deref()
-    }
-
-    /// Get the workspace templates directory path
-    pub fn workspace_templates_dir(&self) -> Option<&Path> {
-        self.workspace_templates_dir.as_deref()
-    }
-
-    /// Get a template by name
-    /// Search order: workspace templates, user templates, built-in templates
-    pub fn get(&self, name: &str) -> Option<Template> {
-        // Try workspace templates first
-        if let Some(template) = self.load_from_dir(&self.workspace_templates_dir, name) {
-            return Some(template);
-        }
-
-        // Try user templates
-        if let Some(template) = self.load_from_dir(&self.user_templates_dir, name) {
-            return Some(template);
-        }
-
-        // Fall back to built-in templates
-        self.get_builtin(name)
-    }
-
-    /// Get a built-in template by name
-    pub fn get_builtin(&self, name: &str) -> Option<Template> {
-        match name {
-            "note" => Some(Template::builtin_note()),
-            _ => None,
-        }
-    }
-
-    /// Load a template from a directory
-    fn load_from_dir(&self, dir: &Option<PathBuf>, name: &str) -> Option<Template> {
-        let dir = dir.as_ref()?;
-        let path = dir.join(format!("{}.md", name));
-
-        if self.fs.exists(&path) {
-            Template::from_file(&self.fs, &path).ok()
-        } else {
-            None
-        }
-    }
-
-    /// List all available templates
-    pub fn list(&self) -> Vec<TemplateInfo> {
-        let mut templates = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-
-        // Workspace templates (highest priority)
-        if let Some(ref dir) = self.workspace_templates_dir {
-            for info in self.list_templates_in_dir(dir, TemplateSource::Workspace) {
-                if seen.insert(info.name.clone()) {
-                    templates.push(info);
-                }
-            }
-        }
-
-        // User templates
-        if let Some(ref dir) = self.user_templates_dir {
-            for info in self.list_templates_in_dir(dir, TemplateSource::User) {
-                if seen.insert(info.name.clone()) {
-                    templates.push(info);
-                }
-            }
-        }
-
-        // Built-in templates
-        for (name, source) in [("note", TemplateSource::Builtin)] {
-            if seen.insert(name.to_string()) {
-                templates.push(TemplateInfo {
-                    name: name.to_string(),
-                    source,
-                    path: None,
-                });
-            }
-        }
-
-        templates.sort_by(|a, b| a.name.cmp(&b.name));
-        templates
-    }
-
-    /// List templates in a directory
-    fn list_templates_in_dir(&self, dir: &Path, source: TemplateSource) -> Vec<TemplateInfo> {
-        let mut templates = Vec::new();
-
-        if let Ok(files) = self.fs.list_md_files(dir) {
-            for path in files {
-                if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
-                    templates.push(TemplateInfo {
-                        name: name.to_string(),
-                        source: source.clone(),
-                        path: Some(path),
-                    });
-                }
-            }
-        }
-
-        templates
-    }
-
-    /// Create a new template file in the user templates directory
-    pub fn create_template(&self, name: &str, content: &str) -> Result<PathBuf> {
-        let dir = self
-            .user_templates_dir
-            .as_ref()
-            .ok_or(DiaryxError::NoConfigDir)?;
-
-        // Create templates directory if it doesn't exist
-        self.fs.create_dir_all(dir)?;
-
-        let path = dir.join(format!("{}.md", name));
-        self.fs.create_new(&path, content)?;
-
-        Ok(path)
-    }
-
-    /// Save a template to the user templates directory (overwrites if exists)
-    pub fn save_template(&self, name: &str, content: &str) -> Result<PathBuf> {
-        let dir = self
-            .user_templates_dir
-            .as_ref()
-            .ok_or(DiaryxError::NoConfigDir)?;
-
-        // Create templates directory if it doesn't exist
-        self.fs.create_dir_all(dir)?;
-
-        let path = dir.join(format!("{}.md", name));
-        self.fs.write_file(&path, content)?;
-
-        Ok(path)
-    }
-}
-
-/// Information about a template
-#[derive(Debug, Clone)]
+/// Information about a template.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TemplateInfo {
-    /// Template name
+    /// Template name.
     pub name: String,
-    /// Where the template comes from
-    pub source: TemplateSource,
-    /// Path to the template file (None for built-in)
-    pub path: Option<PathBuf>,
-}
-
-/// Source of a template
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TemplateSource {
-    /// Built-in template
-    Builtin,
-    /// User template (~/.config/diaryx/templates/)
-    User,
-    /// Workspace template (`<workspace>/.diaryx/templates/`)
-    Workspace,
-}
-
-impl std::fmt::Display for TemplateSource {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TemplateSource::Builtin => write!(f, "built-in"),
-            TemplateSource::User => write!(f, "user"),
-            TemplateSource::Workspace => write!(f, "workspace"),
-        }
-    }
+    /// Source of the template ("builtin", "workspace", or "user").
+    pub source: String,
 }
 
 #[cfg(test)]

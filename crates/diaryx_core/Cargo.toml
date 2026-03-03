@@ -36,7 +36,6 @@ futures-lite = "2"
 
 # Optional dependencies
 git2 = { version = "0.19", optional = true, default-features = false }
-handlebars = { version = "6", optional = true }
 
 # Day One ZIP import (works on all platforms including WASM)
 zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
@@ -79,8 +78,6 @@ import-dayone = ["dep:zip"]
 # Enable markdown directory import (folders of .md files)
 import-markdown = []
 
-# Enable render-time body templating via Handlebars
-templating = ["dep:handlebars"]
 
 # Browser WASM support (uuid/js for browser crypto)
 browser-js = ["uuid/js"]

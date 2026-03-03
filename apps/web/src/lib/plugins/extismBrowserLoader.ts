@@ -346,6 +346,23 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
           return cp.store("");
         }
       },
+      async host_delete_file(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as
+            | { path: string }
+            | undefined;
+          if (!input) return cp.store("");
+          if (opts) await checkBrowserPermission(opts, "delete_files", input.path);
+          const backend = getBackendSync();
+          await backend.execute({
+            type: "DeleteFile",
+            params: { path: input.path },
+          } as any);
+          return cp.store("");
+        } catch {
+          return cp.store("");
+        }
+      },
       async host_write_binary(cp: CallContext, offs: bigint) {
         try {
           const input = cp.read(offs)?.json() as

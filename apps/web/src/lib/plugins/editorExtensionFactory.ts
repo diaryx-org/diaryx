@@ -16,6 +16,33 @@ import { mount, unmount } from "svelte";
 import type { BrowserExtismPlugin } from "./extismBrowserLoader";
 import MathInlineNodeView from "$lib/components/MathInlineNodeView.svelte";
 import MathBlockNodeView from "$lib/components/MathBlockNodeView.svelte";
+import { TemplateVariable } from "$lib/extensions/TemplateVariable";
+import { ConditionalBlock } from "$lib/extensions/ConditionalBlock";
+
+// ============================================================================
+// Builtin extension registry — complex extensions registered by host ID
+// ============================================================================
+
+/**
+ * Registry of host-provided TipTap extensions that are too complex for the
+ * declarative manifest. Plugins declare `node_type: Builtin { host_extension_id }`
+ * and the factory looks up the pre-registered TypeScript extension(s) here.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const BUILTIN_EXTENSION_REGISTRY: Record<string, () => any[]> = {
+  templateVariable: () => [TemplateVariable],
+  conditionalBlock: () => [ConditionalBlock.configure({ enabled: true })],
+};
+
+/**
+ * Look up a builtin extension by host_extension_id.
+ * Returns the TipTap extension instances, or null if not found.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function getBuiltinExtension(hostExtensionId: string): any[] | null {
+  const factory = BUILTIN_EXTENSION_REGISTRY[hostExtensionId];
+  return factory ? factory() : null;
+}
 
 // ============================================================================
 // Types matching the Rust EditorExtension manifest
@@ -24,7 +51,11 @@ import MathBlockNodeView from "$lib/components/MathBlockNodeView.svelte";
 export interface EditorExtensionManifest {
   slot: "EditorExtension";
   extension_id: string;
-  node_type: "InlineAtom" | "BlockAtom" | "InlineMark";
+  node_type:
+    | "InlineAtom"
+    | "BlockAtom"
+    | "InlineMark"
+    | { Builtin: { host_extension_id: string } };
   markdown: {
     level: "Inline" | "Block";
     open: string;

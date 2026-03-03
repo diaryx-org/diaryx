@@ -21,7 +21,7 @@
   } from "@lucide/svelte";
   import { getBackend } from "../backend";
   import { createApi } from "../backend/api";
-  import type { TemplateInfo } from "../backend/generated/TemplateInfo";
+  import type { TemplateInfo } from "../backend/interface";
   import TemplateEditorDialog from "../components/TemplateEditorDialog.svelte";
   import { getWorkspaceConfigStore } from "../stores/workspaceConfigStore.svelte";
 
@@ -162,7 +162,7 @@ created: {{timestamp}}
   }
 
   async function openEditTemplateEditor(templateInfo: TemplateInfo) {
-    if (templateInfo.source === "built-in") {
+    if (templateInfo.source === "builtin") {
       // Can't edit built-in templates, but can view them
       isNewTemplate = false;
     } else {
@@ -198,7 +198,7 @@ created: {{timestamp}}
   }
 
   async function deleteTemplate(templateInfo: TemplateInfo) {
-    if (templateInfo.source === "built-in") return;
+    if (templateInfo.source === "builtin") return;
 
     if (!confirm(`Delete template "${templateInfo.name}"?`)) return;
 
@@ -216,7 +216,7 @@ created: {{timestamp}}
 
   function getSourceBadgeClass(source: string): string {
     switch (source) {
-      case "built-in":
+      case "builtin":
         return "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200";
       case "workspace":
         return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
@@ -338,11 +338,11 @@ created: {{timestamp}}
                 size="sm"
                 class="h-7 w-7 p-0"
                 onclick={() => openEditTemplateEditor(template)}
-                title={template.source === "built-in" ? "View template" : "Edit template"}
+                title={template.source === "builtin" ? "View template" : "Edit template"}
               >
                 <Pencil class="size-3.5" />
               </Button>
-              {#if template.source !== "built-in"}
+              {#if template.source !== "builtin"}
                 <Button
                   variant="ghost"
                   size="sm"
@@ -365,7 +365,7 @@ created: {{timestamp}}
   bind:open={editorOpen}
   template={editingTemplate}
   isNew={isNewTemplate}
-  readOnly={editingTemplate !== null && !isNewTemplate && templates.find(t => t.name === editingTemplate?.name)?.source === "built-in"}
+  readOnly={editingTemplate !== null && !isNewTemplate && templates.find(t => t.name === editingTemplate?.name)?.source === "builtin"}
   onSave={handleSaveTemplate}
   onClose={() => {
     editorOpen = false;

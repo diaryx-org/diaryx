@@ -5,7 +5,7 @@
  * Usage: `const api = createApi(backend); await api.getEntry(path);`
  */
 
-import type { Backend } from './interface';
+import type { Backend, TemplateInfo } from './interface';
 import type {
   Response,
   EntryData,
@@ -18,7 +18,6 @@ import type {
   ExportPlan,
   ExportedFile,
   BinaryFileInfo,
-  TemplateInfo,
   StorageInfo,
   SearchOptions,
   AncestorAttachmentsResult,
@@ -564,40 +563,40 @@ export function createApi(backend: Backend) {
     },
 
     // =========================================================================
-    // Templates
+    // Templates (via diaryx.templating plugin)
     // =========================================================================
 
     /** List available templates. */
     async listTemplates(workspacePath?: string): Promise<TemplateInfo[]> {
-      const response = await backend.execute({
-        type: 'ListTemplates',
-        params: { workspace_path: workspacePath ?? null },
+      const result = await pluginCommand('diaryx.templating', 'ListTemplates', {
+        workspace_path: workspacePath ?? null,
       });
-      return expectResponse(response, 'Templates').data;
+      return (result ?? []) as unknown as TemplateInfo[];
     },
 
     /** Get a template's content. */
     async getTemplate(name: string, workspacePath?: string): Promise<string> {
-      const response = await backend.execute({
-        type: 'GetTemplate',
-        params: { name, workspace_path: workspacePath ?? null },
+      const result = await pluginCommand('diaryx.templating', 'GetTemplate', {
+        name,
+        workspace_path: workspacePath ?? null,
       });
-      return expectResponse(response, 'String').data;
+      return result as string;
     },
 
     /** Save a template. */
     async saveTemplate(name: string, content: string, workspacePath: string): Promise<void> {
-      await backend.execute({
-        type: 'SaveTemplate',
-        params: { name, content, workspace_path: workspacePath },
+      await pluginCommand('diaryx.templating', 'SaveTemplate', {
+        name,
+        content,
+        workspace_path: workspacePath,
       });
     },
 
     /** Delete a template. */
     async deleteTemplate(name: string, workspacePath: string): Promise<void> {
-      await backend.execute({
-        type: 'DeleteTemplate',
-        params: { name, workspace_path: workspacePath },
+      await pluginCommand('diaryx.templating', 'DeleteTemplate', {
+        name,
+        workspace_path: workspacePath,
       });
     },
 

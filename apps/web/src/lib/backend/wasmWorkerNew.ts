@@ -406,7 +406,12 @@ async function init(
 
   // Create backend with specified storage type
   if (storageType === "opfs") {
-    backend = await wasm.DiaryxBackend.createOpfs(resolvedWorkspaceName);
+    try {
+      backend = await wasm.DiaryxBackend.createOpfs(resolvedWorkspaceName);
+    } catch (e) {
+      console.warn("[WasmWorker] OPFS unavailable, falling back to IndexedDB:", e);
+      backend = await wasm.DiaryxBackend.createIndexedDb(workspaceId ?? undefined);
+    }
   } else if (storageType === "filesystem-access") {
     if (!directoryHandle) {
       throw new Error(

@@ -23,7 +23,7 @@ APPLE_API_KEY_PATH="$API_KEY_PATH" \
 cargo tauri ios build --export-method app-store-connect -- --features iap
 
 # ── Find the IPA ─────────────────────────────────────────────────────
-IPA=$(find "$REPO_ROOT/apps/tauri/src-tauri/gen/apple/build" -name "*.ipa" -newer "$0" | head -1)
+IPA=$(find "$REPO_ROOT/apps/tauri/src-tauri/gen/apple/build" -name "*.ipa" | head -1)
 
 if [ -z "$IPA" ]; then
   echo "ERROR: Could not find .ipa file. Check the build output above."

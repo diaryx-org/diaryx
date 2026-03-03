@@ -22,7 +22,7 @@ use diaryx_core::{
     workspace::Workspace,
 };
 use serde::Serialize;
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 // ============================================================================
 // Types
@@ -119,6 +119,13 @@ fn acquire_lock<T>(mutex: &Mutex<T>) -> Result<std::sync::MutexGuard<'_, T>, Ser
     })
 }
 
+#[cfg(feature = "extism-plugins")]
+fn make_permission_checker(
+    workspace_root: Option<PathBuf>,
+) -> Arc<dyn diaryx_extism::PermissionChecker> {
+    Arc::new(diaryx_extism::FrontmatterPermissionChecker::from_workspace_root(workspace_root))
+}
+
 // ============================================================================
 // Extism Third-Party Plugin Loading
 // ============================================================================
@@ -144,7 +151,13 @@ fn register_extism_plugins<FS: diaryx_core::fs::AsyncFileSystem + 'static>(
     // Use a basic real filesystem for host function file access.
     let fs: Arc<dyn diaryx_core::fs::AsyncFileSystem> =
         Arc::new(SyncToAsyncFs::new(RealFileSystem));
-    let host_ctx = Arc::new(diaryx_extism::HostContext::with_fs(fs));
+    let host_ctx = Arc::new(diaryx_extism::HostContext {
+        fs,
+        storage: Arc::new(diaryx_extism::NoopStorage),
+        event_emitter: Arc::new(diaryx_extism::NoopEventEmitter),
+        plugin_id: String::new(),
+        permission_checker: Some(make_permission_checker(diaryx.workspace_root())),
+    });
     match diaryx_extism::load_plugins_from_dir(&plugins_dir, host_ctx) {
         Ok(plugins) => {
             for plugin in plugins {
@@ -285,12 +298,16 @@ pub async fn load_sync_plugin<R: Runtime>(
     let fs: Arc<dyn diaryx_core::fs::AsyncFileSystem> =
         Arc::new(SyncToAsyncFs::new(RealFileSystem));
 
+    let workspace_root = app
+        .try_state::<AppState>()
+        .and_then(|state| state.workspace_path.lock().ok().and_then(|v| (*v).clone()));
+
     let host_ctx = Arc::new(diaryx_extism::HostContext {
         fs,
         storage: Arc::new(diaryx_extism::NoopStorage),
         event_emitter,
         plugin_id: String::new(),
-        permission_checker: None,
+        permission_checker: Some(make_permission_checker(workspace_root)),
     });
 
     // Load the plugin
@@ -422,7 +439,13 @@ pub async fn install_user_plugin<R: Runtime>(
     // Load to extract the manifest.
     let fs: Arc<dyn diaryx_core::fs::AsyncFileSystem> =
         Arc::new(SyncToAsyncFs::new(RealFileSystem));
-    let host_ctx = Arc::new(diaryx_extism::HostContext::with_fs(fs));
+    let host_ctx = Arc::new(diaryx_extism::HostContext {
+        fs,
+        storage: Arc::new(diaryx_extism::NoopStorage),
+        event_emitter: Arc::new(diaryx_extism::NoopEventEmitter),
+        plugin_id: String::new(),
+        permission_checker: Some(Arc::new(diaryx_extism::DenyAllPermissionChecker)),
+    });
 
     let adapter = diaryx_extism::load_plugin_from_wasm(&tmp_wasm, host_ctx, None).map_err(|e| {
         let _ = std::fs::remove_dir_all(&tmp_dir);

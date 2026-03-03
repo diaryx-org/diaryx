@@ -11,6 +11,8 @@ use diaryx_core::fs::AsyncFileSystem;
 use diaryx_core::plugin::permissions::PermissionType;
 use extism::{CurrentPlugin, Error as ExtismError, UserData, Val, ValType};
 
+use crate::permission_checker::DenyAllPermissionChecker;
+
 /// Trait for persisting plugin state (CRDT snapshots, config, etc.).
 ///
 /// Implementations might use SQLite on native or IndexedDB on web.
@@ -77,7 +79,7 @@ pub struct HostContext {
     pub event_emitter: Arc<dyn EventEmitter>,
     /// Which plugin this context belongs to.
     pub plugin_id: String,
-    /// Permission checker (None = allow all, for backwards compatibility).
+    /// Permission checker (None = deny all).
     pub permission_checker: Option<Arc<dyn PermissionChecker>>,
 }
 
@@ -89,7 +91,7 @@ impl HostContext {
             storage: Arc::new(NoopStorage),
             event_emitter: Arc::new(NoopEventEmitter),
             plugin_id: String::new(),
-            permission_checker: None,
+            permission_checker: Some(Arc::new(DenyAllPermissionChecker)),
         }
     }
 
@@ -100,7 +102,17 @@ impl HostContext {
                 .check_permission(&self.plugin_id, perm, target)
                 .map_err(|msg| ExtismError::msg(msg))
         } else {
-            Ok(())
+            Err(ExtismError::msg(
+                "Permission checker is not configured for this plugin host context",
+            ))
+        }
+    }
+
+    fn storage_key(&self, key: &str) -> String {
+        if self.plugin_id.is_empty() {
+            key.to_string()
+        } else {
+            format!("{}:{}", self.plugin_id, key)
         }
     }
 }
@@ -499,8 +511,9 @@ fn host_storage_get(
     let ctx = user_data.get()?;
     let ctx = ctx.lock().unwrap();
     ctx.check_perm(PermissionType::PluginStorage, &parsed.key)?;
+    let storage_key = ctx.storage_key(&parsed.key);
 
-    let result = match ctx.storage.get(&parsed.key) {
+    let result = match ctx.storage.get(&storage_key) {
         Some(data) => {
             let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
             serde_json::json!({ "data": encoded }).to_string()
@@ -541,7 +554,8 @@ fn host_storage_set(
     let ctx = user_data.get()?;
     let ctx = ctx.lock().unwrap();
     ctx.check_perm(PermissionType::PluginStorage, &parsed.key)?;
-    ctx.storage.set(&parsed.key, &bytes);
+    let storage_key = ctx.storage_key(&parsed.key);
+    ctx.storage.set(&storage_key, &bytes);
 
     plugin.memory_set_val(&mut outputs[0], "")?;
     Ok(())
@@ -569,7 +583,9 @@ fn host_run_wasi_module(
     // Load the WASM module bytes from plugin storage
     let ctx = user_data.get()?;
     let ctx = ctx.lock().unwrap();
-    let wasm_bytes = ctx.storage.get(&request.module_key).ok_or_else(|| {
+    ctx.check_perm(PermissionType::PluginStorage, &request.module_key)?;
+    let storage_key = ctx.storage_key(&request.module_key);
+    let wasm_bytes = ctx.storage.get(&storage_key).ok_or_else(|| {
         ExtismError::msg(format!(
             "host_run_wasi_module: module not found in storage: {}",
             request.module_key

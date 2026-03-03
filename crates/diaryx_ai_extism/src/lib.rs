@@ -21,6 +21,8 @@ struct GuestManifest {
     description: String,
     capabilities: Vec<String>,
     #[serde(default)]
+    requested_permissions: Option<JsonValue>,
+    #[serde(default)]
     ui: Vec<JsonValue>,
     #[serde(default)]
     commands: Vec<String>,
@@ -201,6 +203,22 @@ pub fn manifest(_input: String) -> FnResult<String> {
         version: env!("CARGO_PKG_VERSION").into(),
         description: "AI chat assistant powered by OpenAI-compatible APIs".into(),
         capabilities: vec!["custom_commands".into()],
+        requested_permissions: Some(serde_json::json!({
+            "defaults": {
+                "http_requests": {
+                    "include": ["openrouter.ai"],
+                    "exclude": []
+                },
+                "plugin_storage": {
+                    "include": ["all"],
+                    "exclude": []
+                }
+            },
+            "reasons": {
+                "http_requests": "Send chat requests to the configured OpenAI-compatible API endpoint.",
+                "plugin_storage": "Persist conversation history and plugin settings between sessions."
+            }
+        })),
         ui: vec![
             // Toolbar button to toggle the AI sidebar
             serde_json::json!({

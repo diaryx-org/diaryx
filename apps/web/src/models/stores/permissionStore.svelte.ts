@@ -55,6 +55,15 @@ export interface PluginConfig {
   permissions: PluginPermissions;
 }
 
+export interface PermissionPersistenceHandlers {
+  /** Return current plugins config from root frontmatter. */
+  getPluginsConfig: () => Record<string, PluginConfig> | undefined;
+  /** Persist updated plugins config to root frontmatter. */
+  savePluginsConfig: (
+    config: Record<string, PluginConfig>,
+  ) => Promise<void> | void;
+}
+
 // ============================================================================
 // State
 // ============================================================================
@@ -66,6 +75,8 @@ let pendingRequests = $state<PermissionRequest[]>([]);
 let sessionCache = $state<Record<string, boolean>>({});
 
 let requestCounter = 0;
+
+let persistenceHandlers = $state<PermissionPersistenceHandlers | null>(null);
 
 // ============================================================================
 // Permission Check Logic
@@ -247,8 +258,15 @@ async function requestPermission(
   target: string,
   pluginsConfig?: Record<string, PluginConfig>,
 ): Promise<boolean> {
+  const effectiveConfig = pluginsConfig ?? persistenceHandlers?.getPluginsConfig();
+
   // 1. Check static config
-  const configResult = checkPermission(pluginsConfig, pluginId, permissionType, target);
+  const configResult = checkPermission(
+    effectiveConfig,
+    pluginId,
+    permissionType,
+    target,
+  );
   if (configResult === 'allowed') return true;
   if (configResult === 'denied') return false;
 
@@ -289,6 +307,95 @@ function resolveRequest(requestId: string, allowed: boolean): void {
   request.resolve(allowed);
 }
 
+function getTargetScopeForRequest(
+  request: PermissionRequest,
+  mode: 'target' | 'folder',
+): string {
+  if (request.permissionType === 'http_requests') {
+    return extractDomain(request.target);
+  }
+
+  if (request.permissionType === 'plugin_storage') {
+    return 'all';
+  }
+
+  const normalized = request.target.replace(/^\//, '');
+  if (!normalized) return normalized;
+  if (mode === 'target') return normalized;
+  const slash = normalized.lastIndexOf('/');
+  if (slash <= 0) return normalized;
+  return normalized.slice(0, slash);
+}
+
+async function persistRequestDecision(
+  requestId: string,
+  mode: 'allow_target' | 'allow_folder' | 'block_target',
+): Promise<void> {
+  const request = pendingRequests.find((r) => r.id === requestId);
+  if (!request) return;
+
+  const handlers = persistenceHandlers;
+  if (!handlers) {
+    resolveRequest(requestId, mode !== 'block_target');
+    return;
+  }
+
+  const currentConfig = handlers.getPluginsConfig() ?? {};
+  const pluginConfig: PluginConfig = {
+    download: currentConfig[request.pluginId]?.download,
+    permissions: {
+      ...(currentConfig[request.pluginId]?.permissions ?? {}),
+    },
+  };
+
+  const existingRule = pluginConfig.permissions[request.permissionType] ?? {
+    include: [],
+    exclude: [],
+  };
+  const nextRule: PermissionRule = {
+    include: [...existingRule.include],
+    exclude: [...existingRule.exclude],
+  };
+
+  if (mode === 'allow_target') {
+    const targetScope = getTargetScopeForRequest(request, 'target');
+    if (targetScope && !nextRule.include.includes(targetScope)) {
+      nextRule.include.push(targetScope);
+    }
+    nextRule.exclude = nextRule.exclude.filter((s) => s !== targetScope);
+  } else if (mode === 'allow_folder') {
+    const folderScope = getTargetScopeForRequest(request, 'folder');
+    if (folderScope && !nextRule.include.includes(folderScope)) {
+      nextRule.include.push(folderScope);
+    }
+    nextRule.exclude = nextRule.exclude.filter((s) => s !== folderScope);
+  } else {
+    const targetScope = getTargetScopeForRequest(request, 'target');
+    if (targetScope && !nextRule.exclude.includes(targetScope)) {
+      nextRule.exclude.push(targetScope);
+    }
+    nextRule.include = nextRule.include.filter((s) => s !== targetScope);
+  }
+
+  pluginConfig.permissions = {
+    ...pluginConfig.permissions,
+    [request.permissionType]: nextRule,
+  };
+
+  const nextConfig: Record<string, PluginConfig> = {
+    ...currentConfig,
+    [request.pluginId]: pluginConfig,
+  };
+
+  try {
+    await handlers.savePluginsConfig(nextConfig);
+    resolveRequest(requestId, mode !== 'block_target');
+  } catch {
+    // Fallback to ephemeral decision if persistence fails.
+    resolveRequest(requestId, mode !== 'block_target');
+  }
+}
+
 /**
  * Dismiss a request (deny without caching).
  */
@@ -305,6 +412,12 @@ function dismissRequest(requestId: string): void {
  */
 function clearSessionCache(): void {
   sessionCache = {};
+}
+
+function setPersistenceHandlers(
+  handlers: PermissionPersistenceHandlers | null,
+): void {
+  persistenceHandlers = handlers;
 }
 
 // ============================================================================
@@ -344,8 +457,10 @@ export function getPermissionStore() {
     },
     requestPermission,
     resolveRequest,
+    persistRequestDecision,
     dismissRequest,
     clearSessionCache,
+    setPersistenceHandlers,
     checkPermission,
     getPermissionLabel,
     formatTarget,

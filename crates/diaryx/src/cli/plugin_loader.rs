@@ -10,7 +10,10 @@ use std::sync::Arc;
 use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
 use diaryx_core::plugin::{Plugin, PluginContext, PluginManifest};
 use diaryx_extism::protocol::GuestManifest;
-use diaryx_extism::{EventEmitter, ExtismPluginAdapter, HostContext, load_plugin_from_wasm};
+use diaryx_extism::{
+    EventEmitter, ExtismPluginAdapter, FrontmatterPermissionChecker, HostContext,
+    load_plugin_from_wasm,
+};
 use serde_json::Value as JsonValue;
 
 use super::plugin_storage::CliPluginStorage;
@@ -402,7 +405,9 @@ fn create_host_context(workspace_root: &Path, plugin_id: &str) -> Arc<HostContex
         storage,
         event_emitter,
         plugin_id: plugin_id.to_string(),
-        permission_checker: None,
+        permission_checker: Some(Arc::new(FrontmatterPermissionChecker::from_workspace_root(
+            Some(workspace_root.to_path_buf()),
+        ))),
     })
 }
 

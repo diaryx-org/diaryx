@@ -4,7 +4,21 @@
 //! serialized as JSON. This module defines the contract — any language
 //! with an Extism PDK can implement a compatible guest.
 
+use std::collections::HashMap;
+
+use diaryx_core::plugin::permissions::PluginPermissions;
 use serde::{Deserialize, Serialize};
+
+/// Plugin-declared default permissions and human-readable reasons.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GuestRequestedPermissions {
+    /// Default permission rules to apply at install time.
+    #[serde(default)]
+    pub defaults: PluginPermissions,
+    /// Why each permission is needed, keyed by permission field name.
+    #[serde(default)]
+    pub reasons: HashMap<String, String>,
+}
 
 /// Manifest returned by the guest's exported `manifest` function.
 ///
@@ -34,6 +48,9 @@ pub struct GuestManifest {
     /// CLI subcommand declarations (deserialized into `CliCommand` by the host).
     #[serde(default)]
     pub cli: Vec<serde_json::Value>,
+    /// Optional default permission request + rationale shown during install.
+    #[serde(default)]
+    pub requested_permissions: Option<GuestRequestedPermissions>,
 }
 
 /// Event sent to the guest's `on_event` function.
@@ -86,6 +103,7 @@ mod tests {
             ui: vec![],
             commands: vec!["do-thing".into()],
             cli: vec![],
+            requested_permissions: None,
         };
         let json = serde_json::to_string(&manifest).unwrap();
         let parsed: GuestManifest = serde_json::from_str(&json).unwrap();

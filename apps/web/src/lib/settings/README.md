@@ -42,7 +42,7 @@ Settings panel components for `SettingsDialog.svelte`.
 | `S3StorageSettings.svelte` / `GoogleDriveStorageSettings.svelte` | Storage plugin-specific settings. |
 | `ImportSettings.svelte` / `FormatImportSettings.svelte` | ZIP import and format import flows. |
 | `AccountSettings.svelte` / `BillingSettings.svelte` | Authentication/account and billing surfaces. |
-| `PluginsSettings.svelte` | Plugin enable/disable + install/remove controls. |
+| `PluginsSettings.svelte` | Plugin enable/disable + install/remove controls, including install-time permission review and default-permission persistence to root frontmatter. |
 | `PluginSettingsTab.svelte` | Declarative plugin field renderer. |
 | `syncSettingsLogic.ts` | Shared sync/storage usage helpers used by settings UIs. |
 | `workspaceSnapshotUpload.ts` | Shared snapshot builder used by provider/sync bootstrap flows. |

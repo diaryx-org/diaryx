@@ -10,6 +10,7 @@
     getBrowserPluginSupportError,
     installPlugin as browserInstallPlugin,
     uninstallPlugin as browserUninstallPlugin,
+    inspectPluginWasm,
     isBuiltinPlugin,
   } from "$lib/plugins/browserPluginManager.svelte";
   import {
@@ -17,7 +18,14 @@
     type RegistryPlugin,
   } from "$lib/plugins/pluginRegistry";
   import { getBackend, isTauri } from "$lib/backend";
+  import { createApi } from "$lib/backend/api";
   import type { Backend } from "$lib/backend/interface";
+  import { workspaceStore } from "@/models/stores/workspaceStore.svelte";
+  import type {
+    PermissionType,
+    PluginConfig,
+    PluginPermissions,
+  } from "@/models/stores/permissionStore.svelte";
 
   const pluginStore = getPluginStore();
 
@@ -121,13 +129,114 @@
   // Actions
   // =========================================================================
 
+  const PERMISSION_LABELS: Record<PermissionType, string> = {
+    read_files: "Read files",
+    edit_files: "Edit files",
+    create_files: "Create files",
+    delete_files: "Delete files",
+    move_files: "Move files",
+    http_requests: "HTTP requests",
+    execute_commands: "Execute commands",
+    plugin_storage: "Plugin storage",
+  };
+
+  function formatRuleSummary(permissionType: PermissionType, rule: { include: string[]; exclude: string[] }): string {
+    if (permissionType === "plugin_storage") return "all";
+    if (!rule.include?.length) return "no includes";
+    return rule.include.join(", ");
+  }
+
+  async function persistDefaultPermissions(
+    pluginId: string,
+    defaults: PluginPermissions,
+  ): Promise<void> {
+    const rootIndexPath = workspaceStore.tree?.path;
+    if (!rootIndexPath) return;
+
+    const backend = await getBackend();
+    const api = createApi(backend);
+    const fm = await api.getFrontmatter(rootIndexPath);
+    const existingPlugins = (fm.plugins as Record<string, PluginConfig> | undefined) ?? {};
+    const existingPluginConfig = existingPlugins[pluginId] ?? { permissions: {} };
+    const mergedPermissions: PluginPermissions = {
+      ...(existingPluginConfig.permissions ?? {}),
+    };
+
+    for (const [permissionType, requestedRule] of Object.entries(defaults)) {
+      if (!requestedRule) continue;
+      if (!mergedPermissions[permissionType as PermissionType]) {
+        mergedPermissions[permissionType as PermissionType] = {
+          include: [...(requestedRule.include ?? [])],
+          exclude: [...(requestedRule.exclude ?? [])],
+        };
+      }
+    }
+
+    const nextPlugins: Record<string, PluginConfig> = {
+      ...existingPlugins,
+      [pluginId]: {
+        ...existingPluginConfig,
+        permissions: mergedPermissions,
+      },
+    };
+
+    await api.setFrontmatterProperty(
+      rootIndexPath,
+      "plugins",
+      nextPlugins as any,
+      rootIndexPath,
+    );
+  }
+
+  async function reviewAndInstall(
+    wasmBytes: ArrayBuffer,
+    fallbackName?: string,
+  ): Promise<void> {
+    const inspected = await inspectPluginWasm(wasmBytes);
+    const pluginId = inspected.pluginId;
+    const pluginName = inspected.pluginName || fallbackName || pluginId;
+    const requested = inspected.requestedPermissions;
+    const defaults = requested?.defaults ?? {};
+    const reasons = requested?.reasons ?? {};
+
+    const requestedLines = Object.entries(defaults)
+      .filter(([, rule]) => !!rule)
+      .map(([permissionType, rule]) => {
+        const typed = permissionType as PermissionType;
+        const reason = reasons[typed];
+        const summary = formatRuleSummary(typed, rule!);
+        if (reason) {
+          return `- ${PERMISSION_LABELS[typed]}: ${summary}\n  Why: ${reason}`;
+        }
+        return `- ${PERMISSION_LABELS[typed]}: ${summary}`;
+      });
+
+    const details =
+      requestedLines.length > 0
+        ? requestedLines.join("\n")
+        : "- This plugin requests no default permissions.";
+
+    const approved = window.confirm(
+      `Install "${pluginName}" (${pluginId})?\n\n` +
+        `Requested default permissions:\n${details}\n\n` +
+        `Approved defaults will be saved in root frontmatter under plugins.${pluginId}.permissions.`,
+    );
+    if (!approved) return;
+
+    if (requested?.defaults) {
+      await persistDefaultPermissions(pluginId, requested.defaults);
+    }
+
+    await platformInstall(wasmBytes, fallbackName ?? pluginName);
+  }
+
   async function installFromRegistry(rp: RegistryPlugin) {
     installingIds = new Set([...installingIds, rp.id]);
     try {
       const resp = await fetch(rp.wasmUrl);
       if (!resp.ok) throw new Error(`Download failed: ${resp.status}`);
       const bytes = await resp.arrayBuffer();
-      await platformInstall(bytes, rp.name);
+      await reviewAndInstall(bytes, rp.name);
       toast.success(`Installed ${rp.name}`);
     } catch (e) {
       toast.error(
@@ -170,7 +279,7 @@
     uploadingCustom = true;
     try {
       const bytes = await file.arrayBuffer();
-      await platformInstall(bytes, file.name.replace(/\.wasm$/, ""));
+      await reviewAndInstall(bytes, file.name.replace(/\.wasm$/, ""));
       toast.success(`Installed plugin from ${file.name}`);
     } catch (e) {
       toast.error(

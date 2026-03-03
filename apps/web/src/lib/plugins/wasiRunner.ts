@@ -175,20 +175,21 @@ function base64ToUint8Array(b64: string): Uint8Array {
 /**
  * Handle a `host_run_wasi_module` call from an Extism guest plugin.
  *
- * Loads WASM bytes from localStorage (plugin storage), decodes base64 inputs,
- * runs the WASI module, and returns the result.
+ * Loads WASM bytes from plugin-scoped storage, decodes base64 inputs, runs
+ * the WASI module, and returns the result.
  */
 export async function handleHostRunWasiModule(
   request: WasiRunRequest,
+  pluginId: string,
 ): Promise<WasiRunResult> {
-  // Load WASM bytes from plugin storage (localStorage)
-  const storageKey = `diaryx-plugin:${request.module_key}`;
+  // Load WASM bytes from plugin-scoped storage (localStorage)
+  const storageKey = `diaryx-plugin:${pluginId}:${request.module_key}`;
   const raw = localStorage.getItem(storageKey);
   if (!raw) {
     return {
       exit_code: -1,
       stdout: '',
-      stderr: `Module not found in storage: ${request.module_key}`,
+      stderr: `Module not found in storage for plugin '${pluginId}': ${request.module_key}`,
     };
   }
 

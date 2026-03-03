@@ -20,6 +20,7 @@ import { getBackendSync } from "$lib/backend";
 import {
   permissionStore,
   type PermissionType,
+  type PluginPermissions,
   type PluginConfig,
 } from "@/models/stores/permissionStore.svelte";
 
@@ -36,6 +37,12 @@ export interface GuestManifest {
   ui: UiContribution[];
   commands: string[];
   cli?: unknown[];
+  requested_permissions?: RequestedPermissionsManifest;
+}
+
+export interface RequestedPermissionsManifest {
+  defaults: PluginPermissions;
+  reasons?: Partial<Record<PermissionType, string>>;
 }
 
 export interface GuestEvent {
@@ -62,6 +69,8 @@ export interface BrowserPluginRuntimeSupport {
 export interface BrowserExtismPlugin {
   /** The plugin's manifest, converted to the core PluginManifest format. */
   manifest: PluginManifest;
+  /** Plugin-declared default permissions and reasons (optional). */
+  requestedPermissions?: RequestedPermissionsManifest;
   /** Send a lifecycle event to the guest. */
   callEvent(event: GuestEvent): Promise<void>;
   /** Dispatch a command to the guest. */
@@ -94,10 +103,10 @@ export interface BrowserExtismPlugin {
 
 /** Options for building host functions with permission support. */
 export interface HostFunctionOptions {
-  /** Plugin ID for permission checks. */
-  pluginId: string;
-  /** Plugin display name for permission banners. */
-  pluginName: string;
+  /** Dynamic plugin ID for permission checks. */
+  getPluginId: () => string;
+  /** Dynamic plugin display name for permission banners. */
+  getPluginName: () => string;
   /** Callback to get current workspace plugin config. Returns undefined if not available. */
   getPluginsConfig?: () => Record<string, PluginConfig> | undefined;
 }
@@ -111,10 +120,20 @@ async function checkBrowserPermission(
   permType: PermissionType,
   target: string,
 ): Promise<void> {
+  const pluginId = opts.getPluginId();
+  if (!pluginId || pluginId === "unknown-plugin") {
+    throw new Error(
+      JSON.stringify({
+        error: "permission_checker_unbound_plugin",
+        permission: permType,
+        target,
+      }),
+    );
+  }
   const pluginsConfig = opts.getPluginsConfig?.();
   const allowed = await permissionStore.requestPermission(
-    opts.pluginId,
-    opts.pluginName,
+    pluginId,
+    opts.getPluginName(),
     permType,
     target,
     pluginsConfig,
@@ -125,10 +144,27 @@ async function checkBrowserPermission(
         error: "permission_denied",
         permission: permType,
         target,
-        plugin: opts.pluginId,
+        plugin: pluginId,
       }),
     );
   }
+}
+
+async function requirePermission(
+  opts: HostFunctionOptions | undefined,
+  permType: PermissionType,
+  target: string,
+): Promise<void> {
+  if (!opts) {
+    throw new Error(
+      JSON.stringify({
+        error: "permission_checker_missing",
+        permission: permType,
+        target,
+      }),
+    );
+  }
+  await checkBrowserPermission(opts, permType, target);
 }
 
 function buildHostFunctions(opts?: HostFunctionOptions) {
@@ -163,7 +199,7 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
         try {
           const input = cp.read(offs)?.json() as { path: string } | undefined;
           if (!input) return cp.store("");
-          if (opts) await checkBrowserPermission(opts, "read_files", input.path);
+          await requirePermission(opts, "read_files", input.path);
           const backend = getBackendSync();
           const response: any = await backend.execute({
             type: "ReadFile",
@@ -182,7 +218,7 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
           const input = cp.read(offs)?.json() as { prefix: string } | undefined;
           if (!input) return cp.store("[]");
           const prefix = typeof input.prefix === "string" ? input.prefix : "";
-          if (opts) await checkBrowserPermission(opts, "read_files", prefix);
+          await requirePermission(opts, "read_files", prefix);
           const backend = getBackendSync();
           const response: any = await backend.execute({
             type: "GetFilesystemTree",
@@ -219,7 +255,7 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
         try {
           const input = cp.read(offs)?.json() as { path: string } | undefined;
           if (!input) return cp.store("false");
-          if (opts) await checkBrowserPermission(opts, "read_files", input.path);
+          await requirePermission(opts, "read_files", input.path);
           const backend = getBackendSync();
           const response: any = await backend.execute({
             type: "FileExists",
@@ -237,8 +273,18 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
         try {
           const input = cp.read(offs)?.json() as { key: string } | undefined;
           if (!input?.key) return cp.store("");
-          if (opts) await checkBrowserPermission(opts, "plugin_storage", input.key);
-          const raw = localStorage.getItem(`diaryx-plugin:${input.key}`);
+          await requirePermission(opts, "plugin_storage", input.key);
+          if (!opts) {
+            throw new Error(
+              JSON.stringify({
+                error: "permission_checker_missing",
+                permission: "plugin_storage",
+                target: input.key,
+              }),
+            );
+          }
+          const pluginId = opts.getPluginId();
+          const raw = localStorage.getItem(`diaryx-plugin:${pluginId}:${input.key}`);
           if (!raw) return cp.store("");
           // Return in the same {data: base64} format the Rust host uses
           return cp.store(raw);
@@ -252,10 +298,20 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
             | { key: string; data: string }
             | undefined;
           if (!input?.key) return cp.store("");
-          if (opts) await checkBrowserPermission(opts, "plugin_storage", input.key);
+          await requirePermission(opts, "plugin_storage", input.key);
+          if (!opts) {
+            throw new Error(
+              JSON.stringify({
+                error: "permission_checker_missing",
+                permission: "plugin_storage",
+                target: input.key,
+              }),
+            );
+          }
+          const pluginId = opts.getPluginId();
           // Store the base64 data wrapped in JSON matching Rust host format
           localStorage.setItem(
-            `diaryx-plugin:${input.key}`,
+            `diaryx-plugin:${pluginId}:${input.key}`,
             JSON.stringify({ data: input.data }),
           );
           return cp.store("");
@@ -281,7 +337,7 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
             return cp.store(
               JSON.stringify({ status: 0, headers: {}, body: "no input" }),
             );
-          if (opts) await checkBrowserPermission(opts, "http_requests", input.url);
+          await requirePermission(opts, "http_requests", input.url);
           let fetchBody: BodyInit | undefined;
           if (input.body_base64) {
             const binary = atob(input.body_base64);
@@ -335,8 +391,17 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
             | { path: string; content: string }
             | undefined;
           if (!input) return cp.store("");
-          if (opts) await checkBrowserPermission(opts, "edit_files", input.path);
           const backend = getBackendSync();
+          const existsResp: any = await backend.execute({
+            type: "FileExists",
+            params: { path: input.path },
+          } as any);
+          const exists = existsResp?.type === "Bool" && !!existsResp.data;
+          await requirePermission(
+            opts,
+            exists ? "edit_files" : "create_files",
+            input.path,
+          );
           await backend.execute({
             type: "WriteFile",
             params: { path: input.path, content: input.content },
@@ -352,7 +417,7 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
             | { path: string }
             | undefined;
           if (!input) return cp.store("");
-          if (opts) await checkBrowserPermission(opts, "delete_files", input.path);
+          await requirePermission(opts, "delete_files", input.path);
           const backend = getBackendSync();
           await backend.execute({
             type: "DeleteFile",
@@ -369,14 +434,23 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
             | { path: string; content: string }
             | undefined;
           if (!input) return cp.store("");
-          if (opts) await checkBrowserPermission(opts, "edit_files", input.path);
+          const backend = getBackendSync();
+          const existsResp: any = await backend.execute({
+            type: "FileExists",
+            params: { path: input.path },
+          } as any);
+          const exists = existsResp?.type === "Bool" && !!existsResp.data;
+          await requirePermission(
+            opts,
+            exists ? "edit_files" : "create_files",
+            input.path,
+          );
           // Decode base64 to Uint8Array
           const binary = atob(input.content);
           const bytes = new Uint8Array(binary.length);
           for (let i = 0; i < binary.length; i++) {
             bytes[i] = binary.charCodeAt(i);
           }
-          const backend = getBackendSync();
           await backend.writeBinary(input.path, bytes);
           return cp.store("");
         } catch {
@@ -412,7 +486,14 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
               }),
             );
           }
-          const result = await handleHostRunWasiModule(input);
+          await requirePermission(opts, "plugin_storage", input.module_key);
+          if (!opts) {
+            throw new Error("host_run_wasi_module: missing plugin identity");
+          }
+          const result = await handleHostRunWasiModule(
+            input,
+            opts.getPluginId(),
+          );
           return cp.store(JSON.stringify(result));
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
@@ -572,6 +653,7 @@ export async function loadBrowserPlugin(
 
   return {
     manifest,
+    requestedPermissions: guestManifest.requested_permissions,
 
     async callEvent(event: GuestEvent): Promise<void> {
       return enqueue(async () => {
@@ -685,4 +767,21 @@ export async function loadBrowserPlugin(
       await plugin.close();
     },
   };
+}
+
+/**
+ * Inspect a plugin WASM to read manifest metadata without installing it.
+ */
+export async function inspectBrowserPlugin(
+  wasmBytes: ArrayBuffer,
+): Promise<{ manifest: PluginManifest; requestedPermissions?: RequestedPermissionsManifest }> {
+  const plugin = await loadBrowserPlugin(wasmBytes);
+  try {
+    return {
+      manifest: plugin.manifest,
+      requestedPermissions: plugin.requestedPermissions,
+    };
+  } finally {
+    await plugin.close();
+  }
 }

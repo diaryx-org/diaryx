@@ -128,6 +128,14 @@ Plugins are sandboxed via a permission model stored in the workspace root index
 frontmatter under a `plugins` key. Each plugin has an entry with `download` URL
 and `permissions` object.
 
+Plugin manifests may optionally declare:
+
+- `requested_permissions.defaults` — default rules the plugin asks to install
+- `requested_permissions.reasons` — human-readable rationale per permission key
+
+Hosts can inspect this at install time and show an approval dialog before
+writing defaults into root frontmatter.
+
 ### Permission Types
 
 | Permission | Covers | Scope values |
@@ -138,7 +146,7 @@ and `permissions` object.
 | `delete_files` | `DeleteEntry` | file/folder links, `all` |
 | `move_files` | `MoveEntry`, `RenameEntry` | file/folder links, `all` |
 | `http_requests` | `host_http_request` | domain patterns, `all` |
-| `plugin_storage` | `host_storage_get`, `host_storage_set` | `all` |
+| `plugin_storage` | `host_storage_get`, `host_storage_set`, `host_run_wasi_module` | `all` |
 
 ### Resolution Rules
 
@@ -151,12 +159,22 @@ and `permissions` object.
 
 ### Enforcement
 
-On native (Extism): `HostContext` holds a `plugin_id` and optional
-`PermissionChecker` trait object. Each host function checks permissions
-before proceeding.
+On native (Extism): each host function checks a `PermissionChecker` in
+`HostContext` before proceeding. `HostContext::with_fs()` now defaults to
+deny-all. CLI and Tauri attach a `FrontmatterPermissionChecker`, which reads
+`plugins` from the workspace root frontmatter on each check.
 
 On browser: `extismBrowserLoader.ts` host functions check permissions via
-the `permissionStore`, showing a `PermissionBanner` for user approval.
+the `permissionStore`, showing a `PermissionBanner` for user approval when
+rules are missing.
+
+Both hosts split write access by existence:
+
+- existing path → `edit_files`
+- new path → `create_files`
+
+Plugin storage keys are plugin-scoped (`{plugin_id}:{key}`) to avoid
+cross-plugin collisions and accidental data sharing.
 
 ### YAML Example
 

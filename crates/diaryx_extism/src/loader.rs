@@ -133,7 +133,7 @@ pub fn load_plugin_from_wasm(
     });
 
     let builder = PluginBuilder::new(extism_manifest).with_wasi(true);
-    let builder = host_fns::register_host_functions(builder, user_data);
+    let builder = host_fns::register_host_functions(builder, user_data.clone());
     let mut plugin = builder.build().map_err(|e| ExtismLoadError::PluginCreate {
         plugin_name: plugin_name.clone(),
         source: e,
@@ -154,6 +154,11 @@ pub fn load_plugin_from_wasm(
             source: e,
         }
     })?;
+    if let Ok(ctx) = user_data.get()
+        && let Ok(mut guard) = ctx.lock()
+    {
+        guard.plugin_id = guest_manifest.id.clone();
+    }
 
     // Cache the manifest.json alongside the WASM for fast discovery.
     let manifest_path = wasm_path
@@ -202,7 +207,7 @@ fn load_single_plugin(
     });
 
     let builder = PluginBuilder::new(extism_manifest).with_wasi(true);
-    let builder = host_fns::register_host_functions(builder, user_data);
+    let builder = host_fns::register_host_functions(builder, user_data.clone());
     let mut plugin = builder.build().map_err(|e| ExtismLoadError::PluginCreate {
         plugin_name: plugin_name.into(),
         source: e,
@@ -236,6 +241,11 @@ fn load_single_plugin(
         cache_manifest(&manifest_path, &gm);
         gm
     };
+    if let Ok(ctx) = user_data.get()
+        && let Ok(mut guard) = ctx.lock()
+    {
+        guard.plugin_id = guest_manifest.id.clone();
+    }
 
     // Load config sidecar.
     let config_path = plugin_dir.join("config.json");

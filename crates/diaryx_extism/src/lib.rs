@@ -24,6 +24,7 @@ pub mod adapter;
 pub mod binary_protocol;
 pub mod host_fns;
 pub mod loader;
+pub mod permission_checker;
 pub mod plugin_fs;
 pub mod protocol;
 #[cfg(feature = "wasi-runner")]
@@ -34,4 +35,5 @@ pub use host_fns::{
     EventEmitter, HostContext, NoopEventEmitter, NoopStorage, PermissionChecker, PluginStorage,
 };
 pub use loader::{ExtismLoadError, load_plugin_from_wasm, load_plugins_from_dir};
+pub use permission_checker::{DenyAllPermissionChecker, FrontmatterPermissionChecker};
 pub use plugin_fs::PluginFileSystem;

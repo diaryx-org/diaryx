@@ -73,7 +73,7 @@
                 <button
                   class="flex w-full items-center rounded-sm px-2 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors"
                   onclick={() => {
-                    permissionStore.resolveRequest(request.id, true);
+                    void permissionStore.persistRequestDecision(request.id, "allow_target");
                     showMoreOptions = null;
                   }}
                 >
@@ -82,7 +82,7 @@
                 <button
                   class="flex w-full items-center rounded-sm px-2 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors"
                   onclick={() => {
-                    permissionStore.resolveRequest(request.id, true);
+                    void permissionStore.persistRequestDecision(request.id, "allow_folder");
                     showMoreOptions = null;
                   }}
                 >
@@ -92,7 +92,7 @@
                 <button
                   class="flex w-full items-center rounded-sm px-2 py-1.5 text-xs text-destructive hover:bg-destructive/10 transition-colors"
                   onclick={() => {
-                    permissionStore.resolveRequest(request.id, false);
+                    void permissionStore.persistRequestDecision(request.id, "block_target");
                     showMoreOptions = null;
                   }}
                 >

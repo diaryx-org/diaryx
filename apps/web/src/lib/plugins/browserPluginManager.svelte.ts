@@ -8,12 +8,15 @@
 
 import {
   loadBrowserPlugin,
+  inspectBrowserPlugin,
   getBrowserPluginRuntimeSupport,
   type BrowserExtismPlugin,
   type GuestEvent,
+  type RequestedPermissionsManifest,
 } from "./extismBrowserLoader";
 import type { PluginManifest } from "$lib/backend/generated";
 import { getPluginStore } from "@/models/stores/pluginStore.svelte";
+import type { PluginConfig } from "@/models/stores/permissionStore.svelte";
 import {
   createExtensionFromManifest,
   createMarkFromManifest,
@@ -150,6 +153,11 @@ let browserManifests = $state<PluginManifest[]>([]);
 /** Last runtime-level support error for browser plugins. */
 let runtimeSupportError = $state<string | null>(null);
 
+/** Current workspace plugin permission config provider. */
+let pluginsConfigProvider:
+  | (() => Record<string, PluginConfig> | undefined)
+  | null = null;
+
 // ============================================================================
 // Public API
 // ============================================================================
@@ -171,11 +179,21 @@ export async function installPlugin(
     throw new Error(runtimeSupportError);
   }
 
+  const runtimeIdentity = {
+    pluginId: "unknown-plugin",
+    pluginName: name ?? "Unknown Plugin",
+  };
   console.log(
     `[browserPluginManager] Installing plugin (${(wasmBytes.byteLength / 1024).toFixed(0)} KB)...`,
   );
-  const plugin = await loadBrowserPlugin(wasmBytes);
+  const plugin = await loadBrowserPlugin(wasmBytes, {
+    getPluginId: () => runtimeIdentity.pluginId,
+    getPluginName: () => runtimeIdentity.pluginName,
+    getPluginsConfig: () => pluginsConfigProvider?.(),
+  });
   const id = plugin.manifest.id as unknown as string;
+  runtimeIdentity.pluginId = id;
+  runtimeIdentity.pluginName = String(plugin.manifest.name ?? id);
   console.log(
     `[browserPluginManager] Installed plugin: ${id} (${plugin.manifest.name})`,
   );
@@ -246,8 +264,18 @@ export async function loadAllPlugins(): Promise<void> {
     );
     for (const entry of stored) {
       try {
-        const plugin = await loadBrowserPlugin(entry.wasm);
+        const runtimeIdentity = {
+          pluginId: entry.id,
+          pluginName: entry.name,
+        };
+        const plugin = await loadBrowserPlugin(entry.wasm, {
+          getPluginId: () => runtimeIdentity.pluginId,
+          getPluginName: () => runtimeIdentity.pluginName,
+          getPluginsConfig: () => pluginsConfigProvider?.(),
+        });
         const id = plugin.manifest.id as unknown as string;
+        runtimeIdentity.pluginId = id;
+        runtimeIdentity.pluginName = String(plugin.manifest.name ?? id);
         loadedPlugins.set(id, plugin);
         browserManifests = [...browserManifests, plugin.manifest];
         console.log(
@@ -266,6 +294,29 @@ export async function loadAllPlugins(): Promise<void> {
       e,
     );
   }
+}
+
+/** Configure how browser plugins read workspace permission config. */
+export function setPluginPermissionConfigProvider(
+  provider: (() => Record<string, PluginConfig> | undefined) | null,
+): void {
+  pluginsConfigProvider = provider;
+}
+
+/** Inspect plugin manifest metadata without installing. */
+export async function inspectPluginWasm(
+  wasmBytes: ArrayBuffer,
+): Promise<{
+  pluginId: string;
+  pluginName: string;
+  requestedPermissions?: RequestedPermissionsManifest;
+}> {
+  const inspected = await inspectBrowserPlugin(wasmBytes);
+  return {
+    pluginId: inspected.manifest.id as unknown as string,
+    pluginName: String(inspected.manifest.name ?? inspected.manifest.id),
+    requestedPermissions: inspected.requestedPermissions,
+  };
 }
 
 /**

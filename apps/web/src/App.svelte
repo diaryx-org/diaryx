@@ -31,10 +31,12 @@
     uiStore,
     collaborationStore,
     workspaceStore,
+    permissionStore,
     getThemeStore,
     shareSessionStore
   } from "./models/stores";
   import { getPluginStore } from "./models/stores/pluginStore.svelte";
+  import type { PluginConfig } from "./models/stores/permissionStore.svelte";
   import { getTemplateContextStore } from "./lib/stores/templateContextStore.svelte";
   import { getAppearanceStore } from "./lib/stores/appearance.svelte";
 
@@ -247,6 +249,12 @@
   // API wrapper - uses execute() internally for all operations
   let api: Api | null = $derived(backend ? createApi(backend) : null);
 
+  // Root frontmatter plugin permissions cache (used by runtime permission checks).
+  let pluginPermissionsConfig = $state<Record<string, PluginConfig> | undefined>(
+    undefined,
+  );
+  let pluginPermissionsRootPath = $state<string | null>(null);
+
   // Reserved for plugin-provided history panels that may need host context.
   let rustApi: any | null = $state(null);
 
@@ -310,6 +318,46 @@
       return Object.fromEntries(frontmatter.entries());
     }
     return frontmatter;
+  }
+
+  async function reloadPluginPermissionsConfig(): Promise<void> {
+    if (!api || !tree?.path) {
+      pluginPermissionsConfig = undefined;
+      pluginPermissionsRootPath = null;
+      return;
+    }
+
+    if (pluginPermissionsRootPath !== tree.path) {
+      permissionStore.clearSessionCache();
+      pluginPermissionsRootPath = tree.path;
+    }
+
+    try {
+      const fm = await api.getFrontmatter(tree.path);
+      const raw = fm.plugins as unknown;
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        pluginPermissionsConfig = {};
+        return;
+      }
+      pluginPermissionsConfig = raw as Record<string, PluginConfig>;
+    } catch {
+      pluginPermissionsConfig = {};
+    }
+  }
+
+  async function persistPluginPermissionsConfig(
+    nextConfig: Record<string, PluginConfig>,
+  ): Promise<void> {
+    if (!api || !tree?.path) {
+      throw new Error("Workspace root is not available");
+    }
+    await api.setFrontmatterProperty(
+      tree.path,
+      "plugins",
+      nextConfig as unknown as JsonValue,
+      tree.path,
+    );
+    pluginPermissionsConfig = nextConfig;
   }
 
   function toCollaborationPath(path: string): string {
@@ -673,21 +721,6 @@
       // Initialize plugin store (fetch manifests for UI extension points)
       getPluginStore().init(apiInstance);
 
-      // Load browser-side Extism WASM plugins from IndexedDB
-      import('$lib/plugins/browserPluginManager.svelte').then(async (m) => {
-        const pluginSupport = m.getBrowserPluginSupport();
-        if (!pluginSupport.supported) {
-          console.info('[App] Browser plugins disabled:', pluginSupport.reason);
-          return;
-        }
-
-        await m.loadAllPlugins().catch((e: unknown) =>
-          console.warn('[App] Failed to load browser plugins:', e),
-        );
-        // Eagerly load icons for plugin insert commands so they're cached before menus open.
-        getPluginStore().preloadInsertCommandIcons();
-      });
-
       // Initialize filesystem event subscription for automatic UI updates
       cleanupEventSubscription = initEventSubscription(backendInstance);
 
@@ -732,6 +765,28 @@
       }
 
       await refreshTree();
+
+      // Configure permission persistence + provider now that we have a root tree path.
+      permissionStore.setPersistenceHandlers({
+        getPluginsConfig: () => pluginPermissionsConfig,
+        savePluginsConfig: persistPluginPermissionsConfig,
+      });
+
+      // Load browser-side Extism WASM plugins from IndexedDB
+      import('$lib/plugins/browserPluginManager.svelte').then(async (m) => {
+        const pluginSupport = m.getBrowserPluginSupport();
+        if (!pluginSupport.supported) {
+          console.info('[App] Browser plugins disabled:', pluginSupport.reason);
+          return;
+        }
+
+        m.setPluginPermissionConfigProvider(() => pluginPermissionsConfig);
+        await m.loadAllPlugins().catch((e: unknown) =>
+          console.warn('[App] Failed to load browser plugins:', e),
+        );
+        // Eagerly load icons for plugin insert commands so they're cached before menus open.
+        getPluginStore().preloadInsertCommandIcons();
+      });
 
       // Note: With multiplexed body sync, we no longer need to proactively
       // sync all files. Files are subscribed on-demand when opened, using a
@@ -1730,6 +1785,7 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
     if (!api || !backend) return;
     const audience = templateContextStore.previewAudience ?? undefined;
     await refreshTreeController(api, backend, showUnlinkedFiles, showHiddenFiles, audience);
+    await reloadPluginPermissionsConfig();
   }
 
   // Handle import:complete event from ImportSettings

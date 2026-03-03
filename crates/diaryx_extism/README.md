@@ -2,7 +2,9 @@
 
 Extism-based third-party plugin runtime for Diaryx.
 
-Loads WebAssembly plugin modules via the [Extism](https://extism.org/) runtime and adapts them to the `diaryx_core` `Plugin`, `WorkspacePlugin`, and `FilePlugin` traits. Guest plugins communicate with the host through a JSON protocol.
+Loads WebAssembly plugin modules via the [Extism](https://extism.org/) runtime
+and adapts them to `diaryx_core` plugin traits. Guest plugins communicate with
+the host through a JSON protocol (`protocol.rs`).
 
 ## Plugin directory structure
 
@@ -10,8 +12,8 @@ Loads WebAssembly plugin modules via the [Extism](https://extism.org/) runtime a
 ~/.diaryx/plugins/
   my-plugin/
     plugin.wasm      # The WASM module
-    manifest.json    # Optional cached manifest
-    config.json      # Plugin config (created at runtime)
+    manifest.json    # Cached guest manifest
+    config.json      # Plugin config sidecar
 ```
 
 ## Guest-exported functions
@@ -25,11 +27,38 @@ Loads WebAssembly plugin modules via the [Extism](https://extism.org/) runtime a
 | `get_config` | `""` | config JSON | Config read |
 | `set_config` | config JSON | `""` | Config write |
 
+`GuestManifest` supports optional `requested_permissions`:
+
+- `defaults` (`PluginPermissions`) for install-time defaults
+- `reasons` (`HashMap<String, String>`) for permission rationale text
+
 ## Host functions available to guests
 
-| Function | Input | Output | Description |
-|----------|-------|--------|-------------|
-| `host_log` | `{level, message}` | `""` | Log via `log` crate |
-| `host_read_file` | `{path}` | file content | Read a workspace file |
-| `host_list_files` | `{prefix}` | `string[]` | List files under prefix |
-| `host_file_exists` | `{path}` | `bool` | Check file existence |
+| Function | Description |
+|----------|-------------|
+| `host_log` | Plugin logging |
+| `host_read_file` / `host_list_files` / `host_file_exists` | Workspace reads |
+| `host_write_file` / `host_write_binary` | Workspace writes (create/edit split by file existence) |
+| `host_delete_file` | Workspace deletes |
+| `host_http_request` | HTTP request bridge (feature-gated) |
+| `host_storage_get` / `host_storage_set` | Plugin persistent storage |
+| `host_run_wasi_module` | Execute a WASI module loaded from plugin storage (feature-gated) |
+| `host_emit_event` / `host_ws_request` / `host_get_timestamp` | Eventing and utility functions |
+
+## Permission enforcement
+
+Permissions are checked in host functions via `HostContext.permission_checker`.
+
+- If no checker is configured, host calls are denied.
+- `HostContext::with_fs()` defaults to `DenyAllPermissionChecker`.
+- Loader updates runtime `plugin_id` from the guest manifest `id`, so checks
+  are keyed to the canonical plugin ID.
+
+Provided checkers:
+
+- `DenyAllPermissionChecker` — denies every request
+- `FrontmatterPermissionChecker` — reads root frontmatter `plugins` config and
+  delegates to `diaryx_core::plugin::permissions::check_permission`
+
+Storage keys are plugin-scoped in host functions (`{plugin_id}:{key}`), so one
+plugin cannot read another plugin's storage by key collision.

@@ -20,7 +20,6 @@ export type {
 
 export interface Config {
   default_workspace: string;
-  daily_entry_folder?: string;
   editor?: string;
 }
 

@@ -2289,6 +2289,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "diaryx_daily"
+version = "1.2.1"
+dependencies = [
+ "chrono",
+ "chrono-english",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "diaryx_daily_extism"
+version = "1.2.1"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "diaryx_core",
+ "diaryx_daily",
+ "extism-pdk",
+ "indexmap 2.13.0",
+ "pathdiff",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+]
+
+[[package]]
 name = "diaryx_extism"
 version = "1.2.1"
 dependencies = [

@@ -97,7 +97,7 @@ describe('api', () => {
 
       await api.createEntry('new-entry.md', {
         title: 'New Entry',
-        template: 'daily',
+        template: 'note',
         part_of: 'index.md',
       })
 
@@ -105,7 +105,7 @@ describe('api', () => {
         type: 'CreateEntry',
         params: {
           path: 'new-entry.md',
-          options: { title: 'New Entry', part_of: 'index.md', template: 'daily', root_index_path: null },
+          options: { title: 'New Entry', part_of: 'index.md', template: 'note', root_index_path: null },
         },
       })
     })
@@ -374,7 +374,7 @@ describe('api', () => {
   describe('template operations', () => {
     it('should list templates', async () => {
       const mockTemplates = [
-        { name: 'daily', path: 'templates/daily.md', source: 'workspace' },
+        { name: 'note', path: 'templates/note.md', source: 'workspace' },
       ]
       vi.mocked(mockBackend.execute).mockResolvedValue({
         type: 'Templates',
@@ -393,16 +393,16 @@ describe('api', () => {
     it('should get template content', async () => {
       vi.mocked(mockBackend.execute).mockResolvedValue({
         type: 'String',
-        data: '# Daily Entry\n\nDate: {{date}}',
+        data: '# Note\n\n{{content}}',
       })
 
-      const result = await api.getTemplate('daily')
+      const result = await api.getTemplate('note')
 
       expect(mockBackend.execute).toHaveBeenCalledWith({
         type: 'GetTemplate',
-        params: { name: 'daily', workspace_path: null },
+        params: { name: 'note', workspace_path: null },
       })
-      expect(result).toBe('# Daily Entry\n\nDate: {{date}}')
+      expect(result).toBe('# Note\n\n{{content}}')
     })
   })
 

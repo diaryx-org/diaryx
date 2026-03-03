@@ -253,11 +253,6 @@
   // Track whether initial guest sync has completed (to avoid re-opening root on every update)
   let guestInitialSyncDone = $state(false);
 
-  // Track whether the current entry is a daily entry (for prev/next navigation)
-  let isDailyEntry = $state(false);
-  // Track whether the current daily entry is today's entry (for "Go to Today" button)
-  let isTodayEntry = $state(false);
-
   // Collaboration state - proxied from collaborationStore
   let collaborationEnabled = $derived(collaborationStore.collaborationEnabled);
 
@@ -1105,19 +1100,6 @@
       });
       if (requestId !== openEntryRequestId) return;
 
-      // Check if this is a daily entry for prev/next navigation
-      if (api) {
-        isDailyEntry = await api.isDailyEntry(path);
-        if (isDailyEntry) {
-          // Check if this is today's entry by comparing the filename date to today
-          const filename = path.split('/').pop()?.replace(/\.md$/, '') ?? '';
-          const today = new Date();
-          const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-          isTodayEntry = filename === todayStr;
-        } else {
-          isTodayEntry = false;
-        }
-      }
     } finally {
       if (requestId === openEntryRequestId) {
         pendingEntryPath = null;
@@ -1262,18 +1244,39 @@
         showSettingsDialog = true;
       }
     }
-    // Navigate daily entries with Alt+Left/Right, go to today with Alt+T
-    if (event.altKey && isDailyEntry) {
-      if (event.key === "ArrowLeft") {
-        event.preventDefault();
-        handlePrevDay();
-      } else if (event.key === "ArrowRight") {
-        event.preventDefault();
-        handleNextDay();
-      } else if (event.key === "t" && !isTodayEntry) {
-        event.preventDefault();
-        handleGoToToday();
+  }
+
+  /**
+   * Handle generic host actions requested by plugin iframes.
+   */
+  async function handlePluginHostAction(action: { type: string; payload?: unknown }) {
+    const actionType = action?.type;
+    const payload = (action?.payload ?? {}) as Record<string, unknown>;
+
+    switch (actionType) {
+      case "open-entry": {
+        const path = typeof payload.path === "string" ? payload.path : null;
+        if (!path) throw new Error("host-action open-entry requires payload.path");
+        await openEntry(path);
+        return { opened: path };
       }
+      case "refresh-tree":
+        await refreshTree();
+        return { refreshed: true };
+      case "open-settings": {
+        const tab = typeof payload.tab === "string" ? payload.tab : undefined;
+        settingsInitialTab = tab;
+        showSettingsDialog = true;
+        return { opened: "settings", tab: tab ?? null };
+      }
+      case "toggle-left-sidebar":
+        toggleLeftSidebar();
+        return { toggled: "left" };
+      case "toggle-right-sidebar":
+        toggleRightSidebar();
+        return { toggled: "right" };
+      default:
+        throw new Error(`Unknown host action: ${actionType ?? "undefined"}`);
     }
   }
 
@@ -1479,10 +1482,6 @@ Create new entries from the sidebar **+** button or by pressing **Ctrl+K** and t
 
 Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, or use the **contents** property to define child pages in order.
 
-## Daily Entries
-
-Use the calendar icon or **Ctrl+K** → "Daily Entry" to create a date-stamped journal entry. These are automatically organized by date.
-
 ## Optional Sync
 
 Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to configure sync when you're ready.
@@ -1502,59 +1501,6 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
     await apiInstance.saveEntry(gettingStartedPath, gettingStartedContent, rootPath);
 
     return { id: ws.id, name: ws.name };
-  }
-
-  /** Extract YYYY-MM-DD date string from a daily entry path filename. */
-  function extractDateFromPath(path: string): string | null {
-    const filename = path.split('/').pop()?.replace(/\.md$/, '');
-    if (!filename || !/^\d{4}-\d{2}-\d{2}$/.test(filename)) return null;
-    return filename;
-  }
-
-  /** Navigate to an adjacent day, creating the entry if it doesn't exist. */
-  async function navigateToAdjacentDay(direction: 'prev' | 'next') {
-    if (!api || !currentEntry || !tree) return;
-    try {
-      const adjPath = await api.getAdjacentDailyEntry(currentEntry.path, direction);
-      if (!adjPath) return;
-
-      const exists = await api.fileExists(adjPath);
-      if (exists) {
-        await openEntry(adjPath);
-      } else {
-        // Create the entry for the adjacent date and navigate to it
-        const dateStr = extractDateFromPath(adjPath);
-        if (dateStr) {
-          const path = await api.ensureDailyEntry(tree.path, undefined, undefined, dateStr);
-          await refreshTree();
-          await openEntry(path);
-        }
-      }
-    } catch (e) {
-      uiStore.setError(e instanceof Error ? e.message : String(e));
-    }
-  }
-
-  // Navigate to the previous day's entry
-  async function handlePrevDay() {
-    await navigateToAdjacentDay('prev');
-  }
-
-  // Navigate to the next day's entry
-  async function handleNextDay() {
-    await navigateToAdjacentDay('next');
-  }
-
-  // Navigate to today's daily entry
-  async function handleGoToToday() {
-    if (!api || !tree) return;
-    try {
-      const path = await api.ensureDailyEntry(tree.path, undefined, undefined);
-      await refreshTree();
-      await openEntry(path);
-    } catch (e) {
-      uiStore.setError(e instanceof Error ? e.message : String(e));
-    }
   }
 
   // Rename an entry by title - uses SetFrontmatterProperty which handles title→filename→H1 sync
@@ -2316,6 +2262,7 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
     onSetAudience={handleSetAudience}
     requestedTab={requestedLeftTab}
     onRequestedTabConsumed={() => (requestedLeftTab = null)}
+    onPluginHostAction={handlePluginHostAction}
   />
 
   <!-- Hidden file input for attachments (accepts all file types) -->
@@ -2342,15 +2289,10 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
         rightSidebarOpen={!rightSidebarCollapsed}
         {focusMode}
         readonly={editorReadonly}
-        {isDailyEntry}
-        {isTodayEntry}
         onSave={save}
         onToggleLeftSidebar={toggleLeftSidebar}
         onToggleRightSidebar={toggleRightSidebar}
         onOpenCommandPalette={uiStore.openCommandPalette}
-        onPrevDay={handlePrevDay}
-        onNextDay={handleNextDay}
-        onGoToToday={handleGoToToday}
         {api}
         onPluginToolbarAction={handlePluginToolbarAction}
       />
@@ -2417,6 +2359,7 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
     {api}
     requestedTab={requestedSidebarTab}
     onRequestedTabConsumed={() => (requestedSidebarTab = null)}
+    onPluginHostAction={handlePluginHostAction}
   />
 </div>
 {/if}

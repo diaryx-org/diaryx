@@ -19,9 +19,10 @@
     component: ComponentRef;
     api: Api;
     entry?: EntryData | null;
+    onHostAction?: (action: { type: string; payload?: unknown }) => Promise<unknown> | unknown;
   }
 
-  let { pluginId, component, api, entry = null }: Props = $props();
+  let { pluginId, component, api, entry = null, onHostAction }: Props = $props();
 
   let config = $state<Record<string, JsonValue>>({});
 
@@ -65,7 +66,12 @@
 </script>
 
 {#if component.type === "Iframe"}
-  <PluginIframe pluginId={pluginId as unknown as string} componentId={component.component_id} {entry} />
+  <PluginIframe
+    pluginId={pluginId as unknown as string}
+    componentId={component.component_id}
+    {entry}
+    {onHostAction}
+  />
 {:else}
   <div class="p-4 space-y-4">
     {#if component.type === "Declarative"}

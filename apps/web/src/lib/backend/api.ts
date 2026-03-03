@@ -198,51 +198,6 @@ export function createApi(backend: Backend) {
       return expectResponse(response, 'String').data;
     },
 
-    /** Ensure a daily entry exists for the given date (defaults to today). Returns the path to the daily entry. */
-    async ensureDailyEntry(
-      workspacePath: string,
-      dailyEntryFolder?: string,
-      template?: string,
-      date?: string,
-    ): Promise<string> {
-      const response = await backend.execute({
-        type: 'EnsureDailyEntry',
-        params: {
-          workspace_path: workspacePath,
-          daily_entry_folder: dailyEntryFolder ?? null,
-          template: template ?? null,
-          date: date ?? null,
-        },
-      });
-      return expectResponse(response, 'String').data;
-    },
-
-    /** Get the path to an adjacent daily entry. Returns null if not a daily entry. */
-    async getAdjacentDailyEntry(
-      path: string,
-      direction: 'prev' | 'next'
-    ): Promise<string | null> {
-      try {
-        const response = await backend.execute({
-          type: 'GetAdjacentDailyEntry',
-          params: { path, direction },
-        });
-        return expectResponse(response, 'String').data;
-      } catch {
-        // Returns null if not a daily entry
-        return null;
-      }
-    },
-
-    /** Check if a path is a daily entry. */
-    async isDailyEntry(path: string): Promise<boolean> {
-      const response = await backend.execute({
-        type: 'IsDailyEntry',
-        params: { path },
-      });
-      return expectResponse(response, 'Bool').data;
-    },
-
     // =========================================================================
     // Workspace Operations
     // =========================================================================

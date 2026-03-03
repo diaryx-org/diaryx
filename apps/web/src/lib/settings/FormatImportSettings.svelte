@@ -53,7 +53,6 @@
     },
   ];
 
-  type ImportMode = "folder" | "daily";
   type MdDestination = "root" | "subfolder";
 
   /** Directories to skip when reading from FSAPI. Matches Rust SKIP_DIRS. */
@@ -81,7 +80,6 @@
   let showConfirmDialog: boolean = $state(false);
 
   // ── Day One state ────────────────────────────────────────────────────
-  let importMode: ImportMode = $state("folder");
   let selectedParent: { path: string; name: string } | null = $state(null);
   let fileInputRef: HTMLInputElement | null = $state(null);
   let selectedFiles: File[] = $state([]);
@@ -119,12 +117,6 @@
     if (value) {
       selectedFormat = value as ImportFormat;
       resetState();
-    }
-  }
-
-  function handleModeChange(value: string | undefined) {
-    if (value) {
-      importMode = value as ImportMode;
     }
   }
 
@@ -304,8 +296,7 @@
         params: {
           entries_json: entriesJson,
           folder: folderName,
-          parent_path: importMode === "daily" ? null : (selectedParent?.path ?? null),
-          import_mode: importMode === "daily" ? "daily" : null,
+          parent_path: selectedParent?.path ?? null,
         },
       });
 
@@ -618,42 +609,7 @@
     {#if selectedFormat === "dayone"}
       <!-- ═══ Day One specific controls ═══ -->
 
-      <!-- Destination mode -->
-      <div class="space-y-1.5">
-        <Label class="text-xs text-muted-foreground">
-          Destination
-        </Label>
-        <Select.Root
-          type="single"
-          value={importMode}
-          onValueChange={handleModeChange}
-        >
-          <Select.Trigger class="w-full">
-            {importMode === "daily" ? "Daily entries" : "Separate folder"}
-          </Select.Trigger>
-          <Select.Content>
-            <Select.Item value="folder">
-              <div class="flex flex-col gap-0.5">
-                <span>Separate folder</span>
-                <span class="text-xs text-muted-foreground">
-                  Create a new folder with its own hierarchy
-                </span>
-              </div>
-            </Select.Item>
-            <Select.Item value="daily">
-              <div class="flex flex-col gap-0.5">
-                <span>Daily entries</span>
-                <span class="text-xs text-muted-foreground">
-                  Add as children of your daily entries
-                </span>
-              </div>
-            </Select.Item>
-          </Select.Content>
-        </Select.Root>
-      </div>
-
-      <!-- Parent entry picker (folder mode only) -->
-      {#if importMode === "folder"}
+      <!-- Parent entry picker -->
       <div class="space-y-1.5">
         <Label class="text-xs text-muted-foreground">
           Import under
@@ -679,7 +635,6 @@
           </button>
         {/if}
       </div>
-      {/if}
 
       <!-- Select Day One file -->
       <Button
@@ -828,20 +783,12 @@
       </Dialog.Title>
       <Dialog.Description>
         {#if selectedFormat === "dayone"}
-          {#if importMode === "daily"}
-            {#if selectedFiles.length === 1}
-              Import from <span class="font-medium">{selectedFiles[0].name}</span> as children of daily entries.
-            {:else}
-              Import {selectedFiles.length} files as children of daily entries.
-            {/if}
+          {#if selectedFiles.length === 1}
+            Import from <span class="font-medium">{selectedFiles[0].name}</span> into
+            <span class="font-mono text-xs">{displayPath}/</span>.
           {:else}
-            {#if selectedFiles.length === 1}
-              Import from <span class="font-medium">{selectedFiles[0].name}</span> into
-              <span class="font-mono text-xs">{displayPath}/</span>.
-            {:else}
-              Import {selectedFiles.length} files into
-              <span class="font-mono text-xs">{displayPath}/</span>.
-            {/if}
+            Import {selectedFiles.length} files into
+            <span class="font-mono text-xs">{displayPath}/</span>.
           {/if}
         {:else}
           Import from <span class="font-medium">{mdSourceLabel}</span> into
@@ -894,12 +841,8 @@
       <div class="space-y-2 py-2">
         <p class="text-sm text-muted-foreground">
           {#if selectedFormat === "dayone"}
-            {#if importMode === "daily"}
-              Entries will be added as children of your daily entries, organized by date.
-            {:else}
-              Entries will be parsed from Day One's JSON format and organized
-              by date into <span class="font-mono text-xs">{displayPath}/</span>.
-            {/if}
+            Entries will be parsed from Day One's JSON format and organized
+            by date into <span class="font-mono text-xs">{displayPath}/</span>.
           {:else}
             Files will be written to <span class="font-mono text-xs">{mdDisplayDestination}/</span>
             and hierarchy metadata (contents/part_of) will be added automatically.

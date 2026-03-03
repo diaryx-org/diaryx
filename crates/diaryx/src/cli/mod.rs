@@ -12,7 +12,7 @@ mod config;
 /// Body content manipulation
 mod content;
 
-/// `today`, `yesterday`, `open`, `create` commands
+/// `open` and `create` commands
 mod entry;
 
 /// `diaryx_core` export with audience filtering
@@ -88,7 +88,7 @@ pub type AsyncFs = SyncToAsyncFs<RealFileSystem>;
 pub type CliDiaryxApp = DiaryxApp<AsyncFs>;
 
 /// Type alias for the sync DiaryxApp.
-/// Used for operations that haven't been migrated to async yet (templates, daily entries).
+/// Used for operations that haven't been migrated to async yet.
 pub type CliDiaryxAppSync = DiaryxAppSync<RealFileSystem>;
 
 /// Type alias for Workspace with the CLI's async filesystem.
@@ -153,14 +153,9 @@ fn dispatch_core_command(cli: Cli) -> bool {
     match cli.command {
         Commands::Init {
             default_workspace,
-            daily_folder,
             title,
             description,
-        } => handle_init(default_workspace, daily_folder, title, description, &ws),
-
-        Commands::Today { template } => entry::handle_today(&app_sync, template),
-
-        Commands::Yesterday { template } => entry::handle_yesterday(&app_sync, template),
+        } => handle_init(default_workspace, title, description, &ws),
 
         Commands::Open { path } => entry::handle_open(&app_sync, &path),
 
@@ -393,7 +388,6 @@ fn handle_uninstall(yes: bool) -> bool {
 /// Returns true on success, false on error
 fn handle_init(
     default_workspace: Option<PathBuf>,
-    daily_folder: Option<String>,
     title: Option<String>,
     description: Option<String>,
     ws: &Workspace<SyncToAsyncFs<RealFileSystem>>,
@@ -405,13 +399,10 @@ fn handle_init(
     });
 
     // Initialize config
-    match Config::init_with_options(dir.clone(), daily_folder.clone()) {
+    match Config::init_with_options(dir.clone()) {
         Ok(_) => {
             println!("✓ Initialized diaryx configuration");
             println!("  Default workspace: {}", dir.display());
-            if let Some(ref folder) = daily_folder {
-                println!("  Daily entry folder: {}", folder);
-            }
             if let Some(config_path) = Config::config_path() {
                 println!("  Config file: {}", config_path.display());
             }

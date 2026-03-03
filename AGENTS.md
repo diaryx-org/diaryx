@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-03-02T22:43:58Z
+updated: 2026-03-03T02:34:03Z
 part_of: '[README](/README.md)'
 ---
 # Instructions for AI agents
@@ -66,6 +66,8 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │       ├── Utils module - Utility functions for date and path handling - crates/diaryx_core/src/utils/README.md
 │   │       ├── Workspace module - Workspace tree organization - crates/diaryx_core/src/workspace/README.md
 │   │       └── Import module - Import external formats into Diaryx entries - crates/diaryx_core/src/import/README.md
+│   ├── crates/diaryx_daily/README.md
+│   ├── crates/diaryx_daily_extism/README.md
 │   ├── diaryx_publish - Publishing pipeline for Diaryx workspaces — converts markdown to HTML - crates/diaryx_publish/README.md
 │   ├── crates/diaryx_publish_extism/README.md
 │   ├── diaryx_wasm - WASM bindings for diaryx_core - crates/diaryx_wasm/README.md
@@ -92,6 +94,7 @@ Read the root README.md first. For specific projects, use these entry points:
 | ---------------- | ----------------------------------- |
 | Entire workspace | README.md                           |
 | Core library     | crates/diaryx_core/README.md        |
+| Daily domain     | crates/diaryx_daily/README.md       |
 | Publish pipeline | crates/diaryx_publish/README.md     |
 | CLI              | crates/diaryx/README.md             |
 | Web app          | apps/web/README.md                  |
@@ -100,6 +103,7 @@ Read the root README.md first. For specific projects, use these entry points:
 | Sync engine      | crates/diaryx_sync/README.md        |
 | Sync server      | crates/diaryx_sync_server/README.md |
 | Extism plugins   | crates/diaryx_extism/README.md      |
+| Daily plugin guest | crates/diaryx_daily_extism/README.md |
 | S3 storage       | crates/diaryx_storage_s3_extism/README.md |
 | GDrive storage   | crates/diaryx_storage_gdrive_extism/README.md |
 

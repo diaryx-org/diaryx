@@ -45,10 +45,6 @@ pub enum Commands {
         #[arg(short = 'd', long, alias = "base-dir")]
         default_workspace: Option<PathBuf>,
 
-        /// Subfolder for daily entries (e.g., "Daily" or "Journal/Daily")
-        #[arg(long)]
-        daily_folder: Option<String>,
-
         /// Title for the workspace
         #[arg(short, long)]
         title: Option<String>,
@@ -58,24 +54,10 @@ pub enum Commands {
         description: Option<String>,
     },
 
-    /// Open today's entry in your editor
-    Today {
-        /// Template to use (default: config's daily_template or "daily")
-        #[arg(short, long)]
-        template: Option<String>,
-    },
-
-    /// Open yesterday's entry in your editor
-    Yesterday {
-        /// Template to use (default: config's daily_template or "daily")
-        #[arg(short, long)]
-        template: Option<String>,
-    },
-
     /// Open an entry in your editor
     Open {
-        /// Path or date to open (supports dates, fuzzy matching, globs, directories)
-        /// Examples: "today", "README", "*.md", ".", "2024-01-15"
+        /// Path to open (supports fuzzy matching, globs, directories)
+        /// Examples: "README", "*.md", "."
         path: String,
     },
 
@@ -88,7 +70,7 @@ pub enum Commands {
 
     /// Sort frontmatter keys
     Sort {
-        /// Path to the entry file (supports dates or glob patterns like "*.md")
+        /// Path to the entry file (supports glob patterns like "*.md")
         path: String,
 
         /// Custom sort pattern: comma-separated keys with "*" for rest alphabetically

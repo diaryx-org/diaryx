@@ -4,7 +4,10 @@
 //! plugin directory at `~/.diaryx/plugins/`.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
+use diaryx_extism::{HostContext, load_plugin_from_wasm};
 use serde::Deserialize;
 
 use crate::cli::args::PluginCommands;
@@ -171,25 +174,38 @@ fn install_plugin(plugin: &RegistryPlugin) {
         }
     }
 
-    // Write a basic manifest.json so the CLI can discover it without WASM loading.
-    // The full manifest will be cached when the plugin is first loaded.
-    let basic_manifest = serde_json::json!({
-        "id": plugin.id,
-        "name": plugin.name,
-        "version": plugin.version,
-        "description": plugin.description,
-        "capabilities": [],
-        "ui": [],
-        "commands": [],
-        "cli": [],
-    });
-    let manifest_path = dest.join("manifest.json");
-    let _ = std::fs::write(
-        &manifest_path,
-        serde_json::to_string_pretty(&basic_manifest).unwrap_or_default(),
-    );
+    // Cache the real plugin manifest immediately so dynamic CLI commands
+    // become available right after install.
+    if let Err(err) = cache_manifest_from_wasm(&wasm_path) {
+        eprintln!("    Warning: failed to cache plugin manifest: {}", err);
+        // Fallback to a basic manifest so the plugin still appears in list/info.
+        let basic_manifest = serde_json::json!({
+            "id": plugin.id,
+            "name": plugin.name,
+            "version": plugin.version,
+            "description": plugin.description,
+            "capabilities": [],
+            "ui": [],
+            "commands": [],
+            "cli": [],
+        });
+        let manifest_path = dest.join("manifest.json");
+        let _ = std::fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&basic_manifest).unwrap_or_default(),
+        );
+    }
 
     println!("    Installed to {}", dest.display());
+}
+
+/// Load a plugin once to trigger manifest.json cache generation.
+fn cache_manifest_from_wasm(wasm_path: &Path) -> Result<(), String> {
+    let fs = SyncToAsyncFs::new(RealFileSystem);
+    let host_context = Arc::new(HostContext::with_fs(Arc::new(fs)));
+    load_plugin_from_wasm(wasm_path, host_context, None)
+        .map(|_| ())
+        .map_err(|e| format!("{}", e))
 }
 
 /// Remove an installed plugin.

@@ -103,6 +103,7 @@
     // External tab control (built-in tabs or plugin tab IDs)
     requestedTab?: string | null;
     onRequestedTabConsumed?: () => void;
+    onPluginHostAction?: (action: { type: string; payload?: unknown }) => Promise<unknown> | unknown;
   }
 
   let {
@@ -124,6 +125,7 @@
     api = null,
     requestedTab = null,
     onRequestedTabConsumed,
+    onPluginHostAction,
   }: Props = $props();
 
   // Detect if current entry is the workspace root index
@@ -506,9 +508,7 @@
   // Workspace config keys that are shown in the dedicated config section (root index only)
   const WORKSPACE_CONFIG_KEYS = [
     "link_format",
-    "daily_entry_folder",
     "default_template",
-    "daily_template",
     "sync_title_to_heading",
     "auto_update_timestamp",
     "auto_rename_to_title",
@@ -1229,6 +1229,7 @@
             component={pluginTab.contribution.component}
             {api}
             {entry}
+            onHostAction={onPluginHostAction}
           />
         </div>
       {/if}

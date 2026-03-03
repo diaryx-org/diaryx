@@ -23,9 +23,6 @@
     Menu,
     Loader2,
     Search,
-    ChevronLeft,
-    ChevronRight,
-    CalendarDays,
     Sparkles,
     Plug,
   } from "@lucide/svelte";
@@ -46,20 +43,10 @@
     rightSidebarOpen: boolean;
     focusMode?: boolean;
     readonly?: boolean;
-    /** Whether the current entry is a daily entry (shows prev/next navigation) */
-    isDailyEntry?: boolean;
-    /** Whether the current daily entry is today's entry */
-    isTodayEntry?: boolean;
     onSave: () => void;
     onToggleLeftSidebar: () => void;
     onToggleRightSidebar: () => void;
     onOpenCommandPalette: () => void;
-    /** Navigate to the previous day's entry */
-    onPrevDay?: () => void;
-    /** Navigate to the next day's entry */
-    onNextDay?: () => void;
-    /** Navigate to today's daily entry */
-    onGoToToday?: () => void;
     /** API wrapper for plugin status bar commands */
     api?: Api | null;
     /** Plugin toolbar button clicked */
@@ -77,15 +64,10 @@
     rightSidebarOpen,
     focusMode = false,
     readonly = false,
-    isDailyEntry = false,
-    isTodayEntry = false,
     onSave,
     onToggleLeftSidebar,
     onToggleRightSidebar,
     onOpenCommandPalette,
-    onPrevDay,
-    onNextDay,
-    onGoToToday,
     api = null,
     onPluginToolbarAction,
   }: Props = $props();
@@ -162,101 +144,13 @@
     {/if}
 
     <!-- Title and path area -->
-    {#if showTitle || showPath || isDailyEntry}
+    {#if showTitle || showPath}
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-1">
-          <!-- Prev day button (only for daily entries) -->
-          {#if isDailyEntry && onPrevDay}
-            <Tooltip.Root>
-              <Tooltip.Trigger>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onclick={onPrevDay}
-                  class="size-7 shrink-0"
-                  aria-label="Previous day"
-                >
-                  <ChevronLeft class="size-4" />
-                </Button>
-              </Tooltip.Trigger>
-              {#if !mobileState.isMobile}
-                <Tooltip.Content>
-                  <div class="flex items-center gap-2">
-                    Previous day
-                    <Kbd.Group>
-                      <Kbd.Root>Alt</Kbd.Root>
-                      <span>+</span>
-                      <Kbd.Root>←</Kbd.Root>
-                    </Kbd.Group>
-                  </div>
-                </Tooltip.Content>
-              {/if}
-            </Tooltip.Root>
-          {/if}
-
           {#if showTitle}
             <h2 class="text-lg md:text-xl font-semibold text-foreground truncate">
               {title}
             </h2>
-          {/if}
-
-          <!-- Next day button (only for daily entries) -->
-          {#if isDailyEntry && onNextDay}
-            <Tooltip.Root>
-              <Tooltip.Trigger>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onclick={onNextDay}
-                  class="size-7 shrink-0"
-                  aria-label="Next day"
-                >
-                  <ChevronRight class="size-4" />
-                </Button>
-              </Tooltip.Trigger>
-              {#if !mobileState.isMobile}
-                <Tooltip.Content>
-                  <div class="flex items-center gap-2">
-                    Next day
-                    <Kbd.Group>
-                      <Kbd.Root>Alt</Kbd.Root>
-                      <span>+</span>
-                      <Kbd.Root>→</Kbd.Root>
-                    </Kbd.Group>
-                  </div>
-                </Tooltip.Content>
-              {/if}
-            </Tooltip.Root>
-          {/if}
-
-          <!-- Go to Today button (only for daily entries when not viewing today) -->
-          {#if isDailyEntry && !isTodayEntry && onGoToToday}
-            <Tooltip.Root>
-              <Tooltip.Trigger>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onclick={onGoToToday}
-                  class="h-7 px-2 shrink-0 text-xs"
-                  aria-label="Go to today"
-                >
-                  <CalendarDays class="size-3.5 mr-1" />
-                  Today
-                </Button>
-              </Tooltip.Trigger>
-              {#if !mobileState.isMobile}
-                <Tooltip.Content>
-                  <div class="flex items-center gap-2">
-                    Go to today
-                    <Kbd.Group>
-                      <Kbd.Root>Alt</Kbd.Root>
-                      <span>+</span>
-                      <Kbd.Root>T</Kbd.Root>
-                    </Kbd.Group>
-                  </div>
-                </Tooltip.Content>
-              {/if}
-            </Tooltip.Root>
           {/if}
         </div>
         {#if showPath}

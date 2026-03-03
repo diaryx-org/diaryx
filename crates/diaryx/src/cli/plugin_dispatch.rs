@@ -10,6 +10,9 @@ use std::path::{Path, PathBuf};
 use clap::ArgMatches;
 use diaryx_core::config::Config;
 use diaryx_core::plugin::{CliArgType, CliCommand, PluginManifest};
+use serde_json::Value as JsonValue;
+
+use crate::editor::launch_editor;
 
 /// A native handler function signature.
 ///
@@ -140,7 +143,7 @@ fn dispatch_wasm_command(
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-    let ctx = match super::plugin_loader::CliPublishContext::load(&ws_root) {
+    let ctx = match super::plugin_loader::CliPluginContext::load(&ws_root, plugin_id) {
         Ok(ctx) => ctx,
         Err(e) => {
             eprintln!("Failed to load plugin '{}': {}", plugin_id, e);
@@ -150,17 +153,87 @@ fn dispatch_wasm_command(
 
     match ctx.cmd(&command_name, params) {
         Ok(data) => {
+            if handle_plugin_cli_action(&data, workspace_root) {
+                return true;
+            }
+
             // Print result if it contains useful data
             if !data.is_null() {
-                if let Ok(pretty) = serde_json::to_string_pretty(&data) {
-                    println!("{}", pretty);
-                }
+                print_plugin_result(&data);
             }
             true
         }
         Err(e) => {
             eprintln!("Command failed: {}", e);
             false
+        }
+    }
+}
+
+/// Handle a generic plugin-declared CLI action envelope.
+///
+/// Contract:
+/// - `{ "__diaryx_cli_action": "open_entry", "path": "..." }`
+/// - `{ "__diaryx_cli_action": "print", "text": "..." }`
+fn handle_plugin_cli_action(data: &JsonValue, workspace_root: Option<&Path>) -> bool {
+    let Some(action) = data
+        .get("__diaryx_cli_action")
+        .and_then(|value| value.as_str())
+    else {
+        return false;
+    };
+
+    match action {
+        "open_entry" => {
+            let Some(path_str) = data.get("path").and_then(|value| value.as_str()) else {
+                eprintln!("Plugin action 'open_entry' requires a string 'path'");
+                return true;
+            };
+
+            let resolved = resolve_action_path(path_str, workspace_root);
+            if !resolved.exists() {
+                eprintln!("✗ File not found: {}", resolved.display());
+                return true;
+            }
+
+            let config = Config::load().unwrap_or_default();
+            if let Err(e) = launch_editor(&resolved, &config) {
+                eprintln!("✗ Error launching editor for {}: {}", resolved.display(), e);
+            }
+            true
+        }
+        "print" => {
+            if let Some(text) = data.get("text").and_then(|value| value.as_str()) {
+                print!("{}", text);
+                if !text.ends_with('\n') {
+                    println!();
+                }
+            } else {
+                print_plugin_result(data);
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+fn resolve_action_path(path_str: &str, workspace_root: Option<&Path>) -> PathBuf {
+    let path = Path::new(path_str);
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    workspace_root
+        .map(|root| root.join(path))
+        .unwrap_or_else(|| path.to_path_buf())
+}
+
+fn print_plugin_result(data: &JsonValue) {
+    match data {
+        JsonValue::String(text) => println!("{}", text),
+        _ => {
+            if let Ok(pretty) = serde_json::to_string_pretty(data) {
+                println!("{}", pretty);
+            }
         }
     }
 }

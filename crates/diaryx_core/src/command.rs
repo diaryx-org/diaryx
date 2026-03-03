@@ -165,39 +165,6 @@ pub enum Command {
         parent_path: String,
     },
 
-    /// Ensure a daily entry exists for a given date (defaults to today).
-    /// Returns the path to the daily entry (created if it didn't exist).
-    EnsureDailyEntry {
-        /// Workspace path (directory containing the workspace root index).
-        workspace_path: String,
-        /// Optional subfolder for daily entries (e.g., "Daily" or "Journal/Daily").
-        /// If not provided, entries are created in the workspace root.
-        #[serde(default)]
-        daily_entry_folder: Option<String>,
-        /// Optional template name to use for new entries.
-        /// Falls back to "daily" built-in template if not provided.
-        #[serde(default)]
-        template: Option<String>,
-        /// Optional ISO date string (YYYY-MM-DD). Defaults to today if not provided.
-        #[serde(default)]
-        date: Option<String>,
-    },
-
-    /// Get the path to an adjacent daily entry (previous or next day).
-    /// Returns null if the path is not a daily entry.
-    GetAdjacentDailyEntry {
-        /// Path to the current daily entry.
-        path: String,
-        /// Direction: "prev" for previous day, "next" for next day.
-        direction: String,
-    },
-
-    /// Check if a path is a daily entry.
-    IsDailyEntry {
-        /// Path to check.
-        path: String,
-    },
-
     // === Workspace Operations ===
     /// Find the root index file in a directory.
     /// Returns the path to the root index (a file with `contents` but no `part_of`).
@@ -541,10 +508,6 @@ pub enum Command {
         /// When set, the import folder is placed under the parent's directory and grafted
         /// into the parent's `contents`. When `None`, grafts into the workspace root.
         parent_path: Option<String>,
-        /// Import mode: `"folder"` (default) creates a separate folder hierarchy,
-        /// `"daily"` adds entries as children of daily entries in the workspace's
-        /// daily entry hierarchy.
-        import_mode: Option<String>,
     },
 
     /// Convert a directory of markdown files to Diaryx hierarchy format in-place.
@@ -722,8 +685,6 @@ impl Command {
             | Command::DuplicateEntry { path }
             | Command::ConvertToIndex { path }
             | Command::ConvertToLeaf { path }
-            | Command::GetAdjacentDailyEntry { path, .. }
-            | Command::IsDailyEntry { path }
             | Command::GetFrontmatter { path }
             | Command::RemoveFrontmatterProperty { path, .. }
             | Command::ValidateFile { path }
@@ -804,10 +765,6 @@ impl Command {
             } => {
                 *entry_path = normalizer(entry_path);
                 *parent_path = normalizer(parent_path);
-            }
-
-            Command::EnsureDailyEntry { workspace_path, .. } => {
-                *workspace_path = normalizer(workspace_path);
             }
 
             // --- Workspace directory paths — NOT normalized ---

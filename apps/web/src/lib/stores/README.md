@@ -42,6 +42,6 @@ Persisted to `localStorage["diaryx-appearance"]`. Migrates from the legacy `read
 
 ## Workspace Config Store
 
-`workspaceConfigStore.svelte.ts` provides reactive access to the full `WorkspaceConfig` stored in the workspace root index frontmatter. Used by `WorkspaceSettings.svelte` and `TemplateSettings.svelte` to manage settings like `auto_update_timestamp`, `sync_title_to_heading`, `filename_style`, `daily_entry_folder`, `default_template`, and `daily_template`.
+`workspaceConfigStore.svelte.ts` provides reactive access to the full `WorkspaceConfig` stored in the workspace root index frontmatter. Used by `WorkspaceSettings.svelte` and `TemplateSettings.svelte` to manage settings like `auto_update_timestamp`, `sync_title_to_heading`, `filename_style`, `default_template`, and `public_audience`.
 
-Settings that were previously in browser localStorage (`daily_entry_folder`, `default_template`, `daily_template`) are migrated to workspace config on first load so they sync across devices.
+Settings that were previously in browser localStorage (`default_template`) are migrated to workspace config on first load so they sync across devices.

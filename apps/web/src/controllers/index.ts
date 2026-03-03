@@ -21,7 +21,6 @@ export {
   createChildEntryWithSync,
   createEntry,
   createEntryWithSync,
-  ensureDailyEntry,
   deleteEntry,
   deleteEntryWithSync,
   moveEntry,

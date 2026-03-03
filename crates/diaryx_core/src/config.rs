@@ -7,7 +7,6 @@
 //! # Key Configuration Fields
 //!
 //! - `default_workspace`: Primary workspace directory path
-//! - `daily_entry_folder`: Optional subfolder for daily entries
 //! - `editor`: Preferred editor command
 //! - `link_format`: Format for `part_of`/`contents`/`attachments` links
 //! - `sync_*`: Cloud synchronization settings
@@ -31,7 +30,7 @@
 //! let config = Config::load()?;
 //!
 //! // Access config values
-//! let daily_dir = config.daily_entry_dir();
+//! let workspace = config.default_workspace.clone();
 //! ```
 
 use serde::{Deserialize, Serialize};
@@ -51,12 +50,6 @@ pub struct Config {
     /// This is the main directory for your workspace/journal
     #[serde(alias = "base_dir")]
     pub default_workspace: PathBuf,
-
-    /// Subfolder within the workspace for daily entries (optional)
-    /// If not set, daily entries are created in the workspace root
-    /// Example: "Daily" or "Journal/Daily"
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub daily_entry_folder: Option<String>,
 
     /// Preferred editor (falls back to $EDITOR if not set)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -137,20 +130,6 @@ fn is_default_link_format(format: &LinkFormat) -> bool {
 }
 
 impl Config {
-    /// Get the directory where daily entries should be created
-    /// Returns daily_entry_folder joined with default_workspace, or just default_workspace
-    pub fn daily_entry_dir(&self) -> PathBuf {
-        match &self.daily_entry_folder {
-            Some(folder) => {
-                // Strip leading slashes to ensure proper path joining
-                // A leading "/" would make this an absolute path instead of relative
-                let normalized = folder.trim_start_matches('/');
-                self.default_workspace.join(normalized)
-            }
-            None => self.default_workspace.clone(),
-        }
-    }
-
     /// Alias for backwards compatibility
     pub fn base_dir(&self) -> &PathBuf {
         &self.default_workspace
@@ -160,7 +139,6 @@ impl Config {
     pub fn new(default_workspace: PathBuf) -> Self {
         Self {
             default_workspace,
-            daily_entry_folder: None,
             editor: None,
             link_format: LinkFormat::default(),
             sync_server_url: None,
@@ -172,17 +150,14 @@ impl Config {
         }
     }
 
-    /// Create a config with workspace directory and daily entry folder
+    /// Create a config with workspace directory and optional editor/template values
     pub fn with_options(
         default_workspace: PathBuf,
-        daily_entry_folder: Option<String>,
         editor: Option<String>,
         _default_template: Option<String>,
-        _daily_template: Option<String>,
     ) -> Self {
         Self {
             default_workspace,
-            daily_entry_folder,
             editor,
             link_format: LinkFormat::default(),
             sync_server_url: None,
@@ -319,7 +294,6 @@ impl Default for Config {
 
         Self {
             default_workspace: default_base,
-            daily_entry_folder: None,
             editor: None,
             link_format: LinkFormat::default(),
             sync_server_url: None,
@@ -374,18 +348,14 @@ impl Config {
     /// Initialize config with user-provided values
     /// Only available on native platforms
     pub fn init(default_workspace: PathBuf) -> Result<Self> {
-        Self::init_with_options(default_workspace, None)
+        Self::init_with_options(default_workspace)
     }
 
-    /// Initialize config with user-provided values including daily folder
+    /// Initialize config with user-provided values.
     /// Only available on native platforms
-    pub fn init_with_options(
-        default_workspace: PathBuf,
-        daily_entry_folder: Option<String>,
-    ) -> Result<Self> {
+    pub fn init_with_options(default_workspace: PathBuf) -> Result<Self> {
         let config = Config {
             default_workspace,
-            daily_entry_folder,
             editor: None,
             link_format: LinkFormat::default(),
             sync_server_url: None,
@@ -412,7 +382,6 @@ impl Default for Config {
         // The actual workspace location will be virtual
         Self {
             default_workspace: PathBuf::from("/workspace"),
-            daily_entry_folder: None,
             editor: None,
             link_format: LinkFormat::default(),
             sync_server_url: None,

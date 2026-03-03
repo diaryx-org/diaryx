@@ -8,9 +8,6 @@
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use chrono::NaiveDate;
-use diaryx_core::config::Config;
-use diaryx_core::entry::DiaryxAppSync;
 use diaryx_core::error::DiaryxError;
 use diaryx_core::frontmatter;
 use diaryx_core::fs::{AsyncFileSystem, RealFileSystem, SyncToAsyncFs};
@@ -145,8 +142,6 @@ pub struct SearchResultsData {
 pub struct WorkspaceConfigData {
     /// Link format for part_of/contents references.
     pub link_format: String,
-    /// Subfolder for daily entries (e.g. "Daily").
-    pub daily_entry_folder: Option<String>,
     /// Filename generation style.
     pub filename_style: String,
     /// Whether to sync title frontmatter to the first H1 heading.
@@ -651,7 +646,6 @@ impl DiaryxAppleWorkspace {
 
         Ok(WorkspaceConfigData {
             link_format: format!("{:?}", config.link_format),
-            daily_entry_folder: config.daily_entry_folder,
             filename_style: format!("{:?}", config.filename_style),
             sync_title_to_heading: config.sync_title_to_heading,
             auto_update_timestamp: config.auto_update_timestamp,
@@ -661,7 +655,7 @@ impl DiaryxAppleWorkspace {
 
     /// Set a workspace configuration field by name.
     ///
-    /// Valid fields: `link_format`, `daily_entry_folder`, `filename_style`,
+    /// Valid fields: `link_format`, `filename_style`,
     /// `sync_title_to_heading`, `auto_update_timestamp`, `auto_rename_to_title`.
     pub fn set_workspace_config_field(
         &self,
@@ -680,49 +674,6 @@ impl DiaryxAppleWorkspace {
             .map_err(|e| {
                 DiaryxAppleError::Core(format!("Failed to set config field '{field}': {e}"))
             })
-    }
-
-    /// Get or create today's daily entry.
-    ///
-    /// If `date_string` is provided (format: `YYYY-MM-DD`), uses that date.
-    /// Otherwise uses today's date. Returns the workspace-relative path.
-    pub fn get_or_create_daily_entry(
-        &self,
-        date_string: Option<String>,
-    ) -> Result<String, DiaryxAppleError> {
-        let date = if let Some(ds) = &date_string {
-            NaiveDate::parse_from_str(ds, "%Y-%m-%d")
-                .map_err(|e| DiaryxAppleError::Core(format!("Invalid date format '{ds}': {e}")))?
-        } else {
-            chrono::Local::now().date_naive()
-        };
-
-        // Build a Config pointing at this workspace
-        let ws = self.make_workspace()?;
-        let daily_entry_folder =
-            futures_lite::future::block_on(ws.find_root_index_in_dir(&self.workspace_root))
-                .ok()
-                .flatten()
-                .and_then(|root_path| {
-                    futures_lite::future::block_on(ws.get_workspace_config(&root_path))
-                        .ok()
-                        .and_then(|c| c.daily_entry_folder)
-                });
-
-        let config = Config::with_options(
-            self.workspace_root.clone(),
-            daily_entry_folder,
-            None,
-            None,
-            None,
-        );
-
-        let app = DiaryxAppSync::new(RealFileSystem);
-        let path = app
-            .ensure_dated_entry(&date, &config)
-            .map_err(|e| DiaryxAppleError::Core(format!("Failed to create daily entry: {e}")))?;
-
-        self.to_relative(&path)
     }
 
     /// Duplicate an entry (leaf or index) and return the new workspace-relative path.

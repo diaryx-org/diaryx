@@ -253,27 +253,6 @@ export async function createEntry(
 }
 
 /**
- * Create or open today's daily entry.
- */
-export async function ensureDailyEntry(
-  api: Api,
-  workspacePath: string,
-  dailyEntryFolder?: string,
-  onSuccess?: (path: string) => Promise<void>
-): Promise<string | null> {
-  try {
-    const path = await api.ensureDailyEntry(workspacePath, dailyEntryFolder);
-    if (onSuccess) {
-      await onSuccess(path);
-    }
-    return path;
-  } catch (e) {
-    uiStore.setError(e instanceof Error ? e.message : String(e));
-    return null;
-  }
-}
-
-/**
  * Delete an entry.
  *
  * Callers are responsible for showing a confirmation dialog before calling this.

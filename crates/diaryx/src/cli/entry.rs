@@ -1,8 +1,7 @@
-//! Entry command handlers (today, yesterday, open, create, config)
+//! Entry command handlers (open, create)
 
 use std::path::Path;
 
-use diaryx_core::date::parse_date;
 use diaryx_core::frontmatter;
 
 use crate::cli::CliDiaryxAppSync;
@@ -116,100 +115,6 @@ fn sync_to_crdt(workspace_root: &Path, file_path: &Path, original_content: &str)
     true
 }
 
-/// Handle the 'today' command
-/// Returns true on success, false on error
-pub fn handle_today(app: &CliDiaryxAppSync, template: Option<String>) -> bool {
-    let config = match load_config() {
-        Some(c) => apply_workspace_config(c),
-        None => return false,
-    };
-
-    match parse_date("today") {
-        Ok(date) => {
-            // Validate hierarchy and duplicate detection
-            if let Ok(warnings) = app.validate_daily_hierarchy(&date, &config) {
-                for warning in warnings {
-                    eprintln!("! Warning: {}", warning);
-                }
-            }
-
-            match app.ensure_dated_entry_with_template(&date, &config, template.as_deref()) {
-                Ok(path) => {
-                    println!("Opening: {}", path.display());
-
-                    // Read content before opening editor
-                    let original_content = std::fs::read_to_string(&path).unwrap_or_default();
-
-                    if let Err(e) = launch_editor(&path, &config) {
-                        eprintln!("✗ Error launching editor: {}", e);
-                        return false;
-                    }
-
-                    // Sync changes to CRDT after editor closes
-                    sync_to_crdt(&config.default_workspace, &path, &original_content);
-
-                    true
-                }
-                Err(e) => {
-                    eprintln!("✗ Error creating entry: {}", e);
-                    false
-                }
-            }
-        }
-        Err(e) => {
-            eprintln!("✗ Error parsing date: {}", e);
-            false
-        }
-    }
-}
-
-/// Handle the 'yesterday' command
-/// Returns true on success, false on error
-pub fn handle_yesterday(app: &CliDiaryxAppSync, template: Option<String>) -> bool {
-    let config = match load_config() {
-        Some(c) => apply_workspace_config(c),
-        None => return false,
-    };
-
-    match parse_date("yesterday") {
-        Ok(date) => {
-            // Validate hierarchy and duplicate detection
-            if let Ok(warnings) = app.validate_daily_hierarchy(&date, &config) {
-                for warning in warnings {
-                    eprintln!("! Warning: {}", warning);
-                }
-            }
-
-            match app.ensure_dated_entry_with_template(&date, &config, template.as_deref()) {
-                Ok(path) => {
-                    println!("Opening: {}", path.display());
-
-                    // Read content before opening editor
-                    let original_content = std::fs::read_to_string(&path).unwrap_or_default();
-
-                    if let Err(e) = launch_editor(&path, &config) {
-                        eprintln!("✗ Error launching editor: {}", e);
-                        return false;
-                    }
-
-                    // Sync changes to CRDT after editor closes
-                    sync_to_crdt(&config.default_workspace, &path, &original_content);
-
-                    true
-                }
-                Err(e) => {
-                    eprintln!("✗ Error creating entry: {}", e);
-                    false
-                }
-            }
-        }
-        Err(e) => {
-            eprintln!("✗ Error parsing date: {}", e);
-            false
-        }
-    }
-}
-
 /// Handle the 'open' command
 pub fn handle_open(app: &CliDiaryxAppSync, path_or_date: &str) -> bool {
     let config = match load_config() {
@@ -228,34 +133,7 @@ pub fn handle_open(app: &CliDiaryxAppSync, path_or_date: &str) -> bool {
     let mut had_error = false;
     let workspace_root = &config.default_workspace;
 
-    // For single files that don't exist, check if this was meant as a date
     if paths.len() == 1 && !paths[0].exists() {
-        // Try to parse as a date and create the entry
-        if let Ok(date) = parse_date(path_or_date) {
-            match app.ensure_dated_entry(&date, &config) {
-                Ok(path) => {
-                    println!("Opening: {}", path.display());
-
-                    // Read content before opening editor
-                    let original_content = std::fs::read_to_string(&path).unwrap_or_default();
-
-                    if let Err(e) = launch_editor(&path, &config) {
-                        eprintln!("✗ Error launching editor: {}", e);
-                        return false;
-                    }
-
-                    // Sync changes to CRDT after editor closes
-                    sync_to_crdt(workspace_root, &path, &original_content);
-
-                    return true;
-                }
-                Err(e) => {
-                    eprintln!("✗ Error creating entry: {}", e);
-                    return false;
-                }
-            }
-        }
-        // Not a date and file doesn't exist
         eprintln!("✗ File not found: {}", paths[0].display());
         return false;
     }

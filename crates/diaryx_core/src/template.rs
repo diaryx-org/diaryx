@@ -52,18 +52,6 @@ created: {{timestamp}}
 
 "#;
 
-/// Built-in default template for daily entries
-pub const DEFAULT_DAILY_TEMPLATE: &str = r#"---
-date: {{date}}
-title: "{{title}}"
-created: {{timestamp}}
-part_of: "{{part_of}}"
----
-
-# {{title}}
-
-"#;
-
 /// A parsed template with frontmatter and body
 #[derive(Debug, Clone)]
 pub struct Template {
@@ -101,11 +89,6 @@ impl Template {
     /// Get the built-in note template
     pub fn builtin_note() -> Self {
         Self::new("note", DEFAULT_NOTE_TEMPLATE)
-    }
-
-    /// Get the built-in daily template
-    pub fn builtin_daily() -> Self {
-        Self::new("daily", DEFAULT_DAILY_TEMPLATE)
     }
 
     /// Render the template with the given context
@@ -358,7 +341,6 @@ impl<FS: FileSystem> TemplateManager<FS> {
     pub fn get_builtin(&self, name: &str) -> Option<Template> {
         match name {
             "note" => Some(Template::builtin_note()),
-            "daily" => Some(Template::builtin_daily()),
             _ => None,
         }
     }
@@ -399,10 +381,7 @@ impl<FS: FileSystem> TemplateManager<FS> {
         }
 
         // Built-in templates
-        for (name, source) in [
-            ("note", TemplateSource::Builtin),
-            ("daily", TemplateSource::Builtin),
-        ] {
+        for (name, source) in [("note", TemplateSource::Builtin)] {
             if seen.insert(name.to_string()) {
                 templates.push(TemplateInfo {
                     name: name.to_string(),
@@ -549,21 +528,6 @@ mod tests {
         assert!(result.contains("title: \"My Note\""));
         assert!(result.contains("# My Note"));
         assert!(result.contains("created:"));
-    }
-
-    #[test]
-    fn test_builtin_daily_template() {
-        let template = Template::builtin_daily();
-        let date = NaiveDate::from_ymd_opt(2024, 6, 15).unwrap();
-        let context = TemplateContext::new()
-            .with_title("June 15, 2024")
-            .with_date(date)
-            .with_part_of("06_june.md");
-        let result = template.render(&context);
-
-        assert!(result.contains("date: 2024-06-15"));
-        assert!(result.contains("title: \"June 15, 2024\""));
-        assert!(result.contains("part_of: \"06_june.md\""));
     }
 
     #[test]

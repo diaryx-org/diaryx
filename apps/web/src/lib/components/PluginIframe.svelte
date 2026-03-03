@@ -17,9 +17,10 @@
     pluginId: string;
     componentId: string;
     entry?: EntryData | null;
+    onHostAction?: (action: { type: string; payload?: unknown }) => Promise<unknown> | unknown;
   }
 
-  let { pluginId, componentId, entry = null }: Props = $props();
+  let { pluginId, componentId, entry = null, onHostAction }: Props = $props();
 
   let iframeEl: HTMLIFrameElement | undefined = $state();
   let blobUrl: string | null = $state(null);
@@ -159,6 +160,40 @@
           "*"
         );
       });
+      return;
+    }
+
+    if (data.type === "host-action") {
+      const { action, requestId } = data;
+      Promise.resolve()
+        .then(() => {
+          if (!onHostAction) {
+            throw new Error("Host actions are not available in this context");
+          }
+          return onHostAction(action ?? {});
+        })
+        .then((result) => {
+          iframeEl?.contentWindow?.postMessage(
+            {
+              type: "host-action-response",
+              requestId,
+              success: true,
+              data: result ?? null,
+            },
+            "*"
+          );
+        })
+        .catch((e) => {
+          iframeEl?.contentWindow?.postMessage(
+            {
+              type: "host-action-response",
+              requestId,
+              success: false,
+              error: e instanceof Error ? e.message : String(e),
+            },
+            "*"
+          );
+        });
     }
   }
 

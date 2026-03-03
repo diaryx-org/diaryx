@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
-use diaryx_core::plugin::PluginManifest;
+use diaryx_core::plugin::{Plugin, PluginContext, PluginManifest};
 use diaryx_extism::protocol::GuestManifest;
 use diaryx_extism::{EventEmitter, ExtismPluginAdapter, HostContext, load_plugin_from_wasm};
 use serde_json::Value as JsonValue;
@@ -183,6 +183,50 @@ impl CliPublishContext {
     }
 }
 
+/// Generic plugin context for CLI-dispatched plugin commands.
+///
+/// Wraps an `ExtismPluginAdapter` loaded for an arbitrary plugin ID.
+pub struct CliPluginContext {
+    plugin: ExtismPluginAdapter,
+}
+
+impl CliPluginContext {
+    /// Load a plugin context for a specific plugin ID.
+    ///
+    /// Accepts both namespaced IDs (e.g. `diaryx.publish`) and short IDs
+    /// (e.g. `publish`) when resolving plugin directory names.
+    pub fn load(workspace_root: &Path, plugin_id: &str) -> Result<Self, String> {
+        let plugin = load_plugin(workspace_root, plugin_id)?;
+        Ok(Self { plugin })
+    }
+
+    /// Send a command to the plugin and return the result.
+    pub fn cmd(&self, command: &str, params: JsonValue) -> Result<JsonValue, String> {
+        let input = serde_json::json!({
+            "command": command,
+            "params": params,
+        });
+
+        let output = self
+            .plugin
+            .call_guest("handle_command", &input.to_string())
+            .map_err(|e| format!("Plugin call failed: {}", e))?;
+
+        let response: JsonValue =
+            serde_json::from_str(&output).map_err(|e| format!("Invalid plugin response: {}", e))?;
+
+        if response.get("success").and_then(|v| v.as_bool()) == Some(true) {
+            Ok(response.get("data").cloned().unwrap_or(JsonValue::Null))
+        } else {
+            let error_msg = response
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown plugin error");
+            Err(error_msg.to_string())
+        }
+    }
+}
+
 // ============================================================================
 // Plugin loading helpers
 // ============================================================================
@@ -193,7 +237,7 @@ impl CliPublishContext {
 /// 1. `~/.diaryx/plugins/{id}.diaryx/plugin.wasm` (new convention)
 /// 2. `~/.diaryx/plugins/{id}/plugin.wasm` (legacy)
 /// 3. `$XDG_DATA_HOME/diaryx/plugins/{id}/plugin.wasm` (Tauri compat)
-fn find_plugin_wasm(plugin_id: &str) -> Result<PathBuf, String> {
+fn find_plugin_wasm_exact(plugin_id: &str) -> Result<PathBuf, String> {
     // Check user plugins directory (new .diaryx extension convention)
     if let Some(home) = dirs::home_dir() {
         let new_path = home
@@ -225,6 +269,24 @@ fn find_plugin_wasm(plugin_id: &str) -> Result<PathBuf, String> {
             .join("plugin.wasm");
         if xdg_path.exists() {
             return Ok(xdg_path);
+        }
+    }
+
+    Err(format!("Plugin '{}' not found", plugin_id))
+}
+
+/// Find plugin.wasm using common ID variants.
+fn find_plugin_wasm(plugin_id: &str) -> Result<PathBuf, String> {
+    let mut candidates = vec![plugin_id.to_string()];
+    if let Some(stripped) = plugin_id.strip_prefix("diaryx.") {
+        candidates.push(stripped.to_string());
+    } else {
+        candidates.push(format!("diaryx.{plugin_id}"));
+    }
+
+    for candidate in candidates {
+        if let Ok(path) = find_plugin_wasm_exact(&candidate) {
+            return Ok(path);
         }
     }
 
@@ -330,7 +392,7 @@ fn convert_guest_manifest_to_plugin(guest: &GuestManifest) -> PluginManifest {
 }
 
 /// Create a `HostContext` for the CLI with file-based storage.
-fn create_host_context(workspace_root: &Path) -> Arc<HostContext> {
+fn create_host_context(workspace_root: &Path, plugin_id: &str) -> Arc<HostContext> {
     let fs = SyncToAsyncFs::new(RealFileSystem);
     let storage = Arc::new(CliPluginStorage::new(workspace_root));
     let event_emitter = Arc::new(CliEventEmitter);
@@ -339,25 +401,37 @@ fn create_host_context(workspace_root: &Path) -> Arc<HostContext> {
         fs: Arc::new(fs),
         storage,
         event_emitter,
-        plugin_id: String::new(),
+        plugin_id: plugin_id.to_string(),
         permission_checker: None,
     })
 }
 
+/// Load an arbitrary WASM plugin by ID.
+fn load_plugin(workspace_root: &Path, plugin_id: &str) -> Result<ExtismPluginAdapter, String> {
+    let wasm_path = find_plugin_wasm(plugin_id)?;
+    let host_context = create_host_context(workspace_root, plugin_id);
+
+    let plugin = load_plugin_from_wasm(&wasm_path, host_context, None)
+        .map_err(|e| format!("Failed to load plugin '{}': {}", plugin_id, e))?;
+
+    // Initialize plugin with workspace context so guest plugins can resolve
+    // workspace-scoped paths and config deterministically.
+    let ctx = PluginContext {
+        workspace_root: Some(workspace_root.to_path_buf()),
+        link_format: diaryx_core::link_parser::LinkFormat::default(),
+    };
+    futures_lite::future::block_on(Plugin::init(&plugin, &ctx))
+        .map_err(|e| format!("Failed to initialize plugin '{}': {}", plugin_id, e))?;
+
+    Ok(plugin)
+}
+
 /// Load the sync WASM plugin.
 fn load_sync_plugin(workspace_root: &Path) -> Result<ExtismPluginAdapter, String> {
-    let wasm_path = find_plugin_wasm("diaryx.sync")?;
-    let host_context = create_host_context(workspace_root);
-
-    load_plugin_from_wasm(&wasm_path, host_context, None)
-        .map_err(|e| format!("Failed to load sync plugin: {}", e))
+    load_plugin(workspace_root, "diaryx.sync")
 }
 
 /// Load the publish WASM plugin.
 fn load_publish_plugin(workspace_root: &Path) -> Result<ExtismPluginAdapter, String> {
-    let wasm_path = find_plugin_wasm("diaryx.publish")?;
-    let host_context = create_host_context(workspace_root);
-
-    load_plugin_from_wasm(&wasm_path, host_context, None)
-        .map_err(|e| format!("Failed to load publish plugin: {}", e))
+    load_plugin(workspace_root, "diaryx.publish")
 }

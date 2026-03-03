@@ -75,7 +75,7 @@ diaryx_core
     │   ├── mod.rs
     │   └── types.rs
     ├── search.rs (Searching by frontmatter or content)
-    ├── template.rs (Templating functionality, mostly for daily files)
+    ├── template.rs (Templating functionality for entry scaffolding)
     ├── test_utils.rs (Feature-gated unit test utility functions)
     ├── utils
     │   ├── date.rs (chrono for date and time manipulation)
@@ -591,7 +591,6 @@ Templates support variable substitution:
 
 ### Built-in Templates
 
-- `daily` - Daily journal entry with date-based title
 - `note` - General note with title placeholder
 
 ### Using Templates
@@ -605,7 +604,7 @@ let manager = TemplateManager::new(&fs)
     .with_workspace_dir(Path::new("/workspace"));
 
 // Get a template
-let template = manager.get("daily").unwrap();
+let template = manager.get("note").unwrap();
 
 // Render with context
 let context = TemplateContext::new()
@@ -622,7 +621,6 @@ Templates can be regular workspace entries referenced by link in workspace confi
 
 ```yaml
 default_template: "[Default](/templates/default.md)"
-daily_template: "[Daily](/templates/daily.md)"
 ```
 
 The resolution order is: workspace config link -> `_templates/` directory -> built-in templates.
@@ -681,8 +679,7 @@ Configure how `part_of`, `contents`, and `attachments` links are formatted:
 The `date` module provides natural language date parsing:
 
 ```rust,ignore
-use diaryx_core::date::{parse_date, date_to_path};
-use std::path::Path;
+use diaryx_core::date::parse_date;
 
 // Natural language parsing
 let today = parse_date("today")?;
@@ -692,10 +689,6 @@ let three_days_ago = parse_date("3 days ago")?;
 
 // ISO format
 let specific = parse_date("2024-01-15")?;
-
-// Generate path for date
-let path = date_to_path(Path::new("/diary"), &today);
-// e.g., "/diary/2024/01/2024-01-15.md"
 ```
 
 ## Shared errors
@@ -749,13 +742,11 @@ use std::path::PathBuf;
 let config = Config::load()?;
 
 let workspace = &config.default_workspace;    // Main workspace path
-let daily_dir = config.daily_entry_dir();     // Daily entries location
 let editor = &config.editor;                  // Preferred editor
 ```
 
 ```toml
 default_workspace = "/home/user/diary"
-daily_entry_folder = "Daily"
 editor = "nvim"
 
 # Sync settings (optional)
@@ -775,9 +766,7 @@ filename_style: kebab_case
 auto_update_timestamp: true
 auto_rename_to_title: true
 sync_title_to_heading: false
-daily_entry_folder: "Journal/Daily"
 default_template: "[Default](/templates/default.md)"
-daily_template: "[Daily](/templates/daily.md)"
 public_audience: "public"
 ---
 ```

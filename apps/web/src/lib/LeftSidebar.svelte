@@ -86,6 +86,7 @@
     onSetAudience?: (path: string) => void;
     requestedTab?: string | null;
     onRequestedTabConsumed?: () => void;
+    onPluginHostAction?: (action: { type: string; payload?: unknown }) => Promise<unknown> | unknown;
   }
 
   let {
@@ -126,6 +127,7 @@
     onSetAudience,
     requestedTab = null,
     onRequestedTabConsumed,
+    onPluginHostAction,
   }: Props = $props();
 
   // Platform detection for keyboard shortcut display
@@ -1256,6 +1258,7 @@
           pluginId={activePluginTab.pluginId}
           component={activePluginTab.component}
           {api}
+          onHostAction={onPluginHostAction}
         />
       {:else}
         <div class="p-4 text-sm text-muted-foreground">
@@ -1492,6 +1495,7 @@
           pluginId={contextMenuOwner.pluginId}
           component={contextMenuOwner.contribution.component}
           {api}
+          onHostAction={onPluginHostAction}
         />
       </div>
     </div>

@@ -39,9 +39,6 @@ fn show_config(config: &Option<Config>) -> bool {
             println!("Diaryx Configuration");
             println!("====================");
             println!("Default workspace: {}", cfg.default_workspace.display());
-            if let Some(ref daily) = cfg.daily_entry_folder {
-                println!("Daily entry folder: {}", daily);
-            }
             if let Some(config_path) = Config::config_path() {
                 println!("Config file: {}", config_path.display());
             }
@@ -95,9 +92,6 @@ fn show_workspace_config(
                 "Link format: {}",
                 format_link_format_display(ws_config.link_format)
             );
-            if let Some(daily) = ws_config.daily_entry_folder {
-                println!("Daily entry folder: {}", daily);
-            }
             true
         }
         Err(e) => {

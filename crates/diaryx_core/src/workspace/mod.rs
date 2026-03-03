@@ -65,23 +65,11 @@ pub struct WorkspaceConfig {
     #[serde(default)]
     pub link_format: LinkFormat,
 
-    /// Subfolder for daily entries (e.g., "Daily" or "Journal/Daily").
-    /// If not specified, daily entries are created at workspace root.
-    #[ts(optional)]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub daily_entry_folder: Option<String>,
-
     /// Link to the default template entry for new files (in link_format style).
     /// If absent, uses the built-in "note" template.
     #[ts(optional)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_template: Option<String>,
-
-    /// Link to the daily entry template (in link_format style).
-    /// If absent, uses the built-in "daily" template.
-    #[ts(optional)]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub daily_template: Option<String>,
 
     /// When true, setting the `title` frontmatter property also updates the first H1 heading.
     /// Unidirectional: title → heading only.
@@ -759,18 +747,8 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             })
             .unwrap_or_default();
 
-        let daily_entry_folder = extra
-            .get("daily_entry_folder")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
         let default_template = extra
             .get("default_template")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
-        let daily_template = extra
-            .get("daily_template")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
@@ -808,9 +786,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
 
         Ok(WorkspaceConfig {
             link_format,
-            daily_entry_folder,
             default_template,
-            daily_template,
             sync_title_to_heading,
             auto_update_timestamp,
             auto_rename_to_title,
@@ -823,7 +799,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
     ///
     /// # Arguments
     /// * `root_index_path` - Path to the root index file
-    /// * `field` - Field name to set (e.g., "link_format", "daily_entry_folder")
+    /// * `field` - Field name to set (e.g., "link_format", "default_template")
     /// * `value` - Value to set as a string; boolean strings ("true"/"false") are
     ///   stored as YAML booleans so that `as_bool()` works when reading back.
     pub async fn set_workspace_config_field(

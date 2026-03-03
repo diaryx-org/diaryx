@@ -9,7 +9,7 @@
   import * as Drawer from "$lib/components/ui/drawer";
   import * as Tabs from "$lib/components/ui/tabs";
   import { Button } from "$lib/components/ui/button";
-  import { Settings, Eye, FolderOpen, FileText, Database, Bug, User, CreditCard, Puzzle } from "@lucide/svelte";
+  import { Settings, Eye, FolderOpen, Database, Bug, User, CreditCard, Puzzle } from "@lucide/svelte";
   import { getMobileState } from "./hooks/useMobile.svelte";
   import { getAuthState } from "$lib/auth";
   import { getCurrentWorkspaceId, getLocalWorkspace } from "$lib/storage/localWorkspaceRegistry.svelte";
@@ -132,10 +132,6 @@
         <FolderOpen class="size-4 mr-1.5 hidden sm:inline" />
         Workspace
       </Tabs.Trigger>
-      <Tabs.Trigger value="templates" class="shrink-0">
-        <FileText class="size-4 mr-1.5 hidden sm:inline" />
-        Templates
-      </Tabs.Trigger>
       {#each pluginSettingsTabs as tab}
         <Tabs.Trigger value={`plugin-${tab.contribution.id}`} class="shrink-0">
           {tab.contribution.label}
@@ -177,12 +173,6 @@
         <WorkspaceSettings workspaceRootIndex={workspacePath} />
         <LinkSettings workspaceRootIndex={workspacePath} />
         <StorageSettings workspaceId={currentWorkspaceId} workspaceName={currentWorkspaceName} />
-      </div>
-    </Tabs.Content>
-
-    <Tabs.Content value="templates">
-      <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
-        <TemplateSettings workspaceRootIndex={workspacePath} />
       </div>
     </Tabs.Content>
 
@@ -234,6 +224,8 @@
             <S3StorageSettings />
           {:else if tab.contribution.component?.type === "Builtin" && tab.contribution.component.component_id === "storage.gdrive.settings"}
             <GoogleDriveStorageSettings />
+          {:else if tab.contribution.component?.type === "Builtin" && tab.contribution.component.component_id === "templating.settings"}
+            <TemplateSettings workspaceRootIndex={workspacePath} />
           {:else if tab.contribution.fields.length > 0}
             {#await loadPluginConfig(tab.pluginId) then}
               <PluginSettingsTab

@@ -6,6 +6,7 @@ export type { AncestorAttachmentsResult } from './AncestorAttachmentsResult';
 export type { BinaryExportFile } from './BinaryExportFile';
 export type { BinaryFileInfo } from './BinaryFileInfo';
 export type { BinaryRef } from './BinaryRef';
+export type { BlockPickerPrompt } from './BlockPickerPrompt';
 export type { CliArg } from './CliArg';
 export type { CliArgType } from './CliArgType';
 export type { CliCommand } from './CliCommand';

@@ -282,6 +282,21 @@ function getWorkspaceProviders(): Array<{
   );
 }
 
+/** Block picker item contributions across all plugins. */
+function getBlockPickerItems(): Array<{
+  pluginId: PluginId;
+  contribution: Extract<UiContribution, { slot: "BlockPickerItem" }>;
+}> {
+  return manifests.flatMap((m) =>
+    m.ui
+      .filter(
+        (c): c is Extract<UiContribution, { slot: "BlockPickerItem" }> =>
+          c.slot === "BlockPickerItem",
+      )
+      .map((contribution) => ({ pluginId: m.id, contribution })),
+  );
+}
+
 /** Editor insert commands from EditorExtension entries with insert_command. */
 function getEditorInsertCommands(): {
   inline: PluginInsertCommand[];
@@ -322,15 +337,18 @@ function getEditorInsertCommands(): {
   return { inline, block, mark };
 }
 
-/** Eagerly load icons for all plugin insert commands. Call after plugins load. */
+/** Eagerly load icons for all plugin insert commands and block picker items. Call after plugins load. */
 async function preloadInsertCommandIcons(): Promise<void> {
   for (const manifest of manifests) {
     for (const ui of manifest.ui) {
-      if (ui.slot !== "EditorExtension") continue;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const ext = ui as any;
-      if (ext.insert_command?.icon) {
-        await loadPluginIcon(ext.insert_command.icon);
+      if (ui.slot === "EditorExtension") {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const ext = ui as any;
+        if (ext.insert_command?.icon) {
+          await loadPluginIcon(ext.insert_command.icon);
+        }
+      } else if (ui.slot === "BlockPickerItem" && ui.icon) {
+        await loadPluginIcon(ui.icon);
       }
     }
   }
@@ -412,6 +430,9 @@ export function getPluginStore() {
     },
     get workspaceProviders() {
       return getWorkspaceProviders();
+    },
+    get blockPickerItems() {
+      return getBlockPickerItems();
     },
     get editorInsertCommands() {
       return getEditorInsertCommands();

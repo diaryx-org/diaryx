@@ -195,6 +195,16 @@ plugins:
         include: [all]
 ```
 
+## BlockPickerItem Slot
+
+Plugins can contribute items to the editor's block picker "More" submenu via
+`UiContribution::BlockPickerItem`. Each item specifies an `editor_command` to
+call, optional static `params`, and an optional `prompt` that collects user
+input before execution.
+
+The host renders contributed items dynamically — they appear when the plugin
+is enabled and disappear when disabled.
+
 ## EditorExtension Slot
 
 Plugins can contribute TipTap editor extensions via `UiContribution::EditorExtension`.

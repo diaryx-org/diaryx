@@ -219,6 +219,27 @@ pub enum UiContribution {
         #[serde(default)]
         click_behavior: Option<MarkClickBehavior>,
     },
+    /// An item in the block picker menu (the "More" submenu).
+    ///
+    /// Plugins declare these to add custom block types to the editor's
+    /// block picker. The host renders them dynamically and calls the
+    /// specified editor command with optional params and user prompt.
+    BlockPickerItem {
+        /// Unique identifier for this item.
+        id: String,
+        /// Label displayed in the block picker menu.
+        label: String,
+        /// Optional Lucide icon name (kebab-case).
+        icon: Option<String>,
+        /// TipTap editor command to execute (e.g., `"insertConditionalBlock"`).
+        editor_command: String,
+        /// Static params passed to the editor command.
+        #[serde(default)]
+        params: Option<serde_json::Value>,
+        /// Optional prompt shown to collect user input before executing.
+        #[serde(default)]
+        prompt: Option<BlockPickerPrompt>,
+    },
 }
 
 /// Which sidebar a tab appears in.
@@ -315,6 +336,22 @@ pub enum MarkClickBehavior {
         /// Class applied when the mark has been clicked (revealed) state.
         revealed_class: String,
     },
+}
+
+/// A prompt shown to the user before inserting a block picker item.
+///
+/// When present on a [`BlockPickerItem`](UiContribution::BlockPickerItem),
+/// the host shows a `window.prompt()` dialog and merges the result into
+/// the editor command params at `param_key`.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
+pub struct BlockPickerPrompt {
+    /// Message shown in the prompt dialog.
+    pub message: String,
+    /// Default value pre-filled in the prompt input.
+    pub default_value: String,
+    /// Key in the params object where the user's input is stored.
+    pub param_key: String,
 }
 
 /// Metadata for an insert button in the editor menus.

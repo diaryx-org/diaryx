@@ -22,11 +22,10 @@ serde_json.workspace = true
 serde_yaml.workspace = true
 toml = "0.9.8"
 thiserror.workspace = true
+async-trait = "0.1"
+urlencoding = "2"
+uuid = { version = "1", features = ["v4", "rng-getrandom"] }
 
-# CRDT support
-# The "sync" feature makes Subscription Send+Sync, enabling thread-safe observers
-yrs = { version = "0.25", optional = true, features = ["sync"] }
-uuid = { version = "1", features = ["v4", "js"], optional = true }
 
 # TypeScript bindings generation
 ts-rs = { version = "10", features = ["serde-json-impl", "indexmap-impl", "no-serde-warnings"] }
@@ -36,9 +35,7 @@ ts-rs = { version = "10", features = ["serde-json-impl", "indexmap-impl", "no-se
 futures-lite = "2"
 
 # Optional dependencies
-comrak = { version = "0.49", optional = true }
 git2 = { version = "0.19", optional = true, default-features = false }
-handlebars = { version = "6", optional = true }
 
 # Day One ZIP import (works on all platforms including WASM)
 zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
@@ -54,39 +51,20 @@ glob = "0.3"
 rusqlite = { version = "0.34", features = ["bundled"], optional = true }
 html-to-markdown-rs = { version = "2", optional = true }
 
-# Native sync dependencies (native-sync feature)
-tokio = { version = "1", features = ["sync", "time", "macros", "rt"], optional = true }
-tokio-tungstenite = { version = "0.26", optional = true, features = ["rustls-tls-webpki-roots"] }
-url = { version = "2", optional = true }
-futures-util = { version = "0.3", optional = true }
-async-trait = { version = "0.1", optional = true }
-
 # WASM-specific dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Add wasm-bindgen when we need JS interop
 # wasm-bindgen = "0.2"
 
 [features]
-# Enable markdown-to-HTML conversion (for publish feature)
-markdown = ["dep:comrak"]
-
-# Enable CRDT-based sync and version history (works on all platforms)
-# On native, also enables SqliteStorage via rusqlite
-crdt = ["dep:yrs", "dep:uuid"]
-
-# Enable SQLite storage for CRDT (native only, automatically enabled with crdt on non-WASM)
-crdt-sqlite = ["crdt", "dep:rusqlite"]
+# Kept for backward compatibility — the publish pipeline has moved to diaryx_publish.
+markdown = []
 
 # Placeholder feature for workspace crates that currently enable it.
 live-sync = []
 
-# Enable native sync transport (tokio-tungstenite WebSocket)
-# This provides TokioTransport and SyncClient for CLI and native apps.
-# Not available on WASM - use CallbackTransport instead.
-native-sync = ["crdt", "dep:tokio", "dep:tokio-tungstenite", "dep:url", "dep:futures-util", "dep:async-trait"]
-
-# Enable git-backed version history (requires crdt-sqlite for storage, native only)
-git = ["crdt-sqlite", "dep:git2"]
+# SQLite database support (enables Database error variant with rusqlite From impl)
+database = ["dep:rusqlite"]
 
 # Enable native pandoc binary invocation for multi-format export (CLI/Tauri only)
 native-pandoc = []
@@ -100,8 +78,9 @@ import-dayone = ["dep:zip"]
 # Enable markdown directory import (folders of .md files)
 import-markdown = []
 
-# Enable render-time body templating via Handlebars
-templating = ["dep:handlebars"]
+
+# Browser WASM support (uuid/js for browser crypto)
+browser-js = ["uuid/js"]
 
 # Default features for the library
 default = []
@@ -112,3 +91,5 @@ publish = true
 
 [dev-dependencies]
 tempfile = "3"
+diaryx_sync = { path = "../diaryx_sync" }
+async-trait = "0.1"

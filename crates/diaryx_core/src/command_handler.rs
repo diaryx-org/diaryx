@@ -14,19 +14,17 @@ use crate::error::{DiaryxError, Result};
 use crate::frontmatter;
 use crate::fs::AsyncFileSystem;
 use crate::link_parser;
-use crate::path_utils::{normalize_path, normalize_sync_path, strip_workspace_root_prefix};
+use crate::path_utils::{normalize_path, strip_workspace_root_prefix};
+use crate::plugin::{FileCreatedEvent, FileDeletedEvent, FileMovedEvent, FileSavedEvent};
 
-#[cfg(feature = "crdt")]
-use crate::crdt::FileMetadata;
-
-#[cfg(all(test, feature = "crdt"))]
+#[cfg(test)]
 use std::path::Component;
 
 /// Normalize a path by resolving a relative path against a base directory.
 /// Handles `.` and `..` components without filesystem access.
 /// Returns a forward-slash-separated path string suitable for CRDT keys.
 /// Also handles corrupted absolute paths by stripping the workspace base path if found.
-#[cfg(all(test, feature = "crdt"))]
+#[cfg(test)]
 fn normalize_contents_path(base_dir: &Path, relative: &str, workspace_base: &Path) -> String {
     // First, check if this looks like a corrupted absolute path
     // (e.g., "Users/adamharris/Documents/journal/Archive/file.md" - absolute path with leading / stripped)
@@ -186,6 +184,54 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         }
     }
 
+    /// Recursively collect all unique audience tags from a workspace tree.
+    async fn collect_audiences_recursive<F: AsyncFileSystem>(
+        ws: &crate::workspace::Workspace<F>,
+        path: &Path,
+        audiences: &mut std::collections::HashSet<String>,
+        visited: &mut std::collections::HashSet<PathBuf>,
+        workspace_root: &Path,
+        link_format: Option<crate::link_parser::LinkFormat>,
+    ) {
+        if visited.contains(path) {
+            return;
+        }
+        visited.insert(path.to_path_buf());
+
+        if let Ok(index) = ws.parse_index_with_hint(path, link_format).await {
+            if let Some(file_audiences) = &index.frontmatter.audience {
+                for a in file_audiences {
+                    let trimmed = a.trim();
+                    if !trimmed.is_empty() {
+                        audiences.insert(a.clone());
+                    }
+                }
+            }
+
+            if index.frontmatter.is_index() {
+                for child_rel in index.frontmatter.contents_list() {
+                    let child_path = index.resolve_path(child_rel);
+                    let absolute_child_path = if child_path.is_absolute() {
+                        child_path
+                    } else {
+                        workspace_root.join(&child_path)
+                    };
+                    if ws.fs_ref().exists(&absolute_child_path).await {
+                        Box::pin(Self::collect_audiences_recursive(
+                            ws,
+                            &absolute_child_path,
+                            audiences,
+                            visited,
+                            workspace_root,
+                            link_format,
+                        ))
+                        .await;
+                    }
+                }
+            }
+        }
+    }
+
     /// Strip the workspace root from a path if present, returning a workspace-relative path.
     ///
     /// On Tauri, entry paths from the frontend may be absolute OS paths (e.g.,
@@ -201,49 +247,13 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     }
 
     /// Get the canonical path from a storage path.
-    /// Delegates to sync_manager if available, otherwise returns the path unchanged.
-    #[cfg(feature = "crdt")]
+    ///
+    /// Delegates to the plugin registry (e.g., SyncPlugin) if a plugin provides
+    /// path mapping. Otherwise returns the path unchanged.
     fn get_canonical_path(&self, storage_path: &str) -> String {
-        if let Some(sync_manager) = self.sync_manager() {
-            sync_manager.get_canonical_path(storage_path)
-        } else {
-            storage_path.to_string()
-        }
-    }
-
-    /// Get the canonical path from a storage path (non-CRDT version).
-    /// Simply normalizes the path by stripping leading slashes and "./" prefixes.
-    #[cfg(not(feature = "crdt"))]
-    fn get_canonical_path(&self, storage_path: &str) -> String {
-        normalize_sync_path(storage_path)
-    }
-
-    /// Get the storage path from a canonical path.
-    /// Delegates to sync_manager if available, otherwise returns the path unchanged.
-    #[cfg(feature = "crdt")]
-    #[allow(dead_code)]
-    fn get_storage_path(&self, canonical_path: &str) -> PathBuf {
-        if let Some(sync_manager) = self.sync_manager() {
-            sync_manager.get_storage_path(canonical_path)
-        } else {
-            PathBuf::from(canonical_path)
-        }
-    }
-
-    /// Track content for echo detection in the sync manager.
-    #[cfg(feature = "crdt")]
-    fn track_content_for_sync(&self, canonical_path: &str, content: &str) {
-        if let Some(sync_manager) = self.sync_manager() {
-            sync_manager.track_content(canonical_path, content);
-        }
-    }
-
-    /// Track metadata for echo detection in the sync manager.
-    #[cfg(feature = "crdt")]
-    fn track_metadata_for_sync(&self, canonical_path: &str, metadata: &FileMetadata) {
-        if let Some(sync_manager) = self.sync_manager() {
-            sync_manager.track_metadata(canonical_path, metadata);
-        }
+        self.plugin_registry()
+            .get_canonical_path(storage_path)
+            .unwrap_or_else(|| storage_path.to_string())
     }
 
     /// Sync the first H1 heading in the body to the given title.
@@ -261,7 +271,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     }
 
     /// Resolve a template from a workspace config link value.
-    /// The link is in the workspace's configured link_format (e.g., `[Daily](/templates/daily.md)`).
+    /// The link is in the workspace's configured link_format (e.g., `[Template](/templates/note.md)`).
     /// Returns the file content as a Template, or None if resolution fails.
     async fn resolve_template_from_link(
         &self,
@@ -284,60 +294,9 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         Some(crate::template::Template::new(name, content))
     }
 
-    /// This helper simplifies the sync emission pattern used across commands.
-    /// It logs a warning if emission fails but doesn't propagate the error.
-    #[cfg(feature = "crdt")]
-    fn emit_workspace_sync(&self, operation: &str) {
-        if let Some(sync_manager) = self.sync_manager()
-            && let Err(e) = sync_manager.emit_workspace_update()
-        {
-            log::warn!("Failed to emit workspace sync for {}: {}", operation, e);
-        }
-    }
-
-    /// Merge attachment refs from existing metadata into incoming metadata.
-    ///
-    /// `SetCrdtFile` callers often send frontmatter-derived metadata that has
-    /// no `attachments` array (or attachment refs with empty hashes). Preserve
-    /// existing BinaryRef/hash data so incremental attachment reconcile keeps
-    /// working.
-    #[cfg(feature = "crdt")]
-    fn merge_attachment_refs(existing: &FileMetadata, incoming: &mut FileMetadata) {
-        if existing.attachments.is_empty() {
-            return;
-        }
-
-        if incoming.attachments.is_empty() {
-            incoming.attachments = existing.attachments.clone();
-            return;
-        }
-
-        for attachment in &mut incoming.attachments {
-            if attachment.hash.is_empty()
-                && let Some(existing_ref) = existing
-                    .attachments
-                    .iter()
-                    .find(|r| r.path == attachment.path && !r.hash.is_empty())
-            {
-                attachment.hash = existing_ref.hash.clone();
-                attachment.mime_type = existing_ref.mime_type.clone();
-                attachment.size = existing_ref.size;
-                attachment.uploaded_at = existing_ref.uploaded_at;
-                attachment.source = existing_ref.source.clone();
-            }
-        }
-    }
-
-    /// Get the path to store in a parent's contents array.
-    ///
-    /// The CRDT stores canonical (workspace-relative) paths for contents arrays.
-    /// This ensures consistent storage regardless of how the path was created,
-    /// and allows metadata_writer to format them as markdown links when syncing to disk.
-    #[cfg(feature = "crdt")]
-    fn contents_path(&self, child_canonical_path: &str) -> String {
-        // Store canonical paths directly - no relative path computation needed
-        // The metadata_writer will format these as markdown links: [Title](/path/to/file.md)
-        child_canonical_path.to_string()
+    /// Notify plugins that the workspace was modified (for sync broadcast).
+    async fn emit_workspace_sync(&self) {
+        self.plugin_registry().notify_workspace_modified().await;
     }
 
     /// Format a canonical path as a link for frontmatter.
@@ -351,7 +310,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     /// The title is resolved from:
     /// 1. CRDT metadata (if available and has a title)
     /// 2. Fallback: generated from the filename using `path_to_title`
-    #[cfg(feature = "crdt")]
     fn format_link_for_file(&self, canonical_path: &str, from_canonical_path: &str) -> String {
         let title = self.resolve_title(canonical_path);
         let format = self.link_format();
@@ -385,7 +343,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     ///
     /// For formats that require a source file (relative formats), this falls back
     /// to MarkdownRoot format.
-    #[cfg(feature = "crdt")]
     #[allow(dead_code)]
     fn format_link(&self, canonical_path: &str) -> String {
         let title = self.resolve_title(canonical_path);
@@ -397,25 +354,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     ///
     /// Looks up the title from CRDT metadata if available,
     /// otherwise generates one from the filename.
-    #[cfg(feature = "crdt")]
     fn resolve_title(&self, canonical_path: &str) -> String {
-        if let Some(crdt_ops) = self.crdt()
-            && let Some(metadata) = crdt_ops.get_file(canonical_path)
-            && let Some(title) = metadata.title
-        {
+        if let Some(title) = self.plugin_registry().get_file_title(canonical_path) {
             return title;
         }
         link_parser::path_to_title(canonical_path)
-    }
-
-    /// Format a canonical path as a link for frontmatter (non-CRDT version).
-    ///
-    /// Uses the configured link format.
-    #[cfg(not(feature = "crdt"))]
-    fn format_link_for_file(&self, canonical_path: &str, from_canonical_path: &str) -> String {
-        let title = link_parser::path_to_title(canonical_path);
-        let format = self.link_format();
-        link_parser::format_link_with_format(canonical_path, &title, format, from_canonical_path)
     }
 
     /// Resolve a frontmatter reference (`part_of`, `contents`, `attachments`) to
@@ -474,14 +417,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         )
     }
 
-    /// Format a canonical path as a link (non-CRDT version, simple).
-    #[cfg(not(feature = "crdt"))]
-    #[allow(dead_code)]
-    fn format_link(&self, canonical_path: &str) -> String {
-        let title = link_parser::path_to_title(canonical_path);
-        link_parser::format_link(canonical_path, &title)
-    }
-
     // =========================================================================
     // Command Execution
     // =========================================================================
@@ -505,6 +440,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
     /// ```
     pub async fn execute(&self, mut command: Command) -> Result<Response> {
         command.normalize_paths(|p| self.to_workspace_relative(p));
+
         match command {
             // === Entry Operations ===
             Command::GetEntry { path } => {
@@ -564,7 +500,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .await?;
 
                 // Track for echo detection and emit sync message if CRDT is enabled
-                #[cfg(feature = "crdt")]
                 {
                     let canonical_path = self.get_canonical_path(&path);
                     log::debug!(
@@ -574,7 +509,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     );
 
                     // Track for echo detection
-                    self.track_content_for_sync(&canonical_path, &content);
+                    self.plugin_registry()
+                        .track_content_for_sync(&canonical_path, &content);
 
                     // Note: Body sync messages are now automatically emitted via the Yrs observer
                     // pattern when set_body() is called. No manual emit_body_update needed.
@@ -584,6 +520,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         canonical_path
                     );
                 }
+
+                // Emit file-saved event to file plugins
+                self.plugin_registry()
+                    .emit_file_saved(&FileSavedEvent { path: path.clone() })
+                    .await;
 
                 // H1→title sync: detect first-line H1 and sync to title + filename
                 if detect_h1_title && let Some(ref ws_config) = ws_config {
@@ -645,32 +586,23 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                                 let new_path_str = new_path.to_string_lossy().to_string();
 
                                 // Migrate body CRDT doc to new path
-                                #[cfg(feature = "crdt")]
                                 {
                                     let canonical_old = self.get_canonical_path(&path);
                                     let canonical_new = self.get_canonical_path(&new_path_str);
-                                    if canonical_old != canonical_new
-                                        && let Some(body_manager) = self.body_doc_manager()
-                                        && let Err(e) =
-                                            body_manager.rename(&canonical_old, &canonical_new)
-                                    {
-                                        log::warn!(
-                                            "Failed to migrate body doc on H1 rename {} -> {}: {}",
-                                            canonical_old,
-                                            canonical_new,
-                                            e
-                                        );
+                                    if canonical_old != canonical_new {
+                                        self.plugin_registry()
+                                            .emit_body_doc_renamed(&canonical_old, &canonical_new)
+                                            .await;
                                     }
 
-                                    self.emit_workspace_sync("SaveEntry_H1Sync");
+                                    self.emit_workspace_sync().await;
                                 }
 
                                 return Ok(Response::String(new_path_str));
                             }
 
                             // Title changed but filename didn't need to change
-                            #[cfg(feature = "crdt")]
-                            self.emit_workspace_sync("SaveEntry_H1Sync");
+                            self.emit_workspace_sync().await;
 
                             return Ok(Response::String(path));
                         }
@@ -696,7 +628,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 // Handle part_of/contents/attachments specially - normalize and
                 // format links according to workspace settings.
                 // CrdtFs.write_file extracts metadata from frontmatter automatically
-                #[cfg(feature = "crdt")]
                 {
                     let canonical_path = self.get_canonical_path(&path);
 
@@ -716,15 +647,13 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                                 .set_frontmatter_property(&path, &key, yaml_value)
                                 .await?;
 
-                            // Track for echo detection (read metadata that CrdtFs already set)
-                            if let Some(crdt_ops) = self.crdt()
-                                && let Some(metadata) = crdt_ops.get_file(&canonical_path)
-                            {
-                                self.track_metadata_for_sync(&canonical_path, &metadata);
-                            }
+                            // Track for echo detection
+                            self.plugin_registry()
+                                .track_file_for_sync(&canonical_path)
+                                .await;
 
                             // Emit workspace sync message
-                            self.emit_workspace_sync("SetFrontmatterProperty");
+                            self.emit_workspace_sync().await;
                             return Ok(Response::Ok);
                         }
                     } else if key == "contents" {
@@ -748,15 +677,13 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                                 .set_frontmatter_property(&path, &key, yaml_value)
                                 .await?;
 
-                            // Track for echo detection (read metadata that CrdtFs already set)
-                            if let Some(crdt_ops) = self.crdt()
-                                && let Some(metadata) = crdt_ops.get_file(&canonical_path)
-                            {
-                                self.track_metadata_for_sync(&canonical_path, &metadata);
-                            }
+                            // Track for echo detection
+                            self.plugin_registry()
+                                .track_file_for_sync(&canonical_path)
+                                .await;
 
                             // Emit workspace sync message
-                            self.emit_workspace_sync("SetFrontmatterProperty");
+                            self.emit_workspace_sync().await;
                             return Ok(Response::Ok);
                         }
                     } else if key == "attachments" {
@@ -785,13 +712,12 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                                 .set_frontmatter_property(&path, &key, yaml_value)
                                 .await?;
 
-                            if let Some(crdt_ops) = self.crdt()
-                                && let Some(metadata) = crdt_ops.get_file(&canonical_path)
-                            {
-                                self.track_metadata_for_sync(&canonical_path, &metadata);
-                            }
+                            // Track for echo detection
+                            self.plugin_registry()
+                                .track_file_for_sync(&canonical_path)
+                                .await;
 
-                            self.emit_workspace_sync("SetFrontmatterProperty");
+                            self.emit_workspace_sync().await;
                             return Ok(Response::Ok);
                         } else if let serde_json::Value::String(ref s) = value {
                             // Accept scalar attachment values for backwards compatibility.
@@ -809,13 +735,12 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                                 .set_frontmatter_property(&path, &key, yaml_value)
                                 .await?;
 
-                            if let Some(crdt_ops) = self.crdt()
-                                && let Some(metadata) = crdt_ops.get_file(&canonical_path)
-                            {
-                                self.track_metadata_for_sync(&canonical_path, &metadata);
-                            }
+                            // Track for echo detection
+                            self.plugin_registry()
+                                .track_file_for_sync(&canonical_path)
+                                .await;
 
-                            self.emit_workspace_sync("SetFrontmatterProperty");
+                            self.emit_workspace_sync().await;
                             return Ok(Response::Ok);
                         }
                     }
@@ -879,21 +804,13 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                             let new_path_str = new_path.to_string_lossy().to_string();
 
                             // Migrate body CRDT doc to new path
-                            #[cfg(feature = "crdt")]
                             {
                                 let canonical_old = self.get_canonical_path(&path);
                                 let canonical_new = self.get_canonical_path(&new_path_str);
-                                if canonical_old != canonical_new
-                                    && let Some(body_manager) = self.body_doc_manager()
-                                    && let Err(e) =
-                                        body_manager.rename(&canonical_old, &canonical_new)
-                                {
-                                    log::warn!(
-                                        "Failed to migrate body doc on title rename {} -> {}: {}",
-                                        canonical_old,
-                                        canonical_new,
-                                        e
-                                    );
+                                if canonical_old != canonical_new {
+                                    self.plugin_registry()
+                                        .emit_body_doc_renamed(&canonical_old, &canonical_new)
+                                        .await;
                                 }
                             }
 
@@ -906,8 +823,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         .await?;
 
                     // Emit workspace sync (covers both rename + frontmatter update)
-                    #[cfg(feature = "crdt")]
-                    self.emit_workspace_sync("SetFrontmatterProperty");
+                    self.emit_workspace_sync().await;
 
                     // Return new path if rename happened, Ok otherwise
                     if effective_path != path {
@@ -934,20 +850,17 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 // CrdtFs handles CRDT updates automatically via write_file hook.
                 // We only need to track for echo detection and emit sync.
-                #[cfg(feature = "crdt")]
                 {
                     if key == "part_of" || key == "contents" || key == "attachments" {
                         let canonical_path = self.get_canonical_path(&path);
 
-                        // Track for echo detection (read metadata that CrdtFs already set)
-                        if let Some(crdt_ops) = self.crdt()
-                            && let Some(metadata) = crdt_ops.get_file(&canonical_path)
-                        {
-                            self.track_metadata_for_sync(&canonical_path, &metadata);
-                        }
+                        // Track for echo detection
+                        self.plugin_registry()
+                            .track_file_for_sync(&canonical_path)
+                            .await;
 
                         // Emit workspace sync message
-                        self.emit_workspace_sync("RemoveFrontmatterProperty");
+                        self.emit_workspace_sync().await;
                     }
                 }
 
@@ -961,6 +874,29 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     Some(path) => Ok(Response::String(path.to_string_lossy().to_string())),
                     None => Err(DiaryxError::WorkspaceNotFound(PathBuf::from(&directory))),
                 }
+            }
+
+            Command::GetAvailableAudiences { path } => {
+                let resolved = self.resolve_fs_path(&path);
+                let ws = self.workspace().inner();
+                let link_format = Some(self.link_format());
+                let mut audiences = std::collections::HashSet::new();
+                let mut visited = std::collections::HashSet::new();
+                let workspace_root = resolved.parent().unwrap_or(Path::new(".")).to_path_buf();
+
+                Self::collect_audiences_recursive(
+                    &ws,
+                    &resolved,
+                    &mut audiences,
+                    &mut visited,
+                    &workspace_root,
+                    link_format,
+                )
+                .await;
+
+                let mut result: Vec<String> = audiences.into_iter().collect();
+                result.sort();
+                Ok(Response::Strings(result))
             }
 
             Command::GetWorkspaceTree {
@@ -1052,12 +988,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .fix_broken_part_of(&resolved_path)
                     .await;
 
-                #[cfg(feature = "crdt")]
-                if result.success
-                    && let Some(sync_manager) = self.sync_manager()
-                    && let Err(e) = sync_manager.emit_workspace_update()
-                {
-                    log::warn!("Failed to emit workspace sync for FixBrokenPartOf: {}", e);
+                if result.success {
+                    self.emit_workspace_sync().await;
                 }
 
                 Ok(Response::FixResult(result))
@@ -1071,15 +1003,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .fix_broken_contents_ref(&resolved_index_path, &target)
                     .await;
 
-                #[cfg(feature = "crdt")]
-                if result.success
-                    && let Some(sync_manager) = self.sync_manager()
-                    && let Err(e) = sync_manager.emit_workspace_update()
-                {
-                    log::warn!(
-                        "Failed to emit workspace sync for FixBrokenContentsRef: {}",
-                        e
-                    );
+                if result.success {
+                    self.emit_workspace_sync().await;
                 }
 
                 Ok(Response::FixResult(result))
@@ -1109,19 +1034,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .search_workspace(&resolved_workspace_path, &query)
                     .await?;
                 Ok(Response::SearchResults(results))
-            }
-
-            // === Export Operations ===
-            Command::PlanExport {
-                root_path,
-                audience,
-            } => {
-                let resolved_root_path = self.resolve_fs_path(&root_path);
-                let plan = self
-                    .export()
-                    .plan_export(&resolved_root_path, &audience, Path::new("/tmp/export"))
-                    .await?;
-                Ok(Response::ExportPlan(plan))
             }
 
             // === File System Operations ===
@@ -1337,13 +1249,11 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 // Set part_of if provided - format based on configured link format
                 // CrdtFs.write_file (via set_frontmatter_property) extracts updated metadata
                 if let Some(ref parent) = options.part_of {
-                    #[cfg(feature = "crdt")]
-                    let formatted_link = {
+                    let _formatted_link = {
                         let canonical_path = self.get_canonical_path(&path);
                         let canonical_parent = self.get_canonical_path(parent);
                         self.format_link_for_file(&canonical_parent, &canonical_path)
                     };
-                    #[cfg(not(feature = "crdt"))]
                     let formatted_link = {
                         let canonical_path = &path;
                         self.format_link_for_file(parent, canonical_path)
@@ -1355,25 +1265,27 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 // CrdtFs handles CRDT updates automatically via create_new and write_file hooks.
                 // We only need to track for echo detection and emit sync.
-                #[cfg(feature = "crdt")]
                 {
                     let canonical_path = self.get_canonical_path(&path);
 
-                    // Track for echo detection (read metadata that CrdtFs already set)
-                    if let Some(crdt_ops) = self.crdt()
-                        && let Some(metadata) = crdt_ops.get_file(&canonical_path)
-                    {
-                        self.track_metadata_for_sync(&canonical_path, &metadata);
-                    }
+                    // Track for echo detection
+                    self.plugin_registry()
+                        .track_file_for_sync(&canonical_path)
+                        .await;
 
                     // Emit workspace sync message
-                    self.emit_workspace_sync("CreateEntry");
+                    self.emit_workspace_sync().await;
 
                     log::debug!(
                         "[CommandHandler] CreateEntry: created {} (CrdtFs handled CRDT)",
                         canonical_path
                     );
                 }
+
+                // Emit file-created event to file plugins
+                self.plugin_registry()
+                    .emit_file_created(&FileCreatedEvent { path: path.clone() })
+                    .await;
 
                 Ok(Response::String(path))
             }
@@ -1389,22 +1301,20 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 ws.delete_entry(&resolved_path).await?;
 
                 // Delete body doc CRDT and emit sync
-                #[cfg(feature = "crdt")]
                 {
-                    if let Some(body_manager) = self.body_doc_manager()
-                        && let Err(e) = body_manager.delete(&path)
-                    {
-                        log::warn!("Failed to delete body doc for {}: {}", path, e);
-                    }
-
-                    // Emit workspace sync message
-                    self.emit_workspace_sync("DeleteEntry");
+                    self.plugin_registry().emit_body_doc_deleted(&path).await;
+                    self.emit_workspace_sync().await;
 
                     log::debug!(
                         "[CommandHandler] DeleteEntry: deleted {} (CrdtFs handled CRDT)",
                         path
                     );
                 }
+
+                // Emit file-deleted event to file plugins
+                self.plugin_registry()
+                    .emit_file_deleted(&FileDeletedEvent { path: path.clone() })
+                    .await;
 
                 Ok(Response::Ok)
             }
@@ -1421,17 +1331,17 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 ws.move_entry(&resolved_from, &resolved_to).await?;
 
                 // Migrate body doc CRDT to new path
-                #[cfg(feature = "crdt")]
-                if let Some(body_manager) = self.body_doc_manager()
-                    && let Err(e) = body_manager.rename(&from, &to)
-                {
-                    log::warn!(
-                        "Failed to migrate body doc on move {} -> {}: {}",
-                        from,
-                        to,
-                        e
-                    );
-                }
+                self.plugin_registry()
+                    .emit_body_doc_renamed(&from, &to)
+                    .await;
+
+                // Emit file-moved event to file plugins
+                self.plugin_registry()
+                    .emit_file_moved(&FileMovedEvent {
+                        old_path: from,
+                        new_path: to.clone(),
+                    })
+                    .await;
 
                 Ok(Response::String(to))
             }
@@ -1449,17 +1359,9 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 ws.sync_move_metadata(&resolved_old, &resolved_new).await?;
 
                 // Migrate body doc CRDT to new path
-                #[cfg(feature = "crdt")]
-                if let Some(body_manager) = self.body_doc_manager()
-                    && let Err(e) = body_manager.rename(&old_path, &new_path)
-                {
-                    log::warn!(
-                        "Failed to migrate body doc on sync_move_metadata {} -> {}: {}",
-                        old_path,
-                        new_path,
-                        e
-                    );
-                }
+                self.plugin_registry()
+                    .emit_body_doc_renamed(&old_path, &new_path)
+                    .await;
 
                 Ok(Response::String(new_path))
             }
@@ -1469,9 +1371,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 let ws = self.workspace().inner();
                 ws.sync_create_metadata(&resolved_path).await?;
 
-                #[cfg(feature = "crdt")]
                 {
-                    self.emit_workspace_sync("SyncCreateMetadata");
+                    self.emit_workspace_sync().await;
 
                     log::debug!(
                         "[CommandHandler] SyncCreateMetadata: added {} to hierarchy",
@@ -1487,9 +1388,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 let ws = self.workspace().inner();
                 ws.sync_delete_metadata(&resolved_path).await?;
 
-                #[cfg(feature = "crdt")]
                 {
-                    self.emit_workspace_sync("SyncDeleteMetadata");
+                    self.emit_workspace_sync().await;
 
                     log::debug!(
                         "[CommandHandler] SyncDeleteMetadata: removed {} from hierarchy",
@@ -1510,26 +1410,17 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 let to_path_str = new_path.to_string_lossy().to_string();
 
                 // Migrate body doc and emit sync
-                #[cfg(feature = "crdt")]
                 {
                     let canonical_old = self.get_canonical_path(&path);
                     let canonical_new = self.get_canonical_path(&to_path_str);
 
-                    // Migrate body doc CRDT to new path
-                    if canonical_old != canonical_new
-                        && let Some(body_manager) = self.body_doc_manager()
-                        && let Err(e) = body_manager.rename(&canonical_old, &canonical_new)
-                    {
-                        log::warn!(
-                            "Failed to migrate body doc on rename {} -> {}: {}",
-                            canonical_old,
-                            canonical_new,
-                            e
-                        );
+                    if canonical_old != canonical_new {
+                        self.plugin_registry()
+                            .emit_body_doc_renamed(&canonical_old, &canonical_new)
+                            .await;
                     }
 
-                    // Emit workspace sync message
-                    self.emit_workspace_sync("RenameEntry");
+                    self.emit_workspace_sync().await;
 
                     log::debug!(
                         "[CommandHandler] RenameEntry: renamed {} -> {} (CrdtFs handled CRDT)",
@@ -1552,6 +1443,14 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     self.sync_heading_to_title(&to_path_str, &title).await?;
                 }
 
+                // Emit file-moved event to file plugins
+                self.plugin_registry()
+                    .emit_file_moved(&FileMovedEvent {
+                        old_path: path,
+                        new_path: to_path_str.clone(),
+                    })
+                    .await;
+
                 Ok(Response::String(to_path_str))
             }
 
@@ -1565,19 +1464,16 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 // CrdtFs handles CRDT updates automatically via write_file hooks.
                 // We only need to track for echo detection and emit sync.
-                #[cfg(feature = "crdt")]
                 {
                     let canonical_path = self.get_canonical_path(&new_path_str);
 
-                    // Track for echo detection (read metadata that CrdtFs already set)
-                    if let Some(crdt_ops) = self.crdt()
-                        && let Some(metadata) = crdt_ops.get_file(&canonical_path)
-                    {
-                        self.track_metadata_for_sync(&canonical_path, &metadata);
-                    }
+                    // Track for echo detection
+                    self.plugin_registry()
+                        .track_file_for_sync(&canonical_path)
+                        .await;
 
                     // Emit workspace sync message
-                    self.emit_workspace_sync("DuplicateEntry");
+                    self.emit_workspace_sync().await;
 
                     log::debug!(
                         "[CommandHandler] DuplicateEntry: duplicated {} (CrdtFs handled CRDT)",
@@ -1605,19 +1501,16 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 // CrdtFs handles CRDT updates automatically via write_file hook.
                 // We only need to track for echo detection and emit sync.
-                #[cfg(feature = "crdt")]
                 {
                     let canonical_path = self.get_canonical_path(&path);
 
-                    // Track for echo detection (read metadata that CrdtFs already set)
-                    if let Some(crdt_ops) = self.crdt()
-                        && let Some(metadata) = crdt_ops.get_file(&canonical_path)
-                    {
-                        self.track_metadata_for_sync(&canonical_path, &metadata);
-                    }
+                    // Track for echo detection
+                    self.plugin_registry()
+                        .track_file_for_sync(&canonical_path)
+                        .await;
 
                     // Emit workspace sync for hierarchy change
-                    self.emit_workspace_sync("ConvertToIndex");
+                    self.emit_workspace_sync().await;
                 }
 
                 Ok(Response::String(path))
@@ -1632,19 +1525,16 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 // CrdtFs handles CRDT updates automatically via write_file hook.
                 // We only need to track for echo detection and emit sync.
-                #[cfg(feature = "crdt")]
                 {
                     let canonical_path = self.get_canonical_path(&path);
 
-                    // Track for echo detection (read metadata that CrdtFs already set)
-                    if let Some(crdt_ops) = self.crdt()
-                        && let Some(metadata) = crdt_ops.get_file(&canonical_path)
-                    {
-                        self.track_metadata_for_sync(&canonical_path, &metadata);
-                    }
+                    // Track for echo detection
+                    self.plugin_registry()
+                        .track_file_for_sync(&canonical_path)
+                        .await;
 
                     // Emit workspace sync for hierarchy change
-                    self.emit_workspace_sync("ConvertToLeaf");
+                    self.emit_workspace_sync().await;
                 }
 
                 Ok(Response::String(path))
@@ -1665,19 +1555,16 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 // CrdtFs handles CRDT updates automatically via create_new and write_file hooks.
                 // We only need to track for echo detection and emit sync.
-                #[cfg(feature = "crdt")]
                 {
                     let canonical_child = self.get_canonical_path(&result.child_path);
 
-                    // Track for echo detection (read metadata that CrdtFs already set)
-                    if let Some(crdt_ops) = self.crdt()
-                        && let Some(metadata) = crdt_ops.get_file(&canonical_child)
-                    {
-                        self.track_metadata_for_sync(&canonical_child, &metadata);
-                    }
+                    // Track for echo detection
+                    self.plugin_registry()
+                        .track_file_for_sync(&canonical_child)
+                        .await;
 
                     // Emit workspace sync message
-                    self.emit_workspace_sync("CreateChildEntry");
+                    self.emit_workspace_sync().await;
 
                     log::debug!(
                         "[CommandHandler] CreateChildEntry: created {} (parent_converted={}, CrdtFs handled CRDT)",
@@ -1705,26 +1592,19 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
                 // CrdtFs handles CRDT updates automatically via move_file hooks.
                 // We only need to migrate body doc and emit sync.
-                #[cfg(feature = "crdt")]
                 {
                     let canonical_old = self.get_canonical_path(&entry_path);
                     let canonical_new = self.get_canonical_path(&new_path_str);
 
                     // Migrate body doc CRDT to new path
-                    if canonical_old != canonical_new
-                        && let Some(body_manager) = self.body_doc_manager()
-                        && let Err(e) = body_manager.rename(&canonical_old, &canonical_new)
-                    {
-                        log::warn!(
-                            "Failed to migrate body doc on attach {} -> {}: {}",
-                            canonical_old,
-                            canonical_new,
-                            e
-                        );
+                    if canonical_old != canonical_new {
+                        self.plugin_registry()
+                            .emit_body_doc_renamed(&canonical_old, &canonical_new)
+                            .await;
                     }
 
                     // Emit workspace sync message
-                    self.emit_workspace_sync("AttachEntryToParent");
+                    self.emit_workspace_sync().await;
 
                     log::debug!(
                         "[CommandHandler] AttachEntryToParent: moved {} -> {} (CrdtFs handled CRDT)",
@@ -1734,227 +1614,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 }
 
                 Ok(Response::String(new_path_str))
-            }
-
-            Command::EnsureDailyEntry {
-                workspace_path,
-                daily_entry_folder,
-                template,
-                date,
-            } => {
-                use crate::config::Config;
-                use chrono::Local;
-
-                // workspace_path is the root index file (e.g., "workspace/README.md")
-                let workspace_root_path = self.resolve_fs_path(&workspace_path);
-                let workspace_dir = workspace_root_path
-                    .parent()
-                    .map(|p| p.to_path_buf())
-                    .unwrap_or_else(|| workspace_root_path.clone());
-
-                // Read workspace config — command params override workspace config values
-                let ws_cfg = self
-                    .workspace()
-                    .inner()
-                    .get_workspace_config(&workspace_root_path)
-                    .await
-                    .ok();
-                let effective_daily_folder = daily_entry_folder
-                    .clone()
-                    .or_else(|| ws_cfg.as_ref().and_then(|c| c.daily_entry_folder.clone()));
-
-                let config = Config::with_options(
-                    workspace_dir.clone(),
-                    effective_daily_folder.clone(),
-                    None, // editor
-                    None, // default_template
-                    None, // daily_template (resolved below from workspace config)
-                );
-
-                // Use provided date or default to today
-                let today = if let Some(ref date_str) = date {
-                    chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
-                        .map_err(|_| DiaryxError::InvalidDateFormat(date_str.clone()))?
-                } else {
-                    Local::now().date_naive()
-                };
-
-                // Ensure index hierarchy exists FIRST - this finds/creates the correct month_dir
-                // which may be named "01", "january", etc. depending on existing structure
-                let (month_dir, month_index_path) = self
-                    .ensure_daily_index_hierarchy(
-                        &today,
-                        &config,
-                        &workspace_root_path,
-                        effective_daily_folder.as_deref(),
-                    )
-                    .await?;
-
-                // Construct entry path using the actual month_dir found/created
-                let date_str = today.format("%Y-%m-%d").to_string();
-                let entry_filename = format!("{}.md", date_str);
-                let entry_path = month_dir.join(&entry_filename);
-
-                // Check if the entry already exists
-                if self.fs().exists(&entry_path).await {
-                    return Ok(Response::String(entry_path.to_string_lossy().to_string()));
-                }
-                // No need to create_dir_all - month_dir already exists from ensure_daily_index_hierarchy
-
-                // Resolve template: workspace config link → _templates/ dir → built-in
-                let template_content = if let Some(ref cfg) = ws_cfg
-                    && let Some(ref daily_tmpl_link) = cfg.daily_template
-                {
-                    // Try workspace config link first
-                    self.resolve_template_from_link(daily_tmpl_link, &workspace_root_path)
-                        .await
-                        .map(|t| t.raw_content)
-                } else {
-                    None
-                };
-                let template_content = if template_content.is_some() {
-                    template_content
-                } else {
-                    // Fall back to _templates/ directory
-                    let templates_dir = workspace_dir.join("_templates");
-                    let template_name = template.as_deref().unwrap_or("daily");
-                    let template_path = templates_dir.join(format!("{}.md", template_name));
-                    if self.fs().exists(&template_path).await {
-                        self.fs().read_to_string(&template_path).await.ok()
-                    } else {
-                        None
-                    }
-                };
-
-                // Build context for template variables
-                let title = today.format("%B %d, %Y").to_string(); // e.g., "January 15, 2026"
-                // Extract the actual month index filename from the path found/created by ensure_daily_index_hierarchy
-                let month_index_filename = month_index_path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("month_index.md")
-                    .to_string();
-
-                // Render content (substitute template variables)
-                let content = if let Some(tmpl) = template_content {
-                    tmpl.replace("{{title}}", &title)
-                        .replace("{{date}}", &date_str)
-                        .replace("{{part_of}}", &month_index_filename)
-                } else {
-                    // Built-in daily template
-                    format!(
-                        "---\ntitle: \"{}\"\npart_of: {}\ncreated: {}\n---\n\n## Today\n\n",
-                        title, month_index_filename, date_str
-                    )
-                };
-
-                // Create the file
-                self.fs()
-                    .create_new(&entry_path, &content)
-                    .await
-                    .map_err(|e| DiaryxError::FileWrite {
-                        path: entry_path.clone(),
-                        source: e,
-                    })?;
-
-                // Add entry to month index contents (use the month_index_path from ensure_daily_index_hierarchy)
-                self.add_to_index_contents(&month_index_path, &entry_filename)
-                    .await?;
-
-                let entry_path_str = entry_path.to_string_lossy().to_string();
-
-                // Add to workspace CRDT if enabled
-                #[cfg(feature = "crdt")]
-                {
-                    let canonical_path = self.get_canonical_path(&entry_path_str);
-                    let canonical_parent =
-                        self.get_canonical_path(&month_index_path.to_string_lossy());
-
-                    if let Some(crdt_ops) = self.crdt() {
-                        // Create metadata for the daily entry
-                        let mut metadata = FileMetadata::new(Some(title.clone()));
-                        metadata.part_of = Some(canonical_parent.clone());
-                        metadata.modified_at = chrono::Utc::now().timestamp_millis();
-
-                        // Set file in workspace CRDT
-                        if let Err(e) = crdt_ops.set_file(&canonical_path, metadata.clone()) {
-                            log::warn!("Failed to add {} to workspace CRDT: {}", canonical_path, e);
-                        }
-
-                        // Update month index contents in CRDT
-                        if let Some(mut parent_meta) = crdt_ops.get_file(&canonical_parent) {
-                            let contents_entry = self.contents_path(&canonical_path);
-                            let mut contents = parent_meta.contents.unwrap_or_default();
-                            if !contents.contains(&contents_entry) {
-                                contents.push(contents_entry);
-                                parent_meta.contents = Some(contents);
-                                parent_meta.modified_at = chrono::Utc::now().timestamp_millis();
-                                if let Err(e) =
-                                    crdt_ops.set_file(&canonical_parent, parent_meta.clone())
-                                {
-                                    log::warn!(
-                                        "Failed to update month index contents in CRDT: {}",
-                                        e
-                                    );
-                                }
-                                self.track_metadata_for_sync(&canonical_parent, &parent_meta);
-                            }
-                        }
-
-                        // Track for echo detection
-                        self.track_metadata_for_sync(&canonical_path, &metadata);
-
-                        // Emit workspace sync message
-                        if let Some(sync_manager) = self.sync_manager()
-                            && let Err(e) = sync_manager.emit_workspace_update()
-                        {
-                            log::warn!("Failed to emit workspace sync for EnsureDailyEntry: {}", e);
-                        }
-
-                        log::debug!(
-                            "[CommandHandler] EnsureDailyEntry: created {} with CRDT sync",
-                            canonical_path
-                        );
-                    }
-                }
-
-                Ok(Response::String(entry_path_str))
-            }
-
-            Command::GetAdjacentDailyEntry { path, direction } => {
-                use crate::date::get_adjacent_daily_entry_path;
-
-                let offset = match direction.as_str() {
-                    "prev" | "previous" | "-1" => -1,
-                    "next" | "1" => 1,
-                    _ => {
-                        return Err(DiaryxError::Unsupported(format!(
-                            "Invalid direction '{}'. Use 'prev' or 'next'.",
-                            direction
-                        )));
-                    }
-                };
-
-                let path_buf = PathBuf::from(&path);
-                match get_adjacent_daily_entry_path(&path_buf, offset) {
-                    Some(adjacent_path) => Ok(Response::String(
-                        adjacent_path.to_string_lossy().to_string(),
-                    )),
-                    None => {
-                        // Not a daily entry or couldn't compute adjacent path
-                        Err(DiaryxError::Unsupported(
-                            "Path is not a daily entry or adjacent date cannot be computed."
-                                .to_string(),
-                        ))
-                    }
-                }
-            }
-
-            Command::IsDailyEntry { path } => {
-                use crate::date::is_daily_entry;
-
-                let path_buf = PathBuf::from(&path);
-                Ok(Response::Bool(is_daily_entry(&path_buf)))
             }
 
             // === Workspace Operations ===
@@ -1977,15 +1636,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .fix_broken_attachment(&resolved_path, &attachment)
                     .await;
 
-                #[cfg(feature = "crdt")]
-                if result.success
-                    && let Some(sync_manager) = self.sync_manager()
-                    && let Err(e) = sync_manager.emit_workspace_update()
-                {
-                    log::warn!(
-                        "Failed to emit workspace sync for FixBrokenAttachment: {}",
-                        e
-                    );
+                if result.success {
+                    self.emit_workspace_sync().await;
                 }
 
                 Ok(Response::FixResult(result))
@@ -2004,15 +1656,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .fix_non_portable_path(&resolved_path, &property, &old_value, &new_value)
                     .await;
 
-                #[cfg(feature = "crdt")]
-                if result.success
-                    && let Some(sync_manager) = self.sync_manager()
-                    && let Err(e) = sync_manager.emit_workspace_update()
-                {
-                    log::warn!(
-                        "Failed to emit workspace sync for FixNonPortablePath: {}",
-                        e
-                    );
+                if result.success {
+                    self.emit_workspace_sync().await;
                 }
 
                 Ok(Response::FixResult(result))
@@ -2030,12 +1675,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .fix_unlisted_file(&resolved_index_path, &resolved_file_path)
                     .await;
 
-                #[cfg(feature = "crdt")]
-                if result.success
-                    && let Some(sync_manager) = self.sync_manager()
-                    && let Err(e) = sync_manager.emit_workspace_update()
-                {
-                    log::warn!("Failed to emit workspace sync for FixUnlistedFile: {}", e);
+                if result.success {
+                    self.emit_workspace_sync().await;
                 }
 
                 Ok(Response::FixResult(result))
@@ -2053,15 +1694,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .fix_orphan_binary_file(&resolved_index_path, &resolved_file_path)
                     .await;
 
-                #[cfg(feature = "crdt")]
-                if result.success
-                    && let Some(sync_manager) = self.sync_manager()
-                    && let Err(e) = sync_manager.emit_workspace_update()
-                {
-                    log::warn!(
-                        "Failed to emit workspace sync for FixOrphanBinaryFile: {}",
-                        e
-                    );
+                if result.success {
+                    self.emit_workspace_sync().await;
                 }
 
                 Ok(Response::FixResult(result))
@@ -2079,12 +1713,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .fix_missing_part_of(&resolved_file_path, &resolved_index_path)
                     .await;
 
-                #[cfg(feature = "crdt")]
-                if result.success
-                    && let Some(sync_manager) = self.sync_manager()
-                    && let Err(e) = sync_manager.emit_workspace_update()
-                {
-                    log::warn!("Failed to emit workspace sync for FixMissingPartOf: {}", e);
+                if result.success {
+                    self.emit_workspace_sync().await;
                 }
 
                 Ok(Response::FixResult(result))
@@ -2099,12 +1729,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 let total_failed = error_fixes.iter().filter(|r| !r.success).count()
                     + warning_fixes.iter().filter(|r| !r.success).count();
 
-                #[cfg(feature = "crdt")]
-                if total_fixed > 0
-                    && let Some(sync_manager) = self.sync_manager()
-                    && let Err(e) = sync_manager.emit_workspace_update()
-                {
-                    log::warn!("Failed to emit workspace sync for FixAll: {}", e);
+                if total_fixed > 0 {
+                    self.emit_workspace_sync().await;
                 }
 
                 Ok(Response::FixSummary(crate::command::FixSummary {
@@ -2126,15 +1752,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     .fix_circular_reference(&resolved_file_path, &part_of_value)
                     .await;
 
-                #[cfg(feature = "crdt")]
-                if result.success
-                    && let Some(sync_manager) = self.sync_manager()
-                    && let Err(e) = sync_manager.emit_workspace_update()
-                {
-                    log::warn!(
-                        "Failed to emit workspace sync for FixCircularReference: {}",
-                        e
-                    );
+                if result.success {
+                    self.emit_workspace_sync().await;
                 }
 
                 Ok(Response::FixResult(result))
@@ -2199,430 +1818,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 // Sort for consistent ordering
                 parents.sort();
                 Ok(Response::Strings(parents))
-            }
-
-            // === Export Operations ===
-            Command::GetAvailableAudiences { root_path } => {
-                // Collect unique audience tags from workspace
-                let ws = self.workspace().inner();
-                let mut audiences = std::collections::HashSet::new();
-                let mut visited = std::collections::HashSet::new();
-                let resolved_root_path = self.resolve_fs_path(&root_path);
-
-                // Get workspace root for resolving paths
-                let workspace_root = resolved_root_path
-                    .parent()
-                    .unwrap_or(Path::new("."))
-                    .to_path_buf();
-
-                // Get link format from workspace config
-                let link_format = ws
-                    .get_workspace_config(&resolved_root_path)
-                    .await
-                    .map(|c| c.link_format)
-                    .ok();
-
-                async fn collect_audiences<FS: AsyncFileSystem>(
-                    ws: &crate::workspace::Workspace<FS>,
-                    path: &Path,
-                    audiences: &mut std::collections::HashSet<String>,
-                    visited: &mut std::collections::HashSet<PathBuf>,
-                    workspace_root: &Path,
-                    link_format: Option<crate::link_parser::LinkFormat>,
-                ) {
-                    if visited.contains(path) {
-                        return;
-                    }
-                    visited.insert(path.to_path_buf());
-
-                    if let Ok(index) = ws.parse_index_with_hint(path, link_format).await {
-                        if let Some(file_audiences) = &index.frontmatter.audience {
-                            for a in file_audiences {
-                                let trimmed = a.trim();
-                                if !trimmed.is_empty() {
-                                    audiences.insert(a.clone());
-                                }
-                            }
-                        }
-
-                        if index.frontmatter.is_index() {
-                            for child_rel in index.frontmatter.contents_list() {
-                                let child_path = index.resolve_path(child_rel);
-                                // Make path absolute if needed
-                                let absolute_child_path = if child_path.is_absolute() {
-                                    child_path
-                                } else {
-                                    workspace_root.join(&child_path)
-                                };
-                                if ws.fs_ref().exists(&absolute_child_path).await {
-                                    Box::pin(collect_audiences(
-                                        ws,
-                                        &absolute_child_path,
-                                        audiences,
-                                        visited,
-                                        workspace_root,
-                                        link_format,
-                                    ))
-                                    .await;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                collect_audiences(
-                    &ws,
-                    &resolved_root_path,
-                    &mut audiences,
-                    &mut visited,
-                    &workspace_root,
-                    link_format,
-                )
-                .await;
-                let mut result: Vec<String> = audiences.into_iter().collect();
-                result.sort();
-                Ok(Response::Strings(result))
-            }
-
-            Command::ExportToMemory {
-                root_path,
-                audience,
-            } => {
-                // Plan the export first
-                log::debug!(
-                    "[Export] ExportToMemory starting - root_path: {:?}, audience: {:?}",
-                    root_path,
-                    audience
-                );
-                let resolved_root_path = self.resolve_fs_path(&root_path);
-                let plan = self
-                    .export()
-                    .plan_export(&resolved_root_path, &audience, Path::new("/tmp/export"))
-                    .await?;
-
-                log::debug!(
-                    "[Export] plan_export returned {} included files",
-                    plan.included.len()
-                );
-
-                // Read each included file
-                let mut files = Vec::new();
-                for included in &plan.included {
-                    match self.fs().read_to_string(&included.source_path).await {
-                        Ok(content) => {
-                            // When exporting for a specific audience, render body templates
-                            // so {{#for-audience}} blocks resolve. For "all" (*), leave raw.
-                            #[cfg(feature = "templating")]
-                            let content = if audience != "*"
-                                && crate::body_template::has_templates(&content)
-                            {
-                                match crate::frontmatter::parse_or_empty(&content) {
-                                    Ok(parsed) => {
-                                        let context = crate::body_template::build_publish_context(
-                                            &parsed.frontmatter,
-                                            &included.source_path,
-                                            Some(&resolved_root_path),
-                                            &audience,
-                                        );
-                                        let rendered =
-                                            crate::body_template::BodyTemplateRenderer::new()
-                                                .render(&parsed.body, &context)
-                                                .unwrap_or_else(|_| parsed.body.clone());
-                                        // Reconstruct file with original frontmatter + rendered body
-                                        crate::frontmatter::serialize(
-                                            &parsed.frontmatter,
-                                            &rendered,
-                                        )
-                                        .unwrap_or(content)
-                                    }
-                                    Err(_) => content,
-                                }
-                            } else {
-                                content
-                            };
-
-                            files.push(crate::command::ExportedFile {
-                                path: included.relative_path.to_string_lossy().to_string(),
-                                content,
-                            });
-                        }
-                        Err(e) => {
-                            log::warn!("[Export] read failed: {:?} - {}", included.source_path, e);
-                        }
-                    }
-                }
-                log::debug!("[Export] ExportToMemory returning {} files", files.len());
-                Ok(Response::ExportedFiles(files))
-            }
-
-            Command::ExportToHtml {
-                root_path,
-                audience,
-            } => {
-                // Plan the export first
-                let resolved_root_path = self.resolve_fs_path(&root_path);
-                let plan = self
-                    .export()
-                    .plan_export(&resolved_root_path, &audience, Path::new("/tmp/export"))
-                    .await?;
-
-                // Read each included file and convert path extension
-                let mut files = Vec::new();
-                for included in &plan.included {
-                    if let Ok(content) = self.fs().read_to_string(&included.source_path).await {
-                        let html_path = included
-                            .relative_path
-                            .to_string_lossy()
-                            .replace(".md", ".html");
-                        files.push(crate::command::ExportedFile {
-                            path: html_path,
-                            content, // TODO: Add markdown-to-HTML conversion
-                        });
-                    }
-                }
-                Ok(Response::ExportedFiles(files))
-            }
-
-            Command::ExportBinaryAttachments {
-                root_path,
-                audience: _,
-            } => {
-                // Collect all non-hidden binary files from workspace
-                let resolved_root_path = self.resolve_fs_path(&root_path);
-                let root_index = resolved_root_path.as_path();
-                let root_dir = root_index.parent().unwrap_or(root_index);
-
-                log::info!(
-                    "[Export] ExportBinaryAttachments starting - root_path: {:?}, root_dir: {:?}",
-                    root_path,
-                    root_dir
-                );
-
-                let mut attachments: Vec<crate::command::BinaryFileInfo> = Vec::new();
-                let mut visited_dirs = std::collections::HashSet::new();
-
-                // Helper to check if a file is a binary attachment (not markdown)
-                fn is_binary_file(path: &Path) -> bool {
-                    let ext = path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .map(|e| e.to_lowercase());
-
-                    match ext.as_deref() {
-                        // Text/markdown files - not binary
-                        Some("md" | "txt" | "json" | "yaml" | "yml" | "toml") => false,
-                        // Common binary formats
-                        Some(
-                            "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "ico" | "bmp" | "pdf"
-                            | "heic" | "heif" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx"
-                            | "mp3" | "mp4" | "wav" | "ogg" | "flac" | "m4a" | "aac" | "mov"
-                            | "avi" | "mkv" | "webm" | "zip" | "tar" | "gz" | "rar" | "7z" | "ttf"
-                            | "otf" | "woff" | "woff2" | "sqlite" | "db",
-                        ) => true,
-                        // Unknown extension - check if it looks like a text file
-                        _ => false,
-                    }
-                }
-
-                // Helper to check if a path component is hidden
-                fn is_hidden_component(name: &str) -> bool {
-                    name.starts_with('.')
-                }
-
-                // Recursively collect binary file paths from a directory (no data, for efficiency)
-                async fn collect_binaries_recursive<FS: AsyncFileSystem>(
-                    fs: &FS,
-                    dir: &Path,
-                    root_dir: &Path,
-                    attachments: &mut Vec<crate::command::BinaryFileInfo>,
-                    visited_dirs: &mut std::collections::HashSet<PathBuf>,
-                ) {
-                    if visited_dirs.contains(dir) {
-                        log::debug!("[Export] skipping already visited dir: {:?}", dir);
-                        return;
-                    }
-                    visited_dirs.insert(dir.to_path_buf());
-
-                    // Skip hidden directories
-                    if let Some(name) = dir.file_name().and_then(|n| n.to_str())
-                        && is_hidden_component(name)
-                    {
-                        log::debug!("[Export] skipping hidden dir: {:?}", dir);
-                        return;
-                    }
-
-                    log::info!("[Export] listing files in dir: {:?}", dir);
-                    let entries = match fs.list_files(dir).await {
-                        Ok(e) => {
-                            log::info!(
-                                "[Export] list_files returned {} entries for {:?}",
-                                e.len(),
-                                dir
-                            );
-                            e
-                        }
-                        Err(e) => {
-                            log::warn!("[Export] list_files failed for {:?}: {}", dir, e);
-                            return;
-                        }
-                    };
-
-                    for entry_path in entries {
-                        // Skip hidden files/dirs
-                        if let Some(name) = entry_path.file_name().and_then(|n| n.to_str())
-                            && is_hidden_component(name)
-                        {
-                            continue;
-                        }
-
-                        if fs.is_dir(&entry_path).await {
-                            // Recurse into subdirectory
-                            Box::pin(collect_binaries_recursive(
-                                fs,
-                                &entry_path,
-                                root_dir,
-                                attachments,
-                                visited_dirs,
-                            ))
-                            .await;
-                        } else if is_binary_file(&entry_path) {
-                            // Just record the path, don't read data (for efficiency)
-                            let relative_path = pathdiff::diff_paths(&entry_path, root_dir)
-                                .unwrap_or_else(|| entry_path.clone());
-                            log::debug!("[Export] found binary file: {:?}", entry_path);
-                            attachments.push(crate::command::BinaryFileInfo {
-                                source_path: entry_path.to_string_lossy().to_string(),
-                                relative_path: relative_path.to_string_lossy().to_string(),
-                            });
-                        } else {
-                            log::debug!("[Export] skipping non-binary file: {:?}", entry_path);
-                        }
-                    }
-                }
-
-                collect_binaries_recursive(
-                    self.fs(),
-                    root_dir,
-                    root_dir,
-                    &mut attachments,
-                    &mut visited_dirs,
-                )
-                .await;
-
-                log::info!(
-                    "[Export] ExportBinaryAttachments returning {} attachment paths",
-                    attachments.len()
-                );
-                Ok(Response::BinaryFilePaths(attachments))
-            }
-
-            // === Template Operations ===
-            Command::ListTemplates { workspace_path } => {
-                let templates_dir = PathBuf::from(workspace_path.as_deref().unwrap_or("workspace"))
-                    .join("_templates");
-
-                let mut templates = Vec::new();
-
-                // Add built-in templates
-                templates.push(crate::command::TemplateInfo {
-                    name: "note".to_string(),
-                    path: None,
-                    source: "builtin".to_string(),
-                });
-                templates.push(crate::command::TemplateInfo {
-                    name: "daily".to_string(),
-                    path: None,
-                    source: "builtin".to_string(),
-                });
-
-                // Add workspace templates
-                if self.fs().is_dir(&templates_dir).await
-                    && let Ok(files) = self.fs().list_files(&templates_dir).await
-                {
-                    for file_path in files {
-                        if file_path.extension().is_some_and(|ext| ext == "md")
-                            && let Some(name) = file_path.file_stem().and_then(|s| s.to_str())
-                        {
-                            templates.push(crate::command::TemplateInfo {
-                                name: name.to_string(),
-                                path: Some(file_path),
-                                source: "workspace".to_string(),
-                            });
-                        }
-                    }
-                }
-
-                Ok(Response::Templates(templates))
-            }
-
-            Command::GetTemplate {
-                name,
-                workspace_path,
-            } => {
-                let templates_dir = PathBuf::from(workspace_path.as_deref().unwrap_or("workspace"))
-                    .join("_templates");
-                let template_path = templates_dir.join(format!("{}.md", name));
-
-                // Check workspace templates first
-                if self.fs().exists(&template_path).await {
-                    let content = self
-                        .fs()
-                        .read_to_string(&template_path)
-                        .await
-                        .map_err(|e| DiaryxError::FileRead {
-                            path: template_path,
-                            source: e,
-                        })?;
-                    return Ok(Response::String(content));
-                }
-
-                // Return built-in template
-                let content = match name.as_str() {
-                    "note" => "---\ntitle: \"{{title}}\"\ncreated: \"{{date}}\"\n---\n\n",
-                    "daily" => {
-                        "---\ntitle: \"{{title}}\"\ncreated: \"{{date}}\"\n---\n\n## Today\n\n"
-                    }
-                    _ => return Err(DiaryxError::TemplateNotFound(name)),
-                };
-                Ok(Response::String(content.to_string()))
-            }
-
-            Command::SaveTemplate {
-                name,
-                content,
-                workspace_path,
-            } => {
-                let templates_dir = PathBuf::from(&workspace_path).join("_templates");
-                self.fs().create_dir_all(&templates_dir).await?;
-
-                let template_path = templates_dir.join(format!("{}.md", name));
-                self.fs()
-                    .write_file(&template_path, &content)
-                    .await
-                    .map_err(|e| DiaryxError::FileWrite {
-                        path: template_path,
-                        source: e,
-                    })?;
-
-                Ok(Response::Ok)
-            }
-
-            Command::DeleteTemplate {
-                name,
-                workspace_path,
-            } => {
-                let template_path = PathBuf::from(&workspace_path)
-                    .join("_templates")
-                    .join(format!("{}.md", name));
-
-                self.fs().delete_file(&template_path).await.map_err(|e| {
-                    DiaryxError::FileWrite {
-                        path: template_path,
-                        source: e,
-                    }
-                })?;
-
-                Ok(Response::Ok)
             }
 
             // === Attachment Operations ===
@@ -2724,6 +1919,15 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 Ok(Response::Bytes(data))
             }
 
+            Command::ResolveAttachmentPath {
+                entry_path,
+                attachment_path,
+            } => {
+                let rel_path = resolve_attachment_storage_path(&entry_path, &attachment_path);
+                let full_path = self.resolve_fs_path(&rel_path);
+                Ok(Response::String(full_path.to_string_lossy().into_owned()))
+            }
+
             Command::MoveAttachment {
                 source_entry_path,
                 target_entry_path,
@@ -2821,7 +2025,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 entries_json,
                 folder,
                 parent_path,
-                import_mode,
             } => {
                 let entries: Vec<crate::import::ImportedEntry> =
                     serde_json::from_str(&entries_json).map_err(|e| DiaryxError::InvalidPath {
@@ -2830,22 +2033,16 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     })?;
 
                 let workspace_root = self.workspace_root().unwrap_or_else(|| PathBuf::from("."));
+                let result = crate::import::orchestrate::write_entries(
+                    self.fs(),
+                    &workspace_root,
+                    &folder,
+                    &entries,
+                    parent_path.as_deref(),
+                )
+                .await;
 
-                if import_mode.as_deref() == Some("daily") {
-                    let result = self.import_entries_daily(&workspace_root, &entries).await?;
-                    Ok(Response::ImportResult(result))
-                } else {
-                    let result = crate::import::orchestrate::write_entries(
-                        self.fs(),
-                        &workspace_root,
-                        &folder,
-                        &entries,
-                        parent_path.as_deref(),
-                    )
-                    .await;
-
-                    Ok(Response::ImportResult(result))
-                }
+                Ok(Response::ImportResult(result))
             }
 
             Command::ImportDirectoryInPlace { path } => {
@@ -2866,1182 +2063,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     limit: None,
                     attachment_limit: None,
                 }))
-            }
-
-            // === CRDT Initialization ===
-            #[cfg(feature = "crdt")]
-            Command::InitializeWorkspaceCrdt {
-                workspace_path,
-                audience,
-            } => {
-                use std::collections::HashSet;
-
-                // Check CRDT is enabled first
-                let crdt = match self.crdt() {
-                    Some(c) => c,
-                    None => {
-                        return Err(DiaryxError::Unsupported(
-                            "CRDT not enabled for this instance".to_string(),
-                        ));
-                    }
-                };
-
-                // Log initial CRDT state for debugging sync issues
-                let initial_files: Vec<_> = crdt.list_files().into_iter().collect();
-                log::debug!(
-                    "[InitializeWorkspaceCrdt] INITIAL CRDT state: {} files: {:?}",
-                    initial_files.len(),
-                    initial_files.iter().take(10).collect::<Vec<_>>()
-                );
-
-                let ws = self.workspace().inner();
-
-                // Find root index file
-                let root_path = PathBuf::from(&workspace_path);
-                // base_path is the workspace root directory - all CRDT paths should be relative to this
-                let base_path = if root_path.extension().is_some_and(|ext| ext == "md") {
-                    // workspace_path is a file, use its parent directory as base
-                    root_path
-                        .parent()
-                        .map(|p| p.to_path_buf())
-                        .unwrap_or_else(|| root_path.clone())
-                } else {
-                    root_path.clone()
-                };
-                log::debug!(
-                    "[InitializeWorkspaceCrdt] workspace_path={:?}, base_path={:?}",
-                    workspace_path,
-                    base_path
-                );
-                let root_index = if root_path.extension().is_some_and(|ext| ext == "md") {
-                    root_path.clone()
-                } else {
-                    ws.find_root_index_in_dir(&root_path)
-                        .await?
-                        .ok_or_else(|| DiaryxError::WorkspaceNotFound(root_path.clone()))?
-                };
-
-                // Use the workspace's configured link format as a read-time hint.
-                // This is required to disambiguate PlainCanonical paths correctly.
-                let link_format_hint = ws
-                    .get_workspace_config(&root_index)
-                    .await
-                    .map(|cfg| cfg.link_format)
-                    .ok();
-
-                // If audience is specified, use plan_export to get filtered file list
-                let allowed_paths: Option<HashSet<PathBuf>> = if let Some(ref aud) = audience {
-                    let plan = self
-                        .export()
-                        .plan_export(
-                            &root_index,
-                            aud,
-                            Path::new("/tmp"), // Dummy destination, we just need included paths
-                        )
-                        .await?;
-                    Some(
-                        plan.included
-                            .iter()
-                            .map(|f| f.source_path.clone())
-                            .collect(),
-                    )
-                } else {
-                    None
-                };
-
-                // Build tree
-                log::debug!(
-                    "[InitializeWorkspaceCrdt] Building tree from root_index={:?}",
-                    root_index
-                );
-                let tree = ws
-                    .build_tree_with_depth(&root_index, None, &mut HashSet::new())
-                    .await?;
-                log::debug!(
-                    "[InitializeWorkspaceCrdt] Tree built: root={:?}, children={}",
-                    tree.path,
-                    tree.children.len()
-                );
-
-                // Collect all files with their metadata using iterative tree walk
-                let mut files_to_add: Vec<(String, crate::crdt::FileMetadata)> = Vec::new();
-
-                // Use a stack for iterative tree traversal
-                let mut stack: Vec<(&crate::workspace::TreeNode, Option<String>)> =
-                    vec![(&tree, None)];
-
-                // Track files updated from disk (file was newer than CRDT)
-                let mut files_updated_from_disk: Vec<String> = Vec::new();
-
-                while let Some((node, parent_path)) = stack.pop() {
-                    // Keep absolute path for filesystem operations (reading files)
-                    let absolute_path = node.path.to_string_lossy().to_string();
-
-                    // Convert absolute path to workspace-relative for CRDT storage
-                    // This ensures paths are portable across machines
-                    let canonical_path = if base_path.as_os_str() == "." {
-                        // When base_path is ".", paths are already relative
-                        normalize_sync_path(&node.path.to_string_lossy())
-                    } else {
-                        node.path
-                            .strip_prefix(&base_path)
-                            .map(|p| normalize_sync_path(&p.to_string_lossy()))
-                            .unwrap_or_else(|_| {
-                                log::warn!(
-                                    "[InitializeWorkspaceCrdt] Failed to strip prefix {:?} from {:?}, using absolute path",
-                                    base_path, node.path
-                                );
-                                normalize_sync_path(&absolute_path)
-                            })
-                    };
-
-                    log::debug!(
-                        "[InitializeWorkspaceCrdt] Processing: absolute={}, canonical={}, children={}",
-                        absolute_path,
-                        canonical_path,
-                        node.children.len()
-                    );
-
-                    // Skip files not in allowed set (if audience filtering is active)
-                    if let Some(ref allowed) = allowed_paths
-                        && !allowed.contains(&node.path)
-                    {
-                        log::debug!(
-                            "[InitializeWorkspaceCrdt] Skipping {} (not in audience)",
-                            canonical_path
-                        );
-                        continue;
-                    }
-
-                    // Get file modification time from filesystem
-                    let file_mtime = self.fs().get_modified_time(&node.path).await;
-
-                    // Get existing CRDT entry for reconciliation (use canonical path)
-                    let existing_crdt_entry = crdt.get_file(&canonical_path);
-                    log::debug!(
-                        "[InitializeWorkspaceCrdt] CRDT lookup for '{}': exists={}, deleted={:?}",
-                        canonical_path,
-                        existing_crdt_entry.is_some(),
-                        existing_crdt_entry.as_ref().map(|e| e.deleted)
-                    );
-
-                    // Reconciliation logic: compare file mtime vs CRDT modified_at
-                    // If CRDT has newer or equal timestamp, skip updating from file
-                    if let Some(crdt_entry) = &existing_crdt_entry {
-                        if crdt_entry.deleted {
-                            // CRDT says this file was deleted — trust the tombstone.
-                            // The file still exists on disk (e.g. from a previous
-                            // session that crashed before the FS delete, or from
-                            // sync re-materializing before the deletion propagated).
-                            // Do NOT overwrite the CRDT with disk data, as that would
-                            // resurrect the file and cause it to reappear after every
-                            // sync cycle.
-                            log::info!(
-                                "[InitializeWorkspaceCrdt] Skipping deleted file {} (CRDT tombstone exists, removing stale disk copy)",
-                                canonical_path
-                            );
-                            if let Err(e) = self.fs().delete_file(&node.path).await {
-                                log::warn!(
-                                    "[InitializeWorkspaceCrdt] Failed to clean up stale file {}: {:?}",
-                                    canonical_path,
-                                    e
-                                );
-                            }
-                            continue;
-                        }
-
-                        // If we have file mtime, compare timestamps
-                        // If no file mtime available (OPFS/web), trust the CRDT if it has data
-                        let should_keep_crdt = match file_mtime {
-                            Some(fmtime) => crdt_entry.modified_at >= fmtime,
-                            None => true, // No mtime available, trust existing CRDT entry
-                        };
-
-                        if should_keep_crdt {
-                            log::debug!(
-                                "[InitializeWorkspaceCrdt] Keeping CRDT version for {} (CRDT: {}, file: {:?})",
-                                canonical_path,
-                                crdt_entry.modified_at,
-                                file_mtime
-                            );
-                            // Add children to stack to continue tree traversal
-                            for child in node.children.iter().rev() {
-                                stack.push((child, Some(canonical_path.clone())));
-                            }
-                            continue;
-                        }
-                    }
-
-                    // File is newer or no CRDT entry exists - read and update
-                    // Use absolute_path for filesystem operations
-                    let content = match self.entry().read_raw(&absolute_path).await {
-                        Ok(c) => c,
-                        Err(e) => {
-                            log::warn!(
-                                "[InitializeWorkspaceCrdt] Could not read {}: {:?}",
-                                absolute_path,
-                                e
-                            );
-                            continue;
-                        }
-                    };
-
-                    // Parse frontmatter
-                    let parsed = match crate::frontmatter::parse_or_empty(&content) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            log::warn!(
-                                "[InitializeWorkspaceCrdt] Parse error for {}: {:?}",
-                                canonical_path,
-                                e
-                            );
-                            continue;
-                        }
-                    };
-
-                    // Track if this was an update from disk (existing CRDT entry with older timestamp)
-                    if existing_crdt_entry.is_some() {
-                        files_updated_from_disk.push(canonical_path.clone());
-                        log::info!(
-                            "[InitializeWorkspaceCrdt] Updating {} from disk (file is newer)",
-                            canonical_path
-                        );
-                    }
-
-                    // Build FileMetadata
-                    let title = parsed
-                        .frontmatter
-                        .get("title")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-
-                    let contents: Option<Vec<String>> = parsed
-                        .frontmatter
-                        .get("contents")
-                        .and_then(|v| v.as_sequence())
-                        .map(|seq| {
-                            seq.iter()
-                                .filter_map(|v| v.as_str())
-                                .map(|raw_value| {
-                                    let parsed_link = link_parser::parse_link(raw_value);
-                                    let resolved = link_parser::to_canonical_with_link_format(
-                                        &parsed_link,
-                                        Path::new(&canonical_path),
-                                        link_format_hint,
-                                    );
-                                    log::debug!(
-                                        "[InitializeWorkspaceCrdt] contents: file={} (from '{}', type={:?}) -> {}",
-                                        canonical_path,
-                                        raw_value,
-                                        parsed_link.path_type,
-                                        resolved
-                                    );
-                                    resolved
-                                })
-                                .collect()
-                        });
-
-                    let file_audience: Option<Vec<String>> = parsed
-                        .frontmatter
-                        .get("audience")
-                        .and_then(|v| v.as_sequence())
-                        .map(|seq| {
-                            seq.iter()
-                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                                .collect()
-                        });
-
-                    let description = parsed
-                        .frontmatter
-                        .get("description")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-
-                    let attachments_list: Vec<String> = parsed
-                        .frontmatter
-                        .get("attachments")
-                        .and_then(|v| v.as_sequence())
-                        .map(|seq| {
-                            seq.iter()
-                                .filter_map(|v| v.as_str())
-                                .map(|raw_value| {
-                                    let parsed_link = link_parser::parse_link(raw_value);
-                                    let resolved = link_parser::to_canonical_with_link_format(
-                                        &parsed_link,
-                                        Path::new(&canonical_path),
-                                        link_format_hint,
-                                    );
-                                    log::debug!(
-                                        "[InitializeWorkspaceCrdt] attachments: file={} (from '{}', type={:?}) -> {}",
-                                        canonical_path,
-                                        raw_value,
-                                        parsed_link.path_type,
-                                        resolved
-                                    );
-                                    resolved
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-
-                    let attachments: Vec<crate::crdt::BinaryRef> = attachments_list
-                        .into_iter()
-                        .map(|path| {
-                            // Preserve existing hash/metadata from CRDT if available
-                            let existing_ref = existing_crdt_entry.as_ref().and_then(|entry| {
-                                entry
-                                    .attachments
-                                    .iter()
-                                    .find(|r| r.path == path && !r.hash.is_empty())
-                            });
-                            if let Some(existing) = existing_ref {
-                                existing.clone()
-                            } else {
-                                crate::crdt::BinaryRef {
-                                    path,
-                                    source: "local".to_string(),
-                                    hash: String::new(),
-                                    mime_type: String::new(),
-                                    size: 0,
-                                    uploaded_at: None,
-                                    deleted: false,
-                                }
-                            }
-                        })
-                        .collect();
-
-                    // Build extra fields (everything not in core frontmatter)
-                    // Note: body content is stored in BodyDocs, NOT in extra._body
-                    let mut extra: std::collections::HashMap<String, serde_json::Value> =
-                        std::collections::HashMap::new();
-                    for (key, value) in &parsed.frontmatter {
-                        if ![
-                            "title",
-                            "part_of",
-                            "contents",
-                            "attachments",
-                            "audience",
-                            "description",
-                        ]
-                        .contains(&key.as_str())
-                            && let Ok(json) = serde_json::to_value(value)
-                        {
-                            extra.insert(key.clone(), json);
-                        }
-                    }
-
-                    // Use file mtime if available, otherwise current time
-                    let modified_at =
-                        file_mtime.unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
-
-                    // Extract filename from path (canonical_path works here - same filename)
-                    let filename = std::path::Path::new(&canonical_path)
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("")
-                        .to_string();
-
-                    let metadata = crate::crdt::FileMetadata {
-                        filename,
-                        title,
-                        part_of: parent_path.clone(),
-                        contents,
-                        attachments,
-                        deleted: false,
-                        audience: file_audience,
-                        description,
-                        extra,
-                        modified_at,
-                    };
-
-                    // Store with canonical (workspace-relative) path as CRDT key
-                    files_to_add.push((canonical_path.clone(), metadata));
-
-                    // Add children to stack (in reverse order to process in correct order)
-                    // Pass canonical_path as parent so children also use relative paths
-                    for child in node.children.iter().rev() {
-                        stack.push((child, Some(canonical_path.clone())));
-                    }
-                }
-
-                // Now populate CRDT
-                let file_count = files_to_add.len();
-                let updated_count = files_updated_from_disk.len();
-
-                for (path, metadata) in &files_to_add {
-                    if let Err(e) = crdt.set_file(path, metadata.clone()) {
-                        log::warn!(
-                            "[InitializeWorkspaceCrdt] Failed to set file {}: {:?}",
-                            path,
-                            e
-                        );
-                    }
-                    // NOTE: We intentionally do NOT initialize BodyDocs from disk here.
-                    // Body content is synced via BodySyncBridge, and the TypeScript layer
-                    // has a safety guard to preserve disk content when writing files.
-                    // Initializing BodyDocs here would create Y.js operations that merge
-                    // with server operations, causing content duplication.
-                }
-
-                // Save CRDT state (workspace metadata only, not body content)
-                crdt.save()?;
-
-                let msg = if updated_count > 0 {
-                    if audience.is_some() {
-                        format!(
-                            "{} files populated, {} updated from disk (audience filtered)",
-                            file_count, updated_count
-                        )
-                    } else {
-                        format!(
-                            "{} files populated, {} updated from disk",
-                            file_count, updated_count
-                        )
-                    }
-                } else if audience.is_some() {
-                    format!("{} files populated (audience filtered)", file_count)
-                } else {
-                    format!("{} files populated", file_count)
-                };
-                log::info!("[InitializeWorkspaceCrdt] {}", msg);
-
-                Ok(Response::String(msg))
-            }
-
-            // === CRDT Operations ===
-            #[cfg(feature = "crdt")]
-            Command::GetSyncState { doc_name: _ } => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                Ok(Response::Binary(crdt.get_state_vector()))
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::ApplyRemoteUpdate {
-                doc_name: _,
-                update,
-            } => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                let update_id = crdt.apply_update(&update, crate::crdt::UpdateOrigin::Remote)?;
-                Ok(Response::UpdateId(update_id))
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::GetMissingUpdates {
-                doc_name: _,
-                remote_state_vector,
-            } => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                let update = crdt.get_missing_updates(&remote_state_vector)?;
-                Ok(Response::Binary(update))
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::GetFullState { doc_name: _ } => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                Ok(Response::Binary(crdt.get_full_state()))
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::GetHistory { doc_name, limit } => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                let history_manager = crate::crdt::HistoryManager::new(crdt.storage().clone());
-                let history = history_manager.get_history(&doc_name, limit)?;
-                let entries: Vec<crate::command::CrdtHistoryEntry> = history
-                    .into_iter()
-                    .map(|u| crate::command::CrdtHistoryEntry {
-                        update_id: u.update_id,
-                        timestamp: u.timestamp,
-                        origin: u.origin,
-                        files_changed: u.files_changed,
-                        device_id: u.device_id,
-                        device_name: u.device_name,
-                    })
-                    .collect();
-                Ok(Response::CrdtHistory(entries))
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::GetFileHistory { file_path, limit } => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                let history_manager = crate::crdt::HistoryManager::new(crdt.storage().clone());
-                let history = history_manager.get_file_history(&file_path, limit)?;
-                let entries: Vec<crate::command::CrdtHistoryEntry> = history
-                    .into_iter()
-                    .map(|u| crate::command::CrdtHistoryEntry {
-                        update_id: u.update_id,
-                        timestamp: u.timestamp,
-                        origin: u.origin,
-                        files_changed: u.files_changed,
-                        device_id: u.device_id,
-                        device_name: u.device_name,
-                    })
-                    .collect();
-                Ok(Response::CrdtHistory(entries))
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::RestoreVersion {
-                doc_name,
-                update_id,
-            } => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                let history_manager = crate::crdt::HistoryManager::new(crdt.storage().clone());
-                let restore_update = history_manager.create_restore_update(&doc_name, update_id)?;
-                crdt.apply_update(&restore_update, crate::crdt::UpdateOrigin::Local)?;
-                crdt.save()?;
-                Ok(Response::Ok)
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::GetVersionDiff {
-                doc_name,
-                from_id,
-                to_id,
-            } => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                let history_manager = crate::crdt::HistoryManager::new(crdt.storage().clone());
-                let diffs = history_manager.diff(&doc_name, from_id, to_id)?;
-                Ok(Response::VersionDiff(diffs))
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::GetStateAt {
-                doc_name,
-                update_id,
-            } => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                let history_manager = crate::crdt::HistoryManager::new(crdt.storage().clone());
-                let state = history_manager.get_state_at(&doc_name, update_id)?;
-                match state {
-                    Some(data) => Ok(Response::Binary(data)),
-                    None => Ok(Response::Ok),
-                }
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::GetCrdtFile { path } => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                Ok(Response::CrdtFile(crdt.get_file(&path)))
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::SetCrdtFile { path, metadata } => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                let mut file_metadata: crate::crdt::FileMetadata = serde_json::from_value(metadata)
-                    .map_err(|e| DiaryxError::Unsupported(format!("Invalid metadata: {}", e)))?;
-
-                if let Some(existing) = crdt.get_file(&path) {
-                    Self::merge_attachment_refs(&existing, &mut file_metadata);
-                }
-
-                crdt.set_file(&path, file_metadata)?;
-
-                // Emit workspace sync (observe_updates should handle this, but emit explicitly for safety)
-                if let Some(sync_manager) = self.sync_manager()
-                    && let Err(e) = sync_manager.emit_workspace_update()
-                {
-                    log::warn!("Failed to emit workspace sync for SetCrdtFile: {}", e);
-                }
-
-                Ok(Response::Ok)
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::ListCrdtFiles { include_deleted } => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                let files = if include_deleted {
-                    crdt.list_files()
-                } else {
-                    crdt.list_active_files()
-                };
-                Ok(Response::CrdtFiles(files))
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::SaveCrdtState { doc_name: _ } => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                crdt.save()?;
-                Ok(Response::Ok)
-            }
-
-            // ==================== Body Document Commands ====================
-            #[cfg(feature = "crdt")]
-            Command::GetBodyContent { doc_name } => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                match crdt.get_body_content(&doc_name) {
-                    Some(content) => Ok(Response::String(content)),
-                    None => Ok(Response::String(String::new())),
-                }
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::SetBodyContent { doc_name, content } => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                crdt.set_body_content(&doc_name, &content)?;
-
-                // Note: Body sync messages are now automatically emitted via the Yrs observer
-                // pattern when set_body() is called. No manual emit_body_update needed.
-
-                Ok(Response::Ok)
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::ResetBodyDoc { doc_name } => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                // Replace the cached body doc with a fresh empty Y.Doc.
-                // This discards all local operations without creating DELETE ops.
-                crdt.reset_body_doc(&doc_name);
-                Ok(Response::Ok)
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::GetBodySyncState { doc_name } => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                match crdt.get_body_sync_state(&doc_name) {
-                    Some(state) => Ok(Response::Binary(state)),
-                    None => Ok(Response::Binary(Vec::new())),
-                }
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::GetBodyFullState { doc_name } => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                match crdt.get_body_full_state(&doc_name) {
-                    Some(state) => Ok(Response::Binary(state)),
-                    None => Ok(Response::Binary(Vec::new())),
-                }
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::ApplyBodyUpdate { doc_name, update } => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                let update_id =
-                    crdt.apply_body_update(&doc_name, &update, crate::crdt::UpdateOrigin::Remote)?;
-                Ok(Response::UpdateId(update_id))
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::GetBodyMissingUpdates {
-                doc_name,
-                remote_state_vector,
-            } => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                let diff = crdt.get_body_missing_updates(&doc_name, &remote_state_vector)?;
-                Ok(Response::Binary(diff))
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::SaveBodyDoc { doc_name } => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                crdt.save_body_doc(&doc_name)?;
-                Ok(Response::Ok)
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::SaveAllBodyDocs => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                crdt.save_all_body_docs()?;
-                Ok(Response::Ok)
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::ListLoadedBodyDocs => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                Ok(Response::Strings(crdt.loaded_body_docs()))
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::UnloadBodyDoc { doc_name } => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                crdt.unload_body_doc(&doc_name);
-                Ok(Response::Ok)
-            }
-
-            // ==================== Sync Protocol Commands ====================
-            #[cfg(feature = "crdt")]
-            Command::CreateSyncStep1 { doc_name } => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                let message = crdt.create_sync_step1(&doc_name);
-                Ok(Response::Binary(message))
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::HandleSyncMessage {
-                doc_name,
-                message,
-                write_to_disk,
-            } => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-
-                let (response, changed_files) =
-                    crdt.handle_sync_message_with_changes(&doc_name, &message)?;
-
-                // If write_to_disk is enabled and we have changed files, write them
-                if write_to_disk
-                    && !changed_files.is_empty()
-                    && let Some(handler) = self.sync_handler()
-                {
-                    // Get file metadata for changed files from the CRDT
-                    let files_to_sync: Vec<(String, crate::crdt::FileMetadata)> = changed_files
-                        .iter()
-                        .filter_map(|path| crdt.get_file(path).map(|m| (path.clone(), m)))
-                        .collect();
-
-                    if !files_to_sync.is_empty() {
-                        let body_mgr_ref = self.body_doc_manager().map(|arc| arc.as_ref());
-                        // Note: This path doesn't track renames, pass empty vec
-                        handler
-                            .handle_remote_metadata_update(
-                                files_to_sync,
-                                Vec::new(),
-                                body_mgr_ref,
-                                true,
-                            )
-                            .await?;
-                        log::debug!(
-                            "HandleSyncMessage: wrote {} changed files to disk",
-                            changed_files.len()
-                        );
-                    }
-                }
-
-                match response {
-                    Some(data) => Ok(Response::Binary(data)),
-                    None => Ok(Response::Ok),
-                }
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::CreateUpdateMessage { doc_name, update } => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                let message = crdt.create_update_message(&doc_name, &update);
-                Ok(Response::Binary(message))
-            }
-
-            // ==================== Sync Handler Commands ====================
-            #[cfg(feature = "crdt")]
-            Command::ConfigureSyncHandler {
-                guest_join_code,
-                uses_opfs,
-            } => {
-                let sync_handler = self.sync_handler().ok_or_else(|| {
-                    DiaryxError::Unsupported(
-                        "SyncHandler not enabled for this instance".to_string(),
-                    )
-                })?;
-
-                let config = guest_join_code.map(|join_code| crate::crdt::GuestConfig {
-                    join_code,
-                    uses_opfs,
-                });
-                sync_handler.configure_guest(config);
-                Ok(Response::Ok)
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::ApplyRemoteWorkspaceUpdateWithEffects {
-                update,
-                write_to_disk,
-            } => {
-                let crdt = self.crdt().ok_or_else(|| {
-                    DiaryxError::Unsupported("CRDT not enabled for this instance".to_string())
-                })?;
-                let sync_handler = self.sync_handler();
-                let body_manager = self.body_doc_manager();
-
-                // Apply the update to the CRDT, tracking which files changed
-                let (update_id, changed_paths, renames) =
-                    crdt.apply_update_tracking_changes(&update, crate::crdt::UpdateOrigin::Remote)?;
-
-                // If we have a sync handler and write_to_disk is enabled, write only changed files
-                if write_to_disk && let Some(handler) = sync_handler {
-                    // Only get metadata for files that actually changed
-                    let files: Vec<(String, crate::crdt::FileMetadata)> = changed_paths
-                        .iter()
-                        .filter_map(|path| crdt.get_file(path).map(|m| (path.clone(), m)))
-                        .collect();
-                    let body_mgr_ref = body_manager.map(|arc| arc.as_ref());
-                    let files_synced = handler
-                        .handle_remote_metadata_update(files, renames, body_mgr_ref, true)
-                        .await?;
-                    log::debug!(
-                        "ApplyRemoteWorkspaceUpdateWithEffects: synced {} files (out of {} changed)",
-                        files_synced,
-                        changed_paths.len()
-                    );
-                }
-
-                Ok(Response::UpdateId(update_id))
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::ApplyRemoteBodyUpdateWithEffects {
-                doc_name,
-                update,
-                write_to_disk,
-            } => {
-                let body_manager = self.body_doc_manager().ok_or_else(|| {
-                    DiaryxError::Unsupported(
-                        "BodyDocManager not enabled for this instance".to_string(),
-                    )
-                })?;
-
-                // Apply the update to the body doc
-                let doc = body_manager.get_or_create(&doc_name);
-                let update_id = doc.apply_update(&update, crate::crdt::UpdateOrigin::Remote)?;
-
-                // If write_to_disk is enabled, write the body to disk
-                if write_to_disk && let Some(handler) = self.sync_handler() {
-                    let body = doc.get_body();
-                    let crdt = self.crdt();
-                    let metadata = crdt.and_then(|c| c.get_file(&doc_name));
-
-                    handler
-                        .handle_remote_body_update(&doc_name, &body, metadata.as_ref())
-                        .await?;
-
-                    log::debug!(
-                        "ApplyRemoteBodyUpdateWithEffects: wrote body to disk for {}",
-                        doc_name
-                    );
-                }
-
-                Ok(Response::UpdateId(update_id))
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::GetStoragePath { canonical_path } => {
-                let sync_handler = self.sync_handler().ok_or_else(|| {
-                    DiaryxError::Unsupported(
-                        "SyncHandler not enabled for this instance".to_string(),
-                    )
-                })?;
-
-                let storage_path = sync_handler.get_storage_path(&canonical_path);
-                Ok(Response::String(storage_path.to_string_lossy().to_string()))
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::GetCanonicalPath { storage_path } => {
-                let sync_handler = self.sync_handler().ok_or_else(|| {
-                    DiaryxError::Unsupported(
-                        "SyncHandler not enabled for this instance".to_string(),
-                    )
-                })?;
-
-                let canonical_path = sync_handler.get_canonical_path(&storage_path);
-                Ok(Response::String(canonical_path))
-            }
-
-            // ==================== Sync Manager Commands ====================
-            #[cfg(feature = "crdt")]
-            Command::HandleWorkspaceSyncMessage {
-                message,
-                write_to_disk,
-            } => {
-                let sync_manager = self.sync_manager().ok_or_else(|| {
-                    DiaryxError::Unsupported(
-                        "SyncManager not enabled for this instance".to_string(),
-                    )
-                })?;
-
-                let result = sync_manager
-                    .handle_workspace_message(&message, write_to_disk)
-                    .await?;
-
-                Ok(Response::WorkspaceSyncResult {
-                    response: result.response,
-                    changed_files: result.changed_files,
-                    sync_complete: result.sync_complete,
-                })
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::HandleCrdtState { state } => {
-                let sync_manager = self.sync_manager().ok_or_else(|| {
-                    DiaryxError::Unsupported(
-                        "SyncManager not enabled for this instance".to_string(),
-                    )
-                })?;
-
-                let file_count = sync_manager.handle_crdt_state(&state).await?;
-                log::info!(
-                    "[CommandHandler] HandleCrdtState: applied state, {} files in workspace",
-                    file_count
-                );
-                Ok(Response::Ok)
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::CreateWorkspaceSyncStep1 => {
-                let sync_manager = self.sync_manager().ok_or_else(|| {
-                    DiaryxError::Unsupported(
-                        "SyncManager not enabled for this instance".to_string(),
-                    )
-                })?;
-
-                let step1 = sync_manager.create_workspace_sync_step1();
-                Ok(Response::Binary(step1))
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::CreateWorkspaceUpdate { since_state_vector } => {
-                let sync_manager = self.sync_manager().ok_or_else(|| {
-                    DiaryxError::Unsupported(
-                        "SyncManager not enabled for this instance".to_string(),
-                    )
-                })?;
-
-                let update = sync_manager.create_workspace_update(since_state_vector.as_deref())?;
-                Ok(Response::Binary(update))
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::InitBodySync { doc_name } => {
-                let sync_manager = self.sync_manager().ok_or_else(|| {
-                    DiaryxError::Unsupported(
-                        "SyncManager not enabled for this instance".to_string(),
-                    )
-                })?;
-
-                sync_manager.init_body_sync(&doc_name);
-                Ok(Response::Ok)
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::CloseBodySync { doc_name } => {
-                let sync_manager = self.sync_manager().ok_or_else(|| {
-                    DiaryxError::Unsupported(
-                        "SyncManager not enabled for this instance".to_string(),
-                    )
-                })?;
-
-                sync_manager.close_body_sync(&doc_name);
-                Ok(Response::Ok)
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::HandleBodySyncMessage {
-                doc_name,
-                message,
-                write_to_disk,
-            } => {
-                let sync_manager = self.sync_manager().ok_or_else(|| {
-                    DiaryxError::Unsupported(
-                        "SyncManager not enabled for this instance".to_string(),
-                    )
-                })?;
-
-                let result = sync_manager
-                    .handle_body_message(&doc_name, &message, write_to_disk)
-                    .await?;
-
-                Ok(Response::BodySyncResult {
-                    response: result.response,
-                    content: result.content,
-                    is_echo: result.is_echo,
-                })
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::CreateBodySyncStep1 { doc_name } => {
-                let sync_manager = self.sync_manager().ok_or_else(|| {
-                    DiaryxError::Unsupported(
-                        "SyncManager not enabled for this instance".to_string(),
-                    )
-                })?;
-
-                let step1 = sync_manager.create_body_sync_step1(&doc_name);
-                Ok(Response::Binary(step1))
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::CreateBodyUpdate { doc_name, content } => {
-                let sync_manager = self.sync_manager().ok_or_else(|| {
-                    DiaryxError::Unsupported(
-                        "SyncManager not enabled for this instance".to_string(),
-                    )
-                })?;
-
-                let update = sync_manager.create_body_update(&doc_name, &content)?;
-                Ok(Response::Binary(update))
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::IsSyncComplete => {
-                let sync_manager = self.sync_manager().ok_or_else(|| {
-                    DiaryxError::Unsupported(
-                        "SyncManager not enabled for this instance".to_string(),
-                    )
-                })?;
-
-                Ok(Response::Bool(sync_manager.is_sync_complete()))
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::IsWorkspaceSynced => {
-                let sync_manager = self.sync_manager().ok_or_else(|| {
-                    DiaryxError::Unsupported(
-                        "SyncManager not enabled for this instance".to_string(),
-                    )
-                })?;
-
-                Ok(Response::Bool(sync_manager.is_workspace_synced()))
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::IsBodySynced { doc_name } => {
-                let sync_manager = self.sync_manager().ok_or_else(|| {
-                    DiaryxError::Unsupported(
-                        "SyncManager not enabled for this instance".to_string(),
-                    )
-                })?;
-
-                Ok(Response::Bool(sync_manager.is_body_synced(&doc_name)))
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::MarkSyncComplete => {
-                let sync_manager = self.sync_manager().ok_or_else(|| {
-                    DiaryxError::Unsupported(
-                        "SyncManager not enabled for this instance".to_string(),
-                    )
-                })?;
-
-                sync_manager.mark_sync_complete();
-                Ok(Response::Ok)
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::GetActiveSyncs => {
-                let sync_manager = self.sync_manager().ok_or_else(|| {
-                    DiaryxError::Unsupported(
-                        "SyncManager not enabled for this instance".to_string(),
-                    )
-                })?;
-
-                let syncs = sync_manager.get_active_syncs();
-                Ok(Response::Strings(syncs))
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::TrackContent { path, content } => {
-                let sync_manager = self.sync_manager().ok_or_else(|| {
-                    DiaryxError::Unsupported(
-                        "SyncManager not enabled for this instance".to_string(),
-                    )
-                })?;
-
-                sync_manager.track_content(&path, &content);
-                Ok(Response::Ok)
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::IsEcho { path, content } => {
-                let sync_manager = self.sync_manager().ok_or_else(|| {
-                    DiaryxError::Unsupported(
-                        "SyncManager not enabled for this instance".to_string(),
-                    )
-                })?;
-
-                Ok(Response::Bool(sync_manager.is_echo(&path, &content)))
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::ClearTrackedContent { path } => {
-                let sync_manager = self.sync_manager().ok_or_else(|| {
-                    DiaryxError::Unsupported(
-                        "SyncManager not enabled for this instance".to_string(),
-                    )
-                })?;
-
-                sync_manager.clear_tracked_content(&path);
-                Ok(Response::Ok)
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::ResetSyncState => {
-                let sync_manager = self.sync_manager().ok_or_else(|| {
-                    DiaryxError::Unsupported(
-                        "SyncManager not enabled for this instance".to_string(),
-                    )
-                })?;
-
-                sync_manager.reset();
-                Ok(Response::Ok)
-            }
-
-            #[cfg(feature = "crdt")]
-            Command::TriggerWorkspaceSync => {
-                let sync_manager = self.sync_manager().ok_or_else(|| {
-                    DiaryxError::Unsupported(
-                        "SyncManager not enabled for this instance".to_string(),
-                    )
-                })?;
-
-                // Create workspace update message (full state)
-                let update = sync_manager.create_workspace_update(None)?;
-                if update.is_empty() {
-                    // No changes to sync
-                    Ok(Response::Ok)
-                } else {
-                    // Return the sync message bytes
-                    Ok(Response::Binary(update))
-                }
             }
 
             // === Workspace Configuration Commands ===
@@ -4252,6 +2273,54 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             Command::ToWebSocketSyncUrl { url } => {
                 use crate::utils::naming;
                 Ok(Response::String(naming::to_websocket_sync_url(&url)))
+            }
+
+            // === Plugin Operations ===
+            Command::PluginCommand {
+                plugin,
+                command,
+                params,
+            } => {
+                let result = self
+                    .plugin_registry()
+                    .handle_plugin_command(&plugin, &command, params)
+                    .await;
+                match result {
+                    Some(Ok(value)) => Ok(Response::PluginResult(value)),
+                    Some(Err(e)) => Err(DiaryxError::Plugin(e.to_string())),
+                    None => Err(DiaryxError::Plugin(format!(
+                        "No plugin '{plugin}' handles command '{command}'"
+                    ))),
+                }
+            }
+
+            Command::GetPluginManifests => {
+                let manifests = self.plugin_registry().get_all_manifests();
+                Ok(Response::PluginManifests(manifests))
+            }
+
+            Command::GetPluginConfig { plugin } => {
+                for wp in self.plugin_registry().workspace_plugins() {
+                    if wp.id().0 == plugin {
+                        let config = wp.get_config().await;
+                        return Ok(Response::PluginResult(
+                            config.unwrap_or(serde_json::Value::Null),
+                        ));
+                    }
+                }
+                Err(DiaryxError::Plugin(format!("Plugin '{plugin}' not found")))
+            }
+
+            Command::SetPluginConfig { plugin, config } => {
+                for wp in self.plugin_registry().workspace_plugins() {
+                    if wp.id().0 == plugin {
+                        wp.set_config(config)
+                            .await
+                            .map_err(|e| DiaryxError::Plugin(e.to_string()))?;
+                        return Ok(Response::Ok);
+                    }
+                }
+                Err(DiaryxError::Plugin(format!("Plugin '{plugin}' not found")))
             }
         }
     }
@@ -4527,800 +2596,13 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
 
         Ok((links_converted, modified))
     }
-
-    // ==================== Import Daily Mode ====================
-
-    /// Import entries into the workspace's daily entry hierarchy.
-    ///
-    /// Groups entries by date, then for each date:
-    /// - **Single entry, no existing daily entry**: writes the entry's content
-    ///   directly as the daily entry file (e.g. `2026-02-23.md`).
-    /// - **Multiple entries, or daily entry already exists**: creates child files
-    ///   linked to the daily entry via `part_of`/`contents`.
-    async fn import_entries_daily(
-        &self,
-        workspace_root: &Path,
-        entries: &[crate::import::ImportedEntry],
-    ) -> Result<crate::import::ImportResult> {
-        use crate::config::Config;
-        use crate::entry::slugify;
-        use std::collections::HashSet;
-
-        let mut result = crate::import::ImportResult {
-            imported: 0,
-            skipped: 0,
-            errors: Vec::new(),
-            attachment_count: 0,
-        };
-
-        if entries.is_empty() {
-            return Ok(result);
-        }
-
-        // Find workspace root index to read config
-        let ws = self.workspace().inner();
-        let workspace_root_path = match ws.find_root_index_in_dir(workspace_root).await? {
-            Some(path) => path,
-            None => {
-                result
-                    .errors
-                    .push("Could not find workspace root index".to_string());
-                return Ok(result);
-            }
-        };
-
-        // Read workspace config for daily_entry_folder
-        let ws_cfg = ws.get_workspace_config(&workspace_root_path).await.ok();
-        let daily_entry_folder = ws_cfg.as_ref().and_then(|c| c.daily_entry_folder.clone());
-
-        let workspace_dir = workspace_root_path
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| workspace_root_path.clone());
-
-        let config = Config::with_options(
-            workspace_dir.clone(),
-            daily_entry_folder.clone(),
-            None,
-            None,
-            None,
-        );
-
-        // Group entries by date so we can detect single-entry days.
-        let mut by_date: IndexMap<chrono::NaiveDate, Vec<&crate::import::ImportedEntry>> =
-            IndexMap::new();
-        for entry in entries {
-            let date = entry
-                .date
-                .map(|dt| dt.date_naive())
-                .unwrap_or_else(|| chrono::Local::now().date_naive());
-            by_date.entry(date).or_default().push(entry);
-        }
-
-        let mut used_paths: HashSet<PathBuf> = HashSet::new();
-
-        for (date, day_entries) in &by_date {
-            // 1. Ensure daily index hierarchy (year/month dirs + indexes)
-            let (month_dir, month_index_path) = match self
-                .ensure_daily_index_hierarchy(
-                    date,
-                    &config,
-                    &workspace_root_path,
-                    daily_entry_folder.as_deref(),
-                )
-                .await
-            {
-                Ok(paths) => paths,
-                Err(e) => {
-                    for entry in day_entries {
-                        result.errors.push(format!(
-                            "Failed to create hierarchy for {}: {e}",
-                            entry.title
-                        ));
-                        result.skipped += 1;
-                    }
-                    continue;
-                }
-            };
-
-            let date_str = date.format("%Y-%m-%d").to_string();
-            let daily_filename = format!("{date_str}.md");
-            let daily_entry_path = month_dir.join(&daily_filename);
-            let daily_already_exists = self.fs().exists(&daily_entry_path).await;
-
-            // Single entry for this date and no existing daily entry →
-            // write content directly as the daily entry.
-            if day_entries.len() == 1 && !daily_already_exists {
-                let entry = day_entries[0];
-                let title = date.format("%B %d, %Y").to_string();
-                let month_index_filename = month_index_path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("month_index.md")
-                    .to_string();
-
-                let mut fm = IndexMap::new();
-                fm.insert("title".to_string(), Value::String(title));
-                fm.insert("part_of".to_string(), Value::String(month_index_filename));
-                fm.insert("created".to_string(), Value::String(date_str.clone()));
-
-                // Carry over extra metadata from the imported entry
-                for (key, value) in &entry.metadata {
-                    fm.insert(key.clone(), value.clone());
-                }
-
-                if let Some(dt) = entry.date {
-                    fm.insert("date".to_string(), Value::String(dt.to_rfc3339()));
-                }
-
-                // Attachments list — use daily entry stem for paths
-                let daily_stem = date_str.clone(); // stem of "2026-02-23.md"
-                if !entry.attachments.is_empty() {
-                    let att_list: Vec<Value> = entry
-                        .attachments
-                        .iter()
-                        .map(|a| Value::String(format!("{daily_stem}/_attachments/{}", a.filename)))
-                        .collect();
-                    fm.insert("attachments".to_string(), Value::Sequence(att_list));
-                }
-
-                let yaml = serde_yaml::to_string(&fm).unwrap_or_default();
-
-                let body = if !entry.attachments.is_empty() {
-                    entry
-                        .body
-                        .replace("_attachments/", &format!("{daily_stem}/_attachments/"))
-                } else {
-                    entry.body.clone()
-                };
-
-                let content = format!("---\n{yaml}---\n{body}");
-
-                if let Err(e) = self.fs().write_file(&daily_entry_path, &content).await {
-                    result.errors.push(format!(
-                        "Failed to write {}: {e}",
-                        daily_entry_path.display()
-                    ));
-                    result.skipped += 1;
-                } else {
-                    let _ = self
-                        .add_to_index_contents(&month_index_path, &daily_filename)
-                        .await;
-
-                    // Write attachments
-                    if !entry.attachments.is_empty() {
-                        let attachments_dir = month_dir.join(format!("{daily_stem}/_attachments"));
-                        for att in &entry.attachments {
-                            let att_path = attachments_dir.join(&att.filename);
-                            if let Err(e) = self.fs().create_dir_all(&attachments_dir).await {
-                                result
-                                    .errors
-                                    .push(format!("Failed to create attachment dir: {e}"));
-                                continue;
-                            }
-                            if let Err(e) = self.fs().write_binary(&att_path, &att.data).await {
-                                result
-                                    .errors
-                                    .push(format!("Failed to write attachment: {e}"));
-                                continue;
-                            }
-                            result.attachment_count += 1;
-                        }
-                    }
-
-                    result.imported += 1;
-                }
-
-                continue;
-            }
-
-            // Multiple entries (or daily entry already exists) →
-            // create the daily entry if needed, then add children.
-            if !daily_already_exists {
-                let title = date.format("%B %d, %Y").to_string();
-                let month_index_filename = month_index_path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("month_index.md")
-                    .to_string();
-
-                // Try to resolve a daily template
-                let template_content = if let Some(ref cfg) = ws_cfg
-                    && let Some(ref daily_tmpl_link) = cfg.daily_template
-                {
-                    self.resolve_template_from_link(daily_tmpl_link, &workspace_root_path)
-                        .await
-                        .map(|t| t.raw_content)
-                } else {
-                    None
-                };
-                let template_content = if template_content.is_some() {
-                    template_content
-                } else {
-                    let templates_dir = workspace_dir.join("_templates");
-                    let template_path = templates_dir.join("daily.md");
-                    if self.fs().exists(&template_path).await {
-                        self.fs().read_to_string(&template_path).await.ok()
-                    } else {
-                        None
-                    }
-                };
-
-                let content = if let Some(tmpl) = template_content {
-                    tmpl.replace("{{title}}", &title)
-                        .replace("{{date}}", &date_str)
-                        .replace("{{part_of}}", &month_index_filename)
-                } else {
-                    format!(
-                        "---\ntitle: \"{}\"\npart_of: {}\ncreated: {}\n---\n\n## Today\n\n",
-                        title, month_index_filename, date_str
-                    )
-                };
-
-                if let Err(e) = self.fs().create_new(&daily_entry_path, &content).await {
-                    log::warn!(
-                        "Failed to create daily entry {}: {e}",
-                        daily_entry_path.display()
-                    );
-                } else {
-                    let _ = self
-                        .add_to_index_contents(&month_index_path, &daily_filename)
-                        .await;
-                }
-            }
-
-            // Write each entry as a child of the daily entry
-            for entry in day_entries {
-                let slug = slugify(&entry.title);
-                let slug = if slug.is_empty() {
-                    "untitled".to_string()
-                } else {
-                    slug
-                };
-                let entry_filename = format!("{date_str}-{slug}.md");
-                let mut entry_path = month_dir.join(&entry_filename);
-
-                // Handle filename collisions
-                if used_paths.contains(&entry_path) || self.fs().exists(&entry_path).await {
-                    let stem = entry_path
-                        .file_stem()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string();
-                    let mut counter = 2;
-                    loop {
-                        let candidate = month_dir.join(format!("{stem}-{counter}.md"));
-                        if !used_paths.contains(&candidate) && !self.fs().exists(&candidate).await {
-                            entry_path = candidate;
-                            break;
-                        }
-                        counter += 1;
-                    }
-                }
-                used_paths.insert(entry_path.clone());
-
-                // Build frontmatter
-                let mut fm = IndexMap::new();
-                fm.insert("title".to_string(), Value::String(entry.title.clone()));
-
-                for (key, value) in &entry.metadata {
-                    fm.insert(key.clone(), value.clone());
-                }
-
-                if let Some(dt) = entry.date {
-                    fm.insert("date".to_string(), Value::String(dt.to_rfc3339()));
-                }
-
-                // part_of → daily entry
-                fm.insert("part_of".to_string(), Value::String(daily_filename.clone()));
-
-                // Attachments list in frontmatter
-                if !entry.attachments.is_empty() {
-                    let entry_stem = entry_path
-                        .file_stem()
-                        .unwrap()
-                        .to_string_lossy()
-                        .to_string();
-                    let att_list: Vec<Value> = entry
-                        .attachments
-                        .iter()
-                        .map(|a| Value::String(format!("{entry_stem}/_attachments/{}", a.filename)))
-                        .collect();
-                    fm.insert("attachments".to_string(), Value::Sequence(att_list));
-                }
-
-                let yaml = serde_yaml::to_string(&fm).unwrap_or_default();
-
-                // Resolve attachment references in body
-                let body = if !entry.attachments.is_empty() {
-                    let entry_stem = entry_path.file_stem().unwrap().to_string_lossy();
-                    entry
-                        .body
-                        .replace("_attachments/", &format!("{entry_stem}/_attachments/"))
-                } else {
-                    entry.body.clone()
-                };
-
-                let entry_content = format!("---\n{yaml}---\n{body}");
-
-                // Write entry file
-                if let Err(e) = self.fs().write_file(&entry_path, &entry_content).await {
-                    result
-                        .errors
-                        .push(format!("Failed to write {}: {e}", entry_path.display()));
-                    result.skipped += 1;
-                    continue;
-                }
-
-                // Add entry to daily entry's contents
-                let entry_filename_final = entry_path
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string();
-                let _ = self
-                    .add_to_index_contents(&daily_entry_path, &entry_filename_final)
-                    .await;
-
-                // Write attachments
-                if !entry.attachments.is_empty() {
-                    let entry_stem = entry_path
-                        .file_stem()
-                        .unwrap()
-                        .to_string_lossy()
-                        .to_string();
-                    let attachments_dir = month_dir.join(format!("{entry_stem}/_attachments"));
-
-                    for att in &entry.attachments {
-                        let att_path = attachments_dir.join(&att.filename);
-                        if let Err(e) = self.fs().create_dir_all(&attachments_dir).await {
-                            result
-                                .errors
-                                .push(format!("Failed to create attachment dir: {e}"));
-                            continue;
-                        }
-                        if let Err(e) = self.fs().write_binary(&att_path, &att.data).await {
-                            result
-                                .errors
-                                .push(format!("Failed to write attachment: {e}"));
-                            continue;
-                        }
-                        result.attachment_count += 1;
-                    }
-                }
-
-                result.imported += 1;
-            }
-        }
-
-        Ok(result)
-    }
-
-    // ==================== Daily Entry Helper Methods ====================
-
-    /// Ensure the daily index hierarchy exists for a given date.
-    ///
-    /// When `daily_entry_folder` is Some: Creates daily_index.md -> YYYY_index.md -> YYYY_month.md
-    /// When `daily_entry_folder` is None: Adds YYYY_index.md directly to workspace root
-    ///
-    /// This function detects existing index files and directories with alternate naming conventions
-    /// (e.g., `2026.md` vs `2026_index.md`, `01/` vs `january/`) to avoid creating duplicates.
-    async fn ensure_daily_index_hierarchy(
-        &self,
-        date: &chrono::NaiveDate,
-        config: &crate::config::Config,
-        workspace_root_path: &Path,
-        daily_entry_folder: Option<&str>,
-    ) -> Result<(PathBuf, PathBuf)> {
-        let daily_dir = config.daily_entry_dir();
-        let year = date.format("%Y").to_string();
-
-        // Find or create year directory (always named by year number)
-        let year_dir = daily_dir.join(&year);
-        self.fs().create_dir_all(&year_dir).await?;
-
-        // Find or create year index - check for existing files with alternate names
-        let year_index_path = self
-            .find_or_create_year_index(&year_dir, date, workspace_root_path, daily_entry_folder)
-            .await?;
-
-        // Find or create month directory and index - check for existing with alternate names
-        let (month_dir, month_index_path) = self
-            .find_or_create_month_dir_and_index(&year_dir, date, &year_index_path)
-            .await?;
-
-        // Ensure the month directory exists
-        self.fs().create_dir_all(&month_dir).await?;
-
-        // Return the paths for the caller to use when creating the daily entry
-        Ok((month_dir, month_index_path))
-    }
-
-    /// Find an existing year index or create one.
-    /// Checks for common naming patterns: YYYY.md, YYYY_index.md
-    /// Only considers files that are actual indexes (have `contents` property).
-    async fn find_or_create_year_index(
-        &self,
-        year_dir: &Path,
-        date: &chrono::NaiveDate,
-        workspace_root_path: &Path,
-        daily_entry_folder: Option<&str>,
-    ) -> Result<PathBuf> {
-        let year = date.format("%Y").to_string();
-        let daily_dir = year_dir.parent().unwrap_or(year_dir);
-
-        // Check for existing year index files (in order of preference)
-        let candidates = [
-            format!("{}.md", year),       // 2026.md (simpler, user-preferred)
-            format!("{}_index.md", year), // 2026_index.md
-        ];
-
-        for candidate in &candidates {
-            let path = year_dir.join(candidate);
-            if self.is_index_file(&path).await {
-                return Ok(path);
-            }
-        }
-
-        // No existing index found - create one with the simpler naming
-        let year_index_path = year_dir.join(format!("{}.md", year));
-        let workspace_root_filename = workspace_root_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("README.md");
-
-        if let Some(folder) = daily_entry_folder {
-            // With daily_entry_folder: Ensure daily_index.md exists first
-            let daily_index_path = daily_dir.join("daily_index.md");
-
-            if !self.fs().exists(&daily_index_path).await {
-                let part_of = format!("../{}", workspace_root_filename);
-                self.create_daily_index(&daily_index_path, Some(&part_of))
-                    .await?;
-
-                // Add daily_index to workspace root's contents
-                let daily_index_rel = format!("{}/daily_index.md", folder);
-                self.add_to_index_contents(workspace_root_path, &daily_index_rel)
-                    .await?;
-            }
-
-            // Create year index linking to daily_index
-            self.create_year_index(&year_index_path, date, "../daily_index.md")
-                .await?;
-            let year_index_rel = format!("{}/{}.md", year, year);
-            self.add_to_index_contents(&daily_index_path, &year_index_rel)
-                .await?;
-        } else {
-            // Without daily_entry_folder: Link directly to workspace root
-            let part_of = format!("../{}", workspace_root_filename);
-            self.create_year_index(&year_index_path, date, &part_of)
-                .await?;
-            let year_index_rel = format!("{}/{}.md", year, year);
-            self.add_to_index_contents(workspace_root_path, &year_index_rel)
-                .await?;
-        }
-
-        Ok(year_index_path)
-    }
-
-    /// Find an existing month directory and index, or create them.
-    /// Checks for common directory naming patterns: 01, january, 01-january
-    /// Checks for common index naming patterns: YYYY_month.md, month.md, 01.md
-    /// Only considers files that are actual indexes (have `contents` property).
-    /// Returns (month_dir, month_index_path).
-    async fn find_or_create_month_dir_and_index(
-        &self,
-        year_dir: &Path,
-        date: &chrono::NaiveDate,
-        year_index_path: &Path,
-    ) -> Result<(PathBuf, PathBuf)> {
-        let year = date.format("%Y").to_string();
-        let month_name = date.format("%B").to_string().to_lowercase();
-        let month_num = date.format("%m").to_string();
-
-        // Check for existing month directories with valid indices
-        // Only use a directory if it has a valid index file inside
-        let dir_candidates = [
-            month_num.clone(),                       // 01
-            month_name.clone(),                      // january
-            format!("{}-{}", month_num, month_name), // 01-january
-        ];
-
-        let index_candidates = [
-            format!("{}_{}.md", year, month_name), // 2026_january.md
-            format!("{}.md", month_name),          // january.md
-            format!("{}.md", month_num),           // 01.md
-        ];
-
-        // Check directories AND their indices together
-        for dir_name in &dir_candidates {
-            let month_dir = year_dir.join(dir_name);
-            if self.fs().exists(&month_dir).await {
-                for index_name in &index_candidates {
-                    let index_path = month_dir.join(index_name);
-                    if self.is_index_file(&index_path).await {
-                        return Ok((month_dir, index_path));
-                    }
-                }
-            }
-        }
-
-        // Check for month index directly in year_dir (flat structure)
-        // e.g., 2026/january.md instead of 2026/january/january.md
-        for index_name in &index_candidates {
-            let index_path = year_dir.join(index_name);
-            if self.is_index_file(&index_path).await {
-                // Flat index found - use numeric month dir for entries
-                let month_dir = year_dir.join(&month_num);
-                return Ok((month_dir, index_path));
-            }
-        }
-
-        // No existing index found - create with numeric naming (consistent with date_to_path)
-        let month_dir = year_dir.join(&month_num);
-        let month_index_path = month_dir.join(format!("{}_{}.md", year, month_name));
-
-        // Create the directory if it doesn't exist
-        self.fs().create_dir_all(&month_dir).await?;
-
-        // Create the index file
-        self.create_month_index_with_parent(&month_index_path, date, year_index_path)
-            .await?;
-
-        // Add month index to year index contents
-        let month_index_rel = format!("{}/{}_{}.md", month_num, year, month_name);
-        self.add_to_index_contents(year_index_path, &month_index_rel)
-            .await?;
-
-        Ok((month_dir, month_index_path))
-    }
-
-    /// Check if a file exists and is an index file (has `contents` property in frontmatter).
-    async fn is_index_file(&self, path: &Path) -> bool {
-        if !self.fs().exists(path).await {
-            return false;
-        }
-
-        // Read the file and check for contents property
-        let content = match self.fs().read_to_string(path).await {
-            Ok(c) => c,
-            Err(_) => return false,
-        };
-
-        // Check if frontmatter contains "contents:"
-        if content.starts_with("---\n") || content.starts_with("---\r\n") {
-            // Find the end of frontmatter
-            let rest = &content[4..];
-            if let Some(end_idx) = rest.find("\n---\n").or_else(|| rest.find("\n---\r\n")) {
-                let frontmatter = &rest[..end_idx];
-                return frontmatter.contains("contents:");
-            }
-        }
-
-        false
-    }
-
-    /// Create the root daily index file.
-    ///
-    /// `part_of` can be a relative path (e.g., `../README.md`) which will be
-    /// converted to a canonical path and formatted based on the configured link format.
-    async fn create_daily_index(&self, path: &Path, part_of: Option<&str>) -> Result<()> {
-        // Convert part_of to link if provided
-        let part_of_line = match part_of {
-            Some(p) => {
-                // Get canonical path of the file being created for resolving relative paths
-                let canonical_path = self.get_canonical_path(&path.to_string_lossy());
-                let canonical_parent = self.resolve_frontmatter_link_target(p, &canonical_path);
-                let formatted_link = self.format_link_for_file(&canonical_parent, &canonical_path);
-                // Quote if it contains special characters (markdown links do)
-                if formatted_link.contains('[') || formatted_link.contains(':') {
-                    format!("part_of: \"{}\"\n", formatted_link)
-                } else {
-                    format!("part_of: {}\n", formatted_link)
-                }
-            }
-            None => String::new(),
-        };
-
-        let content = format!(
-            "---\n\
-            title: Daily Entries\n\
-            {}contents: []\n\
-            ---\n\n\
-            # Daily Entries\n\n\
-            This index contains all daily journal entries organized by year and month.\n",
-            part_of_line
-        );
-
-        self.fs()
-            .write_file(path, &content)
-            .await
-            .map_err(|e| DiaryxError::FileWrite {
-                path: path.to_path_buf(),
-                source: e,
-            })?;
-        Ok(())
-    }
-
-    /// Create a year index file.
-    ///
-    /// `part_of` can be a relative path (e.g., `../daily_index.md`) which will be
-    /// converted to a canonical path and formatted based on the configured link format.
-    async fn create_year_index(
-        &self,
-        path: &Path,
-        date: &chrono::NaiveDate,
-        part_of: &str,
-    ) -> Result<()> {
-        let year = date.format("%Y").to_string();
-
-        // Convert part_of to link using configured format
-        let canonical_path = self.get_canonical_path(&path.to_string_lossy());
-        let canonical_parent = self.resolve_frontmatter_link_target(part_of, &canonical_path);
-        let formatted_link = self.format_link_for_file(&canonical_parent, &canonical_path);
-
-        // Quote if it contains special characters (markdown links do)
-        let part_of_value = if formatted_link.contains('[') || formatted_link.contains(':') {
-            format!("\"{}\"", formatted_link)
-        } else {
-            formatted_link
-        };
-
-        let content = format!(
-            "---\n\
-            title: {year}\n\
-            part_of: {part_of_value}\n\
-            contents: []\n\
-            ---\n\n\
-            # {year}\n\n\
-            Daily entries for {year}.\n"
-        );
-
-        self.fs()
-            .write_file(path, &content)
-            .await
-            .map_err(|e| DiaryxError::FileWrite {
-                path: path.to_path_buf(),
-                source: e,
-            })?;
-        Ok(())
-    }
-
-    /// Create a month index file.
-    ///
-    /// The `year_index_path` is used to compute the part_of link, which is formatted
-    /// based on the configured link format.
-    async fn create_month_index_with_parent(
-        &self,
-        path: &Path,
-        date: &chrono::NaiveDate,
-        year_index_path: &Path,
-    ) -> Result<()> {
-        let year = date.format("%Y").to_string();
-        let month_name = date.format("%B").to_string();
-        let title = format!("{} {}", month_name, year);
-
-        // Convert year_index_path to canonical and format as link
-        let canonical_path = self.get_canonical_path(&path.to_string_lossy());
-        let canonical_year_index = self.get_canonical_path(&year_index_path.to_string_lossy());
-        let formatted_link = self.format_link_for_file(&canonical_year_index, &canonical_path);
-
-        // Quote if it contains special characters (markdown links do)
-        let part_of_value = if formatted_link.contains('[') || formatted_link.contains(':') {
-            format!("\"{}\"", formatted_link)
-        } else {
-            formatted_link
-        };
-
-        let content = format!(
-            "---\n\
-            title: {title}\n\
-            part_of: {part_of_value}\n\
-            contents: []\n\
-            ---\n\n\
-            # {title}\n\n\
-            Daily entries for {title}.\n"
-        );
-
-        self.fs()
-            .write_file(path, &content)
-            .await
-            .map_err(|e| DiaryxError::FileWrite {
-                path: path.to_path_buf(),
-                source: e,
-            })?;
-        Ok(())
-    }
-
-    /// Add an entry to an index's contents list.
-    ///
-    /// The `entry` parameter is a relative path from the index file's directory
-    /// (e.g., "2024/2024.md" for a child in a subdirectory). It will be converted
-    /// to a canonical path and formatted based on the configured link format.
-    async fn add_to_index_contents(&self, index_path: &Path, entry: &str) -> Result<bool> {
-        let content = match self.fs().read_to_string(index_path).await {
-            Ok(c) => c,
-            Err(_) => return Ok(false),
-        };
-
-        // Parse frontmatter
-        if !content.starts_with("---\n") && !content.starts_with("---\r\n") {
-            return Ok(false);
-        }
-
-        let rest = &content[4..];
-        let end_idx = match rest.find("\n---\n").or_else(|| rest.find("\n---\r\n")) {
-            Some(idx) => idx,
-            None => return Ok(false),
-        };
-
-        let frontmatter_str = &rest[..end_idx];
-        let body = &rest[end_idx + 5..];
-
-        // Parse YAML
-        let mut frontmatter: indexmap::IndexMap<String, serde_yaml::Value> =
-            serde_yaml::from_str(frontmatter_str).unwrap_or_default();
-
-        // Convert relative entry path to canonical and format as link
-        let index_canonical = self.get_canonical_path(&index_path.to_string_lossy());
-        let entry_canonical = self.resolve_frontmatter_link_target(entry, &index_canonical);
-        let formatted_entry = self.format_link_for_file(&entry_canonical, &index_canonical);
-
-        // Get or create contents array
-        let contents = frontmatter
-            .entry("contents".to_string())
-            .or_insert(serde_yaml::Value::Sequence(vec![]));
-
-        if let serde_yaml::Value::Sequence(items) = contents {
-            let entry_value = serde_yaml::Value::String(formatted_entry.clone());
-            // Check if any existing entry refers to the same canonical path
-            let entry_exists = items.iter().any(|item| {
-                if let Some(s) = item.as_str() {
-                    let canonical_existing =
-                        self.resolve_frontmatter_link_target(s, &index_canonical);
-                    canonical_existing == entry_canonical
-                } else {
-                    false
-                }
-            });
-
-            if !entry_exists {
-                items.push(entry_value);
-                // Sort for consistent ordering (by canonical path for stability)
-                items.sort_by(|a, b| {
-                    let a_canonical = a
-                        .as_str()
-                        .map(|s| self.resolve_frontmatter_link_target(s, &index_canonical))
-                        .unwrap_or_default();
-                    let b_canonical = b
-                        .as_str()
-                        .map(|s| self.resolve_frontmatter_link_target(s, &index_canonical))
-                        .unwrap_or_default();
-                    a_canonical.cmp(&b_canonical)
-                });
-
-                // Reconstruct file
-                let yaml_str = serde_yaml::to_string(&frontmatter)?;
-                let new_content = format!("---\n{}---\n{}", yaml_str, body);
-                self.fs()
-                    .write_file(index_path, &new_content)
-                    .await
-                    .map_err(|e| DiaryxError::FileWrite {
-                        path: index_path.to_path_buf(),
-                        source: e,
-                    })?;
-                return Ok(true);
-            }
-        }
-
-        Ok(false)
-    }
 }
 
-#[cfg(all(test, feature = "crdt"))]
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crdt::BinaryRef;
+    use std::path::{Path, PathBuf};
+
     use crate::fs::{InMemoryFileSystem, SyncToAsyncFs};
     use futures_lite::future::block_on;
 
@@ -5728,71 +3010,6 @@ mod tests {
                 ]
             );
         });
-    }
-
-    #[test]
-    fn test_merge_attachment_refs_preserves_existing_when_incoming_empty() {
-        let existing = FileMetadata {
-            attachments: vec![BinaryRef {
-                path: "_attachments/a.png".to_string(),
-                source: "local".to_string(),
-                hash: "a".repeat(64),
-                mime_type: "image/png".to_string(),
-                size: 123,
-                uploaded_at: Some(1),
-                deleted: false,
-            }],
-            ..Default::default()
-        };
-        let mut incoming = FileMetadata::default();
-
-        Diaryx::<crate::fs::SyncToAsyncFs<crate::fs::InMemoryFileSystem>>::merge_attachment_refs(
-            &existing,
-            &mut incoming,
-        );
-
-        assert_eq!(incoming.attachments.len(), 1);
-        assert_eq!(incoming.attachments[0].path, "_attachments/a.png");
-        assert_eq!(incoming.attachments[0].hash, "a".repeat(64));
-    }
-
-    #[test]
-    fn test_merge_attachment_refs_fills_missing_hash_for_matching_path() {
-        let existing = FileMetadata {
-            attachments: vec![BinaryRef {
-                path: "_attachments/a.png".to_string(),
-                source: "local".to_string(),
-                hash: "b".repeat(64),
-                mime_type: "image/png".to_string(),
-                size: 321,
-                uploaded_at: Some(2),
-                deleted: false,
-            }],
-            ..Default::default()
-        };
-        let mut incoming = FileMetadata {
-            attachments: vec![BinaryRef {
-                path: "_attachments/a.png".to_string(),
-                source: "local".to_string(),
-                hash: String::new(),
-                mime_type: String::new(),
-                size: 0,
-                uploaded_at: None,
-                deleted: false,
-            }],
-            ..Default::default()
-        };
-
-        Diaryx::<crate::fs::SyncToAsyncFs<crate::fs::InMemoryFileSystem>>::merge_attachment_refs(
-            &existing,
-            &mut incoming,
-        );
-
-        assert_eq!(incoming.attachments.len(), 1);
-        assert_eq!(incoming.attachments[0].hash, "b".repeat(64));
-        assert_eq!(incoming.attachments[0].mime_type, "image/png");
-        assert_eq!(incoming.attachments[0].size, 321);
-        assert_eq!(incoming.attachments[0].uploaded_at, Some(2));
     }
 
     #[test]

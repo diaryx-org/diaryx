@@ -1,7 +1,5 @@
 <script lang="ts">
   import type { EntryData } from "./backend";
-  import type { RustCrdtApi } from "$lib/crdt/rustCrdtApi";
-  import type { CrdtHistoryEntry, FileDiff } from "$lib/backend/generated";
   import type { Api } from "$lib/backend/api";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -50,11 +48,28 @@
   import * as Kbd from "$lib/components/ui/kbd";
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
   import { workspaceStore } from "@/models/stores/workspaceStore.svelte";
+  import { getPluginStore } from "@/models/stores/pluginStore.svelte";
+  import PluginSidebarPanel from "$lib/components/PluginSidebarPanel.svelte";
   import {
     getAttachmentMetadata,
     enqueueAttachmentDownload,
     isAttachmentSyncEnabled,
-  } from "@/models/services/attachmentSyncService";
+  } from "$lib/sync/attachmentSyncService";
+
+  interface CrdtHistoryEntry {
+    update_id: bigint;
+    timestamp: bigint;
+    origin: string;
+    device_name?: string | null;
+    summary?: string | null;
+  }
+
+  interface FileDiff {
+    path: string;
+    change_type: string;
+    old_value?: string | null;
+    new_value?: string | null;
+  }
 
   // Platform detection for keyboard shortcut display
   const isMac =
@@ -81,13 +96,14 @@
     // Navigation
     onOpenEntry?: (path: string) => Promise<void>;
     // History props
-    rustApi?: RustCrdtApi | null;
+    rustApi?: any | null;
     onHistoryRestore?: () => void;
     // API for properties tab
     api?: Api | null;
-    // External tab control
-    requestedTab?: "properties" | "history" | null;
+    // External tab control (built-in tabs or plugin tab IDs)
+    requestedTab?: string | null;
     onRequestedTabConsumed?: () => void;
+    onPluginHostAction?: (action: { type: string; payload?: unknown }) => Promise<unknown> | unknown;
   }
 
   let {
@@ -109,6 +125,7 @@
     api = null,
     requestedTab = null,
     onRequestedTabConsumed,
+    onPluginHostAction,
   }: Props = $props();
 
   // Detect if current entry is the workspace root index
@@ -116,15 +133,33 @@
     entry !== null && workspaceStore.tree !== null && entry.path === workspaceStore.tree.path
   );
 
-  // Tab state
-  type TabType = "properties" | "history";
-  let activeTab: TabType = $state("properties");
+  // Plugin store for right sidebar tabs
+  const pluginStore = getPluginStore();
+  const historyTabId = $derived<string | null>(null);
+  const historyTabLabel = $derived("History");
+  const nonHistoryPluginTabs = $derived.by(() => {
+    return pluginStore.rightSidebarTabs;
+  });
+
+  // Tab state — built-in "properties"/"history" + plugin tab IDs
+  let activeTab: string = $state("properties");
 
   // Handle external tab request
   $effect(() => {
     if (requestedTab && requestedTab !== activeTab) {
       activeTab = requestedTab;
       onRequestedTabConsumed?.();
+    }
+  });
+
+  $effect(() => {
+    const validTabIds = new Set<string>([
+      "properties",
+      ...(historyTabId ? [historyTabId] : []),
+      ...nonHistoryPluginTabs.map((tab) => tab.contribution.id),
+    ]);
+    if (!validTabIds.has(activeTab)) {
+      activeTab = "properties";
     }
   });
 
@@ -249,7 +284,7 @@
 
   // Load history when switching to history tab or when entry changes
   $effect(() => {
-    if (activeTab === "history" && entry && rustApi) {
+    if (activeTab === historyTabId && entry && rustApi) {
       loadHistory();
     }
   });
@@ -473,9 +508,7 @@
   // Workspace config keys that are shown in the dedicated config section (root index only)
   const WORKSPACE_CONFIG_KEYS = [
     "link_format",
-    "daily_entry_folder",
     "default_template",
-    "daily_template",
     "sync_title_to_heading",
     "auto_update_timestamp",
     "auto_rename_to_title",
@@ -647,7 +680,8 @@
       {/if}
     </Tooltip.Root>
 
-    <!-- Tab Toggle -->
+    <!-- Tab Toggle (hidden when only one tab) -->
+    {#if historyTabId || nonHistoryPluginTabs.length > 0}
     <div class="flex items-center gap-1 bg-muted rounded-md p-0.5">
       <button
         type="button"
@@ -656,14 +690,26 @@
       >
         Props
       </button>
-      <button
-        type="button"
-        class="px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === 'history' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-        onclick={() => activeTab = "history"}
-      >
-        History
-      </button>
+      {#if historyTabId}
+        <button
+          type="button"
+          class="px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === historyTabId ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+          onclick={() => activeTab = historyTabId}
+        >
+          {historyTabLabel}
+        </button>
+      {/if}
+      {#each nonHistoryPluginTabs as tab}
+        <button
+          type="button"
+          class="px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === tab.contribution.id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+          onclick={() => activeTab = tab.contribution.id}
+        >
+          {tab.contribution.label}
+        </button>
+      {/each}
     </div>
+    {/if}
   </div>
 
   <!-- Content -->
@@ -1175,7 +1221,21 @@
           </p>
         </div>
       {/if}
-    {:else if activeTab === "history"}
+    {:else if activeTab !== "properties" && activeTab !== historyTabId}
+      <!-- Plugin Tab -->
+      {@const pluginTab = nonHistoryPluginTabs.find(t => t.contribution.id === activeTab)}
+      {#if pluginTab && api}
+        <div class="h-full">
+          <PluginSidebarPanel
+            pluginId={pluginTab.pluginId}
+            component={pluginTab.contribution.component}
+            {api}
+            {entry}
+            onHostAction={onPluginHostAction}
+          />
+        </div>
+      {/if}
+    {:else if activeTab === historyTabId}
       <!-- History Tab (CRDT Changes) -->
       {#if entry}
         <div class="p-3">

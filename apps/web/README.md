@@ -27,222 +27,63 @@ exclude:
 
 # Diaryx Web
 
-The Svelte web frontend for Diaryx, supporting both WebAssembly and Tauri backends.
+Svelte 5 frontend for Diaryx that runs against either the WASM backend (web)
+or Tauri IPC backend (desktop shell).
 
 ## Getting Started
 
 ```bash
-# Install dependencies (uses Bun package manager)
 bun install
-
-# Development server
 bun run dev
-
-# Build for production
 bun run build
 ```
 
 ## Architecture
 
-This is a plain Svelte 5 app (not SvelteKit). It uses a backend abstraction layer to support two runtime environments:
+The app uses a backend abstraction (`src/lib/backend`) so feature code can run
+against WASM or Tauri with the same interface.
 
-### Backend Abstraction
+### Plugin-Owned Sync
 
-The `src/lib/backend/` directory contains:
+Web sync/share/provider/history/status behavior is plugin-owned:
 
-| File           | Purpose                                             |
-| -------------- | --------------------------------------------------- |
-| `interface.ts` | TypeScript interface defining all backend methods   |
-| `wasm.ts`      | WebAssembly implementation (InMemoryFS + IndexedDB) |
-| `tauri.ts`     | Tauri IPC implementation (native filesystem)        |
-| `index.ts`     | Runtime detection and backend export                |
-
-```typescript
-import { backend } from "$lib/backend";
-
-// Works identically in both WASM and Tauri environments
-await backend.init();
-const tree = await backend.getWorkspaceTree();
-const entry = await backend.getEntry("workspace/notes/my-note.md");
-```
-
-### WASM Backend
-
-When running in a browser without Tauri:
-
-1. Files are stored in IndexedDB
-2. Loaded into `InMemoryFileSystem` on startup
-3. All operations happen in memory
-4. Changes persisted back to IndexedDB via `backend.persist()`
-
-### Tauri Backend
-
-When running inside Tauri:
-
-1. Commands sent via Tauri IPC
-2. Rust backend uses `RealFileSystem`
-3. Direct native filesystem access
-4. No explicit persistence needed
+- Runtime: `diaryx_sync_extism` loaded as `sync`
+- Host rendering: generic plugin surfaces (sidebar/settings/status)
+- Host responsibilities: plugin dispatch + filesystem-event-driven refresh
+- No host CRDT bridge layer in `apps/web/src/lib/crdt`
 
 ## Validation
 
-Both backends support comprehensive validation and automatic fixing:
-
-```typescript
-// Validate workspace
-const result = await backend.validateWorkspace();
-
-if (result.errors.length > 0 || result.warnings.length > 0) {
-  // Fix all issues automatically
-  const summary = await backend.fixAll(result);
-  console.log(`Fixed: ${summary.total_fixed}, Failed: ${summary.total_failed}`);
-}
-
-// Or fix individual issues
-await backend.fixBrokenPartOf("workspace/broken.md");
-await backend.fixUnlistedFile("workspace/index.md", "workspace/new-file.md");
-```
-
-### Validation Errors
-
-- `BrokenPartOf` - `part_of` points to non-existent file
-- `BrokenContentsRef` - `contents` references non-existent file
-- `BrokenAttachment` - `attachments` references non-existent file
-
-### Validation Warnings
-
-- `OrphanFile` - Markdown file not in any index's contents
-- `UnlinkedEntry` - File/directory not in contents hierarchy
-- `UnlistedFile` - File exists but not listed in index's contents
-- `CircularReference` - Circular reference in hierarchy
-- `NonPortablePath` - Path contains absolute or `.`/`..` components
-- `MultipleIndexes` - Multiple index files in same directory
-- `OrphanBinaryFile` - Binary file not in any attachments
-
-## E2E Sync Test
-
-The sync E2E test expects a running sync server (default `http://127.0.0.1:3030`).
-The test relies on the dev-mode magic link response (`dev_link`), so the sync server
-must be running without SMTP configured.
-
-When initializing with **Load from server**, the wizard clears the local workspace
-before downloading so local-only files are removed.
-The sync workspace transfer test validates entries via the CRDT state first
-(metadata + body content), then falls back to file APIs, because browser clients
-may not materialize files on disk during a load-from-server flow.
-
-When running E2E tests in parallel across browsers, each project uses its own sync
-server port by default to avoid conflicts (chromium: base port, webkit: base+1,
-firefox: base+2). Set `SYNC_SERVER_URL` to override this behavior.
-
-Environment variables:
-
-- `SYNC_SERVER_URL` (optional): override the sync server URL (disables per-project ports)
-- `SYNC_SERVER_HOST` (optional): host for the auto-started sync server (default `127.0.0.1`)
-- `SYNC_SERVER_PORT` (optional): base port for the auto-started sync server (default `3030`)
-- `SYNC_E2E_START_SERVER` (optional): set to `0` to skip auto-starting the sync server
-- `MissingPartOf` - Non-index file has no `part_of`
-
-## Project Structure
-
-```
-src/
-├── App.svelte           # Main app component
-├── main.ts              # Entry point
-├── app.css              # Global styles
-└── lib/
-    ├── backend/         # Backend abstraction layer
-    │   ├── interface.ts # Backend interface definition
-    │   ├── wasm.ts      # WebAssembly implementation
-    │   ├── tauri.ts     # Tauri IPC implementation
-    │   └── index.ts     # Runtime detection
-    ├── components/      # Reusable Svelte components
-    ├── stores/          # Svelte stores for state management
-    ├── hooks/           # Custom Svelte hooks
-    ├── wasm/            # Built WASM module (from diaryx_wasm)
-    ├── Editor.svelte    # TipTap markdown editor
-    ├── LeftSidebar.svelte
-    ├── RightSidebar.svelte
-    └── ...
-```
+Workspace validation/fixes are exposed through backend commands and used in both
+WASM and Tauri runtimes.
 
 ## Testing
 
-The web app includes comprehensive unit tests (Vitest) and E2E tests (Playwright).
-
-### Running Tests
-
 ```bash
-# Run unit tests
-bun run test
+# Static/type checks
+bun run check
 
-# Run tests with coverage
-bun run test:coverage
+# Unit tests
+bunx vitest run
 
-# Run tests with UI
-bun run test:ui
-
-# Run E2E tests
+# E2E tests
 bun run test:e2e
-
-# Run E2E tests with UI
-bun run test:e2e:ui
 ```
 
-### Test Structure
+### Sync E2E Notes
 
-```
-src/
-├── test/
-│   └── setup.ts                    # Test setup and mocks
-├── models/
-│   ├── services/
-│   │   ├── attachmentService.test.ts
-│   │   ├── shareService.test.ts
-│   │   ├── toastService.test.ts
-│   │   └── workspaceCrdtService.test.ts
-│   └── stores/
-│       ├── workspaceStore.test.ts
-│       ├── entryStore.test.ts
-│       ├── collaborationStore.test.ts
-│       └── uiStore.test.ts
-├── lib/
-│   ├── backend/
-│   │   └── api.test.ts
-│   ├── crdt/
-│   │   ├── workspaceCrdtBridge.test.ts
-│   │   └── syncTransport.test.ts
-│   └── components/
-│       └── AttachmentPicker.test.ts
-e2e/
-├── workspace.spec.ts               # Workspace navigation tests
-├── editor.spec.ts                  # Editor functionality tests
-├── attachments.spec.ts             # Attachment handling tests
-├── share.spec.ts                   # Share session tests
-├── sync.spec.ts                    # Sync smoke test
-└── sync-workspace.spec.ts          # Sync workspace transfer test
-```
+Sync E2E tests expect a running sync server (`http://127.0.0.1:3030` by
+default). The dev-mode magic-link response (`dev_link`) is used for auth flows.
 
-### Configuration
+Environment variables:
 
-- `vitest.config.ts` - Vitest configuration with Svelte support and jsdom environment
-- `playwright.config.ts` - Playwright configuration for E2E testing
+- `SYNC_SERVER_URL`: override sync server URL
+- `SYNC_SERVER_HOST`: host for auto-started sync server (`127.0.0.1` default)
+- `SYNC_SERVER_PORT`: base port for auto-started sync server (`3030` default)
+- `SYNC_E2E_START_SERVER`: set `0` to skip auto-starting the sync server
 
-## Building WASM
+## Developer Guide
 
-The WASM module is built from `crates/diaryx_wasm`:
-
-```bash
-cd ../../crates/diaryx_wasm
-wasm-pack build --target web --out-dir ../../apps/web/src/lib/wasm
-```
-
-## Developer Guides
-
-| Guide                                                        | Description                                             |
-| ------------------------------------------------------------ | ------------------------------------------------------- |
+| Guide | Description |
+| --- | --- |
 | [TipTap Custom Extensions](docs/tiptap-custom-extensions.md) | Creating custom TipTap extensions with markdown support |
-
-## Live Demo
-
-Try the web frontend at: https://diaryx-org.github.io/diaryx/

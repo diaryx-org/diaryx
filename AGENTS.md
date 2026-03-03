@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-02-22T21:56:51Z
+updated: 2026-03-03T03:01:07Z
 part_of: '[README](/README.md)'
 ---
 # Instructions for AI agents
@@ -25,13 +25,14 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │   │   │   ├── Backend - Backend abstraction layer for WASM and Tauri - apps/web/src/lib/backend/README.md
 │   │   │   │   ├── Components - Reusable Svelte components - apps/web/src/lib/components/README.md
 │   │   │   │   │   └── UI Components - shadcn-svelte based UI primitives - apps/web/src/lib/components/ui/README.md
-│   │   │   │   ├── CRDT - CRDT synchronization bridge - apps/web/src/lib/crdt/README.md
+│   │   │   │   ├── CRDT - Legacy placeholder for removed web CRDT host layer - apps/web/src/lib/crdt/README.md
 │   │   │   │   ├── Device - Device identification - apps/web/src/lib/device/README.md
 │   │   │   │   ├── Extensions - TipTap editor extensions - apps/web/src/lib/extensions/README.md
 │   │   │   │   ├── History - Version history components - apps/web/src/lib/history/README.md
 │   │   │   │   ├── Hooks - Svelte hooks - apps/web/src/lib/hooks/README.md
+│   │   │   │   ├── Publish - Publishing and export UI components - apps/web/src/lib/publish/README.md
 │   │   │   │   ├── Settings - Settings panel components - apps/web/src/lib/settings/README.md
-│   │   │   │   ├── Share - Share session components - apps/web/src/lib/share/README.md
+│   │   │   │   ├── Share - Legacy share/publish panel module - apps/web/src/lib/share/README.md
 │   │   │   │   ├── Storage - Storage abstraction layer - apps/web/src/lib/storage/README.md
 │   │   │   │   ├── Lib Stores - Svelte stores for UI preferences - apps/web/src/lib/stores/README.md
 │   │   │   │   └── diaryx_wasm - WASM bindings for diaryx_core - apps/web/src/lib/wasm/README.md
@@ -58,14 +59,17 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │   └── diaryx_apple src - Source code for the Apple UniFFI bridge crate - crates/diaryx_apple/src/README.md
 │   ├── diaryx_core - Core library shared by Diaryx clients - crates/diaryx_core/README.md
 │   │   └── diaryx_core src - Source code for the core Diaryx library - crates/diaryx_core/src/README.md
-│   │       ├── CRDT Synchronization - Conflict-free replicated data types for real-time collaboration - crates/diaryx_core/src/crdt/README.md
-│   │       ├── Cloud Sync - Bidirectional file synchronization with cloud storage - crates/diaryx_core/src/cloud/README.md
 │   │       ├── Entry module - Entry manipulation functionality - crates/diaryx_core/src/entry/README.md
 │   │       ├── Filesystem module - Filesystem abstraction layer - crates/diaryx_core/src/fs/README.md
-│   │       ├── Publish module - HTML publishing using comrak - crates/diaryx_core/src/publish/README.md
+│   │       ├── crates/diaryx_core/src/plugin/README.md
+│   │       ├── Publish module - ContentProvider trait — shared publish abstractions - crates/diaryx_core/src/publish/README.md
 │   │       ├── Utils module - Utility functions for date and path handling - crates/diaryx_core/src/utils/README.md
 │   │       ├── Workspace module - Workspace tree organization - crates/diaryx_core/src/workspace/README.md
 │   │       └── Import module - Import external formats into Diaryx entries - crates/diaryx_core/src/import/README.md
+│   ├── crates/diaryx_daily/README.md
+│   ├── crates/diaryx_daily_extism/README.md
+│   ├── diaryx_publish - Publishing pipeline for Diaryx workspaces — converts markdown to HTML - crates/diaryx_publish/README.md
+│   ├── crates/diaryx_publish_extism/README.md
 │   ├── diaryx_wasm - WASM bindings for diaryx_core - crates/diaryx_wasm/README.md
 │   │   └── diaryx_wasm src - Source code for WASM bindings - crates/diaryx_wasm/src/README.md
 │   ├── diaryx_sync_server - Sync server used by frontends - crates/diaryx_sync_server/README.md
@@ -74,7 +78,9 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │       ├── Database module - SQLite database schema and repository - crates/diaryx_sync_server/src/db/README.md
 │   │       ├── Email module - SMTP email sending for magic links - crates/diaryx_sync_server/src/email/README.md
 │   │       └── Handlers module - HTTP route handlers - crates/diaryx_sync_server/src/handlers/README.md
-│   └── diaryx_sync - crates/diaryx_sync/README.md
+│   ├── diaryx_sync - crates/diaryx_sync/README.md
+│   ├── crates/diaryx_storage_s3_extism/README.md
+│   └── crates/diaryx_storage_gdrive_extism/README.md
 ├── ROADMAP - The plan for future Diaryx features - ROADMAP.md
 └── Scripts - scripts/scripts.md
 ```
@@ -88,11 +94,20 @@ Read the root README.md first. For specific projects, use these entry points:
 | ---------------- | ----------------------------------- |
 | Entire workspace | README.md                           |
 | Core library     | crates/diaryx_core/README.md        |
+| Daily domain     | crates/diaryx_daily/README.md       |
+| Templating       | crates/diaryx_templating/README.md  |
+| Publish pipeline | crates/diaryx_publish/README.md     |
 | CLI              | crates/diaryx/README.md             |
 | Web app          | apps/web/README.md                  |
 | Tauri app        | apps/tauri/README.md                |
 | WASM bindings    | crates/diaryx_wasm/README.md        |
+| Sync engine      | crates/diaryx_sync/README.md        |
 | Sync server      | crates/diaryx_sync_server/README.md |
+| Extism plugins   | crates/diaryx_extism/README.md      |
+| Daily plugin guest | crates/diaryx_daily_extism/README.md |
+| Templating plugin guest | crates/diaryx_templating_extism/README.md |
+| S3 storage       | crates/diaryx_storage_s3_extism/README.md |
+| GDrive storage   | crates/diaryx_storage_gdrive_extism/README.md |
 
 
 ## Commands

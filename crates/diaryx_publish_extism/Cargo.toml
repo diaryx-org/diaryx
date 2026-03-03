@@ -1,0 +1,23 @@
+[package]
+name = "diaryx_publish_extism"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+description = "Extism WASM guest plugin for Diaryx publish/export pipeline"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+diaryx_core = { workspace = true }
+diaryx_publish = { workspace = true, features = ["templating"] }
+extism-pdk = "1.4"
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = "0.22"
+log = "0.4"
+
+# Custom RNG backends for WASM (no JS access from wasmtime)
+getrandom = { version = "0.2", features = ["custom"] }
+getrandom_03 = { package = "getrandom", version = "0.3", default-features = false }

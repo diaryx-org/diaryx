@@ -1,206 +1,216 @@
 //! Authentication command handlers for sync.
 //!
-//! Handles login, verify, and logout commands.
+//! Thin wrapper around [`diaryx_core::auth::AuthService`] with CLI-specific
+//! output formatting. HTTP is provided by reqwest, storage by Config TOML.
 
+use diaryx_core::auth::{AuthCredentials, AuthError, AuthHttpClient, AuthStorage, HttpResponse};
 use diaryx_core::config::Config;
 
-const DEFAULT_SYNC_SERVER: &str = "https://sync.diaryx.org";
+// =========================================================================
+// CLI HTTP Client (reqwest blocking)
+// =========================================================================
+
+/// Reqwest-based HTTP client for CLI auth operations.
+pub struct ReqwestAuthClient {
+    client: reqwest::blocking::Client,
+}
+
+impl ReqwestAuthClient {
+    pub fn new() -> Self {
+        Self {
+            client: reqwest::blocking::Client::new(),
+        }
+    }
+
+    fn build_request(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+        bearer_token: Option<&str>,
+        json_body: Option<&str>,
+    ) -> Result<HttpResponse, AuthError> {
+        let mut req = self.client.request(method, url);
+
+        if let Some(token) = bearer_token {
+            req = req.header("Authorization", format!("Bearer {}", token));
+        }
+
+        if let Some(body) = json_body {
+            req = req
+                .header("Content-Type", "application/json")
+                .body(body.to_string());
+        }
+
+        let resp = req
+            .send()
+            .map_err(|e| AuthError::network(format!("Failed to connect: {}", e)))?;
+
+        let status = resp.status().as_u16();
+        let body = resp.text().unwrap_or_default();
+
+        Ok(HttpResponse { status, body })
+    }
+}
+
+#[async_trait::async_trait]
+impl AuthHttpClient for ReqwestAuthClient {
+    async fn get(&self, url: &str, bearer_token: Option<&str>) -> Result<HttpResponse, AuthError> {
+        self.build_request(reqwest::Method::GET, url, bearer_token, None)
+    }
+
+    async fn post(
+        &self,
+        url: &str,
+        bearer_token: Option<&str>,
+        json_body: Option<&str>,
+    ) -> Result<HttpResponse, AuthError> {
+        self.build_request(reqwest::Method::POST, url, bearer_token, json_body)
+    }
+
+    async fn patch(
+        &self,
+        url: &str,
+        bearer_token: Option<&str>,
+        json_body: Option<&str>,
+    ) -> Result<HttpResponse, AuthError> {
+        self.build_request(reqwest::Method::PATCH, url, bearer_token, json_body)
+    }
+
+    async fn delete(
+        &self,
+        url: &str,
+        bearer_token: Option<&str>,
+    ) -> Result<HttpResponse, AuthError> {
+        self.build_request(reqwest::Method::DELETE, url, bearer_token, None)
+    }
+}
+
+// =========================================================================
+// CLI Auth Storage (Config TOML)
+// =========================================================================
+
+/// Config TOML-based credential storage for CLI.
+pub struct ConfigAuthStorage;
+
+#[async_trait::async_trait]
+impl AuthStorage for ConfigAuthStorage {
+    async fn load_credentials(&self) -> Option<AuthCredentials> {
+        let config = Config::load().ok()?;
+        Some(AuthCredentials {
+            server_url: config
+                .sync_server_url
+                .unwrap_or_else(|| diaryx_core::auth::DEFAULT_SYNC_SERVER.to_string()),
+            session_token: config.sync_session_token,
+            email: config.sync_email,
+            workspace_id: config.sync_workspace_id,
+        })
+    }
+
+    async fn save_credentials(&self, credentials: &AuthCredentials) {
+        if let Ok(mut config) = Config::load() {
+            config.sync_server_url = Some(credentials.server_url.clone());
+            config.sync_session_token = credentials.session_token.clone();
+            config.sync_email = credentials.email.clone();
+            config.sync_workspace_id = credentials.workspace_id.clone();
+            if let Err(e) = config.save() {
+                eprintln!("Warning: Could not save config: {}", e);
+            }
+        }
+    }
+
+    async fn clear_session(&self) {
+        if let Ok(mut config) = Config::load() {
+            config.sync_session_token = None;
+            // Keep email and server URL for convenience on re-login
+            if let Err(e) = config.save() {
+                eprintln!("Warning: Could not save config: {}", e);
+            }
+        }
+    }
+}
+
+// =========================================================================
+// CLI Auth Service Factory
+// =========================================================================
+
+type CliAuthService = diaryx_core::auth::AuthService<ReqwestAuthClient, ConfigAuthStorage>;
+
+/// Create a CLI auth service backed by reqwest and Config TOML.
+pub fn cli_auth_service() -> CliAuthService {
+    diaryx_core::auth::AuthService::new(ReqwestAuthClient::new(), ConfigAuthStorage)
+}
+
+// =========================================================================
+// CLI Command Handlers
+// =========================================================================
 
 /// Handle the login command - initiate magic link authentication.
 pub fn handle_login(config: &Config, email: &str, server: Option<&str>) {
     let server_url = server
         .or(config.sync_server_url.as_deref())
-        .unwrap_or(DEFAULT_SYNC_SERVER);
+        .unwrap_or(diaryx_core::auth::DEFAULT_SYNC_SERVER);
 
     println!("Logging in to sync server...");
     println!("  Server: {}", server_url);
     println!("  Email: {}", email);
     println!();
 
-    // Build the request URL
-    let url = format!("{}/auth/magic-link", server_url);
-
-    // Use blocking reqwest for simplicity in CLI context
-    let client = reqwest::blocking::Client::new();
-    let response = client
-        .post(&url)
-        .json(&serde_json::json!({ "email": email }))
-        .send();
-
-    match response {
-        Ok(resp) => {
-            if resp.status().is_success() {
-                // Save server URL to config for future use
-                let mut new_config = config.clone();
-                new_config.sync_server_url = Some(server_url.to_string());
-                new_config.sync_email = Some(email.to_string());
-
-                if let Err(e) = new_config.save() {
-                    eprintln!("Warning: Could not save config: {}", e);
-                }
-
-                println!("Check your email for a magic link!");
-                println!();
-                println!("Once you receive the email, run:");
-                println!("  diaryx sync verify <TOKEN>");
-                println!();
-                println!("The token is in the magic link URL (the part after ?token=)");
-            } else {
-                let status = resp.status();
-                let body = resp.text().unwrap_or_default();
-                eprintln!("Login request failed: {} - {}", status, body);
-            }
+    let service = cli_auth_service();
+    match futures_lite::future::block_on(service.request_magic_link(email, Some(server_url))) {
+        Ok(_) => {
+            println!("Check your email for a magic link!");
+            println!();
+            println!("Once you receive the email, run:");
+            println!("  diaryx sync verify <TOKEN>");
+            println!();
+            println!("The token is in the magic link URL (the part after ?token=)");
         }
         Err(e) => {
-            eprintln!("Failed to connect to sync server: {}", e);
-            eprintln!();
-            eprintln!("Please check:");
-            eprintln!("  - Your internet connection");
-            eprintln!("  - The server URL is correct: {}", server_url);
+            eprintln!("Login request failed: {}", e);
+            if e.status_code == 0 {
+                eprintln!();
+                eprintln!("Please check:");
+                eprintln!("  - Your internet connection");
+                eprintln!("  - The server URL is correct: {}", server_url);
+            }
         }
     }
 }
 
 /// Handle the verify command - complete magic link authentication.
 pub fn handle_verify(config: &Config, token: &str, device_name: Option<&str>) {
-    let server_url = config
-        .sync_server_url
-        .as_deref()
-        .unwrap_or(DEFAULT_SYNC_SERVER);
-
-    let device = device_name.unwrap_or("CLI");
+    let _ = config; // Config is read by the auth service's storage layer
 
     println!("Verifying authentication...");
 
-    // Build the request URL with query parameters
-    let url = format!(
-        "{}/auth/verify?token={}&device_name={}",
-        server_url,
-        urlencoding::encode(token),
-        urlencoding::encode(device)
-    );
-
-    let client = reqwest::blocking::Client::new();
-    let response = client.get(&url).send();
-
-    match response {
-        Ok(resp) => {
-            if resp.status().is_success() {
-                // Parse response to get session token
-                match resp.json::<serde_json::Value>() {
-                    Ok(json) => {
-                        // Server returns "token" not "session_token"
-                        let session_token = json
-                            .get("token")
-                            .or_else(|| json.get("session_token"))
-                            .and_then(|v| v.as_str());
-
-                        if let Some(session_token) = session_token {
-                            // Get email from response - may be nested under "user"
-                            let email = json
-                                .get("user")
-                                .and_then(|u| u.get("email"))
-                                .and_then(|v| v.as_str())
-                                .or_else(|| json.get("email").and_then(|v| v.as_str()))
-                                .map(String::from)
-                                .or_else(|| config.sync_email.clone());
-
-                            // Get user_id from response - may be nested under "user"
-                            // This can be used as a workspace_id fallback
-                            let user_id = json
-                                .get("user")
-                                .and_then(|u| u.get("id"))
-                                .and_then(|v| v.as_str())
-                                .map(String::from);
-
-                            // Get workspace_id from response if present
-                            let workspace_id = json
-                                .get("workspace_id")
-                                .and_then(|v| v.as_str())
-                                .map(String::from)
-                                .or(user_id);
-
-                            // Save credentials to config
-                            let mut new_config = config.clone();
-                            new_config.sync_session_token = Some(session_token.to_string());
-                            if let Some(e) = email.clone() {
-                                new_config.sync_email = Some(e);
-                            }
-                            if let Some(wid) = workspace_id.clone() {
-                                new_config.sync_workspace_id = Some(wid);
-                            }
-
-                            if let Err(e) = new_config.save() {
-                                eprintln!("Warning: Could not save config: {}", e);
-                            }
-
-                            println!();
-                            println!("Successfully logged in!");
-                            if let Some(e) = email {
-                                println!("  Email: {}", e);
-                            }
-                            if let Some(wid) = workspace_id {
-                                println!("  Workspace ID: {}", wid);
-                            }
-                            println!();
-                            println!("You can now start syncing with:");
-                            println!("  diaryx sync start");
-                        } else {
-                            eprintln!("Verification succeeded but no session token in response");
-                            eprintln!("Response: {:?}", json);
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to parse verification response: {}", e);
-                    }
-                }
-            } else {
-                let status = resp.status();
-                let body = resp.text().unwrap_or_default();
-
-                if status.as_u16() == 401 || status.as_u16() == 400 {
-                    eprintln!("Invalid or expired token.");
-                    eprintln!();
-                    eprintln!("Please request a new magic link with:");
-                    eprintln!("  diaryx sync login <your-email>");
-                } else {
-                    eprintln!("Verification failed: {} - {}", status, body);
-                }
-            }
+    let service = cli_auth_service();
+    let device = device_name.unwrap_or("CLI");
+    match futures_lite::future::block_on(service.verify_magic_link(token, Some(device))) {
+        Ok(verify) => {
+            println!();
+            println!("Successfully logged in!");
+            println!("  Email: {}", verify.user.email);
+            println!();
+            println!("You can now start syncing with:");
+            println!("  diaryx sync start");
         }
         Err(e) => {
-            eprintln!("Failed to connect to sync server: {}", e);
+            if e.is_unauthorized() {
+                eprintln!("Invalid or expired token.");
+                eprintln!();
+                eprintln!("Please request a new magic link with:");
+                eprintln!("  diaryx sync login <your-email>");
+            } else {
+                eprintln!("Verification failed: {}", e);
+            }
         }
     }
 }
 
 /// Handle the logout command - clear stored credentials.
 pub fn handle_logout(config: &Config) {
-    let server_url = config.sync_server_url.as_deref();
-    let session_token = config.sync_session_token.as_deref();
-
-    // Try to notify server about logout if we have credentials
-    if let (Some(server), Some(token)) = (server_url, session_token) {
-        let url = format!("{}/auth/logout", server);
-        let client = reqwest::blocking::Client::new();
-
-        // Best-effort logout notification - don't fail if server is unavailable
-        let _ = client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", token))
-            .send();
-    }
-
-    // Clear local credentials
-    let mut new_config = config.clone();
-    new_config.sync_session_token = None;
-    // Keep email and server URL for convenience on re-login
-    // new_config.sync_email = None;
-    // new_config.sync_server_url = None;
-
-    if let Err(e) = new_config.save() {
-        eprintln!("Warning: Could not save config: {}", e);
-    }
+    let service = cli_auth_service();
+    let _ = futures_lite::future::block_on(service.logout());
 
     println!("Logged out successfully.");
     if let Some(email) = &config.sync_email {
@@ -212,10 +222,11 @@ pub fn handle_logout(config: &Config) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use diaryx_core::auth::DEFAULT_SYNC_SERVER;
+    use diaryx_core::config::Config;
 
     // =========================================================================
-    // URL Construction Tests
+    // URL Construction Tests (verify core auth builds correct URLs)
     // =========================================================================
 
     #[test]
@@ -223,16 +234,6 @@ mod tests {
         let server_url = "https://sync.diaryx.org";
         let url = format!("{}/auth/magic-link", server_url);
         assert_eq!(url, "https://sync.diaryx.org/auth/magic-link");
-    }
-
-    #[test]
-    fn test_login_url_with_trailing_slash() {
-        // If server URL had trailing slash, we'd get double slash
-        // This test documents current behavior
-        let server_url = "https://sync.diaryx.org/";
-        let url = format!("{}/auth/magic-link", server_url);
-        // Note: Current code doesn't strip trailing slash
-        assert_eq!(url, "https://sync.diaryx.org//auth/magic-link");
     }
 
     #[test]
@@ -276,134 +277,6 @@ mod tests {
         let server = "https://sync.diaryx.org";
         let url = format!("{}/auth/logout", server);
         assert_eq!(url, "https://sync.diaryx.org/auth/logout");
-    }
-
-    // =========================================================================
-    // Response Parsing Tests
-    // =========================================================================
-
-    #[test]
-    fn test_verify_response_parsing_token_field() {
-        let json = r#"{"token": "session-token-123"}"#;
-        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
-
-        let session_token = parsed
-            .get("token")
-            .or_else(|| parsed.get("session_token"))
-            .and_then(|v| v.as_str());
-
-        assert_eq!(session_token, Some("session-token-123"));
-    }
-
-    #[test]
-    fn test_verify_response_parsing_session_token_fallback() {
-        // Test fallback to session_token field
-        let json = r#"{"session_token": "session-token-456"}"#;
-        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
-
-        let session_token = parsed
-            .get("token")
-            .or_else(|| parsed.get("session_token"))
-            .and_then(|v| v.as_str());
-
-        assert_eq!(session_token, Some("session-token-456"));
-    }
-
-    #[test]
-    fn test_verify_response_parsing_nested_user() {
-        let json = r#"{
-            "token": "token123",
-            "user": {
-                "email": "user@example.com",
-                "id": "user-id-abc"
-            }
-        }"#;
-        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
-
-        // Extract email from nested user object
-        let email = parsed
-            .get("user")
-            .and_then(|u| u.get("email"))
-            .and_then(|v| v.as_str())
-            .or_else(|| parsed.get("email").and_then(|v| v.as_str()));
-
-        assert_eq!(email, Some("user@example.com"));
-
-        // Extract user_id from nested user object
-        let user_id = parsed
-            .get("user")
-            .and_then(|u| u.get("id"))
-            .and_then(|v| v.as_str());
-
-        assert_eq!(user_id, Some("user-id-abc"));
-    }
-
-    #[test]
-    fn test_verify_response_parsing_flat_email() {
-        // Test email at root level (fallback)
-        let json = r#"{"token": "token", "email": "flat@example.com"}"#;
-        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
-
-        let email = parsed
-            .get("user")
-            .and_then(|u| u.get("email"))
-            .and_then(|v| v.as_str())
-            .or_else(|| parsed.get("email").and_then(|v| v.as_str()));
-
-        assert_eq!(email, Some("flat@example.com"));
-    }
-
-    #[test]
-    fn test_verify_response_parsing_workspace_id() {
-        let json = r#"{
-            "token": "token",
-            "workspace_id": "ws-123"
-        }"#;
-        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
-
-        let workspace_id = parsed
-            .get("workspace_id")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-
-        assert_eq!(workspace_id, Some("ws-123".to_string()));
-    }
-
-    #[test]
-    fn test_verify_response_fallback_to_user_id() {
-        // When workspace_id is absent, use user.id as fallback
-        let json = r#"{
-            "token": "token",
-            "user": {"id": "user-123"}
-        }"#;
-        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
-
-        let user_id = parsed
-            .get("user")
-            .and_then(|u| u.get("id"))
-            .and_then(|v| v.as_str())
-            .map(String::from);
-
-        let workspace_id = parsed
-            .get("workspace_id")
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .or(user_id);
-
-        assert_eq!(workspace_id, Some("user-123".to_string()));
-    }
-
-    #[test]
-    fn test_verify_response_no_token_returns_none() {
-        let json = r#"{"email": "test@example.com"}"#;
-        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
-
-        let session_token = parsed
-            .get("token")
-            .or_else(|| parsed.get("session_token"))
-            .and_then(|v| v.as_str());
-
-        assert!(session_token.is_none());
     }
 
     // =========================================================================

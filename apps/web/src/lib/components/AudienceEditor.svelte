@@ -1,6 +1,5 @@
 <script lang="ts">
   import type { Api } from "$lib/backend/api";
-  import type { RustCrdtApi } from "$lib/crdt/rustCrdtApi";
   import * as Popover from "$lib/components/ui/popover";
   import * as Command from "$lib/components/ui/command";
   import * as Drawer from "$lib/components/ui/drawer";
@@ -15,7 +14,7 @@
     entryPath: string;
     rootPath: string;
     api: Api | null;
-    rustApi: RustCrdtApi | null;
+    rustApi: any | null;
     onChange: (value: string[] | null) => void;
   }
 

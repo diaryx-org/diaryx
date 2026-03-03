@@ -7,6 +7,7 @@ contents:
   - "[README](/crates/diaryx_core/src/cloud/README.md)"
   - "[README](/crates/diaryx_core/src/entry/README.md)"
   - "[README](/crates/diaryx_core/src/fs/README.md)"
+  - "[README](/crates/diaryx_core/src/plugin/README.md)"
   - "[README](/crates/diaryx_core/src/publish/README.md)"
   - "[README](/crates/diaryx_core/src/utils/README.md)"
   - "[README](/crates/diaryx_core/src/workspace/README.md)"
@@ -28,6 +29,7 @@ attachments:
   - "[template.rs](/crates/diaryx_core/src/template.rs)"
   - "[test_utils.rs](/crates/diaryx_core/src/test_utils.rs)"
   - "[validate.rs](/crates/diaryx_core/src/validate.rs)"
+  - "[workspace_registry.rs](/crates/diaryx_core/src/workspace_registry.rs)"
 exclude:
   - "*.lock"
 ---
@@ -56,6 +58,21 @@ This directory contains the source code for the core Diaryx library.
 | `template.rs`        | Creation-time template management                      |
 | `test_utils.rs`      | Feature-gated test utilities                           |
 | `validate.rs`        | Workspace validation and fixing                        |
+| `workspace_registry.rs` | Multi-workspace registry types (shared across frontends) |
+
+## Modules
+
+| Directory   | Purpose                                                     |
+| ----------- | ----------------------------------------------------------- |
+| `plugin/`   | Plugin architecture: traits, events, registry               |
+| `publish/`  | HTML publishing pipeline (includes `ContentProvider` trait)  |
+| `crdt/`     | CRDT sync and version history (requires `crdt` feature)     |
+| `cloud/`    | Bidirectional file sync with cloud storage                  |
+| `entry/`    | Entry manipulation functionality                            |
+| `fs/`       | Filesystem abstraction layer                                |
+| `utils/`    | Utility functions (date, path)                              |
+| `workspace/`| Workspace tree organization                                 |
+| `import/`   | Import external formats                                     |
 
 ## SetFrontmatterProperty: Atomic Title Rename
 

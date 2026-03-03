@@ -8,6 +8,8 @@ attachments:
   - '[entryStore.svelte.ts](/apps/web/src/models/stores/entryStore.svelte.ts)'
   - '[sitePublishingStore.svelte.ts](/apps/web/src/models/stores/sitePublishingStore.svelte.ts)'
   - '[shareSessionStore.svelte.ts](/apps/web/src/models/stores/shareSessionStore.svelte.ts)'
+  - '[pluginStore.svelte.ts](/apps/web/src/models/stores/pluginStore.svelte.ts)'
+  - '[permissionStore.svelte.ts](/apps/web/src/models/stores/permissionStore.svelte.ts)'
   - '[uiStore.svelte.ts](/apps/web/src/models/stores/uiStore.svelte.ts)'
   - '[workspaceStore.svelte.ts](/apps/web/src/models/stores/workspaceStore.svelte.ts)'
 exclude:
@@ -23,14 +25,14 @@ Svelte stores for reactive application state.
 
 | File | Purpose |
 |------|---------|
-| `collaborationStore.svelte.ts` | Real-time collaboration state |
-| `entryStore.svelte.ts` | Current entry state |
-| `sitePublishingStore.svelte.ts` | Publishing state for default workspace site configuration, publish actions, and token lifecycle |
-| `shareSessionStore.svelte.ts` | Share session state |
-| `uiStore.svelte.ts` | UI state (sidebars, dialogs) |
-| `workspaceStore.svelte.ts` | Workspace tree state. Lazy subtree updates short-circuit as soon as the target node is found, avoiding full-tree traversal on folder expansion in large workspaces. |
+| `collaborationStore.svelte.ts` | Sync/session status state (status/progress/error) used by generic plugin-driven UI surfaces. |
+| `entryStore.svelte.ts` | Current entry + dirty/saving state. |
+| `sitePublishingStore.svelte.ts` | Publishing state for site config, publish actions, and token lifecycle. |
+| `shareSessionStore.svelte.ts` | Share session state — reserved for the sync plugin to set at runtime. |
+| `pluginStore.svelte.ts` | Plugin manifest aggregation and derived UI contribution selectors (settings/sidebar/toolbar/status/commands/providers). |
+| `permissionStore.svelte.ts` | Runtime plugin permission checks, pending request queue, session cache, and root-frontmatter persistence hooks. |
+| `uiStore.svelte.ts` | Dialog/sidebar state and UI toggles. |
+| `workspaceStore.svelte.ts` | Workspace tree state and expanded-node persistence. |
 
-`collaborationStore.svelte.ts` normalizes unknown/object-shaped sync errors
-into readable strings (including nested `message`/`error` fields and JSON
-payloads) so UI surfaces like `SyncStatusIndicator` do not display raw
-`[object Object]`.
+`pluginStore` is now the primary source for sync/share/history/status surfaces;
+the host renders these generically from plugin contributions.

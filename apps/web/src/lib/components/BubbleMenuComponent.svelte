@@ -19,15 +19,13 @@
   interface Props {
     editor: Editor | null;
     element?: HTMLDivElement;
-    /** Whether spoiler functionality is enabled */
-    enableSpoilers?: boolean;
     /** Current entry path for resolving local links */
     entryPath?: string;
     /** API instance for link formatting */
     api?: Api | null;
   }
 
-  let { editor, element = $bindable(), enableSpoilers = true, entryPath = "", api = null }: Props = $props();
+  let { editor, element = $bindable(), entryPath = "", api = null }: Props = $props();
 
   // Track active states reactively
   let isBoldActive = $state(false);
@@ -245,7 +243,7 @@
 
     <div class="toolbar-divider"></div>
 
-    <MoreStylesPicker {editor} {enableSpoilers} bind:open={moreStylesOpen} onOpen={() => { closeAllDropdowns(); }} />
+    <MoreStylesPicker {editor} bind:open={moreStylesOpen} onOpen={() => { closeAllDropdowns(); }} />
   {/if}
 </div>
 

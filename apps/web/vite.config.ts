@@ -6,12 +6,15 @@ import path from "path";
 import { readFileSync } from "fs";
 
 const pkg = JSON.parse(
-  readFileSync(path.resolve(__dirname, "package.json"), "utf-8")
+  readFileSync(path.resolve(__dirname, "package.json"), "utf-8"),
 );
 const isTauri = !!process.env.TAURI_ENV_PLATFORM;
 const useWasmCdn = !!process.env.VITE_WASM_CDN_URL;
 const tauriDevHost = process.env.TAURI_DEV_HOST;
 const useHttps = !!process.env.VITE_HTTPS;
+const devPort = 5174;
+const canonicalDevHost = "localhost";
+const enableCrossOriginIsolation = process.env.VITE_DISABLE_COI !== "1";
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -25,14 +28,23 @@ export default defineConfig({
   // Prevent vite from obscuring rust errors
   clearScreen: false,
   server: {
-    port: 5174,
+    port: devPort,
     strictPort: isTauri, // Tauri expects a fixed port
-    host: tauriDevHost || false,
+    host: isTauri ? tauriDevHost || false : canonicalDevHost,
+    origin: isTauri
+      ? undefined
+      : `${useHttps ? "https" : "http"}://${canonicalDevHost}:${devPort}`,
     hmr: tauriDevHost
       ? {
           protocol: "ws",
           host: tauriDevHost,
           port: 1421,
+        }
+      : undefined,
+    headers: enableCrossOriginIsolation
+      ? {
+          "Cross-Origin-Opener-Policy": "same-origin",
+          "Cross-Origin-Embedder-Policy": "require-corp",
         }
       : undefined,
     watch: {
@@ -61,7 +73,7 @@ export default defineConfig({
       "@diaryx/wasm": path.resolve(
         isTauri || useWasmCdn
           ? "./src/lib/wasm-stub.js"
-          : "./src/lib/wasm/diaryx_wasm.js"
+          : "./src/lib/wasm/diaryx_wasm.js",
       ),
       $lib: path.resolve("./src/lib"),
       "@": path.resolve(__dirname, "./src"),
@@ -69,14 +81,8 @@ export default defineConfig({
   },
   optimizeDeps: {
     // Exclude Tauri API from optimization since it's optional
-    // Exclude wasm-pandoc so Vite doesn't try to pre-bundle the 56MB WASM
-    exclude: ["@tauri-apps/api", "wasm-pandoc", "@diaryx/wasm"],
-    // Pre-bundle deps used by export workers so Vite doesn't discover them
-    // at runtime and trigger a full page reload.
-    include: [
-      "@bjorn3/browser_wasi_shim",
-      "@myriaddreamin/typst.ts/dist/esm/contrib/snippet.mjs",
-    ],
+    exclude: ["@tauri-apps/api", "@diaryx/wasm"],
+    include: ["@bjorn3/browser_wasi_shim"],
   },
   // Env variables starting with the item of `envPrefix` will be exposed in tauri's source code through `import.meta.env`.
   envPrefix: ["VITE_", "TAURI_ENV_*"],

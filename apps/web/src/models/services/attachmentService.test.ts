@@ -159,7 +159,8 @@ describe('attachmentService', () => {
 
     it('should skip external URLs', async () => {
       const mockApi = {
-        getAttachmentData: vi.fn(),
+        resolveAttachmentStoragePath: vi.fn(),
+        readBinary: vi.fn(),
         canonicalizeLink: vi.fn(),
         formatLink: vi.fn(),
       }
@@ -168,12 +169,13 @@ describe('attachmentService', () => {
       const result = await transformAttachmentPaths(content, 'entry.md', mockApi as any)
 
       expect(result).toBe(content)
-      expect(mockApi.getAttachmentData).not.toHaveBeenCalled()
+      expect(mockApi.resolveAttachmentStoragePath).not.toHaveBeenCalled()
     })
 
     it('should skip already-transformed blob URLs', async () => {
       const mockApi = {
-        getAttachmentData: vi.fn(),
+        resolveAttachmentStoragePath: vi.fn(),
+        readBinary: vi.fn(),
         canonicalizeLink: vi.fn(),
         formatLink: vi.fn(),
       }
@@ -182,13 +184,14 @@ describe('attachmentService', () => {
       const result = await transformAttachmentPaths(content, 'entry.md', mockApi as any)
 
       expect(result).toBe(content)
-      expect(mockApi.getAttachmentData).not.toHaveBeenCalled()
+      expect(mockApi.resolveAttachmentStoragePath).not.toHaveBeenCalled()
     })
 
     it('should transform local image paths to blob URLs', async () => {
       const mockData = new Uint8Array([1, 2, 3])
       const mockApi = {
-        getAttachmentData: vi.fn().mockResolvedValue(Array.from(mockData)),
+        resolveAttachmentStoragePath: vi.fn().mockResolvedValue('resolved/test.png'),
+        readBinary: vi.fn().mockResolvedValue(mockData),
         canonicalizeLink: vi.fn(async (path: string) => path),
         formatLink: vi.fn(async (path: string) => path),
       }
@@ -196,15 +199,51 @@ describe('attachmentService', () => {
       const content = '![test image](test.png)'
       const result = await transformAttachmentPaths(content, 'entry.md', mockApi as any)
 
-      expect(mockApi.getAttachmentData).toHaveBeenCalledWith('entry.md', 'test.png')
+      expect(mockApi.resolveAttachmentStoragePath).toHaveBeenCalledWith('entry.md', 'test.png')
+      expect(mockApi.readBinary).toHaveBeenCalledWith('resolved/test.png')
+      expect(mockApi.canonicalizeLink).not.toHaveBeenCalled()
+      expect(mockApi.formatLink).not.toHaveBeenCalled()
       expect(result).toContain('blob:')
       expect(result).toContain('![test image]')
+    })
+
+    it('should fall back to link-parser normalization when direct lookup fails', async () => {
+      const mockData = new Uint8Array([1, 2, 3])
+      const mockApi = {
+        resolveAttachmentStoragePath: vi.fn(async (_entryPath: string, attachmentPath: string) => {
+          if (attachmentPath === 'raw/path.png') {
+            throw new Error('Not found')
+          }
+          if (attachmentPath === 'normalized/path.png') {
+            return 'resolved/normalized/path.png'
+          }
+          throw new Error('Unexpected path')
+        }),
+        readBinary: vi.fn().mockResolvedValue(mockData),
+        canonicalizeLink: vi.fn(async () => 'normalized/path.png'),
+        formatLink: vi.fn(async () => 'normalized/path.png'),
+      }
+
+      const content = '![alt](raw/path.png)'
+      const result = await transformAttachmentPaths(content, 'entry.md', mockApi as any)
+
+      expect(mockApi.resolveAttachmentStoragePath).toHaveBeenNthCalledWith(1, 'entry.md', 'raw/path.png')
+      expect(mockApi.canonicalizeLink).toHaveBeenCalledWith('raw/path.png', 'entry.md')
+      expect(mockApi.formatLink).toHaveBeenCalledWith(
+        'normalized/path.png',
+        'path.png',
+        'plain_relative',
+        'entry.md',
+      )
+      expect(mockApi.resolveAttachmentStoragePath).toHaveBeenNthCalledWith(2, 'entry.md', 'normalized/path.png')
+      expect(result).toContain('blob:')
     })
 
     it('should handle angle-bracket syntax for paths with spaces', async () => {
       const mockData = new Uint8Array([1, 2, 3])
       const mockApi = {
-        getAttachmentData: vi.fn().mockResolvedValue(Array.from(mockData)),
+        resolveAttachmentStoragePath: vi.fn().mockResolvedValue('resolved/path with spaces/image.png'),
+        readBinary: vi.fn().mockResolvedValue(mockData),
         canonicalizeLink: vi.fn(async (path: string) => path),
         formatLink: vi.fn(async (path: string) => path),
       }
@@ -212,12 +251,13 @@ describe('attachmentService', () => {
       const content = '![alt](<path with spaces/image.png>)'
       await transformAttachmentPaths(content, 'entry.md', mockApi as any)
 
-      expect(mockApi.getAttachmentData).toHaveBeenCalledWith('entry.md', 'path with spaces/image.png')
+      expect(mockApi.resolveAttachmentStoragePath).toHaveBeenCalledWith('entry.md', 'path with spaces/image.png')
     })
 
     it('should leave original path on attachment not found', async () => {
       const mockApi = {
-        getAttachmentData: vi.fn().mockRejectedValue(new Error('Not found')),
+        resolveAttachmentStoragePath: vi.fn().mockRejectedValue(new Error('Not found')),
+        readBinary: vi.fn(),
         canonicalizeLink: vi.fn(async (path: string) => path),
         formatLink: vi.fn(async (path: string) => path),
       }
@@ -231,7 +271,8 @@ describe('attachmentService', () => {
     it('should normalize nested markdown-link paths via link_parser helpers', async () => {
       const mockData = new Uint8Array([1, 2, 3])
       const mockApi = {
-        getAttachmentData: vi.fn().mockResolvedValue(Array.from(mockData)),
+        resolveAttachmentStoragePath: vi.fn().mockResolvedValue('resolved/_attachments/diaryx-icon.jpg'),
+        readBinary: vi.fn().mockResolvedValue(mockData),
         canonicalizeLink: vi.fn(async (path: string) => {
           if (path.endsWith(')')) {
             return '_attachments/diaryx-icon.jpg'
@@ -254,7 +295,7 @@ describe('attachmentService', () => {
         '[diaryx-icon.jpg](/_attachments/diaryx-icon.jpg)',
         'entry.md'
       )
-      expect(mockApi.getAttachmentData).toHaveBeenCalledWith('entry.md', '_attachments/diaryx-icon.jpg')
+      expect(mockApi.resolveAttachmentStoragePath).toHaveBeenCalledWith('entry.md', '_attachments/diaryx-icon.jpg')
       expect(result).toContain('blob:')
     })
   })

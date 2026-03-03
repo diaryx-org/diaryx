@@ -178,18 +178,20 @@ pub enum DiaryxError {
         message: String,
     },
 
+    /// Error from a plugin operation.
+    #[error("Plugin error: {0}")]
+    Plugin(String),
+
     /// Error from CRDT operations (sync, storage, etc.)
-    #[cfg(feature = "crdt")]
     #[error("CRDT error: {0}")]
     Crdt(String),
 
     /// Error from SQLite database operations
-    #[cfg(all(feature = "crdt-sqlite", not(target_arch = "wasm32")))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "database"))]
     #[error("Database error: {0}")]
     Database(#[from] rusqlite::Error),
 
     /// Error from git operations
-    #[cfg(feature = "git")]
     #[error("Git error: {0}")]
     Git(String),
 }
@@ -233,11 +235,10 @@ impl From<&DiaryxError> for SerializableError {
             DiaryxError::InvalidPath { .. } => "InvalidPath",
             DiaryxError::Unsupported(_) => "Unsupported",
             DiaryxError::Validation(_) => "Validation",
-            #[cfg(feature = "crdt")]
+            DiaryxError::Plugin(_) => "Plugin",
             DiaryxError::Crdt(_) => "Crdt",
-            #[cfg(all(feature = "crdt-sqlite", not(target_arch = "wasm32")))]
+            #[cfg(all(not(target_arch = "wasm32"), feature = "database"))]
             DiaryxError::Database(_) => "Database",
-            #[cfg(feature = "git")]
             DiaryxError::Git(_) => "Git",
         }
         .to_string();

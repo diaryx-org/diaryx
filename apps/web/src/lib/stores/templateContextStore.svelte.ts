@@ -5,7 +5,7 @@
  * TemplateVariable and ConditionalBlock NodeViews subscribe to this store to
  * show live resolved values and active/inactive branch highlighting.
  *
- * Follows the same singleton pattern as formattingStore.svelte.ts.
+ * Follows the same singleton pattern as other lib stores.
  */
 
 export type TemplateContext = Record<string, unknown>;

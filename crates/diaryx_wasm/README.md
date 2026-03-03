@@ -47,31 +47,25 @@ Current filesystem test suites live in:
 
 ## Architecture
 
-The crate provides typed class-based APIs that wrap `diaryx_core` functionality:
+`diaryx_wasm` depends only on `diaryx_core`. The main entry point is `DiaryxBackend`,
+which provides a unified command API (`execute()`/`executeJs()`) backed by native
+browser storage (OPFS, IndexedDB, File System Access API).
 
+Sync and publish functionality are provided by Extism guest plugins
+(`diaryx_sync.wasm`, `diaryx_publish.wasm`) loaded at runtime by the browser
+plugin manager. CRDT commands are routed to the sync plugin via the frontend
+command router before reaching the WASM backend.
 
-| Class                   | Purpose                                   |
-| ----------------------- | ----------------------------------------- |
-| `DiaryxWorkspace`       | Workspace tree operations                 |
-| `DiaryxEntry`           | Entry CRUD operations                     |
-| `DiaryxFrontmatter`     | Frontmatter manipulation                  |
-| `DiaryxSearch`          | Workspace search                          |
-| `DiaryxTemplate`        | Template management                       |
-| `DiaryxValidation`      | Link integrity validation and fixing      |
-| `DiaryxExport`          | Export with audience filtering            |
-| `DiaryxAttachment`      | Attachment upload/download                |
-| `DiaryxFilesystem`      | Low-level filesystem operations (sync)    |
-| `DiaryxAsyncFilesystem` | Async filesystem operations with Promises |
-| `Diaryx`                | Unified command API (includes CRDT ops)   |
+### Storage Backends
 
+Unlike the CLI and Tauri backends which use `RealFileSystem` (native filesystem),
+the WASM backend supports several browser storage backends:
 
-### In-Memory Filesystem
-
-Unlike the CLI and Tauri backends which use `RealFileSystem` (native filesystem), the WASM backend uses `InMemoryFileSystem`. This allows the web app to:
-
-1. Load files from IndexedDB on startup
-2. Operate entirely in memory during use
-3. Persist changes back to IndexedDB
+- **OPFS** — Origin Private File System (default)
+- **IndexedDB** — IndexedDB-based filesystem
+- **File System Access** — User-selected directory on the real filesystem
+- **In-Memory** — Used for guest mode in share sessions
+- **JavaScript** — Bridged to external JS filesystem (Node.js, Obsidian, Electron)
 
 ## API Reference
 

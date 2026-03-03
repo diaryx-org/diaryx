@@ -6,10 +6,9 @@
 /// Where all the Tauri `invoke` functions are defined.
 mod commands;
 
-use commands::{CrdtState, GuestModeState, WebSocketSyncState};
-
-/// Cloud backup targets (S3, Google Drive, etc.)
-mod cloud;
+#[cfg(feature = "extism-plugins")]
+use commands::ExtismSyncState;
+use commands::{AppState, GuestModeState};
 
 /// Configure the iOS WKWebView to render edge-to-edge, extending content into
 /// safe areas. Without this, the webview stops at the bottom safe area boundary,
@@ -62,7 +61,6 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_google_auth::init())
         // Native iOS keyboard toolbar for TipTap editor (no-op on desktop)
         .plugin(tauri_plugin_editor_toolbar::init());
 
@@ -72,13 +70,18 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_iap::init());
     }
 
+    // Core state
+    builder = builder
+        .manage(AppState::new())
+        .manage(GuestModeState::new());
+
+    // Extism sync plugin state — only available with extism-plugins feature
+    #[cfg(feature = "extism-plugins")]
+    {
+        builder = builder.manage(ExtismSyncState::new());
+    }
+
     builder
-        // CRDT state for version history and sync
-        .manage(CrdtState::new())
-        // Guest mode state for share sessions
-        .manage(GuestModeState::new())
-        // WebSocket sync state
-        .manage(WebSocketSyncState::new())
         .setup(|_app| {
             #[cfg(target_os = "ios")]
             setup_ios_edge_to_edge(_app);
@@ -92,29 +95,13 @@ pub fn run() {
             // ============================================================
             // PLATFORM-SPECIFIC COMMANDS
             // These cannot be moved to execute() as they require platform
-            // features (file dialogs, cloud auth, app paths, etc.)
+            // features (file dialogs, app paths, etc.)
             // ============================================================
 
             // App initialization (iOS-compatible)
             commands::initialize_app,
             commands::get_app_paths,
             commands::pick_workspace_folder,
-            // Backup (local filesystem)
-            commands::backup_workspace,
-            commands::restore_workspace,
-            commands::list_backup_targets,
-            // Cloud Backup (S3)
-            commands::test_s3_connection,
-            commands::backup_to_s3,
-            commands::restore_from_s3,
-            // Cloud Backup (Google Drive)
-            commands::get_google_auth_config,
-            commands::backup_to_google_drive,
-            // Cloud Sync (bidirectional)
-            commands::sync_to_s3,
-            commands::sync_to_google_drive,
-            commands::get_sync_status,
-            commands::resolve_sync_conflict,
             // Export
             commands::export_to_zip,
             commands::export_to_format,
@@ -130,17 +117,16 @@ pub fn run() {
             commands::start_guest_mode,
             commands::end_guest_mode,
             commands::is_guest_mode,
-            // CrdtFs Control
-            commands::set_crdt_enabled,
-            commands::is_crdt_enabled,
             // Workspace Reinitialization
             commands::reinitialize_workspace,
-            // WebSocket Sync
-            commands::start_websocket_sync,
-            commands::stop_websocket_sync,
-            commands::get_websocket_sync_status,
             // HTTP Proxy (iOS CORS bypass)
             commands::proxy_fetch,
+            // Extism Sync Plugin (load/unload on demand)
+            commands::load_sync_plugin,
+            commands::unload_sync_plugin,
+            // Extism User Plugin Management
+            commands::install_user_plugin,
+            commands::uninstall_user_plugin,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

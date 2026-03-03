@@ -1,13 +1,26 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { RustCrdtApi } from '$lib/crdt/rustCrdtApi';
-  import type { CrdtHistoryEntry, FileDiff } from '$lib/backend/generated';
   import HistoryEntry from './HistoryEntry.svelte';
   import VersionDiff from './VersionDiff.svelte';
 
+  interface CrdtHistoryEntry {
+    update_id: bigint;
+    timestamp: bigint;
+    origin: string;
+    device_name?: string | null;
+    summary?: string | null;
+  }
+
+  interface FileDiff {
+    path: string;
+    change_type: string;
+    old_value?: string | null;
+    new_value?: string | null;
+  }
+
   // Props
   interface Props {
-    rustApi: RustCrdtApi;
+    rustApi: any;
     docName?: string;
     onRestore?: (updateId: bigint) => void;
   }

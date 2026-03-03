@@ -10,4 +10,5 @@ export { collaborationStore, getCollaborationStore } from './collaborationStore.
 export { workspaceStore, getWorkspaceStore } from './workspaceStore.svelte';
 export { shareSessionStore, getShareSessionStore } from './shareSessionStore.svelte';
 export { sitePublishingStore, getSitePublishingStore } from './sitePublishingStore.svelte';
+export { permissionStore, getPermissionStore } from './permissionStore.svelte';
 export { getThemeStore } from '../../lib/stores/theme.svelte';

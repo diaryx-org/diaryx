@@ -1,15 +1,13 @@
 <script lang="ts">
   /**
-   * LinkSettings - Link format configuration for the workspace
+   * LinkSettings - Link conversion actions for the workspace
    *
-   * Allows users to configure how links in part_of, contents, and attachments
-   * properties are formatted, and to convert existing links to a different format.
+   * Provides a conversion action to rewrite existing links using the current
+   * workspace link format.
    */
   import { Button } from "$lib/components/ui/button";
-  import { Label } from "$lib/components/ui/label";
-  import * as Select from "$lib/components/ui/select";
   import { Link, RefreshCw, AlertCircle, Check } from "@lucide/svelte";
-  import { getLinkFormatStore, type LinkFormatValue } from "../stores/linkFormatStore.svelte";
+  import { getLinkFormatStore } from "../stores/linkFormatStore.svelte";
 
   interface Props {
     workspaceRootIndex?: string | null;
@@ -33,12 +31,6 @@
       linkFormatStore.load(workspaceRootIndex);
     }
   });
-
-  async function handleFormatChange(value: string | undefined) {
-    if (value && value !== linkFormatStore.format) {
-      await linkFormatStore.setFormat(value as LinkFormatValue);
-    }
-  }
 
   async function handleConvertLinks() {
     isConverting = true;
@@ -66,11 +58,6 @@
       isConverting = false;
     }
   }
-
-  // Get selected option for display
-  $effect(() => {
-    // Update selected when format changes
-  });
 </script>
 
 <div class="space-y-4">
@@ -81,38 +68,17 @@
     </h3>
 
     <p class="text-xs text-muted-foreground px-1">
-      Choose how links in <code class="bg-muted px-1 rounded">part_of</code> and
+      Convert links in <code class="bg-muted px-1 rounded">part_of</code> and
       <code class="bg-muted px-1 rounded">contents</code> and
-      <code class="bg-muted px-1 rounded">attachments</code> properties are formatted.
+      <code class="bg-muted px-1 rounded">attachments</code> properties to your current workspace format.
     </p>
 
     <div class="space-y-3 px-1">
-      <div class="space-y-2">
-        <Label for="link-format" class="text-xs text-muted-foreground">
-          Link Format
-        </Label>
-        <Select.Root
-          type="single"
-          value={linkFormatStore.format}
-          onValueChange={handleFormatChange}
-          disabled={linkFormatStore.loading || !workspaceRootIndex}
-        >
-          <Select.Trigger id="link-format" class="w-full">
-            {linkFormatStore.getFormatLabel(linkFormatStore.format)}
-          </Select.Trigger>
-          <Select.Content>
-            {#each linkFormatStore.options as option}
-              <Select.Item value={option.value}>
-                <div class="flex flex-col gap-0.5">
-                  <span>{option.label}</span>
-                  <span class="text-xs text-muted-foreground font-mono">
-                    {option.example}
-                  </span>
-                </div>
-              </Select.Item>
-            {/each}
-          </Select.Content>
-        </Select.Root>
+      <div class="space-y-1">
+        <p class="text-xs text-muted-foreground">
+          Current link format:
+          <code class="bg-muted px-1 rounded ml-1">{linkFormatStore.getFormatLabel(linkFormatStore.format)}</code>
+        </p>
         <p class="text-xs text-muted-foreground">
           {linkFormatStore.getFormatDescription(linkFormatStore.format)}
         </p>
@@ -127,7 +93,7 @@
 
       <div class="pt-2 border-t space-y-2">
         <p class="text-xs text-muted-foreground">
-          Convert all existing links in your workspace to the selected format.
+          Convert all existing links in your workspace to the current workspace format.
           This will update <code class="bg-muted px-1 rounded">part_of</code> and
           <code class="bg-muted px-1 rounded">contents</code> and
           <code class="bg-muted px-1 rounded">attachments</code> in all files.

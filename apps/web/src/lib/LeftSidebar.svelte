@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from "svelte";
   import { isTauri, type TreeNode, type EntryData, type ValidationResultWithMeta, type ValidationErrorWithMeta, type ValidationWarningWithMeta, type Api } from "./backend";
+  import type { ComponentRef, PluginId } from "$lib/backend/generated";
   import type { FixResult } from "./backend/generated";
   import { Button } from "$lib/components/ui/button";
   import * as Tooltip from "$lib/components/ui/tooltip";
@@ -25,29 +26,32 @@
     AlertCircle,
     AlertTriangle,
     Plus,
-    Trash2,
-    Download,
     Settings,
     Wrench,
     Eye,
     X,
-    SearchCheck,
     MoreVertical,
-    Pencil,
-    Copy,
     FolderInput,
     CircleUser,
+    Download,
+    SearchCheck,
+    Trash2,
+    Pencil,
+    Copy,
   } from "@lucide/svelte";
   import { getAuthState } from "./auth";
   import WorkspaceSelector from "./WorkspaceSelector.svelte";
   import AudienceFilter from "./components/AudienceFilter.svelte";
-  import ShareTab from "./share/ShareTab.svelte";
-  import GitHistoryPanel from "./history/GitHistoryPanel.svelte";
-  import { Share2, History, FolderTree } from "@lucide/svelte";
+  import PluginSidebarPanel from "./components/PluginSidebarPanel.svelte";
+  import PublishTab from "./publish/PublishTab.svelte";
+  import { Share2, History, FolderTree, Globe } from "@lucide/svelte";
+  import { getPluginStore } from "@/models/stores/pluginStore.svelte";
+  import { getPublishBuiltinTabKeyByComponentId } from "$lib/publish/publishBuiltinUiRegistry";
 
   interface Props {
     tree: TreeNode | null;
     currentEntry: EntryData | null;
+    activeEntryPath?: string | null;
     isLoading: boolean;
     expandedNodes: Set<string>;
     validationResult: ValidationResultWithMeta | null;
@@ -64,6 +68,8 @@
     onCreateChildEntry: (parentPath: string) => void;
     onDeleteEntry: (path: string) => void;
     onExport: (path: string) => void;
+    onOpenBackupImport?: () => void;
+    onImportMarkdownFile?: () => void;
     onAddAttachment: (entryPath: string) => void;
     onMoveAttachment?: (sourceEntryPath: string, targetEntryPath: string, attachmentPath: string) => void;
     onRemoveBrokenPartOf?: (filePath: string) => void;
@@ -78,18 +84,15 @@
     onWorkspaceSwitchComplete?: () => void;
     onInitializeWorkspace?: () => void;
     onSetAudience?: (path: string) => void;
-    // Share props (workspace-level)
-    onBeforeHost?: (audience: string | null) => Promise<void>;
-    onOpenEntry2?: (path: string) => Promise<void>;
-    requestedTab?: "files" | "share" | "snapshots" | null;
+    requestedTab?: string | null;
     onRequestedTabConsumed?: () => void;
-    triggerStartSession?: boolean;
-    onTriggerStartSessionConsumed?: () => void;
+    onPluginHostAction?: (action: { type: string; payload?: unknown }) => Promise<unknown> | unknown;
   }
 
   let {
     tree,
     currentEntry,
+    activeEntryPath = null,
     isLoading,
     expandedNodes,
     validationResult,
@@ -106,6 +109,8 @@
     onCreateChildEntry,
     onDeleteEntry,
     onExport,
+    onOpenBackupImport,
+    onImportMarkdownFile,
     onAddAttachment: _onAddAttachment,
     onMoveAttachment,
     onRemoveBrokenPartOf,
@@ -120,12 +125,9 @@
     onWorkspaceSwitchComplete,
     onInitializeWorkspace,
     onSetAudience,
-    onBeforeHost,
-    onOpenEntry2,
     requestedTab = null,
     onRequestedTabConsumed,
-    triggerStartSession = false,
-    onTriggerStartSessionConsumed,
+    onPluginHostAction,
   }: Props = $props();
 
   // Platform detection for keyboard shortcut display
@@ -147,9 +149,75 @@
   // Auth state for profile icon
   const authState = $derived(getAuthState());
 
-  // Tab state for left sidebar
-  type LeftTab = "files" | "share" | "snapshots";
-  let leftTab: LeftTab = $state("files");
+  type LeftSidebarTabDescriptor = {
+    id: string;
+    label: string;
+    icon: string | null;
+    pluginId: PluginId | null;
+    component: ComponentRef | null;
+    publishBuiltinKey: "publish" | null;
+  };
+
+  const pluginStore = getPluginStore();
+  const contextMenuOwner = $derived(pluginStore.leftSidebarContextMenuOwner);
+  let showPluginContextMenu = $state(false);
+  let pluginContextTarget = $state<TreeNodeMenuData | null>(null);
+
+  async function openPluginOwnedContextMenu(target: TreeNodeMenuData) {
+    pluginContextTarget = target;
+    showPluginContextMenu = true;
+
+    if (!api || !contextMenuOwner) return;
+    try {
+      await api.executePluginCommand(
+        contextMenuOwner.pluginId,
+        "set_context_menu_context",
+        {
+          path: target.path,
+          name: target.name,
+          has_children: target.hasChildren,
+        } as any,
+      );
+    } catch {
+      // Optional command; owners may rely only on iframe init + plugin events.
+    }
+  }
+
+  const leftTabs = $derived.by<LeftSidebarTabDescriptor[]>(() => {
+    const tabMap = new Map<string, LeftSidebarTabDescriptor>();
+
+    for (const tab of pluginStore.leftSidebarTabs) {
+      if (tab.contribution.id === "files") continue;
+      const component = tab.contribution.component;
+      const publishBuiltinKey =
+        component.type === "Builtin"
+          ? getPublishBuiltinTabKeyByComponentId(component.component_id)
+          : null;
+      tabMap.set(tab.contribution.id, {
+        id: tab.contribution.id,
+        label: tab.contribution.label,
+        icon: tab.contribution.icon,
+        pluginId: tab.pluginId,
+        component,
+        publishBuiltinKey,
+      });
+    }
+
+    return [
+      {
+        id: "files",
+        label: "Files",
+        icon: "files",
+        pluginId: null,
+        component: null,
+        publishBuiltinKey: null,
+      },
+      ...Array.from(tabMap.values()),
+    ];
+  });
+
+  // Tab state for left sidebar (built-in + plugin IDs)
+  let leftTab = $state("files");
 
   // Handle external tab request
   $effect(() => {
@@ -158,6 +226,14 @@
       onRequestedTabConsumed?.();
     }
   });
+
+  $effect(() => {
+    if (!leftTabs.some((tab) => tab.id === leftTab)) {
+      leftTab = "files";
+    }
+  });
+
+  let selectedEntryPath = $derived(activeEntryPath ?? currentEntry?.path ?? null);
 
   // Track which nodes are currently loading children
   let loadingNodes = $state(new Set<string>());
@@ -1111,35 +1187,31 @@
     </div>
   {/if}
 
-  <!-- Tab Bar -->
+  <!-- Tab Bar (hidden when only one tab) -->
+  {#if leftTabs.length > 1}
   <div class="px-3 pt-2 pb-1 shrink-0">
     <div class="flex items-center gap-1 bg-muted rounded-md p-0.5">
-      <button
-        type="button"
-        class="flex-1 flex items-center justify-center gap-1.5 px-2 py-1 text-[11px] font-medium rounded transition-colors {leftTab === 'files' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-        onclick={() => (leftTab = 'files')}
-      >
-        <FolderTree class="size-3" />
-        Files
-      </button>
-      <button
-        type="button"
-        class="flex-1 flex items-center justify-center gap-1.5 px-2 py-1 text-[11px] font-medium rounded transition-colors {leftTab === 'share' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-        onclick={() => (leftTab = 'share')}
-      >
-        <Share2 class="size-3" />
-        Share
-      </button>
-      <button
-        type="button"
-        class="flex-1 flex items-center justify-center gap-1.5 px-2 py-1 text-[11px] font-medium rounded transition-colors {leftTab === 'snapshots' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-        onclick={() => (leftTab = 'snapshots')}
-      >
-        <History class="size-3" />
-        Snapshots
-      </button>
+      {#each leftTabs as tab (tab.id)}
+        <button
+          type="button"
+          class="flex-1 flex items-center justify-center gap-1.5 px-2 py-1 text-[11px] font-medium rounded transition-colors {leftTab === tab.id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+          onclick={() => (leftTab = tab.id)}
+        >
+          {#if tab.id === "files"}
+            <FolderTree class="size-3" />
+          {:else if tab.icon === "share"}
+            <Share2 class="size-3" />
+          {:else if tab.icon === "history"}
+            <History class="size-3" />
+          {:else if tab.publishBuiltinKey === "publish" || tab.icon === "globe"}
+            <Globe class="size-3" />
+          {/if}
+          {tab.label}
+        </button>
+      {/each}
     </div>
   </div>
+  {/if}
 
   <!-- Content Area -->
   <div class="flex-1 overflow-y-auto {leftTab === 'files' ? 'px-3 pb-3' : ''}" bind:this={scrollContainer}>
@@ -1175,17 +1247,26 @@
           <p class="text-sm text-muted-foreground">No workspace found</p>
         </div>
       {/if}
-    {:else if leftTab === "share"}
-      <ShareTab
-        {onBeforeHost}
-        {onAddWorkspace}
-        onOpenEntry={onOpenEntry2}
-        {api}
-        triggerStart={triggerStartSession}
-        onTriggerStartConsumed={onTriggerStartSessionConsumed}
-      />
-    {:else if leftTab === "snapshots"}
-      <GitHistoryPanel />
+    {:else}
+      {@const activePluginTab = leftTabs.find((tab) => tab.id === leftTab) ?? null}
+      {#if activePluginTab?.publishBuiltinKey === "publish"}
+        <PublishTab
+          rootPath={tree?.path ?? "."}
+          {api}
+          {onAddWorkspace}
+        />
+      {:else if activePluginTab?.pluginId && activePluginTab.component && api}
+        <PluginSidebarPanel
+          pluginId={activePluginTab.pluginId}
+          component={activePluginTab.component}
+          {api}
+          onHostAction={onPluginHostAction}
+        />
+      {:else}
+        <div class="p-4 text-sm text-muted-foreground">
+          No panel available for this tab.
+        </div>
+      {/if}
     {/if}
   </div>
 
@@ -1381,7 +1462,47 @@
   onDuplicate={onDuplicateEntry ? handleDuplicate : undefined}
   onMoveTo={api ? handleMoveToClick : undefined}
   onSetAudience={onSetAudience}
+  onOpenBackupImport={onOpenBackupImport}
+  onImportMarkdownFile={onImportMarkdownFile}
+  minimalMode={false}
 />
+
+<!-- Plugin-owned Context Menu Dialog -->
+{#if showPluginContextMenu && contextMenuOwner && api}
+  <div
+    class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="plugin-context-menu-title"
+    onclick={() => (showPluginContextMenu = false)}
+    onkeydown={(e) => e.key === 'Escape' && (showPluginContextMenu = false)}
+    tabindex={-1}
+  >
+    <div
+      class="bg-background rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] flex flex-col overflow-hidden"
+      role="presentation"
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
+    >
+      <div class="flex items-center justify-between p-4 border-b">
+        <h2 id="plugin-context-menu-title" class="text-lg font-semibold">
+          {pluginContextTarget?.name?.replace('.md', '') ?? 'Context Menu'}
+        </h2>
+        <Button variant="ghost" size="sm" onclick={() => (showPluginContextMenu = false)}>
+          <X class="size-4" />
+        </Button>
+      </div>
+      <div class="h-[60vh] max-h-[640px] overflow-hidden">
+        <PluginSidebarPanel
+          pluginId={contextMenuOwner.pluginId}
+          component={contextMenuOwner.contribution.component}
+          {api}
+          onHostAction={onPluginHostAction}
+        />
+      </div>
+    </div>
+  </div>
+{/if}
 
 <!-- Parent Picker Dialog (for validation fixes) -->
 {#if showParentPicker}
@@ -1549,12 +1670,12 @@
 
 {#snippet treeNode(node: TreeNode, depth: number)}
   <ContextMenu.Root>
-    <ContextMenu.Trigger disabled={contextMenuState.useBottomSheet}>
+    <ContextMenu.Trigger disabled={contextMenuState.useBottomSheet || !!contextMenuOwner}>
       <div
         class="select-none"
         role="treeitem"
         tabindex={0}
-        aria-selected={currentEntry?.path === node.path}
+        aria-selected={selectedEntryPath === node.path}
         aria-expanded={node.children.length > 0
           ? expandedNodes.has(node.path)
           : undefined}
@@ -1563,7 +1684,10 @@
         ondragstart={(e) => handleDragStart(e, node.path)}
         ondragend={handleDragEnd}
         oncontextmenu={(e) => {
-          if (contextMenuState.useBottomSheet) {
+          if (contextMenuOwner) {
+            e.preventDefault();
+            openPluginOwnedContextMenu({ path: node.path, name: node.name, hasChildren: node.children.length > 0 });
+          } else if (contextMenuState.useBottomSheet) {
             e.preventDefault();
             contextMenuState.openMenu({ path: node.path, name: node.name, hasChildren: node.children.length > 0 });
           }
@@ -1609,7 +1733,7 @@
           {/if}
           <button
             type="button"
-            class="flex-1 min-w-0 flex items-center gap-2 py-1.5 pr-2 text-sm text-left rounded-md transition-colors hover:bg-sidebar-accent active:bg-sidebar-accent {currentEntry?.path ===
+            class="flex-1 min-w-0 flex items-center gap-2 py-1.5 pr-2 text-sm text-left rounded-md transition-colors hover:bg-sidebar-accent active:bg-sidebar-accent {selectedEntryPath ===
             node.path
               ? 'text-sidebar-primary font-medium bg-sidebar-accent'
               : 'text-sidebar-foreground'}"
@@ -1801,7 +1925,11 @@
               class="p-1.5 rounded-md hover:bg-sidebar-accent-foreground/10 transition-colors shrink-0"
               onclick={(e) => {
                 e.stopPropagation();
-                contextMenuState.openMenu({ path: node.path, name: node.name, hasChildren: node.children.length > 0 });
+                if (contextMenuOwner) {
+                  openPluginOwnedContextMenu({ path: node.path, name: node.name, hasChildren: node.children.length > 0 });
+                } else {
+                  contextMenuState.openMenu({ path: node.path, name: node.name, hasChildren: node.children.length > 0 });
+                }
               }}
               aria-label="More actions"
             >
@@ -1820,54 +1948,79 @@
       </div>
     </ContextMenu.Trigger>
 
-    <ContextMenu.Content class="w-48">
-      <ContextMenu.Item onclick={() => onCreateChildEntry(node.path)}>
-        <Plus class="size-4 mr-2" />
-        New Entry Here
-      </ContextMenu.Item>
-      {#if onRenameEntry}
-        <ContextMenu.Item onclick={() => handleRenameClick(node.path, node.name)}>
-          <Pencil class="size-4 mr-2" />
-          Rename
+    {#if !contextMenuOwner}
+      <ContextMenu.Content class="w-56">
+        <ContextMenu.Item onclick={() => onCreateChildEntry(node.path)}>
+          <Plus class="size-4 mr-2" />
+          New Entry Here
         </ContextMenu.Item>
-      {/if}
-      {#if onDuplicateEntry}
-        <ContextMenu.Item onclick={() => handleDuplicate(node.path)}>
-          <Copy class="size-4 mr-2" />
-          Duplicate
+
+        {#if onRenameEntry}
+          <ContextMenu.Item onclick={() => handleRenameClick(node.path, node.name)}>
+            <Pencil class="size-4 mr-2" />
+            Rename
+          </ContextMenu.Item>
+        {/if}
+
+        {#if onDuplicateEntry}
+          <ContextMenu.Item onclick={() => handleDuplicate(node.path)}>
+            <Copy class="size-4 mr-2" />
+            Duplicate
+          </ContextMenu.Item>
+        {/if}
+
+        {#if api}
+          <ContextMenu.Item onclick={() => handleMoveToClick(node.path)}>
+            <FolderInput class="size-4 mr-2" />
+            Move to...
+          </ContextMenu.Item>
+        {/if}
+
+        {#if onSetAudience}
+          <ContextMenu.Item onclick={() => onSetAudience(node.path)}>
+            <CircleUser class="size-4 mr-2" />
+            Set Audience...
+          </ContextMenu.Item>
+        {/if}
+
+        <ContextMenu.Separator />
+
+        <ContextMenu.Item onclick={() => onExport(node.path)}>
+          <Download class="size-4 mr-2" />
+          Export...
         </ContextMenu.Item>
-      {/if}
-      {#if api}
-        <ContextMenu.Item onclick={() => handleMoveToClick(node.path)}>
-          <FolderInput class="size-4 mr-2" />
-          Move to...
+
+        {#if onValidate}
+          <ContextMenu.Item onclick={() => onValidate(node.path)}>
+            <SearchCheck class="size-4 mr-2" />
+            Validate
+          </ContextMenu.Item>
+        {/if}
+
+        {#if onImportMarkdownFile}
+          <ContextMenu.Item onclick={() => onImportMarkdownFile()}>
+            <FolderInput class="size-4 mr-2" />
+            Import Markdown File
+          </ContextMenu.Item>
+        {/if}
+
+        {#if onOpenBackupImport}
+          <ContextMenu.Item onclick={() => onOpenBackupImport()}>
+            <Settings class="size-4 mr-2" />
+            Download Backup ZIP
+          </ContextMenu.Item>
+        {/if}
+
+        <ContextMenu.Separator />
+
+        <ContextMenu.Item
+          class="text-destructive focus:text-destructive"
+          onclick={() => onDeleteEntry(node.path)}
+        >
+          <Trash2 class="size-4 mr-2" />
+          Delete
         </ContextMenu.Item>
-      {/if}
-      {#if onSetAudience}
-        <ContextMenu.Item onclick={() => onSetAudience(node.path)}>
-          <CircleUser class="size-4 mr-2" />
-          Set Audience...
-        </ContextMenu.Item>
-      {/if}
-      <ContextMenu.Separator />
-      <ContextMenu.Item onclick={() => onExport(node.path)}>
-        <Download class="size-4 mr-2" />
-        Export...
-      </ContextMenu.Item>
-      {#if onValidate}
-        <ContextMenu.Item onclick={() => onValidate(node.path)}>
-          <SearchCheck class="size-4 mr-2" />
-          Validate
-        </ContextMenu.Item>
-      {/if}
-      <ContextMenu.Separator />
-      <ContextMenu.Item
-        variant="destructive"
-        onclick={() => onDeleteEntry(node.path)}
-      >
-        <Trash2 class="size-4 mr-2" />
-        Delete
-      </ContextMenu.Item>
-    </ContextMenu.Content>
+      </ContextMenu.Content>
+    {/if}
   </ContextMenu.Root>
 {/snippet}

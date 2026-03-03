@@ -3,7 +3,7 @@
 //! Provides a shared cache of `SqliteStorage` connections keyed by workspace ID,
 //! used by both cloud and local sync servers.
 
-use diaryx_core::crdt::SqliteStorage;
+use crate::SqliteStorage;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};

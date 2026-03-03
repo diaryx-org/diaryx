@@ -16,18 +16,6 @@ export {
 } from './attachmentService';
 
 export {
-  initializeWorkspaceCrdt,
-  isCrdtInitialized,
-  resetCrdtState,
-  updateCrdtFileMetadata,
-  addFileToCrdt,
-  createAttachmentRef,
-  getCrdtStats,
-  type WorkspaceCrdtCallbacks,
-  type WorkspaceCrdtStats,
-} from './workspaceCrdtService';
-
-export {
   showError,
   showSuccess,
   showWarning,
@@ -35,19 +23,6 @@ export {
   showLoading,
   handleError,
 } from './toastService';
-
-export {
-  createShareSession,
-  joinShareSession,
-  endShareSession,
-  setShareServerUrl,
-  getGuestStoragePath,
-  isGuestMode,
-  getCurrentJoinCode,
-  getSessionSyncUrl,
-  cleanupGuestStorage,
-  cleanupAllGuestStorage,
-} from './shareService';
 
 export {
   getCommitHistory,
@@ -89,4 +64,4 @@ export {
   sha256Hex,
   isTerminalAttachmentSyncError,
   getAttachmentSyncQueueSnapshot,
-} from './attachmentSyncService';
+} from '$lib/sync/attachmentSyncService';

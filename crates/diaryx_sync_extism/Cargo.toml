@@ -1,0 +1,26 @@
+[package]
+name = "diaryx_sync_extism"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+description = "Extism guest plugin wrapping diaryx_sync for on-demand CRDT sync"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+diaryx_core = { workspace = true }
+diaryx_sync = { workspace = true }
+extism-pdk = "1.4"
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = "0.22"
+log = "0.4"
+
+# Override getrandom to use a custom backend instead of wasm-bindgen/js.
+# The `custom` feature lets us register our own RNG (using host_get_timestamp as entropy).
+# v0.2: used by fastrand/futures-lite — `register_custom_getrandom!` macro
+# v0.3: used by uuid/rng-getrandom — `__getrandom_v03_custom` extern fn
+getrandom = { version = "0.2", features = ["custom"] }
+getrandom_03 = { package = "getrandom", version = "0.3", default-features = false }

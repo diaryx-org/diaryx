@@ -8,13 +8,14 @@
 
   import * as Drawer from "$lib/components/ui/drawer";
   import {
+    FolderInput,
+    Settings,
     Plus,
     Download,
     SearchCheck,
     Trash2,
     Pencil,
     Copy,
-    FolderInput,
     CircleUser,
   } from "@lucide/svelte";
 
@@ -31,6 +32,9 @@
     onDuplicate?: (path: string) => void;
     onMoveTo?: (path: string) => void;
     onSetAudience?: (path: string) => void;
+    onOpenBackupImport?: () => void;
+    onImportMarkdownFile?: () => void;
+    minimalMode?: boolean;
   }
 
   let {
@@ -46,6 +50,9 @@
     onDuplicate,
     onMoveTo,
     onSetAudience,
+    onOpenBackupImport,
+    onImportMarkdownFile,
+    minimalMode = false,
   }: Props = $props();
 
   // Action handlers that close the sheet after action
@@ -69,15 +76,38 @@
       </Drawer.Header>
 
       <div class="flex flex-col pb-4">
-        <!-- New Entry -->
-        <button
-          type="button"
-          class="flex items-center gap-4 px-6 py-4 hover:bg-muted active:bg-muted/80 transition-colors text-left"
-          onclick={() => handleAction(() => onCreateChild(nodePath))}
-        >
-          <Plus class="size-5 text-muted-foreground" />
-          <span class="text-base">New Entry Here</span>
-        </button>
+        {#if minimalMode}
+          {#if onImportMarkdownFile}
+            <button
+              type="button"
+              class="flex items-center gap-4 px-6 py-4 hover:bg-muted active:bg-muted/80 transition-colors text-left"
+              onclick={() => handleAction(() => onImportMarkdownFile())}
+            >
+              <FolderInput class="size-5 text-muted-foreground" />
+              <span class="text-base">Import Markdown File</span>
+            </button>
+          {/if}
+
+          {#if onOpenBackupImport}
+            <button
+              type="button"
+              class="flex items-center gap-4 px-6 py-4 hover:bg-muted active:bg-muted/80 transition-colors text-left"
+              onclick={() => handleAction(() => onOpenBackupImport())}
+            >
+              <Settings class="size-5 text-muted-foreground" />
+              <span class="text-base">Download Backup ZIP</span>
+            </button>
+          {/if}
+        {:else}
+          <!-- New Entry -->
+          <button
+            type="button"
+            class="flex items-center gap-4 px-6 py-4 hover:bg-muted active:bg-muted/80 transition-colors text-left"
+            onclick={() => handleAction(() => onCreateChild(nodePath))}
+          >
+            <Plus class="size-5 text-muted-foreground" />
+            <span class="text-base">New Entry Here</span>
+          </button>
 
         <!-- Rename -->
         {#if onRename}
@@ -155,15 +185,16 @@
         <!-- Separator -->
         <div class="border-t border-border my-2"></div>
 
-        <!-- Delete - Destructive -->
-        <button
-          type="button"
-          class="flex items-center gap-4 px-6 py-4 hover:bg-destructive/10 active:bg-destructive/20 transition-colors text-left text-destructive"
-          onclick={() => handleAction(() => onDelete(nodePath))}
-        >
-          <Trash2 class="size-5" />
-          <span class="text-base">Delete</span>
-        </button>
+          <!-- Delete - Destructive -->
+          <button
+            type="button"
+            class="flex items-center gap-4 px-6 py-4 hover:bg-destructive/10 active:bg-destructive/20 transition-colors text-left text-destructive"
+            onclick={() => handleAction(() => onDelete(nodePath))}
+          >
+            <Trash2 class="size-5" />
+            <span class="text-base">Delete</span>
+          </button>
+        {/if}
       </div>
     </div>
   </Drawer.Content>

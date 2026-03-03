@@ -10,10 +10,7 @@
 
 import type { TreeNode, Api, ValidationResultWithMeta } from '../lib/backend';
 import type { Backend } from '../lib/backend/interface';
-import type { RustCrdtApi } from '../lib/crdt/rustCrdtApi';
 import { workspaceStore } from '../models/stores';
-import { initializeWorkspaceCrdt } from '../models/services';
-import { setWorkspaceId } from '../lib/crdt/workspaceCrdtBridge';
 import { toast } from 'svelte-sonner';
 
 // Depth limit for initial tree loading (lazy loading)
@@ -207,84 +204,5 @@ export async function validatePath(
   } catch (e) {
     toast.error(e instanceof Error ? e.message : 'Validation failed');
     console.error('[WorkspaceController] Validation error:', e);
-  }
-}
-
-/**
- * Setup workspace CRDT for collaboration.
- *
- * Gets workspace ID from the auth store (server is source of truth).
- * When authenticated, the server generates and stores the workspace UUID.
- * For local-only mode (not signed in), we use null.
- */
-export async function setupWorkspaceCrdt(
-  api: Api,
-  backend: Backend,
-  rustApi: RustCrdtApi,
-  collaborationServerUrl: string | null,
-  collaborationEnabled: boolean,
-  serverWorkspaceId: string | null,
-  onConnectionChange: (connected: boolean) => void
-): Promise<{ workspaceId: string | null; initialized: boolean }> {
-  try {
-    const sharedWorkspaceId = serverWorkspaceId;
-
-    if (sharedWorkspaceId) {
-      console.log('[WorkspaceController] Using workspace_id from server:', sharedWorkspaceId);
-    } else {
-      console.log('[WorkspaceController] No authenticated workspace, using local-only mode');
-    }
-
-    // Get the workspace directory from the backend, then find the actual root index
-    const workspaceDir = backend
-      .getWorkspacePath()
-      .replace(/\/index\.md$/, '')
-      .replace(/\/README\.md$/, '');
-    console.log('[WorkspaceController] Workspace directory:', workspaceDir);
-
-    let workspacePath: string | undefined;
-    try {
-      workspacePath = await api.findRootIndex(workspaceDir);
-      console.log('[WorkspaceController] Found root index at:', workspacePath);
-    } catch (e) {
-      console.warn('[WorkspaceController] Could not find root index (workspace may be empty):', e);
-    }
-
-    // Set workspace ID for per-file document room naming
-    // If null, rooms will be "doc:{path}" instead of "{id}:doc:{path}"
-    setWorkspaceId(sharedWorkspaceId);
-    workspaceStore.setWorkspaceId(sharedWorkspaceId);
-
-    // Initialize workspace CRDT using service with Rust API
-    // Only if we have a valid workspace path (skip for empty workspaces)
-    if (workspacePath) {
-      const initialized = await initializeWorkspaceCrdt(
-        sharedWorkspaceId,
-        workspacePath,
-        collaborationServerUrl,
-        collaborationEnabled,
-        rustApi,
-        {
-          onConnectionChange: (connected: boolean) => {
-            console.log(
-              '[WorkspaceController] Workspace CRDT connection:',
-              connected ? 'online' : 'offline'
-            );
-            onConnectionChange(connected);
-          },
-        }
-      );
-
-      workspaceStore.setWorkspaceCrdtInitialized(initialized);
-      return { workspaceId: sharedWorkspaceId, initialized };
-    } else {
-      console.log('[WorkspaceController] Skipping CRDT init — no root index found');
-      workspaceStore.setWorkspaceCrdtInitialized(false);
-      return { workspaceId: sharedWorkspaceId, initialized: false };
-    }
-  } catch (e) {
-    console.error('[WorkspaceController] Failed to initialize workspace CRDT:', e);
-    workspaceStore.setWorkspaceCrdtInitialized(false);
-    return { workspaceId: null, initialized: false };
   }
 }

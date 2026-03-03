@@ -1,18 +1,18 @@
 //! Git operations for server-side workspace commits and restores.
 //!
-//! Thin wrappers around `diaryx_core::crdt::git` that handle storage lookup,
+//! Thin wrappers around `diaryx_sync::git` that handle storage lookup,
 //! repo open/init, and CRDT loading for a given workspace ID.
 
 use std::path::Path;
 use std::sync::Arc;
 
-use diaryx_core::crdt::git::{
+use diaryx_core::error::DiaryxError;
+use diaryx_sync::git::{
     CommitOptions, CommitResult, RepoKind, commit_workspace, init_repo, open_repo,
     rebuild_crdt_from_git,
 };
-use diaryx_core::crdt::self_healing::HealthTracker;
-use diaryx_core::crdt::{BodyDocManager, CrdtStorage, WorkspaceCrdt};
-use diaryx_core::error::DiaryxError;
+use diaryx_sync::self_healing::HealthTracker;
+use diaryx_sync::{BodyDocManager, CrdtStorage, WorkspaceCrdt};
 use git2::Oid;
 
 use crate::sync_v2::StorageCache;

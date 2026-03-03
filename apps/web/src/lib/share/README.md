@@ -1,27 +1,22 @@
 ---
 title: Share
-description: Share session components
-part_of: '[README](/apps/web/src/lib/README.md)'
+description: Legacy share/publish panel module
+part_of: "[README](/apps/web/src/lib/README.md)"
 attachments:
-  - '[ShareTab.svelte](/apps/web/src/lib/share/ShareTab.svelte)'
-  - '[LiveCollaborationPanel.svelte](/apps/web/src/lib/share/LiveCollaborationPanel.svelte)'
-  - '[PublishingPanel.svelte](/apps/web/src/lib/share/PublishingPanel.svelte)'
+  - "[PublishingPanel.svelte](/apps/web/src/lib/share/PublishingPanel.svelte)"
 exclude:
-  - '*.lock'
+  - "*.lock"
 ---
 
 # Share
 
-Share components for real-time collaboration and static-site publishing. These live in the **left sidebar** Share tab (workspace-level concern).
+This directory no longer contains host-owned live-share session UI.
 
-## Audience Selection
-
-Both `LiveCollaborationPanel` and `PublishingPanel` read the audience from the left sidebar's `AudienceFilter` via `templateContextStore.previewAudience` instead of maintaining their own audience dropdowns. This centralises audience selection to one place.
+Live share/session surfaces moved to the sync plugin (`diaryx_sync_extism`) and
+are rendered through plugin iframe contributions.
 
 ## Files
 
 | File | Purpose |
-|------|---------|
-| `ShareTab.svelte` | Share top-level sub-tab shell (`Live Collaboration` and `Publishing`) |
-| `LiveCollaborationPanel.svelte` | Share-session create/join/host UI; uses `templateContextStore.previewAudience` for audience filtering |
-| `PublishingPanel.svelte` | Site publishing setup, publish-now actions, and access-token CRUD; uses `templateContextStore.previewAudience` for token audience |
+| --- | --- |
+| `PublishingPanel.svelte` | Site publishing panel used by publish surfaces. |

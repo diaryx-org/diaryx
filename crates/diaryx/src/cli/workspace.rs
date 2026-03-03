@@ -26,6 +26,20 @@ pub fn handle_workspace_command(
     let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     match command {
+        WorkspaceCommands::List => handle_list_workspaces(&config),
+
+        WorkspaceCommands::Register { path, name } => {
+            handle_register_workspace(&config, path, name)
+        }
+
+        WorkspaceCommands::Unregister { name_or_path, yes } => {
+            handle_unregister_workspace(&config, &name_or_path, yes)
+        }
+
+        WorkspaceCommands::Default { name_or_path } => {
+            handle_default_workspace(&config, name_or_path)
+        }
+
         WorkspaceCommands::Info {
             path,
             depth,
@@ -1774,11 +1788,15 @@ fn handle_init(
     current_dir: &Path,
 ) {
     let target_dir = dir.unwrap_or_else(|| current_dir.to_path_buf());
+    let canonical = std::fs::canonicalize(&target_dir).unwrap_or_else(|_| target_dir.clone());
 
     match block_on(ws.init_workspace(&target_dir, title.as_deref(), description.as_deref())) {
         Ok(readme_path) => {
             println!("✓ Initialized workspace");
             println!("  Index file: {}", readme_path.display());
+
+            // Auto-register in the workspace registry
+            auto_register_workspace(&canonical, title.as_deref());
         }
         Err(e) => eprintln!("✗ Error initializing workspace: {}", e),
     }
@@ -3466,4 +3484,226 @@ fn convert_file_links(
     }
 
     result
+}
+
+// ============================================================================
+// Workspace Registry Commands
+// ============================================================================
+
+/// List all registered workspaces.
+fn handle_list_workspaces(config: &Option<Config>) -> bool {
+    let Some(cfg) = config else {
+        eprintln!("No configuration found. Run 'diaryx init' first.");
+        return false;
+    };
+
+    let reg = cfg.workspace_registry();
+
+    if reg.entries.is_empty() {
+        println!("No workspaces registered.");
+        println!();
+        println!("Register a workspace with:");
+        println!("  diaryx workspace register <path>");
+        return true;
+    }
+
+    println!("Registered workspaces:");
+    for entry in &reg.entries {
+        let is_default = reg.default_id.as_deref() == Some(&*entry.id);
+        let marker = if is_default { " (default)" } else { "" };
+        let path_str = entry
+            .path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(no path)".into());
+        println!("  {} — {}{}", entry.name, path_str, marker);
+    }
+    true
+}
+
+/// Register a workspace directory.
+fn handle_register_workspace(config: &Option<Config>, path: PathBuf, name: Option<String>) -> bool {
+    let Some(cfg) = config else {
+        eprintln!("No configuration found. Run 'diaryx init' first.");
+        return false;
+    };
+
+    let canonical = std::fs::canonicalize(&path).unwrap_or(path);
+    let display_name = name.unwrap_or_else(|| {
+        canonical
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "workspace".into())
+    });
+
+    let mut reg = cfg.workspace_registry();
+    if reg.find_by_path(&canonical).is_some() {
+        println!("Workspace already registered: {}", canonical.display());
+        return true;
+    }
+
+    let entry = reg.register(display_name.clone(), Some(canonical.clone()));
+    let id = entry.id.clone();
+
+    // If this is the first workspace, make it the default
+    if reg.entries.len() == 1 {
+        reg.set_default(&id);
+    }
+
+    let mut cfg = cfg.clone();
+    cfg.apply_registry(&reg);
+    if let Err(e) = cfg.save() {
+        eprintln!("✗ Error saving config: {}", e);
+        return false;
+    }
+
+    println!(
+        "✓ Registered workspace \"{}\" at {}",
+        display_name,
+        canonical.display()
+    );
+    true
+}
+
+/// Unregister a workspace by name or path.
+fn handle_unregister_workspace(config: &Option<Config>, name_or_path: &str, yes: bool) -> bool {
+    use std::io::{self, Write};
+
+    let Some(cfg) = config else {
+        eprintln!("No configuration found. Run 'diaryx init' first.");
+        return false;
+    };
+
+    let mut reg = cfg.workspace_registry();
+
+    // Try as name first, then as path
+    let entry_id = reg
+        .find_by_name(name_or_path)
+        .or_else(|| {
+            let path = PathBuf::from(name_or_path);
+            let canonical = std::fs::canonicalize(&path).unwrap_or(path);
+            reg.find_by_path(&canonical)
+        })
+        .map(|e| (e.id.clone(), e.name.clone()));
+
+    let Some((id, name)) = entry_id else {
+        eprintln!("✗ No registered workspace matching \"{}\"", name_or_path);
+        return false;
+    };
+
+    if !yes {
+        print!(
+            "Unregister workspace \"{}\"? Files will not be deleted. [y/N] ",
+            name
+        );
+        io::stdout().flush().unwrap();
+        let mut input = String::new();
+        if io::stdin().read_line(&mut input).is_err() || !input.trim().eq_ignore_ascii_case("y") {
+            println!("Cancelled.");
+            return true;
+        }
+    }
+
+    reg.unregister(&id);
+
+    let mut cfg = cfg.clone();
+    cfg.apply_registry(&reg);
+    if let Err(e) = cfg.save() {
+        eprintln!("✗ Error saving config: {}", e);
+        return false;
+    }
+
+    println!("✓ Unregistered workspace \"{}\"", name);
+    true
+}
+
+/// Show or set the default workspace.
+fn handle_default_workspace(config: &Option<Config>, name_or_path: Option<String>) -> bool {
+    let Some(cfg) = config else {
+        eprintln!("No configuration found. Run 'diaryx init' first.");
+        return false;
+    };
+
+    let mut reg = cfg.workspace_registry();
+
+    match name_or_path {
+        None => {
+            // Show current default
+            match reg.default_entry() {
+                Some(entry) => {
+                    let path_str = entry
+                        .path
+                        .as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| "(no path)".into());
+                    println!("{} — {}", entry.name, path_str);
+                }
+                None => {
+                    println!("Default workspace: {}", cfg.default_workspace.display());
+                    if !reg.entries.is_empty() {
+                        println!("(not set — use 'diaryx workspace default <name>' to set)");
+                    }
+                }
+            }
+            true
+        }
+        Some(ref val) => {
+            // Find by name or path
+            let entry_id = reg
+                .find_by_name(val)
+                .or_else(|| {
+                    let path = PathBuf::from(val);
+                    let canonical = std::fs::canonicalize(&path).unwrap_or(path);
+                    reg.find_by_path(&canonical)
+                })
+                .map(|e| (e.id.clone(), e.name.clone()));
+
+            let Some((id, name)) = entry_id else {
+                eprintln!("✗ No registered workspace matching \"{}\"", val);
+                return false;
+            };
+
+            reg.set_default(&id);
+
+            let mut cfg = cfg.clone();
+            cfg.apply_registry(&reg);
+            if let Err(e) = cfg.save() {
+                eprintln!("✗ Error saving config: {}", e);
+                return false;
+            }
+
+            println!("✓ Default workspace set to \"{}\"", name);
+            true
+        }
+    }
+}
+
+/// Auto-register a workspace path in the config if not already present.
+fn auto_register_workspace(path: &Path, name: Option<&str>) {
+    let Ok(mut cfg) = Config::load() else {
+        return;
+    };
+
+    let mut reg = cfg.workspace_registry();
+    if reg.find_by_path(path).is_some() {
+        return;
+    }
+
+    let display_name = name.map(|n| n.to_string()).unwrap_or_else(|| {
+        path.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "workspace".into())
+    });
+
+    let entry = reg.register(display_name, Some(path.to_path_buf()));
+    let id = entry.id.clone();
+
+    // Set as default if it matches the configured default_workspace or is the first
+    let default_canonical = std::fs::canonicalize(&cfg.default_workspace).ok();
+    if reg.entries.len() == 1 || default_canonical.as_deref() == Some(path) {
+        reg.set_default(&id);
+    }
+
+    cfg.apply_registry(&reg);
+    let _ = cfg.save();
 }

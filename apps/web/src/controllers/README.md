@@ -23,7 +23,7 @@ Controller logic for UI actions, mediating between views and models.
 |------|---------|
 | `attachmentController.ts` | Attachment upload/management + incremental sync enqueue + BinaryRef hash metadata updates (creates missing `BinaryRef` entries when needed, writes canonical attachment refs to CRDT metadata, and enqueues uploads with canonical metadata paths so server-side path canonicalization stays consistent for nested entries). Shows a grouped loading toast when cloud sync is active to track upload progress. |
 | `commandPaletteController.ts` | Command palette actions |
-| `entryController.ts` | Entry creation, editing, deletion, and frontmatter-safe property updates (normalizes `Map` frontmatter before merges/removals). Title changes delegate rename logic to the Rust backend (`SetFrontmatterProperty` handler reads workspace config for `auto_rename_to_title` and `filename_style`). |
+| `entryController.ts` | Entry creation, editing, deletion, and frontmatter-safe property updates (normalizes `Map` frontmatter before merges/removals). Title changes delegate rename logic to the Rust backend (`SetFrontmatterProperty` handler reads workspace config for `auto_rename_to_title` and `filename_style`). Entry-open flow supports request-scoped guards so stale `openEntry` results do not overwrite newer navigation intents. |
 | `linkController.ts` | Link handling and navigation |
 | `workspaceController.ts` | Workspace operations (tree refresh, lazy child loading, validation). |
 

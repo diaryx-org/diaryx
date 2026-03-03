@@ -30,12 +30,16 @@ import {
   serializeRegistrationCredential,
   serializeAuthenticationCredential,
 } from "./webauthnUtils";
-import {
-  setAuthToken,
-  setCollaborationWorkspaceId,
-} from "../crdt";
 import { collaborationStore } from "@/models/stores/collaborationStore.svelte";
 import { getCurrentWorkspaceId as registryGetCurrentWorkspaceId } from "$lib/storage/localWorkspaceRegistry.svelte";
+
+function setAuthToken(_token: string | undefined): void {
+  // Sync plugin reads token through host callbacks/local auth state.
+}
+
+function setCollaborationWorkspaceId(_workspaceId: string | null): void {
+  // Workspace sync ownership moved to the sync plugin.
+}
 
 // ============================================================================
 // Types

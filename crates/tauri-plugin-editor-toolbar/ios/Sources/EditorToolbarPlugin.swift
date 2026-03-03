@@ -82,6 +82,16 @@ class EditorToolbarPlugin: Plugin, WKScriptMessageHandler {
                   let canRedo = body["canRedo"] as? Bool else { return }
             let editable = body["editable"] as? Bool ?? true
             toolbar?.updateState(activeStates: states, canUndo: canUndo, canRedo: canRedo, editable: editable)
+        case "focusChange":
+            guard let focused = body["focused"] as? Bool,
+                  let webView = webView else { return }
+            if let contentView = Self.findWKContentView(in: webView) {
+                objc_setAssociatedObject(contentView, &Self.associatedEditorFocusedKey, focused, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+                contentView.reloadInputViews()
+            }
+        case "pluginCommands":
+            guard let commands = body["commands"] as? [String: Any] else { return }
+            toolbar?.updatePluginCommands(commands)
         default:
             break
         }
@@ -92,6 +102,7 @@ class EditorToolbarPlugin: Plugin, WKScriptMessageHandler {
 
 extension EditorToolbarPlugin {
     private static var associatedToolbarKey = "diaryxEditorToolbar"
+    private static var associatedEditorFocusedKey = "diaryxEditorFocused"
 
     /// Swizzle WKContentView's inputAccessoryView to return our toolbar.
     /// Returns true if the swizzle was applied, false if WKContentView wasn't found.
@@ -117,6 +128,8 @@ extension EditorToolbarPlugin {
               let typeEncoding = method_getTypeEncoding(method) else { return false }
 
         let block: @convention(block) (AnyObject) -> UIView? = { obj in
+            let focused = objc_getAssociatedObject(obj, &EditorToolbarPlugin.associatedEditorFocusedKey) as? Bool ?? false
+            guard focused else { return nil }
             return objc_getAssociatedObject(obj, &EditorToolbarPlugin.associatedToolbarKey) as? UIView
         }
         let imp = imp_implementationWithBlock(block)
@@ -145,28 +158,37 @@ extension EditorToolbarPlugin {
     (function() {
         var currentEditor = null;
         var pollInterval = null;
+        var pluginMarkIds = [];
+        var pluginCommandsSent = false;
 
         function reportState() {
             var editor = currentEditor;
             if (!editor) return;
 
             try {
+                var activeStates = {
+                    bold: editor.isActive('bold'),
+                    italic: editor.isActive('italic'),
+                    strike: editor.isActive('strike'),
+                    code: editor.isActive('code'),
+                    heading1: editor.isActive('heading', {level: 1}),
+                    heading2: editor.isActive('heading', {level: 2}),
+                    heading3: editor.isActive('heading', {level: 3}),
+                    bulletList: editor.isActive('bulletList'),
+                    orderedList: editor.isActive('orderedList'),
+                    taskList: editor.isActive('taskList'),
+                    blockquote: editor.isActive('blockquote'),
+                    codeBlock: editor.isActive('codeBlock'),
+                    link: editor.isActive('link')
+                };
+
+                for (var i = 0; i < pluginMarkIds.length; i++) {
+                    activeStates[pluginMarkIds[i]] = editor.isActive(pluginMarkIds[i]);
+                }
+
                 var msg = {
                     type: 'stateUpdate',
-                    activeStates: {
-                        bold: editor.isActive('bold'),
-                        italic: editor.isActive('italic'),
-                        strike: editor.isActive('strike'),
-                        code: editor.isActive('code'),
-                        heading1: editor.isActive('heading', {level: 1}),
-                        heading2: editor.isActive('heading', {level: 2}),
-                        heading3: editor.isActive('heading', {level: 3}),
-                        bulletList: editor.isActive('bulletList'),
-                        orderedList: editor.isActive('orderedList'),
-                        taskList: editor.isActive('taskList'),
-                        blockquote: editor.isActive('blockquote'),
-                        link: editor.isActive('link')
-                    },
+                    activeStates: activeStates,
                     canUndo: editor.can().undo(),
                     canRedo: editor.can().redo(),
                     editable: editor.isEditable
@@ -178,11 +200,48 @@ extension EditorToolbarPlugin {
             }
         }
 
+        function reportPluginCommands() {
+            try {
+                var bridge = globalThis.__diaryx_nativeToolbar;
+                if (!bridge || !bridge.getPluginCommands) return;
+                var commands = bridge.getPluginCommands();
+                if (!commands) return;
+
+                pluginMarkIds = (commands.marks || []).map(function(c) { return c.extensionId; });
+
+                window.webkit.messageHandlers.editorToolbar.postMessage({
+                    type: 'pluginCommands',
+                    commands: commands
+                });
+                pluginCommandsSent = true;
+            } catch (e) {
+                // Plugin commands not available yet
+            }
+        }
+
         function attachToEditor(editor) {
             currentEditor = editor;
             editor.on('selectionUpdate', reportState);
             editor.on('transaction', reportState);
-            editor.on('focus', reportState);
+            editor.on('focus', function() {
+                window.webkit.messageHandlers.editorToolbar.postMessage({
+                    type: 'focusChange', focused: true
+                });
+                reportState();
+            });
+            editor.on('blur', function() {
+                window.webkit.messageHandlers.editorToolbar.postMessage({
+                    type: 'focusChange', focused: false
+                });
+            });
+
+            if (editor.isFocused) {
+                window.webkit.messageHandlers.editorToolbar.postMessage({
+                    type: 'focusChange', focused: true
+                });
+            }
+
+            reportPluginCommands();
             reportState();
         }
 
@@ -192,7 +251,13 @@ extension EditorToolbarPlugin {
 
             // Editor instance changed (e.g. switched entries) — re-attach
             if (editor !== currentEditor) {
+                pluginCommandsSent = false;
                 attachToEditor(editor);
+            }
+
+            // Retry plugin commands if bridge wasn't ready on first attach
+            if (!pluginCommandsSent) {
+                reportPluginCommands();
             }
         }
 
@@ -239,6 +304,14 @@ class EditorToolbar: UIView {
 
     // Button references for active state updates (keyed by state ID)
     private var buttonMap: [String: UIButton] = [:]
+
+    // Plugin commands
+    private var pluginCommands: [PluginCommand] = []
+    private var pluginButtonViews: [UIView] = []
+    private var pluginButtonKeys: [String] = []
+
+    // Last known active states for block picker menu checkmarks
+    private var lastActiveStates: [String: Bool] = [:]
 
     private static let toolbarHeight: CGFloat = 44
 
@@ -338,7 +411,12 @@ class EditorToolbar: UIView {
     // MARK: - Build Buttons
 
     private func buildButtons() {
-        // Group 1: History
+        // Block picker button (replaces FloatingMenu on iOS)
+        addGroup([makeBlockPickerButton()])
+
+        addSeparator()
+
+        // History
         addGroup([
             makeButton(systemName: "arrow.uturn.backward", action: #selector(doUndo), id: "undo"),
             makeButton(systemName: "arrow.uturn.forward", action: #selector(doRedo), id: "redo"),
@@ -346,39 +424,119 @@ class EditorToolbar: UIView {
 
         addSeparator()
 
-        // Group 2: Inline formatting
+        // Inline formatting
         addGroup([
             makeButton(systemName: "bold", action: #selector(doBold), id: "bold"),
             makeButton(systemName: "italic", action: #selector(doItalic), id: "italic"),
             makeButton(systemName: "strikethrough", action: #selector(doStrike), id: "strike"),
             makeButton(systemName: "chevron.left.forwardslash.chevron.right", action: #selector(doCode), id: "code"),
-        ])
-
-        addSeparator()
-
-        // Group 3: Headings
-        addGroup([
-            makeTextButton(title: "H1", action: #selector(doH1), id: "heading1"),
-            makeTextButton(title: "H2", action: #selector(doH2), id: "heading2"),
-            makeTextButton(title: "H3", action: #selector(doH3), id: "heading3"),
-        ])
-
-        addSeparator()
-
-        // Group 4: Lists
-        addGroup([
-            makeButton(systemName: "list.bullet", action: #selector(doBullet), id: "bulletList"),
-            makeButton(systemName: "list.number", action: #selector(doOrdered), id: "orderedList"),
-            makeButton(systemName: "checklist", action: #selector(doTask), id: "taskList"),
-        ])
-
-        addSeparator()
-
-        // Group 5: Blocks
-        addGroup([
-            makeButton(systemName: "text.quote", action: #selector(doQuote), id: "blockquote"),
             makeButton(systemName: "link", action: #selector(doLink), id: "link"),
         ])
+    }
+
+    // MARK: - Block Picker (replaces FloatingMenu)
+
+    private var blockPickerButton: UIButton?
+
+    private func makeBlockPickerButton() -> UIButton {
+        let button = UIButton(type: .system)
+        let config = UIImage.SymbolConfiguration(pointSize: 16, weight: .medium)
+        button.setImage(UIImage(systemName: "paragraph", withConfiguration: config), for: .normal)
+        button.tintColor = .secondaryLabel
+        button.showsMenuAsPrimaryAction = true
+        button.menu = buildBlockPickerMenu()
+        button.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            button.widthAnchor.constraint(equalToConstant: 36),
+            button.heightAnchor.constraint(equalToConstant: 36),
+        ])
+        blockPickerButton = button
+        return button
+    }
+
+    private func buildBlockPickerMenu() -> UIMenu {
+        let states = lastActiveStates
+
+        func isOn(_ key: String) -> UIMenuElement.State {
+            (states[key] ?? false) ? .on : .off
+        }
+
+        let h1 = UIAction(title: "Heading 1", state: isOn("heading1")) { [weak self] _ in
+            self?.haptics.impactOccurred()
+            self?.execHeading(level: 1)
+        }
+        let h2 = UIAction(title: "Heading 2", state: isOn("heading2")) { [weak self] _ in
+            self?.haptics.impactOccurred()
+            self?.execHeading(level: 2)
+        }
+        let h3 = UIAction(title: "Heading 3", state: isOn("heading3")) { [weak self] _ in
+            self?.haptics.impactOccurred()
+            self?.execHeading(level: 3)
+        }
+        let headings = UIMenu(title: "Heading", image: UIImage(systemName: "textformat.size"), children: [h1, h2, h3])
+
+        let bullet = UIAction(title: "Bullet List", image: UIImage(systemName: "list.bullet"), state: isOn("bulletList")) { [weak self] _ in
+            self?.haptics.impactOccurred()
+            self?.execCommand("toggleBulletList")
+        }
+        let ordered = UIAction(title: "Numbered List", image: UIImage(systemName: "list.number"), state: isOn("orderedList")) { [weak self] _ in
+            self?.haptics.impactOccurred()
+            self?.execCommand("toggleOrderedList")
+        }
+        let task = UIAction(title: "Task List", image: UIImage(systemName: "checklist"), state: isOn("taskList")) { [weak self] _ in
+            self?.haptics.impactOccurred()
+            self?.execCommand("toggleTaskList")
+        }
+        let lists = UIMenu(title: "List", image: UIImage(systemName: "list.bullet"), children: [bullet, ordered, task])
+
+        let blocks: [UIMenuElement] = [
+            UIAction(title: "Blockquote", image: UIImage(systemName: "text.quote"), state: isOn("blockquote")) { [weak self] _ in
+                self?.haptics.impactOccurred()
+                self?.execCommand("toggleBlockquote")
+            },
+            UIAction(title: "Code Block", image: UIImage(systemName: "curlybraces"), state: isOn("codeBlock")) { [weak self] _ in
+                self?.haptics.impactOccurred()
+                self?.execCommand("toggleCodeBlock")
+            },
+            UIAction(title: "Divider", image: UIImage(systemName: "minus")) { [weak self] _ in
+                self?.haptics.impactOccurred()
+                self?.execCommand("setHorizontalRule")
+            },
+            UIAction(title: "Table", image: UIImage(systemName: "tablecells")) { [weak self] _ in
+                self?.haptics.impactOccurred()
+                self?.webView?.evaluateJavaScript(
+                    "globalThis.__diaryx_tiptapEditor?.chain().focus().insertTable({rows:3,cols:3,withHeaderRow:true}).run();",
+                    completionHandler: nil
+                )
+            },
+        ]
+
+        var pluginItems: [UIMenuElement] = []
+        for cmd in pluginCommands where cmd.nodeType == "blockAtom" || cmd.nodeType == "blockPickerItem" {
+            let captured = cmd
+            let image: UIImage? = {
+                if let iconName = cmd.iconName, let sfName = Self.lucideToSFSymbol[iconName] {
+                    return UIImage(systemName: sfName)
+                }
+                return nil
+            }()
+            pluginItems.append(UIAction(title: cmd.label, image: image) { [weak self] _ in
+                self?.execPluginCommand(captured)
+            })
+        }
+
+        var children: [UIMenuElement] = [headings, lists]
+        children.append(UIMenu(title: "", options: .displayInline, children: blocks))
+        if !pluginItems.isEmpty {
+            children.append(UIMenu(title: "", options: .displayInline, children: pluginItems))
+        }
+
+        return UIMenu(title: "", children: children)
+    }
+
+    /// Rebuild the block picker menu to include updated plugin commands
+    private func refreshBlockPickerMenu() {
+        blockPickerButton?.menu = buildBlockPickerMenu()
     }
 
     // MARK: - Button Factories
@@ -387,21 +545,6 @@ class EditorToolbar: UIView {
         let button = UIButton(type: .system)
         let config = UIImage.SymbolConfiguration(pointSize: 16, weight: .medium)
         button.setImage(UIImage(systemName: systemName, withConfiguration: config), for: .normal)
-        button.tintColor = .secondaryLabel
-        button.addTarget(self, action: action, for: .touchUpInside)
-        button.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            button.widthAnchor.constraint(equalToConstant: 36),
-            button.heightAnchor.constraint(equalToConstant: 36),
-        ])
-        buttonMap[id] = button
-        return button
-    }
-
-    private func makeTextButton(title: String, action: Selector, id: String) -> UIButton {
-        let button = UIButton(type: .system)
-        button.setTitle(title, for: .normal)
-        button.titleLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
         button.tintColor = .secondaryLabel
         button.addTarget(self, action: action, for: .touchUpInside)
         button.translatesAutoresizingMaskIntoConstraints = false
@@ -437,6 +580,21 @@ class EditorToolbar: UIView {
 
     func updateState(activeStates: [String: Bool], canUndo: Bool, canRedo: Bool, editable: Bool) {
         isHidden = !editable
+
+        // Track block-level states for the block picker menu checkmarks
+        let blockKeys: Set<String> = [
+            "heading1", "heading2", "heading3",
+            "bulletList", "orderedList", "taskList",
+            "blockquote", "codeBlock",
+        ]
+        let oldBlockStates = lastActiveStates.filter { blockKeys.contains($0.key) }
+        let newBlockStates = activeStates.filter { blockKeys.contains($0.key) }
+        let blockStateChanged = oldBlockStates != newBlockStates
+        lastActiveStates = activeStates
+
+        if blockStateChanged {
+            refreshBlockPickerMenu()
+        }
 
         let activeTint = tintColor ?? .systemBlue
         let inactiveTint = UIColor.secondaryLabel
@@ -476,41 +634,6 @@ class EditorToolbar: UIView {
     @objc private func doCode() {
         haptics.impactOccurred()
         execCommand("toggleCode")
-    }
-
-    @objc private func doH1() {
-        haptics.impactOccurred()
-        execHeading(level: 1)
-    }
-
-    @objc private func doH2() {
-        haptics.impactOccurred()
-        execHeading(level: 2)
-    }
-
-    @objc private func doH3() {
-        haptics.impactOccurred()
-        execHeading(level: 3)
-    }
-
-    @objc private func doBullet() {
-        haptics.impactOccurred()
-        execCommand("toggleBulletList")
-    }
-
-    @objc private func doOrdered() {
-        haptics.impactOccurred()
-        execCommand("toggleOrderedList")
-    }
-
-    @objc private func doTask() {
-        haptics.impactOccurred()
-        execCommand("toggleTaskList")
-    }
-
-    @objc private func doQuote() {
-        haptics.impactOccurred()
-        execCommand("toggleBlockquote")
     }
 
     @objc private func doLink() {
@@ -617,6 +740,220 @@ class EditorToolbar: UIView {
         }
         return nil
     }
+
+    // MARK: - Plugin Commands
+
+    func updatePluginCommands(_ dict: [String: Any]) {
+        var newCommands: [PluginCommand] = []
+
+        if let marks = dict["marks"] as? [[String: Any]] {
+            for m in marks {
+                guard let extId = m["extensionId"] as? String,
+                      let label = m["label"] as? String else { continue }
+                newCommands.append(PluginCommand(
+                    extensionId: extId, label: label,
+                    iconName: m["iconName"] as? String, nodeType: "mark"
+                ))
+            }
+        }
+        if let inlines = dict["inlineAtoms"] as? [[String: Any]] {
+            for item in inlines {
+                guard let extId = item["extensionId"] as? String,
+                      let label = item["label"] as? String else { continue }
+                newCommands.append(PluginCommand(
+                    extensionId: extId, label: label,
+                    iconName: item["iconName"] as? String, nodeType: "inlineAtom"
+                ))
+            }
+        }
+        if let blocks = dict["blockAtoms"] as? [[String: Any]] {
+            for item in blocks {
+                guard let extId = item["extensionId"] as? String,
+                      let label = item["label"] as? String else { continue }
+                newCommands.append(PluginCommand(
+                    extensionId: extId, label: label,
+                    iconName: item["iconName"] as? String, nodeType: "blockAtom"
+                ))
+            }
+        }
+        if let bpItems = dict["blockPickerItems"] as? [[String: Any]] {
+            for item in bpItems {
+                guard let id = item["id"] as? String,
+                      let label = item["label"] as? String,
+                      let editorCommand = item["editorCommand"] as? String else { continue }
+                let prompt = item["prompt"] as? [String: Any]
+                newCommands.append(PluginCommand(
+                    extensionId: id, label: label,
+                    iconName: item["iconName"] as? String, nodeType: "blockPickerItem",
+                    editorCommand: editorCommand,
+                    params: item["params"] as? [String: Any],
+                    promptMessage: prompt?["message"] as? String,
+                    promptDefault: prompt?["defaultValue"] as? String,
+                    promptParamKey: prompt?["paramKey"] as? String
+                ))
+            }
+        }
+
+        guard newCommands != pluginCommands else { return }
+        pluginCommands = newCommands
+        rebuildPluginButtons()
+        refreshBlockPickerMenu()
+    }
+
+    private func rebuildPluginButtons() {
+        // Remove existing plugin views from stack
+        for view in pluginButtonViews {
+            stackView.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        pluginButtonViews.removeAll()
+
+        // Remove plugin entries from buttonMap
+        for key in pluginButtonKeys {
+            buttonMap.removeValue(forKey: key)
+        }
+        pluginButtonKeys.removeAll()
+
+        guard !pluginCommands.isEmpty else { return }
+
+        // Add separator before plugin buttons
+        let sep = UIView()
+        sep.backgroundColor = UIColor.separator
+        sep.translatesAutoresizingMaskIntoConstraints = false
+        stackView.addArrangedSubview(sep)
+        NSLayoutConstraint.activate([
+            sep.widthAnchor.constraint(equalToConstant: 1.0 / UIScreen.main.scale),
+            sep.heightAnchor.constraint(equalToConstant: 24),
+        ])
+        if let lastBeforeSep = stackView.arrangedSubviews.dropLast().last {
+            stackView.setCustomSpacing(8, after: lastBeforeSep)
+        }
+        stackView.setCustomSpacing(8, after: sep)
+        pluginButtonViews.append(sep)
+
+        for cmd in pluginCommands {
+            let button: UIButton
+            if let sfName = Self.lucideToSFSymbol[cmd.iconName ?? ""] {
+                button = UIButton(type: .system)
+                let config = UIImage.SymbolConfiguration(pointSize: 16, weight: .medium)
+                button.setImage(UIImage(systemName: sfName, withConfiguration: config), for: .normal)
+            } else {
+                // Text label fallback
+                button = UIButton(type: .system)
+                let truncated = String(cmd.label.prefix(3))
+                button.setTitle(truncated, for: .normal)
+                button.titleLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
+            }
+            button.tintColor = .secondaryLabel
+            button.accessibilityLabel = cmd.label
+            button.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                button.widthAnchor.constraint(equalToConstant: 36),
+                button.heightAnchor.constraint(equalToConstant: 36),
+            ])
+
+            let captured = cmd
+            button.addAction(UIAction { [weak self] _ in
+                self?.execPluginCommand(captured)
+            }, for: .touchUpInside)
+
+            stackView.addArrangedSubview(button)
+            buttonMap[cmd.extensionId] = button
+            pluginButtonKeys.append(cmd.extensionId)
+            pluginButtonViews.append(button)
+        }
+    }
+
+    private func execPluginCommand(_ cmd: PluginCommand) {
+        haptics.impactOccurred()
+
+        let js: String
+        switch cmd.nodeType {
+        case "mark":
+            js = "globalThis.__diaryx_tiptapEditor?.chain().focus().toggleMark('\(cmd.extensionId)').run();"
+        case "blockPickerItem":
+            if let promptMsg = cmd.promptMessage, let paramKey = cmd.promptParamKey {
+                promptUserInput(message: promptMsg, defaultValue: cmd.promptDefault ?? "") { [weak self] input in
+                    guard let input = input else { return }
+                    var params = cmd.params ?? [:]
+                    params[paramKey] = input
+                    let paramsJson = Self.jsonString(from: params)
+                    let execJs = "globalThis.__diaryx_tiptapEditor?.chain().focus().\(cmd.editorCommand!)(\(paramsJson)).run();"
+                    self?.webView?.evaluateJavaScript(execJs, completionHandler: nil)
+                }
+                return
+            }
+            let paramsJson = Self.jsonString(from: cmd.params ?? [:])
+            js = "globalThis.__diaryx_tiptapEditor?.chain().focus().\(cmd.editorCommand ?? "insertContent")(\(paramsJson)).run();"
+        default: // inlineAtom, blockAtom
+            js = "globalThis.__diaryx_tiptapEditor?.chain().focus().insertContent({type:'\(cmd.extensionId)',attrs:{source:''}}).run();"
+        }
+        webView?.evaluateJavaScript(js, completionHandler: nil)
+    }
+
+    private func promptUserInput(message: String, defaultValue: String, completion: @escaping (String?) -> Void) {
+        guard let vc = findViewController() else { completion(nil); return }
+        let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
+        alert.addTextField { tf in tf.text = defaultValue }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completion(nil) })
+        alert.addAction(UIAlertAction(title: "Insert", style: .default) { _ in
+            completion(alert.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines))
+        })
+        vc.present(alert, animated: true)
+    }
+
+    private static func jsonString(from dict: [String: Any]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: dict),
+              let str = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return str
+    }
+
+    // MARK: - Lucide → SF Symbol Mapping
+
+    private static let lucideToSFSymbol: [String: String] = [
+        "eye-off": "eye.slash",
+        "eye": "eye",
+        "sigma": "sum",
+        "square-sigma": "sum",
+        "lock": "lock",
+        "unlock": "lock.open",
+        "hash": "number",
+        "code": "chevron.left.forwardslash.chevron.right",
+        "type": "textformat",
+        "at-sign": "at",
+        "star": "star",
+        "heart": "heart",
+        "bookmark": "bookmark",
+        "tag": "tag",
+        "puzzle": "puzzlepiece",
+    ]
+}
+
+// MARK: - Plugin Command
+
+struct PluginCommand: Equatable {
+    let extensionId: String
+    let label: String
+    let iconName: String?
+    let nodeType: String  // "mark", "inlineAtom", "blockAtom", "blockPickerItem"
+    var editorCommand: String? = nil
+    var params: [String: Any]? = nil
+    var promptMessage: String? = nil
+    var promptDefault: String? = nil
+    var promptParamKey: String? = nil
+
+    static func == (lhs: PluginCommand, rhs: PluginCommand) -> Bool {
+        lhs.extensionId == rhs.extensionId &&
+        lhs.label == rhs.label &&
+        lhs.iconName == rhs.iconName &&
+        lhs.nodeType == rhs.nodeType &&
+        lhs.editorCommand == rhs.editorCommand &&
+        lhs.promptMessage == rhs.promptMessage &&
+        lhs.promptDefault == rhs.promptDefault &&
+        lhs.promptParamKey == rhs.promptParamKey
+    }
 }
 
 // MARK: - Link Picker View Controller
@@ -628,6 +965,7 @@ class LinkPickerViewController: UIViewController, UITableViewDataSource, UITable
     struct Entry {
         let path: String
         let name: String
+        let displayPath: String
     }
 
     private let allEntries: [Entry]
@@ -646,7 +984,7 @@ class LinkPickerViewController: UIViewController, UITableViewDataSource, UITable
     init(entries: [[String: String]], existingHref: String?, webView: WKWebView) {
         self.allEntries = entries.compactMap { dict in
             guard let path = dict["path"], let name = dict["name"] else { return nil }
-            return Entry(path: path, name: name)
+            return Entry(path: path, name: name, displayPath: dict["displayPath"] ?? path)
         }
         self.filteredEntries = self.allEntries
         self.existingHref = existingHref
@@ -857,7 +1195,7 @@ class LinkPickerViewController: UIViewController, UITableViewDataSource, UITable
             let query = searchText.lowercased()
             filteredEntries = allEntries.filter { entry in
                 entry.name.lowercased().contains(query) ||
-                entry.path.lowercased().contains(query)
+                entry.displayPath.lowercased().contains(query)
             }
         }
         tableView.reloadData()
@@ -875,7 +1213,7 @@ class LinkPickerViewController: UIViewController, UITableViewDataSource, UITable
 
         var config = cell.defaultContentConfiguration()
         config.text = entry.name
-        config.secondaryText = entry.path
+        config.secondaryText = entry.displayPath
         config.secondaryTextProperties.color = .secondaryLabel
         config.secondaryTextProperties.font = .systemFont(ofSize: 12)
         config.image = UIImage(systemName: "doc.text")

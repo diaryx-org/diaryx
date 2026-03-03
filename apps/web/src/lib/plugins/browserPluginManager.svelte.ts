@@ -27,55 +27,6 @@ import {
 } from "./editorExtensionFactory";
 
 // ============================================================================
-// Built-in plugin constants
-// ============================================================================
-
-/** IDs of plugins that ship with the app and are auto-installed at startup. */
-export const BUILTIN_PLUGIN_IDS = new Set([
-  "diaryx.ai",
-  "diaryx.math",
-  "diaryx.spoiler",
-  "diaryx.templating",
-  "publish",
-  "sync",
-  "diaryx.storage.s3",
-  "diaryx.storage.gdrive",
-]);
-
-/** Built-in plugin metadata for auto-install (fallback URLs in public/plugins/). */
-export const BUILTIN_PLUGINS = [
-  { url: "/plugins/diaryx_ai.wasm", id: "diaryx.ai", name: "AI Assistant" },
-  { url: "/plugins/diaryx_math.wasm", id: "diaryx.math", name: "Math" },
-  {
-    url: "/plugins/diaryx_spoiler.wasm",
-    id: "diaryx.spoiler",
-    name: "Spoiler",
-  },
-  {
-    url: "/plugins/diaryx_templating.wasm",
-    id: "diaryx.templating",
-    name: "Templating",
-  },
-  { url: "/plugins/diaryx_publish.wasm", id: "publish", name: "Publish" },
-  { url: "/plugins/diaryx_sync.wasm", id: "sync", name: "Sync" },
-  {
-    url: "/plugins/diaryx_storage_s3.wasm",
-    id: "diaryx.storage.s3",
-    name: "S3 Storage",
-  },
-  {
-    url: "/plugins/diaryx_storage_gdrive.wasm",
-    id: "diaryx.storage.gdrive",
-    name: "Google Drive Storage",
-  },
-];
-
-/** Check whether a plugin ID is a built-in plugin. */
-export function isBuiltinPlugin(pluginId: string): boolean {
-  return BUILTIN_PLUGIN_IDS.has(pluginId);
-}
-
-// ============================================================================
 // IndexedDB storage
 // ============================================================================
 

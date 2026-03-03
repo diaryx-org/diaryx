@@ -11,7 +11,6 @@
     installPlugin as browserInstallPlugin,
     uninstallPlugin as browserUninstallPlugin,
     inspectPluginWasm,
-    isBuiltinPlugin,
   } from "$lib/plugins/browserPluginManager.svelte";
   import {
     fetchPluginRegistry,
@@ -50,22 +49,18 @@
   // In Tauri, plugins load natively — browser WASM support is irrelevant
   const pluginsSupported = $derived(isTauri() || browserPluginSupport.supported);
 
-  function isSyncPluginId(pluginId: string): boolean {
-    return pluginId === "sync";
-  }
-
   /** All installed plugin IDs (from all sources). */
   const installedIds = $derived(
     new Set(pluginStore.allManifests.map((m) => String(m.id))),
   );
 
-  /** Custom (user-uploaded) plugins: installed but not in the registry and not sync. */
+  /** Custom (user-uploaded) plugins: installed but not in the registry. */
   const customPlugins = $derived.by(() => {
     const registryIds = new Set(registryPlugins.map((r) => r.id));
     return pluginStore.allManifests
       .filter((m) => {
         const id = String(m.id);
-        return !registryIds.has(id) && !isSyncPluginId(id) && !isBuiltinPlugin(id);
+        return !registryIds.has(id);
       })
       .sort((a, b) => {
         const aName = String(a.name ?? a.id);
@@ -374,9 +369,6 @@
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2">
                 <span class="text-sm font-medium">{rp.name}</span>
-                {#if rp.builtin}
-                  <span class="text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground">Built-in</span>
-                {/if}
                 <span class="text-[10px] text-muted-foreground">v{rp.version}</span>
               </div>
               <p class="text-xs text-muted-foreground mt-0.5 truncate">{rp.description}</p>

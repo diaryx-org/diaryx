@@ -227,24 +227,20 @@ export class WorkerBackendNew implements Backend {
         }
       }
 
-      const syncEnabled = !!localStorage.getItem("diaryx_auth_token");
       await this.remote.initWithDirectoryHandle(
         port2 as any,
         handle!,
-        syncEnabled,
       );
     } else {
       const resolvedName =
         workspaceName ||
         localStorage.getItem("diaryx-workspace-name") ||
         "My Journal";
-      const syncEnabled = !!localStorage.getItem("diaryx_auth_token");
       await this.remote.init(
         port2 as any,
         storageType,
         resolvedName,
         undefined,
-        syncEnabled,
         workspaceId,
       );
     }
@@ -356,16 +352,10 @@ export class WorkerBackendNew implements Backend {
           }
         }
 
-        // Check if sync is configured (auth token present) to decide whether to
-        // eagerly initialize the SQLite CRDT storage bridge. This avoids downloading
-        // sql.js WASM when sync isn't needed (important for IndexedDB targets).
-        const syncEnabled = !!localStorage.getItem("diaryx_auth_token");
-
         await this.withWorkerStartupGuards(() =>
           this.remote!.initWithDirectoryHandle(
             Comlink.transfer(port2, [port2]),
             handle!,
-            syncEnabled,
           ),
         );
       } else {
@@ -373,14 +363,12 @@ export class WorkerBackendNew implements Backend {
           workspaceName ||
           localStorage.getItem("diaryx-workspace-name") ||
           "My Journal";
-        const syncEnabled = !!localStorage.getItem("diaryx_auth_token");
         await this.withWorkerStartupGuards(() =>
           this.remote!.init(
             Comlink.transfer(port2, [port2]),
             storageType,
             resolvedName,
             undefined,
-            syncEnabled,
             workspaceId,
           ),
         );
@@ -564,9 +552,6 @@ export class WorkerBackendNew implements Backend {
   // CrdtFs control
   setCrdtEnabled = (enabled: boolean) => this.remote!.setCrdtEnabled(enabled);
   isCrdtEnabled = () => this.remote!.isCrdtEnabled();
-
-  // CRDT storage bridge (lazy init for sync)
-  setupCrdtStorage = () => this.remote!.setupCrdtStorage();
 
   // Root index discovery
   findRootIndex = (dirPath?: string) => this.remote!.findRootIndex(dirPath);

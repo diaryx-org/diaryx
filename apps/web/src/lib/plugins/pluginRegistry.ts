@@ -2,7 +2,7 @@
  * Plugin Registry — fetches the CDN-hosted plugin catalog.
  *
  * The registry lists all official (and eventually third-party) plugins
- * available for installation. Built-in plugins are marked with `builtin: true`.
+ * available for installation.
  */
 
 export interface RegistryPlugin {
@@ -11,7 +11,6 @@ export interface RegistryPlugin {
   description: string;
   version: string;
   wasmUrl: string;
-  builtin: boolean;
 }
 
 export interface PluginRegistry {

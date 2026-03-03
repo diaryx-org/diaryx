@@ -134,7 +134,7 @@ jobs:
         if: steps.wasm-cache.outputs.cache-hit != 'true'
         run: |
           nix develop --command bash -c '
-            PLUGIN_DIR=apps/web/public/plugins
+            PLUGIN_DIR=plugin-output
             mkdir -p "$PLUGIN_DIR"
             for crate in diaryx_sync_extism diaryx_ai_extism diaryx_publish_extism diaryx_math_extism diaryx_spoiler_extism diaryx_templating_extism diaryx_daily_extism diaryx_storage_s3_extism diaryx_storage_gdrive_extism; do
               echo "Building $crate..."
@@ -161,7 +161,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: plugin-wasm
-          path: apps/web/public/plugins/
+          path: plugin-output/
 
       - name: Upload bindings artifact
         uses: actions/upload-artifact@v4
@@ -291,72 +291,63 @@ jobs:
                 "name": "Sync",
                 "description": "Real-time workspace synchronization",
                 "version": "0.1.0",
-                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_sync.wasm",
-                "builtin": true
+                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_sync.wasm"
               },
               {
                 "id": "diaryx.ai",
                 "name": "AI Assistant",
                 "description": "AI-powered writing assistant",
                 "version": "0.1.0",
-                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_ai.wasm",
-                "builtin": true
+                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_ai.wasm"
               },
               {
                 "id": "diaryx.math",
                 "name": "Math",
                 "description": "LaTeX math rendering",
                 "version": "0.1.0",
-                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_math.wasm",
-                "builtin": true
+                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_math.wasm"
               },
               {
                 "id": "publish",
                 "name": "Publish",
                 "description": "Export and publish workspaces",
                 "version": "0.1.0",
-                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_publish.wasm",
-                "builtin": true
+                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_publish.wasm"
               },
               {
                 "id": "diaryx.spoiler",
                 "name": "Spoiler",
                 "description": "Discord-style ||spoiler|| hidden text",
                 "version": "0.1.0",
-                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_spoiler.wasm",
-                "builtin": true
+                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_spoiler.wasm"
               },
               {
                 "id": "diaryx.templating",
                 "name": "Templating",
                 "description": "Entry templating functionality",
                 "version": "0.1.0",
-                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_templating.wasm",
-                "builtin": true
+                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_templating.wasm"
               },
               {
                 "id": "diaryx.daily",
                 "name": "Daily",
                 "description": "Daily entry management",
                 "version": "0.1.0",
-                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_daily.wasm",
-                "builtin": false
+                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_daily.wasm"
               },
               {
                 "id": "diaryx.storage.s3",
                 "name": "S3 Storage",
                 "description": "S3-compatible storage backend",
                 "version": "0.1.0",
-                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_storage_s3.wasm",
-                "builtin": true
+                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_storage_s3.wasm"
               },
               {
                 "id": "diaryx.storage.gdrive",
                 "name": "Google Drive Storage",
                 "description": "Google Drive storage backend",
                 "version": "0.1.0",
-                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_storage_gdrive.wasm",
-                "builtin": true
+                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_storage_gdrive.wasm"
               }
             ]
           }

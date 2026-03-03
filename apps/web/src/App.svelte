@@ -473,41 +473,15 @@
       const currentWsId = getCurrentWorkspaceId();
 
       if (!defaultWorkspace && (localWsList.length === 0 || !currentWsId)) {
-        // Check if the user just cleared all data — if so, show the welcome
-        // screen instead of silently auto-creating a new workspace.
         const dataJustCleared = sessionStorage.getItem('diaryx_data_cleared');
         if (dataJustCleared) {
           sessionStorage.removeItem('diaryx_data_cleared');
-          showWelcomeScreen = true;
-          entryStore.setLoading(false);
-          return;
         }
 
-        // On iOS Tauri, first-run should show onboarding explicitly.
-        // The user taps "Get Started" to create/open the starter workspace.
-        if (isTauri() && isIOS()) {
-          showWelcomeScreen = true;
-          entryStore.setLoading(false);
-          return;
-        }
-
-        // No workspaces exist — auto-create a default workspace
-        try {
-          await autoCreateDefaultWorkspace();
-          await refreshTree();
-          if (tree) {
-            workspaceStore.expandNode(tree.path);
-            await openEntry(tree.path);
-          }
-          await runValidation();
-          entryStore.setLoading(false);
-          return;
-        } catch (e) {
-          console.error("[App] Auto-create default workspace failed, showing welcome screen:", e);
-          showWelcomeScreen = true;
-          entryStore.setLoading(false);
-          return;
-        }
+        // No workspaces exist — show welcome/onboarding screen
+        showWelcomeScreen = true;
+        entryStore.setLoading(false);
+        return;
       }
 
       // Initialize the backend (auto-detects Tauri vs WASM)

@@ -27,7 +27,12 @@ export async function deleteLocalWorkspaceData(workspaceId: string, workspaceNam
   switch (storageType) {
     case 'opfs': {
       if (!navigator.storage?.getDirectory) return;
-      const root = await navigator.storage.getDirectory();
+      let root: FileSystemDirectoryHandle;
+      try {
+        root = await navigator.storage.getDirectory();
+      } catch {
+        return;
+      }
 
       // Try deleting by ID (legacy UUID-named dirs)
       try {
@@ -87,7 +92,13 @@ export async function deleteLocalWorkspaceData(workspaceId: string, workspaceNam
 export async function clearOpfs(): Promise<void> {
   if (!navigator.storage?.getDirectory) return;
 
-  const root = await navigator.storage.getDirectory();
+  let root: FileSystemDirectoryHandle;
+  try {
+    root = await navigator.storage.getDirectory();
+  } catch {
+    // OPFS not functional on this browser (e.g. some WebKit builds)
+    return;
+  }
 
   // Enumerate all entries in the OPFS root and delete them
   try {

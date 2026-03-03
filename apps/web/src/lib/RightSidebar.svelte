@@ -680,7 +680,8 @@
       {/if}
     </Tooltip.Root>
 
-    <!-- Tab Toggle -->
+    <!-- Tab Toggle (hidden when only one tab) -->
+    {#if historyTabId || nonHistoryPluginTabs.length > 0}
     <div class="flex items-center gap-1 bg-muted rounded-md p-0.5">
       <button
         type="button"
@@ -708,6 +709,7 @@
         </button>
       {/each}
     </div>
+    {/if}
   </div>
 
   <!-- Content -->

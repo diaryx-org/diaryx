@@ -1187,7 +1187,8 @@
     </div>
   {/if}
 
-  <!-- Tab Bar -->
+  <!-- Tab Bar (hidden when only one tab) -->
+  {#if leftTabs.length > 1}
   <div class="px-3 pt-2 pb-1 shrink-0">
     <div class="flex items-center gap-1 bg-muted rounded-md p-0.5">
       {#each leftTabs as tab (tab.id)}
@@ -1210,6 +1211,7 @@
       {/each}
     </div>
   </div>
+  {/if}
 
   <!-- Content Area -->
   <div class="flex-1 overflow-y-auto {leftTab === 'files' ? 'px-3 pb-3' : ''}" bind:this={scrollContainer}>

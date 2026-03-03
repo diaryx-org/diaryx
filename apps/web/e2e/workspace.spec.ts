@@ -59,9 +59,7 @@ test.describe('Workspace Entry Properties', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/')
     await waitForAppReady(page)
-
-    const propsTab = page.locator('button').filter({ hasText: 'Props' })
-    await propsTab.click()
+    // Properties is the default right sidebar view; no tab click needed
   })
 
   test('should show attachments section in properties', async ({ page }) => {

@@ -76,13 +76,16 @@ async function createEntrySwitchFixture(page: import('@playwright/test').Page): 
     const targetPath = `${targetStem}.md`
     const targetMarker = `TARGET_SWITCH_MARKER_${uid}`
 
-    const slowBody = Array.from(
+    // Create fake attachment paths in frontmatter so the RightSidebar
+    // probes each one via GetAttachmentData (which the delay intercepts).
+    const fakeAttachments = Array.from(
       { length: 60 },
-      (_, i) => `![img${i}](${slowStem}-image-${i}.png)`,
-    ).join('\n')
+      (_, i) => `${slowStem}-image-${i}.png`,
+    )
 
     await api.createEntry(slowPath, { part_of: rootIndexPath })
-    await api.saveEntry(slowPath, slowBody, rootIndexPath)
+    await api.saveEntry(slowPath, `# Slow entry\n\nLoading...`, rootIndexPath)
+    await api.setFrontmatterProperty(slowPath, 'attachments', fakeAttachments)
     await api.createEntry(targetPath, { part_of: rootIndexPath })
     await api.saveEntry(targetPath, `# Target\n\n${targetMarker}`, rootIndexPath)
 

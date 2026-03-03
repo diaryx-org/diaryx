@@ -5,6 +5,7 @@ part_of: "[README](/crates/diaryx_sync_server/src/README.md)"
 attachments:
   - "[mod.rs](/crates/diaryx_sync_server/src/handlers/mod.rs)"
   - "[api.rs](/crates/diaryx_sync_server/src/handlers/api.rs)"
+  - "[ai.rs](/crates/diaryx_sync_server/src/handlers/ai.rs)"
   - "[auth.rs](/crates/diaryx_sync_server/src/handlers/auth.rs)"
   - "[sites.rs](/crates/diaryx_sync_server/src/handlers/sites.rs)"
   - "[sessions.rs](/crates/diaryx_sync_server/src/handlers/sessions.rs)"
@@ -24,6 +25,7 @@ HTTP route handlers for the sync server API.
 | ------------- | ----------------------------------------------------- |
 | `mod.rs`      | Router setup and middleware                           |
 | `api.rs`      | General API endpoints (status, workspace CRUD)        |
+| `ai.rs`       | Managed AI proxy endpoint (`/api/ai/chat/completions`) |
 | `auth.rs`     | Authentication endpoints (magic-link, verify, logout) |
 | `sites.rs`    | Published site and access-token management endpoints   |
 | `sessions.rs` | Share session management endpoints                    |
@@ -114,3 +116,8 @@ Only available when `STRIPE_SECRET_KEY` is configured.
 ### Admin Endpoints
 
 - `PUT /api/admin/users/{user_id}/tier` — set a user's tier (body: `{"tier": "free"|"plus"}`). Requires `X-Admin-Secret` header matching the `ADMIN_SECRET` env var. Returns `204` on success, `401` on bad secret, `404` if no admin secret configured or user not found, `400` on invalid tier.
+
+### Managed AI Endpoint
+
+- `POST /api/ai/chat/completions` — Authenticated managed AI proxy endpoint (OpenRouter upstream).
+- Requires Plus tier (`plus_required`), validates model against allowlist (`model_not_allowed`), enforces per-user rate limit (`rate_limited`) and monthly quota (`quota_exceeded`), returns `provider_unavailable` for upstream/config failures.

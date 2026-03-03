@@ -48,6 +48,8 @@ pub struct CommandResponse {
 /// Plugin configuration stored via host_storage_get/set.
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 pub struct PluginConfig {
+    pub provider_mode: Option<String>,
+    pub managed_model: Option<String>,
     pub api_endpoint: Option<String>,
     pub api_key: Option<String>,
     pub model: Option<String>,
@@ -253,22 +255,43 @@ pub fn manifest(_input: String) -> FnResult<String> {
                         "description": "Configure your AI assistant API connection",
                     },
                     {
+                        "type": "Select",
+                        "key": "provider_mode",
+                        "label": "Provider",
+                        "description": "Choose Diaryx Plus managed AI or use your own API key",
+                        "options": [
+                            { "value": "managed", "label": "Diaryx Plus (managed)" },
+                            { "value": "byo", "label": "Bring your own API key" }
+                        ],
+                    },
+                    {
+                        "type": "Select",
+                        "key": "managed_model",
+                        "label": "Diaryx Plus Model",
+                        "description": "Model used for managed mode",
+                        "options": [
+                            { "value": "google/gemini-3-flash-preview", "label": "Gemini 3 Flash Preview" },
+                            { "value": "anthropic/claude-haiku-4.5", "label": "Claude Haiku 4.5" },
+                            { "value": "openai/gpt-5.2", "label": "OpenAI GPT-5.2" }
+                        ],
+                    },
+                    {
                         "type": "Text",
                         "key": "api_endpoint",
                         "label": "API Endpoint",
-                        "description": "OpenAI-compatible endpoint (default: OpenRouter)",
+                        "description": "OpenAI-compatible endpoint for BYO mode (default: OpenRouter)",
                     },
                     {
                         "type": "Text",
                         "key": "api_key",
                         "label": "API Key",
-                        "description": "Your API key",
+                        "description": "Your API key (BYO mode only)",
                     },
                     {
                         "type": "Text",
                         "key": "model",
                         "label": "Model",
-                        "description": "e.g. anthropic/claude-sonnet-4-6",
+                        "description": "BYO model, e.g. anthropic/claude-sonnet-4-6",
                     },
                     {
                         "type": "Text",
@@ -315,11 +338,19 @@ pub fn handle_command(input: String) -> FnResult<String> {
                 serde_json::from_value(request.params).unwrap_or(chat::ChatInput {
                     message: String::new(),
                     entries: Vec::new(),
+                    managed: None,
                 });
             let config = load_config();
             chat::handle_chat(chat_input, &config)
         }
-        "chat_continue" => chat::chat_continue(),
+        "chat_continue" => {
+            let managed = request
+                .params
+                .get("managed")
+                .cloned()
+                .and_then(|v| serde_json::from_value::<chat::ManagedContext>(v).ok());
+            chat::chat_continue(managed)
+        }
         "clear_conversation" => chat::clear_conversation(),
         "get_history" => chat::get_history(),
         "list_conversations" => chat::list_conversations(),

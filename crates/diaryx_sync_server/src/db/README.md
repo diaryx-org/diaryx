@@ -30,6 +30,7 @@ The schema includes attachment usage tracking tables:
 - `workspace_attachment_refs` (workspace path refs to blob hashes)
 - `attachment_uploads` (resumable multipart upload sessions)
 - `attachment_upload_parts` (uploaded part ETags/state per upload session)
+- `user_ai_usage_monthly` (managed AI request counters by user and UTC month)
 - `published_sites` (workspace-to-site slug mapping and publish settings)
 - `site_audience_builds` (latest build file counts per audience)
 - `site_access_tokens` (audience-scoped token metadata + revocation state)

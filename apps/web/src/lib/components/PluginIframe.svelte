@@ -8,19 +8,31 @@
    * and receive responses/events from the host.
    */
   import { onMount, onDestroy } from "svelte";
-  import { dispatchCommand } from "$lib/plugins/browserPluginManager.svelte";
+  import {
+    dispatchCommand,
+    getPlugin as getBrowserPlugin,
+  } from "$lib/plugins/browserPluginManager.svelte";
   import { getThemeStore } from "@/models/stores";
   import { getAppearanceStore } from "$lib/stores/appearance.svelte";
   import type { EntryData } from "$lib/backend/interface";
+  import type { Api } from "$lib/backend/api";
+  import { getAuthState, getToken } from "$lib/auth";
 
   interface Props {
     pluginId: string;
     componentId: string;
     entry?: EntryData | null;
+    api?: Api | null;
     onHostAction?: (action: { type: string; payload?: unknown }) => Promise<unknown> | unknown;
   }
 
-  let { pluginId, componentId, entry = null, onHostAction }: Props = $props();
+  let {
+    pluginId,
+    componentId,
+    entry = null,
+    api = null,
+    onHostAction,
+  }: Props = $props();
 
   let iframeEl: HTMLIFrameElement | undefined = $state();
   let blobUrl: string | null = $state(null);
@@ -30,6 +42,76 @@
 
   const themeStore = getThemeStore();
   const appearanceStore = getAppearanceStore();
+
+  function withManagedContext(command: string, params: unknown): unknown {
+    const baseParams =
+      params && typeof params === "object" && !Array.isArray(params)
+        ? { ...(params as Record<string, unknown>) }
+        : {};
+
+    if (
+      pluginId !== "diaryx.ai" ||
+      (command !== "chat" && command !== "chat_continue")
+    ) {
+      return baseParams;
+    }
+
+    const authState = getAuthState();
+    const token = getToken();
+    if (!authState.serverUrl || !token) {
+      return baseParams;
+    }
+
+    return {
+      ...baseParams,
+      managed: {
+        server_url: authState.serverUrl,
+        auth_token: token,
+        tier: authState.tier,
+      },
+    };
+  }
+
+  async function executePluginCommand(
+    command: string,
+    params: unknown,
+  ): Promise<{ success: boolean; data?: unknown; error?: string }> {
+    const commandParams = withManagedContext(command, params);
+    const browserPlugin = getBrowserPlugin(pluginId);
+    if (browserPlugin) {
+      try {
+        return await dispatchCommand(pluginId, command, commandParams);
+      } catch (e) {
+        if (!api) {
+          return {
+            success: false,
+            error: e instanceof Error ? e.message : String(e),
+          };
+        }
+      }
+    }
+
+    if (!api) {
+      return {
+        success: false,
+        error: `Plugin runtime unavailable: ${pluginId}`,
+      };
+    }
+
+    try {
+      const data = await api.executePluginCommand(
+        pluginId,
+        command,
+        commandParams as any,
+      );
+      return { success: true, data };
+    } catch (e) {
+      return {
+        success: false,
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
+  }
 
   /** CSS variable names forwarded to plugin iframes for theming. */
   const CSS_VAR_NAMES = [
@@ -63,7 +145,7 @@
 
   onMount(async () => {
     try {
-      const result = await dispatchCommand(pluginId, "get_component_html", {
+      const result = await executePluginCommand("get_component_html", {
         component_id: componentId,
       });
       // data may be a string directly, or nested if the response shape differs
@@ -150,7 +232,7 @@
 
     if (data.type === "plugin-command") {
       const { command, params, requestId } = data;
-      dispatchCommand(pluginId, command, params).then((result) => {
+      executePluginCommand(command, params).then((result) => {
         iframeEl?.contentWindow?.postMessage(
           {
             type: "plugin-response",

@@ -11,7 +11,7 @@ use diaryx_sync_server::{
     db::{AuthRepo, init_database},
     email::EmailService,
     handlers::sites::verify_domain_route,
-    handlers::{api_routes, auth_routes, session_routes, site_routes},
+    handlers::{ai_routes, api_routes, auth_routes, session_routes, site_routes},
     kv_client::CloudflareKvClient,
     publish::{
         new_publish_lock, publish_workspace_to_r2, release_publish_lock, try_acquire_publish_lock,
@@ -146,6 +146,28 @@ async fn main() {
         data_dir: data_dir.to_path_buf(),
     };
 
+    let ai_state = diaryx_sync_server::handlers::ai::AiState {
+        repo: repo.clone(),
+        rate_limiter: Arc::new(rate_limiter.clone()),
+        http_client: reqwest::Client::new(),
+        openrouter_api_key: config.managed_ai.openrouter_api_key.clone(),
+        openrouter_endpoint: config.managed_ai.openrouter_endpoint.clone(),
+        allowed_models: config.managed_ai.models.iter().cloned().collect(),
+        rate_limit_per_minute: config.managed_ai.rate_limit_per_minute,
+        monthly_quota: config.managed_ai.monthly_quota,
+    };
+
+    if config.managed_ai.openrouter_api_key.is_empty() {
+        info!("Managed AI proxy: disabled (MANAGED_AI_OPENROUTER_API_KEY not set)");
+    } else {
+        info!(
+            "Managed AI proxy: enabled (models={}, rate_limit={}/min, monthly_quota={})",
+            config.managed_ai.models.join(","),
+            config.managed_ai.rate_limit_per_minute,
+            config.managed_ai.monthly_quota
+        );
+    }
+
     let sessions_state = diaryx_sync_server::handlers::sessions::SessionsState {
         repo: repo.clone(),
         sync_v2: sync_v2_state.clone(),
@@ -244,6 +266,7 @@ async fn main() {
         .nest("/auth", auth_routes(auth_state))
         // API routes
         .nest("/api", api_routes(api_state))
+        .nest("/api", ai_routes(ai_state))
         .nest("/api", site_routes(sites_state.clone()))
         // Caddy verify-domain endpoint (unauthenticated)
         .nest("/api", verify_domain_route(sites_state))

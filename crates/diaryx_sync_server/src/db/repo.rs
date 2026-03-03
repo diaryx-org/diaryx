@@ -1593,6 +1593,53 @@ impl AuthRepo {
         Ok(usage)
     }
 
+    /// Get the managed AI request count for a user in a UTC month (`YYYY-MM`).
+    pub fn get_user_ai_usage_monthly_count(
+        &self,
+        user_id: &str,
+        period_utc: &str,
+    ) -> Result<u64, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let count = conn
+            .query_row(
+                "SELECT request_count
+                 FROM user_ai_usage_monthly
+                 WHERE user_id = ? AND period_utc = ?",
+                params![user_id, period_utc],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        Ok(count.unwrap_or(0).max(0) as u64)
+    }
+
+    /// Increment and return the managed AI usage counter for a user/month.
+    pub fn increment_user_ai_usage_monthly_count(
+        &self,
+        user_id: &str,
+        period_utc: &str,
+    ) -> Result<u64, rusqlite::Error> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let now = Utc::now().timestamp();
+        tx.execute(
+            "INSERT INTO user_ai_usage_monthly (user_id, period_utc, request_count, updated_at)
+             VALUES (?, ?, 1, ?)
+             ON CONFLICT(user_id, period_utc) DO UPDATE SET
+               request_count = request_count + 1,
+               updated_at = excluded.updated_at",
+            params![user_id, period_utc, now],
+        )?;
+        let count: i64 = tx.query_row(
+            "SELECT request_count
+             FROM user_ai_usage_monthly
+             WHERE user_id = ? AND period_utc = ?",
+            params![user_id, period_utc],
+            |row| row.get(0),
+        )?;
+        tx.commit()?;
+        Ok(count.max(0) as u64)
+    }
+
     /// List blobs that are soft deleted and due for physical deletion.
     pub fn list_soft_deleted_blobs_due(
         &self,
@@ -2943,6 +2990,68 @@ mod tests {
         assert_eq!(
             repo.get_effective_published_site_limit(&user_id).unwrap(),
             UserTier::Plus.defaults().published_site_limit
+        );
+    }
+
+    #[test]
+    fn test_ai_usage_monthly_first_request_creates_and_increments() {
+        let repo = setup_test_db();
+        let user_id = repo
+            .get_or_create_user("ai-usage-test@example.com")
+            .unwrap();
+        let period = "2026-03";
+
+        assert_eq!(
+            repo.get_user_ai_usage_monthly_count(&user_id, period)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            repo.increment_user_ai_usage_monthly_count(&user_id, period)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            repo.increment_user_ai_usage_monthly_count(&user_id, period)
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            repo.get_user_ai_usage_monthly_count(&user_id, period)
+                .unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn test_ai_usage_monthly_rollover_starts_new_counter() {
+        let repo = setup_test_db();
+        let user_id = repo
+            .get_or_create_user("ai-usage-rollover@example.com")
+            .unwrap();
+
+        let march = "2026-03";
+        let april = "2026-04";
+
+        assert_eq!(
+            repo.increment_user_ai_usage_monthly_count(&user_id, march)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            repo.get_user_ai_usage_monthly_count(&user_id, march)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            repo.get_user_ai_usage_monthly_count(&user_id, april)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            repo.increment_user_ai_usage_monthly_count(&user_id, april)
+                .unwrap(),
+            1
         );
     }
 }

@@ -69,6 +69,7 @@
   <PluginIframe
     pluginId={pluginId as unknown as string}
     componentId={component.component_id}
+    {api}
     {entry}
     {onHostAction}
   />

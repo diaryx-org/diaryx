@@ -15,6 +15,9 @@ const MAX_HISTORY_MESSAGES: usize = 50;
 const MAX_CONVERSATIONS: usize = 50;
 const MAX_AGENT_ITERATIONS: usize = 10;
 const MAX_TOOL_RESULT_BYTES: usize = 8192;
+const DEFAULT_BYO_ENDPOINT: &str = "https://openrouter.ai/api/v1/chat/completions";
+const DEFAULT_BYO_MODEL: &str = "anthropic/claude-sonnet-4-6";
+const DEFAULT_MANAGED_MODEL: &str = "google/gemini-3-flash-preview";
 
 // ============================================================================
 // Types
@@ -33,6 +36,19 @@ pub struct ChatInput {
     pub message: String,
     #[serde(default)]
     pub entries: Vec<EntryContext>,
+    #[serde(default)]
+    pub managed: Option<ManagedContext>,
+}
+
+/// Managed-mode context injected by the host.
+#[derive(serde::Deserialize, Clone, Default)]
+pub struct ManagedContext {
+    #[serde(default)]
+    pub server_url: Option<String>,
+    #[serde(default)]
+    pub auth_token: Option<String>,
+    #[serde(default)]
+    pub tier: Option<String>,
 }
 
 /// Entry context attached to a chat request.
@@ -380,6 +396,37 @@ fn truncate_result(s: &str) -> String {
     }
 }
 
+fn plugin_error(code: &str, message: impl Into<String>) -> CommandResponse {
+    CommandResponse {
+        success: false,
+        data: Some(serde_json::json!({ "code": code })),
+        error: Some(message.into()),
+    }
+}
+
+fn is_managed_mode(config: &PluginConfig) -> bool {
+    config
+        .provider_mode
+        .as_deref()
+        .is_some_and(|mode| mode.eq_ignore_ascii_case("managed"))
+}
+
+fn build_byo_url(endpoint: &str) -> String {
+    let trimmed = endpoint.trim_end_matches('/');
+    if trimmed.ends_with("/chat/completions") {
+        trimmed.to_string()
+    } else {
+        format!("{}/chat/completions", trimmed)
+    }
+}
+
+fn build_managed_url(server_url: &str) -> String {
+    format!(
+        "{}/api/ai/chat/completions",
+        server_url.trim_end_matches('/')
+    )
+}
+
 // ============================================================================
 // Single API call + tool dispatch (shared by handle_chat & chat_continue)
 // ============================================================================
@@ -544,27 +591,66 @@ fn build_response(state: &AgentState, final_text: Option<&str>) -> CommandRespon
 /// Start a new chat turn.  Makes one API call, then either returns the final
 /// response or yields tool-call steps for the UI to render before continuing.
 pub fn handle_chat(input: ChatInput, config: &PluginConfig) -> CommandResponse {
-    let endpoint = config
-        .api_endpoint
-        .as_deref()
-        .unwrap_or("https://openrouter.ai/api/v1/chat/completions");
-    let api_key = match &config.api_key {
-        Some(key) if !key.is_empty() => key.clone(),
-        _ => {
-            return CommandResponse {
-                success: false,
-                data: None,
-                error: Some(
-                    "No API key configured. Open Settings → AI to set your API key.".into(),
-                ),
-            };
+    let ChatInput {
+        message,
+        entries,
+        managed,
+    } = input;
+
+    let (url, api_key, model) = if is_managed_mode(config) {
+        let managed = managed.unwrap_or_default();
+        let server_url = managed.server_url.unwrap_or_default();
+        let auth_token = managed.auth_token.unwrap_or_default();
+        let tier = managed.tier.unwrap_or_default();
+
+        if server_url.trim().is_empty() || auth_token.trim().is_empty() || tier.trim().is_empty() {
+            return plugin_error(
+                "managed_unavailable",
+                "Managed mode requires an authenticated Diaryx sync session.",
+            );
         }
+        if !tier.eq_ignore_ascii_case("plus") {
+            return plugin_error(
+                "plus_required",
+                "Diaryx Plus is required to use managed AI.",
+            );
+        }
+
+        (
+            build_managed_url(&server_url),
+            auth_token,
+            config
+                .managed_model
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or(DEFAULT_MANAGED_MODEL)
+                .to_string(),
+        )
+    } else {
+        let endpoint = config
+            .api_endpoint
+            .as_deref()
+            .unwrap_or(DEFAULT_BYO_ENDPOINT);
+        let api_key = match &config.api_key {
+            Some(key) if !key.is_empty() => key.clone(),
+            _ => {
+                return plugin_error(
+                    "api_key_required",
+                    "No API key configured. Open Settings → AI to set your API key.",
+                );
+            }
+        };
+
+        (
+            build_byo_url(endpoint),
+            api_key,
+            config
+                .model
+                .as_deref()
+                .unwrap_or(DEFAULT_BYO_MODEL)
+                .to_string(),
+        )
     };
-    let model = config
-        .model
-        .as_deref()
-        .unwrap_or("anthropic/claude-sonnet-4-6")
-        .to_string();
 
     ensure_loaded();
 
@@ -589,9 +675,9 @@ pub fn handle_chat(input: ChatInput, config: &PluginConfig) -> CommandResponse {
         "content": system_prompt,
     }));
 
-    if !input.entries.is_empty() {
+    if !entries.is_empty() {
         let mut context_parts = Vec::new();
-        for entry in &input.entries {
+        for entry in &entries {
             context_parts.push(format!("## {}\n\n{}", entry.path, entry.content));
         }
         api_messages.push(serde_json::json!({
@@ -615,14 +701,12 @@ pub fn handle_chat(input: ChatInput, config: &PluginConfig) -> CommandResponse {
 
     api_messages.push(serde_json::json!({
         "role": "user",
-        "content": &input.message,
+        "content": &message,
     }));
-
-    let url = format!("{}/chat/completions", endpoint.trim_end_matches('/'));
 
     let mut state = AgentState {
         api_messages,
-        user_message: input.message,
+        user_message: message,
         steps: Vec::new(),
         iterations: 0,
         url,
@@ -654,7 +738,7 @@ pub fn handle_chat(input: ChatInput, config: &PluginConfig) -> CommandResponse {
 /// Continue an in-flight agent loop.  Called by the UI after rendering
 /// tool-call steps.  Makes one more API call and either yields again
 /// or returns the final response.
-pub fn chat_continue() -> CommandResponse {
+pub fn chat_continue(_managed: Option<ManagedContext>) -> CommandResponse {
     let mut state = match AGENT_STATE.with(|s| s.borrow_mut().take()) {
         Some(s) => s,
         None => {
@@ -692,6 +776,88 @@ pub fn chat_continue() -> CommandResponse {
                 error: Some(e),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ChatInput, build_byo_url, build_managed_url, handle_chat};
+    use crate::PluginConfig;
+
+    #[test]
+    fn byo_url_keeps_chat_completions_path_when_already_present() {
+        let url = build_byo_url("https://openrouter.ai/api/v1/chat/completions");
+        assert_eq!(url, "https://openrouter.ai/api/v1/chat/completions");
+    }
+
+    #[test]
+    fn byo_url_appends_chat_completions_when_missing() {
+        let url = build_byo_url("https://openrouter.ai/api/v1");
+        assert_eq!(url, "https://openrouter.ai/api/v1/chat/completions");
+    }
+
+    #[test]
+    fn managed_url_appends_server_route() {
+        let url = build_managed_url("https://sync.diaryx.org/");
+        assert_eq!(url, "https://sync.diaryx.org/api/ai/chat/completions");
+    }
+
+    #[test]
+    fn managed_mode_rejects_missing_context() {
+        let config = PluginConfig {
+            provider_mode: Some("managed".to_string()),
+            ..PluginConfig::default()
+        };
+
+        let response = handle_chat(
+            ChatInput {
+                message: "hello".to_string(),
+                entries: Vec::new(),
+                managed: None,
+            },
+            &config,
+        );
+
+        assert!(!response.success);
+        assert_eq!(
+            response
+                .data
+                .as_ref()
+                .and_then(|d| d.get("code"))
+                .and_then(|v| v.as_str()),
+            Some("managed_unavailable")
+        );
+    }
+
+    #[test]
+    fn managed_mode_rejects_free_tier() {
+        let config = PluginConfig {
+            provider_mode: Some("managed".to_string()),
+            ..PluginConfig::default()
+        };
+
+        let response = handle_chat(
+            ChatInput {
+                message: "hello".to_string(),
+                entries: Vec::new(),
+                managed: Some(super::ManagedContext {
+                    server_url: Some("https://sync.diaryx.org".to_string()),
+                    auth_token: Some("token".to_string()),
+                    tier: Some("free".to_string()),
+                }),
+            },
+            &config,
+        );
+
+        assert!(!response.success);
+        assert_eq!(
+            response
+                .data
+                .as_ref()
+                .and_then(|d| d.get("code"))
+                .and_then(|v| v.as_str()),
+            Some("plus_required")
+        );
     }
 }
 

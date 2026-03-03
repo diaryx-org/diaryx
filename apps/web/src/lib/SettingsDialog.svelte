@@ -31,6 +31,7 @@
   import PluginsSettings from "./settings/PluginsSettings.svelte";
   import PluginSettingsTab from "./settings/PluginSettingsTab.svelte";
   import PluginIframe from "./components/PluginIframe.svelte";
+  import UpgradeBanner from "$lib/components/UpgradeBanner.svelte";
   import { getPluginStore } from "../models/stores/pluginStore.svelte";
   import { getPlugin as getBrowserPlugin } from "$lib/plugins/browserPluginManager.svelte";
   import type { Api } from "$lib/backend/api";
@@ -75,6 +76,68 @@
   // Plugin config state: keyed by pluginId
   let pluginConfigs = $state<Record<string, Record<string, JsonValue>>>({});
 
+  function isManagedMode(config: Record<string, JsonValue>): boolean {
+    const mode = config.provider_mode;
+    return typeof mode === "string" && mode.toLowerCase() === "managed";
+  }
+
+  async function ensureManagedSyncPermission(
+    pluginId: string,
+    updated: Record<string, JsonValue>,
+  ) {
+    if (pluginId !== "diaryx.ai" || !isManagedMode(updated)) return;
+    if (!api || !workspacePath) return;
+
+    const serverUrl = authState.serverUrl;
+    if (!serverUrl) return;
+
+    let hostname: string;
+    try {
+      hostname = new URL(serverUrl).hostname;
+    } catch {
+      return;
+    }
+
+    const fm = await api.getFrontmatter(workspacePath);
+    const existingPlugins =
+      (fm.plugins as Record<string, Record<string, unknown>> | undefined) ?? {};
+    const aiPlugin = { ...(existingPlugins["diaryx.ai"] ?? {}) };
+    const permissions =
+      (aiPlugin.permissions as Record<string, unknown> | undefined) ?? {};
+    const httpRule =
+      (permissions.http_requests as Record<string, unknown> | undefined) ?? {};
+
+    const includes = Array.isArray(httpRule.include)
+      ? httpRule.include.filter((value): value is string => typeof value === "string")
+      : [];
+    if (includes.includes(hostname)) return;
+
+    const excludes = Array.isArray(httpRule.exclude)
+      ? httpRule.exclude.filter((value): value is string => typeof value === "string")
+      : [];
+
+    const nextPlugins = {
+      ...existingPlugins,
+      "diaryx.ai": {
+        ...aiPlugin,
+        permissions: {
+          ...permissions,
+          http_requests: {
+            include: [...includes, hostname],
+            exclude: excludes,
+          },
+        },
+      },
+    };
+
+    await api.setFrontmatterProperty(
+      workspacePath,
+      "plugins",
+      nextPlugins as unknown as JsonValue,
+      workspacePath,
+    );
+  }
+
   async function loadPluginConfig(pluginId: string) {
     try {
       // Browser-loaded plugins store config via their own get/setConfig
@@ -101,10 +164,12 @@
       const browserPlugin = getBrowserPlugin(pluginId);
       if (browserPlugin) {
         await browserPlugin.setConfig(updated as Record<string, unknown>);
-        return;
+      } else {
+        if (!api) return;
+        await api.setPluginConfig(pluginId, updated);
       }
-      if (!api) return;
-      await api.setPluginConfig(pluginId, updated);
+
+      await ensureManagedSyncPermission(pluginId, updated);
     } catch (e) {
       console.error(`[Settings] Failed to save plugin config for ${pluginId}:`, e);
     }
@@ -218,11 +283,18 @@
               <PluginIframe
                 pluginId={tab.pluginId as unknown as string}
                 componentId={tab.contribution.component.component_id}
+                {api}
                 {onHostAction}
               />
             </div>
           {:else if tab.contribution.fields.length > 0}
             {#await loadPluginConfig(tab.pluginId) then}
+              {#if tab.pluginId === "diaryx.ai" && isManagedMode(pluginConfigs[tab.pluginId] ?? {}) && authState.tier !== "plus"}
+                <UpgradeBanner
+                  feature="Managed AI"
+                  description="Upgrade to Diaryx Plus to use managed AI without your own API key."
+                />
+              {/if}
               <PluginSettingsTab
                 pluginId={tab.pluginId}
                 fields={tab.contribution.fields}

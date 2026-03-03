@@ -75,6 +75,11 @@ cargo run -p diaryx_sync_server
 | `APPLE_IAP_BUNDLE_ID`                | -                                              | Apple app bundle ID (e.g., org.diaryx.desktop). Apple IAP endpoints disabled when empty.                                                    |
 | `APPLE_IAP_ENVIRONMENT`              | `Sandbox`                                      | Apple IAP environment: `Sandbox` or `Production`                                                                                            |
 | `APPLE_IAP_SKIP_SIGNATURE_VERIFY`   | `false`                                        | Skip JWS signature verification (for local StoreKit simulator testing only — **never enable in production**)                                |
+| `MANAGED_AI_OPENROUTER_API_KEY`      | -                                              | OpenRouter API key used by managed AI proxy. Managed AI endpoint returns `provider_unavailable` when empty.                                |
+| `MANAGED_AI_OPENROUTER_ENDPOINT`     | `https://openrouter.ai/api/v1/chat/completions` | OpenRouter endpoint override for managed AI proxy requests.                                                                                  |
+| `MANAGED_AI_MODELS`                  | `google/gemini-3-flash-preview,anthropic/claude-haiku-4.5,openai/gpt-5.2` | Comma-separated managed model allowlist. Requests with other models are rejected.                                             |
+| `MANAGED_AI_RATE_LIMIT_PER_MINUTE`   | `30`                                           | Per-user managed AI request rate limit (requests/minute).                                                                                   |
+| `MANAGED_AI_MONTHLY_QUOTA`           | `1000`                                         | Per-user managed AI request quota per UTC calendar month (`YYYY-MM`).                                                                       |
 
 
 ## API Endpoints
@@ -218,6 +223,24 @@ Response:
 
 `limit_bytes` is per-user. New/existing users default to 200 MiB unless the
 `users.attachment_limit_bytes` value is changed in the database.
+
+#### Managed AI Proxy
+
+```
+POST /api/ai/chat/completions
+Authorization: Bearer <session_token>
+Content-Type: application/json
+```
+
+Behavior:
+
+- Auth required (`401` when missing/invalid).
+- Plus tier required (`403` with `error: "plus_required"`).
+- Requested `model` must be in managed allowlist (`400` with `error: "model_not_allowed"`).
+- Per-user rate limited (`429` with `error: "rate_limited"`).
+- Per-user monthly quota enforced (`429` with `error: "quota_exceeded"`).
+- Upstream/provider failures return `503` with `error: "provider_unavailable"`.
+- Success returns OpenRouter response JSON as-is.
 
 #### Incremental Attachment Upload (Resumable)
 

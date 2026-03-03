@@ -51,3 +51,13 @@ Settings panel components for `SettingsDialog.svelte`.
 - Declarative field contributions render via `PluginSettingsTab`
 
 All plugin settings (sync, GDrive storage, templating) now use the iframe approach.
+
+## Managed AI Notes
+
+- `SettingsDialog.svelte` now renders `UpgradeBanner` for `diaryx.ai` when:
+  - `provider_mode === "managed"` and
+  - current auth tier is not Plus.
+- The AI provider mode selector remains visible so users can switch back to BYO mode.
+- When `diaryx.ai` config is saved in managed mode, settings persistence ensures root frontmatter plugin permissions include the current sync server hostname under:
+  - `plugins.diaryx.ai.permissions.http_requests.include`
+  - no wildcard `all` is used.

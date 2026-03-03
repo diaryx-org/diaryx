@@ -49,7 +49,11 @@
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
   import { workspaceStore } from "@/models/stores/workspaceStore.svelte";
   import { getPluginStore } from "@/models/stores/pluginStore.svelte";
+  import { getPlugin as getBrowserPlugin } from "$lib/plugins/browserPluginManager.svelte";
+  import { getAuthState } from "$lib/auth";
   import PluginSidebarPanel from "$lib/components/PluginSidebarPanel.svelte";
+  import UpgradeBanner from "$lib/components/UpgradeBanner.svelte";
+  import type { JsonValue } from "$lib/backend/generated/serde_json/JsonValue";
   import {
     getAttachmentMetadata,
     enqueueAttachmentDownload,
@@ -140,6 +144,10 @@
   const nonHistoryPluginTabs = $derived.by(() => {
     return pluginStore.rightSidebarTabs;
   });
+  let authState = $derived(getAuthState());
+
+  let aiPluginConfig = $state<Record<string, JsonValue>>({});
+  let aiConfigLoading = $state(false);
 
   // Tab state — built-in "properties"/"history" + plugin tab IDs
   let activeTab: string = $state("properties");
@@ -287,6 +295,36 @@
     if (activeTab === historyTabId && entry && rustApi) {
       loadHistory();
     }
+  });
+
+  function isManagedMode(config: Record<string, JsonValue>): boolean {
+    const mode = config.provider_mode;
+    return typeof mode === "string" && mode.toLowerCase() === "managed";
+  }
+
+  async function loadAiPluginConfig() {
+    if (!api) return;
+    aiConfigLoading = true;
+    try {
+      const browserPlugin = getBrowserPlugin("diaryx.ai");
+      if (browserPlugin) {
+        const raw = await browserPlugin.getConfig();
+        aiPluginConfig = (raw as Record<string, JsonValue>) ?? {};
+        return;
+      }
+      const raw = await api.getPluginConfig("diaryx.ai");
+      aiPluginConfig = (raw as Record<string, JsonValue>) ?? {};
+    } catch {
+      aiPluginConfig = {};
+    } finally {
+      aiConfigLoading = false;
+    }
+  }
+
+  $effect(() => {
+    const pluginTab = nonHistoryPluginTabs.find((t) => t.contribution.id === activeTab);
+    if (!pluginTab || String(pluginTab.pluginId) !== "diaryx.ai") return;
+    void loadAiPluginConfig();
   });
 
   // Reset history state when entry changes
@@ -1226,13 +1264,24 @@
       {@const pluginTab = nonHistoryPluginTabs.find(t => t.contribution.id === activeTab)}
       {#if pluginTab && api}
         <div class="h-full">
-          <PluginSidebarPanel
-            pluginId={pluginTab.pluginId}
-            component={pluginTab.contribution.component}
-            {api}
-            {entry}
-            onHostAction={onPluginHostAction}
-          />
+          {#if String(pluginTab.pluginId) === "diaryx.ai" && aiConfigLoading}
+            <div class="h-full flex items-center justify-center text-sm text-muted-foreground">
+              Loading...
+            </div>
+          {:else if String(pluginTab.pluginId) === "diaryx.ai" && authState.tier !== "plus" && isManagedMode(aiPluginConfig)}
+            <UpgradeBanner
+              feature="Managed AI"
+              description="Upgrade to Diaryx Plus to use managed AI without your own API key."
+            />
+          {:else}
+            <PluginSidebarPanel
+              pluginId={pluginTab.pluginId}
+              component={pluginTab.contribution.component}
+              {api}
+              {entry}
+              onHostAction={onPluginHostAction}
+            />
+          {/if}
         </div>
       {/if}
     {:else if activeTab === historyTabId}

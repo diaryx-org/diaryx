@@ -143,6 +143,17 @@ CREATE TABLE IF NOT EXISTS attachment_upload_parts (
 
 CREATE INDEX IF NOT EXISTS idx_attachment_upload_parts_upload ON attachment_upload_parts(upload_id);
 
+-- Managed AI monthly usage counters (per-user, per UTC month).
+CREATE TABLE IF NOT EXISTS user_ai_usage_monthly (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    period_utc TEXT NOT NULL, -- YYYY-MM in UTC
+    request_count INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, period_utc)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_ai_usage_monthly_user ON user_ai_usage_monthly(user_id);
+
 -- Published static sites.
 CREATE TABLE IF NOT EXISTS published_sites (
     id TEXT PRIMARY KEY,
@@ -457,6 +468,7 @@ mod tests {
         assert!(tables.contains(&"workspace_attachment_refs".to_string()));
         assert!(tables.contains(&"attachment_uploads".to_string()));
         assert!(tables.contains(&"attachment_upload_parts".to_string()));
+        assert!(tables.contains(&"user_ai_usage_monthly".to_string()));
         assert!(tables.contains(&"published_sites".to_string()));
         assert!(tables.contains(&"site_audience_builds".to_string()));
         assert!(tables.contains(&"site_access_tokens".to_string()));

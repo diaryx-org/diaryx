@@ -13,6 +13,9 @@ attachments:
   - '[FloatingMenuComponent.svelte](/apps/web/src/lib/components/FloatingMenuComponent.svelte)'
   - '[HighlightColorPicker.svelte](/apps/web/src/lib/components/HighlightColorPicker.svelte)'
   - '[MoreStylesPicker.svelte](/apps/web/src/lib/components/MoreStylesPicker.svelte)'
+  - '[PluginIframe.svelte](/apps/web/src/lib/components/PluginIframe.svelte)'
+  - '[PluginSidebarPanel.svelte](/apps/web/src/lib/components/PluginSidebarPanel.svelte)'
+  - '[UpgradeBanner.svelte](/apps/web/src/lib/components/UpgradeBanner.svelte)'
 exclude:
   - '*.lock'
   - '*.test.ts'
@@ -34,6 +37,9 @@ Reusable Svelte components for the editor and UI.
 | `FloatingMenuComponent.svelte` | TipTap floating menu |
 | `HighlightColorPicker.svelte` | Text highlight color picker |
 | `MoreStylesPicker.svelte` | Overflow formatting menu (strikethrough, inline code, spoiler) |
+| `PluginIframe.svelte` | Sandboxed plugin iframe host with command bridge, managed-context injection for `diaryx.ai`, and backend `executePluginCommand` fallback for native/Tauri plugin runtimes. |
+| `PluginSidebarPanel.svelte` | Sidebar wrapper for plugin component refs (Builtin/Declarative/Iframe). |
+| `UpgradeBanner.svelte` | Shared upsell surface for Plus-gated features (used for managed AI gating). |
 
 ## UI Components
 

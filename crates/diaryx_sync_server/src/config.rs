@@ -44,10 +44,27 @@ pub struct Config {
     pub kv_api_token: String,
     /// Optional admin secret for tier management endpoints
     pub admin_secret: Option<String>,
+    /// Managed AI proxy configuration.
+    pub managed_ai: ManagedAiConfig,
     /// Stripe billing configuration (None if STRIPE_SECRET_KEY not set)
     pub stripe: Option<StripeConfig>,
     /// Apple IAP configuration (None if APPLE_IAP_BUNDLE_ID not set)
     pub apple_iap: Option<AppleIapConfig>,
+}
+
+/// Managed AI proxy configuration.
+#[derive(Debug, Clone)]
+pub struct ManagedAiConfig {
+    /// OpenRouter API key used by server-side managed proxy calls.
+    pub openrouter_api_key: String,
+    /// OpenRouter chat completions endpoint.
+    pub openrouter_endpoint: String,
+    /// Allowlisted managed models.
+    pub models: Vec<String>,
+    /// Per-user requests per minute.
+    pub rate_limit_per_minute: usize,
+    /// Per-user request quota per UTC calendar month.
+    pub monthly_quota: u64,
 }
 
 /// Stripe billing configuration.
@@ -211,6 +228,38 @@ impl Config {
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty());
 
+        let managed_ai_models = env::var("MANAGED_AI_MODELS")
+            .ok()
+            .map(|raw| {
+                raw.split(',')
+                    .map(|model| model.trim().to_string())
+                    .filter(|model| !model.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|models| !models.is_empty())
+            .unwrap_or_else(|| {
+                vec![
+                    "google/gemini-3-flash-preview".to_string(),
+                    "anthropic/claude-haiku-4.5".to_string(),
+                    "openai/gpt-5.2".to_string(),
+                ]
+            });
+
+        let managed_ai = ManagedAiConfig {
+            openrouter_api_key: env::var("MANAGED_AI_OPENROUTER_API_KEY").unwrap_or_default(),
+            openrouter_endpoint: env::var("MANAGED_AI_OPENROUTER_ENDPOINT")
+                .unwrap_or_else(|_| "https://openrouter.ai/api/v1/chat/completions".to_string()),
+            models: managed_ai_models,
+            rate_limit_per_minute: env::var("MANAGED_AI_RATE_LIMIT_PER_MINUTE")
+                .unwrap_or_else(|_| "30".to_string())
+                .parse()
+                .unwrap_or(30),
+            monthly_quota: env::var("MANAGED_AI_MONTHLY_QUOTA")
+                .unwrap_or_else(|_| "1000".to_string())
+                .parse()
+                .unwrap_or(1000),
+        };
+
         let stripe = {
             let secret_key = env::var("STRIPE_SECRET_KEY").unwrap_or_default();
             if secret_key.is_empty() {
@@ -261,6 +310,7 @@ impl Config {
             kv_namespace_id,
             kv_api_token,
             admin_secret,
+            managed_ai,
             stripe,
             apple_iap,
         })

@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from "svelte";
   import { getBackend, isTauri, resetBackend } from "./lib/backend";
-  import { FsaGestureRequiredError } from "./lib/backend/workerBackendNew";
+  import { FsaGestureRequiredError } from "./lib/backend/fsaErrors";
+  import * as browserPlugins from "$lib/plugins/browserPluginManager.svelte";
+  import { addFilesToZip } from "./lib/settings/zipUtils";
   import { createApi, type Api } from "./lib/backend/api";
   import type { JsonValue } from "./lib/backend/generated/serde_json/JsonValue";
   import { isIOS } from "$lib/hooks/useMobile.svelte";
@@ -16,9 +18,10 @@
   import AudienceEditor from "./lib/components/AudienceEditor.svelte";
   import DocumentAudiencePill from "./lib/components/DocumentAudiencePill.svelte";
   import MarkdownPreviewDialog from "./lib/MarkdownPreviewDialog.svelte";
-    import EditorHeader from "./views/editor/EditorHeader.svelte";
+  import EditorHeader from "./views/editor/EditorHeader.svelte";
   import EditorEmptyState from "./views/editor/EditorEmptyState.svelte";
   import WelcomeScreen from "./views/WelcomeScreen.svelte";
+  import PluginMarketplace from "./views/marketplace/PluginMarketplace.svelte";
   import EditorContent from "./views/editor/EditorContent.svelte";
   import { Toaster } from "$lib/components/ui/sonner";
   import * as Tooltip from "$lib/components/ui/tooltip";
@@ -214,6 +217,9 @@
 
   // Welcome screen (shown when no workspaces exist)
   let showWelcomeScreen = $state(false);
+
+  // Dedicated plugin marketplace surface.
+  let showMarketplace = $state(false);
 
   // FSA reconnect state (shown when local folder needs user gesture to re-grant access)
   let fsaNeedsReconnect = $state(false);
@@ -540,15 +546,15 @@
       });
 
       // Load browser-side Extism WASM plugins from IndexedDB
-      import('$lib/plugins/browserPluginManager.svelte').then(async (m) => {
-        const pluginSupport = m.getBrowserPluginSupport();
+      Promise.resolve().then(async () => {
+        const pluginSupport = browserPlugins.getBrowserPluginSupport();
         if (!pluginSupport.supported) {
           console.info('[App] Browser plugins disabled:', pluginSupport.reason);
           return;
         }
 
-        m.setPluginPermissionConfigProvider(() => pluginPermissionsConfig);
-        await m.loadAllPlugins().catch((e: unknown) =>
+        browserPlugins.setPluginPermissionConfigProvider(() => pluginPermissionsConfig);
+        await browserPlugins.loadAllPlugins().catch((e: unknown) =>
           console.warn('[App] Failed to load browser plugins:', e),
         );
         // Eagerly load icons for plugin insert commands so they're cached before menus open.
@@ -817,6 +823,15 @@
     uiStore.toggleRightSidebar();
   }
 
+  function openMarketplace() {
+    showSettingsDialog = false;
+    showMarketplace = true;
+  }
+
+  function closeMarketplace() {
+    showMarketplace = false;
+  }
+
   /** Handle plugin toolbar button clicks — open the right sidebar to the plugin's tab. */
   function handlePluginToolbarAction(pluginId: string, _command: string) {
     // Look for a matching sidebar tab from this plugin
@@ -888,6 +903,9 @@
         showSettingsDialog = true;
         return { opened: "settings", tab: tab ?? null };
       }
+      case "open-marketplace":
+        openMarketplace();
+        return { opened: "marketplace" };
       case "toggle-left-sidebar":
         toggleLeftSidebar();
         return { toggled: "left" };
@@ -1528,7 +1546,6 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
         return;
       }
 
-      const { addFilesToZip } = await import("./lib/settings/zipUtils");
       const JSZip = (await import("jszip")).default;
 
       const workspaceDir = tree.path.substring(0, tree.path.lastIndexOf("/"));
@@ -1927,6 +1944,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
   workspacePath={tree?.path}
   initialTab={settingsInitialTab}
   {api}
+  onOpenMarketplace={openMarketplace}
   onAddWorkspace={async () => {
     showSettingsDialog = false;
     await tick();
@@ -2005,7 +2023,9 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
 <!-- Tooltip Provider for keyboard shortcut hints -->
 <Tooltip.Provider>
 
-{#if fsaNeedsReconnect}
+{#if showMarketplace}
+  <PluginMarketplace onClose={closeMarketplace} />
+{:else if fsaNeedsReconnect}
   <div class="flex h-full items-center justify-center bg-background">
     <div class="flex flex-col items-center gap-4 text-center max-w-sm px-4">
       <div class="text-4xl">&#128194;</div>
@@ -2055,6 +2075,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     onToggleCollapse={toggleLeftSidebar}
     onOpenSettings={() => { settingsInitialTab = undefined; showSettingsDialog = true; }}
     onOpenAccountSettings={() => { settingsInitialTab = "account"; showSettingsDialog = true; }}
+    onOpenMarketplace={openMarketplace}
     onAddWorkspace={() => { showAddWorkspace = true; }}
     onMoveEntry={handleMoveEntry}
     onCreateChildEntry={handleCreateChildEntry}

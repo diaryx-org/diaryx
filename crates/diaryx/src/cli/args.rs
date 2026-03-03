@@ -964,10 +964,26 @@ pub enum ImportCommands {
 pub enum PluginCommands {
     /// List installed plugins
     #[command(alias = "ls")]
-    List,
+    List {
+        /// Filter by category (registry metadata)
+        #[arg(long)]
+        category: Option<String>,
+        /// Filter by tag (registry metadata)
+        #[arg(long)]
+        tag: Option<String>,
+        /// Filter by source kind: internal | external
+        #[arg(long)]
+        source: Option<String>,
+        /// Filter by creator
+        #[arg(long)]
+        creator: Option<String>,
+        /// Emit JSON output
+        #[arg(long)]
+        json: bool,
+    },
     /// Install a plugin from the registry
     Install {
-        /// Plugin ID, or "--defaults" for built-in plugins
+        /// Canonical plugin ID (for example: "diaryx.sync")
         id: String,
     },
     /// Remove an installed plugin
@@ -983,6 +999,24 @@ pub enum PluginCommands {
     Search {
         /// Search query (optional, lists all if omitted)
         query: Option<String>,
+        /// Filter by category
+        #[arg(long)]
+        category: Option<String>,
+        /// Filter by tag
+        #[arg(long)]
+        tag: Option<String>,
+        /// Filter by source kind: internal | external
+        #[arg(long)]
+        source: Option<String>,
+        /// Filter by creator
+        #[arg(long)]
+        creator: Option<String>,
+        /// Show only installed plugins
+        #[arg(long)]
+        installed: bool,
+        /// Emit JSON output
+        #[arg(long)]
+        json: bool,
     },
     /// Update installed plugins to latest versions
     Update {
@@ -993,5 +1027,8 @@ pub enum PluginCommands {
     Info {
         /// Plugin ID
         id: String,
+        /// Emit JSON output
+        #[arg(long)]
+        json: bool,
     },
 }

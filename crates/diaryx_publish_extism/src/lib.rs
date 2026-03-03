@@ -127,7 +127,7 @@ pub fn manifest(_input: String) -> FnResult<String> {
     };
 
     let pm = PluginManifest {
-        id: PluginId("publish".into()),
+        id: PluginId("diaryx.publish".into()),
         name: "Publish".into(),
         version: env!("CARGO_PKG_VERSION").into(),
         description: "Export and publish content with optional format conversion".into(),

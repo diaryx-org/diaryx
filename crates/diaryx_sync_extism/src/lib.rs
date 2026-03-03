@@ -569,13 +569,13 @@ pub fn manifest(_input: String) -> FnResult<String> {
     };
 
     let workspace_provider = UiContribution::WorkspaceProvider {
-        id: "sync".into(),
+        id: "diaryx.sync".into(),
         label: "Diaryx Sync".into(),
         icon: Some("cloud".into()),
     };
 
     let manifest = GuestManifest {
-        id: "sync".into(),
+        id: "diaryx.sync".into(),
         name: "Sync".into(),
         version: env!("CARGO_PKG_VERSION").into(),
         description: "Real-time CRDT sync across devices".into(),

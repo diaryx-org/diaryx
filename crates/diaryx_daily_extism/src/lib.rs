@@ -678,7 +678,7 @@ fn dispatch_command(command: &str, params: JsonValue) -> Result<JsonValue, Strin
 #[plugin_fn]
 pub fn manifest(_input: String) -> FnResult<String> {
     let manifest = GuestManifest {
-        id: "daily".into(),
+        id: "diaryx.daily".into(),
         name: "Daily".into(),
         version: env!("CARGO_PKG_VERSION").into(),
         description: "Daily entry plugin with date hierarchy, navigation, and CLI surface".into(),

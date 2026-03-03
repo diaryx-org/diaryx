@@ -27,6 +27,7 @@
     AlertTriangle,
     Plus,
     Settings,
+    Store,
     Wrench,
     Eye,
     X,
@@ -63,6 +64,7 @@
     onToggleCollapse: () => void;
     onOpenSettings: () => void;
     onOpenAccountSettings: () => void;
+    onOpenMarketplace?: () => void;
     onAddWorkspace: () => void;
     onMoveEntry: (fromPath: string, toParentPath: string) => void;
     onCreateChildEntry: (parentPath: string) => void;
@@ -104,6 +106,7 @@
     onToggleCollapse,
     onOpenSettings,
     onOpenAccountSettings,
+    onOpenMarketplace,
     onAddWorkspace,
     onMoveEntry,
     onCreateChildEntry,
@@ -1117,6 +1120,26 @@
       <span class="text-xs font-normal text-sidebar-foreground/50">v{__APP_VERSION__}</span>
     </a>
     <div class="flex items-center gap-1">
+      {#if onOpenMarketplace}
+        <Tooltip.Root>
+          <Tooltip.Trigger>
+            <Button
+              variant="ghost"
+              size="icon"
+              onclick={onOpenMarketplace}
+              class="size-8"
+              aria-label="Open plugin marketplace"
+            >
+              <Store class="size-4" />
+            </Button>
+          </Tooltip.Trigger>
+          {#if !mobileState.isMobile && !collapsed}
+            <Tooltip.Content>
+              Marketplace
+            </Tooltip.Content>
+          {/if}
+        </Tooltip.Root>
+      {/if}
       <Tooltip.Root>
         <Tooltip.Trigger>
           <Button

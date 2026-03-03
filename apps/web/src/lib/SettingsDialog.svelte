@@ -49,6 +49,8 @@
     api?: Api | null;
     /** Handler for host actions from plugin iframes (e.g. OAuth) */
     onHostAction?: (action: { type: string; payload?: unknown }) => Promise<unknown> | unknown;
+    /** Open dedicated plugin marketplace surface. */
+    onOpenMarketplace?: () => void;
   }
 
   let {
@@ -59,6 +61,7 @@
     onAddWorkspace,
     api = null,
     onHostAction,
+    onOpenMarketplace,
   }: Props = $props();
 
   const mobileState = getMobileState();
@@ -265,7 +268,7 @@
 
     <Tabs.Content value="plugins">
       <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
-        <PluginsSettings />
+        <PluginsSettings {onOpenMarketplace} />
       </div>
     </Tabs.Content>
 

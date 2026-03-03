@@ -1,0 +1,722 @@
+<script lang="ts">
+  import {
+    Store,
+    Search,
+    Loader2,
+    Download,
+    Upload,
+    Trash2,
+    Check,
+    X,
+    ExternalLink,
+  } from "@lucide/svelte";
+  import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
+  import { Switch } from "$lib/components/ui/switch";
+  import { Badge } from "$lib/components/ui/badge";
+  import { Separator } from "$lib/components/ui/separator";
+  import { toast } from "svelte-sonner";
+  import {
+    fetchPluginRegistry,
+    type RegistryPlugin,
+  } from "$lib/plugins/pluginRegistry";
+  import {
+    getBrowserPluginSupport,
+    getBrowserPluginSupportError,
+    installPlugin as browserInstallPlugin,
+    uninstallPlugin as browserUninstallPlugin,
+    inspectPluginWasm,
+  } from "$lib/plugins/browserPluginManager.svelte";
+  import { getBackend, isTauri } from "$lib/backend";
+  import { createApi } from "$lib/backend/api";
+  import type { Backend } from "$lib/backend/interface";
+  import type {
+    PermissionType,
+    PluginConfig,
+    PluginPermissions,
+  } from "@/models/stores/permissionStore.svelte";
+  import { workspaceStore } from "@/models/stores/workspaceStore.svelte";
+  import { getPluginStore } from "@/models/stores/pluginStore.svelte";
+
+  interface Props {
+    onClose: () => void;
+  }
+
+  let { onClose }: Props = $props();
+
+  const pluginStore = getPluginStore();
+
+  let registryPlugins = $state<RegistryPlugin[]>([]);
+  let registryLoading = $state(true);
+  let registryError = $state<string | null>(null);
+  let installingIds = $state<Set<string>>(new Set());
+  let removingIds = $state<Set<string>>(new Set());
+  let uploadingLocal = $state(false);
+  let fileInputRef = $state<HTMLInputElement | null>(null);
+
+  let search = $state("");
+  let categoryFilter = $state("all");
+  let capabilityFilter = $state("all");
+  let sourceFilter = $state<"all" | "internal" | "external" | "installed">("all");
+  let sortBy = $state<"name" | "version" | "recent">("name");
+  let selectedPluginId = $state<string | null>(null);
+
+  const browserPluginSupport = $derived(getBrowserPluginSupport());
+  const browserPluginSupportError = $derived(getBrowserPluginSupportError());
+  const pluginsSupported = $derived(isTauri() || browserPluginSupport.supported);
+
+  const installedIds = $derived(
+    new Set(pluginStore.allManifests.map((m) => String(m.id))),
+  );
+
+  const localPlugins = $derived.by(() => {
+    const registryIds = new Set(registryPlugins.map((r) => r.id));
+    return pluginStore.allManifests
+      .filter((m) => !registryIds.has(String(m.id)))
+      .sort((a, b) => String(a.name ?? a.id).localeCompare(String(b.name ?? b.id)));
+  });
+
+  const categories = $derived.by(() => {
+    const all = new Set<string>();
+    for (const plugin of registryPlugins) {
+      for (const category of plugin.categories) all.add(category);
+    }
+    return ["all", ...Array.from(all).sort()];
+  });
+
+  const capabilities = $derived.by(() => {
+    const all = new Set<string>();
+    for (const plugin of registryPlugins) {
+      for (const capability of plugin.capabilities) all.add(capability);
+    }
+    return ["all", ...Array.from(all).sort()];
+  });
+
+  const filteredPlugins = $derived.by(() => {
+    const query = search.trim().toLowerCase();
+
+    const filtered = registryPlugins.filter((plugin) => {
+      if (sourceFilter === "internal" && plugin.source.kind !== "internal") return false;
+      if (sourceFilter === "external" && plugin.source.kind !== "external") return false;
+      if (sourceFilter === "installed" && !installedIds.has(plugin.id)) return false;
+
+      if (categoryFilter !== "all" && !plugin.categories.includes(categoryFilter)) {
+        return false;
+      }
+      if (capabilityFilter !== "all" && !plugin.capabilities.includes(capabilityFilter)) {
+        return false;
+      }
+
+      if (!query) return true;
+      const haystack = [
+        plugin.id,
+        plugin.name,
+        plugin.summary,
+        plugin.description,
+        plugin.creator,
+        plugin.license,
+        ...plugin.tags,
+        ...plugin.categories,
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+
+    filtered.sort((a, b) => {
+      if (sortBy === "name") {
+        return a.name.localeCompare(b.name);
+      }
+      if (sortBy === "version") {
+        return b.version.localeCompare(a.version);
+      }
+      const aTs = Date.parse(a.artifact.publishedAt) || 0;
+      const bTs = Date.parse(b.artifact.publishedAt) || 0;
+      return bTs - aTs;
+    });
+
+    return filtered;
+  });
+
+  const selectedPlugin = $derived.by(() => {
+    if (filteredPlugins.length === 0) return null;
+    const explicit = filteredPlugins.find((p) => p.id === selectedPluginId);
+    return explicit ?? filteredPlugins[0] ?? null;
+  });
+
+  $effect(() => {
+    if (!selectedPluginId && filteredPlugins.length > 0) {
+      selectedPluginId = filteredPlugins[0].id;
+    }
+    if (
+      selectedPluginId &&
+      filteredPlugins.length > 0 &&
+      !filteredPlugins.some((plugin) => plugin.id === selectedPluginId)
+    ) {
+      selectedPluginId = filteredPlugins[0].id;
+    }
+  });
+
+  async function loadRegistry() {
+    registryLoading = true;
+    registryError = null;
+    try {
+      const registry = await fetchPluginRegistry();
+      registryPlugins = registry.plugins;
+    } catch (e) {
+      registryError =
+        e instanceof Error ? e.message : "Failed to load plugin registry";
+      registryPlugins = [];
+    } finally {
+      registryLoading = false;
+    }
+  }
+
+  $effect(() => {
+    loadRegistry();
+  });
+
+  async function platformInstall(
+    bytes: ArrayBuffer,
+    name?: string,
+    expectedPluginId?: string,
+  ): Promise<void> {
+    if (isTauri()) {
+      const backend: Backend = await getBackend();
+      if (backend.installPlugin) {
+        const manifestJson = await backend.installPlugin(new Uint8Array(bytes));
+        if (expectedPluginId) {
+          let installedId: string | null = null;
+          try {
+            const parsed = JSON.parse(manifestJson);
+            if (typeof parsed?.id === "string") {
+              installedId = parsed.id;
+            }
+          } catch {
+            // Keep installedId as null and fail below.
+          }
+          if (!installedId) {
+            throw new Error("Installed plugin manifest did not include a valid plugin ID.");
+          }
+          if (installedId !== expectedPluginId) {
+            throw new Error(
+              `Installed plugin ID mismatch: expected '${expectedPluginId}', got '${installedId}'`,
+            );
+          }
+        }
+        return;
+      }
+    }
+    await browserInstallPlugin(bytes, name);
+  }
+
+  async function platformUninstall(pluginId: string): Promise<void> {
+    if (isTauri()) {
+      const backend: Backend = await getBackend();
+      if (backend.uninstallPlugin) {
+        await backend.uninstallPlugin(pluginId);
+        return;
+      }
+    }
+    await browserUninstallPlugin(pluginId);
+  }
+
+  function normalizeSha256(value: string): string {
+    return value.trim().toLowerCase().replace(/^sha256:/, "");
+  }
+
+  async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
+    if (typeof crypto === "undefined" || !crypto.subtle) {
+      throw new Error("SHA-256 verification is unavailable in this runtime.");
+    }
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    const arr = Array.from(new Uint8Array(digest));
+    return arr.map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  async function verifyRegistryArtifact(bytes: ArrayBuffer, expectedSha: string): Promise<void> {
+    const actual = await sha256Hex(bytes);
+    if (actual !== normalizeSha256(expectedSha)) {
+      throw new Error("Plugin integrity check failed (SHA-256 mismatch)");
+    }
+  }
+
+  const PERMISSION_LABELS: Record<PermissionType, string> = {
+    read_files: "Read files",
+    edit_files: "Edit files",
+    create_files: "Create files",
+    delete_files: "Delete files",
+    move_files: "Move files",
+    http_requests: "HTTP requests",
+    execute_commands: "Execute commands",
+    plugin_storage: "Plugin storage",
+  };
+
+  function formatRuleSummary(permissionType: PermissionType, rule: { include: string[]; exclude: string[] }): string {
+    if (permissionType === "plugin_storage") return "all";
+    if (!rule.include?.length) return "no includes";
+    return rule.include.join(", ");
+  }
+
+  async function persistDefaultPermissions(pluginId: string, defaults: PluginPermissions): Promise<void> {
+    const rootIndexPath = workspaceStore.tree?.path;
+    if (!rootIndexPath) return;
+
+    const backend = await getBackend();
+    const api = createApi(backend);
+    const fm = await api.getFrontmatter(rootIndexPath);
+    const existingPlugins = (fm.plugins as Record<string, PluginConfig> | undefined) ?? {};
+    const existingPluginConfig = existingPlugins[pluginId] ?? { permissions: {} };
+    const mergedPermissions: PluginPermissions = {
+      ...(existingPluginConfig.permissions ?? {}),
+    };
+
+    for (const [permissionType, requestedRule] of Object.entries(defaults)) {
+      if (!requestedRule) continue;
+      if (!mergedPermissions[permissionType as PermissionType]) {
+        mergedPermissions[permissionType as PermissionType] = {
+          include: [...(requestedRule.include ?? [])],
+          exclude: [...(requestedRule.exclude ?? [])],
+        };
+      }
+    }
+
+    const nextPlugins: Record<string, PluginConfig> = {
+      ...existingPlugins,
+      [pluginId]: {
+        ...existingPluginConfig,
+        permissions: mergedPermissions,
+      },
+    };
+
+    await api.setFrontmatterProperty(rootIndexPath, "plugins", nextPlugins as any, rootIndexPath);
+  }
+
+  async function reviewAndInstall(
+    bytes: ArrayBuffer,
+    fallbackName?: string,
+    expectedPluginId?: string,
+  ): Promise<void> {
+    if (isTauri()) {
+      await platformInstall(bytes, fallbackName, expectedPluginId);
+      return;
+    }
+
+    const inspected = await inspectPluginWasm(bytes);
+    const pluginId = inspected.pluginId;
+    if (expectedPluginId && pluginId !== expectedPluginId) {
+      throw new Error(
+        `Plugin ID mismatch: expected '${expectedPluginId}', got '${pluginId}'`,
+      );
+    }
+    const pluginName = inspected.pluginName || fallbackName || pluginId;
+    const requested = inspected.requestedPermissions;
+    const defaults = requested?.defaults ?? {};
+    const reasons = requested?.reasons ?? {};
+
+    const requestedLines = Object.entries(defaults)
+      .filter(([, rule]) => !!rule)
+      .map(([permissionType, rule]) => {
+        const typed = permissionType as PermissionType;
+        const reason = reasons[typed];
+        const summary = formatRuleSummary(typed, rule!);
+        if (reason) {
+          return `- ${PERMISSION_LABELS[typed]}: ${summary}\n  Why: ${reason}`;
+        }
+        return `- ${PERMISSION_LABELS[typed]}: ${summary}`;
+      });
+
+    const details =
+      requestedLines.length > 0
+        ? requestedLines.join("\n")
+        : "- This plugin requests no default permissions.";
+
+    const approved = window.confirm(
+      `Install "${pluginName}" (${pluginId})?\n\n` +
+        `Requested default permissions:\n${details}\n\n` +
+        `Approved defaults will be saved in root frontmatter under plugins.${pluginId}.permissions.`,
+    );
+    if (!approved) return;
+
+    if (requested?.defaults) {
+      await persistDefaultPermissions(pluginId, requested.defaults);
+    }
+
+    await platformInstall(bytes, fallbackName ?? pluginName, expectedPluginId);
+  }
+
+  async function installFromRegistry(plugin: RegistryPlugin): Promise<void> {
+    installingIds = new Set([...installingIds, plugin.id]);
+    try {
+      const response = await fetch(plugin.artifact.wasmUrl);
+      if (!response.ok) {
+        throw new Error(`Download failed: ${response.status}`);
+      }
+      const bytes = await response.arrayBuffer();
+      await verifyRegistryArtifact(bytes, plugin.artifact.sha256);
+      await reviewAndInstall(bytes, plugin.name, plugin.id);
+      toast.success(`Installed ${plugin.name}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : `Failed to install ${plugin.name}`);
+    } finally {
+      installingIds = new Set([...installingIds].filter((id) => id !== plugin.id));
+    }
+  }
+
+  async function removePlugin(pluginId: string, pluginName: string): Promise<void> {
+    removingIds = new Set([...removingIds, pluginId]);
+    try {
+      await platformUninstall(pluginId);
+      toast.success(`Removed ${pluginName}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : `Failed to remove ${pluginName}`);
+    } finally {
+      removingIds = new Set([...removingIds].filter((id) => id !== pluginId));
+    }
+  }
+
+  function triggerUpload(): void {
+    fileInputRef?.click();
+  }
+
+  async function onLocalFileSelected(event: Event): Promise<void> {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    input.value = "";
+
+    if (!file.name.endsWith(".wasm")) {
+      toast.error("Please select a .wasm file");
+      return;
+    }
+
+    uploadingLocal = true;
+    try {
+      const bytes = await file.arrayBuffer();
+      await reviewAndInstall(bytes, file.name.replace(/\.wasm$/, ""));
+      toast.success(`Installed local plugin from ${file.name}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to install plugin");
+    } finally {
+      uploadingLocal = false;
+    }
+  }
+
+  function setEnabled(pluginId: string, enabled: boolean): void {
+    pluginStore.setPluginEnabled(pluginId, enabled);
+  }
+</script>
+
+<div class="fixed inset-0 z-50 bg-background overflow-hidden">
+  <div class="h-full flex flex-col">
+    <header class="border-b px-4 py-3 flex items-center justify-between gap-3">
+      <div class="flex items-center gap-2 min-w-0">
+        <Store class="size-5" />
+        <div>
+          <h2 class="text-lg font-semibold">Plugin Marketplace</h2>
+          <p class="text-xs text-muted-foreground">Curated registries, signed metadata, SHA-256 verified installs.</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 shrink-0">
+        <Button variant="outline" size="sm" onclick={triggerUpload} disabled={uploadingLocal || !pluginsSupported}>
+          {#if uploadingLocal}
+            <Loader2 class="size-3.5 mr-1.5 animate-spin" />
+            Installing...
+          {:else}
+            <Upload class="size-3.5 mr-1.5" />
+            Add Local
+          {/if}
+        </Button>
+        <Button variant="ghost" size="icon" onclick={onClose} aria-label="Close marketplace">
+          <X class="size-4" />
+        </Button>
+      </div>
+      <input
+        type="file"
+        accept=".wasm"
+        class="hidden"
+        bind:this={fileInputRef}
+        onchange={onLocalFileSelected}
+      />
+    </header>
+
+    {#if !pluginsSupported}
+      <div class="px-4 pt-3">
+        <div class="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-300">
+          {browserPluginSupportError ?? browserPluginSupport.reason ?? "Browser plugins are unavailable in this browser."}
+        </div>
+      </div>
+    {/if}
+
+    <div class="px-4 pt-3 pb-2 flex flex-wrap items-center gap-2 border-b">
+      <div class="relative min-w-[240px] flex-1">
+        <Search class="size-4 absolute left-2.5 top-2.5 text-muted-foreground" />
+        <Input class="pl-8" placeholder="Search plugins" bind:value={search} />
+      </div>
+
+      <select class="h-9 rounded-md border bg-background px-2 text-sm" bind:value={categoryFilter}>
+        {#each categories as category}
+          <option value={category}>{category === "all" ? "All categories" : category}</option>
+        {/each}
+      </select>
+
+      <select class="h-9 rounded-md border bg-background px-2 text-sm" bind:value={capabilityFilter}>
+        {#each capabilities as capability}
+          <option value={capability}>{capability === "all" ? "All capabilities" : capability}</option>
+        {/each}
+      </select>
+
+      <select class="h-9 rounded-md border bg-background px-2 text-sm" bind:value={sourceFilter}>
+        <option value="all">All sources</option>
+        <option value="internal">Internal</option>
+        <option value="external">External</option>
+        <option value="installed">Installed</option>
+      </select>
+
+      <select class="h-9 rounded-md border bg-background px-2 text-sm" bind:value={sortBy}>
+        <option value="name">Sort: Name</option>
+        <option value="recent">Sort: Recent</option>
+        <option value="version">Sort: Version</option>
+      </select>
+    </div>
+
+    <div class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_420px]">
+      <section class="min-h-0 overflow-auto border-r">
+        {#if registryLoading}
+          <div class="h-full flex items-center justify-center text-muted-foreground gap-2">
+            <Loader2 class="size-4 animate-spin" />
+            Loading plugin registry...
+          </div>
+        {:else if registryError}
+          <div class="p-4 text-sm text-muted-foreground">{registryError}</div>
+        {:else if filteredPlugins.length === 0}
+          <div class="p-4 text-sm text-muted-foreground">No plugins match your filters.</div>
+        {:else}
+          <div class="grid gap-3 p-3 md:grid-cols-2">
+            {#each filteredPlugins as plugin}
+              {@const installed = installedIds.has(plugin.id)}
+              {@const installing = installingIds.has(plugin.id)}
+              <button
+                type="button"
+                class={`text-left rounded-lg border p-3 transition ${selectedPlugin?.id === plugin.id ? "border-primary" : "hover:border-foreground/40"}`}
+                onclick={() => (selectedPluginId = plugin.id)}
+              >
+                <div class="flex items-center justify-between gap-2">
+                  <h3 class="font-medium truncate">{plugin.name}</h3>
+                  <Badge variant="secondary" class="text-[10px]">v{plugin.version}</Badge>
+                </div>
+                <p class="text-xs text-muted-foreground mt-1 line-clamp-2">{plugin.summary}</p>
+                <div class="mt-2 flex flex-wrap gap-1">
+                  <Badge variant="outline" class="text-[10px]">{plugin.source.kind}</Badge>
+                  <Badge variant="outline" class="text-[10px]">{plugin.creator}</Badge>
+                </div>
+                <div class="mt-3 flex items-center justify-between gap-2">
+                  {#if installed}
+                    <span class="text-xs text-emerald-600 dark:text-emerald-400 inline-flex items-center gap-1">
+                      <Check class="size-3" />
+                      Installed
+                    </span>
+                  {:else}
+                    <span class="text-xs text-muted-foreground">Not installed</span>
+                  {/if}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      void installFromRegistry(plugin);
+                    }}
+                    disabled={installing || installed || !pluginsSupported}
+                  >
+                    {#if installing}
+                      <Loader2 class="size-3.5 mr-1.5 animate-spin" />
+                      Installing...
+                    {:else}
+                      <Download class="size-3.5 mr-1.5" />
+                      Install
+                    {/if}
+                  </Button>
+                </div>
+              </button>
+            {/each}
+          </div>
+        {/if}
+
+        <Separator />
+
+        <div class="p-3 space-y-2">
+          <h3 class="text-sm font-medium text-muted-foreground">Local Plugins (Unmanaged)</h3>
+          {#if localPlugins.length === 0}
+            <p class="text-xs text-muted-foreground">No local plugins installed.</p>
+          {:else}
+            <div class="space-y-2">
+              {#each localPlugins as plugin}
+                {@const pluginId = String(plugin.id)}
+                {@const removing = removingIds.has(pluginId)}
+                <div class="rounded-md border p-3 flex items-center justify-between gap-3">
+                  <div class="min-w-0">
+                    <p class="text-sm font-medium truncate">{plugin.name}</p>
+                    <p class="text-xs text-muted-foreground truncate">{plugin.description || pluginId}</p>
+                  </div>
+                  <div class="flex items-center gap-2 shrink-0">
+                    <Switch
+                      id={`local-plugin-enabled-${pluginId}`}
+                      checked={pluginStore.isPluginEnabled(pluginId)}
+                      onCheckedChange={(checked) => setEnabled(pluginId, checked)}
+                      disabled={!pluginsSupported}
+                    />
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onclick={() => removePlugin(pluginId, String(plugin.name ?? pluginId))}
+                      disabled={removing}
+                    >
+                      {#if removing}
+                        <Loader2 class="size-3.5 animate-spin" />
+                      {:else}
+                        <Trash2 class="size-3.5 text-destructive" />
+                      {/if}
+                    </Button>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      </section>
+
+      <aside class="min-h-0 overflow-auto p-4">
+        {#if selectedPlugin}
+          {@const plugin = selectedPlugin}
+          {@const installed = installedIds.has(plugin.id)}
+          {@const installing = installingIds.has(plugin.id)}
+          {@const removing = removingIds.has(plugin.id)}
+          <div class="space-y-4">
+            <div>
+              <div class="flex items-center gap-2 flex-wrap">
+                <h3 class="text-lg font-semibold">{plugin.name}</h3>
+                <Badge variant="secondary">v{plugin.version}</Badge>
+                <Badge variant="outline">{plugin.source.kind}</Badge>
+              </div>
+              <p class="text-sm text-muted-foreground mt-1">{plugin.summary}</p>
+              <p class="text-sm mt-2">{plugin.description}</p>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2 text-xs">
+              <div class="rounded-md border p-2">
+                <p class="text-muted-foreground">Creator</p>
+                <p class="font-medium">{plugin.creator}</p>
+              </div>
+              <div class="rounded-md border p-2">
+                <p class="text-muted-foreground">License</p>
+                <p class="font-medium">{plugin.license}</p>
+              </div>
+              <div class="rounded-md border p-2">
+                <p class="text-muted-foreground">Artifact Size</p>
+                <p class="font-medium">{Math.round(plugin.artifact.sizeBytes / 1024)} KB</p>
+              </div>
+              <div class="rounded-md border p-2">
+                <p class="text-muted-foreground">Published</p>
+                <p class="font-medium">{new Date(plugin.artifact.publishedAt).toLocaleDateString()}</p>
+              </div>
+            </div>
+
+            <div class="space-y-2">
+              <h4 class="text-sm font-medium">Capabilities</h4>
+              <div class="flex flex-wrap gap-1">
+                {#if plugin.capabilities.length === 0}
+                  <span class="text-xs text-muted-foreground">No declared capabilities.</span>
+                {:else}
+                  {#each plugin.capabilities as capability}
+                    <Badge variant="outline" class="text-[11px]">{capability}</Badge>
+                  {/each}
+                {/if}
+              </div>
+            </div>
+
+            <div class="space-y-2">
+              <h4 class="text-sm font-medium">Tags</h4>
+              <div class="flex flex-wrap gap-1">
+                {#if plugin.tags.length === 0}
+                  <span class="text-xs text-muted-foreground">No tags.</span>
+                {:else}
+                  {#each plugin.tags as tag}
+                    <Badge variant="secondary" class="text-[11px]">{tag}</Badge>
+                  {/each}
+                {/if}
+              </div>
+            </div>
+
+            <div class="space-y-1 text-xs">
+              {#if plugin.homepage}
+                <a class="inline-flex items-center gap-1 text-primary hover:underline" href={plugin.homepage} target="_blank" rel="noreferrer">
+                  Homepage <ExternalLink class="size-3" />
+                </a>
+              {/if}
+              {#if plugin.documentationUrl}
+                <a class="inline-flex items-center gap-1 text-primary hover:underline" href={plugin.documentationUrl} target="_blank" rel="noreferrer">
+                  Documentation <ExternalLink class="size-3" />
+                </a>
+              {/if}
+              {#if plugin.changelogUrl}
+                <a class="inline-flex items-center gap-1 text-primary hover:underline" href={plugin.changelogUrl} target="_blank" rel="noreferrer">
+                  Changelog <ExternalLink class="size-3" />
+                </a>
+              {/if}
+            </div>
+
+            <div class="rounded-md border p-2 text-xs">
+              <p class="font-medium mb-1">Requested Permissions</p>
+              {#if plugin.requestedPermissions}
+                <pre class="whitespace-pre-wrap break-words text-[11px] text-muted-foreground">{JSON.stringify(plugin.requestedPermissions, null, 2)}</pre>
+              {:else}
+                <p class="text-muted-foreground">No explicit requested permissions in manifest.</p>
+              {/if}
+            </div>
+
+            <div class="flex items-center gap-2 pt-1">
+              {#if installed}
+                <Switch
+                  id={`marketplace-plugin-enabled-${plugin.id}`}
+                  checked={pluginStore.isPluginEnabled(plugin.id)}
+                  onCheckedChange={(checked) => setEnabled(plugin.id, checked)}
+                  disabled={!pluginsSupported}
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onclick={() => removePlugin(plugin.id, plugin.name)}
+                  disabled={removing}
+                >
+                  {#if removing}
+                    <Loader2 class="size-3.5 mr-1.5 animate-spin" />
+                    Removing...
+                  {:else}
+                    <Trash2 class="size-3.5 mr-1.5" />
+                    Uninstall
+                  {/if}
+                </Button>
+              {:else}
+                <Button
+                  size="sm"
+                  onclick={() => installFromRegistry(plugin)}
+                  disabled={installing || !pluginsSupported}
+                >
+                  {#if installing}
+                    <Loader2 class="size-3.5 mr-1.5 animate-spin" />
+                    Installing...
+                  {:else}
+                    <Download class="size-3.5 mr-1.5" />
+                    Install
+                  {/if}
+                </Button>
+              {/if}
+            </div>
+          </div>
+        {:else}
+          <p class="text-sm text-muted-foreground">Select a plugin to view details.</p>
+        {/if}
+      </aside>
+    </div>
+  </div>
+</div>

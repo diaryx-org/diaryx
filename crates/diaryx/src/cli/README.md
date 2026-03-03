@@ -40,12 +40,28 @@ In the Diaryx CLI, this module provides the majority of the functionality.
 
 ## Plugin Management Commands
 
-- `diaryx plugin list` — List installed plugins.
-- `diaryx plugin install <id>` — Install a plugin from the registry.
+- `diaryx plugin list` — List installed plugins (supports metadata filters and `--json`).
+- `diaryx plugin install <id>` — Install a plugin from the curated `registry-v2` by canonical ID.
 - `diaryx plugin remove <id>` — Remove an installed plugin.
-- `diaryx plugin search [query]` — Search the plugin registry.
+- `diaryx plugin search [query]` — Search the curated registry with filters.
 - `diaryx plugin update [id]` — Update installed plugins.
-- `diaryx plugin info <id>` — Show details about an installed plugin.
+- `diaryx plugin info <id>` — Show rich plugin metadata (`--json` supported).
+
+Registry contract and behavior:
+
+- CLI only accepts registry schema `v2` and fails fast on older schema payloads.
+- Install verifies `artifact.sha256` and `artifact.sizeBytes` before persistence.
+- Canonical plugin IDs are required (for example: `diaryx.sync`).
+- Legacy `diaryx plugin install --defaults` behavior was removed.
+
+Discovery filters:
+
+- `--category <value>`
+- `--tag <value>`
+- `--source internal|external`
+- `--creator <value>`
+- `--installed` (search only)
+- `--json` (machine-readable output)
 
 ## Dynamic Plugin Commands
 

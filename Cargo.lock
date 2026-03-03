@@ -2205,6 +2205,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -2570,7 +2571,6 @@ version = "1.2.1"
 dependencies = [
  "async-trait",
  "chrono",
- "comrak",
  "console_error_panic_hook",
  "console_log",
  "diaryx_core",
@@ -2580,7 +2580,6 @@ dependencies = [
  "log",
  "opfs",
  "pathdiff",
- "regex",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",

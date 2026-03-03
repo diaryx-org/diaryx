@@ -5,6 +5,7 @@
   import type { ExportPlan, ExportedFile } from "./backend";
   import type { Api } from "./backend/api";
   import { toast } from "svelte-sonner";
+  import * as browserPlugins from "$lib/plugins/browserPluginManager.svelte";
   import {
     Download,
     FileText,
@@ -116,17 +117,16 @@
   ): Promise<T> {
     if (!api) throw new Error("Export API unavailable");
 
-    const browserPlugins = await import("$lib/plugins/browserPluginManager.svelte");
-    const browserPublish = browserPlugins.getPlugin("publish");
+    const browserPublish = browserPlugins.getPlugin("diaryx.publish");
     if (browserPublish) {
-      const result = await browserPlugins.dispatchCommand("publish", command, params);
+      const result = await browserPlugins.dispatchCommand("diaryx.publish", command, params);
       if (!result.success) {
         throw new Error(result.error ?? `Publish command failed: ${command}`);
       }
       return normalizeToObject(result.data) as T;
     }
 
-    const data = await api.executePluginCommand("publish", command, params as any);
+    const data = await api.executePluginCommand("diaryx.publish", command, params as any);
     return normalizeToObject(data) as T;
   }
 

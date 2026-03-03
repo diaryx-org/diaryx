@@ -38,7 +38,7 @@ Settings panel components for `SettingsDialog.svelte`.
 | `StorageSettings.svelte` | Local storage backend settings. |
 | `ImportSettings.svelte` / `FormatImportSettings.svelte` | ZIP import and format import flows. |
 | `AccountSettings.svelte` / `BillingSettings.svelte` | Authentication/account and billing surfaces. |
-| `PluginsSettings.svelte` | Plugin enable/disable + install/remove controls, including install-time permission review and default-permission persistence to root frontmatter. |
+| `PluginsSettings.svelte` | Installed/local plugin management surface. Includes local `.wasm` upload, enable/disable, uninstall, and a shortcut into the dedicated marketplace. Registry installs are SHA-256 verified. |
 | `PluginSettingsTab.svelte` | Declarative plugin field renderer. |
 | `syncSettingsLogic.ts` | Shared sync/storage usage helpers used by settings UIs. |
 | `workspaceSnapshotUpload.ts` | Shared snapshot builder used by provider/sync bootstrap flows. |
@@ -51,6 +51,12 @@ Settings panel components for `SettingsDialog.svelte`.
 - Declarative field contributions render via `PluginSettingsTab`
 
 All plugin settings (sync, GDrive storage, templating) now use the iframe approach.
+
+## Marketplace Integration
+
+- The dedicated marketplace is a separate app surface (`views/marketplace/PluginMarketplace.svelte`), not just a settings panel.
+- Settings keeps an installed/local management focus and links to marketplace via `Open Marketplace`.
+- Local uploads are explicitly labeled unmanaged and are separate from curated registry trust.
 
 ## Managed AI Notes
 

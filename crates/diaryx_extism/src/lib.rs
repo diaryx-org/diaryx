@@ -34,6 +34,8 @@ pub use adapter::ExtismPluginAdapter;
 pub use host_fns::{
     EventEmitter, HostContext, NoopEventEmitter, NoopStorage, PermissionChecker, PluginStorage,
 };
-pub use loader::{ExtismLoadError, load_plugin_from_wasm, load_plugins_from_dir};
+pub use loader::{
+    ExtismLoadError, inspect_plugin_wasm_manifest, load_plugin_from_wasm, load_plugins_from_dir,
+};
 pub use permission_checker::{DenyAllPermissionChecker, FrontmatterPermissionChecker};
 pub use plugin_fs::PluginFileSystem;

@@ -6,7 +6,6 @@
  */
 
 import type { Api } from '$lib/backend/api';
-import heic2any from 'heic2any';
 import { getServerAttachmentUrl, getAttachmentMetadata, sha256Hex } from '$lib/sync/attachmentSyncService';
 
 // ============================================================================
@@ -166,6 +165,7 @@ export function bytesToBase64(bytes: Uint8Array): string {
  */
 export async function convertHeicToJpeg(blob: Blob): Promise<Blob> {
   try {
+    const { default: heic2any } = await import('heic2any');
     const result = await heic2any({
       blob,
       toType: 'image/jpeg',

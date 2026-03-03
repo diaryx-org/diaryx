@@ -18,6 +18,10 @@ Plugins can also declare host UI surface ownership in their manifest via
 
 Plugins are registered in the `PluginRegistry`, which is stored on the `Diaryx<FS>` struct and wired into the command handler.
 
+Plugin IDs are canonical, namespaced dotted identifiers. First-party plugins
+use the `diaryx.*` namespace (for example: `diaryx.sync`, `diaryx.publish`,
+`diaryx.daily`).
+
 ## Files
 
 | File | Description |
@@ -51,7 +55,7 @@ struct MyPlugin;
 
 #[async_trait::async_trait]
 impl Plugin for MyPlugin {
-    fn id(&self) -> PluginId { PluginId("my-plugin".into()) }
+    fn id(&self) -> PluginId { PluginId("example.my-plugin".into()) }
 }
 
 #[async_trait::async_trait]
@@ -75,7 +79,7 @@ Plugin-specific commands use the `PluginCommand` variant:
 
 ```rust
 Command::PluginCommand {
-    plugin: "my-plugin".into(),
+    plugin: "example.my-plugin".into(),
     command: "do-something".into(),
     params: serde_json::json!({}),
 }

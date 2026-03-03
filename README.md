@@ -50,6 +50,20 @@ All of this logic is defined in the `diaryx_core` Rust crate, and is used by the
 - `[apps/tauri](apps/tauri/README.md)`: Tauri frontend for Diaryx. Uses `apps/web` as its frontend, but calls the functions through the Tauri backend instead of through WebAssembly, allowing for native filesystem access.
 - `[workers/site-proxy](workers/site-proxy/README.md)`: Cloudflare Worker for serving published static sites with audience-gated access.
 
+## Plugin Marketplace And Registry
+
+Diaryx now uses a curated plugin marketplace model across web, CLI, and Tauri:
+
+- Registry schema is `v2` (`plugins/registry-v2.json`) and is treated as canonical.
+- Plugin IDs are canonical namespaced IDs (for example: `diaryx.sync`, `diaryx.publish`, `diaryx.daily`).
+- Registry installs require immutable artifact metadata: `artifact.wasmUrl`, `artifact.sha256`, `artifact.sizeBytes`, and `version`.
+- Local `.wasm` uploads remain supported but are treated as local/unmanaged plugins outside curated registry trust.
+
+Registry build/publish is generated dynamically in CI from plugin crate discovery (`cargo metadata`) plus curated catalogs in:
+
+- `plugins/catalog/internal-plugins.json`
+- `plugins/catalog/external-plugins.json`
+
 ## Installation
 
 You can try a live demo of the Diaryx web frontend at [https://diaryx-org.github.io/diaryx/](https://diaryx-org.github.io/diaryx/).

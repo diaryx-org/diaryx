@@ -49,6 +49,47 @@ pub enum ExtismLoadError {
     },
 }
 
+fn parse_guest_manifest(
+    plugin: &mut extism::Plugin,
+    plugin_name: &str,
+) -> Result<GuestManifest, ExtismLoadError> {
+    let output =
+        plugin
+            .call::<&str, &[u8]>("manifest", "")
+            .map_err(|e| ExtismLoadError::ManifestCall {
+                plugin_name: plugin_name.to_string(),
+                source: e,
+            })?;
+    let output_str = String::from_utf8_lossy(output);
+    serde_json::from_str::<GuestManifest>(&output_str).map_err(|e| ExtismLoadError::ManifestParse {
+        plugin_name: plugin_name.to_string(),
+        source: e,
+    })
+}
+
+/// Inspect a plugin's guest manifest directly from a WASM file.
+///
+/// This is used by CI tooling to extract plugin metadata (ID, name, version,
+/// permissions, capabilities) without loading the full Diaryx runtime.
+pub fn inspect_plugin_wasm_manifest(wasm_path: &Path) -> Result<GuestManifest, ExtismLoadError> {
+    let plugin_name = wasm_path
+        .file_stem()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".into());
+
+    let wasm = Wasm::file(wasm_path);
+    let extism_manifest = ExtismManifest::new([wasm]);
+    let mut plugin = PluginBuilder::new(extism_manifest)
+        .with_wasi(true)
+        .build()
+        .map_err(|e| ExtismLoadError::PluginCreate {
+            plugin_name: plugin_name.clone(),
+            source: e,
+        })?;
+
+    parse_guest_manifest(&mut plugin, &plugin_name)
+}
+
 /// Load all WASM plugins from the given directory.
 ///
 /// Scans `plugins_dir` for subdirectories containing a `plugin.wasm` file.
@@ -140,20 +181,7 @@ pub fn load_plugin_from_wasm(
     })?;
 
     // Call the guest's manifest export.
-    let output =
-        plugin
-            .call::<&str, &[u8]>("manifest", "")
-            .map_err(|e| ExtismLoadError::ManifestCall {
-                plugin_name: plugin_name.clone(),
-                source: e,
-            })?;
-    let output_str = String::from_utf8_lossy(output);
-    let guest_manifest = serde_json::from_str::<GuestManifest>(&output_str).map_err(|e| {
-        ExtismLoadError::ManifestParse {
-            plugin_name: plugin_name.clone(),
-            source: e,
-        }
-    })?;
+    let guest_manifest = parse_guest_manifest(&mut plugin, &plugin_name)?;
     if let Ok(ctx) = user_data.get()
         && let Ok(mut guard) = ctx.lock()
     {
@@ -224,19 +252,7 @@ fn load_single_plugin(
             }
         })?
     } else {
-        let output = plugin.call::<&str, &[u8]>("manifest", "").map_err(|e| {
-            ExtismLoadError::ManifestCall {
-                plugin_name: plugin_name.into(),
-                source: e,
-            }
-        })?;
-        let output_str = String::from_utf8_lossy(output);
-        let gm = serde_json::from_str::<GuestManifest>(&output_str).map_err(|e| {
-            ExtismLoadError::ManifestParse {
-                plugin_name: plugin_name.into(),
-                source: e,
-            }
-        })?;
+        let gm = parse_guest_manifest(&mut plugin, plugin_name)?;
         // Cache the manifest for fast discovery on next startup.
         cache_manifest(&manifest_path, &gm);
         gm

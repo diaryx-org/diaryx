@@ -9,6 +9,7 @@
   import { Download, Loader2, Check, AlertCircle } from "@lucide/svelte";
   import { getBackend } from "../backend";
   import { createApi } from "../backend/api";
+  import { addFilesToZip } from "./zipUtils";
 
   interface Props {
     workspacePath?: string | null;
@@ -57,7 +58,6 @@
       } else {
         // Web: Use workspace tree + file reads to build zip
         const api = createApi(backend);
-        const { addFilesToZip } = await import("./zipUtils");
 
         // Get workspace directory from index path
         const workspaceDir = workspacePath.substring(

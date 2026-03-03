@@ -1,5 +1,13 @@
 <script lang="ts">
-  import { Puzzle, Loader2, Trash2, Upload, Download, Check } from "@lucide/svelte";
+  import {
+    Puzzle,
+    Loader2,
+    Trash2,
+    Upload,
+    Download,
+    Check,
+    Store,
+  } from "@lucide/svelte";
   import { Switch } from "$lib/components/ui/switch";
   import { Button } from "$lib/components/ui/button";
   import { Separator } from "$lib/components/ui/separator";
@@ -25,6 +33,12 @@
     PluginConfig,
     PluginPermissions,
   } from "@/models/stores/permissionStore.svelte";
+
+  interface Props {
+    onOpenMarketplace?: () => void;
+  }
+
+  let { onOpenMarketplace }: Props = $props();
 
   const pluginStore = getPluginStore();
 
@@ -54,8 +68,8 @@
     new Set(pluginStore.allManifests.map((m) => String(m.id))),
   );
 
-  /** Custom (user-uploaded) plugins: installed but not in the registry. */
-  const customPlugins = $derived.by(() => {
+  /** Local (user-uploaded) plugins: installed but not in the curated registry. */
+  const localPlugins = $derived.by(() => {
     const registryIds = new Set(registryPlugins.map((r) => r.id));
     return pluginStore.allManifests
       .filter((m) => {
@@ -100,11 +114,31 @@
   async function platformInstall(
     wasmBytes: ArrayBuffer,
     name?: string,
+    expectedPluginId?: string,
   ): Promise<void> {
     if (isTauri()) {
       const backend: Backend = await getBackend();
       if (backend.installPlugin) {
-        await backend.installPlugin(new Uint8Array(wasmBytes));
+        const manifestJson = await backend.installPlugin(new Uint8Array(wasmBytes));
+        if (expectedPluginId) {
+          let installedId: string | null = null;
+          try {
+            const parsed = JSON.parse(manifestJson);
+            if (typeof parsed?.id === "string") {
+              installedId = parsed.id;
+            }
+          } catch {
+            // Keep installedId as null and fail below.
+          }
+          if (!installedId) {
+            throw new Error("Installed plugin manifest did not include a valid plugin ID.");
+          }
+          if (installedId !== expectedPluginId) {
+            throw new Error(
+              `Installed plugin ID mismatch: expected '${expectedPluginId}', got '${installedId}'`,
+            );
+          }
+        }
         return;
       }
     }
@@ -141,6 +175,29 @@
     if (permissionType === "plugin_storage") return "all";
     if (!rule.include?.length) return "no includes";
     return rule.include.join(", ");
+  }
+
+  function normalizeSha256(value: string): string {
+    return value.trim().toLowerCase().replace(/^sha256:/, "");
+  }
+
+  async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
+    if (typeof crypto === "undefined" || !crypto.subtle) {
+      throw new Error("SHA-256 verification is unavailable in this runtime.");
+    }
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    const arr = Array.from(new Uint8Array(digest));
+    return arr.map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  async function verifyRegistryArtifact(
+    wasmBytes: ArrayBuffer,
+    expectedSha256: string,
+  ): Promise<void> {
+    const actual = await sha256Hex(wasmBytes);
+    if (actual !== normalizeSha256(expectedSha256)) {
+      throw new Error("Plugin integrity check failed (SHA-256 mismatch)");
+    }
   }
 
   async function persistDefaultPermissions(
@@ -188,17 +245,23 @@
   async function reviewAndInstall(
     wasmBytes: ArrayBuffer,
     fallbackName?: string,
+    expectedPluginId?: string,
   ): Promise<void> {
     // On Tauri, the native backend handles WASM loading/inspection — browser
     // Extism isn't available on iOS. Skip browser-side inspect and install
     // directly; the backend extracts the manifest and returns it.
     if (isTauri()) {
-      await platformInstall(wasmBytes, fallbackName);
+      await platformInstall(wasmBytes, fallbackName, expectedPluginId);
       return;
     }
 
     const inspected = await inspectPluginWasm(wasmBytes);
     const pluginId = inspected.pluginId;
+    if (expectedPluginId && pluginId !== expectedPluginId) {
+      throw new Error(
+        `Plugin ID mismatch: expected '${expectedPluginId}', got '${pluginId}'`,
+      );
+    }
     const pluginName = inspected.pluginName || fallbackName || pluginId;
     const requested = inspected.requestedPermissions;
     const defaults = requested?.defaults ?? {};
@@ -232,16 +295,17 @@
       await persistDefaultPermissions(pluginId, requested.defaults);
     }
 
-    await platformInstall(wasmBytes, fallbackName ?? pluginName);
+    await platformInstall(wasmBytes, fallbackName ?? pluginName, expectedPluginId);
   }
 
   async function installFromRegistry(rp: RegistryPlugin) {
     installingIds = new Set([...installingIds, rp.id]);
     try {
-      const resp = await fetch(rp.wasmUrl);
+      const resp = await fetch(rp.artifact.wasmUrl);
       if (!resp.ok) throw new Error(`Download failed: ${resp.status}`);
       const bytes = await resp.arrayBuffer();
-      await reviewAndInstall(bytes, rp.name);
+      await verifyRegistryArtifact(bytes, rp.artifact.sha256);
+      await reviewAndInstall(bytes, rp.name, rp.id);
       toast.success(`Installed ${rp.name}`);
     } catch (e) {
       toast.error(
@@ -285,7 +349,7 @@
     try {
       const bytes = await file.arrayBuffer();
       await reviewAndInstall(bytes, file.name.replace(/\.wasm$/, ""));
-      toast.success(`Installed plugin from ${file.name}`);
+      toast.success(`Installed local plugin from ${file.name}`);
     } catch (e) {
       toast.error(
         e instanceof Error ? e.message : "Failed to install plugin",
@@ -306,28 +370,36 @@
 
 <div class="space-y-5">
   <!-- Header -->
-  <div class="flex items-center justify-between">
+  <div class="flex items-center justify-between gap-2">
     <h3 class="font-medium flex items-center gap-2">
       <Puzzle class="size-4" />
       Plugins
     </h3>
-    <Button
-      variant="outline"
-      size="sm"
-      onclick={triggerFileUpload}
-      disabled={uploadingCustom || !pluginsSupported}
-    >
-      {#if uploadingCustom}
-        <Loader2 class="size-3.5 mr-1.5 animate-spin" />
-        Installing...
-      {:else}
-        <Upload class="size-3.5 mr-1.5" />
-        Add Plugin
+    <div class="flex items-center gap-2">
+      {#if onOpenMarketplace}
+        <Button variant="outline" size="sm" onclick={onOpenMarketplace}>
+          <Store class="size-3.5 mr-1.5" />
+          Open Marketplace
+        </Button>
       {/if}
-    </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        onclick={triggerFileUpload}
+        disabled={uploadingCustom || !pluginsSupported}
+      >
+        {#if uploadingCustom}
+          <Loader2 class="size-3.5 mr-1.5 animate-spin" />
+          Installing...
+        {:else}
+          <Upload class="size-3.5 mr-1.5" />
+          Add Local Plugin
+        {/if}
+      </Button>
+    </div>
   </div>
 
-  <!-- Hidden file input for custom .wasm upload -->
+  <!-- Hidden file input for local .wasm upload -->
   <input
     type="file"
     accept=".wasm"
@@ -345,9 +417,9 @@
     </div>
   {/if}
 
-  <!-- Available Plugins (from registry) -->
+  <!-- Curated Plugins (from registry-v2) -->
   <div class="space-y-2">
-    <h4 class="text-sm font-medium text-muted-foreground">Available Plugins</h4>
+    <h4 class="text-sm font-medium text-muted-foreground">Curated Plugins</h4>
 
     {#if registryLoading}
       <div class="flex items-center gap-2 px-1 py-3">
@@ -356,10 +428,10 @@
       </div>
     {:else if registryError}
       <p class="text-xs text-muted-foreground px-1">
-        Could not load plugin registry. Installed plugins still work.
+        Could not load plugin registry v2. Installed plugins still work.
       </p>
     {:else if registryPlugins.length === 0}
-      <p class="text-sm text-muted-foreground px-1">No plugins available.</p>
+      <p class="text-sm text-muted-foreground px-1">No curated plugins available.</p>
     {:else}
       <div class="space-y-2">
         {#each registryPlugins as rp}
@@ -367,11 +439,17 @@
           {@const installing = installingIds.has(rp.id)}
           <div class="flex items-center justify-between gap-3 rounded-md border p-3">
             <div class="flex-1 min-w-0">
-              <div class="flex items-center gap-2">
+              <div class="flex items-center gap-2 flex-wrap">
                 <span class="text-sm font-medium">{rp.name}</span>
                 <span class="text-[10px] text-muted-foreground">v{rp.version}</span>
+                <span class="text-[10px] rounded bg-muted px-1.5 py-0.5 text-muted-foreground">
+                  {rp.source.kind}
+                </span>
               </div>
-              <p class="text-xs text-muted-foreground mt-0.5 truncate">{rp.description}</p>
+              <p class="text-xs text-muted-foreground mt-0.5 line-clamp-2">{rp.summary}</p>
+              <p class="text-[11px] text-muted-foreground mt-1">
+                {rp.creator} • {rp.license}
+              </p>
             </div>
             <div class="flex items-center gap-2 shrink-0">
               {#if installed}
@@ -408,20 +486,20 @@
     {/if}
   </div>
 
-  <!-- Custom Plugins (user-uploaded) -->
-  {#if customPlugins.length > 0 || (!registryLoading && !registryError)}
+  <!-- Local plugins -->
+  {#if localPlugins.length > 0 || (!registryLoading && !registryError)}
     <Separator />
 
     <div class="space-y-2">
-      <h4 class="text-sm font-medium text-muted-foreground">Custom Plugins</h4>
+      <h4 class="text-sm font-medium text-muted-foreground">Local Plugins (Unmanaged)</h4>
 
-      {#if customPlugins.length === 0}
+      {#if localPlugins.length === 0}
         <p class="text-xs text-muted-foreground px-1">
-          No custom plugins. Upload a .wasm file to add one.
+          No local plugins. Upload a .wasm file to add one.
         </p>
       {:else}
         <div class="space-y-2">
-          {#each customPlugins as plugin}
+          {#each localPlugins as plugin}
             {@const pluginId = String(plugin.id)}
             {@const removing = removingIds.has(pluginId)}
             <div class="flex items-center justify-between gap-3 rounded-md border p-3">
@@ -430,6 +508,7 @@
                 <p class="text-xs text-muted-foreground mt-0.5 truncate">
                   {plugin.description || pluginId}
                 </p>
+                <p class="text-[11px] text-muted-foreground mt-1">Source: local upload</p>
               </div>
               <div class="flex items-center gap-2 shrink-0">
                 <Switch

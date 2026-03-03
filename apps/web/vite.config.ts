@@ -63,6 +63,37 @@ export default defineConfig({
     minify: isTauri && process.env.TAURI_ENV_DEBUG ? false : "esbuild",
     // Produce sourcemaps for debug builds
     sourcemap: isTauri ? !!process.env.TAURI_ENV_DEBUG : true,
+    rollupOptions: {
+      onwarn(warning, defaultHandler) {
+        // Suppress Svelte 5 compiler @__PURE__ annotation warnings — these
+        // are compiler artifacts and not actionable in user code.
+        if (
+          warning.code === "INVALID_ANNOTATION" &&
+          warning.message.includes("@__PURE__")
+        ) {
+          return;
+        }
+        defaultHandler(warning);
+      },
+      output: {
+        manualChunks(id) {
+          if (id.includes("node_modules")) {
+            if (id.includes("@tiptap/") || id.includes("prosemirror-")) {
+              return "vendor-tiptap";
+            }
+            if (id.includes("@extism/") || id.includes("@bjorn3/")) {
+              return "vendor-extism";
+            }
+            if (id.includes("/svelte/")) {
+              return "vendor-svelte";
+            }
+            if (id.includes("bits-ui")) {
+              return "vendor-ui";
+            }
+          }
+        },
+      },
+    },
   },
   resolve: {
     alias: {

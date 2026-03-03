@@ -130,44 +130,105 @@ jobs:
         if: steps.bindings-cache.outputs.cache-hit != 'true'
         run: nix develop --command cargo test -p diaryx_core
 
-      - name: Build plugin WASMs
-        if: steps.wasm-cache.outputs.cache-hit != 'true'
-        run: |
-          nix develop --command bash -c '
-            PLUGIN_DIR=plugin-output
-            mkdir -p "$PLUGIN_DIR"
-            for crate in diaryx_sync_extism diaryx_ai_extism diaryx_publish_extism diaryx_math_extism diaryx_spoiler_extism diaryx_templating_extism diaryx_daily_extism diaryx_storage_s3_extism diaryx_storage_gdrive_extism; do
-              echo "Building $crate..."
-              cargo build --target wasm32-unknown-unknown -p "$crate" --release
-            done
-            cp target/wasm32-unknown-unknown/release/diaryx_sync_extism.wasm "$PLUGIN_DIR/diaryx_sync.wasm"
-            cp target/wasm32-unknown-unknown/release/diaryx_ai_extism.wasm "$PLUGIN_DIR/diaryx_ai.wasm"
-            cp target/wasm32-unknown-unknown/release/diaryx_publish_extism.wasm "$PLUGIN_DIR/diaryx_publish.wasm"
-            cp target/wasm32-unknown-unknown/release/diaryx_math_extism.wasm "$PLUGIN_DIR/diaryx_math.wasm"
-            cp target/wasm32-unknown-unknown/release/diaryx_spoiler_extism.wasm "$PLUGIN_DIR/diaryx_spoiler.wasm"
-            cp target/wasm32-unknown-unknown/release/diaryx_templating_extism.wasm "$PLUGIN_DIR/diaryx_templating.wasm"
-            cp target/wasm32-unknown-unknown/release/diaryx_daily_extism.wasm "$PLUGIN_DIR/diaryx_daily.wasm"
-            cp target/wasm32-unknown-unknown/release/diaryx_storage_s3_extism.wasm "$PLUGIN_DIR/diaryx_storage_s3.wasm"
-            cp target/wasm32-unknown-unknown/release/diaryx_storage_gdrive_extism.wasm "$PLUGIN_DIR/diaryx_storage_gdrive.wasm"
-          '
-
       - name: Upload WASM artifact
         uses: actions/upload-artifact@v4
         with:
           name: wasm-package
           path: apps/web/src/lib/wasm/
 
-      - name: Upload plugin WASM artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: plugin-wasm
-          path: plugin-output/
-
       - name: Upload bindings artifact
         uses: actions/upload-artifact@v4
         with:
           name: ts-bindings
           path: crates/diaryx_core/bindings/
+
+  # Discover internal Extism plugins dynamically from Cargo metadata.
+  discover-plugins:
+    name: Discover Plugins
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: startsWith(github.ref, 'refs/tags/v') || needs.changes.outputs.plugins == 'true'
+    outputs:
+      matrix: ${{ steps.discover.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Discover plugin crates
+        id: discover
+        run: |
+          MATRIX_JSON="$(./scripts/plugins/discover-internal-plugins.sh)"
+          echo "matrix=${MATRIX_JSON}" >> "$GITHUB_OUTPUT"
+          echo "$MATRIX_JSON" | jq .
+
+  # Build plugin WASM artifacts in parallel (one job per plugin crate).
+  build-plugin:
+    name: Build Plugin (${{ matrix.plugin.crate }})
+    runs-on: ubuntu-latest
+    needs: [changes, discover-plugins]
+    if: startsWith(github.ref, 'refs/tags/v') || needs.changes.outputs.plugins == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: ${{ fromJson(needs.discover-plugins.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build plugin package
+        run: |
+          ./scripts/plugins/build-internal-plugin.sh \
+            "${{ matrix.plugin.crate }}" \
+            "${{ matrix.plugin.target }}" \
+            plugin-package
+
+      - name: Upload plugin package
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-package-${{ matrix.plugin.crate }}
+          path: plugin-package/
+
+  # Assemble registry-v2.json from internal build metadata + curated catalogs.
+  assemble-plugin-registry:
+    name: Assemble Plugin Registry
+    runs-on: ubuntu-latest
+    needs: [changes, build-plugin]
+    if: startsWith(github.ref, 'refs/tags/v') || needs.changes.outputs.plugins == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download plugin packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: plugin-package-*
+          path: plugin-packages/
+          merge-multiple: false
+
+      - name: Assemble registry-v2
+        run: |
+          ./scripts/plugins/assemble-registry-v2.sh \
+            plugin-packages \
+            plugin-registry/registry-v2.json \
+            plugins/catalog/internal-plugins.json \
+            plugins/catalog/external-plugins.json \
+            https://cdn.diaryx.org \
+            plugin-registry/upload-plan.json
+          jq . plugin-registry/registry-v2.json
+
+      - name: Upload plugin registry artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-registry-v2
+          path: plugin-registry/
 
   # Web app build and checks
   web:
@@ -218,9 +279,9 @@ jobs:
           name: web-dist
           path: apps/web/dist/
 
-  # Upload WASM to CDN on push (not PRs), only when WASM-related files changed
+  # Upload core WASM bindings to CDN on push (not PRs).
   upload-wasm-cdn:
-    name: Upload WASM to CDN
+    name: Upload Core WASM to CDN
     runs-on: ubuntu-latest
     needs: [build-wasm, changes]
     if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || needs.changes.outputs.wasm == 'true')
@@ -233,12 +294,6 @@ jobs:
         with:
           name: wasm-package
           path: wasm-output/
-
-      - name: Download plugin WASM artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: plugin-wasm
-          path: plugin-output/
 
       - name: Upload WASM to CDN (SHA)
         uses: ./.github/actions/upload-wasm-cdn
@@ -260,106 +315,41 @@ jobs:
           r2-endpoint: ${{ secrets.R2_ENDPOINT }}
           r2-bucket: ${{ secrets.R2_BUCKET }}
 
-      - name: Upload plugins to CDN and generate registry
-        if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
+  # Upload plugin artifacts + registry-v2 to CDN.
+  upload-plugin-registry-cdn:
+    name: Upload Plugin Registry to CDN
+    runs-on: ubuntu-latest
+    needs: [changes, build-plugin, assemble-plugin-registry]
+    if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || needs.changes.outputs.plugins == 'true')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download plugin packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: plugin-package-*
+          path: plugin-packages/
+          merge-multiple: false
+
+      - name: Download plugin registry artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: plugin-registry-v2
+          path: plugin-registry/
+
+      - name: Upload plugin artifacts and registry-v2
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: auto
         run: |
-          ENDPOINT="${{ secrets.R2_ENDPOINT }}"
-          BUCKET="${{ secrets.R2_BUCKET }}"
-          CDN_BASE="https://cdn.diaryx.org/plugins"
-
-          # Upload each plugin WASM to plugins/ prefix
-          for f in plugin-output/*.wasm; do
-            [ -f "$f" ] || continue
-            echo "Uploading $(basename "$f") to plugins/"
-            aws s3 cp "$f" "s3://${BUCKET}/plugins/$(basename "$f")" \
-              --endpoint-url "${ENDPOINT}" \
-              --content-type "application/wasm" \
-              --cache-control "public, max-age=300"
-          done
-
-          # Generate plugins.json registry from the built plugin files
-          cat > plugins.json <<'REGISTRY'
-          {
-            "version": 1,
-            "plugins": [
-              {
-                "id": "diaryx.sync",
-                "name": "Sync",
-                "description": "Real-time workspace synchronization",
-                "version": "0.1.0",
-                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_sync.wasm"
-              },
-              {
-                "id": "diaryx.ai",
-                "name": "AI Assistant",
-                "description": "AI-powered writing assistant",
-                "version": "0.1.0",
-                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_ai.wasm"
-              },
-              {
-                "id": "diaryx.math",
-                "name": "Math",
-                "description": "LaTeX math rendering",
-                "version": "0.1.0",
-                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_math.wasm"
-              },
-              {
-                "id": "publish",
-                "name": "Publish",
-                "description": "Export and publish workspaces",
-                "version": "0.1.0",
-                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_publish.wasm"
-              },
-              {
-                "id": "diaryx.spoiler",
-                "name": "Spoiler",
-                "description": "Discord-style ||spoiler|| hidden text",
-                "version": "0.1.0",
-                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_spoiler.wasm"
-              },
-              {
-                "id": "diaryx.templating",
-                "name": "Templating",
-                "description": "Entry templating functionality",
-                "version": "0.1.0",
-                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_templating.wasm"
-              },
-              {
-                "id": "diaryx.daily",
-                "name": "Daily",
-                "description": "Daily entry management",
-                "version": "0.1.0",
-                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_daily.wasm"
-              },
-              {
-                "id": "diaryx.storage.s3",
-                "name": "S3 Storage",
-                "description": "S3-compatible storage backend",
-                "version": "0.1.0",
-                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_storage_s3.wasm"
-              },
-              {
-                "id": "diaryx.storage.gdrive",
-                "name": "Google Drive Storage",
-                "description": "Google Drive storage backend",
-                "version": "0.1.0",
-                "wasmUrl": "CDN_BASE_PLACEHOLDER/diaryx_storage_gdrive.wasm"
-              }
-            ]
-          }
-          REGISTRY
-          sed -i "s|CDN_BASE_PLACEHOLDER|${CDN_BASE}|g" plugins.json
-
-          aws s3 cp plugins.json "s3://${BUCKET}/plugins/plugins.json" \
-            --endpoint-url "${ENDPOINT}" \
-            --content-type "application/json" \
-            --cache-control "public, max-age=300"
-
-          echo "Plugin registry uploaded: ${CDN_BASE}/plugins.json"
+          ./scripts/plugins/upload-plugin-artifacts.sh \
+            plugin-packages \
+            plugin-registry/upload-plan.json \
+            plugin-registry/registry-v2.json \
+            "${{ secrets.R2_ENDPOINT }}" \
+            "${{ secrets.R2_BUCKET }}"
 
   # Publish WASM bindings to npm (JS glue + types, no .wasm binary)
   publish-wasm-npm:
@@ -578,6 +568,7 @@ jobs:
       tauri: ${{ steps.filter.outputs.tauri }}
       web: ${{ steps.filter.outputs.web }}
       wasm: ${{ steps.filter.outputs.wasm }}
+      plugins: ${{ steps.filter.outputs.plugins }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -602,6 +593,14 @@ jobs:
             wasm:
               - 'crates/diaryx_core/**'
               - 'crates/diaryx_wasm/**'
+            plugins:
+              - 'crates/*_extism/**'
+              - 'crates/diaryx_extism/**'
+              - 'scripts/plugins/**'
+              - 'plugins/catalog/**'
+              - '.github/workflows/ci.yml'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
 
   # Tauri compilation check (cargo check, not full build)
   # Full builds are done in tauri-release.yml on tags

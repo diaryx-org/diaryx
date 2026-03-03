@@ -180,7 +180,7 @@ impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
 /// Shared manifest for the Sync plugin (used by both native and WASM impls).
 fn sync_plugin_manifest() -> PluginManifest {
     PluginManifest {
-        id: PluginId("sync".into()),
+        id: PluginId("diaryx.sync".into()),
         name: "Sync".into(),
         version: env!("CARGO_PKG_VERSION").into(),
         description: "Real-time CRDT sync across devices".into(),
@@ -210,7 +210,7 @@ fn sync_plugin_manifest() -> PluginManifest {
 #[async_trait]
 impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> Plugin for SyncPlugin<FS> {
     fn id(&self) -> PluginId {
-        PluginId("sync".into())
+        PluginId("diaryx.sync".into())
     }
 
     fn manifest(&self) -> PluginManifest {
@@ -231,7 +231,7 @@ impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> Plugin for SyncPlugin<
 #[async_trait(?Send)]
 impl<FS: AsyncFileSystem + Clone + 'static> Plugin for SyncPlugin<FS> {
     fn id(&self) -> PluginId {
-        PluginId("sync".into())
+        PluginId("diaryx.sync".into())
     }
 
     fn manifest(&self) -> PluginManifest {
@@ -1708,7 +1708,7 @@ mod tests {
     #[test]
     fn test_sync_plugin_new() {
         let plugin = make_plugin();
-        assert_eq!(plugin.id(), PluginId("sync".into()));
+        assert_eq!(plugin.id(), PluginId("diaryx.sync".into()));
     }
 
     #[test]

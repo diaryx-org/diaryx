@@ -196,8 +196,7 @@ pub struct CliPluginContext {
 impl CliPluginContext {
     /// Load a plugin context for a specific plugin ID.
     ///
-    /// Accepts both namespaced IDs (e.g. `diaryx.publish`) and short IDs
-    /// (e.g. `publish`) when resolving plugin directory names.
+    /// Requires canonical namespaced IDs (e.g. `diaryx.publish`).
     pub fn load(workspace_root: &Path, plugin_id: &str) -> Result<Self, String> {
         let plugin = load_plugin(workspace_root, plugin_id)?;
         Ok(Self { plugin })
@@ -278,25 +277,14 @@ fn find_plugin_wasm_exact(plugin_id: &str) -> Result<PathBuf, String> {
     Err(format!("Plugin '{}' not found", plugin_id))
 }
 
-/// Find plugin.wasm using common ID variants.
+/// Find plugin.wasm using the canonical plugin ID.
 fn find_plugin_wasm(plugin_id: &str) -> Result<PathBuf, String> {
-    let mut candidates = vec![plugin_id.to_string()];
-    if let Some(stripped) = plugin_id.strip_prefix("diaryx.") {
-        candidates.push(stripped.to_string());
-    } else {
-        candidates.push(format!("diaryx.{plugin_id}"));
-    }
-
-    for candidate in candidates {
-        if let Ok(path) = find_plugin_wasm_exact(&candidate) {
-            return Ok(path);
-        }
-    }
-
-    Err(format!(
-        "Plugin '{}' not found. Install it with: diaryx plugin install {}",
-        plugin_id, plugin_id
-    ))
+    find_plugin_wasm_exact(plugin_id).map_err(|_| {
+        format!(
+            "Plugin '{}' not found. Install it with canonical ID: diaryx plugin install {}",
+            plugin_id, plugin_id
+        )
+    })
 }
 
 /// Discover installed plugin manifests by scanning cached `manifest.json` files.

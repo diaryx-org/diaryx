@@ -734,7 +734,7 @@ export const workerApi = {
   async planExport(rootPath: string, audience: string): Promise<any> {
     return executeAndExtract(
       "PluginCommand",
-      { plugin: "publish", command: "PlanExport", params: { root_path: rootPath, audience } },
+      { plugin: "diaryx.publish", command: "PlanExport", params: { root_path: rootPath, audience } },
       "PluginResult",
     );
   },
@@ -742,7 +742,7 @@ export const workerApi = {
   async exportToMemory(rootPath: string, audience: string): Promise<any[]> {
     return executeAndExtract(
       "PluginCommand",
-      { plugin: "publish", command: "ExportToMemory", params: { root_path: rootPath, audience } },
+      { plugin: "diaryx.publish", command: "ExportToMemory", params: { root_path: rootPath, audience } },
       "PluginResult",
     );
   },
@@ -750,7 +750,7 @@ export const workerApi = {
   async exportToHtml(rootPath: string, audience: string): Promise<any[]> {
     return executeAndExtract(
       "PluginCommand",
-      { plugin: "publish", command: "ExportToHtml", params: { root_path: rootPath, audience } },
+      { plugin: "diaryx.publish", command: "ExportToHtml", params: { root_path: rootPath, audience } },
       "PluginResult",
     );
   },
@@ -761,7 +761,7 @@ export const workerApi = {
   ): Promise<{ source_path: string; relative_path: string }[]> {
     return executeAndExtract(
       "PluginCommand",
-      { plugin: "publish", command: "ExportBinaryAttachments", params: { root_path: rootPath, audience } },
+      { plugin: "diaryx.publish", command: "ExportBinaryAttachments", params: { root_path: rootPath, audience } },
       "PluginResult",
     );
   },

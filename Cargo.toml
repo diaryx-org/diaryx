@@ -61,8 +61,14 @@ pre-release-commit-message = "chore: release v{{version}}"
 publish = true
 push = true
 
+[profile.release]
+# LTO and single codegen-unit improve WASM size (~20-30% smaller).
+# Applied workspace-wide since release builds benefit from both.
+lto = "fat"
+codegen-units = 1
+
 [profile.release.package.diaryx_wasm]
-# Keep wasm artifact size small without using per-crate profile stanzas.
+# Optimize WASM for size rather than speed.
 opt-level = "s"
 
 # Patch getrandom 0.2 to let `custom` feature take priority over `js` on wasm32.

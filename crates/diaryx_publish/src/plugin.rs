@@ -280,7 +280,7 @@ fn is_binary_file(path: &Path) -> bool {
 
 fn publish_plugin_manifest() -> PluginManifest {
     PluginManifest {
-        id: PluginId("publish".into()),
+        id: PluginId("diaryx.publish".into()),
         name: "Publish".into(),
         version: env!("CARGO_PKG_VERSION").into(),
         description: "HTML export and website publishing".into(),
@@ -318,7 +318,7 @@ fn publish_plugin_manifest() -> PluginManifest {
 #[async_trait]
 impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> Plugin for PublishPlugin<FS> {
     fn id(&self) -> PluginId {
-        PluginId("publish".into())
+        PluginId("diaryx.publish".into())
     }
 
     fn manifest(&self) -> PluginManifest {
@@ -338,7 +338,7 @@ impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> Plugin for PublishPlug
 #[async_trait(?Send)]
 impl<FS: AsyncFileSystem + Clone + 'static> Plugin for PublishPlugin<FS> {
     fn id(&self) -> PluginId {
-        PluginId("publish".into())
+        PluginId("diaryx.publish".into())
     }
 
     fn manifest(&self) -> PluginManifest {

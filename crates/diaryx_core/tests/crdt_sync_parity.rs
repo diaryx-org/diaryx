@@ -65,7 +65,7 @@ fn execute(node: &TestNode, command: Command) -> Response {
 
 fn plugin_cmd(command: &str, params: serde_json::Value) -> Command {
     Command::PluginCommand {
-        plugin: "sync".into(),
+        plugin: "diaryx.sync".into(),
         command: command.into(),
         params,
     }

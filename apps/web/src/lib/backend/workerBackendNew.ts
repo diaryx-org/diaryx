@@ -18,20 +18,19 @@ import type {
 } from "./interface";
 import { BackendEventEmitter } from "./eventEmitter";
 import type { WorkerApi } from "./wasmWorkerNew";
-import { getStorageType, type StorageType } from "./storageType";
+import {
+  getStorageType,
+  getWorkspaceFileSystemHandle,
+  storeWorkspaceFileSystemHandle,
+  getStoredFileSystemHandle,
+  storeFileSystemHandle,
+  type StorageType,
+} from "./storageType";
+import { FsaGestureRequiredError } from "./fsaErrors";
+
+export { FsaGestureRequiredError } from "./fsaErrors";
 
 const WORKER_INIT_TIMEOUT_MS = 15000;
-
-/**
- * Thrown when FSA initialization fails because it needs a user gesture
- * (e.g. to call showDirectoryPicker or requestPermission after browser restart).
- */
-export class FsaGestureRequiredError extends Error {
-  constructor(message = "Local folder access requires a click to reconnect.") {
-    super(message);
-    this.name = "FsaGestureRequiredError";
-  }
-}
 
 function buildWorkerStartupErrorMessage(details: string): string {
   return (
@@ -162,13 +161,6 @@ export class WorkerBackendNew implements Backend {
     );
 
     if (storageType === "filesystem-access") {
-      const {
-        getWorkspaceFileSystemHandle,
-        storeWorkspaceFileSystemHandle,
-        getStoredFileSystemHandle,
-        storeFileSystemHandle,
-      } = await import("./storageType");
-
       let handle: FileSystemDirectoryHandle | null = null;
 
       if (workspaceId) {
@@ -282,12 +274,6 @@ export class WorkerBackendNew implements Backend {
     try {
       if (storageType === "filesystem-access") {
         // For FSA, we need to get or request the directory handle (per-workspace or legacy global)
-        const {
-          getWorkspaceFileSystemHandle,
-          storeWorkspaceFileSystemHandle,
-          getStoredFileSystemHandle,
-          storeFileSystemHandle,
-        } = await import("./storageType");
 
         let handle: FileSystemDirectoryHandle | null = null;
 

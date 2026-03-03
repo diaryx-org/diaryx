@@ -22,6 +22,17 @@ import { getStorageType, type StorageType } from "./storageType";
 
 const WORKER_INIT_TIMEOUT_MS = 15000;
 
+/**
+ * Thrown when FSA initialization fails because it needs a user gesture
+ * (e.g. to call showDirectoryPicker or requestPermission after browser restart).
+ */
+export class FsaGestureRequiredError extends Error {
+  constructor(message = "Local folder access requires a click to reconnect.") {
+    super(message);
+    this.name = "FsaGestureRequiredError";
+  }
+}
+
 function buildWorkerStartupErrorMessage(details: string): string {
   return (
     `Failed to start browser worker backend: ${details}. ` +
@@ -172,6 +183,7 @@ export class WorkerBackendNew implements Backend {
       }
 
       if (!handle) {
+        // No stored handle — try picker (requires user gesture)
         try {
           handle = await (window as any).showDirectoryPicker({
             mode: "readwrite",
@@ -182,13 +194,10 @@ export class WorkerBackendNew implements Backend {
             await storeFileSystemHandle(handle!);
           }
         } catch (e) {
-          console.error(
-            "[WorkerBackendNew] Failed to get directory handle:",
-            e,
-          );
-          throw new Error(
-            "Failed to open local folder. Please try again from Settings.",
-          );
+          if (e instanceof DOMException && e.name === "SecurityError") {
+            throw new FsaGestureRequiredError();
+          }
+          throw new Error("Failed to open local folder. Please try again from Settings.");
         }
       } else {
         const permission = await (handle as any).queryPermission({
@@ -200,9 +209,13 @@ export class WorkerBackendNew implements Backend {
               mode: "readwrite",
             });
             if (newPermission !== "granted") {
-              throw new Error("Permission denied");
+              throw new FsaGestureRequiredError();
             }
           } catch (e) {
+            if (e instanceof FsaGestureRequiredError) throw e;
+            if (e instanceof DOMException && e.name === "SecurityError") {
+              throw new FsaGestureRequiredError();
+            }
             console.error(
               "[WorkerBackendNew] Permission denied for directory:",
               e,
@@ -297,8 +310,7 @@ export class WorkerBackendNew implements Backend {
         }
 
         if (!handle) {
-          // No stored handle - prompt user to select a folder
-          // Note: showDirectoryPicker requires user gesture, so this will fail if not triggered by user action
+          // No stored handle — try picker (requires user gesture)
           try {
             handle = await (window as any).showDirectoryPicker({
               mode: "readwrite",
@@ -309,13 +321,10 @@ export class WorkerBackendNew implements Backend {
               await storeFileSystemHandle(handle!);
             }
           } catch (e) {
-            console.error(
-              "[WorkerBackendNew] Failed to get directory handle:",
-              e,
-            );
-            throw new Error(
-              "Failed to open local folder. Please try again from Settings.",
-            );
+            if (e instanceof DOMException && e.name === "SecurityError") {
+              throw new FsaGestureRequiredError();
+            }
+            throw new Error("Failed to open local folder. Please try again from Settings.");
           }
         } else {
           // Verify we still have permission
@@ -329,9 +338,13 @@ export class WorkerBackendNew implements Backend {
                 mode: "readwrite",
               });
               if (newPermission !== "granted") {
-                throw new Error("Permission denied");
+                throw new FsaGestureRequiredError();
               }
             } catch (e) {
+              if (e instanceof FsaGestureRequiredError) throw e;
+              if (e instanceof DOMException && e.name === "SecurityError") {
+                throw new FsaGestureRequiredError();
+              }
               console.error(
                 "[WorkerBackendNew] Permission denied for directory:",
                 e,

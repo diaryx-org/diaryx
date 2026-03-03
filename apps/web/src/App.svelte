@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from "svelte";
-  import { getBackend, isTauri } from "./lib/backend";
+  import { getBackend, isTauri, resetBackend } from "./lib/backend";
+  import { FsaGestureRequiredError } from "./lib/backend/workerBackendNew";
   import { createApi, type Api } from "./lib/backend/api";
   import type { JsonValue } from "./lib/backend/generated/serde_json/JsonValue";
   import { isIOS } from "$lib/hooks/useMobile.svelte";
@@ -213,6 +214,11 @@
 
   // Welcome screen (shown when no workspaces exist)
   let showWelcomeScreen = $state(false);
+
+  // FSA reconnect state (shown when local folder needs user gesture to re-grant access)
+  let fsaNeedsReconnect = $state(false);
+  let fsaReconnectWsId = $state<string | undefined>(undefined);
+  let fsaReconnectWsName = $state<string | undefined>(undefined);
 
   // Settings dialog initial tab (for opening to a specific tab)
   let settingsInitialTab = $state<string | undefined>(undefined);
@@ -521,6 +527,9 @@
         wsId = localWs.id;
         wsName = localWs.name;
       }
+      // Save for FSA reconnect in case getBackend throws FsaGestureRequiredError
+      fsaReconnectWsId = wsId;
+      fsaReconnectWsName = wsName;
       const backendInstance = await getBackend(wsId, wsName, wsId ? getWorkspaceStorageType(wsId) : undefined);
       workspaceStore.setBackend(backendInstance);
 
@@ -641,6 +650,11 @@
       document.addEventListener("touchend", handleTouchEnd);
 
     } catch (e) {
+      if (e instanceof FsaGestureRequiredError) {
+        console.warn("[App] FSA needs user gesture to reconnect:", e);
+        fsaNeedsReconnect = true;
+        return;
+      }
       console.error("[App] Initialization error:", e);
       uiStore.setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -656,6 +670,38 @@
     // Cleanup import:complete listener
     window.removeEventListener("import:complete", handleImportComplete);
   });
+
+  // FSA reconnect: user clicks button (providing the gesture), then we retry init
+  async function handleFsaReconnect() {
+    fsaNeedsReconnect = false;
+    entryStore.setLoading(true);
+    try {
+      resetBackend();
+      const storageType = fsaReconnectWsId ? getWorkspaceStorageType(fsaReconnectWsId) : undefined;
+      const backendInstance = await getBackend(fsaReconnectWsId, fsaReconnectWsName, storageType);
+      workspaceStore.setBackend(backendInstance);
+
+      const apiInstance = createApi(backendInstance);
+      await getPluginStore().init(apiInstance);
+      cleanupEventSubscription = initEventSubscription(backendInstance);
+      rustApi = null;
+
+      const sharedWorkspaceId = getCurrentWorkspace()?.id ?? null;
+      workspaceStore.setWorkspaceId(sharedWorkspaceId);
+
+      await refreshTree();
+      if (tree && !currentEntry) {
+        workspaceStore.expandNode(tree.path);
+        await openEntry(tree.path);
+      }
+      await runValidation();
+    } catch (e) {
+      console.error("[App] FSA reconnect failed:", e);
+      uiStore.setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      entryStore.setLoading(false);
+    }
+  }
 
   // Workspace switching handlers
   function handleWorkspaceSwitchStart() {
@@ -1985,7 +2031,18 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
 <!-- Tooltip Provider for keyboard shortcut hints -->
 <Tooltip.Provider>
 
-{#if showWelcomeScreen}
+{#if fsaNeedsReconnect}
+  <div class="flex h-full items-center justify-center bg-background">
+    <div class="flex flex-col items-center gap-4 text-center max-w-sm px-4">
+      <div class="text-4xl">&#128194;</div>
+      <h2 class="text-lg font-semibold">Reconnect local folder</h2>
+      <p class="text-sm text-muted-foreground">
+        Your workspace uses a local folder that needs permission to access. Click below to reconnect.
+      </p>
+      <Button onclick={handleFsaReconnect}>Reconnect folder</Button>
+    </div>
+  </div>
+{:else if showWelcomeScreen}
   <WelcomeScreen
     onGetStarted={async () => {
       entryStore.setLoading(true);

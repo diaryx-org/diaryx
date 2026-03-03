@@ -119,10 +119,12 @@ pub fn manifest(_input: String) -> FnResult<String> {
         capabilities: vec!["custom_commands".into()],
         ui: vec![serde_json::json!({
             "slot": "SettingsTab",
+            "id": "gdrive-storage-settings",
             "label": "Google Drive",
             "icon": "cloud",
             "component": {
-                "Builtin": { "component_id": "storage.gdrive.settings" }
+                "type": "Iframe",
+                "component_id": "storage.gdrive.settings",
             }
         })],
         commands: vec![
@@ -139,8 +141,10 @@ pub fn manifest(_input: String) -> FnResult<String> {
             "WriteBinary".into(),
             "GetModifiedTime".into(),
             "RefreshToken".into(),
+            "ExchangeToken".into(),
             "GetConfig".into(),
             "SetConfig".into(),
+            "get_component_html".into(),
         ],
         cli: vec![],
     };
@@ -180,31 +184,7 @@ pub fn on_event(_input: String) -> FnResult<String> {
 pub fn get_config(_input: String) -> FnResult<String> {
     let config = CONFIG.with(|c| c.borrow().clone());
     match config {
-        Some(c) => {
-            // Redact tokens for display
-            let mut display = serde_json::to_value(&c)?;
-            if let Some(obj) = display.as_object_mut() {
-                if obj.contains_key("access_token") {
-                    obj.insert(
-                        "access_token".to_string(),
-                        serde_json::Value::String("***".to_string()),
-                    );
-                }
-                if obj.contains_key("refresh_token") {
-                    obj.insert(
-                        "refresh_token".to_string(),
-                        serde_json::Value::String("***".to_string()),
-                    );
-                }
-                if obj.contains_key("client_secret") {
-                    obj.insert(
-                        "client_secret".to_string(),
-                        serde_json::Value::String("***".to_string()),
-                    );
-                }
-            }
-            Ok(serde_json::to_string(&display)?)
-        }
+        Some(c) => Ok(serde_json::to_string(&serde_json::to_value(&c)?)?),
         None => Ok("{}".into()),
     }
 }
@@ -415,6 +395,46 @@ fn dispatch_command(command: &str, params: &JsonValue) -> CommandResponse {
             }
             Err(e) => CommandResponse::err(format!("Invalid GDrive config: {e}")),
         },
+
+        "ExchangeToken" => {
+            let code = match params.get("code").and_then(|v| v.as_str()) {
+                Some(c) => c,
+                None => return CommandResponse::err("Missing 'code' parameter"),
+            };
+            let redirect_uri = match params.get("redirect_uri").and_then(|v| v.as_str()) {
+                Some(r) => r,
+                None => return CommandResponse::err("Missing 'redirect_uri' parameter"),
+            };
+            match with_config(|c| gdrive_ops::exchange_token(c, code, redirect_uri)) {
+                Ok(Ok((access_token, refresh_token))) => {
+                    let _ = with_config_mut(|c| {
+                        c.access_token = access_token.clone();
+                        c.refresh_token = refresh_token.clone();
+                        let data = serde_json::to_vec(c).unwrap_or_default();
+                        let _ = host_bridge::storage_set("gdrive_config", &data);
+                    });
+                    CommandResponse::ok(serde_json::json!({
+                        "access_token": access_token,
+                        "refresh_token": refresh_token,
+                    }))
+                }
+                Ok(Err(e)) => CommandResponse::err(e),
+                Err(e) => CommandResponse::err(e),
+            }
+        }
+
+        "get_component_html" => {
+            let component_id = params
+                .get("component_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            match component_id {
+                "storage.gdrive.settings" => CommandResponse::ok(serde_json::json!({
+                    "html": include_str!("ui/settings.html"),
+                })),
+                _ => CommandResponse::err(format!("Unknown component: {component_id}")),
+            }
+        }
 
         _ => CommandResponse::err(format!("Unknown command: {command}")),
     }

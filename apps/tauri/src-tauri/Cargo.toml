@@ -39,6 +39,7 @@ tauri-plugin-iap = { path = "../../../crates/tauri-plugin-iap", optional = true 
 # Native iOS keyboard toolbar for TipTap editor
 tauri-plugin-editor-toolbar = { path = "../../../crates/tauri-plugin-editor-toolbar" }
 reqwest = { version = "0.12", features = ["json", "multipart"] }
+url = "2"
 dotenvy = "0.15"
 
 # Optional: Extism third-party plugin runtime

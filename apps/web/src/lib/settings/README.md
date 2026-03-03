@@ -13,9 +13,7 @@ attachments:
   - "[FormatImportSettings.svelte](/apps/web/src/lib/settings/FormatImportSettings.svelte)"
   - "[ImportSettings.svelte](/apps/web/src/lib/settings/ImportSettings.svelte)"
   - "[LinkSettings.svelte](/apps/web/src/lib/settings/LinkSettings.svelte)"
-  - "[GoogleDriveStorageSettings.svelte](/apps/web/src/lib/settings/GoogleDriveStorageSettings.svelte)"
   - "[StorageSettings.svelte](/apps/web/src/lib/settings/StorageSettings.svelte)"
-  - "[TemplateSettings.svelte](/apps/web/src/lib/settings/TemplateSettings.svelte)"
   - "[WorkspaceManagement.svelte](/apps/web/src/lib/settings/WorkspaceManagement.svelte)"
   - "[WorkspaceSettings.svelte](/apps/web/src/lib/settings/WorkspaceSettings.svelte)"
   - "[AppearanceSettings.svelte](/apps/web/src/lib/settings/AppearanceSettings.svelte)"
@@ -38,7 +36,6 @@ Settings panel components for `SettingsDialog.svelte`.
 | `DisplaySettings.svelte` / `AppearanceSettings.svelte` | Display, typography, and theme preferences. |
 | `WorkspaceSettings.svelte` / `WorkspaceManagement.svelte` | Workspace config and provider link/unlink management. |
 | `StorageSettings.svelte` | Local storage backend settings. |
-| `GoogleDriveStorageSettings.svelte` | Google Drive storage plugin-specific settings (requires OAuth popup). |
 | `ImportSettings.svelte` / `FormatImportSettings.svelte` | ZIP import and format import flows. |
 | `AccountSettings.svelte` / `BillingSettings.svelte` | Authentication/account and billing surfaces. |
 | `PluginsSettings.svelte` | Plugin enable/disable + install/remove controls, including install-time permission review and default-permission persistence to root frontmatter. |
@@ -50,8 +47,7 @@ Settings panel components for `SettingsDialog.svelte`.
 
 `SettingsDialog.svelte` renders plugin-contributed settings tabs dynamically:
 
-- `ComponentRef::Iframe` contributions render via `PluginIframe`
+- `ComponentRef::Iframe` contributions render via `PluginIframe` (used by sync, GDrive, templating plugins)
 - Declarative field contributions render via `PluginSettingsTab`
-- Built-in storage plugin settings keep explicit host mappings
 
-The old host sync settings component (`SyncSettings.svelte`) was removed.
+All plugin settings (sync, GDrive storage, templating) now use the iframe approach.

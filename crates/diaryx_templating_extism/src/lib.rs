@@ -335,6 +335,18 @@ fn dispatch_command(command: &str, params: JsonValue) -> Result<JsonValue, Strin
             let rendered = template.render(&ctx);
             Ok(JsonValue::String(rendered))
         }
+        "get_component_html" => {
+            let component_id = params
+                .get("component_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            match component_id {
+                "templating.settings" => Ok(serde_json::json!({
+                    "html": include_str!("ui/settings.html"),
+                })),
+                _ => Err(format!("Unknown component: {component_id}")),
+            }
+        }
         _ => Err(format!("Unknown command: {command}")),
     }
 }
@@ -376,6 +388,7 @@ fn all_commands() -> Vec<String> {
         "RenderBody".into(),
         "HasTemplates".into(),
         "RenderCreationTemplate".into(),
+        "get_component_html".into(),
     ]
 }
 
@@ -400,7 +413,7 @@ pub fn manifest(_input: String) -> FnResult<String> {
                 "icon": "file-code",
                 "fields": [],
                 "component": {
-                    "type": "Builtin",
+                    "type": "Iframe",
                     "component_id": "templating.settings",
                 },
             }),

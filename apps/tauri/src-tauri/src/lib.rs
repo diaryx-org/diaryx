@@ -131,6 +131,8 @@ pub fn run() {
             commands::uninstall_user_plugin,
             // Extism Plugin Render (IPC for Tauri/iOS when browser Extism unavailable)
             commands::call_plugin_render,
+            // OAuth Webview (native popup for OAuth sign-in)
+            commands::oauth_webview,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

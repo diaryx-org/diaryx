@@ -2543,3 +2543,103 @@ pub async fn proxy_fetch(
         body_base64,
     })
 }
+
+// ============================================================================
+// OAuth Webview (Native OAuth popup for Tauri)
+// ============================================================================
+
+/// Percent-decode a URL query parameter value.
+fn percent_decode(s: &str) -> String {
+    let mut result = Vec::new();
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(byte) =
+                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
+            {
+                result.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        if bytes[i] == b'+' {
+            result.push(b' ');
+        } else {
+            result.push(bytes[i]);
+        }
+        i += 1;
+    }
+    String::from_utf8(result).unwrap_or_else(|_| s.to_string())
+}
+
+/// Open a webview window for OAuth sign-in and intercept the redirect to
+/// extract the authorization code.
+///
+/// On desktop, this opens a secondary Tauri window that navigates to the
+/// OAuth URL. When the OAuth provider redirects back to `redirect_prefix`,
+/// the code is extracted from the query string and returned.
+#[tauri::command]
+pub async fn oauth_webview<R: Runtime>(
+    app: AppHandle<R>,
+    url: String,
+    redirect_prefix: String,
+) -> Result<serde_json::Value, SerializableError> {
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+    use tokio::sync::oneshot;
+
+    let (tx, rx) = oneshot::channel::<String>();
+    let tx = std::sync::Mutex::new(Some(tx));
+    let prefix = redirect_prefix.clone();
+
+    let window = WebviewWindowBuilder::new(
+        &app,
+        "oauth",
+        WebviewUrl::External(
+            url.parse()
+                .map_err(|e: url::ParseError| SerializableError {
+                    kind: "OAuthError".to_string(),
+                    message: format!("Invalid OAuth URL: {e}"),
+                    path: None,
+                })?,
+        ),
+    )
+    .title("Sign in")
+    .inner_size(500.0, 600.0)
+    .on_navigation(move |nav_url| {
+        let url_str = nav_url.as_str();
+        if url_str.starts_with(&prefix) {
+            if let Some(query) = nav_url.query() {
+                for pair in query.split('&') {
+                    if let Some(val) = pair.strip_prefix("code=") {
+                        let code = percent_decode(val);
+                        if let Ok(mut guard) = tx.lock() {
+                            if let Some(sender) = guard.take() {
+                                let _ = sender.send(code);
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            return false; // Block navigation — we have the code
+        }
+        true
+    })
+    .build()
+    .map_err(|e| SerializableError {
+        kind: "OAuthError".to_string(),
+        message: format!("Failed to create OAuth window: {e}"),
+        path: None,
+    })?;
+
+    // Wait for the code or window close
+    let code = rx.await.map_err(|_| SerializableError {
+        kind: "OAuthError".to_string(),
+        message: "OAuth window closed without completing sign-in".to_string(),
+        path: None,
+    })?;
+
+    let _ = window.close();
+    Ok(serde_json::json!({ "code": code }))
+}

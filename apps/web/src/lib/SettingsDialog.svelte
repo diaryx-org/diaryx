@@ -26,14 +26,12 @@
   import FormatImportSettings from "./settings/FormatImportSettings.svelte";
   import ClearDataSettings from "./settings/ClearDataSettings.svelte";
   import DebugInfo from "./settings/DebugInfo.svelte";
-  import TemplateSettings from "./settings/TemplateSettings.svelte";
   import WorkspaceManagement from "./settings/WorkspaceManagement.svelte";
   import AppearanceSettings from "./settings/AppearanceSettings.svelte";
   import PluginsSettings from "./settings/PluginsSettings.svelte";
   import PluginSettingsTab from "./settings/PluginSettingsTab.svelte";
   import PluginIframe from "./components/PluginIframe.svelte";
   import { getPluginStore } from "../models/stores/pluginStore.svelte";
-  import GoogleDriveStorageSettings from "./settings/GoogleDriveStorageSettings.svelte";
   import { getPlugin as getBrowserPlugin } from "$lib/plugins/browserPluginManager.svelte";
   import type { Api } from "$lib/backend/api";
   import type { JsonValue } from "$lib/backend/generated/serde_json/JsonValue";
@@ -48,6 +46,8 @@
     onAddWorkspace?: () => void;
     /** API wrapper for plugin config operations */
     api?: Api | null;
+    /** Handler for host actions from plugin iframes (e.g. OAuth) */
+    onHostAction?: (action: { type: string; payload?: unknown }) => Promise<unknown> | unknown;
   }
 
   let {
@@ -57,6 +57,7 @@
     initialTab,
     onAddWorkspace,
     api = null,
+    onHostAction,
   }: Props = $props();
 
   const mobileState = getMobileState();
@@ -217,12 +218,9 @@
               <PluginIframe
                 pluginId={tab.pluginId as unknown as string}
                 componentId={tab.contribution.component.component_id}
+                {onHostAction}
               />
             </div>
-          {:else if tab.contribution.component?.type === "Builtin" && tab.contribution.component.component_id === "storage.gdrive.settings"}
-            <GoogleDriveStorageSettings />
-          {:else if tab.contribution.component?.type === "Builtin" && tab.contribution.component.component_id === "templating.settings"}
-            <TemplateSettings workspaceRootIndex={workspacePath} />
           {:else if tab.contribution.fields.length > 0}
             {#await loadPluginConfig(tab.pluginId) then}
               <PluginSettingsTab

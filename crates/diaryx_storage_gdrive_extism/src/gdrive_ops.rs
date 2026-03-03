@@ -69,6 +69,52 @@ pub fn refresh_token(config: &GDriveConfig) -> Result<String, String> {
         .ok_or_else(|| "No access_token in response".to_string())
 }
 
+/// Exchange an authorization code for access and refresh tokens.
+/// Returns (access_token, refresh_token).
+pub fn exchange_token(
+    config: &GDriveConfig,
+    code: &str,
+    redirect_uri: &str,
+) -> Result<(String, String), String> {
+    let body = format!(
+        "client_id={}&client_secret={}&code={}&redirect_uri={}&grant_type=authorization_code",
+        uri_encode(&config.client_id),
+        uri_encode(&config.client_secret),
+        uri_encode(code),
+        uri_encode(redirect_uri),
+    );
+    let mut headers = HashMap::new();
+    headers.insert(
+        "Content-Type".to_string(),
+        "application/x-www-form-urlencoded".to_string(),
+    );
+    let resp = host_bridge::http_request(
+        "https://oauth2.googleapis.com/token",
+        "POST",
+        &headers,
+        Some(&body),
+    )?;
+    if resp.status != 200 {
+        return Err(format!(
+            "Token exchange failed ({}): {}",
+            resp.status, resp.body
+        ));
+    }
+    let parsed: serde_json::Value = serde_json::from_str(&resp.body)
+        .map_err(|e| format!("Failed to parse token response: {e}"))?;
+    let access_token = parsed
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "No access_token in response".to_string())?;
+    let refresh_token = parsed
+        .get("refresh_token")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "No refresh_token in response".to_string())?;
+    Ok((access_token, refresh_token))
+}
+
 /// Resolve a path like "dir/subdir/file.md" to a Google Drive file ID.
 /// Returns (file_id, is_folder).
 fn resolve_path(config: &GDriveConfig, path: &str) -> Result<Option<(String, bool)>, String> {

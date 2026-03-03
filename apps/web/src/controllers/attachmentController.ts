@@ -512,10 +512,3 @@ export async function handleMoveAttachment(
  * @param api - API instance
  * Share/session orchestration is sync-plugin-owned.
  */
-export async function populateCrdtBeforeHost(
-  _api: Api,
-  _treePath: string | null,
-  _audience: string | null = null
-): Promise<void> {
-  // Share/session orchestration is now sync-plugin-owned.
-}

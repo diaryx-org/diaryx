@@ -3,7 +3,6 @@
   import { getBackend, isTauri } from "./lib/backend";
   import { createApi, type Api } from "./lib/backend/api";
   import type { JsonValue } from "./lib/backend/generated/serde_json/JsonValue";
-  // Note: YDoc and HocuspocusProvider types are now handled by collaborationStore
   import LeftSidebar from "./lib/LeftSidebar.svelte";
   import RightSidebar from "./lib/RightSidebar.svelte";
   import NewEntryModal from "./lib/NewEntryModal.svelte";
@@ -33,7 +32,6 @@
     workspaceStore,
     permissionStore,
     getThemeStore,
-    shareSessionStore
   } from "./models/stores";
   import { getPluginStore } from "./models/stores/pluginStore.svelte";
   import type { PluginConfig } from "./models/stores/permissionStore.svelte";
@@ -60,48 +58,7 @@
   } from "./models/services";
   import { getMimeType, isHeicFile, convertHeicToJpeg } from "./models/services/attachmentService";
 
-  // Sync/CRDT orchestration is plugin-owned. The host keeps filesystem refresh logic.
-  function setBackendApi(_api: Api): void {}
-  function setBackend(_backend: unknown): void {}
-  function disconnectWorkspace(): void {}
-  function setWorkspaceId(_workspaceId: string | null): void {}
-  async function waitForInitialSync(_timeoutMs: number): Promise<boolean> { return false; }
-  async function getTreeFromCrdt(): Promise<any | null> { return null; }
-  async function joinShareSession(_joinCode: string): Promise<void> {}
-  function setShareServerUrl(_url: string | null): void {}
-  function onSessionSync(_callback: () => void | Promise<void>): () => void { return () => {}; }
-  function onBodyChange(
-    _callback: (path: string, body: string) => void | Promise<void>,
-  ): () => void {
-    return () => {};
-  }
-  function onFileChange(
-    _callback: (path: string | null, metadata: any | null) => void | Promise<void>,
-  ): () => void {
-    return () => {};
-  }
-  function onFileRenamed(
-    _callback: (oldPath: string, newPath: string) => void | Promise<void>,
-  ): () => void {
-    return () => {};
-  }
-  function onSyncProgress(
-    _callback: (completed: number, total: number) => void | Promise<void>,
-  ): () => void {
-    return () => {};
-  }
-  function onSyncStatus(
-    _callback: (status: any, error?: string | null) => void | Promise<void>,
-  ): () => void {
-    return () => {};
-  }
-  async function getCanonicalPathForSync(path: string): Promise<string> { return path; }
-  async function ensureBodySync(_path: string): Promise<void> {}
-  function closeBodySync(_path: string): void {}
-  function updateCrdtFileMetadata(
-    _path: string,
-    _frontmatter: Record<string, unknown>,
-  ): void {}
+  // Sync/CRDT orchestration is entirely plugin-owned (diaryx_sync plugin).
   function initEventSubscription(backendInstance: any): () => void {
     if (!backendInstance?.onFileSystemEvent) {
       return () => {};
@@ -168,6 +125,12 @@
     handleAttachmentInsert as attachmentInsertHandler,
     handleMoveAttachment as moveAttachmentHandler,
     handleLinkClick as linkClickHandler,
+    handleValidateWorkspace,
+    handleFindInFile,
+    handleWordCount,
+    handleCopyAsMarkdown,
+    handleViewMarkdown,
+    handleReorderFootnotes,
   } from "./controllers";
 
   // Dynamically import Editor to avoid SSR issues
@@ -187,8 +150,8 @@
   let currentEntry = $derived(entryStore.currentEntry);
   let isDirty = $derived(entryStore.isDirty);
   let isSaving = $derived(entryStore.isSaving);
-  // Editor is read-only when guest is in a read-only session
-  let editorReadonly = $derived(shareSessionStore.isGuest && shareSessionStore.readOnly);
+  // Editor read-only state (may be set by plugins such as sync guest mode)
+  let editorReadonly = $state(false);
   let isLoading = $derived(entryStore.isLoading);
   let titleError = $derived(entryStore.titleError);
   let displayContent = $derived(entryStore.displayContent);
@@ -258,13 +221,9 @@
   // Reserved for plugin-provided history panels that may need host context.
   let rustApi: any | null = $state(null);
 
-  // Track whether initial guest sync has completed (to avoid re-opening root on every update)
-  let guestInitialSyncDone = $state(false);
 
   // Collaboration state - proxied from collaborationStore
   let collaborationEnabled = $derived(collaborationStore.collaborationEnabled);
-
-  // Note: Per-document YDocProxy removed - sync now happens at workspace level
 
   // ========================================================================
   // Non-store state (component-specific, not shared)
@@ -280,36 +239,6 @@
 
   // Event subscription cleanup (for filesystem events from Rust backend)
   let cleanupEventSubscription: (() => void) | null = null;
-
-  // CRDT bridge callback cleanup functions
-  let cleanupSessionSync: (() => void) | null = null;
-  let cleanupBodyChange: (() => void) | null = null;
-  let cleanupFileChange: (() => void) | null = null;
-  let cleanupFileRenamed: (() => void) | null = null;
-  let cleanupSyncProgress: (() => void) | null = null;
-  let cleanupSyncStatus: (() => void) | null = null;
-  let pendingCurrentRenameHint:
-    | { oldCanonical: string; oldPartOf: string | null; expiresAt: number }
-    | null = null;
-  let suppressRemoteEditorOnChange = $state(false);
-  let remoteEditorSuppressToken = 0;
-
-  function beginRemoteEditorApplySuppression(): void {
-    suppressRemoteEditorOnChange = true;
-    const token = ++remoteEditorSuppressToken;
-    setTimeout(() => {
-      if (remoteEditorSuppressToken === token) {
-        suppressRemoteEditorOnChange = false;
-      }
-    }, 150);
-  }
-
-  // Set VITE_DISABLE_WORKSPACE_CRDT=true to disable workspace CRDT for debugging
-  // This keeps per-file collaboration working but disables the workspace-level sync
-  const workspaceCrdtDisabled: boolean =
-    typeof import.meta !== "undefined" &&
-    (import.meta as any).env?.VITE_DISABLE_WORKSPACE_CRDT === "true";
-
 
   // Helper to handle mixed frontmatter types (Map from WASM vs Object from JSON/Tauri)
   function normalizeFrontmatter(frontmatter: any): Record<string, any> {
@@ -378,120 +307,6 @@
     return path;
   }
 
-  function extractMarkdownLinkPath(value: string): string | null {
-    // Mirror the key behavior from diaryx_core/link_parser.rs::parse_link:
-    // parse [Title](path) and [Title](<path>) forms.
-    if (!value.startsWith("[")) return null;
-
-    const closeBracket = value.indexOf("]");
-    if (closeBracket <= 0) return null;
-    if (value.slice(closeBracket, closeBracket + 2) !== "](") return null;
-
-    const rest = value.slice(closeBracket + 2);
-    if (!rest) return null;
-
-    // Angle-bracket URL form: [Title](<path with spaces>)
-    if (rest.startsWith("<")) {
-      const closeAngle = rest.indexOf(">");
-      if (closeAngle <= 1) return null;
-      if (rest.slice(closeAngle + 1, closeAngle + 2) !== ")") return null;
-      return rest.slice(1, closeAngle).trim() || null;
-    }
-
-    // Standard URL form with support for balanced parentheses in the path.
-    let depth = 0;
-    for (let i = 0; i < rest.length; i++) {
-      const ch = rest[i];
-      if (ch === "(") {
-        depth++;
-      } else if (ch === ")") {
-        if (depth === 0) {
-          return rest.slice(0, i).trim() || null;
-        }
-        depth--;
-      }
-    }
-
-    return null;
-  }
-
-  function normalizeRelativePath(path: string): string {
-    const segments = path.split("/");
-    const normalized: string[] = [];
-
-    for (const segment of segments) {
-      if (!segment || segment === ".") continue;
-      if (segment === "..") {
-        if (normalized.length > 0) normalized.pop();
-        continue;
-      }
-      normalized.push(segment);
-    }
-
-    return normalized.join("/");
-  }
-
-  function normalizePartOfValue(
-    value: unknown,
-    currentCanonicalPath: string | null = null,
-  ): string | null {
-    if (typeof value !== "string") return null;
-
-    const trimmed = value.trim();
-    if (!trimmed) return null;
-
-    let partOf = extractMarkdownLinkPath(trimmed) ?? trimmed;
-
-    // Strip optional angle-bracket wrapped paths for plain-path input.
-    if (partOf.startsWith("<") && partOf.endsWith(">")) {
-      partOf = partOf.slice(1, -1).trim();
-    }
-
-    // Workspace-root links become canonical by removing leading slash.
-    if (partOf.startsWith("/")) {
-      return normalizeRelativePath(partOf.slice(1)) || null;
-    }
-
-    const isRelative =
-      partOf.startsWith("./") ||
-      partOf.startsWith("../") ||
-      partOf === "." ||
-      partOf === "..";
-
-    if (!isRelative) {
-      // Ambiguous/legacy paths are treated as canonical by default.
-      return normalizeRelativePath(partOf) || null;
-    }
-
-    if (!currentCanonicalPath) {
-      return normalizeRelativePath(partOf) || null;
-    }
-
-    const currentSegments = currentCanonicalPath.split("/");
-    currentSegments.pop(); // remove filename
-    const baseDir = currentSegments.join("/");
-    const combined = baseDir ? `${baseDir}/${partOf}` : partOf;
-    return normalizeRelativePath(combined) || null;
-  }
-
-  function getPartOf(
-    frontmatter: Record<string, unknown> | undefined,
-    currentCanonicalPath: string | null = null,
-  ): string | null {
-    const partOf = normalizeFrontmatter(frontmatter)?.part_of;
-    return normalizePartOfValue(partOf, currentCanonicalPath);
-  }
-
-  function isTransientEntryReadError(error: unknown): boolean {
-    const message = error instanceof Error ? error.message : String(error);
-    return (
-      message.includes("NotFoundError") ||
-      message.includes("Failed to read file") ||
-      message.includes("A requested file or directory could not be found") ||
-      message.includes("The object can not be found here")
-    );
-  }
-
   // Attachment state
   let attachmentError: string | null = $state(null);
   let attachmentFileInput: HTMLInputElement | null = $state(null);
@@ -516,13 +331,6 @@
         String(showUnlinkedFiles),
       );
       localStorage.setItem("diaryx-show-hidden-files", String(showHiddenFiles));
-    }
-  });
-
-  // Reset guest initial sync flag when leaving guest mode
-  $effect(() => {
-    if (!shareSessionStore.isGuest) {
-      guestInitialSyncDone = false;
     }
   });
 
@@ -557,11 +365,7 @@
       uiStore.setRightSidebarCollapsed(false);
     }
 
-    // Load saved collaboration settings
-    // Note: We only load the URL into the store, but do NOT call setWorkspaceServer()
-    // or setCollaborationServer() here. Those are called by initializeWorkspaceCrdt()
-    // only when collaborationEnabled is true. This prevents the sync bridge from
-    // trying to connect when there's no active sync session.
+    // Load saved collaboration settings (server URL is read by the sync plugin)
     if (typeof window !== "undefined") {
       const savedServerUrl = localStorage.getItem("diaryx_sync_server_url")
         ?? localStorage.getItem("diaryx-sync-server");
@@ -576,7 +380,6 @@
 
     // Check for magic link token in URL (auto-verify without wizard)
     // This must happen AFTER initAuth() so the auth service is initialized
-    // and BEFORE setupWorkspaceCrdt() so the CRDT initializes with auth
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
       const token = params.get("token");
@@ -593,7 +396,6 @@
           setServerUrl("https://sync.diaryx.org");
         }
         // Verify automatically and wait for completion before continuing
-        // This ensures workspace CRDT is initialized with auth credentials
         await handleMagicLinkToken(token);
       }
     }
@@ -628,24 +430,6 @@
             });
           }
         }
-      }
-    }
-
-    // Check for local edit mode params (from `diaryx edit` CLI command)
-    // These override the sync server URL and auto-join a guest session
-    let localEditParams: { syncUrl: string; joinCode: string } | null = null;
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search);
-      const syncUrl = params.get("sync_url");
-      const joinCode = params.get("join_code");
-      if (syncUrl && joinCode) {
-        localEditParams = { syncUrl, joinCode };
-        // Clear query params from URL to prevent re-joining on reload
-        const url = new URL(window.location.href);
-        url.searchParams.delete("sync_url");
-        url.searchParams.delete("join_code");
-        window.history.replaceState({}, "", url.toString());
-        console.log('[App] Local edit mode detected, sync_url:', syncUrl, 'join_code:', joinCode);
       }
     }
 
@@ -713,10 +497,7 @@
       const backendInstance = await getBackend(wsId, wsName, wsId ? getWorkspaceStorageType(wsId) : undefined);
       workspaceStore.setBackend(backendInstance);
 
-      // Set the backend API for CRDT bridge (used for writing synced files to disk)
       const apiInstance = createApi(backendInstance);
-      setBackendApi(apiInstance);
-      setBackend(backendInstance);
 
       // Initialize plugin store (fetch manifests for UI extension points)
       getPluginStore().init(apiInstance);
@@ -726,43 +507,9 @@
 
       rustApi = null;
 
-      // Initialize workspace CRDT (unless disabled or in local edit mode)
-      if (localEditParams) {
-        // Local edit mode: override the share server URL and auto-join
-        console.log('[App] Joining local edit session...');
-        setShareServerUrl(localEditParams.syncUrl);
-        try {
-          workspaceStore.saveTreeState();
-          await joinShareSession(localEditParams.joinCode);
-          console.log('[App] Successfully joined local edit session');
-        } catch (e) {
-          console.error('[App] Failed to join local edit session:', e);
-          workspaceStore.clearSavedTreeState();
-          setShareServerUrl(null);
-          // Fall back to normal workspace CRDT setup
-          await setupWorkspaceCrdt();
-          const syncCompleted = await waitForInitialSync(10000);
-          if (syncCompleted) {
-            console.log('[App] Fallback: initial sync complete');
-          }
-        }
-      } else if (!workspaceCrdtDisabled) {
-        await setupWorkspaceCrdt();
-
-        // Wait for initial sync to complete before building tree
-        // This ensures synced files are available for display
-        console.log('[App] Waiting for initial sync to complete...');
-        const syncCompleted = await waitForInitialSync(10000);
-        if (syncCompleted) {
-          console.log('[App] Initial sync complete, proceeding with tree refresh');
-        } else {
-          console.warn('[App] Initial sync timed out or not applicable, proceeding anyway');
-        }
-      } else {
-        console.log(
-          "[App] Workspace CRDT disabled via VITE_DISABLE_WORKSPACE_CRDT",
-        );
-      }
+      // Set workspace ID for plugin system (sync plugin reads this)
+      const sharedWorkspaceId = getCurrentWorkspace()?.id ?? null;
+      workspaceStore.setWorkspaceId(sharedWorkspaceId);
 
       await refreshTree();
 
@@ -788,223 +535,6 @@
         getPluginStore().preloadInsertCommandIcons();
       });
 
-      // Note: With multiplexed body sync, we no longer need to proactively
-      // sync all files. Files are subscribed on-demand when opened, using a
-      // single WebSocket connection for all body syncs.
-
-      // Register callback to refresh tree when session data is received
-      cleanupSessionSync = onSessionSync(async () => {
-        if (shareSessionStore.isGuest) {
-          // Guest mode: build tree from CRDT (guests don't have files on disk)
-          console.log('[App] Session sync received (guest mode), building tree from CRDT');
-          const crdtTree = await getTreeFromCrdt();
-          if (crdtTree) {
-            console.log('[App] Setting tree from CRDT:', crdtTree);
-            workspaceStore.setTree(crdtTree);
-
-            // Only open root entry on the first sync, not on every update.
-            // Set the flag synchronously BEFORE awaiting to prevent concurrent
-            // callback invocations from also entering this branch.
-            if (!guestInitialSyncDone) {
-              guestInitialSyncDone = true;
-              console.log('[App] Guest session - initial sync, opening root entry:', crdtTree.path);
-              workspaceStore.expandNode(crdtTree.path);
-
-              // With multiplexed body sync, the root entry's body will be
-              // synced on-demand when opened via ensureBodySync
-              await openEntry(crdtTree.path);
-            } else {
-              console.log('[App] Guest session - incremental sync, tree updated');
-            }
-          } else {
-            console.log('[App] No CRDT tree available, falling back to filesystem refresh');
-            await refreshTree();
-          }
-        } else {
-          // Device-to-device sync: files were written to disk, refresh tree from filesystem
-          console.log('[App] Session sync received (device sync), refreshing tree from filesystem');
-          await refreshTree();
-
-          // If no entry is open yet, open the root
-          if (tree && !currentEntry) {
-            console.log('[App] Opening root entry after device sync:', tree.path);
-            workspaceStore.expandNode(tree.path);
-            await openEntry(tree.path);
-          }
-        }
-      });
-
-      // Register callback to reload editor when remote body changes arrive
-      cleanupBodyChange = onBodyChange(async (path, body) => {
-        // path is canonical (e.g., "file.md"), but currentEntry.path may be storage path
-        // (e.g., "guest/abc123/file.md" for guests). Normalize for comparison.
-        const currentCanonical = currentEntry ? await getCanonicalPathForSync(currentEntry.path) : null;
-        console.log('[App] Body change received for:', path, 'current entry canonical:', currentCanonical);
-        // Only update if this is the currently open file
-        if (currentEntry && path === currentCanonical) {
-          console.log('[App] Updating display content with remote body, length:', body.length);
-          beginRemoteEditorApplySuppression();
-          cancelAutoSave();
-          // Set raw content — NodeViews resolve attachments lazily
-          entryStore.setDisplayContent(body);
-        }
-      });
-
-      // Register callback to reload entry when remote metadata changes arrive
-      // This ensures the RightSidebar shows updated properties from sync
-      cleanupFileChange = onFileChange(async (path, metadata) => {
-        // path is canonical, but currentEntry.path may be storage path. Normalize for comparison.
-        const currentCanonical = currentEntry ? await getCanonicalPathForSync(currentEntry.path) : null;
-        const now = Date.now();
-        if (pendingCurrentRenameHint && pendingCurrentRenameHint.expiresAt <= now) {
-          pendingCurrentRenameHint = null;
-        }
-
-        // Fallback for remote renames that arrive as delete+create instead of FileRenamed.
-        if (currentEntry && path && !metadata && path === currentCanonical) {
-          pendingCurrentRenameHint = {
-            oldCanonical: path,
-            oldPartOf: getPartOf(currentEntry.frontmatter, currentCanonical),
-            expiresAt: now + 5000,
-          };
-        }
-
-        // Remap current entry when a likely rename target appears.
-        if (currentEntry && api && path && metadata && path !== currentCanonical) {
-          const incomingPartOf = normalizePartOfValue(metadata.part_of, path);
-          const currentPartOf = getPartOf(currentEntry.frontmatter, currentCanonical);
-          const partOfMatches =
-            incomingPartOf !== null &&
-            currentPartOf !== null &&
-            incomingPartOf === currentPartOf;
-
-          const matchedDeleteCreateRename =
-            !!pendingCurrentRenameHint &&
-            pendingCurrentRenameHint.oldCanonical === currentCanonical &&
-            pendingCurrentRenameHint.oldPartOf === incomingPartOf;
-
-          let currentMissingOnDisk = false;
-          if (!matchedDeleteCreateRename && partOfMatches) {
-            try {
-              currentMissingOnDisk = !(await api.fileExists(currentEntry.path));
-            } catch {
-              // Ignore transient backend errors for fallback detection.
-            }
-          }
-
-          if (
-            matchedDeleteCreateRename ||
-            (currentMissingOnDisk && partOfMatches)
-          ) {
-            console.log('[App] Current entry remapped via metadata fallback:', currentCanonical, '->', path);
-            pendingCurrentRenameHint = null;
-
-            entryStore.setCurrentEntry({
-              ...currentEntry,
-              path,
-            });
-
-            if (collaborationEnabled) {
-              collaborationStore.setCollaborationPath(toCollaborationPath(path));
-            }
-
-            if (!isDirty) {
-              await openEntryController(api, path, tree, collaborationEnabled);
-            }
-            return;
-          }
-        }
-
-        // Only update if this is the currently open file and we have valid metadata
-        if (currentEntry && api && metadata && path === currentCanonical) {
-          console.log('[App] Metadata change received for current entry:', path);
-          try {
-            // Reload with bounded retry: safe-write swaps can create brief NotFound windows.
-            let entry = null;
-            let lastError: unknown = null;
-            for (let attempt = 0; attempt < 8; attempt++) {
-              try {
-                entry = await api.getEntry(currentEntry.path);
-                break;
-              } catch (e) {
-                lastError = e;
-                if (!isTransientEntryReadError(e)) {
-                  throw e;
-                }
-                if (attempt < 7) {
-                  await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
-                }
-              }
-            }
-            if (!entry) throw lastError ?? new Error('Failed to reload entry after metadata change');
-
-            entry.frontmatter = normalizeFrontmatter(entry.frontmatter);
-            // Update the current entry - this will trigger RightSidebar to re-render
-            entryStore.setCurrentEntry(entry);
-          } catch (e) {
-            // Sync-safe writes can briefly make files unreadable; avoid noisy warnings
-            // for transient NotFound windows and let later file events refresh again.
-            if (isTransientEntryReadError(e)) {
-              console.log('[App] Metadata reload deferred due to transient file state');
-            } else {
-              console.warn('[App] Failed to reload entry after metadata change:', e);
-            }
-          }
-        }
-
-        // Refresh tree when:
-        // 1. contents changed (local file added to parent)
-        // 2. path is null (remote sync completed - we don't know what changed)
-        // Use debounced version to prevent rapid refreshes during sync
-        if ((metadata && metadata.contents) || path === null) {
-          console.log('[App] File change detected - scheduling debounced tree refresh');
-          debouncedRefreshTree();
-        }
-      });
-
-      // Register callback to remap the currently open entry when a file is renamed.
-      // This keeps metadata/body updates targeting the renamed canonical path.
-      cleanupFileRenamed = onFileRenamed(async (oldPath, newPath) => {
-        if (!api || !currentEntry) return;
-
-        const currentCanonical = await getCanonicalPathForSync(currentEntry.path);
-        if (currentCanonical !== oldPath) return;
-
-        console.log('[App] Current entry renamed:', oldPath, '->', newPath);
-
-        // Remap path immediately so upcoming metadata/body events match this entry.
-        entryStore.setCurrentEntry({
-          ...currentEntry,
-          path: newPath,
-        });
-
-        // Keep collaboration tracking aligned even when we avoid a full reopen
-        // (e.g. while preserving local unsaved edits).
-        if (collaborationEnabled) {
-          collaborationStore.setCollaborationPath(toCollaborationPath(newPath));
-        }
-        pendingCurrentRenameHint = null;
-
-        // If there are no unsaved local edits, reopen the entry at its new path to
-        // refresh frontmatter and keep body sync subscriptions aligned.
-        if (!isDirty) {
-          await openEntryController(api, newPath, tree, collaborationEnabled);
-        }
-      });
-
-      // Register sync progress callback to update collaborationStore
-      cleanupSyncProgress = onSyncProgress((completed, total) => {
-        collaborationStore.setSyncProgress({ completed, total });
-      });
-
-      // Register sync status callback to update collaborationStore
-      cleanupSyncStatus = onSyncStatus((status, error) => {
-        if (error) {
-          collaborationStore.setSyncError(error);
-        } else {
-          collaborationStore.setSyncStatus(status);
-        }
-      });
 
       // Expand root and open it by default
       if (tree && !currentEntry) {
@@ -1086,15 +616,6 @@
     revokeBlobUrls();
     // Cleanup filesystem event subscription
     cleanupEventSubscription?.();
-    // Cleanup CRDT bridge callbacks (prevents accumulation on HMR)
-    cleanupSessionSync?.();
-    cleanupBodyChange?.();
-    cleanupFileChange?.();
-    cleanupFileRenamed?.();
-    cleanupSyncProgress?.();
-    cleanupSyncStatus?.();
-    // Disconnect workspace CRDT (keeps local state for quick reconnect)
-    disconnectWorkspace();
     // Cleanup import:complete listener
     window.removeEventListener("import:complete", handleImportComplete);
   });
@@ -1127,14 +648,6 @@
     }
     await runValidation();
     entryStore.setLoading(false);
-  }
-
-  // Initialize the workspace CRDT
-  async function setupWorkspaceCrdt() {
-    const sharedWorkspaceId = getCurrentWorkspace()?.id ?? null;
-    setWorkspaceId(sharedWorkspaceId);
-    workspaceStore.setWorkspaceId(sharedWorkspaceId);
-    workspaceStore.setWorkspaceCrdtInitialized(false);
   }
 
   // Open an entry - thin wrapper that handles auto-save and delegates to controller
@@ -1215,14 +728,6 @@
   // Handle content changes - triggers debounced auto-save
   // Sync propagation is handled by plugin-owned filesystem event processing.
   function handleContentChange(markdown: string) {
-    if (suppressRemoteEditorOnChange) {
-      suppressRemoteEditorOnChange = false;
-      cancelAutoSave();
-      entryStore.setDisplayContent(markdown);
-      entryStore.markClean();
-      return;
-    }
-
     if (markdown === displayContent) {
       return;
     }
@@ -1365,7 +870,6 @@
         });
       }
 
-      // Refresh the tree after sync completes (handled by onSessionSync callback)
     } catch (error) {
       console.error("[App] Magic link verification failed:", error);
       collaborationStore.setSyncStatus('error');
@@ -1491,8 +995,6 @@
     workspaceStore.setBackend(backendInstance);
 
     const apiInstance = createApi(backendInstance);
-    setBackendApi(apiInstance);
-    setBackend(backendInstance);
     rustApi = null;
 
     cleanupEventSubscription = initEventSubscription(backendInstance);
@@ -1620,12 +1122,6 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
           }
         }
       }
-    }
-
-    // Handle body sync bridge migration if path changed
-    if (newPath && newPath !== path) {
-      closeBodySync(path);
-      await ensureBodySync(newPath);
     }
 
     return effectivePath;
@@ -1883,6 +1379,81 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
   }
 
   // ========================================================================
+  // Command Palette Handlers - Parameterless wrappers for current entry
+  // ========================================================================
+
+  async function cmdDuplicateEntry() {
+    if (!currentEntry) { toast.error("No entry selected"); return; }
+    const newPath = await handleDuplicateEntry(currentEntry.path);
+    await openEntry(newPath);
+    toast.success("Entry duplicated");
+  }
+
+  async function cmdRenameEntry() {
+    if (!currentEntry) { toast.error("No entry selected"); return; }
+    const currentTitle = (typeof currentEntry.frontmatter?.title === "string" ? currentEntry.frontmatter.title : null)
+      || currentEntry.path.split("/").pop()?.replace(".md", "") || "";
+    const newTitle = window.prompt("Enter new title:", currentTitle);
+    if (!newTitle || newTitle === currentTitle) return;
+    await handleRenameEntry(currentEntry.path, newTitle);
+  }
+
+  function cmdDeleteEntry() {
+    if (!currentEntry) { toast.error("No entry selected"); return; }
+    handleDeleteEntry(currentEntry.path);
+  }
+
+  async function cmdMoveEntry() {
+    if (!currentEntry || !tree) { toast.error("No entry selected"); return; }
+    const allParents: string[] = [];
+    function collectParents(node: typeof tree) {
+      if (!node) return;
+      if (node.children.length > 0 || node.path.endsWith("index.md") || node.path.endsWith("README.md")) {
+        allParents.push(node.path);
+      }
+      node.children.forEach(collectParents);
+    }
+    collectParents(tree);
+    const options = allParents.filter(p => p !== currentEntry!.path).map(p => p.split("/").pop()?.replace(".md", "") || p).join(", ");
+    const dest = window.prompt(`Move "${currentEntry.path.split("/").pop()?.replace(".md", "")}" to which parent?\n\nAvailable: ${options}`);
+    if (!dest) return;
+    const match = allParents.find(p => p.split("/").pop()?.replace(".md", "").toLowerCase() === dest.toLowerCase());
+    if (!match) { toast.error("Parent not found"); return; }
+    await handleMoveEntry(currentEntry.path, match);
+  }
+
+  async function cmdCreateChildEntry() {
+    if (!currentEntry) { toast.error("No entry selected"); return; }
+    await handleCreateChildEntry(currentEntry.path);
+  }
+
+  async function cmdValidateWorkspace() {
+    if (!api) return;
+    await handleValidateWorkspace(api, tree, backend);
+  }
+
+  function cmdWordCount() {
+    handleWordCount(editorRef, currentEntry);
+  }
+
+  async function cmdCopyAsMarkdown() {
+    await handleCopyAsMarkdown(editorRef, currentEntry);
+  }
+
+  function cmdViewMarkdown() {
+    const result = handleViewMarkdown(editorRef, currentEntry);
+    if (result) {
+      markdownPreviewBody = result.body;
+      markdownPreviewFrontmatter = result.frontmatter;
+      markdownPreviewOpen = true;
+    }
+  }
+
+  function cmdReorderFootnotes() {
+    handleReorderFootnotes(editorRef);
+  }
+
+  // ========================================================================
   // Attachment Handlers - Thin wrappers that delegate to controllers
   // ========================================================================
 
@@ -2017,7 +1588,6 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
               frontmatter: { ...normalizedFrontmatter, [key]: value },
             };
             entryStore.setCurrentEntry(updatedEntry);
-            updateCrdtFileMetadata(path, updatedEntry.frontmatter);
           }
 
           // Sync editor H1 to match the new title (backend already wrote to disk,
@@ -2075,7 +1645,6 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
           frontmatter: { ...normalizedFrontmatter, [key]: value },
         };
         entryStore.setCurrentEntry(updatedEntry);
-        updateCrdtFileMetadata(path, updatedEntry.frontmatter);
 
         if (key === 'contents' || key === 'part_of') {
           await refreshTree();
@@ -2089,15 +1658,11 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
   async function handlePropertyRemove(key: string) {
     if (!api || !currentEntry) return;
     try {
-      const path = currentEntry.path;
       await api.removeFrontmatterProperty(currentEntry.path, key);
       // Update local state
       const newFrontmatter = normalizeFrontmatter(currentEntry.frontmatter);
       delete newFrontmatter[key];
       entryStore.setCurrentEntry({ ...currentEntry, frontmatter: newFrontmatter });
-
-      // Update CRDT
-      updateCrdtFileMetadata(path, newFrontmatter);
     } catch (e) {
       uiStore.setError(e instanceof Error ? e.message : String(e));
     }
@@ -2106,7 +1671,6 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
   async function handlePropertyAdd(key: string, value: unknown) {
     if (!api || !currentEntry) return;
     try {
-      const path = currentEntry.path;
       await api.setFrontmatterProperty(currentEntry.path, key, value as JsonValue, tree?.path);
       const normalizedFrontmatter = normalizeFrontmatter(currentEntry.frontmatter);
       // Update local state
@@ -2115,9 +1679,6 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
         frontmatter: { ...normalizedFrontmatter, [key]: value },
       };
       entryStore.setCurrentEntry(updatedEntry);
-
-      // Update CRDT
-      updateCrdtFileMetadata(path, updatedEntry.frontmatter);
     } catch (e) {
       uiStore.setError(e instanceof Error ? e.message : String(e));
     }
@@ -2158,9 +1719,23 @@ Diaryx can sync your workspace across devices. Open **Settings** (gear icon) to 
 <CommandPalette
   bind:open={uiStore.showCommandPalette}
   {api}
+  hasEntry={!!currentEntry}
+  hasEditor={!!editorRef}
   onImportFromClipboard={handleImportFromClipboard}
   onImportMarkdownFile={handleImportMarkdownFile}
   onOpenBackupImport={handleQuickBackupExport}
+  onDuplicateEntry={cmdDuplicateEntry}
+  onRenameEntry={cmdRenameEntry}
+  onDeleteEntry={cmdDeleteEntry}
+  onMoveEntry={cmdMoveEntry}
+  onCreateChildEntry={cmdCreateChildEntry}
+  onRefreshTree={refreshTree}
+  onValidateWorkspace={cmdValidateWorkspace}
+  onFindInFile={handleFindInFile}
+  onWordCount={cmdWordCount}
+  onCopyAsMarkdown={cmdCopyAsMarkdown}
+  onViewMarkdown={cmdViewMarkdown}
+  onReorderFootnotes={cmdReorderFootnotes}
 />
 
 <SettingsDialog

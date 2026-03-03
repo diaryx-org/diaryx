@@ -5,13 +5,11 @@
  * - Workspace validation with feedback
  * - Tree refresh
  * - Entry operations (duplicate, rename, delete, move)
- * - Share session management
  * - Clipboard operations
  * - Word count and find
  * - View markdown source
  */
 
-import { tick } from 'svelte';
 import type { TreeNode, Api, EntryData } from '../lib/backend';
 import { workspaceStore } from '../models/stores';
 import { reverseBlobUrlsToAttachmentPaths } from '../models/services';
@@ -200,30 +198,6 @@ export async function handleCreateChildUnderCurrent(
   }
   await createChildEntryFn(currentEntry.path);
   toast.success('Child entry created');
-}
-
-/**
- * Start a share session.
- * Opens left sidebar and triggers session start.
- */
-export async function handleStartShareSession(
-  setLeftSidebarCollapsed: (collapsed: boolean) => void,
-  setRequestedTab: (tab: string | null) => void,
-  setTriggerStartSession: (trigger: boolean) => void
-): Promise<void> {
-  // Open left sidebar, navigate to share tab, and trigger session start
-  setLeftSidebarCollapsed(false);
-  setRequestedTab('share');
-  // Wait for sidebar to render before triggering session start
-  await tick();
-  setTriggerStartSession(true);
-}
-
-/**
- * Join a share session (prompt for code).
- */
-export async function handleJoinShareSession(): Promise<void> {
-  toast.info('Open the Share tab to join a session.');
 }
 
 /**

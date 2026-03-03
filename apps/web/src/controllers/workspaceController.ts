@@ -206,23 +206,3 @@ export async function validatePath(
     console.error('[WorkspaceController] Validation error:', e);
   }
 }
-
-/**
- * Setup workspace CRDT for collaboration.
- *
- * Gets workspace ID from the auth store (server is source of truth).
- * When authenticated, the server generates and stores the workspace UUID.
- * For local-only mode (not signed in), we use null.
- */
-export async function setupWorkspaceCrdt(
-  _api: Api,
-  _backend: Backend,
-  _collaborationServerUrl: string | null,
-  _collaborationEnabled: boolean,
-  serverWorkspaceId: string | null,
-  _onConnectionChange: (connected: boolean) => void
-): Promise<{ workspaceId: string | null; initialized: boolean }> {
-  workspaceStore.setWorkspaceId(serverWorkspaceId);
-  workspaceStore.setWorkspaceCrdtInitialized(false);
-  return { workspaceId: serverWorkspaceId, initialized: false };
-}

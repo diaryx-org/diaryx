@@ -28,7 +28,7 @@ Svelte stores for reactive application state.
 | `collaborationStore.svelte.ts` | Sync/session status state (status/progress/error) used by generic plugin-driven UI surfaces. |
 | `entryStore.svelte.ts` | Current entry + dirty/saving state. |
 | `sitePublishingStore.svelte.ts` | Publishing state for site config, publish actions, and token lifecycle. |
-| `shareSessionStore.svelte.ts` | Share session state for host flows that still observe session mode/read-only state. |
+| `shareSessionStore.svelte.ts` | Share session state — reserved for the sync plugin to set at runtime. |
 | `pluginStore.svelte.ts` | Plugin manifest aggregation and derived UI contribution selectors (settings/sidebar/toolbar/status/commands/providers). |
 | `permissionStore.svelte.ts` | Runtime plugin permission checks, pending request queue, session cache, and root-frontmatter persistence hooks. |
 | `uiStore.svelte.ts` | Dialog/sidebar state and UI toggles. |

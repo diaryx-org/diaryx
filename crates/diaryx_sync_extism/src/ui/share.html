@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Share Session</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #111827;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --card: #f9fafb;
+    --primary: #0f766e;
+    --primary-fg: #ffffff;
+    --danger: #b91c1c;
+  }
+  .dark {
+    --bg: #0f172a;
+    --fg: #e5e7eb;
+    --muted: #94a3b8;
+    --border: #1f2937;
+    --card: #111827;
+    --primary: #14b8a6;
+    --primary-fg: #062b28;
+    --danger: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    padding: 12px;
+  }
+  .card {
+    border: 1px solid var(--border);
+    background: var(--card);
+    border-radius: 10px;
+    padding: 12px;
+    margin-bottom: 10px;
+  }
+  h1 { margin: 0 0 8px; font-size: 14px; }
+  p { margin: 0 0 10px; color: var(--muted); }
+  label {
+    display: block;
+    font-size: 12px;
+    margin: 8px 0 4px;
+    color: var(--muted);
+  }
+  input {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--fg);
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+  .row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+  button {
+    border: 0;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    background: var(--primary);
+    color: var(--primary-fg);
+  }
+  .ghost {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--fg);
+  }
+  .danger { background: var(--danger); color: #fff; }
+  .status { font-size: 12px; color: var(--muted); min-height: 16px; margin-top: 8px; }
+  .error { color: var(--danger); }
+  .code {
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 13px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    border: 1px dashed var(--border);
+    display: inline-block;
+    margin-top: 6px;
+  }
+  .toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Host Session</h1>
+    <p>Create a share session for a workspace.</p>
+    <label for="workspace">Workspace ID</label>
+    <input id="workspace" placeholder="workspace id" />
+    <label for="audience">Audience (optional)</label>
+    <input id="audience" placeholder="public" />
+    <div class="toggle">
+      <input id="hostReadonly" type="checkbox" />
+      <label for="hostReadonly" style="margin:0">Read-only</label>
+    </div>
+    <div class="row">
+      <button id="create">Create Session</button>
+      <button id="end" class="danger">End Session</button>
+    </div>
+    <div id="hostCode" class="code" style="display:none"></div>
+  </div>
+
+  <div class="card">
+    <h1>Join Session</h1>
+    <p>Join with a share code.</p>
+    <label for="joinCode">Join code</label>
+    <input id="joinCode" placeholder="ABCD1234-EFGH5678" />
+    <div class="row">
+      <button id="join">Join</button>
+      <button id="toggleReadOnly" class="ghost">Toggle Read-only</button>
+    </div>
+  </div>
+
+  <div id="status" class="status"></div>
+
+<script>
+  const workspaceEl = document.getElementById('workspace');
+  const audienceEl = document.getElementById('audience');
+  const hostReadonlyEl = document.getElementById('hostReadonly');
+  const joinCodeEl = document.getElementById('joinCode');
+  const hostCodeEl = document.getElementById('hostCode');
+  const statusEl = document.getElementById('status');
+
+  let requestId = 0;
+  const pending = new Map();
+  let currentReadOnly = false;
+
+  function sendPluginCommand(command, params) {
+    return new Promise((resolve) => {
+      const id = ++requestId;
+      pending.set(id, resolve);
+      parent.postMessage({ type: 'plugin-command', command, params, requestId: id }, '*');
+      setTimeout(() => {
+        if (pending.has(id)) {
+          pending.delete(id);
+          resolve({ success: false, error: 'Request timed out' });
+        }
+      }, 15000);
+    });
+  }
+
+  function setStatus(text, isError) {
+    statusEl.textContent = text || '';
+    statusEl.className = 'status' + (isError ? ' error' : '');
+  }
+
+  async function getConfig() {
+    const cfg = await sendPluginCommand('get_config', {});
+    if (cfg?.success && cfg?.data && typeof cfg.data === 'object') {
+      workspaceEl.value = cfg.data.workspace_id || workspaceEl.value;
+      currentReadOnly = !!cfg.data.share_read_only;
+      hostReadonlyEl.checked = currentReadOnly;
+      if (cfg.data.active_join_code) {
+        hostCodeEl.textContent = cfg.data.active_join_code;
+        hostCodeEl.style.display = 'inline-block';
+      }
+    }
+  }
+
+  async function createSession() {
+    setStatus('Creating session...', false);
+    const result = await sendPluginCommand('CreateShareSession', {
+      workspace_id: workspaceEl.value.trim(),
+      read_only: !!hostReadonlyEl.checked,
+      audience: audienceEl.value.trim() || null,
+    });
+    if (!result?.success || !result?.data) {
+      setStatus(result?.error || 'Failed to create session', true);
+      return;
+    }
+    currentReadOnly = !!result.data.read_only;
+    hostReadonlyEl.checked = currentReadOnly;
+    hostCodeEl.textContent = result.data.join_code || '';
+    hostCodeEl.style.display = result.data.join_code ? 'inline-block' : 'none';
+    if (result.data.workspace_id) {
+      workspaceEl.value = result.data.workspace_id;
+    }
+    setStatus('Session created.', false);
+  }
+
+  async function joinSession() {
+    const code = joinCodeEl.value.trim();
+    if (!code) {
+      setStatus('Enter a join code.', true);
+      return;
+    }
+    setStatus('Joining session...', false);
+    const result = await sendPluginCommand('JoinShareSession', { join_code: code });
+    if (!result?.success || !result?.data) {
+      setStatus(result?.error || 'Failed to join session', true);
+      return;
+    }
+    currentReadOnly = !!result.data.read_only;
+    hostReadonlyEl.checked = currentReadOnly;
+    if (result.data.workspace_id) {
+      workspaceEl.value = result.data.workspace_id;
+    }
+    hostCodeEl.textContent = code.toUpperCase();
+    hostCodeEl.style.display = 'inline-block';
+    setStatus(`Joined ${code.toUpperCase()}.`, false);
+  }
+
+  async function endSession() {
+    setStatus('Ending session...', false);
+    const result = await sendPluginCommand('EndShareSession', {});
+    if (!result?.success) {
+      setStatus(result?.error || 'Failed to end session', true);
+      return;
+    }
+    hostCodeEl.textContent = '';
+    hostCodeEl.style.display = 'none';
+    setStatus('Session ended.', false);
+  }
+
+  async function toggleReadOnly() {
+    const next = !currentReadOnly;
+    setStatus('Updating access...', false);
+    const result = await sendPluginCommand('SetShareReadOnly', { read_only: next });
+    if (!result?.success || !result?.data) {
+      setStatus(result?.error || 'Failed to update read-only mode', true);
+      return;
+    }
+    currentReadOnly = !!result.data.read_only;
+    hostReadonlyEl.checked = currentReadOnly;
+    setStatus(currentReadOnly ? 'Session is now read-only.' : 'Session is editable.', false);
+  }
+
+  document.getElementById('create').addEventListener('click', createSession);
+  document.getElementById('join').addEventListener('click', joinSession);
+  document.getElementById('end').addEventListener('click', endSession);
+  document.getElementById('toggleReadOnly').addEventListener('click', toggleReadOnly);
+
+  window.addEventListener('message', (event) => {
+    const data = event.data;
+    if (!data || typeof data !== 'object') return;
+
+    if (data.type === 'plugin-response' && data.requestId) {
+      const resolve = pending.get(data.requestId);
+      if (resolve) {
+        pending.delete(data.requestId);
+        resolve(data.result);
+      }
+    }
+
+    if (data.type === 'init' || data.type === 'theme-update') {
+      if (data.theme === 'dark') {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+      if (data.type === 'init') {
+        getConfig();
+      }
+    }
+  });
+</script>
+</body>
+</html>

@@ -9,7 +9,6 @@ workspaces
 .direnv
 .zig-cache
 *.zip
-*.html
 **/*.build
 **/.tauri
 apps/tauri/src-tauri/gen

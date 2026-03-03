@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sync Settings</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #111827;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --card: #f9fafb;
+    --primary: #0f766e;
+    --primary-fg: #ffffff;
+    --danger: #b91c1c;
+  }
+  .dark {
+    --bg: #0f172a;
+    --fg: #e5e7eb;
+    --muted: #94a3b8;
+    --border: #1f2937;
+    --card: #111827;
+    --primary: #14b8a6;
+    --primary-fg: #062b28;
+    --danger: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    padding: 12px;
+  }
+  .card {
+    border: 1px solid var(--border);
+    background: var(--card);
+    border-radius: 10px;
+    padding: 12px;
+  }
+  h1 {
+    margin: 0 0 8px;
+    font-size: 14px;
+  }
+  p { margin: 0 0 10px; color: var(--muted); }
+  label {
+    display: block;
+    font-size: 12px;
+    margin: 10px 0 4px;
+    color: var(--muted);
+  }
+  input {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--fg);
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 10px;
+  }
+  .status {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 8px;
+    min-height: 16px;
+  }
+  button {
+    border: 0;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    background: var(--primary);
+    color: var(--primary-fg);
+  }
+  .ghost {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--fg);
+  }
+  .error { color: var(--danger); }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Sync Settings</h1>
+    <p>Configure server access for sync and share features.</p>
+
+    <label for="server">Server URL</label>
+    <input id="server" placeholder="https://sync.diaryx.org" />
+
+    <label for="token">Auth Token</label>
+    <input id="token" placeholder="Bearer token" />
+
+    <div class="row">
+      <button id="save">Save</button>
+      <button id="refresh" class="ghost">Check Status</button>
+    </div>
+    <div id="status" class="status"></div>
+  </div>
+
+<script>
+  const serverEl = document.getElementById('server');
+  const tokenEl = document.getElementById('token');
+  const statusEl = document.getElementById('status');
+
+  let requestId = 0;
+  const pending = new Map();
+
+  function sendPluginCommand(command, params) {
+    return new Promise((resolve) => {
+      const id = ++requestId;
+      pending.set(id, resolve);
+      parent.postMessage({ type: 'plugin-command', command, params, requestId: id }, '*');
+      setTimeout(() => {
+        if (pending.has(id)) {
+          pending.delete(id);
+          resolve({ success: false, error: 'Request timed out' });
+        }
+      }, 15000);
+    });
+  }
+
+  function setStatus(text, isError) {
+    statusEl.textContent = text || '';
+    statusEl.className = 'status' + (isError ? ' error' : '');
+  }
+
+  async function loadConfig() {
+    const cfg = await sendPluginCommand('get_config', {});
+    if (!cfg || !cfg.success || !cfg.data || typeof cfg.data !== 'object') {
+      return;
+    }
+    serverEl.value = cfg.data.server_url || '';
+    tokenEl.value = cfg.data.auth_token || '';
+  }
+
+  async function checkStatus() {
+    setStatus('Checking sync status...', false);
+    const result = await sendPluginCommand('GetSyncStatus', {
+      server_url: serverEl.value.trim() || null,
+      auth_token: tokenEl.value.trim() || null,
+    });
+    if (!result || !result.success || !result.data) {
+      setStatus(result?.error || 'Status check failed', true);
+      return;
+    }
+    const state = result.data.state || 'idle';
+    const label = result.data.label || state;
+    const detail = result.data.detail ? ` (${result.data.detail})` : '';
+    setStatus(`${label}${detail}`, state === 'error');
+  }
+
+  async function saveConfig() {
+    setStatus('Saving...', false);
+    const result = await sendPluginCommand('set_config', {
+      server_url: serverEl.value.trim() || null,
+      auth_token: tokenEl.value.trim() || null,
+    });
+    if (!result || !result.success) {
+      setStatus(result?.error || 'Failed to save settings', true);
+      return;
+    }
+    setStatus('Saved.', false);
+    await checkStatus();
+  }
+
+  document.getElementById('save').addEventListener('click', saveConfig);
+  document.getElementById('refresh').addEventListener('click', checkStatus);
+
+  window.addEventListener('message', (event) => {
+    const data = event.data;
+    if (!data || typeof data !== 'object') return;
+
+    if (data.type === 'plugin-response' && data.requestId) {
+      const resolve = pending.get(data.requestId);
+      if (resolve) {
+        pending.delete(data.requestId);
+        resolve(data.result);
+      }
+    }
+
+    if (data.type === 'init') {
+      if (data.theme === 'dark') {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+      loadConfig();
+      checkStatus();
+    }
+
+    if (data.type === 'theme-update') {
+      if (data.theme === 'dark') {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+    }
+  });
+</script>
+</body>
+</html>

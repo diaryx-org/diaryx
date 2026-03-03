@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sync History</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #111827;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --card: #f9fafb;
+  }
+  .dark {
+    --bg: #0f172a;
+    --fg: #e5e7eb;
+    --muted: #94a3b8;
+    --border: #1f2937;
+    --card: #111827;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    padding: 12px;
+  }
+  .card {
+    border: 1px solid var(--border);
+    background: var(--card);
+    border-radius: 10px;
+    padding: 12px;
+  }
+  h1 { margin: 0 0 8px; font-size: 14px; }
+  p { margin: 0; color: var(--muted); }
+  ul {
+    margin: 10px 0 0;
+    padding-left: 16px;
+    color: var(--muted);
+  }
+  li { margin: 4px 0; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>History</h1>
+    <p>History rendering is plugin-owned in this panel.</p>
+    <ul>
+      <li>Sync status: <span id="status">loading...</span></li>
+      <li>Workspace state updates are emitted via plugin commands/events.</li>
+    </ul>
+  </div>
+
+<script>
+  let requestId = 0;
+  const pending = new Map();
+
+  function sendPluginCommand(command, params) {
+    return new Promise((resolve) => {
+      const id = ++requestId;
+      pending.set(id, resolve);
+      parent.postMessage({ type: 'plugin-command', command, params, requestId: id }, '*');
+      setTimeout(() => {
+        if (pending.has(id)) {
+          pending.delete(id);
+          resolve({ success: false, error: 'Request timed out' });
+        }
+      }, 15000);
+    });
+  }
+
+  async function refreshStatus() {
+    const result = await sendPluginCommand('GetSyncStatus', {});
+    const el = document.getElementById('status');
+    if (!result?.success || !result?.data) {
+      el.textContent = result?.error || 'unknown';
+      return;
+    }
+    el.textContent = result.data.label || result.data.state || 'idle';
+  }
+
+  window.addEventListener('message', (event) => {
+    const data = event.data;
+    if (!data || typeof data !== 'object') return;
+
+    if (data.type === 'plugin-response' && data.requestId) {
+      const resolve = pending.get(data.requestId);
+      if (resolve) {
+        pending.delete(data.requestId);
+        resolve(data.result);
+      }
+    }
+
+    if (data.type === 'init' || data.type === 'theme-update') {
+      if (data.theme === 'dark') {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+      if (data.type === 'init') {
+        refreshStatus();
+      }
+    }
+  });
+</script>
+</body>
+</html>

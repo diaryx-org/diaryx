@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Daily</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #0f172a;
+    --muted: #64748b;
+    --border: #e2e8f0;
+    --panel: #f8fafc;
+    --button: #0f172a;
+    --button-fg: #ffffff;
+    --accent: #0ea5e9;
+    --danger: #dc2626;
+    --radius: 10px;
+  }
+
+  .dark {
+    --bg: #0f172a;
+    --fg: #e2e8f0;
+    --muted: #94a3b8;
+    --border: #1e293b;
+    --panel: #111827;
+    --button: #e2e8f0;
+    --button-fg: #0f172a;
+    --accent: #38bdf8;
+    --danger: #f87171;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .panel {
+    flex: 1;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .row {
+    display: flex;
+    gap: 8px;
+  }
+
+  .row > * {
+    flex: 1;
+  }
+
+  input[type="text"] {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--panel);
+    color: var(--fg);
+    font-size: 13px;
+  }
+
+  button {
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--fg);
+    border-radius: var(--radius);
+    padding: 8px 10px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  button.primary {
+    background: var(--button);
+    color: var(--button-fg);
+    border-color: transparent;
+  }
+
+  button.ghost {
+    background: transparent;
+  }
+
+  button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .status {
+    font-size: 12px;
+    color: var(--muted);
+    min-height: 18px;
+  }
+
+  .status.error {
+    color: var(--danger);
+  }
+
+  .path {
+    padding: 8px 10px;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+    font-size: 12px;
+    color: var(--muted);
+    word-break: break-all;
+  }
+</style>
+</head>
+<body>
+  <div class="panel">
+    <div class="row">
+      <button id="todayBtn" class="primary">Today</button>
+      <button id="yesterdayBtn">Yesterday</button>
+      <button id="tomorrowBtn">Tomorrow</button>
+    </div>
+
+    <input id="dateInput" type="text" placeholder="Date (today, yesterday, 2026-03-02)" />
+
+    <div class="row">
+      <button id="openBtn" class="primary">Open</button>
+      <button id="printBtn">Print</button>
+    </div>
+
+    <div class="row">
+      <button id="prevBtn" class="ghost">Prev</button>
+      <button id="nextBtn" class="ghost">Next</button>
+    </div>
+
+    <div id="status" class="status"></div>
+    <div id="path" class="path">No daily entry opened yet.</div>
+  </div>
+
+<script>
+  let requestSeq = 0;
+  const pendingPlugin = new Map();
+  const pendingHost = new Map();
+
+  let currentPath = null;
+  let currentEntryPath = null;
+
+  function setStatus(message, isError = false) {
+    const el = document.getElementById("status");
+    el.textContent = message || "";
+    el.className = isError ? "status error" : "status";
+  }
+
+  function setPath(path) {
+    currentPath = path || null;
+    const el = document.getElementById("path");
+    el.textContent = currentPath || "No daily entry opened yet.";
+  }
+
+  function nextRequestId() {
+    requestSeq += 1;
+    return `daily-${requestSeq}`;
+  }
+
+  function callPlugin(command, params = {}) {
+    return new Promise((resolve, reject) => {
+      const requestId = nextRequestId();
+      pendingPlugin.set(requestId, { resolve, reject });
+      parent.postMessage({ type: "plugin-command", command, params, requestId }, "*");
+    });
+  }
+
+  function callHostAction(action) {
+    return new Promise((resolve, reject) => {
+      const requestId = nextRequestId();
+      pendingHost.set(requestId, { resolve, reject });
+      parent.postMessage({ type: "host-action", action, requestId }, "*");
+    });
+  }
+
+  async function openDaily(date, print = false) {
+    try {
+      setStatus("Resolving daily entry...");
+      const res = await callPlugin("CliDaily", { date, print });
+      if (!res.success) {
+        throw new Error(res.error || "Daily command failed");
+      }
+      const data = res.data || {};
+      if (data.path) {
+        setPath(data.path);
+      }
+
+      if (print) {
+        setStatus("Printed to host output.");
+        return;
+      }
+
+      if (data.path) {
+        await callHostAction({ type: "open-entry", payload: { path: data.path } });
+        setStatus("Opened entry.");
+      } else {
+        setStatus("No entry path returned.", true);
+      }
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : String(err), true);
+    }
+  }
+
+  async function navigate(direction) {
+    try {
+      const basis = currentEntryPath || currentPath;
+      if (!basis) {
+        setStatus("Open a daily entry first.", true);
+        return;
+      }
+      setStatus("Navigating...");
+      const res = await callPlugin("GetAdjacentDailyEntry", {
+        path: basis,
+        direction,
+        ensure: true
+      });
+      if (!res.success) {
+        throw new Error(res.error || "Navigation failed");
+      }
+
+      const path = res.data && res.data.path;
+      if (!path) {
+        throw new Error("Plugin did not return path");
+      }
+      setPath(path);
+      await callHostAction({ type: "open-entry", payload: { path } });
+      setStatus("Opened adjacent entry.");
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : String(err), true);
+    }
+  }
+
+  function applyTheme(data) {
+    const theme = data && data.theme === "dark" ? "dark" : "light";
+    document.documentElement.classList.toggle("dark", theme === "dark");
+  }
+
+  window.addEventListener("message", (event) => {
+    const msg = event.data;
+    if (!msg || typeof msg !== "object") return;
+
+    if (msg.type === "plugin-response" && msg.requestId) {
+      const pending = pendingPlugin.get(msg.requestId);
+      if (!pending) return;
+      pendingPlugin.delete(msg.requestId);
+      pending.resolve(msg.result || { success: false, error: "Missing result" });
+      return;
+    }
+
+    if (msg.type === "host-action-response" && msg.requestId) {
+      const pending = pendingHost.get(msg.requestId);
+      if (!pending) return;
+      pendingHost.delete(msg.requestId);
+      if (msg.success) {
+        pending.resolve(msg.data);
+      } else {
+        pending.reject(new Error(msg.error || "Host action failed"));
+      }
+      return;
+    }
+
+    if (msg.type === "init") {
+      applyTheme(msg);
+      const entry = msg.entry;
+      currentEntryPath = entry && typeof entry.path === "string" ? entry.path : null;
+      if (currentEntryPath) setPath(currentEntryPath);
+      return;
+    }
+
+    if (msg.type === "theme-update") {
+      applyTheme(msg);
+      return;
+    }
+
+    if (msg.type === "plugin-event" && msg.event === "entry-changed") {
+      const entry = msg.data;
+      currentEntryPath = entry && typeof entry.path === "string" ? entry.path : null;
+      if (currentEntryPath) setPath(currentEntryPath);
+    }
+  });
+
+  document.getElementById("todayBtn").addEventListener("click", () => openDaily("today", false));
+  document.getElementById("yesterdayBtn").addEventListener("click", () => openDaily("yesterday", false));
+  document.getElementById("tomorrowBtn").addEventListener("click", () => openDaily("tomorrow", false));
+
+  document.getElementById("openBtn").addEventListener("click", () => {
+    const date = document.getElementById("dateInput").value.trim();
+    openDaily(date || "today", false);
+  });
+
+  document.getElementById("printBtn").addEventListener("click", () => {
+    const date = document.getElementById("dateInput").value.trim();
+    openDaily(date || "today", true);
+  });
+
+  document.getElementById("prevBtn").addEventListener("click", () => navigate("prev"));
+  document.getElementById("nextBtn").addEventListener("click", () => navigate("next"));
+</script>
+</body>
+</html>

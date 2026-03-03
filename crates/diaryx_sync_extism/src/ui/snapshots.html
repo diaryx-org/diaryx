@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Snapshots</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #111827;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --card: #f9fafb;
+    --primary: #0f766e;
+  }
+  .dark {
+    --bg: #0f172a;
+    --fg: #e5e7eb;
+    --muted: #94a3b8;
+    --border: #1f2937;
+    --card: #111827;
+    --primary: #14b8a6;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    padding: 12px;
+  }
+  .card {
+    border: 1px solid var(--border);
+    background: var(--card);
+    border-radius: 10px;
+    padding: 12px;
+  }
+  h1 { margin: 0 0 8px; font-size: 14px; }
+  p { margin: 0 0 12px; color: var(--muted); }
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--muted);
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    padding: 6px 8px;
+  }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--primary);
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Snapshots</h1>
+    <p>Snapshot actions are managed by the sync plugin command surface.</p>
+    <div class="status">
+      <span class="dot"></span>
+      <span id="status">Loading sync status...</span>
+    </div>
+  </div>
+
+<script>
+  let requestId = 0;
+  const pending = new Map();
+
+  function sendPluginCommand(command, params) {
+    return new Promise((resolve) => {
+      const id = ++requestId;
+      pending.set(id, resolve);
+      parent.postMessage({ type: 'plugin-command', command, params, requestId: id }, '*');
+      setTimeout(() => {
+        if (pending.has(id)) {
+          pending.delete(id);
+          resolve({ success: false, error: 'Request timed out' });
+        }
+      }, 15000);
+    });
+  }
+
+  async function refresh() {
+    const el = document.getElementById('status');
+    const result = await sendPluginCommand('GetSyncStatus', {});
+    if (!result?.success || !result?.data) {
+      el.textContent = result?.error || 'Status unavailable';
+      return;
+    }
+    const state = result.data.state || 'idle';
+    const label = result.data.label || state;
+    el.textContent = state === 'syncing' && result.data.progress
+      ? `${label} (${result.data.progress.completed}/${result.data.progress.total})`
+      : label;
+  }
+
+  window.addEventListener('message', (event) => {
+    const data = event.data;
+    if (!data || typeof data !== 'object') return;
+
+    if (data.type === 'plugin-response' && data.requestId) {
+      const resolve = pending.get(data.requestId);
+      if (resolve) {
+        pending.delete(data.requestId);
+        resolve(data.result);
+      }
+    }
+
+    if (data.type === 'init' || data.type === 'theme-update') {
+      if (data.theme === 'dark') {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+      if (data.type === 'init') {
+        refresh();
+      }
+    }
+  });
+</script>
+</body>
+</html>

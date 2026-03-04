@@ -1947,7 +1947,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             path: old_path.to_path_buf(),
             message: "No parent directory for source path".to_string(),
         })?;
-        let new_parent = new_path.parent().ok_or_else(|| DiaryxError::InvalidPath {
+        new_path.parent().ok_or_else(|| DiaryxError::InvalidPath {
             path: new_path.to_path_buf(),
             message: "No parent directory for destination path".to_string(),
         })?;
@@ -1958,11 +1958,9 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
         let old_index_path = self
             .resolve_part_of_from_dir(new_path, Some(old_parent), old_parent)
             .await;
-        let new_index_path = self.find_any_index_in_dir(new_parent).await.ok().flatten();
-        let same_index_parent = old_index_path
-            .as_ref()
-            .zip(new_index_path.as_ref())
-            .is_some_and(|(old_idx, new_idx)| old_idx == new_idx);
+        // Use nearest index (not just the immediate directory), matching
+        // sync_create_metadata/sync_delete_metadata semantics.
+        let new_index_path = self.find_nearest_index(new_path).await?;
 
         // Add to new parent's contents first. This avoids "disappearing entry" states
         // if a transient write error occurs during index updates.
@@ -1973,18 +1971,22 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             self.add_to_index_contents_canonical(new_index_path, &new_path_canonical, &title)
                 .await?;
 
-            // Update moved entry's part_of only when parent index actually changes.
-            if !same_index_parent {
-                let part_of_value = if self.root_path.is_some() {
-                    let new_index_canonical = self.get_canonical_path(new_index_path);
-                    let parent_title = self.resolve_title(&new_index_canonical).await;
-                    self.format_link_sync(&new_index_canonical, &parent_title, &new_path_canonical)
-                } else {
-                    relative_path_from_file_to_target(new_path, new_index_path)
-                };
-                self.set_frontmatter_property(new_path, "part_of", Value::String(part_of_value))
-                    .await?;
-            }
+            // Always recompute part_of from the new file location. Even when the
+            // parent index is unchanged, relative formats can change across moves.
+            let part_of_value = if self.root_path.is_some() {
+                let new_index_canonical = self.get_canonical_path(new_index_path);
+                let parent_title = self.resolve_title(&new_index_canonical).await;
+                self.format_link_sync(&new_index_canonical, &parent_title, &new_path_canonical)
+            } else {
+                relative_path_from_file_to_target(new_path, new_index_path)
+            };
+            self.set_frontmatter_property(new_path, "part_of", Value::String(part_of_value))
+                .await?;
+        } else {
+            // No reachable parent index in the destination path. Remove stale
+            // part_of to avoid broken references after external moves.
+            self.remove_frontmatter_property(new_path, "part_of")
+                .await?;
         }
 
         // Remove from old parent's contents after successful add to avoid lossy updates.
@@ -3465,6 +3467,199 @@ mod tests {
             !part_of_str.contains("/Section/Section.md"),
             "Expected part_of to no longer reference '/Section/Section.md', got '{}'",
             part_of_str
+        );
+    }
+
+    #[test]
+    fn test_sync_create_metadata_uses_nearest_ancestor_index() {
+        let fs = InMemoryFileSystem::new();
+        fs.create_dir_all(Path::new("notes/deep")).unwrap();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents: []\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("notes/deep/new.md"),
+            "---\ntitle: New Note\n---\n\n# New Note\n",
+        )
+        .unwrap();
+
+        let async_fs = SyncToAsyncFs::new(fs);
+        let ws = Workspace::new(async_fs);
+
+        block_on_test(ws.sync_create_metadata(Path::new("notes/deep/new.md"))).unwrap();
+
+        let contents =
+            block_on_test(ws.get_frontmatter_property(Path::new("README.md"), "contents")).unwrap();
+        let contents = match contents {
+            Some(Value::Sequence(items)) => items
+                .into_iter()
+                .filter_map(|item| item.as_str().map(ToString::to_string))
+                .collect::<Vec<_>>(),
+            other => panic!("expected contents sequence, got {:?}", other),
+        };
+        assert!(
+            contents
+                .iter()
+                .any(|entry| entry.contains("notes/deep/new.md")),
+            "expected README contents to include moved file, got {:?}",
+            contents
+        );
+
+        let part_of =
+            block_on_test(ws.get_frontmatter_property(Path::new("notes/deep/new.md"), "part_of"))
+                .unwrap();
+        let part_of = part_of.and_then(|v| v.as_str().map(ToString::to_string));
+        assert_eq!(part_of.as_deref(), Some("../../README.md"));
+    }
+
+    #[test]
+    fn test_sync_move_metadata_updates_hierarchy_with_nearest_ancestor_index() {
+        let fs = InMemoryFileSystem::new();
+        fs.create_dir_all(Path::new("nested/deep")).unwrap();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents:\n  - old.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("old.md"),
+            "---\ntitle: Old\npart_of: README.md\n---\n\n# Old\n",
+        )
+        .unwrap();
+
+        // Simulate external move (Obsidian already moved the file).
+        fs.move_file(Path::new("old.md"), Path::new("nested/deep/new.md"))
+            .unwrap();
+
+        let async_fs = SyncToAsyncFs::new(fs);
+        let ws = Workspace::new(async_fs);
+
+        block_on_test(ws.sync_move_metadata(Path::new("old.md"), Path::new("nested/deep/new.md")))
+            .unwrap();
+
+        let contents =
+            block_on_test(ws.get_frontmatter_property(Path::new("README.md"), "contents")).unwrap();
+        let contents = match contents {
+            Some(Value::Sequence(items)) => items
+                .into_iter()
+                .filter_map(|item| item.as_str().map(ToString::to_string))
+                .collect::<Vec<_>>(),
+            other => panic!("expected contents sequence, got {:?}", other),
+        };
+
+        assert!(
+            contents
+                .iter()
+                .any(|entry| entry.contains("nested/deep/new.md")),
+            "expected README contents to include new path, got {:?}",
+            contents
+        );
+        assert!(
+            !contents.iter().any(|entry| entry.contains("old.md")),
+            "expected README contents to remove old path, got {:?}",
+            contents
+        );
+
+        let part_of =
+            block_on_test(ws.get_frontmatter_property(Path::new("nested/deep/new.md"), "part_of"))
+                .unwrap();
+        let part_of = part_of.and_then(|v| v.as_str().map(ToString::to_string));
+        assert_eq!(part_of.as_deref(), Some("../../README.md"));
+    }
+
+    #[test]
+    fn test_sync_move_metadata_clears_part_of_when_destination_has_no_parent_index() {
+        let fs = InMemoryFileSystem::new();
+        fs.create_dir_all(Path::new("section")).unwrap();
+        fs.create_dir_all(Path::new("outside")).unwrap();
+        fs.write_file(
+            Path::new("section/index.md"),
+            "---\ntitle: Section\ncontents:\n  - child.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("section/child.md"),
+            "---\ntitle: Child\npart_of: index.md\n---\n\n# Child\n",
+        )
+        .unwrap();
+
+        // Simulate external move into a location with no ancestor index.
+        fs.move_file(Path::new("section/child.md"), Path::new("outside/new.md"))
+            .unwrap();
+
+        let async_fs = SyncToAsyncFs::new(fs);
+        let ws = Workspace::new(async_fs);
+
+        block_on_test(
+            ws.sync_move_metadata(Path::new("section/child.md"), Path::new("outside/new.md")),
+        )
+        .unwrap();
+
+        let contents =
+            block_on_test(ws.get_frontmatter_property(Path::new("section/index.md"), "contents"))
+                .unwrap();
+        let contents = match contents {
+            Some(Value::Sequence(items)) => items
+                .into_iter()
+                .filter_map(|item| item.as_str().map(ToString::to_string))
+                .collect::<Vec<_>>(),
+            other => panic!("expected contents sequence, got {:?}", other),
+        };
+        assert!(
+            !contents.iter().any(|entry| entry.contains("child.md")),
+            "expected section index to drop old child reference, got {:?}",
+            contents
+        );
+
+        let part_of =
+            block_on_test(ws.get_frontmatter_property(Path::new("outside/new.md"), "part_of"))
+                .unwrap();
+        assert!(
+            part_of.is_none(),
+            "expected part_of to be removed when destination has no parent index"
+        );
+    }
+
+    #[test]
+    fn test_sync_delete_metadata_uses_nearest_ancestor_index() {
+        let fs = InMemoryFileSystem::new();
+        fs.create_dir_all(Path::new("nested/deep")).unwrap();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents:\n  - nested/deep/victim.md\n---\n",
+        )
+        .unwrap();
+        fs.write_file(
+            Path::new("nested/deep/victim.md"),
+            "---\ntitle: Victim\npart_of: ../../README.md\n---\n\n# Victim\n",
+        )
+        .unwrap();
+
+        // Simulate external delete (Obsidian already deleted the file).
+        fs.delete_file(Path::new("nested/deep/victim.md")).unwrap();
+
+        let async_fs = SyncToAsyncFs::new(fs);
+        let ws = Workspace::new(async_fs);
+
+        block_on_test(ws.sync_delete_metadata(Path::new("nested/deep/victim.md"))).unwrap();
+
+        let contents =
+            block_on_test(ws.get_frontmatter_property(Path::new("README.md"), "contents")).unwrap();
+        let contents = match contents {
+            Some(Value::Sequence(items)) => items
+                .into_iter()
+                .filter_map(|item| item.as_str().map(ToString::to_string))
+                .collect::<Vec<_>>(),
+            other => panic!("expected contents sequence, got {:?}", other),
+        };
+        assert!(
+            !contents
+                .iter()
+                .any(|entry| entry.contains("nested/deep/victim.md")),
+            "expected README contents to remove deleted file, got {:?}",
+            contents
         );
     }
 }

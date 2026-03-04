@@ -117,6 +117,10 @@ Returns `Response::String(new_path)` if a rename occurred, `Response::Ok` otherw
   filesystem paths via `resolve_fs_path(...)` before reading/writing disk.
 - This preserves cross-platform behavior for Tauri absolute inputs while
   keeping canonical workspace-relative command semantics for sync/link logic.
+- External metadata sync now resolves move destinations using the nearest
+  ancestor index (not just the immediate directory) and clears stale `part_of`
+  when no destination index exists, so `contents`/`part_of` stay consistent
+  after external moves into unindexed folders.
 
 ## TypeScript Binding Notes
 

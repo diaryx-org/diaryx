@@ -11,6 +11,8 @@
 mod fs_content_provider;
 pub mod plugin;
 mod publisher;
+#[cfg(feature = "templating")]
+mod template_render;
 mod types;
 
 pub use fs_content_provider::FilesystemContentProvider;

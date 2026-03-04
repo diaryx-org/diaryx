@@ -63,8 +63,10 @@
     onToggleNode: (path: string) => void;
     onToggleCollapse: () => void;
     onOpenSettings: () => void;
+    onOpenMarketplace: () => void;
+    settingsDialogOpen?: boolean;
+    marketplaceDialogOpen?: boolean;
     onOpenAccountSettings: () => void;
-    onOpenMarketplace?: () => void;
     onAddWorkspace: () => void;
     onMoveEntry: (fromPath: string, toParentPath: string) => void;
     onCreateChildEntry: (parentPath: string) => void;
@@ -105,8 +107,10 @@
     onToggleNode,
     onToggleCollapse,
     onOpenSettings,
-    onOpenAccountSettings,
     onOpenMarketplace,
+    settingsDialogOpen = false,
+    marketplaceDialogOpen = false,
+    onOpenAccountSettings,
     onAddWorkspace,
     onMoveEntry,
     onCreateChildEntry,
@@ -222,6 +226,11 @@
   // Tab state for left sidebar (built-in + plugin IDs)
   let leftTab = $state("files");
 
+  // Suppress tooltips while their dialog is open and briefly after close
+  // so that returning focus / pointer doesn't flash the tooltip.
+  let marketplaceTooltipSuppressed = $state(false);
+  let settingsTooltipSuppressed = $state(false);
+
   // Handle external tab request
   $effect(() => {
     if (requestedTab && requestedTab !== leftTab) {
@@ -233,6 +242,28 @@
   $effect(() => {
     if (!leftTabs.some((tab) => tab.id === leftTab)) {
       leftTab = "files";
+    }
+  });
+
+  $effect(() => {
+    if (marketplaceDialogOpen) {
+      marketplaceTooltipSuppressed = true;
+    } else if (marketplaceTooltipSuppressed) {
+      const timeout = setTimeout(() => {
+        marketplaceTooltipSuppressed = false;
+      }, 400);
+      return () => clearTimeout(timeout);
+    }
+  });
+
+  $effect(() => {
+    if (settingsDialogOpen) {
+      settingsTooltipSuppressed = true;
+    } else if (settingsTooltipSuppressed) {
+      const timeout = setTimeout(() => {
+        settingsTooltipSuppressed = false;
+      }, 400);
+      return () => clearTimeout(timeout);
     }
   });
 
@@ -307,6 +338,16 @@
   // Check if a node is loading
   function isNodeLoading(path: string): boolean {
     return loadingNodes.has(path);
+  }
+
+  function handleOpenSettingsClick(): void {
+    settingsTooltipSuppressed = true;
+    onOpenSettings();
+  }
+
+  function handleOpenMarketplaceClick(): void {
+    marketplaceTooltipSuppressed = true;
+    onOpenMarketplace();
   }
 
   // Extract unlinked entries (files/directories not in hierarchy) from validation result
@@ -1146,48 +1187,6 @@
     </Tooltip.Root>
   </div>
 
-  <!-- Workspace Selector -->
-  <div class="px-3 pt-2">
-    <WorkspaceSelector
-      onSwitchStart={onWorkspaceSwitchStart}
-      onSwitchComplete={onWorkspaceSwitchComplete}
-      onAddWorkspace={onAddWorkspace}
-    />
-  </div>
-
-  <!-- Audience Filter -->
-  {#if tree}
-    <div class="px-3 pt-1">
-      <AudienceFilter {api} rootPath={tree.path} />
-    </div>
-  {/if}
-
-  <!-- Tab Bar (hidden when only one tab) -->
-  {#if leftTabs.length > 1}
-  <div class="px-3 pt-2 pb-1 shrink-0">
-    <div class="flex items-center gap-1 bg-muted rounded-md p-0.5">
-      {#each leftTabs as tab (tab.id)}
-        <button
-          type="button"
-          class="flex-1 flex items-center justify-center gap-1.5 px-2 py-1 text-[11px] font-medium rounded transition-colors {leftTab === tab.id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-          onclick={() => (leftTab = tab.id)}
-        >
-          {#if tab.id === "files"}
-            <FolderTree class="size-3" />
-          {:else if tab.icon === "share"}
-            <Share2 class="size-3" />
-          {:else if tab.icon === "history"}
-            <History class="size-3" />
-          {:else if tab.publishBuiltinKey === "publish" || tab.icon === "globe"}
-            <Globe class="size-3" />
-          {/if}
-          {tab.label}
-        </button>
-      {/each}
-    </div>
-  </div>
-  {/if}
-
   <!-- Content Area -->
   <div class="flex-1 overflow-y-auto {leftTab === 'files' ? 'px-3 pb-3' : ''}" bind:this={scrollContainer}>
     {#if leftTab === "files"}
@@ -1393,6 +1392,48 @@
     </div>
   {/if}
 
+  <!-- Tab Bar (hidden when only one tab) -->
+  {#if leftTabs.length > 1}
+  <div class="px-3 pt-1 pb-1 shrink-0">
+    <div class="flex items-center gap-1 bg-muted rounded-md p-0.5">
+      {#each leftTabs as tab (tab.id)}
+        <button
+          type="button"
+          class="flex-1 flex items-center justify-center gap-1.5 px-2 py-1 text-[11px] font-medium rounded transition-colors {leftTab === tab.id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+          onclick={() => (leftTab = tab.id)}
+        >
+          {#if tab.id === "files"}
+            <FolderTree class="size-3" />
+          {:else if tab.icon === "share"}
+            <Share2 class="size-3" />
+          {:else if tab.icon === "history"}
+            <History class="size-3" />
+          {:else if tab.publishBuiltinKey === "publish" || tab.icon === "globe"}
+            <Globe class="size-3" />
+          {/if}
+          {tab.label}
+        </button>
+      {/each}
+    </div>
+  </div>
+  {/if}
+
+  <!-- Audience Filter -->
+  {#if tree}
+    <div class="px-3 pt-1 shrink-0">
+      <AudienceFilter {api} rootPath={tree.path} />
+    </div>
+  {/if}
+
+  <!-- Workspace Selector -->
+  <div class="px-3 pt-1 pb-1 shrink-0">
+    <WorkspaceSelector
+      onSwitchStart={onWorkspaceSwitchStart}
+      onSwitchComplete={onWorkspaceSwitchComplete}
+      onAddWorkspace={onAddWorkspace}
+    />
+  </div>
+
   <!-- Profile Footer -->
   <div class="border-t border-sidebar-border shrink-0 pb-[env(safe-area-inset-bottom)]">
     <div class="flex items-center gap-1 px-4 py-2">
@@ -1422,39 +1463,37 @@
         </Popover.Content>
       </Popover.Root>
       <div class="flex items-center gap-1 shrink-0">
-        {#if onOpenMarketplace}
-          <Tooltip.Root>
-            <Tooltip.Trigger>
-              <Button
-                variant="ghost"
-                size="icon"
-                onclick={onOpenMarketplace}
-                class="size-8"
-                aria-label="Open plugin marketplace"
-              >
-                <Store class="size-4" />
-              </Button>
-            </Tooltip.Trigger>
-            {#if !mobileState.isMobile && !collapsed}
-              <Tooltip.Content>
-                Marketplace
-              </Tooltip.Content>
-            {/if}
-          </Tooltip.Root>
-        {/if}
         <Tooltip.Root>
           <Tooltip.Trigger>
             <Button
               variant="ghost"
               size="icon"
-              onclick={onOpenSettings}
+              onclick={handleOpenMarketplaceClick}
+              class="size-8"
+              aria-label="Open marketplace"
+            >
+              <Store class="size-4" />
+            </Button>
+          </Tooltip.Trigger>
+          {#if !mobileState.isMobile && !collapsed && !marketplaceDialogOpen && !marketplaceTooltipSuppressed}
+            <Tooltip.Content>
+              Marketplace
+            </Tooltip.Content>
+          {/if}
+        </Tooltip.Root>
+        <Tooltip.Root>
+          <Tooltip.Trigger>
+            <Button
+              variant="ghost"
+              size="icon"
+              onclick={handleOpenSettingsClick}
               class="size-8"
               aria-label="Open settings"
             >
               <Settings class="size-4" />
             </Button>
           </Tooltip.Trigger>
-          {#if !mobileState.isMobile && !collapsed}
+          {#if !mobileState.isMobile && !collapsed && !settingsDialogOpen && !settingsTooltipSuppressed}
             <Tooltip.Content>
               <div class="flex items-center gap-2">
                 Settings

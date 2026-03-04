@@ -7,9 +7,7 @@
    */
   import * as Dialog from "$lib/components/ui/dialog";
   import * as Drawer from "$lib/components/ui/drawer";
-  import * as Tabs from "$lib/components/ui/tabs";
-  import { Button } from "$lib/components/ui/button";
-  import { Settings, Eye, FolderOpen, Database, Bug, User, CreditCard, Puzzle } from "@lucide/svelte";
+  import { Settings } from "@lucide/svelte";
   import { getMobileState } from "./hooks/useMobile.svelte";
   import { getAuthState } from "$lib/auth";
   import { getCurrentWorkspaceId, getLocalWorkspace } from "$lib/storage/localWorkspaceRegistry.svelte";
@@ -27,7 +25,6 @@
   import ClearDataSettings from "./settings/ClearDataSettings.svelte";
   import DebugInfo from "./settings/DebugInfo.svelte";
   import WorkspaceManagement from "./settings/WorkspaceManagement.svelte";
-  import AppearanceSettings from "./settings/AppearanceSettings.svelte";
   import PluginsSettings from "./settings/PluginsSettings.svelte";
   import PluginSettingsTab from "./settings/PluginSettingsTab.svelte";
   import PluginIframe from "./components/PluginIframe.svelte";
@@ -49,8 +46,6 @@
     api?: Api | null;
     /** Handler for host actions from plugin iframes (e.g. OAuth) */
     onHostAction?: (action: { type: string; payload?: unknown }) => Promise<unknown> | unknown;
-    /** Open dedicated plugin marketplace surface. */
-    onOpenMarketplace?: () => void;
   }
 
   let {
@@ -61,7 +56,6 @@
     onAddWorkspace,
     api = null,
     onHostAction,
-    onOpenMarketplace,
   }: Props = $props();
 
   const mobileState = getMobileState();
@@ -181,6 +175,17 @@
   // Track active tab
   let activeTab = $state("general");
 
+  const settingsTabs = $derived([
+    { id: "general", label: "General" },
+    { id: "workspace", label: "Workspace" },
+    ...pluginSettingsTabs.map(t => ({ id: `plugin-${t.contribution.id}`, label: t.contribution.label })),
+    { id: "account", label: "Account" },
+    { id: "billing", label: "Billing" },
+    { id: "data", label: "Data" },
+    { id: "plugins", label: "Plugins" },
+    { id: "debug", label: "Debug" },
+  ]);
+
   // Switch to initialTab when the dialog opens
   $effect(() => {
     if (open && initialTab) {
@@ -190,131 +195,96 @@
 </script>
 
 {#snippet settingsContent()}
-  <Tabs.Root bind:value={activeTab} class="w-full">
-    <Tabs.List class="w-full flex gap-1 overflow-x-auto mb-4">
-      <Tabs.Trigger value="general" class="shrink-0">
-        <Eye class="size-4 mr-1.5 hidden sm:inline" />
-        General
-      </Tabs.Trigger>
-      <Tabs.Trigger value="workspace" class="shrink-0">
-        <FolderOpen class="size-4 mr-1.5 hidden sm:inline" />
-        Workspace
-      </Tabs.Trigger>
-      {#each pluginSettingsTabs as tab}
-        <Tabs.Trigger value={`plugin-${tab.contribution.id}`} class="shrink-0">
-          {tab.contribution.label}
-        </Tabs.Trigger>
-      {/each}
-      <Tabs.Trigger value="account" class="shrink-0">
-        <User class="size-4 mr-1.5 hidden sm:inline" />
-        Account
-      </Tabs.Trigger>
-      <Tabs.Trigger value="billing" class="shrink-0">
-        <CreditCard class="size-4 mr-1.5 hidden sm:inline" />
-        Billing
-      </Tabs.Trigger>
-      <Tabs.Trigger value="data" class="shrink-0">
-        <Database class="size-4 mr-1.5 hidden sm:inline" />
-        Data
-      </Tabs.Trigger>
-      <Tabs.Trigger value="plugins" class="shrink-0">
-        <Puzzle class="size-4 mr-1.5 hidden sm:inline" />
-        Plugins
-      </Tabs.Trigger>
-      <Tabs.Trigger value="debug" class="shrink-0">
-        <Bug class="size-4 mr-1.5 hidden sm:inline" />
-        Debug
-      </Tabs.Trigger>
-    </Tabs.List>
-
-    <Tabs.Content value="general">
-      <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
-        <DisplaySettings bind:focusMode />
-        <AppearanceSettings />
-      </div>
-    </Tabs.Content>
-
-    <Tabs.Content value="workspace">
-      <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
-        <WorkspaceSettings workspaceRootIndex={workspacePath} />
-        <LinkSettings workspaceRootIndex={workspacePath} />
-        <StorageSettings workspaceId={currentWorkspaceId} workspaceName={currentWorkspaceName} />
-      </div>
-    </Tabs.Content>
-
-    <Tabs.Content value="account">
-      <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
-        <AccountSettings {onAddWorkspace} />
-        <WorkspaceManagement />
-      </div>
-    </Tabs.Content>
-
-    <Tabs.Content value="billing">
-      <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
-        <BillingSettings />
-      </div>
-    </Tabs.Content>
-
-    <Tabs.Content value="data">
-      <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
-        <BackupSettings {workspacePath} />
-        <ImportSettings {workspacePath} />
-        <FormatImportSettings {workspacePath} />
-        <ClearDataSettings />
-      </div>
-    </Tabs.Content>
-
-    <Tabs.Content value="plugins">
-      <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
-        <PluginsSettings {onOpenMarketplace} />
-      </div>
-    </Tabs.Content>
-
-    <Tabs.Content value="debug">
-      <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
-        <DebugInfo />
-      </div>
-    </Tabs.Content>
-
-    {#each pluginSettingsTabs as tab}
-      <Tabs.Content value={`plugin-${tab.contribution.id}`}>
-        <div class="space-y-4 h-[350px] overflow-y-auto pr-2">
-          {#if tab.contribution.component?.type === "Iframe"}
-            <div class="h-[320px]">
-              <PluginIframe
-                pluginId={tab.pluginId as unknown as string}
-                componentId={tab.contribution.component.component_id}
-                {api}
-                {onHostAction}
-              />
-            </div>
-          {:else if tab.contribution.fields.length > 0}
-            {#await loadPluginConfig(tab.pluginId) then}
-              {#if tab.pluginId === "diaryx.ai" && isManagedMode(pluginConfigs[tab.pluginId] ?? {}) && authState.tier !== "plus"}
-                <UpgradeBanner
-                  feature="Managed AI"
-                  description="Upgrade to Diaryx Plus to use managed AI without your own API key."
-                />
-              {/if}
-              <PluginSettingsTab
-                pluginId={tab.pluginId}
-                fields={tab.contribution.fields}
-                config={pluginConfigs[tab.pluginId] ?? {}}
-                onConfigChange={(key, value) => handlePluginConfigChange(tab.pluginId, key, value)}
-              />
-            {/await}
-          {:else}
-            <p class="text-sm text-muted-foreground">
-              No configurable settings for this plugin.
-            </p>
-          {/if}
+  <div class="flex h-full min-h-0 flex-col">
+    <!-- Content -->
+    <div class="flex-1 min-h-0 overflow-y-auto pr-2">
+      {#if activeTab === "general"}
+        <div class="space-y-4">
+          <DisplaySettings bind:focusMode />
         </div>
-      </Tabs.Content>
-    {/each}
-  </Tabs.Root>
+      {:else if activeTab === "workspace"}
+        <div class="space-y-4">
+          <WorkspaceSettings workspaceRootIndex={workspacePath} />
+          <LinkSettings workspaceRootIndex={workspacePath} />
+          <StorageSettings workspaceId={currentWorkspaceId} workspaceName={currentWorkspaceName} />
+        </div>
+      {:else if activeTab === "account"}
+        <div class="space-y-4">
+          <AccountSettings {onAddWorkspace} />
+          <WorkspaceManagement />
+        </div>
+      {:else if activeTab === "billing"}
+        <div class="space-y-4">
+          <BillingSettings />
+        </div>
+      {:else if activeTab === "data"}
+        <div class="space-y-4">
+          <BackupSettings {workspacePath} />
+          <ImportSettings {workspacePath} />
+          <FormatImportSettings {workspacePath} />
+          <ClearDataSettings />
+        </div>
+      {:else if activeTab === "plugins"}
+        <div class="space-y-4">
+          <PluginsSettings />
+        </div>
+      {:else if activeTab === "debug"}
+        <div class="space-y-4">
+          <DebugInfo />
+        </div>
+      {:else}
+        {#each pluginSettingsTabs as tab}
+          {#if activeTab === `plugin-${tab.contribution.id}`}
+            <div class="space-y-4">
+              {#if tab.contribution.component?.type === "Iframe"}
+                <div class="h-[320px]">
+                  <PluginIframe
+                    pluginId={tab.pluginId as unknown as string}
+                    componentId={tab.contribution.component.component_id}
+                    {api}
+                    {onHostAction}
+                  />
+                </div>
+              {:else if tab.contribution.fields.length > 0}
+                {#await loadPluginConfig(tab.pluginId) then}
+                  {#if tab.pluginId === "diaryx.ai" && isManagedMode(pluginConfigs[tab.pluginId] ?? {}) && authState.tier !== "plus"}
+                    <UpgradeBanner
+                      feature="Managed AI"
+                      description="Upgrade to Diaryx Plus to use managed AI without your own API key."
+                    />
+                  {/if}
+                  <PluginSettingsTab
+                    pluginId={tab.pluginId}
+                    fields={tab.contribution.fields}
+                    config={pluginConfigs[tab.pluginId] ?? {}}
+                    onConfigChange={(key, value) => handlePluginConfigChange(tab.pluginId, key, value)}
+                  />
+                {/await}
+              {:else}
+                <p class="text-sm text-muted-foreground">
+                  No configurable settings for this plugin.
+                </p>
+              {/if}
+            </div>
+          {/if}
+        {/each}
+      {/if}
+    </div>
 
-  <div class="flex justify-end pt-4 border-t mt-4">
-    <Button variant="outline" onclick={() => (open = false)}>Close</Button>
+    <!-- Bottom Tab Bar -->
+    <div class="px-3 pt-1 pb-1 shrink-0">
+      <div class="flex items-center gap-1 bg-muted rounded-md p-0.5 overflow-x-auto">
+        {#each settingsTabs as tab (tab.id)}
+          <button
+            type="button"
+            class="shrink-0 px-2 py-1.5 text-xs font-medium rounded transition-colors {activeTab === tab.id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+            onclick={() => (activeTab = tab.id)}
+          >
+            {tab.label}
+          </button>
+        {/each}
+      </div>
+    </div>
   </div>
 {/snippet}
 
@@ -322,8 +292,8 @@
   <!-- Mobile: Use Drawer -->
   <Drawer.Root bind:open>
     <Drawer.Content>
-      <div class="mx-auto w-full max-w-md">
-        <Drawer.Header>
+      <div class="mx-auto flex h-[70vh] min-h-0 w-full max-w-md flex-col">
+        <Drawer.Header class="shrink-0">
           <Drawer.Title class="flex items-center gap-2">
             <Settings class="size-5" />
             Settings
@@ -332,7 +302,7 @@
             Configure your workspace and preferences.
           </Drawer.Description>
         </Drawer.Header>
-        <div class="px-4 pb-8 overflow-y-auto max-h-[70vh]">
+        <div class="flex min-h-0 flex-1 flex-col px-4 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]">
           {@render settingsContent()}
         </div>
       </div>
@@ -341,7 +311,7 @@
 {:else}
   <!-- Desktop: Use Dialog -->
   <Dialog.Root bind:open>
-    <Dialog.Content class="sm:max-w-[550px] h-[550px] overflow-hidden">
+    <Dialog.Content class="sm:max-w-[550px] h-[550px] overflow-hidden flex flex-col">
       <Dialog.Header>
         <Dialog.Title class="flex items-center gap-2">
           <Settings class="size-5" />
@@ -351,7 +321,7 @@
           Configure your workspace and preferences.
         </Dialog.Description>
       </Dialog.Header>
-      <div class="py-4 overflow-hidden">
+      <div class="flex-1 min-h-0 flex flex-col py-4">
         {@render settingsContent()}
       </div>
     </Dialog.Content>

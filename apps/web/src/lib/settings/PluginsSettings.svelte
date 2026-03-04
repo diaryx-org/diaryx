@@ -6,7 +6,6 @@
     Upload,
     Download,
     Check,
-    Store,
   } from "@lucide/svelte";
   import { Switch } from "$lib/components/ui/switch";
   import { Button } from "$lib/components/ui/button";
@@ -33,12 +32,6 @@
     PluginConfig,
     PluginPermissions,
   } from "@/models/stores/permissionStore.svelte";
-
-  interface Props {
-    onOpenMarketplace?: () => void;
-  }
-
-  let { onOpenMarketplace }: Props = $props();
 
   const pluginStore = getPluginStore();
 
@@ -376,12 +369,6 @@
       Plugins
     </h3>
     <div class="flex items-center gap-2">
-      {#if onOpenMarketplace}
-        <Button variant="outline" size="sm" onclick={onOpenMarketplace}>
-          <Store class="size-3.5 mr-1.5" />
-          Open Marketplace
-        </Button>
-      {/if}
       <Button
         variant="outline"
         size="sm"

@@ -203,10 +203,10 @@
 {/snippet}
 
 {#if mobileState.isMobile}
-  <!-- Mobile: Use Drawer from top -->
-  <Drawer.Root bind:open direction="top">
+  <!-- Mobile: Use Drawer from bottom -->
+  <Drawer.Root bind:open direction="bottom">
     <Drawer.Content>
-      <div class="mx-auto w-full max-w-md px-4 pb-4 pt-[env(safe-area-inset-top)]">
+      <div class="mx-auto w-full max-w-md px-4 pt-4 pb-[calc(env(safe-area-inset-bottom)+1rem)]">
         <Command.Root class="rounded-lg border-none shadow-none">
           {@render commandContent()}
         </Command.Root>

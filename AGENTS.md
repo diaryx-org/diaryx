@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-03-04T16:55:40Z
+updated: 2026-03-04T22:56:25Z
 part_of: '[README](/README.md)'
 ---
 # Instructions for AI agents
@@ -43,6 +43,7 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │   │   ├── Views - View components - apps/web/src/views/README.md
 │   │   │   │   ├── Editor Views - Editor-related view components - apps/web/src/views/editor/README.md
 │   │   │   │   ├── Layout Views - Layout components - apps/web/src/views/layout/README.md
+│   │   │   │   ├── Marketplace Views - Marketplace panels and plugin/theme browsing views - apps/web/src/views/marketplace/README.md
 │   │   │   │   ├── Shared Views - Shared view components - apps/web/src/views/shared/README.md
 │   │   │   │   └── Sidebar Views - Sidebar components - apps/web/src/views/sidebar/README.md
 │   │   │   └── LICENSE - PolyForm Shield License 1.0.0 - apps/web/src/LICENSE.md

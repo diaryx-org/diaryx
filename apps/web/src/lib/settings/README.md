@@ -52,6 +52,12 @@ Settings panel components for `SettingsDialog.svelte`.
 
 All plugin settings (sync, GDrive storage, templating) now use the iframe approach.
 
+## Mobile Drawer Layout
+
+`SettingsDialog.svelte` keeps mobile tab content scrollable by using a strict
+flex-height chain (`h-[70vh]`, `min-h-0`, `flex-1`) inside `Drawer.Content`,
+so long tabs (for example Workspace) do not push the bottom tab bar off-screen.
+
 ## Marketplace Integration
 
 - The dedicated marketplace is a separate app surface (`views/marketplace/PluginMarketplace.svelte`), not just a settings panel.

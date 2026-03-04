@@ -26,6 +26,7 @@ attachments:
   - "[ExportDialog.svelte](/apps/web/src/lib/ExportDialog.svelte)"
   - "[LeftSidebar.svelte](/apps/web/src/lib/LeftSidebar.svelte)"
   - "[NewEntryModal.svelte](/apps/web/src/lib/NewEntryModal.svelte)"
+  - "[MarketplaceDialog.svelte](/apps/web/src/lib/MarketplaceDialog.svelte)"
   - "[RightSidebar.svelte](/apps/web/src/lib/RightSidebar.svelte)"
   - "[SettingsDialog.svelte](/apps/web/src/lib/SettingsDialog.svelte)"
   - "[AddWorkspaceDialog.svelte](/apps/web/src/lib/AddWorkspaceDialog.svelte)"
@@ -135,8 +136,19 @@ limited to backup/import actions.
 
 - Left sidebar: built-in `Files` tab plus plugin-contributed tabs.
 - Right sidebar: built-in `Properties` tab plus plugin-contributed tabs.
+- Marketplace: opened from a dedicated modal surface
+  (`MarketplaceDialog.svelte`): desktop `Dialog`, mobile `Drawer`.
 - Plugin sidebars are host-rendered with `components/PluginSidebarPanel.svelte`.
 - Status-bar plugin items are host-rendered with `components/PluginStatusItems.svelte`.
+- `RightSidebar.svelte` resets collapse-button tooltip state when collapsing to
+  prevent stale tooltip visibility when reopening the panel.
+- `LeftSidebar.svelte` dismisses the Settings-button tooltip on click so it
+  does not remain visible after opening Settings, temporarily suppresses the
+  tooltip while Settings is open/closing, and uses controlled tooltip open
+  gating plus `ignoreNonKeyboardFocus` to prevent reopen on dialog focus
+  restore and transition races. Settings/Marketplace footer tooltips also
+  blur their triggers on dialog close and require one pointer-leave before
+  opening again.
 
 ## Plugin-Contributed Surfaces
 

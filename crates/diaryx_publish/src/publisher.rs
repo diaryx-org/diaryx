@@ -290,21 +290,21 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
 
         // Render body templates (if any) before markdown-to-HTML conversion
         #[cfg(feature = "templating")]
-        let rendered_body = if diaryx_templating::render::has_templates(&parsed.body) {
+        let rendered_body = if crate::template_render::has_templates(&parsed.body) {
             let context = match _target_audience {
-                Some(audience) => diaryx_templating::render::build_publish_context(
+                Some(audience) => crate::template_render::build_publish_context(
                     &parsed.frontmatter,
                     path,
                     Some(workspace_root),
                     audience,
                 ),
-                None => diaryx_templating::render::build_context(
+                None => crate::template_render::build_context(
                     &parsed.frontmatter,
                     path,
                     Some(workspace_root),
                 ),
             };
-            diaryx_templating::render::BodyTemplateRenderer::new()
+            crate::template_render::BodyTemplateRenderer::new()
                 .render(&parsed.body, &context)
                 .unwrap_or_else(|_| parsed.body.clone())
         } else {

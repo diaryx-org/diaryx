@@ -12,21 +12,21 @@
   import NewEntryModal from "./lib/NewEntryModal.svelte";
   import CommandPalette from "./lib/CommandPalette.svelte";
   import SettingsDialog from "./lib/SettingsDialog.svelte";
+  import MarketplaceDialog from "./lib/MarketplaceDialog.svelte";
   import ExportDialog from "./lib/ExportDialog.svelte";
   import AddWorkspaceDialog from "./lib/AddWorkspaceDialog.svelte";
   import ImagePreviewDialog from "./lib/ImagePreviewDialog.svelte";
   import AudienceEditor from "./lib/components/AudienceEditor.svelte";
-  import DocumentAudiencePill from "./lib/components/DocumentAudiencePill.svelte";
   import MarkdownPreviewDialog from "./lib/MarkdownPreviewDialog.svelte";
-  import EditorHeader from "./views/editor/EditorHeader.svelte";
+  import EditorFooter from "./views/editor/EditorFooter.svelte";
   import EditorEmptyState from "./views/editor/EditorEmptyState.svelte";
   import WelcomeScreen from "./views/WelcomeScreen.svelte";
-  import PluginMarketplace from "./views/marketplace/PluginMarketplace.svelte";
   import EditorContent from "./views/editor/EditorContent.svelte";
   import { Toaster } from "$lib/components/ui/sonner";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
+  import { PanelLeft, PanelRight, Menu } from "@lucide/svelte";
   import { toast } from "svelte-sonner";
   // Note: Button, icons, and LoadingSpinner are now only used in extracted view components
 
@@ -218,9 +218,12 @@
   // Welcome screen (shown when no workspaces exist)
   let showWelcomeScreen = $state(false);
 
-  // Dedicated plugin marketplace surface.
-  let showMarketplace = $state(false);
+  // Marketplace dialog
+  let showMarketplaceDialog = $state(false);
 
+  // Edge hover state for sidebar open buttons (focus mode reveal)
+  let leftEdgeHovered = $state(false);
+  let rightEdgeHovered = $state(false);
   // FSA reconnect state (shown when local folder needs user gesture to re-grant access)
   let fsaNeedsReconnect = $state(false);
   let fsaReconnectWsId = $state<string | undefined>(undefined);
@@ -236,8 +239,6 @@
   let backend = $derived(workspaceStore.backend);
   let showUnlinkedFiles = $derived(workspaceStore.showUnlinkedFiles);
   let showHiddenFiles = $derived(workspaceStore.showHiddenFiles);
-  let showEditorTitle = $derived(workspaceStore.showEditorTitle);
-  let showEditorPath = $derived(workspaceStore.showEditorPath);
   let focusMode = $derived(workspaceStore.focusMode);
 
   // API wrapper - uses execute() internally for all operations
@@ -821,19 +822,14 @@
   // Sidebar toggles
   function toggleLeftSidebar() {
     uiStore.toggleLeftSidebar();
+    leftEdgeHovered = false;
+
   }
 
   function toggleRightSidebar() {
     uiStore.toggleRightSidebar();
-  }
+    rightEdgeHovered = false;
 
-  function openMarketplace() {
-    showSettingsDialog = false;
-    showMarketplace = true;
-  }
-
-  function closeMarketplace() {
-    showMarketplace = false;
   }
 
   /** Handle plugin toolbar button clicks — open the right sidebar to the plugin's tab. */
@@ -908,7 +904,8 @@
         return { opened: "settings", tab: tab ?? null };
       }
       case "open-marketplace":
-        openMarketplace();
+        showSettingsDialog = false;
+        showMarketplaceDialog = true;
         return { opened: "marketplace" };
       case "toggle-left-sidebar":
         toggleLeftSidebar();
@@ -1888,18 +1885,6 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     }
   }
 
-  function getEntryTitle(entry: { path: string; title?: string | null; frontmatter?: Record<string, unknown> }): string {
-    // Prioritize frontmatter.title for live updates, fall back to cached title
-    const fm = normalizeFrontmatter(entry.frontmatter);
-    const frontmatterTitle = fm?.title as string | undefined;
-    return (
-      frontmatterTitle ??
-      entry.title ??
-      entry.path.split("/").pop()?.replace(".md", "") ??
-      "Untitled"
-    );
-  }
-
   // Handle link clicks in the editor - delegates to controller
   async function handleLinkClick(href: string) {
     if (!api) return;
@@ -1948,7 +1933,6 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
   workspacePath={tree?.path}
   initialTab={settingsInitialTab}
   {api}
-  onOpenMarketplace={openMarketplace}
   onAddWorkspace={async () => {
     showSettingsDialog = false;
     await tick();
@@ -1956,6 +1940,8 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
   }}
   onHostAction={handlePluginHostAction}
 />
+
+<MarketplaceDialog bind:open={showMarketplaceDialog} />
 
 <!-- Export Dialog -->
 <ExportDialog
@@ -2026,9 +2012,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
 <!-- Tooltip Provider for keyboard shortcut hints -->
 <Tooltip.Provider>
 
-{#if showMarketplace}
-  <PluginMarketplace onClose={closeMarketplace} />
-{:else if fsaNeedsReconnect}
+{#if fsaNeedsReconnect}
   <div class="flex h-full items-center justify-center bg-background">
     <div class="flex flex-col items-center gap-4 text-center max-w-sm px-4">
       <div class="text-4xl">&#128194;</div>
@@ -2077,8 +2061,10 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     onToggleNode={toggleNode}
     onToggleCollapse={toggleLeftSidebar}
     onOpenSettings={() => { settingsInitialTab = undefined; showSettingsDialog = true; }}
+    onOpenMarketplace={() => { showMarketplaceDialog = true; }}
+    settingsDialogOpen={showSettingsDialog}
+    marketplaceDialogOpen={showMarketplaceDialog}
     onOpenAccountSettings={() => { settingsInitialTab = "account"; showSettingsDialog = true; }}
-    onOpenMarketplace={openMarketplace}
     onAddWorkspace={() => { showAddWorkspace = true; }}
     onMoveEntry={handleMoveEntry}
     onCreateChildEntry={handleCreateChildEntry}
@@ -2127,47 +2113,64 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
 
   <!-- Main Content Area -->
   <main class="flex-1 flex flex-col overflow-hidden min-w-0 relative pt-[env(safe-area-inset-top)]">
-    {#if currentEntry}
-      <EditorHeader
-        title={loadingTargetPath
-          ? loadingTargetPath.split("/").pop()?.replace(".md", "") ?? "Loading..."
-          : getEntryTitle(currentEntry)}
-        path={loadingTargetPath ?? currentEntry.path}
-        {isDirty}
-        {isSaving}
-        showTitle={showEditorTitle}
-        showPath={showEditorPath}
-        leftSidebarOpen={!leftSidebarCollapsed}
-        rightSidebarOpen={!rightSidebarCollapsed}
-        {focusMode}
-        readonly={editorReadonly}
-        onSave={save}
-        onToggleLeftSidebar={toggleLeftSidebar}
-        onToggleRightSidebar={toggleRightSidebar}
-        onOpenCommandPalette={uiStore.openCommandPalette}
-        {api}
-        onPluginToolbarAction={handlePluginToolbarAction}
-      />
-
-      <!-- Document-level audience pill: sits directly under the title bar -->
-      <div class="shrink-0 px-4 md:px-6 py-1 border-b border-border/50">
-        <div class="mx-auto" style:max-width="var(--editor-content-max-width)">
-          <DocumentAudiencePill
-            audience={currentEntry.frontmatter.audience as string[] | null ?? null}
-            entryPath={currentEntry.path}
-            rootPath={tree?.path ?? ""}
-            {api}
-            onChange={(value) => {
-              if (value === null) {
-                handlePropertyRemove("audience");
-              } else {
-                handlePropertyChange("audience", value);
-              }
-            }}
-          />
-        </div>
+    <!-- Sidebar open buttons (visible when collapsed, fade in focus mode, reveal on hover via edge strip) -->
+    {#if leftSidebarCollapsed}
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div
+        class="absolute top-0 left-0 z-20 w-8 h-full hidden md:flex items-start group"
+        onmouseenter={() => leftEdgeHovered = true}
+        onmouseleave={() => leftEdgeHovered = false}
+      >
+        <button
+          type="button"
+          class="mt-[calc(env(safe-area-inset-top)+0.5rem)] ml-2 p-2 transition-opacity duration-200
+            {focusMode && leftSidebarCollapsed && rightSidebarCollapsed && !leftEdgeHovered ? 'opacity-0' : 'opacity-100'}"
+          onclick={toggleLeftSidebar}
+          aria-label="Open navigation sidebar"
+        >
+          <PanelLeft class="size-4 text-muted-foreground" />
+        </button>
       </div>
+    {/if}
+    {#if rightSidebarCollapsed}
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div
+        class="absolute top-0 right-0 z-20 w-8 h-full hidden md:flex items-start justify-end group"
+        onmouseenter={() => rightEdgeHovered = true}
+        onmouseleave={() => rightEdgeHovered = false}
+      >
+        <button
+          type="button"
+          class="mt-[calc(env(safe-area-inset-top)+0.5rem)] mr-2 p-2 transition-opacity duration-200
+            {focusMode && leftSidebarCollapsed && rightSidebarCollapsed && !rightEdgeHovered ? 'opacity-0' : 'opacity-100'}"
+          onclick={toggleRightSidebar}
+          aria-label="Open properties panel"
+        >
+          <PanelRight class="size-4 text-muted-foreground" />
+        </button>
+      </div>
+    {/if}
+    <!-- Mobile sidebar buttons -->
+    <button
+      type="button"
+      class="absolute top-[calc(env(safe-area-inset-top)+0.5rem)] left-2 z-20 p-2 md:hidden"
+      onclick={toggleLeftSidebar}
+      aria-label="Toggle navigation"
+    >
+      <Menu class="size-5 text-muted-foreground" />
+    </button>
+    {#if rightSidebarCollapsed}
+      <button
+        type="button"
+        class="absolute top-[calc(env(safe-area-inset-top)+0.5rem)] right-2 z-20 p-2 md:hidden"
+        onclick={toggleRightSidebar}
+        aria-label="Open properties panel"
+      >
+        <PanelRight class="size-4 text-muted-foreground" />
+      </button>
+    {/if}
 
+    {#if currentEntry}
       <EditorContent
         {Editor}
         bind:editorRef
@@ -2193,6 +2196,30 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
           </div>
         </div>
       {/if}
+
+      <EditorFooter
+        {isDirty}
+        {isSaving}
+        leftSidebarOpen={!leftSidebarCollapsed}
+        rightSidebarOpen={!rightSidebarCollapsed}
+        {focusMode}
+        readonly={editorReadonly}
+        commandPaletteOpen={uiStore.showCommandPalette}
+        onSave={save}
+        onOpenCommandPalette={uiStore.openCommandPalette}
+        {api}
+        onPluginToolbarAction={handlePluginToolbarAction}
+        audience={currentEntry.frontmatter.audience as string[] | null ?? null}
+        entryPath={currentEntry.path}
+        rootPath={tree?.path ?? ""}
+        onAudienceChange={(value) => {
+          if (value === null) {
+            handlePropertyRemove("audience");
+          } else {
+            handlePropertyChange("audience", value);
+          }
+        }}
+      />
     {:else}
       <EditorEmptyState
         {leftSidebarCollapsed}

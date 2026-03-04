@@ -2,9 +2,12 @@
 name = "diaryx_extism"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
 license-file.workspace = true
 description = "Extism-based third-party plugin runtime for Diaryx"
-publish = false
+publish = true
 
 [features]
 default = []

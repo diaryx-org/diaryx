@@ -7,6 +7,8 @@
   import FilePickerPopover from "$lib/components/FilePickerPopover.svelte";
   import AudienceEditor from "$lib/components/AudienceEditor.svelte";
   import WorkspaceConfigSection from "$lib/components/WorkspaceConfigSection.svelte";
+  import NestedObjectDisplay from "$lib/components/NestedObjectDisplay.svelte";
+  import PluginConfigSection from "$lib/components/PluginConfigSection.svelte";
   import {
     Calendar,
     Clock,
@@ -41,6 +43,7 @@
     Download,
     CheckCircle2,
     Loader2,
+    Puzzle,
   } from "@lucide/svelte";
   import type { Component } from "svelte";
   import VersionDiff from "./history/VersionDiff.svelte";
@@ -59,6 +62,7 @@
     enqueueAttachmentDownload,
     isAttachmentSyncEnabled,
   } from "$lib/sync/attachmentSyncService";
+  import { parseLinkDisplay } from "$lib/utils/linkParser";
 
   interface CrdtHistoryEntry {
     update_id: bigint;
@@ -473,7 +477,9 @@
   // Collapsible section state
   let audienceCollapsed = $state(true);
   let configCollapsed = $state(true);
+  let pluginsCollapsed = $state(true);
   let attachmentsCollapsed = $state(true);
+  let collapseTooltipOpen = $state(false);
 
   // State for adding new properties
   let showAddProperty = $state(false);
@@ -483,15 +489,6 @@
   // State for adding new array items
   let addingArrayItemKey = $state<string | null>(null);
   let newArrayItem = $state("");
-
-  // Inline regex to parse markdown link [title](/path) synchronously for display
-  const LINK_RE = /^\[([^\]]*)\]\(([^)]+)\)$/;
-
-  function parseLinkDisplay(link: string): { title: string; path: string } | null {
-    const m = LINK_RE.exec(link);
-    if (!m) return null;
-    return { title: m[1], path: m[2] };
-  }
 
   // Resolve a link string to a workspace path and navigate to it
   async function navigateToLink(link: string) {
@@ -571,7 +568,8 @@
     const entries = Object.entries(frontmatter).filter(
       ([key]) =>
         !DEDICATED_SECTION_KEYS.includes(key.toLowerCase()) &&
-        !(isRootIndex && WORKSPACE_CONFIG_KEYS.includes(key.toLowerCase())),
+        !(isRootIndex && WORKSPACE_CONFIG_KEYS.includes(key.toLowerCase())) &&
+        !(isRootIndex && key.toLowerCase() === "plugins"),
     );
 
     return entries.sort(([a], [b]) => {
@@ -671,6 +669,20 @@
       return value;
     }
   }
+
+  function handleCollapseClick(event: MouseEvent): void {
+    collapseTooltipOpen = false;
+    if (event.currentTarget instanceof HTMLElement) {
+      event.currentTarget.blur();
+    }
+    onToggleCollapse();
+  }
+
+  $effect(() => {
+    if (collapsed) {
+      collapseTooltipOpen = false;
+    }
+  });
 </script>
 
 <!-- Mobile overlay backdrop -->
@@ -692,12 +704,12 @@
   <div
     class="flex items-center justify-between px-4 py-3 border-b border-sidebar-border shrink-0 pt-[calc(env(safe-area-inset-top)+0.75rem)]"
   >
-    <Tooltip.Root>
+    <Tooltip.Root bind:open={collapseTooltipOpen}>
       <Tooltip.Trigger>
         <Button
           variant="ghost"
           size="icon"
-          onclick={onToggleCollapse}
+          onclick={handleCollapseClick}
           class="size-8"
           aria-label="Collapse panel"
         >
@@ -718,35 +730,10 @@
       {/if}
     </Tooltip.Root>
 
-    <!-- Tab Toggle (hidden when only one tab) -->
-    {#if historyTabId || nonHistoryPluginTabs.length > 0}
-    <div class="flex items-center gap-1 bg-muted rounded-md p-0.5">
-      <button
-        type="button"
-        class="px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === 'properties' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-        onclick={() => activeTab = "properties"}
-      >
-        Props
-      </button>
-      {#if historyTabId}
-        <button
-          type="button"
-          class="px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === historyTabId ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-          onclick={() => activeTab = historyTabId}
-        >
-          {historyTabLabel}
-        </button>
-      {/if}
-      {#each nonHistoryPluginTabs as tab}
-        <button
-          type="button"
-          class="px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === tab.contribution.id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-          onclick={() => activeTab = tab.contribution.id}
-        >
-          {tab.contribution.label}
-        </button>
-      {/each}
-    </div>
+    {#if entry}
+      <p class="text-xs text-muted-foreground truncate flex-1 min-w-0" title={entry.path}>
+        {entry.path}
+      </p>
     {/if}
   </div>
 
@@ -968,33 +955,49 @@
                       </Button>
                     </FilePickerPopover>
                   </div>
+                {:else if typeof value === 'object' && value !== null && !Array.isArray(value)}
+                  <!-- Nested object display -->
+                  <NestedObjectDisplay data={value as Record<string, unknown>} onNavigateLink={navigateToLink} />
                 {:else}
-                  <!-- String input -->
-                  <Input
-                    type="text"
-                    value={String(value ?? "")}
-                    class="h-8 text-base md:text-sm {key.toLowerCase() ===
-                      'title' && titleError
-                      ? 'border-destructive'
-                      : ''}"
-                    onblur={(e) => handleStringChange(key, e)}
-                    onfocus={() => {
-                      if (key.toLowerCase() === "title") onTitleErrorClear?.();
-                    }}
-                    onkeydown={(e) => {
-                      if (e.key === "Enter") {
-                        handleStringChange(key, e);
-                        (e.target as HTMLInputElement).blur();
-                      }
-                    }}
-                  />
-                  {#if key.toLowerCase() === "title" && titleError}
-                    <Alert.Root variant="destructive" class="mt-2 py-2">
-                      <AlertCircle class="size-4" />
-                      <Alert.Description class="text-xs">
-                        {titleError}
-                      </Alert.Description>
-                    </Alert.Root>
+                  <!-- String input (with link detection) -->
+                  {@const linkParsed = parseLinkDisplay(String(value ?? ""))}
+                  {#if linkParsed}
+                    <button
+                      type="button"
+                      class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-secondary text-secondary-foreground hover:underline cursor-pointer"
+                      onclick={() => navigateToLink(String(value))}
+                      title={linkParsed.path}
+                    >
+                      <ArrowUpRight class="size-3" />
+                      {linkParsed.title || linkParsed.path}
+                    </button>
+                  {:else}
+                    <Input
+                      type="text"
+                      value={String(value ?? "")}
+                      class="h-8 text-base md:text-sm {key.toLowerCase() ===
+                        'title' && titleError
+                        ? 'border-destructive'
+                        : ''}"
+                      onblur={(e) => handleStringChange(key, e)}
+                      onfocus={() => {
+                        if (key.toLowerCase() === "title") onTitleErrorClear?.();
+                      }}
+                      onkeydown={(e) => {
+                        if (e.key === "Enter") {
+                          handleStringChange(key, e);
+                          (e.target as HTMLInputElement).blur();
+                        }
+                      }}
+                    />
+                    {#if key.toLowerCase() === "title" && titleError}
+                      <Alert.Root variant="destructive" class="mt-2 py-2">
+                        <AlertCircle class="size-4" />
+                        <Alert.Description class="text-xs">
+                          {titleError}
+                        </Alert.Description>
+                      </Alert.Root>
+                    {/if}
                   {/if}
                 {/if}
               </div>
@@ -1116,6 +1119,29 @@
             <WorkspaceConfigSection rootIndexPath={entry.path} />
           {/if}
         </div>
+
+        <!-- Plugins Section (root index only) -->
+        {#if entry.frontmatter.plugins && typeof entry.frontmatter.plugins === 'object' && !Array.isArray(entry.frontmatter.plugins)}
+          <div class="p-3 border-t border-sidebar-border">
+            <button
+              type="button"
+              class="flex items-center justify-between w-full cursor-pointer {pluginsCollapsed ? '' : 'mb-2'}"
+              onclick={() => pluginsCollapsed = !pluginsCollapsed}
+            >
+              <div class="flex items-center gap-2 text-xs text-muted-foreground">
+                <Puzzle class="size-3.5" />
+                <span class="font-medium">Plugins</span>
+              </div>
+              <ChevronRight class="size-3.5 text-muted-foreground transition-transform {pluginsCollapsed ? '' : 'rotate-90'}" />
+            </button>
+            {#if !pluginsCollapsed}
+              <PluginConfigSection
+                plugins={entry.frontmatter.plugins as Record<string, unknown>}
+                onNavigateLink={navigateToLink}
+              />
+            {/if}
+          </div>
+        {/if}
       {/if}
 
       <!-- Attachments Section -->
@@ -1397,12 +1423,37 @@
     {/if}
   </div>
 
-  <!-- Footer with path -->
-  {#if entry}
-    <div class="px-4 py-3 border-t border-sidebar-border shrink-0 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]">
-      <p class="text-xs text-muted-foreground truncate" title={entry.path}>
-        {entry.path}
-      </p>
+  <!-- Tab Toggle (hidden when only one tab) -->
+  {#if historyTabId || nonHistoryPluginTabs.length > 0}
+  <div class="px-3 pt-1 pb-1 shrink-0">
+    <div class="flex items-center gap-1 bg-muted rounded-md p-0.5">
+      <button
+        type="button"
+        class="flex-1 px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === 'properties' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+        onclick={() => activeTab = "properties"}
+      >
+        Props
+      </button>
+      {#if historyTabId}
+        <button
+          type="button"
+          class="flex-1 px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === historyTabId ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+          onclick={() => activeTab = historyTabId}
+        >
+          {historyTabLabel}
+        </button>
+      {/if}
+      {#each nonHistoryPluginTabs as tab}
+        <button
+          type="button"
+          class="flex-1 px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === tab.contribution.id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+          onclick={() => activeTab = tab.contribution.id}
+        >
+          {tab.contribution.label}
+        </button>
+      {/each}
     </div>
+  </div>
   {/if}
+
 </aside>

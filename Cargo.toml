@@ -36,11 +36,11 @@ indexmap = { version = "2.0", features = ["serde"] }
 # Internal crates - version must match workspace.package.version for publishing
 diaryx_core = { path = "crates/diaryx_core", version = "1.3.0" }
 diaryx_apple = { path = "crates/diaryx_apple", version = "0.14.1" }
-diaryx_daily = { path = "crates/diaryx_daily", version = "1.2.1" }
-diaryx_templating = { path = "crates/diaryx_templating", version = "1.2.1" }
-diaryx_publish = { path = "crates/diaryx_publish", version = "1.2.1" }
+diaryx_daily = { path = "crates/diaryx_daily", version = "1.3.0" }
+diaryx_templating = { path = "crates/diaryx_templating", version = "1.3.0" }
+diaryx_publish = { path = "crates/diaryx_publish", version = "1.3.0" }
 diaryx_sync = { path = "crates/diaryx_sync", version = "1.3.0" }
-diaryx_extism = { path = "crates/diaryx_extism" }
+diaryx_extism = { path = "crates/diaryx_extism", version = "1.3.0" }
 
 # cargo-release configuration
 [workspace.metadata.release]

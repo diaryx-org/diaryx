@@ -33,6 +33,18 @@ exactly = 0
 # Core library should be published
 publish = true
 
+[package.diaryx_publish]
+# Publish pipeline library should be published
+publish = true
+
+[package.diaryx_sync]
+# Sync library should be published
+publish = true
+
+[package.diaryx_extism]
+# Extism runtime library should be published
+publish = true
+
 [package.diaryx]
 # CLI binary should be published
 publish = true

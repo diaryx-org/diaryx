@@ -301,7 +301,7 @@
   async function installFromRegistry(rp: RegistryPlugin) {
     installingIds = new Set([...installingIds, rp.id]);
     try {
-      const resp = await fetch(rp.artifact.wasmUrl);
+      const resp = await fetch(rp.artifact.url);
       if (!resp.ok) throw new Error(`Download failed: ${resp.status}`);
       const bytes = await resp.arrayBuffer();
       await verifyRegistryArtifact(bytes, rp.artifact.sha256);
@@ -442,13 +442,10 @@
               <div class="flex items-center gap-2 flex-wrap">
                 <span class="text-sm font-medium">{rp.name}</span>
                 <span class="text-[10px] text-muted-foreground">v{rp.version}</span>
-                <span class="text-[10px] rounded bg-muted px-1.5 py-0.5 text-muted-foreground">
-                  {rp.source.kind}
-                </span>
               </div>
               <p class="text-xs text-muted-foreground mt-0.5 line-clamp-2">{rp.summary}</p>
               <p class="text-[11px] text-muted-foreground mt-1">
-                {rp.creator} • {rp.license}
+                {rp.author} • {rp.license}
               </p>
             </div>
             <div class="flex items-center gap-2 shrink-0">

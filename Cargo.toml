@@ -11,16 +11,6 @@ members = [
     "crates/diaryx_publish",
     "crates/diaryx_sync_server",
     "crates/diaryx_extism",
-    "crates/diaryx_daily_extism",
-    "crates/diaryx_templating_extism",
-    "crates/diaryx_sync_extism",
-    "crates/diaryx_ai_extism",
-    "crates/diaryx_publish_extism",
-    "crates/diaryx_math_extism",
-    "crates/diaryx_spoiler_extism",
-    "crates/diaryx_storage_s3_extism",
-    "crates/diaryx_storage_gdrive_extism",
-    "crates/diaryx_import_extism",
     "apps/tauri/src-tauri"
 ]
 
@@ -73,10 +63,9 @@ codegen-units = 1
 opt-level = "s"
 
 # Patch getrandom 0.2 to let `custom` feature take priority over `js` on wasm32.
-# Upstream getrandom checks `js` first, so when both features are enabled (our
-# `custom` + yrs→fastrand→getrandom/js), the JS/wasm-bindgen backend is selected
-# instead of our custom backend. This patch swaps the priority so diaryx_sync_extism
-# (which needs custom RNG, no wasm-bindgen) works correctly, while diaryx_wasm
-# (which only has `js`, not `custom`) still uses the browser crypto backend.
+# Upstream getrandom checks `js` first, so when both features are enabled
+# (yrs→fastrand→getrandom/js), the JS/wasm-bindgen backend is always selected.
+# This patch swaps the priority so diaryx_wasm (which only has `js`, not
+# `custom`) still uses the browser crypto backend correctly.
 [patch.crates-io]
 getrandom = { path = "patches/getrandom-0.2" }

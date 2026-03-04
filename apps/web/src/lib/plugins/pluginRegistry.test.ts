@@ -6,41 +6,35 @@ import {
   getTrustedRegistryUrls,
 } from "./pluginRegistry";
 
-const VALID_REGISTRY = {
-  schemaVersion: 2,
-  generatedAt: "2026-03-03T00:00:00Z",
-  plugins: [
-    {
-      id: "diaryx.sync",
-      name: "Sync",
-      version: "1.2.3",
-      summary: "Realtime sync",
-      description: "Real-time CRDT sync across devices",
-      creator: "Diaryx Team",
-      license: "PolyForm Shield 1.0.0",
-      artifact: {
-        wasmUrl: "https://cdn.diaryx.org/plugins/artifacts/diaryx.sync/1.2.3/abc.wasm",
-        sha256: "abc",
-        sizeBytes: 123,
-        publishedAt: "2026-03-03T00:00:00Z",
-      },
-      source: {
-        kind: "internal",
-        repositoryUrl: "https://github.com/diaryx-org/diaryx",
-        registryId: "diaryx-official",
-      },
-      homepage: null,
-      documentationUrl: null,
-      changelogUrl: null,
-      categories: ["sync"],
-      tags: ["crdt"],
-      iconUrl: null,
-      screenshots: [],
-      capabilities: ["sync_transport"],
-      requestedPermissions: null,
-    },
-  ],
-};
+const VALID_REGISTRY_MD = `---
+title: "Diaryx Plugin Registry"
+description: "Official plugin directory"
+generated_at: "2026-03-03T00:00:00Z"
+schema_version: 2
+plugins:
+  - id: "diaryx.sync"
+    name: "Sync"
+    version: "1.2.3"
+    summary: "Realtime sync"
+    description: "Real-time CRDT sync across devices"
+    author: "Diaryx Team"
+    license: "PolyForm Shield 1.0.0"
+    artifact:
+      url: "https://cdn.diaryx.org/plugins/artifacts/diaryx.sync/1.2.3/abc.wasm"
+      sha256: "abc"
+      size: 123
+      published_at: "2026-03-03T00:00:00Z"
+    repository: "https://github.com/diaryx-org/diaryx"
+    categories: ["sync"]
+    tags: ["crdt"]
+    icon: null
+    screenshots: []
+    capabilities: ["sync_transport"]
+    requested_permissions: null
+---
+# Diaryx Plugin Registry
+Browse and install plugins for Diaryx.
+`;
 
 afterEach(() => {
   clearRegistryCache();
@@ -48,9 +42,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("pluginRegistry v2", () => {
+describe("pluginRegistry", () => {
   it("rejects untrusted registry URLs", async () => {
-    await expect(fetchPluginRegistry("https://example.com/registry.json")).rejects.toThrow(
+    await expect(fetchPluginRegistry("https://example.com/registry.md")).rejects.toThrow(
       "Untrusted plugin registry URL",
     );
   });
@@ -60,7 +54,7 @@ describe("pluginRegistry v2", () => {
       "fetch",
       vi.fn().mockResolvedValue({
         ok: true,
-        json: async () => ({ schemaVersion: 1, generatedAt: "", plugins: [] }),
+        text: async () => "---\nschema_version: 1\ngenerated_at: \"\"\nplugins: []\n---\n",
       }),
     );
 
@@ -70,10 +64,10 @@ describe("pluginRegistry v2", () => {
     );
   });
 
-  it("parses registry-v2 and caches results", async () => {
+  it("parses registry markdown and caches results", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => VALID_REGISTRY,
+      text: async () => VALID_REGISTRY_MD,
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -81,8 +75,11 @@ describe("pluginRegistry v2", () => {
     const first = await fetchPluginRegistry(trusted);
     const second = await fetchPluginRegistry(trusted);
 
-    expect(first.schemaVersion).toBe(2);
+    expect(first.schema_version).toBe(2);
     expect(first.plugins[0]?.id).toBe("diaryx.sync");
+    expect(first.plugins[0]?.author).toBe("Diaryx Team");
+    expect(first.plugins[0]?.artifact.url).toContain("abc.wasm");
+    expect(first.plugins[0]?.artifact.size).toBe(123);
     expect(second).toBe(first);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });

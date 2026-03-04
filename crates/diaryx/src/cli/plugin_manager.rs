@@ -1,6 +1,6 @@
 //! Plugin management commands — install, remove, list, search, update, info.
 //!
-//! Downloads plugins from the Diaryx CDN `registry-v2.json` and manages the
+//! Downloads plugins from the Diaryx CDN `registry.md` and manages the
 //! local plugin directory at `~/.diaryx/plugins/`.
 
 use std::collections::{HashMap, HashSet};
@@ -8,70 +8,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
+use diaryx_core::plugin::manifest::{MarketplaceEntry, MarketplaceRegistry};
 use diaryx_extism::{HostContext, inspect_plugin_wasm_manifest, load_plugin_from_wasm};
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::cli::args::PluginCommands;
 
-const REGISTRY_URL: &str = "https://cdn.diaryx.org/plugins/registry-v2.json";
-
-#[derive(Debug, Deserialize, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RegistryV2 {
-    schema_version: u64,
-    generated_at: String,
-    plugins: Vec<RegistryPlugin>,
-}
-
-#[derive(Debug, Deserialize, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RegistryPlugin {
-    id: String,
-    name: String,
-    version: String,
-    summary: String,
-    description: String,
-    creator: String,
-    license: String,
-    artifact: RegistryArtifact,
-    source: RegistrySource,
-    #[serde(default)]
-    homepage: Option<String>,
-    #[serde(default)]
-    documentation_url: Option<String>,
-    #[serde(default)]
-    changelog_url: Option<String>,
-    #[serde(default)]
-    categories: Vec<String>,
-    #[serde(default)]
-    tags: Vec<String>,
-    #[serde(default)]
-    icon_url: Option<String>,
-    #[serde(default)]
-    screenshots: Vec<String>,
-    #[serde(default)]
-    capabilities: Vec<String>,
-    #[serde(default)]
-    requested_permissions: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Deserialize, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RegistryArtifact {
-    wasm_url: String,
-    sha256: String,
-    size_bytes: u64,
-    published_at: String,
-}
-
-#[derive(Debug, Deserialize, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RegistrySource {
-    kind: String,
-    repository_url: String,
-    registry_id: String,
-}
+const REGISTRY_URL: &str = "https://cdn.diaryx.org/plugins/registry.md";
 
 #[derive(Debug, Clone)]
 struct InstalledPlugin {
@@ -88,8 +31,7 @@ struct DiscoveryFilters {
     query: Option<String>,
     category: Option<String>,
     tag: Option<String>,
-    source: Option<String>,
-    creator: Option<String>,
+    author: Option<String>,
     installed_only: bool,
 }
 
@@ -99,15 +41,13 @@ pub fn handle_plugin_command(command: PluginCommands) {
         PluginCommands::List {
             category,
             tag,
-            source,
-            creator,
+            author,
             json,
         } => handle_list(
             DiscoveryFilters {
                 category,
                 tag,
-                source,
-                creator,
+                author,
                 ..Default::default()
             },
             json,
@@ -118,8 +58,7 @@ pub fn handle_plugin_command(command: PluginCommands) {
             query,
             category,
             tag,
-            source,
-            creator,
+            author,
             installed,
             json,
         } => handle_search(
@@ -127,8 +66,7 @@ pub fn handle_plugin_command(command: PluginCommands) {
                 query,
                 category,
                 tag,
-                source,
-                creator,
+                author,
                 installed_only: installed,
             },
             json,
@@ -239,32 +177,15 @@ fn normalize_optional_filter(value: &Option<String>) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-fn normalized_source_filter(raw: &Option<String>) -> Result<Option<String>, String> {
-    let source = normalize_optional_filter(raw);
-    if let Some(source_kind) = &source
-        && source_kind != "internal"
-        && source_kind != "external"
-    {
-        return Err(format!(
-            "Invalid --source value '{source_kind}'. Expected 'internal' or 'external'."
-        ));
-    }
-    Ok(source)
-}
-
 fn matches_registry_filters(
-    plugin: &RegistryPlugin,
+    plugin: &MarketplaceEntry,
     filters: &DiscoveryFilters,
     installed_ids: Option<&HashSet<String>>,
 ) -> bool {
     let query = normalize_optional_filter(&filters.query);
     let category = normalize_optional_filter(&filters.category);
     let tag = normalize_optional_filter(&filters.tag);
-    let creator = normalize_optional_filter(&filters.creator);
-    let source = match normalized_source_filter(&filters.source) {
-        Ok(value) => value,
-        Err(_) => return false,
-    };
+    let author = normalize_optional_filter(&filters.author);
 
     if let Some(q) = query {
         let haystack = format!(
@@ -273,7 +194,7 @@ fn matches_registry_filters(
             plugin.name,
             plugin.summary,
             plugin.description,
-            plugin.creator,
+            plugin.author,
             plugin.categories.join(" "),
             plugin.tags.join(" ")
         )
@@ -301,17 +222,11 @@ fn matches_registry_filters(
         return false;
     }
 
-    if let Some(expected_source) = source
-        && !plugin.source.kind.eq_ignore_ascii_case(&expected_source)
-    {
-        return false;
-    }
-
-    if let Some(expected_creator) = creator
+    if let Some(expected_author) = author
         && !plugin
-            .creator
+            .author
             .to_lowercase()
-            .contains(expected_creator.as_str())
+            .contains(expected_author.as_str())
     {
         return false;
     }
@@ -360,11 +275,6 @@ fn is_canonical_plugin_id(id: &str) -> bool {
 
 /// List installed plugins.
 fn handle_list(filters: DiscoveryFilters, json: bool) {
-    if let Err(err) = normalized_source_filter(&filters.source) {
-        eprintln!("{err}");
-        return;
-    }
-
     let installed = read_installed_plugins();
     if installed.is_empty() {
         println!("No plugins installed.");
@@ -372,7 +282,7 @@ fn handle_list(filters: DiscoveryFilters, json: bool) {
     }
 
     let registry = fetch_registry().ok();
-    let registry_by_id: HashMap<String, RegistryPlugin> = registry
+    let registry_by_id: HashMap<String, MarketplaceEntry> = registry
         .as_ref()
         .map(|r| {
             r.plugins
@@ -385,12 +295,11 @@ fn handle_list(filters: DiscoveryFilters, json: bool) {
 
     let using_metadata_filter = filters.category.is_some()
         || filters.tag.is_some()
-        || filters.source.is_some()
-        || filters.creator.is_some()
+        || filters.author.is_some()
         || filters.query.is_some();
 
     if using_metadata_filter && registry.is_none() {
-        eprintln!("Could not fetch registry-v2 metadata. Retry later or remove metadata filters.");
+        eprintln!("Could not fetch registry metadata. Retry later or remove metadata filters.");
         return;
     }
 
@@ -429,9 +338,9 @@ fn handle_list(filters: DiscoveryFilters, json: bool) {
                     "version": local.version,
                     "description": local.description,
                     "installed": true,
-                    "source": registry_plugin.as_ref().map(|p| p.source.kind.clone()),
-                    "creator": registry_plugin.as_ref().map(|p| p.creator.clone()),
+                    "author": registry_plugin.as_ref().map(|p| p.author.clone()),
                     "license": registry_plugin.as_ref().map(|p| p.license.clone()),
+                    "repository": registry_plugin.as_ref().and_then(|p| p.repository.clone()),
                     "categories": registry_plugin.as_ref().map(|p| p.categories.clone()).unwrap_or_default(),
                     "tags": registry_plugin.as_ref().map(|p| p.tags.clone()).unwrap_or_default(),
                     "unmanagedLocal": registry_plugin.is_none(),
@@ -451,12 +360,8 @@ fn handle_list(filters: DiscoveryFilters, json: bool) {
         let version = local.version.as_deref().unwrap_or("?");
         if let Some(registry_plugin) = registry_plugin {
             println!(
-                "  {:<24} v{:<10} {:<11} {:<18} {}",
-                local.id,
-                version,
-                registry_plugin.source.kind,
-                registry_plugin.creator,
-                registry_plugin.summary
+                "  {:<24} v{:<10} {:<18} {}",
+                local.id, version, registry_plugin.author, registry_plugin.summary
             );
         } else {
             let desc = local
@@ -508,7 +413,7 @@ fn handle_install(id: &str) {
 }
 
 /// Download and install a single plugin.
-fn install_plugin(plugin: &RegistryPlugin) -> Result<(), String> {
+fn install_plugin(plugin: &MarketplaceEntry) -> Result<(), String> {
     let dest = plugin_dir(&plugin.id);
     let existed = dest.exists();
 
@@ -525,7 +430,7 @@ fn install_plugin(plugin: &RegistryPlugin) -> Result<(), String> {
             plugin.name, plugin.id, plugin.version
         );
 
-        let bytes = download_bytes(&plugin.artifact.wasm_url)?;
+        let bytes = download_bytes(&plugin.artifact.url)?;
         verify_download_integrity(plugin, &bytes)?;
 
         let wasm_path = dest.join("plugin.wasm");
@@ -556,7 +461,7 @@ fn install_plugin(plugin: &RegistryPlugin) -> Result<(), String> {
     Ok(())
 }
 
-fn verify_download_integrity(plugin: &RegistryPlugin, bytes: &[u8]) -> Result<(), String> {
+fn verify_download_integrity(plugin: &MarketplaceEntry, bytes: &[u8]) -> Result<(), String> {
     let expected_sha = normalize_sha256(&plugin.artifact.sha256);
     if expected_sha.is_empty() {
         return Err("Registry artifact.sha256 is empty".to_string());
@@ -570,11 +475,11 @@ fn verify_download_integrity(plugin: &RegistryPlugin, bytes: &[u8]) -> Result<()
         ));
     }
 
-    if plugin.artifact.size_bytes != bytes.len() as u64 {
+    if plugin.artifact.size != bytes.len() as u64 {
         return Err(format!(
             "Artifact size mismatch for {}: expected {} bytes, got {} bytes",
             plugin.id,
-            plugin.artifact.size_bytes,
+            plugin.artifact.size,
             bytes.len()
         ));
     }
@@ -583,7 +488,7 @@ fn verify_download_integrity(plugin: &RegistryPlugin, bytes: &[u8]) -> Result<()
 }
 
 fn verify_inspected_manifest(
-    registry_plugin: &RegistryPlugin,
+    registry_plugin: &MarketplaceEntry,
     inspected: &diaryx_extism::protocol::GuestManifest,
 ) -> Result<(), String> {
     if inspected.id != registry_plugin.id {
@@ -664,11 +569,6 @@ fn handle_remove(id: &str, yes: bool) {
 
 /// Search the plugin registry.
 fn handle_search(filters: DiscoveryFilters, json: bool) {
-    if let Err(err) = normalized_source_filter(&filters.source) {
-        eprintln!("{err}");
-        return;
-    }
-
     let registry = match fetch_registry() {
         Ok(registry) => registry,
         Err(err) => {
@@ -682,7 +582,7 @@ fn handle_search(filters: DiscoveryFilters, json: bool) {
         .map(|plugin| plugin.id.clone())
         .collect();
 
-    let matches: Vec<&RegistryPlugin> = registry
+    let matches: Vec<&MarketplaceEntry> = registry
         .plugins
         .iter()
         .filter(|plugin| matches_registry_filters(plugin, &filters, Some(&installed_ids)))
@@ -703,9 +603,9 @@ fn handle_search(filters: DiscoveryFilters, json: bool) {
                     "version": plugin.version,
                     "summary": plugin.summary,
                     "description": plugin.description,
-                    "creator": plugin.creator,
+                    "author": plugin.author,
                     "license": plugin.license,
-                    "source": plugin.source,
+                    "repository": plugin.repository,
                     "categories": plugin.categories,
                     "tags": plugin.tags,
                     "capabilities": plugin.capabilities,
@@ -729,13 +629,8 @@ fn handle_search(filters: DiscoveryFilters, json: bool) {
             ""
         };
         println!(
-            "  {:<24} v{:<10} {:<11} {:<18} {}{}",
-            plugin.id,
-            plugin.version,
-            plugin.source.kind,
-            plugin.creator,
-            plugin.summary,
-            installed_suffix
+            "  {:<24} v{:<10} {:<18} {}{}",
+            plugin.id, plugin.version, plugin.author, plugin.summary, installed_suffix
         );
     }
 }
@@ -769,7 +664,7 @@ fn handle_update(specific_id: Option<&str>) {
         checked += 1;
 
         let Some(registry_plugin) = registry.plugins.iter().find(|p| p.id == local.id) else {
-            eprintln!("Skipping {}: not found in registry-v2", local.id);
+            eprintln!("Skipping {}: not found in registry", local.id);
             continue;
         };
 
@@ -819,7 +714,7 @@ fn handle_info(id: &str, json: bool) {
     let installed_plugin = installed.iter().find(|plugin| plugin.id == id);
 
     if registry_plugin.is_none() && installed_plugin.is_none() {
-        eprintln!("Plugin '{id}' was not found in registry-v2 and is not installed.");
+        eprintln!("Plugin '{id}' was not found in registry and is not installed.");
         return;
     }
 
@@ -851,19 +746,17 @@ fn handle_info(id: &str, json: bool) {
         println!("Version: {}", plugin.version);
         println!("Summary: {}", plugin.summary);
         println!("Description: {}", plugin.description);
-        println!("Creator: {}", plugin.creator);
+        println!("Author: {}", plugin.author);
         println!("License: {}", plugin.license);
-        println!(
-            "Source: {} ({})",
-            plugin.source.kind, plugin.source.registry_id
-        );
-        println!("Repository: {}", plugin.source.repository_url);
-        println!("Artifact URL: {}", plugin.artifact.wasm_url);
+        if let Some(url) = &plugin.repository {
+            println!("Repository: {url}");
+        }
+        println!("Artifact URL: {}", plugin.artifact.url);
         println!(
             "Artifact SHA-256: {}",
             normalize_sha256(&plugin.artifact.sha256)
         );
-        println!("Artifact Size: {} bytes", plugin.artifact.size_bytes);
+        println!("Artifact Size: {} bytes", plugin.artifact.size);
         println!("Published At: {}", plugin.artifact.published_at);
         if !plugin.categories.is_empty() {
             println!("Categories: {}", plugin.categories.join(", "));
@@ -873,15 +766,6 @@ fn handle_info(id: &str, json: bool) {
         }
         if !plugin.capabilities.is_empty() {
             println!("Capabilities: {}", plugin.capabilities.join(", "));
-        }
-        if let Some(url) = &plugin.homepage {
-            println!("Homepage: {url}");
-        }
-        if let Some(url) = &plugin.documentation_url {
-            println!("Documentation: {url}");
-        }
-        if let Some(url) = &plugin.changelog_url {
-            println!("Changelog: {url}");
         }
         if let Some(requested) = &plugin.requested_permissions {
             let requested_text = serde_json::to_string_pretty(requested)
@@ -901,89 +785,8 @@ fn handle_info(id: &str, json: bool) {
     }
 }
 
-fn parse_registry_payload(payload: serde_json::Value) -> Result<RegistryV2, String> {
-    let Some(schema_version) = payload.get("schemaVersion").and_then(|v| v.as_u64()) else {
-        return Err(
-            "Unsupported plugin registry schema version: missing schemaVersion (expected 2)"
-                .to_string(),
-        );
-    };
-
-    if schema_version != 2 {
-        return Err(format!(
-            "Unsupported plugin registry schema version: {} (expected 2)",
-            schema_version
-        ));
-    }
-
-    let registry = serde_json::from_value::<RegistryV2>(payload)
-        .map_err(|err| format!("Failed to parse registry-v2 payload: {err}"))?;
-
-    if registry.schema_version != 2 {
-        return Err(format!(
-            "Unsupported plugin registry schema version: {} (expected 2)",
-            registry.schema_version
-        ));
-    }
-
-    for plugin in &registry.plugins {
-        validate_registry_plugin(plugin)?;
-    }
-
-    Ok(registry)
-}
-
-fn validate_registry_plugin(plugin: &RegistryPlugin) -> Result<(), String> {
-    if plugin.id.trim().is_empty() {
-        return Err("registry-v2 validation error: plugin.id must be non-empty".to_string());
-    }
-    if !is_canonical_plugin_id(plugin.id.as_str()) {
-        return Err(format!(
-            "registry-v2 validation error: plugin '{}' has non-canonical id",
-            plugin.id
-        ));
-    }
-    if plugin.name.trim().is_empty() {
-        return Err(format!(
-            "registry-v2 validation error: plugin '{}' has empty name",
-            plugin.id
-        ));
-    }
-    if plugin.version.trim().is_empty() {
-        return Err(format!(
-            "registry-v2 validation error: plugin '{}' has empty version",
-            plugin.id
-        ));
-    }
-    if plugin.artifact.wasm_url.trim().is_empty() {
-        return Err(format!(
-            "registry-v2 validation error: plugin '{}' has empty artifact.wasmUrl",
-            plugin.id
-        ));
-    }
-    if normalize_sha256(&plugin.artifact.sha256).is_empty() {
-        return Err(format!(
-            "registry-v2 validation error: plugin '{}' has empty artifact.sha256",
-            plugin.id
-        ));
-    }
-    if plugin.artifact.size_bytes == 0 {
-        return Err(format!(
-            "registry-v2 validation error: plugin '{}' has invalid artifact.sizeBytes=0",
-            plugin.id
-        ));
-    }
-    if plugin.source.kind != "internal" && plugin.source.kind != "external" {
-        return Err(format!(
-            "registry-v2 validation error: plugin '{}' has invalid source.kind '{}'",
-            plugin.id, plugin.source.kind
-        ));
-    }
-    Ok(())
-}
-
 /// Fetch and parse the plugin registry.
-fn fetch_registry() -> Result<RegistryV2, String> {
+fn fetch_registry() -> Result<MarketplaceRegistry, String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
@@ -992,17 +795,18 @@ fn fetch_registry() -> Result<RegistryV2, String> {
     let response = client
         .get(REGISTRY_URL)
         .send()
-        .map_err(|err| format!("Failed to fetch registry-v2: {err}"))?;
+        .map_err(|err| format!("Failed to fetch registry: {err}"))?;
 
     if !response.status().is_success() {
         return Err(format!("Registry returned status {}", response.status()));
     }
 
-    let payload = response
-        .json::<serde_json::Value>()
-        .map_err(|err| format!("Failed to decode registry payload: {err}"))?;
+    let text = response
+        .text()
+        .map_err(|err| format!("Failed to read registry response: {err}"))?;
 
-    parse_registry_payload(payload)
+    MarketplaceRegistry::from_markdown(&text)
+        .map_err(|err| format!("Failed to parse registry: {err}"))
 }
 
 /// Download a file and return its bytes.
@@ -1030,34 +834,27 @@ fn download_bytes(url: &str) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use diaryx_core::plugin::manifest::PluginArtifact;
 
-    fn sample_plugin() -> RegistryPlugin {
-        RegistryPlugin {
+    fn sample_plugin() -> MarketplaceEntry {
+        MarketplaceEntry {
             id: "diaryx.sync".into(),
             name: "Sync".into(),
             version: "1.2.3".into(),
             summary: "Realtime sync".into(),
             description: "Real-time CRDT sync across devices".into(),
-            creator: "Diaryx Team".into(),
+            author: "Diaryx Team".into(),
             license: "PolyForm Shield 1.0.0".into(),
-            artifact: RegistryArtifact {
-                wasm_url: "https://cdn.diaryx.org/plugins/artifacts/diaryx.sync/1.2.3/abc.wasm"
-                    .into(),
+            artifact: PluginArtifact {
+                url: "https://cdn.diaryx.org/plugins/artifacts/diaryx.sync/1.2.3/abc.wasm".into(),
                 sha256: "abc".into(),
-                size_bytes: 42,
+                size: 42,
                 published_at: "2026-03-03T00:00:00Z".into(),
             },
-            source: RegistrySource {
-                kind: "internal".into(),
-                repository_url: "https://github.com/diaryx-org/diaryx".into(),
-                registry_id: "diaryx-official".into(),
-            },
-            homepage: None,
-            documentation_url: None,
-            changelog_url: None,
+            repository: Some("https://github.com/diaryx-org/diaryx".into()),
             categories: vec!["sync".into()],
             tags: vec!["crdt".into()],
-            icon_url: None,
+            icon: None,
             screenshots: vec![],
             capabilities: vec!["sync_transport".into()],
             requested_permissions: None,
@@ -1065,24 +862,34 @@ mod tests {
     }
 
     #[test]
-    fn parse_registry_rejects_old_schema() {
-        let payload = serde_json::json!({
-            "schemaVersion": 1,
-            "generatedAt": "2026-03-03T00:00:00Z",
-            "plugins": []
-        });
-        let err = parse_registry_payload(payload).expect_err("schema 1 should fail");
-        assert!(err.contains("expected 2"));
+    fn parse_registry_md_rejects_old_schema() {
+        let content = "---\nschema_version: 1\ngenerated_at: \"2026-03-03\"\nplugins: []\n---\n";
+        let err = MarketplaceRegistry::from_markdown(content).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("expected 2"), "got: {msg}");
     }
 
     #[test]
-    fn parse_registry_accepts_v2() {
-        let payload = serde_json::json!({
-            "schemaVersion": 2,
-            "generatedAt": "2026-03-03T00:00:00Z",
-            "plugins": [sample_plugin()]
-        });
-        let parsed = parse_registry_payload(payload).expect("schema 2 should parse");
+    fn parse_registry_md_accepts_v2() {
+        let content = r#"---
+schema_version: 2
+generated_at: "2026-03-03T00:00:00Z"
+plugins:
+  - id: "diaryx.sync"
+    name: "Sync"
+    version: "1.2.3"
+    summary: "Realtime sync"
+    description: "desc"
+    author: "Diaryx Team"
+    license: "MIT"
+    artifact:
+      url: "https://cdn.diaryx.org/test.wasm"
+      sha256: "abc"
+      size: 42
+      published_at: "2026-03-03T00:00:00Z"
+---
+"#;
+        let parsed = MarketplaceRegistry::from_markdown(content).unwrap();
         assert_eq!(parsed.schema_version, 2);
         assert_eq!(parsed.plugins.len(), 1);
         assert_eq!(parsed.plugins[0].id, "diaryx.sync");
@@ -1117,11 +924,11 @@ mod tests {
     }
 
     #[test]
-    fn registry_filter_matches_query_and_source() {
+    fn registry_filter_matches_query_and_author() {
         let plugin = sample_plugin();
         let filters = DiscoveryFilters {
             query: Some("crdt".into()),
-            source: Some("internal".into()),
+            author: Some("Diaryx".into()),
             ..Default::default()
         };
         let installed = HashSet::from(["diaryx.sync".to_string()]);
@@ -1132,7 +939,7 @@ mod tests {
         ));
 
         let fail_filters = DiscoveryFilters {
-            source: Some("external".into()),
+            author: Some("Unknown".into()),
             ..Default::default()
         };
         assert!(!matches_registry_filters(

@@ -2234,15 +2234,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "diaryx_ai_extism"
-version = "1.2.1"
-dependencies = [
- "extism-pdk",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "diaryx_apple"
 version = "1.2.1"
 dependencies = [
@@ -2299,22 +2290,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "diaryx_daily_extism"
-version = "1.2.1"
-dependencies = [
- "base64 0.22.1",
- "chrono",
- "diaryx_core",
- "diaryx_daily",
- "extism-pdk",
- "indexmap 2.13.0",
- "pathdiff",
- "serde",
- "serde_json",
- "serde_yaml",
-]
-
-[[package]]
 name = "diaryx_extism"
 version = "1.2.1"
 dependencies = [
@@ -2335,30 +2310,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "diaryx_import_extism"
-version = "1.2.1"
-dependencies = [
- "base64 0.22.1",
- "chrono",
- "diaryx_core",
- "extism-pdk",
- "indexmap 2.13.0",
- "serde",
- "serde_json",
- "serde_yaml",
-]
-
-[[package]]
-name = "diaryx_math_extism"
-version = "1.2.1"
-dependencies = [
- "extism-pdk",
- "pulldown-latex",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "diaryx_publish"
 version = "1.2.1"
 dependencies = [
@@ -2374,53 +2325,6 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "tempfile",
-]
-
-[[package]]
-name = "diaryx_publish_extism"
-version = "1.2.1"
-dependencies = [
- "base64 0.22.1",
- "diaryx_core",
- "diaryx_publish",
- "extism-pdk",
- "getrandom 0.2.17",
- "getrandom 0.3.4",
- "log",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "diaryx_spoiler_extism"
-version = "1.2.1"
-dependencies = [
- "extism-pdk",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "diaryx_storage_gdrive_extism"
-version = "1.2.1"
-dependencies = [
- "base64 0.22.1",
- "extism-pdk",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "diaryx_storage_s3_extism"
-version = "1.2.1"
-dependencies = [
- "base64 0.22.1",
- "extism-pdk",
- "hex",
- "hmac",
- "serde",
- "serde_json",
- "sha2",
 ]
 
 [[package]]
@@ -2454,21 +2358,6 @@ dependencies = [
  "ts-rs",
  "url",
  "yrs 0.25.0",
-]
-
-[[package]]
-name = "diaryx_sync_extism"
-version = "1.2.1"
-dependencies = [
- "base64 0.22.1",
- "diaryx_core",
- "diaryx_sync",
- "extism-pdk",
- "getrandom 0.2.17",
- "getrandom 0.3.4",
- "log",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -2558,21 +2447,6 @@ version = "1.2.1"
 dependencies = [
  "chrono",
  "handlebars",
- "indexmap 2.13.0",
- "serde",
- "serde_json",
- "serde_yaml",
-]
-
-[[package]]
-name = "diaryx_templating_extism"
-version = "1.2.1"
-dependencies = [
- "base64 0.22.1",
- "chrono",
- "diaryx_core",
- "diaryx_templating",
- "extism-pdk",
  "indexmap 2.13.0",
  "serde",
  "serde_json",
@@ -3031,32 +2905,6 @@ dependencies = [
  "base64 0.22.1",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "extism-pdk"
-version = "1.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "352fcb5a66eb74145a1c4a01f2bd15d59c62c85be73aac8471880c65b26b798f"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "extism-convert",
- "extism-manifest",
- "extism-pdk-derive",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "extism-pdk-derive"
-version = "1.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d086daea5fd844e3c5ac69ddfe36df4a9a43e7218cf7d1f888182b089b09806c"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.114",
 ]
 
 [[package]]
@@ -6272,15 +6120,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
-]
-
-[[package]]
-name = "pulldown-latex"
-version = "0.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5abae0e37a730c3e0c6805cfc30d80754fa03091bf5bad54ae47d033aae6ba8b"
-dependencies = [
- "bumpalo",
 ]
 
 [[package]]

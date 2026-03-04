@@ -44,6 +44,13 @@
 
   let { onClose }: Props = $props();
 
+  let closing = $state(false);
+
+  function handleClose() {
+    closing = true;
+    setTimeout(onClose, 200);
+  }
+
   const pluginStore = getPluginStore();
 
   let registryPlugins = $state<RegistryPlugin[]>([]);
@@ -57,7 +64,7 @@
   let search = $state("");
   let categoryFilter = $state("all");
   let capabilityFilter = $state("all");
-  let sourceFilter = $state<"all" | "internal" | "external" | "installed">("all");
+  let sourceFilter = $state<"all" | "installed">("all");
   let sortBy = $state<"name" | "version" | "recent">("name");
   let selectedPluginId = $state<string | null>(null);
 
@@ -96,8 +103,6 @@
     const query = search.trim().toLowerCase();
 
     const filtered = registryPlugins.filter((plugin) => {
-      if (sourceFilter === "internal" && plugin.source.kind !== "internal") return false;
-      if (sourceFilter === "external" && plugin.source.kind !== "external") return false;
       if (sourceFilter === "installed" && !installedIds.has(plugin.id)) return false;
 
       if (categoryFilter !== "all" && !plugin.categories.includes(categoryFilter)) {
@@ -113,7 +118,7 @@
         plugin.name,
         plugin.summary,
         plugin.description,
-        plugin.creator,
+        plugin.author,
         plugin.license,
         ...plugin.tags,
         ...plugin.categories,
@@ -130,8 +135,8 @@
       if (sortBy === "version") {
         return b.version.localeCompare(a.version);
       }
-      const aTs = Date.parse(a.artifact.publishedAt) || 0;
-      const bTs = Date.parse(b.artifact.publishedAt) || 0;
+      const aTs = Date.parse(a.artifact.published_at) || 0;
+      const bTs = Date.parse(b.artifact.published_at) || 0;
       return bTs - aTs;
     });
 
@@ -348,7 +353,7 @@
   async function installFromRegistry(plugin: RegistryPlugin): Promise<void> {
     installingIds = new Set([...installingIds, plugin.id]);
     try {
-      const response = await fetch(plugin.artifact.wasmUrl);
+      const response = await fetch(plugin.artifact.url);
       if (!response.ok) {
         throw new Error(`Download failed: ${response.status}`);
       }
@@ -407,7 +412,7 @@
   }
 </script>
 
-<div class="fixed inset-0 z-50 bg-background overflow-hidden">
+<div class="fixed inset-0 z-50 bg-background overflow-hidden {closing ? 'animate-marketplace-out' : 'animate-marketplace-in'}">
   <div class="h-full flex flex-col">
     <header class="border-b px-4 py-3 flex items-center justify-between gap-3">
       <div class="flex items-center gap-2 min-w-0">
@@ -427,7 +432,7 @@
             Add Local
           {/if}
         </Button>
-        <Button variant="ghost" size="icon" onclick={onClose} aria-label="Close marketplace">
+        <Button variant="ghost" size="icon" onclick={handleClose} aria-label="Close marketplace">
           <X class="size-4" />
         </Button>
       </div>
@@ -467,9 +472,7 @@
       </select>
 
       <select class="h-9 rounded-md border bg-background px-2 text-sm" bind:value={sourceFilter}>
-        <option value="all">All sources</option>
-        <option value="internal">Internal</option>
-        <option value="external">External</option>
+        <option value="all">All plugins</option>
         <option value="installed">Installed</option>
       </select>
 
@@ -507,8 +510,7 @@
                 </div>
                 <p class="text-xs text-muted-foreground mt-1 line-clamp-2">{plugin.summary}</p>
                 <div class="mt-2 flex flex-wrap gap-1">
-                  <Badge variant="outline" class="text-[10px]">{plugin.source.kind}</Badge>
-                  <Badge variant="outline" class="text-[10px]">{plugin.creator}</Badge>
+                  <Badge variant="outline" class="text-[10px]">{plugin.author}</Badge>
                 </div>
                 <div class="mt-3 flex items-center justify-between gap-2">
                   {#if installed}
@@ -596,7 +598,6 @@
               <div class="flex items-center gap-2 flex-wrap">
                 <h3 class="text-lg font-semibold">{plugin.name}</h3>
                 <Badge variant="secondary">v{plugin.version}</Badge>
-                <Badge variant="outline">{plugin.source.kind}</Badge>
               </div>
               <p class="text-sm text-muted-foreground mt-1">{plugin.summary}</p>
               <p class="text-sm mt-2">{plugin.description}</p>
@@ -604,8 +605,8 @@
 
             <div class="grid grid-cols-2 gap-2 text-xs">
               <div class="rounded-md border p-2">
-                <p class="text-muted-foreground">Creator</p>
-                <p class="font-medium">{plugin.creator}</p>
+                <p class="text-muted-foreground">Author</p>
+                <p class="font-medium">{plugin.author}</p>
               </div>
               <div class="rounded-md border p-2">
                 <p class="text-muted-foreground">License</p>
@@ -613,11 +614,11 @@
               </div>
               <div class="rounded-md border p-2">
                 <p class="text-muted-foreground">Artifact Size</p>
-                <p class="font-medium">{Math.round(plugin.artifact.sizeBytes / 1024)} KB</p>
+                <p class="font-medium">{Math.round(plugin.artifact.size / 1024)} KB</p>
               </div>
               <div class="rounded-md border p-2">
                 <p class="text-muted-foreground">Published</p>
-                <p class="font-medium">{new Date(plugin.artifact.publishedAt).toLocaleDateString()}</p>
+                <p class="font-medium">{new Date(plugin.artifact.published_at).toLocaleDateString()}</p>
               </div>
             </div>
 
@@ -648,27 +649,17 @@
             </div>
 
             <div class="space-y-1 text-xs">
-              {#if plugin.homepage}
-                <a class="inline-flex items-center gap-1 text-primary hover:underline" href={plugin.homepage} target="_blank" rel="noreferrer">
-                  Homepage <ExternalLink class="size-3" />
-                </a>
-              {/if}
-              {#if plugin.documentationUrl}
-                <a class="inline-flex items-center gap-1 text-primary hover:underline" href={plugin.documentationUrl} target="_blank" rel="noreferrer">
-                  Documentation <ExternalLink class="size-3" />
-                </a>
-              {/if}
-              {#if plugin.changelogUrl}
-                <a class="inline-flex items-center gap-1 text-primary hover:underline" href={plugin.changelogUrl} target="_blank" rel="noreferrer">
-                  Changelog <ExternalLink class="size-3" />
+              {#if plugin.repository}
+                <a class="inline-flex items-center gap-1 text-primary hover:underline" href={plugin.repository} target="_blank" rel="noreferrer">
+                  Repository <ExternalLink class="size-3" />
                 </a>
               {/if}
             </div>
 
             <div class="rounded-md border p-2 text-xs">
               <p class="font-medium mb-1">Requested Permissions</p>
-              {#if plugin.requestedPermissions}
-                <pre class="whitespace-pre-wrap break-words text-[11px] text-muted-foreground">{JSON.stringify(plugin.requestedPermissions, null, 2)}</pre>
+              {#if plugin.requested_permissions}
+                <pre class="whitespace-pre-wrap break-words text-[11px] text-muted-foreground">{JSON.stringify(plugin.requested_permissions, null, 2)}</pre>
               {:else}
                 <p class="text-muted-foreground">No explicit requested permissions in manifest.</p>
               {/if}
@@ -720,3 +711,35 @@
     </div>
   </div>
 </div>
+
+<style>
+  @keyframes marketplace-in {
+    from {
+      opacity: 0;
+      transform: translateY(12px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  :global(.animate-marketplace-in) {
+    animation: marketplace-in 0.25s ease-out;
+  }
+
+  @keyframes marketplace-out {
+    from {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+    to {
+      opacity: 0;
+      transform: translateY(12px) scale(0.98);
+    }
+  }
+
+  :global(.animate-marketplace-out) {
+    animation: marketplace-out 0.2s ease-in forwards;
+  }
+</style>

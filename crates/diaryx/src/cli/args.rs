@@ -906,12 +906,9 @@ pub enum PluginCommands {
         /// Filter by tag (registry metadata)
         #[arg(long)]
         tag: Option<String>,
-        /// Filter by source kind: internal | external
+        /// Filter by author
         #[arg(long)]
-        source: Option<String>,
-        /// Filter by creator
-        #[arg(long)]
-        creator: Option<String>,
+        author: Option<String>,
         /// Emit JSON output
         #[arg(long)]
         json: bool,
@@ -940,12 +937,9 @@ pub enum PluginCommands {
         /// Filter by tag
         #[arg(long)]
         tag: Option<String>,
-        /// Filter by source kind: internal | external
+        /// Filter by author
         #[arg(long)]
-        source: Option<String>,
-        /// Filter by creator
-        #[arg(long)]
-        creator: Option<String>,
+        author: Option<String>,
         /// Show only installed plugins
         #[arg(long)]
         installed: bool,

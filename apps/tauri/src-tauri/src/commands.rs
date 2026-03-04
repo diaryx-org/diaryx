@@ -2552,6 +2552,7 @@ pub async fn proxy_fetch(
 // ============================================================================
 
 /// Percent-decode a URL query parameter value.
+#[cfg(not(target_os = "ios"))]
 fn percent_decode(s: &str) -> String {
     let mut result = Vec::new();
     let bytes = s.as_bytes();
@@ -2588,61 +2589,78 @@ pub async fn oauth_webview<R: Runtime>(
     url: String,
     redirect_prefix: String,
 ) -> Result<serde_json::Value, SerializableError> {
-    use tauri::{WebviewUrl, WebviewWindowBuilder};
-    use tokio::sync::oneshot;
+    // Suppress unused warnings on iOS
+    let _ = (&app, &url, &redirect_prefix);
 
-    let (tx, rx) = oneshot::channel::<String>();
-    let tx = std::sync::Mutex::new(Some(tx));
-    let prefix = redirect_prefix.clone();
+    #[cfg(target_os = "ios")]
+    {
+        return Err(SerializableError {
+            kind: "UnsupportedPlatform".to_string(),
+            message:
+                "OAuth webview is not supported on iOS — use ASWebAuthenticationSession instead"
+                    .to_string(),
+            path: None,
+        });
+    }
 
-    let window = WebviewWindowBuilder::new(
-        &app,
-        "oauth",
-        WebviewUrl::External(
-            url.parse()
-                .map_err(|e: url::ParseError| SerializableError {
-                    kind: "OAuthError".to_string(),
-                    message: format!("Invalid OAuth URL: {e}"),
-                    path: None,
-                })?,
-        ),
-    )
-    .title("Sign in")
-    .inner_size(500.0, 600.0)
-    .on_navigation(move |nav_url| {
-        let url_str = nav_url.as_str();
-        if url_str.starts_with(&prefix) {
-            if let Some(query) = nav_url.query() {
-                for pair in query.split('&') {
-                    if let Some(val) = pair.strip_prefix("code=") {
-                        let code = percent_decode(val);
-                        if let Ok(mut guard) = tx.lock() {
-                            if let Some(sender) = guard.take() {
-                                let _ = sender.send(code);
+    #[cfg(not(target_os = "ios"))]
+    {
+        use tauri::{WebviewUrl, WebviewWindowBuilder};
+        use tokio::sync::oneshot;
+
+        let (tx, rx) = oneshot::channel::<String>();
+        let tx = std::sync::Mutex::new(Some(tx));
+        let prefix = redirect_prefix.clone();
+
+        let window = WebviewWindowBuilder::new(
+            &app,
+            "oauth",
+            WebviewUrl::External(
+                url.parse()
+                    .map_err(|e: url::ParseError| SerializableError {
+                        kind: "OAuthError".to_string(),
+                        message: format!("Invalid OAuth URL: {e}"),
+                        path: None,
+                    })?,
+            ),
+        )
+        .title("Sign in")
+        .inner_size(500.0, 600.0)
+        .on_navigation(move |nav_url| {
+            let url_str = nav_url.as_str();
+            if url_str.starts_with(&prefix) {
+                if let Some(query) = nav_url.query() {
+                    for pair in query.split('&') {
+                        if let Some(val) = pair.strip_prefix("code=") {
+                            let code = percent_decode(val);
+                            if let Ok(mut guard) = tx.lock() {
+                                if let Some(sender) = guard.take() {
+                                    let _ = sender.send(code);
+                                }
                             }
+                            break;
                         }
-                        break;
                     }
                 }
+                return false; // Block navigation — we have the code
             }
-            return false; // Block navigation — we have the code
-        }
-        true
-    })
-    .build()
-    .map_err(|e| SerializableError {
-        kind: "OAuthError".to_string(),
-        message: format!("Failed to create OAuth window: {e}"),
-        path: None,
-    })?;
+            true
+        })
+        .build()
+        .map_err(|e| SerializableError {
+            kind: "OAuthError".to_string(),
+            message: format!("Failed to create OAuth window: {e}"),
+            path: None,
+        })?;
 
-    // Wait for the code or window close
-    let code = rx.await.map_err(|_| SerializableError {
-        kind: "OAuthError".to_string(),
-        message: "OAuth window closed without completing sign-in".to_string(),
-        path: None,
-    })?;
+        // Wait for the code or window close
+        let code = rx.await.map_err(|_| SerializableError {
+            kind: "OAuthError".to_string(),
+            message: "OAuth window closed without completing sign-in".to_string(),
+            path: None,
+        })?;
 
-    let _ = window.close();
-    Ok(serde_json::json!({ "code": code }))
+        let _ = window.close();
+        Ok(serde_json::json!({ "code": code }))
+    }
 }

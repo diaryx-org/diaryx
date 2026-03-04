@@ -27,10 +27,66 @@ use the `diaryx.*` namespace (for example: `diaryx.sync`, `diaryx.publish`,
 | File | Description |
 |------|-------------|
 | `mod.rs` | Plugin traits (`Plugin`, `WorkspacePlugin`, `FilePlugin`), `PluginId`, `PluginError`, `PluginContext` |
-| `manifest.rs` | `PluginManifest`, `UiContribution`, `CliCommand`, `CliArg`, `CliArgType` |
+| `manifest.rs` | `PluginManifest`, `UiContribution`, `CliCommand`, marketplace types (`MarketplaceRegistry`, `MarketplaceEntry`, `PluginArtifact`, `PluginWorkspaceMetadata`) |
 | `events.rs` | Event types for workspace and file lifecycle hooks |
 | `permissions.rs` | Permission types, config structs, and permission checking functions |
 | `registry.rs` | `PluginRegistry` — collects plugins and dispatches events/commands |
+
+## Plugin Marketplace
+
+The plugin marketplace uses a Diaryx-native format. Plugin guest crates live in
+standalone repos under [diaryx-org](https://github.com/diaryx-org) (e.g.,
+`plugin-math`, `plugin-sync`). The central
+[plugin-registry](https://github.com/diaryx-org/plugin-registry) repo assembles
+all plugin metadata into a single `registry.md` uploaded to CDN.
+
+Each plugin repo has `README.md` frontmatter containing manifest metadata. The CDN
+registry is a single `registry.md` file with YAML frontmatter.
+
+### Registry Format (`registry.md`)
+
+```yaml
+---
+title: "Diaryx Plugin Registry"
+schema_version: 2
+generated_at: "2026-03-03T00:00:00Z"
+plugins:
+  - id: "diaryx.sync"
+    name: "Sync"
+    version: "1.2.3"
+    summary: "Realtime multi-device sync"
+    description: "Full description..."
+    author: "Diaryx Team"
+    license: "PolyForm Shield 1.0.0"
+    repository: "https://github.com/diaryx-org/diaryx-sync"
+    categories: ["sync", "collaboration"]
+    tags: ["sync", "crdt", "realtime"]
+    artifact:
+      url: "https://cdn.diaryx.org/plugins/artifacts/diaryx.sync/1.2.3/abc.wasm"
+      sha256: "abc123..."
+      size: 2048000
+      published_at: "2026-03-03T00:00:00Z"
+    capabilities: ["sync_transport"]
+---
+```
+
+### Plugin Workspace Root Format
+
+Plugin repos use `README.md` frontmatter with `id`, `version`, `artifact`, plus
+standard Diaryx frontmatter (`title`, `description`, `contents`).
+
+### Types
+
+- `PluginArtifact` — WASM artifact reference (`url`, `sha256`, `size`, `published_at`)
+- `MarketplaceEntry` — single plugin listing with all metadata fields
+- `MarketplaceRegistry` — parsed registry with `schema_version`, `generated_at`, `plugins`
+- `PluginWorkspaceMetadata` — metadata parsed from a plugin workspace root
+
+### Parsing
+
+- `MarketplaceRegistry::from_markdown(content)` — parse `registry.md`
+- `PluginWorkspaceMetadata::from_markdown(content)` — parse plugin workspace root
+- `PluginWorkspaceMetadata::to_marketplace_entry()` — convert to registry entry
 
 ## Registration Dedup
 

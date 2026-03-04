@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-03-04T01:56:16Z
+updated: 2026-03-04T04:20:05Z
 part_of: '[README](/README.md)'
 ---
 # Instructions for AI agents
@@ -67,11 +67,7 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │       ├── Workspace module - Workspace tree organization - crates/diaryx_core/src/workspace/README.md
 │   │       └── Import module - Import external formats into Diaryx entries - crates/diaryx_core/src/import/README.md
 │   ├── crates/diaryx_daily/README.md
-│   ├── crates/diaryx_daily_extism/README.md
-│   ├── diaryx_import_extism - Extism guest plugin for Diaryx import functionality - crates/diaryx_import_extism/README.md
-│   ├── diaryx_ai_extism - Extism AI assistant plugin for Diaryx - crates/diaryx_ai_extism/README.md
 │   ├── diaryx_publish - Publishing pipeline for Diaryx workspaces — converts markdown to HTML - crates/diaryx_publish/README.md
-│   ├── crates/diaryx_publish_extism/README.md
 │   ├── diaryx_wasm - WASM bindings for diaryx_core - crates/diaryx_wasm/README.md
 │   │   └── diaryx_wasm src - Source code for WASM bindings - crates/diaryx_wasm/src/README.md
 │   ├── diaryx_sync_server - Sync server used by frontends - crates/diaryx_sync_server/README.md
@@ -81,8 +77,7 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │       ├── Email module - SMTP email sending for magic links - crates/diaryx_sync_server/src/email/README.md
 │   │       └── Handlers module - HTTP route handlers - crates/diaryx_sync_server/src/handlers/README.md
 │   ├── diaryx_sync - crates/diaryx_sync/README.md
-│   ├── crates/diaryx_storage_s3_extism/README.md
-│   └── crates/diaryx_storage_gdrive_extism/README.md
+│   └── crates/diaryx_extism/README.md
 ├── ROADMAP - The plan for future Diaryx features - ROADMAP.md
 └── Scripts - scripts/scripts.md
 ```
@@ -105,12 +100,7 @@ Read the root README.md first. For specific projects, use these entry points:
 | WASM bindings    | crates/diaryx_wasm/README.md        |
 | Sync engine      | crates/diaryx_sync/README.md        |
 | Sync server      | crates/diaryx_sync_server/README.md |
-| Extism plugins   | crates/diaryx_extism/README.md      |
-| Daily plugin guest | crates/diaryx_daily_extism/README.md |
-| Import plugin guest | crates/diaryx_import_extism/README.md |
-| Templating plugin guest | crates/diaryx_templating_extism/README.md |
-| S3 storage       | crates/diaryx_storage_s3_extism/README.md |
-| GDrive storage   | crates/diaryx_storage_gdrive_extism/README.md |
+| Extism host      | crates/diaryx_extism/README.md      |
 
 
 ## Commands

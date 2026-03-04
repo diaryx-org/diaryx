@@ -1,58 +1,56 @@
 /**
- * Plugin Registry v2 client.
+ * Plugin Registry client.
  *
- * Fetches a curated, versioned marketplace catalog from trusted registry URLs.
+ * Fetches a curated, versioned marketplace catalog from a trusted `registry.md`
+ * URL. The registry is a markdown file with YAML frontmatter containing the
+ * plugin array.
  */
 
-export type RegistrySourceKind = "internal" | "external";
+import yaml from "js-yaml";
 
-export interface RegistryPluginArtifact {
-  wasmUrl: string;
+export interface PluginArtifact {
+  url: string;
   sha256: string;
-  sizeBytes: number;
-  publishedAt: string;
+  size: number;
+  published_at: string;
 }
 
-export interface RegistryPluginSource {
-  kind: RegistrySourceKind;
-  repositoryUrl: string;
-  registryId: string;
-}
-
-export interface RegistryPlugin {
+export interface MarketplaceEntry {
   id: string;
   name: string;
   version: string;
   summary: string;
   description: string;
-  creator: string;
+  author: string;
   license: string;
-  artifact: RegistryPluginArtifact;
-  source: RegistryPluginSource;
-  homepage: string | null;
-  documentationUrl: string | null;
-  changelogUrl: string | null;
+  repository: string | null;
   categories: string[];
   tags: string[];
-  iconUrl: string | null;
-  screenshots: string[];
+  artifact: PluginArtifact;
   capabilities: string[];
-  requestedPermissions: unknown | null;
+  icon: string | null;
+  screenshots: string[];
+  requested_permissions: unknown | null;
 }
 
-export interface PluginRegistryV2 {
-  schemaVersion: 2;
-  generatedAt: string;
-  plugins: RegistryPlugin[];
+export interface MarketplaceRegistry {
+  schema_version: 2;
+  generated_at: string;
+  plugins: MarketplaceEntry[];
 }
+
+// Backward-compatible aliases for downstream consumers.
+export type RegistryPlugin = MarketplaceEntry;
+export type RegistryPluginArtifact = PluginArtifact;
+export type PluginRegistryV2 = MarketplaceRegistry;
 
 const TRUSTED_REGISTRY_URLS = [
-  "https://cdn.diaryx.org/plugins/registry-v2.json",
+  "https://cdn.diaryx.org/plugins/registry.md",
 ] as const;
 
 const DEFAULT_REGISTRY_URL = TRUSTED_REGISTRY_URLS[0];
 
-let cachedRegistry: PluginRegistryV2 | null = null;
+let cachedRegistry: MarketplaceRegistry | null = null;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -61,7 +59,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function readString(obj: Record<string, unknown>, key: string): string {
   const value = obj[key];
   if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`Plugin registry v2 validation error: '${key}' must be a non-empty string`);
+    throw new Error(`Plugin registry validation error: '${key}' must be a non-empty string`);
   }
   return value;
 }
@@ -73,42 +71,45 @@ function readOptionalString(
   const value = obj[key];
   if (value == null) return null;
   if (typeof value !== "string") {
-    throw new Error(`Plugin registry v2 validation error: '${key}' must be a string or null`);
+    throw new Error(`Plugin registry validation error: '${key}' must be a string or null`);
   }
   return value;
 }
 
 function readStringArray(obj: Record<string, unknown>, key: string): string[] {
   const value = obj[key];
-  if (!Array.isArray(value) || value.some((v) => typeof v !== "string")) {
-    throw new Error(`Plugin registry v2 validation error: '${key}' must be a string[]`);
+  if (!Array.isArray(value)) return [];
+  if (value.some((v) => typeof v !== "string")) {
+    throw new Error(`Plugin registry validation error: '${key}' must be a string[]`);
   }
   return value;
 }
 
-function validateRegistryPlugin(input: unknown): RegistryPlugin {
+function parseMarkdownFrontmatter(text: string): { frontmatter: Record<string, unknown>; body: string } {
+  const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
+  if (!match) {
+    throw new Error("Plugin registry validation error: missing YAML frontmatter");
+  }
+  const frontmatter = yaml.load(match[1]) as Record<string, unknown>;
+  if (!isRecord(frontmatter)) {
+    throw new Error("Plugin registry validation error: frontmatter must be a YAML mapping");
+  }
+  return { frontmatter, body: match[2] };
+}
+
+function validateMarketplaceEntry(input: unknown): MarketplaceEntry {
   if (!isRecord(input)) {
-    throw new Error("Plugin registry v2 validation error: plugin entry must be an object");
+    throw new Error("Plugin registry validation error: plugin entry must be an object");
   }
 
   const artifactRaw = input.artifact;
   if (!isRecord(artifactRaw)) {
-    throw new Error("Plugin registry v2 validation error: plugin.artifact must be an object");
+    throw new Error("Plugin registry validation error: plugin.artifact must be an object");
   }
 
-  const sourceRaw = input.source;
-  if (!isRecord(sourceRaw)) {
-    throw new Error("Plugin registry v2 validation error: plugin.source must be an object");
-  }
-
-  const sourceKind = readString(sourceRaw, "kind");
-  if (sourceKind !== "internal" && sourceKind !== "external") {
-    throw new Error("Plugin registry v2 validation error: plugin.source.kind must be 'internal' or 'external'");
-  }
-
-  const sizeBytes = artifactRaw.sizeBytes;
-  if (typeof sizeBytes !== "number" || !Number.isFinite(sizeBytes) || sizeBytes <= 0) {
-    throw new Error("Plugin registry v2 validation error: plugin.artifact.sizeBytes must be a positive number");
+  const size = artifactRaw.size;
+  if (typeof size !== "number" || !Number.isFinite(size) || size <= 0) {
+    throw new Error("Plugin registry validation error: plugin.artifact.size must be a positive number");
   }
 
   return {
@@ -117,59 +118,48 @@ function validateRegistryPlugin(input: unknown): RegistryPlugin {
     version: readString(input, "version"),
     summary: readString(input, "summary"),
     description: readString(input, "description"),
-    creator: readString(input, "creator"),
+    author: readString(input, "author"),
     license: readString(input, "license"),
     artifact: {
-      wasmUrl: readString(artifactRaw, "wasmUrl"),
+      url: readString(artifactRaw, "url"),
       sha256: readString(artifactRaw, "sha256").toLowerCase(),
-      sizeBytes,
-      publishedAt: readString(artifactRaw, "publishedAt"),
+      size,
+      published_at: readString(artifactRaw, "published_at"),
     },
-    source: {
-      kind: sourceKind,
-      repositoryUrl: readString(sourceRaw, "repositoryUrl"),
-      registryId: readString(sourceRaw, "registryId"),
-    },
-    homepage: readOptionalString(input, "homepage"),
-    documentationUrl: readOptionalString(input, "documentationUrl"),
-    changelogUrl: readOptionalString(input, "changelogUrl"),
+    repository: readOptionalString(input, "repository"),
     categories: readStringArray(input, "categories"),
     tags: readStringArray(input, "tags"),
-    iconUrl: readOptionalString(input, "iconUrl"),
+    icon: readOptionalString(input, "icon"),
     screenshots: readStringArray(input, "screenshots"),
     capabilities: readStringArray(input, "capabilities"),
-    requestedPermissions: input.requestedPermissions ?? null,
+    requested_permissions: input.requested_permissions ?? null,
   };
 }
 
-function validateRegistryV2(input: unknown): PluginRegistryV2 {
-  if (!isRecord(input)) {
-    throw new Error("Plugin registry v2 validation error: top-level payload must be an object");
-  }
-
-  const schemaVersion = input.schemaVersion;
+function validateMarketplaceRegistry(frontmatter: Record<string, unknown>): MarketplaceRegistry {
+  const schemaVersion = frontmatter.schema_version;
   if (schemaVersion !== 2) {
     throw new Error(
       `Unsupported plugin registry schema version: ${String(schemaVersion)} (expected 2)`,
     );
   }
 
-  const generatedAt = readString(input, "generatedAt");
-  const pluginsRaw = input.plugins;
+  const generatedAt = readString(frontmatter, "generated_at");
+  const pluginsRaw = frontmatter.plugins;
   if (!Array.isArray(pluginsRaw)) {
-    throw new Error("Plugin registry v2 validation error: 'plugins' must be an array");
+    throw new Error("Plugin registry validation error: 'plugins' must be an array");
   }
 
   return {
-    schemaVersion: 2,
-    generatedAt,
-    plugins: pluginsRaw.map((plugin) => validateRegistryPlugin(plugin)),
+    schema_version: 2,
+    generated_at: generatedAt,
+    plugins: pluginsRaw.map((plugin) => validateMarketplaceEntry(plugin)),
   };
 }
 
 export async function fetchPluginRegistry(
   registryUrl: string = DEFAULT_REGISTRY_URL,
-): Promise<PluginRegistryV2> {
+): Promise<MarketplaceRegistry> {
   if (cachedRegistry) return cachedRegistry;
 
   if (!TRUSTED_REGISTRY_URLS.includes(registryUrl as (typeof TRUSTED_REGISTRY_URLS)[number])) {
@@ -181,8 +171,9 @@ export async function fetchPluginRegistry(
     throw new Error(`Registry fetch failed: ${resp.status}`);
   }
 
-  const payload = await resp.json();
-  cachedRegistry = validateRegistryV2(payload);
+  const text = await resp.text();
+  const { frontmatter } = parseMarkdownFrontmatter(text);
+  cachedRegistry = validateMarketplaceRegistry(frontmatter);
   return cachedRegistry;
 }
 

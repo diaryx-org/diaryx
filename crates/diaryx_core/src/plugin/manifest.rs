@@ -3,10 +3,20 @@
 //! Each plugin declares a [`PluginManifest`] that describes its identity,
 //! capabilities, and UI contributions. The frontend reads these manifests
 //! to dynamically render settings tabs, sidebar panels, command palette items, etc.
+//!
+//! # Marketplace Types
+//!
+//! This module also contains types for the plugin marketplace:
+//! - [`PluginArtifact`] — WASM build artifact reference (URL, SHA-256, size)
+//! - [`MarketplaceEntry`] — a single plugin listing in the registry
+//! - [`MarketplaceRegistry`] — the parsed CDN registry (`registry.md`)
+//! - [`PluginWorkspaceMetadata`] — metadata parsed from a plugin workspace root
 
 use serde::{Deserialize, Serialize};
 
 use super::PluginId;
+use crate::error::DiaryxError;
+use crate::frontmatter;
 
 /// Declarative metadata for a plugin.
 ///
@@ -606,4 +616,515 @@ pub enum CliArgType {
     Boolean,
     /// Filesystem path.
     Path,
+}
+
+// ============================================================================
+// Marketplace types
+// ============================================================================
+
+/// Reference to a WASM build artifact on the CDN.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PluginArtifact {
+    /// CDN URL for the WASM file.
+    pub url: std::string::String,
+    /// SHA-256 hash of the WASM file.
+    pub sha256: std::string::String,
+    /// File size in bytes.
+    pub size: u64,
+    /// ISO 8601 timestamp of when the artifact was published.
+    pub published_at: std::string::String,
+}
+
+/// A single plugin listing in the marketplace registry.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MarketplaceEntry {
+    /// Canonical plugin ID (e.g., `"diaryx.sync"`).
+    pub id: std::string::String,
+    /// Human-readable name.
+    pub name: std::string::String,
+    /// SemVer version string.
+    pub version: std::string::String,
+    /// One-line summary.
+    pub summary: std::string::String,
+    /// Full description.
+    pub description: std::string::String,
+    /// Author or organization.
+    pub author: std::string::String,
+    /// License identifier.
+    pub license: std::string::String,
+    /// Repository URL.
+    #[serde(default)]
+    pub repository: Option<std::string::String>,
+    /// Category tags for discovery.
+    #[serde(default)]
+    pub categories: Vec<std::string::String>,
+    /// Free-form tags for search.
+    #[serde(default)]
+    pub tags: Vec<std::string::String>,
+    /// WASM artifact reference.
+    pub artifact: PluginArtifact,
+    /// Declared capabilities.
+    #[serde(default)]
+    pub capabilities: Vec<std::string::String>,
+    /// Icon URL.
+    #[serde(default)]
+    pub icon: Option<std::string::String>,
+    /// Screenshot URLs.
+    #[serde(default)]
+    pub screenshots: Vec<std::string::String>,
+    /// Requested default permissions (opaque JSON).
+    #[serde(default)]
+    pub requested_permissions: Option<serde_json::Value>,
+}
+
+/// The parsed CDN registry (`registry.md`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarketplaceRegistry {
+    /// Schema version (must be `2`).
+    pub schema_version: u64,
+    /// ISO 8601 timestamp of when the registry was generated.
+    pub generated_at: std::string::String,
+    /// Plugin listings.
+    pub plugins: Vec<MarketplaceEntry>,
+    /// Markdown body after the frontmatter.
+    #[serde(skip)]
+    pub body: std::string::String,
+}
+
+/// Metadata parsed from a plugin workspace root `README.md`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginWorkspaceMetadata {
+    /// Canonical plugin ID.
+    pub id: std::string::String,
+    /// Human-readable name (from `title` frontmatter key).
+    pub name: std::string::String,
+    /// SemVer version.
+    pub version: std::string::String,
+    /// Short description (from `description` frontmatter key).
+    pub summary: std::string::String,
+    /// Author or organization.
+    #[serde(default)]
+    pub author: Option<std::string::String>,
+    /// License identifier.
+    #[serde(default)]
+    pub license: Option<std::string::String>,
+    /// Repository URL.
+    #[serde(default)]
+    pub repository: Option<std::string::String>,
+    /// Category tags.
+    #[serde(default)]
+    pub categories: Vec<std::string::String>,
+    /// Free-form tags.
+    #[serde(default)]
+    pub tags: Vec<std::string::String>,
+    /// Declared capabilities.
+    #[serde(default)]
+    pub capabilities: Vec<std::string::String>,
+    /// WASM artifact reference.
+    pub artifact: PluginArtifact,
+    /// UI contributions (opaque JSON, preserved from frontmatter).
+    #[serde(default)]
+    pub ui: Option<serde_json::Value>,
+    /// CLI commands (opaque JSON, preserved from frontmatter).
+    #[serde(default)]
+    pub cli: Option<serde_json::Value>,
+    /// Requested permissions (opaque JSON).
+    #[serde(default)]
+    pub requested_permissions: Option<serde_json::Value>,
+    /// Markdown body after the frontmatter.
+    #[serde(skip)]
+    pub body: std::string::String,
+}
+
+/// Convert a `serde_yaml::Value` to a `serde_json::Value`.
+fn yaml_to_json(yaml: &serde_yaml::Value) -> Result<serde_json::Value, DiaryxError> {
+    let json_str = serde_json::to_string(
+        &serde_yaml::from_value::<serde_json::Value>(yaml.clone())
+            .map_err(|e| DiaryxError::Validation(format!("YAML→JSON conversion failed: {e}")))?,
+    )
+    .map_err(|e| DiaryxError::Validation(format!("JSON serialization failed: {e}")))?;
+    serde_json::from_str(&json_str)
+        .map_err(|e| DiaryxError::Validation(format!("JSON round-trip failed: {e}")))
+}
+
+impl MarketplaceRegistry {
+    /// Parse a `registry.md` file (YAML frontmatter + markdown body).
+    pub fn from_markdown(content: &str) -> Result<Self, DiaryxError> {
+        let parsed = frontmatter::parse(content)?;
+
+        // Extract and validate schema_version.
+        let schema_version = parsed
+            .frontmatter
+            .get("schema_version")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| {
+                DiaryxError::Validation(
+                    "Registry missing or invalid schema_version (expected 2)".to_string(),
+                )
+            })?;
+
+        if schema_version != 2 {
+            return Err(DiaryxError::Validation(format!(
+                "Unsupported registry schema_version: {schema_version} (expected 2)"
+            )));
+        }
+
+        let generated_at = parsed
+            .frontmatter
+            .get("generated_at")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| DiaryxError::Validation("Registry missing generated_at".to_string()))?
+            .to_string();
+
+        // Deserialize plugins array.
+        let plugins_yaml = parsed
+            .frontmatter
+            .get("plugins")
+            .ok_or_else(|| DiaryxError::Validation("Registry missing plugins array".to_string()))?;
+
+        let plugins_json = yaml_to_json(plugins_yaml)?;
+        let plugins: Vec<MarketplaceEntry> = serde_json::from_value(plugins_json)
+            .map_err(|e| DiaryxError::Validation(format!("Failed to parse plugins: {e}")))?;
+
+        // Validate each plugin entry.
+        for plugin in &plugins {
+            validate_marketplace_entry(plugin)?;
+        }
+
+        Ok(MarketplaceRegistry {
+            schema_version,
+            generated_at,
+            plugins,
+            body: parsed.body,
+        })
+    }
+}
+
+impl PluginWorkspaceMetadata {
+    /// Parse a plugin workspace root `README.md` (YAML frontmatter + markdown body).
+    pub fn from_markdown(content: &str) -> Result<Self, DiaryxError> {
+        let parsed = frontmatter::parse(content)?;
+        let fm = &parsed.frontmatter;
+
+        let id = fm
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| DiaryxError::Validation("Plugin workspace missing 'id'".to_string()))?
+            .to_string();
+
+        let name = fm
+            .get("title")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| DiaryxError::Validation("Plugin workspace missing 'title'".to_string()))?
+            .to_string();
+
+        let version = fm
+            .get("version")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                DiaryxError::Validation("Plugin workspace missing 'version'".to_string())
+            })?
+            .to_string();
+
+        let summary = fm
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let author = fm
+            .get("author")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let license = fm
+            .get("license")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let repository = fm
+            .get("repository")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let categories = yaml_string_array(fm.get("categories"));
+        let tags = yaml_string_array(fm.get("tags"));
+        let capabilities = yaml_string_array(fm.get("capabilities"));
+
+        // Parse artifact.
+        let artifact_yaml = fm.get("artifact").ok_or_else(|| {
+            DiaryxError::Validation("Plugin workspace missing 'artifact'".to_string())
+        })?;
+        let artifact_json = yaml_to_json(artifact_yaml)?;
+        let artifact: PluginArtifact = serde_json::from_value(artifact_json)
+            .map_err(|e| DiaryxError::Validation(format!("Failed to parse artifact: {e}")))?;
+
+        let ui = fm.get("ui").map(yaml_to_json).transpose()?;
+        let cli = fm.get("cli").map(yaml_to_json).transpose()?;
+        let requested_permissions = fm
+            .get("requested_permissions")
+            .map(yaml_to_json)
+            .transpose()?;
+
+        Ok(PluginWorkspaceMetadata {
+            id,
+            name,
+            version,
+            summary,
+            author,
+            license,
+            repository,
+            categories,
+            tags,
+            capabilities,
+            artifact,
+            ui,
+            cli,
+            requested_permissions,
+            body: parsed.body,
+        })
+    }
+
+    /// Convert to a [`MarketplaceEntry`] for registry assembly.
+    pub fn to_marketplace_entry(&self) -> MarketplaceEntry {
+        MarketplaceEntry {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            version: self.version.clone(),
+            summary: self.summary.clone(),
+            description: self.body.trim().to_string(),
+            author: self.author.clone().unwrap_or_default(),
+            license: self.license.clone().unwrap_or_default(),
+            repository: self.repository.clone(),
+            categories: self.categories.clone(),
+            tags: self.tags.clone(),
+            artifact: self.artifact.clone(),
+            capabilities: self.capabilities.clone(),
+            icon: None,
+            screenshots: Vec::new(),
+            requested_permissions: self.requested_permissions.clone(),
+        }
+    }
+}
+
+/// Extract a string array from an optional YAML value.
+fn yaml_string_array(value: Option<&serde_yaml::Value>) -> Vec<std::string::String> {
+    match value {
+        Some(serde_yaml::Value::Sequence(seq)) => seq
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Validate a marketplace entry has required fields.
+fn validate_marketplace_entry(entry: &MarketplaceEntry) -> Result<(), DiaryxError> {
+    if entry.id.trim().is_empty() {
+        return Err(DiaryxError::Validation(
+            "Marketplace entry has empty id".to_string(),
+        ));
+    }
+    if entry.version.trim().is_empty() {
+        return Err(DiaryxError::Validation(format!(
+            "Marketplace entry '{}' has empty version",
+            entry.id
+        )));
+    }
+    if entry.artifact.url.trim().is_empty() {
+        return Err(DiaryxError::Validation(format!(
+            "Marketplace entry '{}' has empty artifact.url",
+            entry.id
+        )));
+    }
+    if entry.artifact.sha256.trim().is_empty() {
+        return Err(DiaryxError::Validation(format!(
+            "Marketplace entry '{}' has empty artifact.sha256",
+            entry.id
+        )));
+    }
+    if entry.artifact.size == 0 {
+        return Err(DiaryxError::Validation(format!(
+            "Marketplace entry '{}' has artifact.size=0",
+            entry.id
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SAMPLE_REGISTRY_MD: &str = r#"---
+title: "Diaryx Plugin Registry"
+description: "Official plugin directory"
+generated_at: "2026-03-03T00:00:00Z"
+schema_version: 2
+plugins:
+  - id: "diaryx.sync"
+    name: "Sync"
+    version: "1.2.3"
+    summary: "Realtime multi-device sync"
+    description: "Full description of sync plugin"
+    author: "Diaryx Team"
+    license: "PolyForm Shield 1.0.0"
+    repository: "https://github.com/diaryx-org/diaryx-sync"
+    categories: ["sync", "collaboration"]
+    tags: ["sync", "crdt", "realtime"]
+    artifact:
+      url: "https://cdn.diaryx.org/plugins/artifacts/diaryx.sync/1.2.3/abc123.wasm"
+      sha256: "abc123"
+      size: 2048000
+      published_at: "2026-03-03T00:00:00Z"
+    capabilities: ["sync_transport"]
+    icon: null
+    screenshots: []
+    requested_permissions: null
+---
+# Diaryx Plugin Registry
+Browse and install plugins for Diaryx.
+"#;
+
+    const SAMPLE_PLUGIN_README: &str = r#"---
+title: "Sync"
+description: "Realtime multi-device sync"
+id: "diaryx.sync"
+version: "1.2.3"
+author: "Diaryx Team"
+license: "PolyForm Shield 1.0.0"
+repository: "https://github.com/diaryx-org/diaryx-sync"
+categories: ["sync", "collaboration"]
+tags: ["sync", "crdt", "realtime"]
+capabilities: ["sync_transport", "crdt_commands"]
+artifact:
+  url: "https://cdn.diaryx.org/plugins/artifacts/diaryx.sync/1.2.3/abc123.wasm"
+  sha256: "abc123"
+  size: 2048000
+  published_at: "2026-03-03T00:00:00Z"
+ui:
+  - slot: WorkspaceProvider
+    id: diaryx.sync
+    label: "Diaryx Cloud"
+cli:
+  - name: sync
+    about: "Sync workspace"
+requested_permissions:
+  defaults:
+    http_requests:
+      include: ["api.diaryx.org"]
+  reasons:
+    http_requests: "Connect to sync server"
+---
+# Sync Plugin
+Full description in markdown body...
+"#;
+
+    #[test]
+    fn parse_registry_md() {
+        let registry = MarketplaceRegistry::from_markdown(SAMPLE_REGISTRY_MD).unwrap();
+        assert_eq!(registry.schema_version, 2);
+        assert_eq!(registry.plugins.len(), 1);
+        assert_eq!(registry.plugins[0].id, "diaryx.sync");
+        assert_eq!(registry.plugins[0].name, "Sync");
+        assert_eq!(registry.plugins[0].version, "1.2.3");
+        assert_eq!(registry.plugins[0].author, "Diaryx Team");
+        assert_eq!(registry.plugins[0].artifact.size, 2048000);
+        assert!(registry.body.contains("Browse and install"));
+    }
+
+    #[test]
+    fn parse_plugin_workspace_readme() {
+        let meta = PluginWorkspaceMetadata::from_markdown(SAMPLE_PLUGIN_README).unwrap();
+        assert_eq!(meta.id, "diaryx.sync");
+        assert_eq!(meta.name, "Sync");
+        assert_eq!(meta.version, "1.2.3");
+        assert_eq!(meta.summary, "Realtime multi-device sync");
+        assert_eq!(meta.author.as_deref(), Some("Diaryx Team"));
+        assert_eq!(meta.categories, vec!["sync", "collaboration"]);
+        assert_eq!(meta.artifact.sha256, "abc123");
+        assert!(meta.ui.is_some());
+        assert!(meta.cli.is_some());
+        assert!(meta.requested_permissions.is_some());
+        assert!(meta.body.contains("Full description"));
+    }
+
+    #[test]
+    fn plugin_workspace_to_marketplace_entry() {
+        let meta = PluginWorkspaceMetadata::from_markdown(SAMPLE_PLUGIN_README).unwrap();
+        let entry = meta.to_marketplace_entry();
+        assert_eq!(entry.id, "diaryx.sync");
+        assert_eq!(entry.name, "Sync");
+        assert_eq!(entry.author, "Diaryx Team");
+        assert_eq!(entry.artifact.url, meta.artifact.url);
+        assert!(entry.description.contains("Full description"));
+    }
+
+    #[test]
+    fn reject_wrong_schema_version() {
+        let content = "---\nschema_version: 1\ngenerated_at: \"2026-01-01\"\nplugins: []\n---\n";
+        let err = MarketplaceRegistry::from_markdown(content).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("expected 2"), "got: {msg}");
+    }
+
+    #[test]
+    fn reject_missing_id() {
+        let content = r#"---
+schema_version: 2
+generated_at: "2026-01-01"
+plugins:
+  - name: "Test"
+    version: "1.0.0"
+    summary: "Test"
+    description: "Test"
+    author: "Test"
+    license: "MIT"
+    artifact:
+      url: "https://example.com/test.wasm"
+      sha256: "abc"
+      size: 100
+      published_at: "2026-01-01"
+---
+"#;
+        let err = MarketplaceRegistry::from_markdown(content).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("missing") || msg.contains("id"), "got: {msg}");
+    }
+
+    #[test]
+    fn reject_missing_artifact_in_workspace() {
+        let content = "---\ntitle: Test\nid: test.plugin\nversion: \"1.0.0\"\n---\nBody\n";
+        let err = PluginWorkspaceMetadata::from_markdown(content).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("artifact"), "got: {msg}");
+    }
+
+    #[test]
+    fn roundtrip_marketplace_entry() {
+        let entry = MarketplaceEntry {
+            id: "test.plugin".to_string(),
+            name: "Test".to_string(),
+            version: "1.0.0".to_string(),
+            summary: "A test plugin".to_string(),
+            description: "Longer description".to_string(),
+            author: "Tester".to_string(),
+            license: "MIT".to_string(),
+            repository: Some("https://example.com".to_string()),
+            categories: vec!["test".to_string()],
+            tags: vec!["example".to_string()],
+            artifact: PluginArtifact {
+                url: "https://example.com/test.wasm".to_string(),
+                sha256: "abc123".to_string(),
+                size: 1024,
+                published_at: "2026-03-03T00:00:00Z".to_string(),
+            },
+            capabilities: vec!["custom".to_string()],
+            icon: None,
+            screenshots: vec![],
+            requested_permissions: None,
+        };
+
+        let json = serde_json::to_string(&entry).unwrap();
+        let deserialized: MarketplaceEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(entry, deserialized);
+    }
 }

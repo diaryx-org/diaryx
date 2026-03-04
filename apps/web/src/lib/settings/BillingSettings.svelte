@@ -299,4 +299,11 @@
       {/if}
     </div>
   {/if}
+
+  {#if billingProvider !== "apple_iap"}
+    <p class="text-[10px] text-muted-foreground/70 text-center leading-tight">
+      <button type="button" class="underline" onclick={() => openExternalUrl('https://diaryx.org/terms')}>Terms</button> &
+      <button type="button" class="underline" onclick={() => openExternalUrl('https://diaryx.org/privacy')}>Privacy</button>
+    </p>
+  {/if}
 </div>

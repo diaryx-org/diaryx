@@ -899,6 +899,112 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 Ok(Response::Strings(result))
             }
 
+            Command::GetEffectiveAudience { path } => {
+                use crate::command::EffectiveAudienceResult;
+                use std::collections::HashSet;
+
+                let ws = self.workspace().inner();
+                let mut current_path = self.resolve_fs_path(&path);
+
+                let workspace_root = self.workspace_root().unwrap_or_else(|| {
+                    current_path
+                        .parent()
+                        .and_then(|p| p.parent())
+                        .unwrap_or(Path::new("."))
+                        .to_path_buf()
+                });
+
+                let link_format = ws
+                    .get_workspace_config(&current_path)
+                    .await
+                    .map(|c| c.link_format)
+                    .ok();
+
+                // Parse the entry's frontmatter
+                let index = ws.parse_index_with_hint(&current_path, link_format).await?;
+
+                // If entry has explicit audience, return it directly
+                if let Some(ref audience_tags) = index.frontmatter.audience {
+                    let can_inherit = index.frontmatter.part_of.is_some();
+                    return Ok(Response::EffectiveAudience(EffectiveAudienceResult {
+                        tags: audience_tags.clone(),
+                        inherited: false,
+                        source_title: None,
+                        can_inherit,
+                    }));
+                }
+
+                // No explicit audience — check if entry has a parent
+                let part_of: String = match &index.frontmatter.part_of {
+                    Some(po) => po.clone(),
+                    None => {
+                        // Root entry, cannot inherit
+                        return Ok(Response::EffectiveAudience(EffectiveAudienceResult {
+                            tags: vec![],
+                            inherited: false,
+                            source_title: None,
+                            can_inherit: false,
+                        }));
+                    }
+                };
+
+                // Walk up the part_of chain
+                let mut visited = HashSet::new();
+                visited.insert(current_path.to_string_lossy().to_string());
+
+                let parent_path = index.resolve_path(&part_of);
+                current_path = if parent_path.is_absolute() {
+                    parent_path
+                } else {
+                    workspace_root.join(&parent_path)
+                };
+
+                const MAX_DEPTH: usize = 100;
+                for _ in 0..MAX_DEPTH {
+                    let path_str = current_path.to_string_lossy().to_string();
+                    if visited.contains(&path_str) {
+                        break;
+                    }
+                    visited.insert(path_str);
+
+                    if let Ok(ancestor) = ws.parse_index_with_hint(&current_path, link_format).await
+                    {
+                        if let Some(ref ancestor_audience) = ancestor.frontmatter.audience
+                            && !ancestor_audience.is_empty()
+                        {
+                            return Ok(Response::EffectiveAudience(EffectiveAudienceResult {
+                                tags: ancestor_audience.clone(),
+                                inherited: true,
+                                source_title: ancestor.frontmatter.title.clone(),
+                                can_inherit: true,
+                            }));
+                        }
+
+                        // Move to next ancestor
+                        if let Some(ref next_part_of) = ancestor.frontmatter.part_of {
+                            let next_path = ancestor.resolve_path(next_part_of);
+                            current_path = if next_path.is_absolute() {
+                                next_path
+                            } else {
+                                workspace_root.join(&next_path)
+                            };
+                        } else {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+
+                // Exhausted chain with no audience found
+                Ok(Response::EffectiveAudience(EffectiveAudienceResult {
+                    tags: vec![],
+                    inherited: false,
+                    source_title: None,
+                    can_inherit: true,
+                }))
+            }
+
             Command::GetWorkspaceTree {
                 path,
                 depth,

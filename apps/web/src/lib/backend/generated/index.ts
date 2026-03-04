@@ -17,6 +17,7 @@ export type { CreateChildResult } from './CreateChildResult';
 export type { CreateEntryOptions } from './CreateEntryOptions';
 export type { EditMode } from './EditMode';
 export type { EditorNodeType } from './EditorNodeType';
+export type { EffectiveAudienceResult } from './EffectiveAudienceResult';
 export type { EntryData } from './EntryData';
 export type { ExcludedFile } from './ExcludedFile';
 export type { ExclusionReason } from './ExclusionReason';

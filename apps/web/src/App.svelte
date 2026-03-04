@@ -2007,7 +2007,6 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
           entryPath={audienceDialogPath}
           rootPath={tree?.path ?? ""}
           {api}
-          {rustApi}
           onChange={handleAudienceChange}
         />
       {/if}

@@ -4,13 +4,13 @@
   import * as Command from "$lib/components/ui/command";
   import * as Drawer from "$lib/components/ui/drawer";
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
-  import { Plus, Lock } from "@lucide/svelte";
+  import { Plus, Lock, ArrowUpRight } from "@lucide/svelte";
   import { getTemplateContextStore } from "$lib/stores/templateContextStore.svelte";
   import { getAudienceColorStore } from "$lib/stores/audienceColorStore.svelte";
   import { getAudienceColor } from "$lib/utils/audienceDotColor";
 
   interface Props {
-    /** string[] = explicit tags, null = inheriting (treated as private here) */
+    /** string[] = explicit tags, null = inheriting, [] = explicitly empty */
     audience: string[] | null;
     entryPath: string;
     rootPath: string;
@@ -18,7 +18,7 @@
     onChange: (value: string[] | null) => void;
   }
 
-  let { audience, entryPath: _, rootPath, api, onChange }: Props = $props();
+  let { audience, entryPath, rootPath, api, onChange }: Props = $props();
 
   const mobileState = getMobileState();
   const templateContextStore = getTemplateContextStore();
@@ -28,8 +28,41 @@
   let searchValue = $state("");
   let availableAudiences = $state<string[]>([]);
 
-  const currentTags = $derived(audience ?? []);
-  const isPrivate = $derived(currentTags.length === 0);
+  // Inherited audience state
+  let inheritedTags = $state<string[]>([]);
+  let inheritedSourceTitle = $state<string | null>(null);
+  /** Whether this entry has a parent (part_of) and can inherit at all */
+  let canInherit = $state(false);
+
+  // Resolve inherited audience via the backend command
+  async function resolveInheritedAudience() {
+    if (!api) return;
+    inheritedTags = [];
+    inheritedSourceTitle = null;
+    canInherit = false;
+
+    try {
+      const result = await api.getEffectiveAudience(entryPath);
+      canInherit = result.can_inherit;
+      if (result.inherited) {
+        inheritedTags = result.tags;
+        inheritedSourceTitle = result.source_title ?? null;
+      }
+    } catch (e) {
+      console.warn("[DocumentAudiencePill] Failed to resolve inherited audience:", e);
+    }
+  }
+
+  // Re-resolve when entry changes
+  $effect(() => {
+    if (entryPath && api) {
+      resolveInheritedAudience();
+    }
+  });
+
+  const isInheriting = $derived(audience === null && canInherit);
+  const displayTags = $derived(isInheriting ? inheritedTags : (audience ?? []));
+  const isPrivate = $derived(displayTags.length === 0);
 
   // Load available audiences when picker opens
   $effect(() => {
@@ -43,7 +76,7 @@
 
   const filteredSuggestions = $derived(
     availableAudiences
-      .filter((a) => !currentTags.some((t) => t.toLowerCase() === a.toLowerCase()))
+      .filter((a) => !displayTags.some((t) => t.toLowerCase() === a.toLowerCase()))
       .filter(
         (a) =>
           !searchValue.trim() ||
@@ -56,7 +89,7 @@
       !availableAudiences.some(
         (a) => a.toLowerCase() === searchValue.trim().toLowerCase(),
       ) &&
-      !currentTags.some(
+      !displayTags.some(
         (t) => t.toLowerCase() === searchValue.trim().toLowerCase(),
       ),
   );
@@ -116,16 +149,30 @@
     class="pill-area"
     role="button"
     tabindex="0"
-    aria-label="Audience: {isPrivate ? 'Private' : currentTags.join(', ')}. Click to edit."
+    aria-label="Audience: {isPrivate ? 'Private' : isInheriting && inheritedTags.length > 0 ? 'Inherited: ' + inheritedTags.join(', ') : displayTags.join(', ')}. Click to edit."
     title="Who this entire journal entry is shared with"
   >
-    {#if isPrivate}
+    {#if isInheriting && inheritedTags.length > 0}
+      {#each inheritedTags as tag (tag)}
+        <span class="pill-tag pill-inherited">
+          <span class="pill-dot {getAudienceColor(tag, colorStore.audienceColors)}"></span>
+          {tag}
+        </span>
+      {/each}
+      <span class="pill-inherited-hint">
+        <ArrowUpRight class="size-2.5" />
+        {inheritedSourceTitle}
+      </span>
+      <span class="pill-add" aria-hidden="true">
+        <Plus class="size-3" />
+      </span>
+    {:else if isPrivate}
       <span class="pill-private">
         <Lock class="size-3 shrink-0" />
         Private
       </span>
     {:else}
-      {#each currentTags as tag (tag)}
+      {#each displayTags as tag (tag)}
         <span class="pill-tag">
           <span class="pill-dot {getAudienceColor(tag, colorStore.audienceColors)}"></span>
           {tag}
@@ -221,6 +268,22 @@
     border-radius: 50%;
     flex-shrink: 0;
     opacity: 0.85;
+  }
+
+  /* Inherited tag — dashed border to distinguish from explicit */
+  .pill-inherited {
+    background: color-mix(in srgb, var(--muted) 50%, transparent);
+    border: 1px dashed var(--border);
+  }
+
+  /* Source hint next to inherited tags */
+  .pill-inherited-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    font-size: 10px;
+    color: var(--muted-foreground);
+    white-space: nowrap;
   }
 
   /* Compact "+" button after tags */

@@ -22,6 +22,7 @@ import type {
   SearchOptions,
   AncestorAttachmentsResult,
   CreateChildResult,
+  EffectiveAudienceResult,
   LinkFormat,
   WorkspaceConfig,
   PluginManifest,
@@ -516,6 +517,15 @@ export function createApi(backend: Backend) {
     // =========================================================================
     // Export
     // =========================================================================
+
+    /** Get the effective audience for an entry, resolving inheritance. */
+    async getEffectiveAudience(path: string): Promise<EffectiveAudienceResult> {
+      const response = await backend.execute({
+        type: 'GetEffectiveAudience',
+        params: { path },
+      } as any);
+      return (response as any).data as EffectiveAudienceResult;
+    },
 
     /** Get available audiences. */
     async getAvailableAudiences(rootPath: string): Promise<string[]> {

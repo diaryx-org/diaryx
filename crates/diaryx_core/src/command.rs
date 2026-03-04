@@ -179,6 +179,16 @@ pub enum Command {
         path: String,
     },
 
+    /// Get the effective audience for an entry, resolving inheritance.
+    ///
+    /// If the entry has an explicit `audience`, returns it directly.
+    /// Otherwise walks up the `part_of` chain to find the nearest ancestor
+    /// with an audience set.
+    GetEffectiveAudience {
+        /// Path to the entry file.
+        path: String,
+    },
+
     /// Get the workspace tree structure.
     GetWorkspaceTree {
         /// Optional path to a specific workspace.
@@ -632,7 +642,8 @@ impl Command {
             | Command::ClearDirectory { path }
             | Command::WriteFileWithMetadata { path, .. }
             | Command::UpdateFileMetadata { path, .. }
-            | Command::GetAvailableAudiences { path } => {
+            | Command::GetAvailableAudiences { path }
+            | Command::GetEffectiveAudience { path } => {
                 *path = normalizer(path);
             }
 
@@ -907,6 +918,9 @@ pub enum Response {
     /// Ancestor attachments response.
     AncestorAttachments(AncestorAttachmentsResult),
 
+    /// Effective audience response.
+    EffectiveAudience(EffectiveAudienceResult),
+
     /// Link format response.
     LinkFormat(LinkFormat),
 
@@ -1065,6 +1079,23 @@ pub struct AncestorAttachmentsResult {
     /// Attachments from current entry and all ancestors.
     /// Ordered from current entry first, then ancestors (closest to root).
     pub entries: Vec<AncestorAttachmentEntry>,
+}
+
+/// Result of resolving effective audience for an entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+pub struct EffectiveAudienceResult {
+    /// The resolved audience tags (empty if none found).
+    pub tags: Vec<String>,
+    /// Whether the audience was inherited from an ancestor (false if explicit).
+    pub inherited: bool,
+    /// Title of the ancestor entry the audience was inherited from.
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_title: Option<String>,
+    /// Whether this entry has a parent and can potentially inherit.
+    pub can_inherit: bool,
 }
 
 /// Result of converting links to a new format.

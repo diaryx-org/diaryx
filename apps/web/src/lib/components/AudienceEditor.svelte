@@ -14,7 +14,6 @@
     entryPath: string;
     rootPath: string;
     api: Api | null;
-    rustApi: any | null;
     onChange: (value: string[] | null) => void;
   }
 
@@ -23,7 +22,6 @@
     entryPath,
     rootPath,
     api,
-    rustApi,
     onChange,
   }: Props = $props();
 
@@ -39,39 +37,23 @@
   let inheritedTags = $state<string[]>([]);
   let inheritedSourceTitle = $state<string | null>(null);
   let inheritedLoading = $state(false);
+  /** Whether this entry has a parent (part_of) and can inherit at all */
+  let canInherit = $state(false);
 
-  // Resolve inherited audience by walking up part_of chain
+  // Resolve inherited audience via the backend command
   async function resolveInheritedAudience() {
-    if (!rustApi) return;
+    if (!api) return;
     inheritedLoading = true;
     inheritedTags = [];
     inheritedSourceTitle = null;
+    canInherit = false;
 
     try {
-      const docId = await rustApi.findDocIdByPath(entryPath);
-      if (!docId) return;
-
-      const meta = await rustApi.getFileById(docId);
-      if (!meta?.part_of) return;
-
-      // Walk up the parent chain
-      let currentParentId: string | null = meta.part_of;
-      const visited = new Set<string>();
-
-      while (currentParentId) {
-        if (visited.has(currentParentId)) break;
-        visited.add(currentParentId);
-
-        const parentMeta = await rustApi.getFileById(currentParentId);
-        if (!parentMeta) break;
-
-        if (parentMeta.audience && parentMeta.audience.length > 0) {
-          inheritedTags = parentMeta.audience;
-          inheritedSourceTitle = parentMeta.title || parentMeta.filename;
-          return;
-        }
-
-        currentParentId = parentMeta.part_of;
+      const result = await api.getEffectiveAudience(entryPath);
+      canInherit = result.can_inherit;
+      if (result.inherited) {
+        inheritedTags = result.tags;
+        inheritedSourceTitle = result.source_title ?? null;
       }
     } catch (e) {
       console.warn("[AudienceEditor] Failed to resolve inherited audience:", e);
@@ -82,7 +64,7 @@
 
   // Re-resolve when entry changes
   $effect(() => {
-    if (entryPath && rustApi) {
+    if (entryPath && api) {
       resolveInheritedAudience();
     }
   });
@@ -297,14 +279,16 @@
           </Popover.Content>
         </Popover.Root>
       {/if}
-      <Button
-        variant="ghost"
-        size="sm"
-        class="h-6 text-xs px-2"
-        onclick={revertToInherit}
-      >
-        Inherit
-      </Button>
+      {#if canInherit}
+        <Button
+          variant="ghost"
+          size="sm"
+          class="h-6 text-xs px-2"
+          onclick={revertToInherit}
+        >
+          Inherit
+        </Button>
+      {/if}
     </div>
   {:else}
     <!-- State 3: Explicit tags -->
@@ -347,14 +331,16 @@
           </Popover.Content>
         </Popover.Root>
       {/if}
-      <Button
-        variant="ghost"
-        size="sm"
-        class="h-6 text-xs px-2"
-        onclick={revertToInherit}
-      >
-        Inherit
-      </Button>
+      {#if canInherit}
+        <Button
+          variant="ghost"
+          size="sm"
+          class="h-6 text-xs px-2"
+          onclick={revertToInherit}
+        >
+          Inherit
+        </Button>
+      {/if}
     </div>
   {/if}
 </div>

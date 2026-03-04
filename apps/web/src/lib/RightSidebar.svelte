@@ -1087,7 +1087,6 @@
           entryPath={entry.path}
           rootPath={workspaceStore.tree?.path ?? ""}
           {api}
-          {rustApi}
           onChange={(value) => {
             if (value === null) {
               onPropertyRemove?.("audience");

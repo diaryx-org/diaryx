@@ -255,14 +255,20 @@ export class WorkerBackendNew implements Backend {
       `[WorkerBackendNew] Initializing plugin storage (main-thread): ${pluginId}`,
     );
 
-    await this.remote.initFromPlugin(port2 as any, pluginId);
+    const initFromPlugin = (this.remote as any).initFromPlugin;
+    if (typeof initFromPlugin !== "function") {
+      throw new Error(
+        "Plugin storage initialization is not available in this web build.",
+      );
+    }
+    await initFromPlugin(port2 as any, pluginId);
   }
 
   /**
    * Initialize the backend.
    * @param storageTypeOverride Optional storage type to use instead of the default.
    *                            Use 'memory' for guest mode (in-memory filesystem).
-   * @param workspaceId Optional workspace UUID for CRDT document namespacing.
+   * @param workspaceId Optional workspace identifier used for isolated storage.
    * @param workspaceName Optional workspace display name for OPFS directory naming.
    *                      Falls back to localStorage('diaryx-workspace-name') or 'My Journal'.
    * @param storagePluginId Optional plugin ID when storageType is 'plugin'.

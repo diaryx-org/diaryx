@@ -567,12 +567,6 @@ pub enum Command {
         url: String,
     },
 
-    /// Convert an HTTP(S) URL to a WebSocket sync URL (`/sync2`).
-    ToWebSocketSyncUrl {
-        /// The HTTP URL to convert.
-        url: String,
-    },
-
     // === Plugin Operations ===
     /// Execute a plugin-specific command.
     ///
@@ -828,7 +822,6 @@ impl Command {
             Command::ValidateWorkspaceName { .. }
             | Command::ValidatePublishingSlug { .. }
             | Command::NormalizeServerUrl { .. }
-            | Command::ToWebSocketSyncUrl { .. }
             | Command::PluginCommand { .. }
             | Command::GetPluginManifests
             | Command::GetPluginConfig { .. }

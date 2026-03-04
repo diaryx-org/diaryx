@@ -33,10 +33,42 @@ export interface PluginInsertCommand {
   /** Tooltip text. */
   description: string | null;
   /** Whether this is inline or block. */
-  nodeType: "InlineAtom" | "BlockAtom";
+  nodeType: "InlineAtom" | "BlockAtom" | "InlineMark";
 }
 
 const PLUGIN_ENABLED_KEY = "diaryx-plugin-enabled";
+const WORKSPACE_PROVIDER_COMMANDS = [
+  "GetProviderStatus",
+  "ListRemoteWorkspaces",
+  "LinkWorkspace",
+  "UnlinkWorkspace",
+  "DownloadWorkspace",
+] as const;
+
+type LegacyUiContribution = Record<string, unknown>;
+type LegacyWorkspaceProviderContribution = {
+  id: string;
+  label: string;
+  description?: string | null;
+};
+type LegacyStorageProviderContribution = {
+  id: string;
+  label: string;
+  description?: string | null;
+};
+type LegacyBlockPickerPrompt = {
+  message: string;
+  default_value?: string;
+  param_key: string;
+};
+type LegacyBlockPickerContribution = {
+  id: string;
+  label: string;
+  icon?: string | null;
+  editor_command: string;
+  params?: Record<string, unknown>;
+  prompt?: LegacyBlockPickerPrompt | null;
+};
 
 // ============================================================================
 // State
@@ -76,6 +108,43 @@ function mergeManifests(): PluginManifest[] {
   }
 
   return Array.from(byId.values());
+}
+
+function getUiEntries(manifest: PluginManifest): LegacyUiContribution[] {
+  if (!Array.isArray((manifest as { ui?: unknown }).ui)) {
+    return [];
+  }
+  return (manifest as { ui: LegacyUiContribution[] }).ui;
+}
+
+function getCustomCommands(manifest: PluginManifest): Set<string> {
+  const commands = new Set<string>();
+  const caps = Array.isArray((manifest as { capabilities?: unknown }).capabilities)
+    ? ((manifest as { capabilities: unknown[] }).capabilities)
+    : [];
+
+  for (const cap of caps) {
+    if (!cap || typeof cap !== "object" || !("CustomCommands" in cap)) {
+      continue;
+    }
+    const raw = (cap as { CustomCommands?: { commands?: unknown } }).CustomCommands;
+    const list = Array.isArray(raw?.commands) ? raw!.commands : [];
+    for (const cmd of list) {
+      if (typeof cmd === "string" && cmd.length > 0) {
+        commands.add(cmd);
+      }
+    }
+  }
+
+  return commands;
+}
+
+function hasCustomCommands(
+  manifest: PluginManifest,
+  required: readonly string[],
+): boolean {
+  const commands = getCustomCommands(manifest);
+  return required.every((name) => commands.has(name));
 }
 
 function loadPluginEnabledState(): Record<string, boolean> {
@@ -267,49 +336,137 @@ function getStatusBarItems(): Array<{
   );
 }
 
-/** Workspace provider contributions across all plugins. */
+/** Workspace provider entries (legacy slot or command-capability synthesis). */
 function getWorkspaceProviders(): Array<{
   pluginId: PluginId;
-  contribution: Extract<UiContribution, { slot: "WorkspaceProvider" }>;
+  contribution: LegacyWorkspaceProviderContribution;
 }> {
-  return manifests.flatMap((m) =>
-    m.ui
-      .filter(
-        (c): c is Extract<UiContribution, { slot: "WorkspaceProvider" }> =>
-          c.slot === "WorkspaceProvider",
-      )
-      .map((contribution) => ({ pluginId: m.id, contribution })),
-  );
+  const result: Array<{
+    pluginId: PluginId;
+    contribution: LegacyWorkspaceProviderContribution;
+  }> = [];
+
+  for (const manifest of manifests) {
+    const pluginId = String(manifest.id);
+    let hasExplicit = false;
+
+    for (const ui of getUiEntries(manifest)) {
+      if (ui.slot !== "WorkspaceProvider") continue;
+      hasExplicit = true;
+      const id = typeof ui.id === "string" ? ui.id : pluginId;
+      const label =
+        typeof ui.label === "string" && ui.label.length > 0
+          ? ui.label
+          : String(manifest.name ?? id);
+      const description = typeof ui.description === "string" ? ui.description : null;
+      result.push({
+        pluginId: manifest.id,
+        contribution: { id, label, description },
+      });
+    }
+
+    if (hasExplicit) continue;
+
+    // Compatibility path: infer a workspace provider from the command surface.
+    if (hasCustomCommands(manifest, WORKSPACE_PROVIDER_COMMANDS)) {
+      result.push({
+        pluginId: manifest.id,
+        contribution: {
+          id: pluginId,
+          label: String(manifest.name ?? pluginId),
+          description:
+            typeof manifest.description === "string"
+              ? manifest.description
+              : null,
+        },
+      });
+    }
+  }
+
+  return result;
 }
 
-/** Storage provider contributions across all plugins. */
+/** Storage provider entries (legacy slot only). */
 function getStorageProviders(): Array<{
   pluginId: PluginId;
-  contribution: Extract<UiContribution, { slot: "StorageProvider" }>;
+  contribution: LegacyStorageProviderContribution;
 }> {
-  return manifests.flatMap((m) =>
-    m.ui
-      .filter(
-        (c): c is Extract<UiContribution, { slot: "StorageProvider" }> =>
-          c.slot === "StorageProvider",
-      )
-      .map((contribution) => ({ pluginId: m.id, contribution })),
-  );
+  const result: Array<{
+    pluginId: PluginId;
+    contribution: LegacyStorageProviderContribution;
+  }> = [];
+
+  for (const manifest of manifests) {
+    const pluginId = String(manifest.id);
+    for (const ui of getUiEntries(manifest)) {
+      if (ui.slot !== "StorageProvider") continue;
+      const id = typeof ui.id === "string" ? ui.id : pluginId;
+      const label =
+        typeof ui.label === "string" && ui.label.length > 0
+          ? ui.label
+          : String(manifest.name ?? id);
+      const description = typeof ui.description === "string" ? ui.description : null;
+      result.push({
+        pluginId: manifest.id,
+        contribution: { id, label, description },
+      });
+    }
+  }
+
+  return result;
 }
 
-/** Block picker item contributions across all plugins. */
+/** Legacy block-picker item entries (optional plugin-declared actions). */
 function getBlockPickerItems(): Array<{
   pluginId: PluginId;
-  contribution: Extract<UiContribution, { slot: "BlockPickerItem" }>;
+  contribution: LegacyBlockPickerContribution;
 }> {
-  return manifests.flatMap((m) =>
-    m.ui
-      .filter(
-        (c): c is Extract<UiContribution, { slot: "BlockPickerItem" }> =>
-          c.slot === "BlockPickerItem",
-      )
-      .map((contribution) => ({ pluginId: m.id, contribution })),
-  );
+  const result: Array<{
+    pluginId: PluginId;
+    contribution: LegacyBlockPickerContribution;
+  }> = [];
+
+  for (const manifest of manifests) {
+    for (const ui of getUiEntries(manifest)) {
+      if (ui.slot !== "BlockPickerItem") continue;
+      if (typeof ui.id !== "string" || typeof ui.label !== "string") continue;
+      if (typeof ui.editor_command !== "string" || ui.editor_command.length === 0) {
+        continue;
+      }
+
+      const prompt =
+        ui.prompt && typeof ui.prompt === "object" &&
+        typeof (ui.prompt as { message?: unknown }).message === "string" &&
+        typeof (ui.prompt as { param_key?: unknown }).param_key === "string"
+          ? {
+              message: (ui.prompt as { message: string }).message,
+              param_key: (ui.prompt as { param_key: string }).param_key,
+              default_value:
+                typeof (ui.prompt as { default_value?: unknown }).default_value ===
+                "string"
+                  ? (ui.prompt as { default_value: string }).default_value
+                  : "",
+            }
+          : undefined;
+
+      result.push({
+        pluginId: manifest.id,
+        contribution: {
+          id: ui.id,
+          label: ui.label,
+          icon: typeof ui.icon === "string" ? ui.icon : null,
+          editor_command: ui.editor_command,
+          params:
+            ui.params && typeof ui.params === "object"
+              ? (ui.params as Record<string, unknown>)
+              : {},
+          prompt,
+        },
+      });
+    }
+  }
+
+  return result;
 }
 
 /** Editor insert commands from EditorExtension entries with insert_command. */
@@ -339,11 +496,11 @@ function getEditorInsertCommands(): {
         nodeType: ext.node_type,
       };
 
-      if (ext.node_type === "InlineMark") {
-        mark.push(cmd);
-      } else if (ext.node_type === "InlineAtom") {
+      if (ext.node_type === "InlineAtom") {
         inline.push(cmd);
-      } else {
+      } else if (ext.node_type === "InlineMark") {
+        mark.push(cmd);
+      } else if (ext.node_type === "BlockAtom") {
         block.push(cmd);
       }
     }
@@ -352,18 +509,15 @@ function getEditorInsertCommands(): {
   return { inline, block, mark };
 }
 
-/** Eagerly load icons for all plugin insert commands and block picker items. Call after plugins load. */
+/** Eagerly load icons for all plugin insert commands. Call after plugins load. */
 async function preloadInsertCommandIcons(): Promise<void> {
   for (const manifest of manifests) {
     for (const ui of manifest.ui) {
-      if (ui.slot === "EditorExtension") {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const ext = ui as any;
-        if (ext.insert_command?.icon) {
-          await loadPluginIcon(ext.insert_command.icon);
-        }
-      } else if (ui.slot === "BlockPickerItem" && ui.icon) {
-        await loadPluginIcon(ui.icon);
+      if (ui.slot !== "EditorExtension") continue;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const ext = ui as any;
+      if (ext.insert_command?.icon) {
+        await loadPluginIcon(ext.insert_command.icon);
       }
     }
   }

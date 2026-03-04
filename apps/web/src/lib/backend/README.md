@@ -55,6 +55,23 @@ When worker startup fails due browser restrictions, `WorkerBackendNew` now
 automatically falls back to an in-process (main-thread) WASM backend path so
 local workspace flows can still proceed without plugins/worker-only features.
 
+## Main-Thread WASM Fallback Loading
+
+`wasmWorkerNew.ts` now prefers an explicit WASM asset URL
+(`$lib/wasm/diaryx_wasm_bg.wasm`) when initializing `@diaryx/wasm` outside the
+worker path. This avoids WebKit/dev fallback failures where wasm-pack's implicit
+`import.meta.url` resolution can fail to fetch the `.wasm` binary.
+
+## Sync Boundary (Plugin-Owned)
+
+The web backend no longer initializes a host-side CRDT storage bridge.
+
+- `wasmWorkerNew.ts` only initializes storage/runtime (OPFS, IndexedDB, FSA,
+  plugin storage) and command execution.
+- Sync/CRDT orchestration is plugin-owned (for example, sync plugin commands and
+  plugin surfaces in settings/sidebar/status).
+- `setupCrdtStorage()` remains a compatibility no-op in the worker API.
+
 ## Native Sync (Tauri only)
 
 The `TauriBackend` provides native sync methods that use the Rust sync client:

@@ -15,6 +15,7 @@
     purchasePlus,
     restoreIapPurchases,
     getPlusProductId,
+    openExternalUrl,
     pollForPlusUpgrade,
   } from "$lib/billing";
   import { isTauri } from "$lib/backend/interface";
@@ -130,8 +131,8 @@
     </button>
     <p class="text-[10px] text-muted-foreground/70 text-center leading-tight">
       $4.99/month. Auto-renews monthly. Cancel anytime in Settings &gt; Apple&nbsp;ID &gt; Subscriptions.
-      <a href="https://diaryx.org/terms" class="underline" target="_blank" rel="noopener">Terms</a> &
-      <a href="https://diaryx.org/privacy" class="underline" target="_blank" rel="noopener">Privacy</a>.
+      <button type="button" class="underline" onclick={() => openExternalUrl('https://diaryx.org/terms')}>Terms</button> &
+      <button type="button" class="underline" onclick={() => openExternalUrl('https://diaryx.org/privacy')}>Privacy</button>.
     </p>
   {:else}
     <Button

@@ -118,6 +118,56 @@ async function executeAndExtract<T>(
   );
 }
 
+let wasmModulePromise: Promise<any> | null = null;
+
+/**
+ * Load and initialize the WASM bindings.
+ *
+ * In dev/main-thread fallback, relying on wasm-pack's implicit `import.meta.url`
+ * resolution can fail in some WebKit setups. Prefer an explicit Vite `?url`
+ * wasm asset when available, with a safe fallback to the default loader.
+ */
+async function loadWasmModule(): Promise<any> {
+  if (wasmModulePromise) return wasmModulePromise;
+
+  wasmModulePromise = (async () => {
+    const wasmCdnUrl = (import.meta as any).env?.VITE_WASM_CDN_URL as
+      | string
+      | undefined;
+
+    if (wasmCdnUrl) {
+      const wasm = await import(/* @vite-ignore */ `${wasmCdnUrl}/diaryx_wasm.js`);
+      await wasm.default({ module_or_path: `${wasmCdnUrl}/diaryx_wasm_bg.wasm` });
+      return wasm;
+    }
+
+    const wasm = await import("@diaryx/wasm");
+
+    try {
+      const wasmUrlModule = await import("$lib/wasm/diaryx_wasm_bg.wasm?url");
+      const wasmUrl = (wasmUrlModule as { default?: string }).default;
+      if (typeof wasmUrl === "string" && wasmUrl.length > 0) {
+        await wasm.default({ module_or_path: wasmUrl });
+      } else {
+        await wasm.default();
+      }
+    } catch (e) {
+      console.warn(
+        "[WasmWorker] Failed to resolve explicit WASM asset URL, using default loader:",
+        e,
+      );
+      await wasm.default();
+    }
+
+    return wasm;
+  })().catch((e) => {
+    wasmModulePromise = null;
+    throw e;
+  });
+
+  return wasmModulePromise;
+}
+
 /**
  * Migrate legacy OPFS workspace directory to a new name.
  * Copies files from "diaryx/" to the target name, then deletes the old directory.
@@ -312,7 +362,7 @@ async function init(
   eventPort = port;
 
   // Use workspace name for OPFS directory naming (human-readable).
-  // The workspaceId is only used for CRDT document namespacing, not storage paths.
+  // The workspaceId is only used for workspace-scoped persistence keys, not path naming.
   const resolvedWorkspaceName = workspaceName || "My Journal";
 
   // For OPFS, run legacy "diaryx" -> name migration
@@ -325,22 +375,10 @@ async function init(
     }
   }
 
-  // Import WASM module
-  // When CDN is configured, load BOTH the JS glue and .wasm binary from CDN
-  // to guarantee they come from the same wasm-pack build. wasm-bindgen generates
-  // hashed function names that must match between JS and WASM; loading them from
-  // different sources (npm JS + CDN WASM) causes "is not a function" errors.
-  const wasmCdnUrl = (import.meta as any).env?.VITE_WASM_CDN_URL as
-    | string
-    | undefined;
-  let wasm: any;
-  if (wasmCdnUrl) {
-    wasm = await import(/* @vite-ignore */ `${wasmCdnUrl}/diaryx_wasm.js`);
-    await wasm.default({ module_or_path: `${wasmCdnUrl}/diaryx_wasm_bg.wasm` });
-  } else {
-    wasm = await import("@diaryx/wasm");
-    await wasm.default();
-  }
+  // CRDT storage bridge setup was removed from the web host. Sync/CRDT state
+  // is plugin-owned; the host only initializes backend storage + command runtime.
+
+  const wasm = await loadWasmModule();
 
   // Create backend with specified storage type
   if (storageType === "opfs") {
@@ -423,56 +461,18 @@ async function initWithDirectoryHandle(
  *
  * All methods use the unified command API through `execute()` except where noted.
  */
-/**
- * Initialize the backend with a plugin-provided filesystem.
- * Must run on the main thread because dispatchCommand() requires
- * main-thread access to the Extism plugin manager.
- */
-async function initFromPlugin(
-  port: MessagePort,
-  pluginId: string,
-): Promise<void> {
-  eventPort = port;
-
-  const wasmCdnUrl = (import.meta as any).env?.VITE_WASM_CDN_URL as
-    | string
-    | undefined;
-  let wasm: any;
-  if (wasmCdnUrl) {
-    wasm = await import(/* @vite-ignore */ `${wasmCdnUrl}/diaryx_wasm.js`);
-    await wasm.default({ module_or_path: `${wasmCdnUrl}/diaryx_wasm_bg.wasm` });
-  } else {
-    wasm = await import("@diaryx/wasm");
-    await wasm.default();
-  }
-
-  const { createPluginFileSystemCallbacks } = await import(
-    "$lib/storage/pluginFileSystem"
-  );
-  const callbacks = createPluginFileSystemCallbacks(pluginId);
-  backend = await wasm.DiaryxBackend.createFromJsFileSystem(callbacks);
-
-  if (backend.onFileSystemEvent && eventPort) {
-    fsEventSubscriptionId = backend.onFileSystemEvent((eventJson: any) => {
-      if (typeof eventJson === "object" && eventJson?.type === "SnapshotDownloaded") {
-        handleSnapshotDownloaded(eventJson.blob, eventJson.workspace_id);
-        return;
-      }
-      try {
-        eventPort!.postMessage({ type: "FileSystemEvent", data: eventJson });
-      } catch (e) {
-        console.error("[WasmWorker] Failed to forward filesystem event:", e);
-      }
-    });
-  }
-
-  console.log("[WasmWorker] DiaryxBackend initialized with plugin storage:", pluginId);
-}
 
 export const workerApi = {
   init,
   initWithDirectoryHandle,
-  initFromPlugin,
+
+  /**
+   * Legacy no-op kept for compatibility with older callers.
+   * Web host no longer initializes a CRDT storage bridge.
+   */
+  async setupCrdtStorage(): Promise<void> {
+    // Intentionally empty.
+  },
 
   isReady(): boolean {
     return backend !== null;
@@ -773,32 +773,32 @@ export const workerApi = {
   async getAvailableAudiences(rootPath: string): Promise<string[]> {
     return executeAndExtract(
       "GetAvailableAudiences",
-      { path: rootPath },
+      { root_path: rootPath },
       "Strings",
     );
   },
 
   async planExport(rootPath: string, audience: string): Promise<any> {
     return executeAndExtract(
-      "PluginCommand",
-      { plugin: "diaryx.publish", command: "PlanExport", params: { root_path: rootPath, audience } },
-      "PluginResult",
+      "PlanExport",
+      { root_path: rootPath, audience },
+      "ExportPlan",
     );
   },
 
   async exportToMemory(rootPath: string, audience: string): Promise<any[]> {
     return executeAndExtract(
-      "PluginCommand",
-      { plugin: "diaryx.publish", command: "ExportToMemory", params: { root_path: rootPath, audience } },
-      "PluginResult",
+      "ExportToMemory",
+      { root_path: rootPath, audience },
+      "ExportedFiles",
     );
   },
 
   async exportToHtml(rootPath: string, audience: string): Promise<any[]> {
     return executeAndExtract(
-      "PluginCommand",
-      { plugin: "diaryx.publish", command: "ExportToHtml", params: { root_path: rootPath, audience } },
-      "PluginResult",
+      "ExportToHtml",
+      { root_path: rootPath, audience },
+      "ExportedFiles",
     );
   },
 
@@ -807,10 +807,120 @@ export const workerApi = {
     audience: string,
   ): Promise<{ source_path: string; relative_path: string }[]> {
     return executeAndExtract(
-      "PluginCommand",
-      { plugin: "diaryx.publish", command: "ExportBinaryAttachments", params: { root_path: rootPath, audience } },
-      "PluginResult",
+      "ExportBinaryAttachments",
+      { root_path: rootPath, audience },
+      "BinaryFilePaths",
     );
+  },
+
+  // =========================================================================
+  // Rust-Owned Sync (Rust owns the WebSocket)
+  // =========================================================================
+
+  /**
+   * Start sync — Rust owns the WebSocket connection.
+   * Creates a WasmSyncTransport, connects to the server, and subscribes
+   * to local CRDT updates. All sync events are forwarded via the filesystem
+   * event port (MessagePort).
+   */
+  startSync(
+    serverUrl: string,
+    workspaceId: string,
+    authToken?: string,
+    sessionCode?: string,
+  ): void {
+    getBackend().startSync(
+      serverUrl,
+      workspaceId,
+      authToken ?? null,
+      sessionCode ?? null,
+    );
+    console.log(
+      "[WasmWorker] Started Rust-owned sync for workspace:",
+      workspaceId,
+    );
+  },
+
+  /**
+   * Stop sync — disconnect and drop the transport.
+   */
+  stopSync(): void {
+    getBackend().stopSync();
+    console.log("[WasmWorker] Stopped Rust-owned sync");
+  },
+
+  /**
+   * Focus on specific files for body sync (Rust-owned).
+   */
+  focusSyncFiles(files: string[]): void {
+    getBackend().focusSyncFiles(files);
+  },
+
+  /**
+   * Unfocus specific files (Rust-owned).
+   */
+  unfocusSyncFiles(files: string[]): void {
+    getBackend().unfocusSyncFiles(files);
+  },
+
+  /**
+   * Request body sync for specific files (Rust-owned).
+   */
+  requestBodySync(files: string[]): void {
+    getBackend().requestBodySync(files);
+  },
+
+  /**
+   * Notify Rust that a snapshot import has completed.
+   */
+  notifySnapshotImported(): void {
+    const b = getBackend();
+    if (b.notifySnapshotImported) {
+      b.notifySnapshotImported();
+    }
+  },
+
+  // =========================================================================
+  // Share Session REST API (Rust-backed)
+  // =========================================================================
+
+  async createShareSession(serverUrl: string, workspaceId: string, authToken: string, readOnly: boolean): Promise<any> {
+    return getBackend().createShareSession(serverUrl, workspaceId, authToken, readOnly);
+  },
+
+  async lookupShareSession(serverUrl: string, joinCode: string, authToken?: string): Promise<any> {
+    return getBackend().lookupShareSession(serverUrl, joinCode, authToken);
+  },
+
+  async deleteShareSession(serverUrl: string, joinCode: string, authToken: string): Promise<void> {
+    return getBackend().deleteShareSession(serverUrl, joinCode, authToken);
+  },
+
+  async setShareSessionReadOnly(serverUrl: string, joinCode: string, authToken: string, readOnly: boolean): Promise<void> {
+    return getBackend().setShareSessionReadOnly(serverUrl, joinCode, authToken, readOnly);
+  },
+
+  // =========================================================================
+  // Attachment Sync (Rust-backed)
+  // =========================================================================
+
+  async syncUploadAttachment(
+    serverUrl: string, authToken: string, workspaceId: string,
+    entryPath: string, attachmentPath: string, hash: string,
+    mimeType: string, data: Uint8Array,
+  ): Promise<void> {
+    return getBackend().uploadAttachment(
+      serverUrl, authToken, workspaceId,
+      entryPath, attachmentPath, hash,
+      mimeType, Array.from(data),
+    );
+  },
+
+  async syncDownloadAttachment(
+    serverUrl: string, authToken: string, workspaceId: string, hash: string,
+  ): Promise<Uint8Array> {
+    const bytes = await getBackend().downloadAttachment(serverUrl, authToken, workspaceId, hash);
+    return new Uint8Array(bytes);
   },
 
   // =========================================================================

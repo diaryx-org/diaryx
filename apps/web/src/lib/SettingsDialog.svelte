@@ -209,12 +209,10 @@
         <User class="size-4 mr-1.5 hidden sm:inline" />
         Account
       </Tabs.Trigger>
-      {#if authState.isAuthenticated}
-        <Tabs.Trigger value="billing" class="shrink-0">
-          <CreditCard class="size-4 mr-1.5 hidden sm:inline" />
-          Billing
-        </Tabs.Trigger>
-      {/if}
+      <Tabs.Trigger value="billing" class="shrink-0">
+        <CreditCard class="size-4 mr-1.5 hidden sm:inline" />
+        Billing
+      </Tabs.Trigger>
       <Tabs.Trigger value="data" class="shrink-0">
         <Database class="size-4 mr-1.5 hidden sm:inline" />
         Data

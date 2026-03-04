@@ -25,6 +25,21 @@ export async function openStripeUrl(url: string): Promise<void> {
 }
 
 /**
+ * Open an external URL in a new tab/window (web) or the default browser (Tauri).
+ *
+ * Unlike `openStripeUrl`, this doesn't navigate the current page — it always
+ * opens a new context. Use this for informational links like Terms & Privacy.
+ */
+export async function openExternalUrl(url: string): Promise<void> {
+  if (isTauri()) {
+    const { open } = await import("@tauri-apps/plugin-shell");
+    await open(url);
+  } else {
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+}
+
+/**
  * Poll `/auth/me` until the user's tier changes to "plus".
  * Returns true if upgrade detected, false if timed out.
  */

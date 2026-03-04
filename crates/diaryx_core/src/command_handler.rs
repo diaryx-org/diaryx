@@ -2236,11 +2236,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 Ok(Response::String(naming::normalize_server_url(&url)))
             }
 
-            Command::ToWebSocketSyncUrl { url } => {
-                use crate::utils::naming;
-                Ok(Response::String(naming::to_websocket_sync_url(&url)))
-            }
-
             // === Plugin Operations ===
             Command::PluginCommand {
                 plugin,

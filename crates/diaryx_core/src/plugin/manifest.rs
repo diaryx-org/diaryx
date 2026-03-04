@@ -3,16 +3,9 @@
 //! Each plugin declares a [`PluginManifest`] that describes its identity,
 //! capabilities, and UI contributions. The frontend reads these manifests
 //! to dynamically render settings tabs, sidebar panels, command palette items, etc.
-//!
-//! # Marketplace Types
-//!
-//! This module also contains types for the plugin marketplace:
-//! - [`PluginArtifact`] — WASM build artifact reference (URL, SHA-256, size)
-//! - [`MarketplaceEntry`] — a single plugin listing in the registry
-//! - [`MarketplaceRegistry`] — the parsed CDN registry (`registry.md`)
-//! - [`PluginWorkspaceMetadata`] — metadata parsed from a plugin workspace root
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use super::PluginId;
 use crate::error::DiaryxError;
@@ -22,9 +15,8 @@ use crate::frontmatter;
 ///
 /// Returned by [`Plugin::manifest()`](super::Plugin::manifest) and consumed
 /// by the frontend to build extension-point UI.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
 pub struct PluginManifest {
     /// Unique plugin identifier.
     pub id: PluginId,
@@ -38,15 +30,14 @@ pub struct PluginManifest {
     pub capabilities: Vec<PluginCapability>,
     /// UI extension points contributed by this plugin.
     pub ui: Vec<UiContribution>,
-    /// CLI subcommands contributed by this plugin.
+    /// CLI commands contributed by this plugin.
     #[serde(default)]
     pub cli: Vec<CliCommand>,
 }
 
 /// A capability that a plugin can declare.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
 pub enum PluginCapability {
     /// Listens to file lifecycle events (create, save, delete, move).
     FileEvents,
@@ -66,9 +57,8 @@ pub enum PluginCapability {
 }
 
 /// A UI extension point contributed by a plugin.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
 #[serde(tag = "slot")]
 pub enum UiContribution {
     /// A tab in the settings dialog.
@@ -164,115 +154,36 @@ pub enum UiContribution {
         /// Optional plugin command to execute on click.
         plugin_command: Option<String>,
     },
-    /// A dialog that can be triggered by a plugin command.
-    ///
-    /// The host renders the component as a modal dialog. Plugins use this
-    /// for complex multi-step flows (e.g., sync setup wizard).
-    Dialog {
-        /// Unique identifier for this dialog.
-        id: String,
-        /// Dialog title / label.
-        label: String,
-        /// Component reference for rendering the dialog content.
-        component: ComponentRef,
-        /// Optional plugin command that triggers this dialog.
-        /// If set, the host opens the dialog when this command is executed.
-        trigger_command: Option<String>,
-    },
-    /// A workspace provider contributed by a plugin.
-    ///
-    /// Plugins declaring this slot appear in workspace creation/management UIs
-    /// as sync providers. The host queries provider readiness and delegates
-    /// link/unlink/download operations to the provider.
-    WorkspaceProvider {
-        /// Unique provider identifier (usually the plugin ID).
-        id: String,
-        /// Human-readable label shown in provider dropdowns.
-        label: String,
-        /// Optional icon name (Lucide kebab-case).
-        icon: Option<String>,
-    },
-    /// A storage provider contributed by a plugin.
-    ///
-    /// Plugins declaring this slot appear in the storage settings UI
-    /// as alternative filesystem backends. The host creates a
-    /// `JsFileSystem`-backed `DiaryxBackend` that delegates I/O to the plugin.
-    StorageProvider {
-        /// Unique provider identifier (usually the plugin ID).
-        id: String,
-        /// Human-readable label shown in storage picker.
-        label: String,
-        /// Optional icon name (Lucide kebab-case).
-        icon: Option<String>,
-        /// Optional description shown below the label.
-        description: Option<String>,
-    },
     /// An editor extension (TipTap node/mark) contributed by a plugin.
     ///
     /// The host generates a TipTap extension from this declaration and calls
-    /// the plugin's `render_export` function to render content (for atom nodes).
-    /// For marks (`InlineMark`), no render export is needed — the host wraps
-    /// inline content directly.
+    /// the plugin's `render_export` function to render content.
     EditorExtension {
-        /// Unique extension ID (becomes the TipTap node/mark name).
+        /// Unique extension ID (becomes the TipTap node name).
         extension_id: String,
         /// What kind of editor node this creates.
         node_type: EditorNodeType,
         /// Markdown syntax delimiters for parsing and serialization.
         markdown: MarkdownSyntax,
         /// Name of the plugin's WASM export to call for rendering.
-        /// Required for atom nodes (`InlineAtom`, `BlockAtom`), unused for marks.
-        #[serde(default)]
-        render_export: Option<String>,
+        render_export: String,
         /// How the user edits the source content.
-        /// Required for atom nodes, unused for marks.
-        #[serde(default)]
-        edit_mode: Option<EditMode>,
+        edit_mode: EditMode,
         /// Optional CSS to inject for rendered output.
         css: Option<String>,
         /// Optional insert command for editor menu integration.
         ///
         /// When present, the host adds a button in the appropriate editor menu
-        /// (MoreStylesPicker for inline atoms/marks, BlockPicker for block atoms)
-        /// to insert or toggle this extension.
+        /// (MoreStylesPicker for inline atoms, BlockPicker for block atoms)
+        /// to insert an empty node of this type.
         #[serde(default)]
         insert_command: Option<InsertCommand>,
-        /// Optional keyboard shortcut (e.g., `"Mod-Shift-s"`).
-        /// Used primarily by mark extensions.
-        #[serde(default)]
-        keyboard_shortcut: Option<String>,
-        /// Optional click behavior for mark extensions.
-        /// Defines how clicking on the mark toggles visual state.
-        #[serde(default)]
-        click_behavior: Option<MarkClickBehavior>,
-    },
-    /// An item in the block picker menu (the "More" submenu).
-    ///
-    /// Plugins declare these to add custom block types to the editor's
-    /// block picker. The host renders them dynamically and calls the
-    /// specified editor command with optional params and user prompt.
-    BlockPickerItem {
-        /// Unique identifier for this item.
-        id: String,
-        /// Label displayed in the block picker menu.
-        label: String,
-        /// Optional Lucide icon name (kebab-case).
-        icon: Option<String>,
-        /// TipTap editor command to execute (e.g., `"insertConditionalBlock"`).
-        editor_command: String,
-        /// Static params passed to the editor command.
-        #[serde(default)]
-        params: Option<serde_json::Value>,
-        /// Optional prompt shown to collect user input before executing.
-        #[serde(default)]
-        prompt: Option<BlockPickerPrompt>,
     },
 }
 
 /// Which sidebar a tab appears in.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
 pub enum SidebarSide {
     /// Left sidebar.
     Left,
@@ -281,9 +192,8 @@ pub enum SidebarSide {
 }
 
 /// Where a status bar item appears.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
 pub enum StatusBarPosition {
     /// Left-aligned.
     Left,
@@ -294,40 +204,26 @@ pub enum StatusBarPosition {
 }
 
 /// Which host context menu surface a plugin contribution targets.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
 pub enum ContextMenuTarget {
     /// Context menu for entry nodes in the left sidebar file tree.
     LeftSidebarTree,
 }
 
 /// The kind of TipTap node an [`EditorExtension`](UiContribution::EditorExtension) creates.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
 pub enum EditorNodeType {
     /// Inline atom node (like a footnote reference).
     InlineAtom,
     /// Block atom node (like an HTML block).
     BlockAtom,
-    /// Inline mark that wraps rich text (like bold, spoiler).
-    InlineMark,
-    /// Host-provided extension too complex for declarative manifest.
-    ///
-    /// The host looks up a pre-registered TypeScript extension by ID.
-    /// For `Builtin` type, the `markdown`, `render_export`, `edit_mode`
-    /// fields are ignored — the TypeScript extension handles everything.
-    Builtin {
-        /// ID of the host-side extension factory.
-        host_extension_id: String,
-    },
 }
 
 /// Markdown syntax delimiters for an editor extension.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
 pub struct MarkdownSyntax {
     /// Whether this is an inline or block-level syntax.
     pub level: MarkdownLevel,
@@ -338,9 +234,8 @@ pub struct MarkdownSyntax {
 }
 
 /// Whether a markdown syntax is inline or block-level.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
 pub enum MarkdownLevel {
     /// Inline-level (within a paragraph).
     Inline,
@@ -349,9 +244,8 @@ pub enum MarkdownLevel {
 }
 
 /// How the user edits the source content of an editor extension node.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
 pub enum EditMode {
     /// Click opens a popover with a source text input (for inline nodes).
     Popover,
@@ -359,45 +253,13 @@ pub enum EditMode {
     SourceToggle,
 }
 
-/// Click behavior for an inline mark extension.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
-pub enum MarkClickBehavior {
-    /// Toggle between two CSS classes on click (e.g., hidden ↔ revealed).
-    ToggleClass {
-        /// Class applied when the mark is in its default (hidden) state.
-        hidden_class: String,
-        /// Class applied when the mark has been clicked (revealed) state.
-        revealed_class: String,
-    },
-}
-
-/// A prompt shown to the user before inserting a block picker item.
-///
-/// When present on a [`BlockPickerItem`](UiContribution::BlockPickerItem),
-/// the host shows a `window.prompt()` dialog and merges the result into
-/// the editor command params at `param_key`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
-pub struct BlockPickerPrompt {
-    /// Message shown in the prompt dialog.
-    pub message: String,
-    /// Default value pre-filled in the prompt input.
-    pub default_value: String,
-    /// Key in the params object where the user's input is stored.
-    pub param_key: String,
-}
-
 /// Metadata for an insert button in the editor menus.
 ///
 /// When present on an [`EditorExtension`](UiContribution::EditorExtension),
 /// the host renders a button in the appropriate menu (MoreStylesPicker for
 /// inline atoms, BlockPicker/BlockStylePicker for block atoms).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
 pub struct InsertCommand {
     /// Button label shown in the menu.
     pub label: String,
@@ -409,9 +271,8 @@ pub struct InsertCommand {
 }
 
 /// How to render a plugin-contributed UI panel.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
 #[serde(tag = "type")]
 pub enum ComponentRef {
     /// Use an existing built-in component by ID.
@@ -435,9 +296,8 @@ pub enum ComponentRef {
 }
 
 /// A declarative settings field rendered as a form control.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
 #[serde(tag = "type")]
 pub enum SettingsField {
     /// Text input.
@@ -515,9 +375,8 @@ pub enum SettingsField {
 }
 
 /// A select dropdown option.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
 pub struct SelectOption {
     /// The value stored when selected.
     pub value: String,
@@ -526,21 +385,17 @@ pub struct SelectOption {
 }
 
 // ============================================================================
-// CLI extension types
+// CLI command types
 // ============================================================================
 
 fn default_true() -> bool {
     true
 }
 
-/// A CLI subcommand declared by a plugin.
-///
-/// Plugins include these in their manifest to contribute commands to the
-/// `diaryx` CLI. The CLI reads cached manifests at startup and builds
+/// A CLI subcommand declared by a plugin. The CLI host builds
 /// dynamic clap commands from these declarations.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
 pub struct CliCommand {
     /// Subcommand name (e.g., `"publish"`).
     pub name: String,
@@ -572,9 +427,8 @@ pub struct CliCommand {
 }
 
 /// A CLI argument declared by a plugin command.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
 pub struct CliArg {
     /// Argument name (used as the clap ID).
     pub name: String,
@@ -601,9 +455,8 @@ pub struct CliArg {
 }
 
 /// Value types for CLI arguments.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings/")]
 pub enum CliArgType {
     /// String value (default).
     #[default]
@@ -626,52 +479,52 @@ pub enum CliArgType {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PluginArtifact {
     /// CDN URL for the WASM file.
-    pub url: std::string::String,
+    pub url: String,
     /// SHA-256 hash of the WASM file.
-    pub sha256: std::string::String,
+    pub sha256: String,
     /// File size in bytes.
     pub size: u64,
     /// ISO 8601 timestamp of when the artifact was published.
-    pub published_at: std::string::String,
+    pub published_at: String,
 }
 
 /// A single plugin listing in the marketplace registry.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MarketplaceEntry {
     /// Canonical plugin ID (e.g., `"diaryx.sync"`).
-    pub id: std::string::String,
+    pub id: String,
     /// Human-readable name.
-    pub name: std::string::String,
+    pub name: String,
     /// SemVer version string.
-    pub version: std::string::String,
+    pub version: String,
     /// One-line summary.
-    pub summary: std::string::String,
+    pub summary: String,
     /// Full description.
-    pub description: std::string::String,
+    pub description: String,
     /// Author or organization.
-    pub author: std::string::String,
+    pub author: String,
     /// License identifier.
-    pub license: std::string::String,
+    pub license: String,
     /// Repository URL.
     #[serde(default)]
-    pub repository: Option<std::string::String>,
+    pub repository: Option<String>,
     /// Category tags for discovery.
     #[serde(default)]
-    pub categories: Vec<std::string::String>,
+    pub categories: Vec<String>,
     /// Free-form tags for search.
     #[serde(default)]
-    pub tags: Vec<std::string::String>,
+    pub tags: Vec<String>,
     /// WASM artifact reference.
     pub artifact: PluginArtifact,
     /// Declared capabilities.
     #[serde(default)]
-    pub capabilities: Vec<std::string::String>,
+    pub capabilities: Vec<String>,
     /// Icon URL.
     #[serde(default)]
-    pub icon: Option<std::string::String>,
+    pub icon: Option<String>,
     /// Screenshot URLs.
     #[serde(default)]
-    pub screenshots: Vec<std::string::String>,
+    pub screenshots: Vec<String>,
     /// Requested default permissions (opaque JSON).
     #[serde(default)]
     pub requested_permissions: Option<serde_json::Value>,
@@ -683,43 +536,43 @@ pub struct MarketplaceRegistry {
     /// Schema version (must be `2`).
     pub schema_version: u64,
     /// ISO 8601 timestamp of when the registry was generated.
-    pub generated_at: std::string::String,
+    pub generated_at: String,
     /// Plugin listings.
     pub plugins: Vec<MarketplaceEntry>,
     /// Markdown body after the frontmatter.
     #[serde(skip)]
-    pub body: std::string::String,
+    pub body: String,
 }
 
 /// Metadata parsed from a plugin workspace root `README.md`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginWorkspaceMetadata {
     /// Canonical plugin ID.
-    pub id: std::string::String,
+    pub id: String,
     /// Human-readable name (from `title` frontmatter key).
-    pub name: std::string::String,
+    pub name: String,
     /// SemVer version.
-    pub version: std::string::String,
+    pub version: String,
     /// Short description (from `description` frontmatter key).
-    pub summary: std::string::String,
+    pub summary: String,
     /// Author or organization.
     #[serde(default)]
-    pub author: Option<std::string::String>,
+    pub author: Option<String>,
     /// License identifier.
     #[serde(default)]
-    pub license: Option<std::string::String>,
+    pub license: Option<String>,
     /// Repository URL.
     #[serde(default)]
-    pub repository: Option<std::string::String>,
+    pub repository: Option<String>,
     /// Category tags.
     #[serde(default)]
-    pub categories: Vec<std::string::String>,
+    pub categories: Vec<String>,
     /// Free-form tags.
     #[serde(default)]
-    pub tags: Vec<std::string::String>,
+    pub tags: Vec<String>,
     /// Declared capabilities.
     #[serde(default)]
-    pub capabilities: Vec<std::string::String>,
+    pub capabilities: Vec<String>,
     /// WASM artifact reference.
     pub artifact: PluginArtifact,
     /// UI contributions (opaque JSON, preserved from frontmatter).
@@ -733,7 +586,7 @@ pub struct PluginWorkspaceMetadata {
     pub requested_permissions: Option<serde_json::Value>,
     /// Markdown body after the frontmatter.
     #[serde(skip)]
-    pub body: std::string::String,
+    pub body: String,
 }
 
 /// Convert a `serde_yaml::Value` to a `serde_json::Value`.
@@ -752,7 +605,6 @@ impl MarketplaceRegistry {
     pub fn from_markdown(content: &str) -> Result<Self, DiaryxError> {
         let parsed = frontmatter::parse(content)?;
 
-        // Extract and validate schema_version.
         let schema_version = parsed
             .frontmatter
             .get("schema_version")
@@ -776,7 +628,6 @@ impl MarketplaceRegistry {
             .ok_or_else(|| DiaryxError::Validation("Registry missing generated_at".to_string()))?
             .to_string();
 
-        // Deserialize plugins array.
         let plugins_yaml = parsed
             .frontmatter
             .get("plugins")
@@ -786,7 +637,6 @@ impl MarketplaceRegistry {
         let plugins: Vec<MarketplaceEntry> = serde_json::from_value(plugins_json)
             .map_err(|e| DiaryxError::Validation(format!("Failed to parse plugins: {e}")))?;
 
-        // Validate each plugin entry.
         for plugin in &plugins {
             validate_marketplace_entry(plugin)?;
         }
@@ -849,7 +699,6 @@ impl PluginWorkspaceMetadata {
         let tags = yaml_string_array(fm.get("tags"));
         let capabilities = yaml_string_array(fm.get("capabilities"));
 
-        // Parse artifact.
         let artifact_yaml = fm.get("artifact").ok_or_else(|| {
             DiaryxError::Validation("Plugin workspace missing 'artifact'".to_string())
         })?;
@@ -906,7 +755,7 @@ impl PluginWorkspaceMetadata {
 }
 
 /// Extract a string array from an optional YAML value.
-fn yaml_string_array(value: Option<&serde_yaml::Value>) -> Vec<std::string::String> {
+fn yaml_string_array(value: Option<&serde_yaml::Value>) -> Vec<String> {
     match value {
         Some(serde_yaml::Value::Sequence(seq)) => seq
             .iter()

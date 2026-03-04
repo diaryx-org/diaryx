@@ -9,7 +9,6 @@
  *   const backend = await DiaryxBackend.createFromJsFileSystem(callbacks);
  */
 
-import { dispatchCommand } from "$lib/plugins/browserPluginManager.svelte";
 import type { JsFileSystemCallbacks } from "$lib/wasm/diaryx_wasm";
 
 async function pluginCmd(
@@ -17,6 +16,9 @@ async function pluginCmd(
   command: string,
   params: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  const { dispatchCommand } = await import(
+    "$lib/plugins/browserPluginManager.svelte"
+  );
   const result = await dispatchCommand(pluginId, command, params);
   if (!result.success) {
     throw new Error(

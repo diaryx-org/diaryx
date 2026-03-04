@@ -33,6 +33,7 @@
     restoreIapPurchases,
     getPlusProductId,
     openStripeUrl,
+    openExternalUrl,
     pollForPlusUpgrade,
   } from "$lib/billing";
   import { isTauri } from "$lib/backend/interface";
@@ -132,7 +133,7 @@
   }
 
   function handleManageAppleSubscription() {
-    window.open("https://apps.apple.com/account/subscriptions", "_blank");
+    openExternalUrl("https://apps.apple.com/account/subscriptions");
   }
 </script>
 
@@ -228,7 +229,12 @@
         </ul>
       </div>
 
-      {#if billingProvider === "apple_iap"}
+      {#if !authState.isAuthenticated}
+        <!-- Not signed in: prompt to sign in -->
+        <p class="text-sm text-muted-foreground">
+          Sign in on the Account tab to upgrade to Plus.
+        </p>
+      {:else if billingProvider === "apple_iap"}
         <!-- Apple IAP: native StoreKit purchase -->
         <Button
           class="w-full"
@@ -255,8 +261,8 @@
         </Button>
         <p class="text-[10px] text-muted-foreground/70 text-center leading-tight">
           {iapPrice}/month. Auto-renews monthly. Cancel anytime in Settings &gt; Apple&nbsp;ID &gt; Subscriptions.
-          <a href="https://diaryx.org/terms" class="underline" target="_blank" rel="noopener">Terms</a> &
-          <a href="https://diaryx.org/privacy" class="underline" target="_blank" rel="noopener">Privacy</a>.
+          <button type="button" class="underline" onclick={() => openExternalUrl('https://diaryx.org/terms')}>Terms</button> &
+          <button type="button" class="underline" onclick={() => openExternalUrl('https://diaryx.org/privacy')}>Privacy</button>.
         </p>
       {:else if isWaitingForCheckout}
         <!-- Waiting for Stripe checkout to complete (Tauri) -->

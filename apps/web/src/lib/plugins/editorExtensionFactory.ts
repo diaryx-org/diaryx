@@ -3,7 +3,7 @@
  *
  * When a plugin declares `EditorExtension` entries in its manifest, this factory
  * creates corresponding TipTap extensions:
- * - **Atom nodes** (`InlineAtom`, `BlockAtom`): TipTap `Node` with Svelte node views
+ * - **Atom nodes** (`InlineAtom`, `BlockAtom`): TipTap `Node` with vanilla DOM node views
  *   and async rendering via the plugin's exported render function.
  * - **Inline marks** (`InlineMark`): TipTap `Mark` that wraps rich text with
  *   input/paste rules, keyboard shortcuts, and optional click behavior.
@@ -12,9 +12,6 @@
 import { Mark, Node, mergeAttributes } from "@tiptap/core";
 import { markInputRule, markPasteRule } from "@tiptap/core";
 import { Plugin as ProseMirrorPlugin, PluginKey } from "@tiptap/pm/state";
-import { mount, unmount } from "svelte";
-import MathInlineNodeView from "$lib/components/MathInlineNodeView.svelte";
-import MathBlockNodeView from "$lib/components/MathBlockNodeView.svelte";
 import { TemplateVariable } from "$lib/extensions/TemplateVariable";
 import { ConditionalBlock } from "$lib/extensions/ConditionalBlock";
 
@@ -122,7 +119,7 @@ export function createExtensionFromManifest(
     injectCss(ext.extension_id, ext.css);
   }
 
-  const NodeComponent = isInline ? MathInlineNodeView : MathBlockNodeView;
+  injectAtomNodeViewCss();
 
   return Node.create({
     name: ext.extension_id,
@@ -153,75 +150,17 @@ export function createExtensionFromManifest(
         tag,
         {
           [`data-${ext.extension_id}`]: "",
-          class: isInline ? "math-inline" : "math-block",
+          class: isInline ? "atom-inline" : "atom-block",
         },
         HTMLAttributes.source || "",
       ];
     },
 
     addNodeView() {
-      return ({ node, getPos, editor }) => {
-        const dom = document.createElement(isInline ? "span" : "div");
-        dom.classList.add(
-          isInline ? "math-inline-wrapper" : "math-block-wrapper",
-        );
-        if (isInline) {
-          dom.style.display = "inline";
-        }
-        dom.setAttribute("contenteditable", "false");
-
-        let currentSource = (node.attrs.source as string) || "";
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        let svelteComponent: Record<string, any> | null = null;
-
-        const onUpdate = (newSource: string) => {
-          const pos = getPos();
-          if (typeof pos !== "number") return;
-          const tr = editor.view.state.tr.setNodeMarkup(pos, null, {
-            source: newSource,
-          });
-          editor.view.dispatch(tr);
-        };
-
-        function mountComponent(source: string) {
-          svelteComponent = mount(NodeComponent, {
-            target: dom,
-            props: {
-              source,
-              readonly: !editor.isEditable,
-              onUpdate,
-              renderFn,
-            },
-          });
-        }
-
-        mountComponent(currentSource);
-
-        return {
-          dom,
-          stopEvent(event: Event) {
-            return dom.contains(event.target as globalThis.Node);
-          },
-          update(updatedNode) {
-            if (updatedNode.type.name !== ext.extension_id) return false;
-            const newSource = (updatedNode.attrs.source as string) || "";
-            if (newSource !== currentSource) {
-              currentSource = newSource;
-              if (svelteComponent) {
-                unmount(svelteComponent);
-              }
-              mountComponent(newSource);
-            }
-            return true;
-          },
-          destroy() {
-            if (svelteComponent) {
-              unmount(svelteComponent);
-              svelteComponent = null;
-            }
-          },
-        };
-      };
+      if (isInline) {
+        return createInlineAtomView(ext, renderFn);
+      }
+      return createBlockAtomView(ext, renderFn);
     },
 
     // Markdown tokenizer — generated from open/close delimiters
@@ -477,4 +416,335 @@ function injectCss(id: string, css: string) {
   style.setAttribute("data-plugin-css", id);
   style.textContent = css;
   document.head.appendChild(style);
+}
+
+// ============================================================================
+// Atom node view helpers (vanilla DOM — no Svelte dependency)
+// ============================================================================
+
+let atomCssInjected = false;
+
+function injectAtomNodeViewCss() {
+  if (atomCssInjected) return;
+  atomCssInjected = true;
+  const style = document.createElement("style");
+  style.setAttribute("data-atom-node-views", "");
+  style.textContent = `
+    .atom-inline-rendered { cursor: pointer; border-radius: 3px; padding: 0 2px; transition: background 0.15s; }
+    .atom-inline-rendered:hover { background: var(--accent); }
+    .atom-inline-error { font-size: 0.9em; color: var(--destructive); border-bottom: 1px wavy var(--destructive); }
+    .atom-inline-loading, .atom-inline-empty { color: var(--muted-foreground); font-style: italic; }
+    .atom-inline-editing { display: inline-flex; align-items: center; gap: 1px; background: var(--muted); border-radius: 3px; padding: 0 2px; }
+    .atom-inline-delim { color: var(--muted-foreground); font-family: "SF Mono", Monaco, "Cascadia Code", monospace; font-size: 0.85em; }
+    .atom-inline-input { border: none; background: transparent; color: var(--foreground); font-family: "SF Mono", Monaco, "Cascadia Code", monospace; font-size: 0.85em; outline: none; min-width: 3em; width: auto; padding: 0; }
+    .atom-block-container { border: 1px dashed var(--border); border-radius: 6px; margin: 0.5em 0; overflow: hidden; user-select: none; -webkit-user-select: none; }
+    .atom-block-header { display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; background: var(--muted); border-bottom: 1px solid var(--border); }
+    .atom-block-label { font-size: 11px; font-weight: 600; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.05em; }
+    .atom-block-toggle { display: flex; align-items: center; justify-content: center; padding: 2px 6px; border: none; background: transparent; border-radius: 3px; cursor: pointer; color: var(--muted-foreground); font-size: 11px; font-family: "SF Mono", Monaco, "Cascadia Code", monospace; }
+    .atom-block-toggle:hover { background: var(--accent); color: var(--accent-foreground); }
+    .atom-block-preview { padding: 12px; text-align: center; overflow-x: auto; }
+    .atom-block-empty, .atom-block-loading { color: var(--muted-foreground); font-style: italic; font-size: 13px; }
+    .atom-block-error { display: flex; flex-direction: column; gap: 4px; align-items: center; }
+    .atom-block-error code { font-size: 13px; color: var(--foreground); }
+    .atom-block-error-msg { font-size: 11px; color: var(--destructive); }
+    .atom-block-source { width: 100%; min-height: 60px; padding: 12px; border: none; background: var(--card); color: var(--foreground); font-family: "SF Mono", Monaco, "Cascadia Code", monospace; font-size: 13px; line-height: 1.5; resize: vertical; outline: none; box-sizing: border-box; field-sizing: content; }
+  `;
+  document.head.appendChild(style);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function createInlineAtomView(ext: EditorExtensionManifest, renderFn: RenderFn): any {
+  return ({ node, getPos, editor }: { node: any; getPos: () => number | undefined; editor: any }) => {
+    const dom = document.createElement("span");
+    dom.classList.add("atom-inline-wrapper");
+    dom.style.display = "inline";
+    dom.setAttribute("contenteditable", "false");
+
+    let currentSource = (node.attrs.source as string) || "";
+    let editing = false;
+
+    function updateSource(newSource: string) {
+      const pos = getPos();
+      if (typeof pos !== "number") return;
+      editor.view.dispatch(
+        editor.view.state.tr.setNodeMarkup(pos, null, { source: newSource }),
+      );
+    }
+
+    function renderPreview(source: string) {
+      dom.textContent = "";
+      if (!source.trim()) {
+        const empty = document.createElement("span");
+        empty.className = "atom-inline-empty";
+        empty.textContent = `${ext.markdown.open}\u2026${ext.markdown.close}`;
+        dom.appendChild(empty);
+        return;
+      }
+      const loading = document.createElement("span");
+      loading.className = "atom-inline-loading";
+      loading.textContent = "\u2026";
+      dom.appendChild(loading);
+
+      renderFn(source, false)
+        .then((result) => {
+          if (editing) return;
+          dom.textContent = "";
+          if (result.html) {
+            const rendered = document.createElement("span");
+            rendered.className = "atom-inline-rendered";
+            rendered.title = source;
+            rendered.innerHTML = result.html;
+            dom.appendChild(rendered);
+          } else {
+            const err = document.createElement("code");
+            err.className = "atom-inline-error";
+            err.textContent = `${ext.markdown.open}${source}${ext.markdown.close}`;
+            dom.appendChild(err);
+          }
+        })
+        .catch(() => {
+          if (editing) return;
+          dom.textContent = "";
+          const err = document.createElement("code");
+          err.className = "atom-inline-error";
+          err.textContent = `${ext.markdown.open}${source}${ext.markdown.close}`;
+          dom.appendChild(err);
+        });
+    }
+
+    function startEditing() {
+      if (!editor.isEditable) return;
+      editing = true;
+      dom.textContent = "";
+
+      const wrapper = document.createElement("span");
+      wrapper.className = "atom-inline-editing";
+
+      const openDelim = document.createElement("span");
+      openDelim.className = "atom-inline-delim";
+      openDelim.textContent = ext.markdown.open;
+
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "atom-inline-input";
+      input.value = currentSource;
+      input.spellcheck = false;
+
+      const closeDelim = document.createElement("span");
+      closeDelim.className = "atom-inline-delim";
+      closeDelim.textContent = ext.markdown.close;
+
+      wrapper.append(openDelim, input, closeDelim);
+      dom.appendChild(wrapper);
+      input.focus();
+      input.select();
+
+      function commit() {
+        if (!editing) return;
+        editing = false;
+        const val = input.value;
+        if (val !== currentSource) {
+          updateSource(val);
+        } else {
+          renderPreview(currentSource);
+        }
+      }
+
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          commit();
+        } else if (e.key === "Escape") {
+          editing = false;
+          renderPreview(currentSource);
+        }
+      });
+      input.addEventListener("blur", commit);
+    }
+
+    dom.addEventListener("click", () => {
+      if (!editing) startEditing();
+    });
+    renderPreview(currentSource);
+
+    return {
+      dom,
+      stopEvent: (event: Event) => dom.contains(event.target as globalThis.Node),
+      update(updatedNode: any) {
+        if (updatedNode.type.name !== ext.extension_id) return false;
+        const newSource = (updatedNode.attrs.source as string) || "";
+        if (newSource !== currentSource) {
+          currentSource = newSource;
+          if (!editing) renderPreview(newSource);
+        }
+        return true;
+      },
+      destroy() {},
+    };
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function createBlockAtomView(ext: EditorExtensionManifest, renderFn: RenderFn): any {
+  const blockLabel = ext.insert_command?.label || ext.extension_id;
+
+  return ({ node, getPos, editor }: { node: any; getPos: () => number | undefined; editor: any }) => {
+    const dom = document.createElement("div");
+    dom.className = "atom-block-container";
+    dom.setAttribute("contenteditable", "false");
+
+    let currentSource = (node.attrs.source as string) || "";
+    let sourceMode = false;
+
+    function updateSource(newSource: string) {
+      const pos = getPos();
+      if (typeof pos !== "number") return;
+      editor.view.dispatch(
+        editor.view.state.tr.setNodeMarkup(pos, null, { source: newSource }),
+      );
+    }
+
+    // Header
+    const header = document.createElement("div");
+    header.className = "atom-block-header";
+
+    const label = document.createElement("span");
+    label.className = "atom-block-label";
+    label.textContent = blockLabel;
+
+    const toggleBtn = document.createElement("button");
+    toggleBtn.type = "button";
+    toggleBtn.className = "atom-block-toggle";
+    toggleBtn.title = "Edit source";
+    toggleBtn.textContent = "</>";
+
+    header.append(label, toggleBtn);
+
+    // Content area
+    const content = document.createElement("div");
+    dom.append(header, content);
+
+    function renderPreview(source: string) {
+      sourceMode = false;
+      toggleBtn.textContent = "</>";
+      toggleBtn.title = "Edit source";
+      content.textContent = "";
+      content.className = "atom-block-preview";
+
+      if (!source.trim()) {
+        const empty = document.createElement("span");
+        empty.className = "atom-block-empty";
+        empty.textContent = `Empty ${blockLabel.toLowerCase()} block`;
+        content.appendChild(empty);
+        return;
+      }
+
+      const loading = document.createElement("span");
+      loading.className = "atom-block-loading";
+      loading.textContent = "Rendering\u2026";
+      content.appendChild(loading);
+
+      renderFn(source, true)
+        .then((result) => {
+          if (sourceMode) return;
+          content.textContent = "";
+          if (result.html) {
+            content.innerHTML = result.html;
+          } else {
+            const errDiv = document.createElement("div");
+            errDiv.className = "atom-block-error";
+            const code = document.createElement("code");
+            code.textContent = source;
+            const msg = document.createElement("span");
+            msg.className = "atom-block-error-msg";
+            msg.textContent = result.error || "Render failed";
+            errDiv.append(code, msg);
+            content.appendChild(errDiv);
+          }
+        })
+        .catch((e) => {
+          if (sourceMode) return;
+          content.textContent = "";
+          const errDiv = document.createElement("div");
+          errDiv.className = "atom-block-error";
+          const code = document.createElement("code");
+          code.textContent = source;
+          const msg = document.createElement("span");
+          msg.className = "atom-block-error-msg";
+          msg.textContent = e instanceof Error ? e.message : String(e);
+          errDiv.append(code, msg);
+          content.appendChild(errDiv);
+        });
+    }
+
+    function showSourceEditor() {
+      sourceMode = true;
+      toggleBtn.textContent = "\u2713";
+      toggleBtn.title = "Done editing";
+      content.textContent = "";
+      content.className = "";
+
+      const textarea = document.createElement("textarea");
+      textarea.className = "atom-block-source";
+      textarea.value = currentSource;
+      textarea.spellcheck = false;
+      textarea.placeholder = `Enter ${blockLabel.toLowerCase()} source\u2026`;
+      content.appendChild(textarea);
+
+      function commit() {
+        if (!sourceMode) return;
+        const val = textarea.value;
+        if (val !== currentSource) {
+          updateSource(val);
+        } else {
+          renderPreview(currentSource);
+        }
+      }
+
+      textarea.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          renderPreview(currentSource);
+        } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+          commit();
+        }
+      });
+      textarea.addEventListener("blur", commit);
+    }
+
+    if (editor.isEditable) {
+      toggleBtn.addEventListener("click", () => {
+        if (sourceMode) {
+          const textarea = content.querySelector("textarea");
+          if (textarea) {
+            const val = textarea.value;
+            if (val !== currentSource) updateSource(val);
+            else renderPreview(currentSource);
+          } else {
+            renderPreview(currentSource);
+          }
+        } else {
+          showSourceEditor();
+        }
+      });
+    } else {
+      toggleBtn.style.display = "none";
+    }
+
+    renderPreview(currentSource);
+
+    return {
+      dom,
+      stopEvent: (event: Event) => dom.contains(event.target as globalThis.Node),
+      update(updatedNode: any) {
+        if (updatedNode.type.name !== ext.extension_id) return false;
+        const newSource = (updatedNode.attrs.source as string) || "";
+        if (newSource !== currentSource) {
+          currentSource = newSource;
+          if (!sourceMode) renderPreview(newSource);
+        }
+        return true;
+      },
+      destroy() {},
+    };
+  };
 }

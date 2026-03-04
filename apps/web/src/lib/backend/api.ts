@@ -779,17 +779,6 @@ export function createApi(backend: Backend) {
       return expectResponse(response, 'String').data;
     },
 
-    /**
-     * Convert an HTTP(S) URL to a WebSocket sync URL (appends /sync2).
-     */
-    async toWebSocketSyncUrl(url: string): Promise<string> {
-      const response = await backend.execute({
-        type: 'ToWebSocketSyncUrl',
-        params: { url },
-      } as any);
-      return expectResponse(response, 'String').data;
-    },
-
     // =========================================================================
     // Storage
     // =========================================================================
@@ -798,33 +787,6 @@ export function createApi(backend: Backend) {
     async getStorageUsage(): Promise<StorageInfo> {
       const response = await backend.execute({ type: 'GetStorageUsage' });
       return expectResponse(response, 'StorageInfo').data;
-    },
-
-    // =========================================================================
-    // CRDT Initialization
-    // =========================================================================
-
-    /**
-     * Initialize workspace CRDT by scanning filesystem and populating state.
-     *
-     * This replaces the frontend's `setupWorkspaceCrdt()` logic by:
-     * 1. Finding the root index file
-     * 2. Recursively scanning all files in the workspace tree
-     * 3. Populating the CRDT with file metadata and body content
-     *
-     * If `audience` is provided, only files visible to that audience are included
-     * (uses the same filtering logic as `planExport`).
-     *
-     * @param workspacePath - Path to workspace root (directory or root index file)
-     * @param audience - Optional audience filter (e.g., "family", "public", or "*" for all non-private)
-     * @returns Status message with number of files populated
-     */
-    async initializeWorkspaceCrdt(workspacePath: string, audience?: string): Promise<string> {
-      const result = await pluginCommand('sync', 'InitializeWorkspaceCrdt', {
-        workspace_path: workspacePath,
-        audience: audience ?? null,
-      });
-      return (result as string) ?? '';
     },
 
     // =========================================================================

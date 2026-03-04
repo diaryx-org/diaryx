@@ -300,7 +300,7 @@
           {tag}
           <button
             type="button"
-            class="opacity-0 group-hover/tag:opacity-100 hover:text-destructive transition-opacity"
+            class="text-muted-foreground hover:text-destructive transition-colors"
             onclick={() => removeTag(i)}
             aria-label="Remove {tag}"
           >

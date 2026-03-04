@@ -10,24 +10,9 @@ part_of: '[README](/README.md)'
 ---
 # Roadmap
 
-## v0.15.0
+## v1.4.0
 
-## Other considerations
-
-### Cross-platform import
-
-Import from Obsidian (add all part_of/contents properties + index files)
-
-Perhaps is already possible for Obsidian with validation fixes. The hard part is handling Wikilinks, which needs design decisions
-
-### Undo/redo
-
-I would like `diaryx undo` and `diaryx redo` commands to undo/redo any command that was previously done, because it is easy to make mistakes.
-
-### Encryption
-
-Ideally hot-swappable similar to backup backends. Maybe Cryptomator?
-
-### Math/diagrams
-
-TipTap has an extension for LaTeX, but I would like to support Mermaid diagrams and Typst syntax as well. Maybe there is a way to swap parsers and return an image?
+- Themes in the plugin marketplace
+- Support for resizing components, sounds, haptics
+- Fleshing out plugin functionality
+- Release to app store!

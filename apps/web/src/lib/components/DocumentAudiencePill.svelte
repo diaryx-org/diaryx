@@ -4,7 +4,7 @@
   import * as Command from "$lib/components/ui/command";
   import * as Drawer from "$lib/components/ui/drawer";
   import { getMobileState } from "$lib/hooks/useMobile.svelte";
-  import { Plus, Lock, ArrowUpRight } from "@lucide/svelte";
+  import { Plus, Lock, ArrowUpRight, X } from "@lucide/svelte";
   import { getTemplateContextStore } from "$lib/stores/templateContextStore.svelte";
   import { getAudienceColorStore } from "$lib/stores/audienceColorStore.svelte";
   import { getAudienceColor } from "$lib/utils/audienceDotColor";
@@ -109,6 +109,13 @@
     open = false;
     searchValue = "";
   }
+
+  function removeTag(index: number) {
+    if (!audience) return;
+    const newTags = [...audience];
+    newTags.splice(index, 1);
+    onChange(newTags);
+  }
 </script>
 
 {#snippet pickerContent()}
@@ -172,10 +179,18 @@
         Private
       </span>
     {:else}
-      {#each displayTags as tag (tag)}
+      {#each displayTags as tag, i (tag)}
         <span class="pill-tag">
           <span class="pill-dot {getAudienceColor(tag, colorStore.audienceColors)}"></span>
           {tag}
+          <button
+            type="button"
+            class="pill-remove"
+            onclick={(e: MouseEvent) => { e.stopPropagation(); removeTag(i); }}
+            aria-label="Remove {tag}"
+          >
+            <X class="size-3" />
+          </button>
         </span>
       {/each}
       <span class="pill-add" aria-hidden="true">
@@ -302,5 +317,23 @@
   .pill-area:hover .pill-add {
     background: var(--muted);
     color: var(--foreground);
+  }
+
+  /* Remove button inside explicit tags */
+  .pill-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    margin: 0;
+    border: none;
+    background: none;
+    color: var(--muted-foreground);
+    cursor: pointer;
+    transition: color 0.15s ease;
+  }
+
+  .pill-remove:hover {
+    color: var(--destructive);
   }
 </style>

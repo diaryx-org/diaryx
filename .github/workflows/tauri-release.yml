@@ -90,6 +90,7 @@ jobs:
         run: |
           mkdir -p apps/web/src/lib/wasm
           cp apps/web/src/lib/wasm-stub.js apps/web/src/lib/wasm/diaryx_wasm.js
+          touch apps/web/src/lib/wasm/diaryx_wasm_bg.wasm
 
       - name: Determine tag
         id: tag

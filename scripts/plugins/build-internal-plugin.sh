@@ -49,16 +49,17 @@ jq -n \
   --arg sha256 "$SHA256" \
   --arg publishedAt "$PUBLISHED_AT" \
   --arg sizeBytes "$SIZE_BYTES" \
-  --argfile manifest "$manifest_tmp" \
-  '{
+  --rawfile manifest "$manifest_tmp" \
+  '($manifest | fromjson) as $m
+  | {
     crate: $crate,
     target: $target,
-    id: $manifest.id,
-    name: $manifest.name,
-    version: $manifest.version,
-    description: $manifest.description,
-    capabilities: ($manifest.capabilities // []),
-    requestedPermissions: ($manifest.requested_permissions // null),
+    id: $m.id,
+    name: $m.name,
+    version: $m.version,
+    description: $m.description,
+    capabilities: ($m.capabilities // []),
+    requestedPermissions: ($m.requested_permissions // null),
     artifactFile: $artifactFile,
     sha256: $sha256,
     sizeBytes: ($sizeBytes | tonumber),

@@ -12,6 +12,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
 use diaryx_core::plugin::Plugin;
 use extism::{Manifest as ExtismManifest, PluginBuilder, UserData, Wasm};
 use thiserror::Error;
@@ -79,13 +80,19 @@ pub fn inspect_plugin_wasm_manifest(wasm_path: &Path) -> Result<GuestManifest, E
 
     let wasm = Wasm::file(wasm_path);
     let extism_manifest = ExtismManifest::new([wasm]);
-    let mut plugin = PluginBuilder::new(extism_manifest)
-        .with_wasi(true)
-        .build()
-        .map_err(|e| ExtismLoadError::PluginCreate {
-            plugin_name: plugin_name.clone(),
-            source: e,
-        })?;
+    // Register host imports so plugins with host_* functions can still be
+    // instantiated for CI manifest inspection.
+    let fs = Arc::new(SyncToAsyncFs::new(RealFileSystem));
+    let user_data = UserData::new(HostContext {
+        plugin_id: plugin_name.clone(),
+        ..HostContext::with_fs(fs)
+    });
+    let builder = PluginBuilder::new(extism_manifest).with_wasi(true);
+    let builder = host_fns::register_host_functions(builder, user_data);
+    let mut plugin = builder.build().map_err(|e| ExtismLoadError::PluginCreate {
+        plugin_name: plugin_name.clone(),
+        source: e,
+    })?;
 
     parse_guest_manifest(&mut plugin, &plugin_name)
 }

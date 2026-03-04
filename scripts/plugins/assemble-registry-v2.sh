@@ -34,10 +34,10 @@ GENERATED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 jq -n \
   --arg generatedAt "$GENERATED_AT" \
   --arg cdnBaseUrl "$CDN_BASE_URL" \
-  --argfile internal "$INTERNAL_CATALOG" \
-  --argfile external "$EXTERNAL_CATALOG" \
-  --argfile built "$built_tmp" \
-  --argfile versions "$versions_tmp" \
+  --rawfile internalJson "$INTERNAL_CATALOG" \
+  --rawfile externalJson "$EXTERNAL_CATALOG" \
+  --rawfile builtJson "$built_tmp" \
+  --rawfile versionsJson "$versions_tmp" \
 '
   def assert_or_error($cond; $msg): if $cond then . else error($msg) end;
 
@@ -97,7 +97,11 @@ jq -n \
     | .documentationUrl = (.documentationUrl // null)
     | .changelogUrl = (.changelogUrl // null);
 
-  ($built | map(validate_internal_plugin(.; $internal; $versions; $cdnBaseUrl))) as $internal_plugins
+  ($internalJson | fromjson) as $internal
+  | ($externalJson | fromjson) as $external
+  | ($builtJson | fromjson) as $built
+  | ($versionsJson | fromjson) as $versions
+  | ($built | map(validate_internal_plugin(.; $internal; $versions; $cdnBaseUrl))) as $internal_plugins
   | ($external.plugins // [] | map(validate_external_plugin(.))) as $external_plugins
   | {
       schemaVersion: 2,
@@ -108,9 +112,8 @@ jq -n \
 
 jq -n \
   --arg cdnBaseUrl "$CDN_BASE_URL" \
-  --argfile built "$built_tmp" \
-'
-  $built
+  --rawfile builtJson "$built_tmp" \
+'($builtJson | fromjson)
   | map({
       id,
       version,

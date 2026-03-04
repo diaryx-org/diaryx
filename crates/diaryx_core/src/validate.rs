@@ -14,7 +14,6 @@ use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 use crate::entry::{has_non_portable_chars, sanitize_filename};
 use crate::error::Result;
@@ -222,8 +221,9 @@ fn compute_suggested_portable_path(value: &str, base_dir: &Path) -> String {
 }
 
 /// A validation error indicating a broken reference.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 #[serde(tag = "type")]
 pub enum ValidationError {
     /// A file's `part_of` points to a non-existent file.
@@ -250,8 +250,9 @@ pub enum ValidationError {
 }
 
 /// A validation warning indicating a potential issue.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 #[serde(tag = "type")]
 pub enum ValidationWarning {
     /// A file exists but is not referenced by any index's contents.
@@ -449,8 +450,9 @@ impl ValidationError {
 }
 
 /// Result of validating a workspace.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct ValidationResult {
     /// Validation errors (broken references)
     pub errors: Vec<ValidationError>,
@@ -490,8 +492,9 @@ impl ValidationResult {
 }
 
 /// A validation warning with computed metadata for frontend display.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct ValidationWarningWithMeta {
     /// The warning data
     #[serde(flatten)]
@@ -519,8 +522,9 @@ impl From<ValidationWarning> for ValidationWarningWithMeta {
 }
 
 /// A validation error with computed metadata for frontend display.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct ValidationErrorWithMeta {
     /// The error data
     #[serde(flatten)]
@@ -539,8 +543,9 @@ impl From<ValidationError> for ValidationErrorWithMeta {
 }
 
 /// Validation result with computed metadata for frontend display.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct ValidationResultWithMeta {
     /// Validation errors with metadata
     pub errors: Vec<ValidationErrorWithMeta>,
@@ -1440,8 +1445,9 @@ async fn find_index_in_directory<FS: AsyncFileSystem>(
 // ============================================================================
 
 /// Result of attempting to fix a validation issue.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct FixResult {
     /// Whether the fix was successful.
     pub success: bool,

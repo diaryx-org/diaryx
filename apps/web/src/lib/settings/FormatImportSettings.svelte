@@ -2,11 +2,12 @@
   /**
    * FormatImportSettings - Import from Day One or Markdown Directory
    *
-   * Day One: Parses Day One JSON/ZIP exports using WASM parsers,
+   * Day One: Parses Day One JSON/ZIP exports via the diaryx.import plugin,
    * then writes them into the workspace with proper hierarchy links.
    *
    * Markdown Directory: Writes raw files from a directory (FSAPI or ZIP)
-   * into the workspace, then calls ImportDirectoryInPlace to add hierarchy metadata.
+   * into the workspace, then calls ImportDirectoryInPlace plugin command
+   * to add hierarchy metadata.
    */
   import { Button } from "$lib/components/ui/button";
   import FilePickerPopover from "$lib/components/FilePickerPopover.svelte";
@@ -26,6 +27,15 @@
   import { getBackend } from "../backend";
   import { createApi } from "../backend/api";
   import { importFilesFromZip } from "./zipUtils";
+
+  /** Encode a Uint8Array to base64 string. */
+  function uint8ToBase64(bytes: Uint8Array): string {
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+  }
 
   interface Props {
     workspacePath?: string | null;
@@ -238,6 +248,7 @@
 
     try {
       const backend = await getBackend();
+      const api = createApi(backend);
       importStatusText = "Parsing files...";
       importProgressPercent = 10;
 
@@ -258,8 +269,12 @@
 
       const file = selectedFiles[0];
       const bytes = new Uint8Array(await file.arrayBuffer());
-      const resultJson = await (backend as unknown as { parseDayOneJson(bytes: Uint8Array): Promise<string> }).parseDayOneJson(bytes);
-      const parsed = JSON.parse(resultJson) as {
+      const b64 = uint8ToBase64(bytes);
+      const parsed = (await api.executePluginCommand(
+        "diaryx.import",
+        "ParseDayOne",
+        { data: b64 },
+      )) as {
         entries: ImportedEntry[];
         errors: string[];
         journal_name: string | null;
@@ -291,45 +306,30 @@
       importProgressPercent = 40;
 
       const entriesJson = JSON.stringify(allEntries);
-      const responseJson = await backend.execute({
-        type: "ImportEntries",
-        params: {
+      const data = (await api.executePluginCommand(
+        "diaryx.import",
+        "ImportEntries",
+        {
           entries_json: entriesJson,
           folder: folderName,
           parent_path: selectedParent?.path ?? null,
         },
-      });
+      )) as {
+        imported: number;
+        skipped: number;
+        errors: string[];
+        attachment_count: number;
+      };
 
       importProgressPercent = 90;
 
-      const response =
-        typeof responseJson === "string"
-          ? JSON.parse(responseJson)
-          : responseJson;
-
-      if (response.type === "ImportResult") {
-        const data = response.data as {
-          imported: number;
-          skipped: number;
-          errors: string[];
-          attachment_count: number;
-        };
-        importResult = {
-          success: data.imported > 0,
-          imported: data.imported,
-          skipped: data.skipped + allErrors.length,
-          errors: [...allErrors, ...data.errors],
-          attachment_count: data.attachment_count,
-        };
-      } else {
-        importResult = {
-          success: true,
-          imported: allEntries.length,
-          skipped: allErrors.length,
-          errors: allErrors,
-          attachment_count: 0,
-        };
-      }
+      importResult = {
+        success: data.imported > 0,
+        imported: data.imported,
+        skipped: data.skipped + allErrors.length,
+        errors: [...allErrors, ...data.errors],
+        attachment_count: data.attachment_count,
+      };
 
       importProgressPercent = 100;
       importStatusText = "Import complete";
@@ -483,43 +483,26 @@
       importStatusText = "Building hierarchy...";
       importProgressPercent = 75;
 
-      const responseJson = await backend.execute({
-        type: "ImportDirectoryInPlace",
-        params: {
-          path: destPrefix || null,
-        },
-      });
+      const dirData = (await api.executePluginCommand(
+        "diaryx.import",
+        "ImportDirectoryInPlace",
+        { path: destPrefix || null },
+      )) as {
+        imported: number;
+        skipped: number;
+        errors: string[];
+        attachment_count: number;
+      };
 
       importProgressPercent = 95;
 
-      const response =
-        typeof responseJson === "string"
-          ? JSON.parse(responseJson)
-          : responseJson;
-
-      if (response.type === "ImportResult") {
-        const data = response.data as {
-          imported: number;
-          skipped: number;
-          errors: string[];
-          attachment_count: number;
-        };
-        importResult = {
-          success: true,
-          imported: filesWritten,
-          skipped: filesSkipped + data.skipped,
-          errors: [...errors, ...data.errors],
-          attachment_count: data.attachment_count,
-        };
-      } else {
-        importResult = {
-          success: true,
-          imported: filesWritten,
-          skipped: filesSkipped,
-          errors,
-          attachment_count: 0,
-        };
-      }
+      importResult = {
+        success: true,
+        imported: filesWritten,
+        skipped: filesSkipped + dirData.skipped,
+        errors: [...errors, ...dirData.errors],
+        attachment_count: dirData.attachment_count,
+      };
 
       importProgressPercent = 100;
       importStatusText = "Import complete";

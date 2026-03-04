@@ -112,12 +112,14 @@ pub enum DiaryxError {
     /// Error that occurs when deserializing config.toml file.
     ///
     /// Inherited from `toml::de::Error`
+    #[cfg(feature = "toml-config")]
     #[error("Config parse error: {0}")]
     ConfigParse(#[from] toml::de::Error),
 
     /// Config failed to serialize.
     ///
     /// Inherited from `toml::ser::Error`.
+    #[cfg(feature = "toml-config")]
     #[error("Config serialize error: {0}")]
     ConfigSerialize(#[from] toml::ser::Error),
 
@@ -221,7 +223,9 @@ impl From<&DiaryxError> for SerializableError {
             DiaryxError::NoFrontmatter(_) => "NoFrontmatter",
             DiaryxError::InvalidFrontmatter(_) => "InvalidFrontmatter",
             DiaryxError::InvalidDateFormat(_) => "InvalidDateFormat",
+            #[cfg(feature = "toml-config")]
             DiaryxError::ConfigParse(_) => "ConfigParse",
+            #[cfg(feature = "toml-config")]
             DiaryxError::ConfigSerialize(_) => "ConfigSerialize",
             DiaryxError::NoConfigDir => "NoConfigDir",
             DiaryxError::ConfigNotInitialized => "ConfigNotInitialized",

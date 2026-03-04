@@ -20,6 +20,7 @@ members = [
     "crates/diaryx_spoiler_extism",
     "crates/diaryx_storage_s3_extism",
     "crates/diaryx_storage_gdrive_extism",
+    "crates/diaryx_import_extism",
     "apps/tauri/src-tauri"
 ]
 

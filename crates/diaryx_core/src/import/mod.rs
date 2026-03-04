@@ -4,9 +4,8 @@
 //! into [`ImportedEntry`] values. The parsers are pure functions — they do no
 //! filesystem I/O — so callers (CLI, WASM, etc.) decide how to persist results.
 //!
-//! The [`orchestrate`] submodule provides async orchestration for writing parsed
-//! entries into a workspace, building the date-based folder hierarchy with proper
-//! `part_of`/`contents` links.
+//! Orchestration (writing entries into the workspace hierarchy) and in-place
+//! directory import have moved to the `diaryx_import_extism` plugin crate.
 //!
 //! # Feature flags
 //!
@@ -27,12 +26,8 @@ pub mod dayone;
 #[cfg(feature = "import-markdown")]
 pub mod markdown;
 
-pub mod directory;
-pub mod orchestrate;
-
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 /// A single imported entry ready to be written to the workspace.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,8 +71,9 @@ impl Default for ImportOptions {
 }
 
 /// Summary of an import operation.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct ImportResult {
     /// Number of entries successfully imported.
     pub imported: usize,

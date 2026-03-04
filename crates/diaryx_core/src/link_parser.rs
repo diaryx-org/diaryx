@@ -36,13 +36,13 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use ts_rs::TS;
 
 /// The format to use when writing links to frontmatter.
 ///
 /// This controls how frontmatter link paths are serialized.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 #[serde(rename_all = "snake_case")]
 pub enum LinkFormat {
     /// Markdown link with workspace-root path: `[Title](/path/to/file.md)`

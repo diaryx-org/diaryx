@@ -42,6 +42,44 @@ impl PluginStorage for NoopStorage {
     fn delete(&self, _key: &str) {}
 }
 
+/// Trait for providing user-selected files to plugins.
+///
+/// On CLI, files come from command-line arguments (paths read into memory).
+/// On browser, files come from File input elements or drag-and-drop.
+/// Plugins request files by key name (e.g. "source_file", "dayone_export").
+pub trait FileProvider: Send + Sync {
+    /// Get file bytes by key name. Returns `None` if no file is available for that key.
+    fn get_file(&self, key: &str) -> Option<Vec<u8>>;
+}
+
+/// No-op implementation of [`FileProvider`] — always returns `None`.
+pub struct NoopFileProvider;
+
+impl FileProvider for NoopFileProvider {
+    fn get_file(&self, _key: &str) -> Option<Vec<u8>> {
+        None
+    }
+}
+
+/// [`FileProvider`] backed by a pre-populated map.
+///
+/// Used by the CLI to pass files read from command-line arguments.
+pub struct MapFileProvider {
+    files: std::collections::HashMap<String, Vec<u8>>,
+}
+
+impl MapFileProvider {
+    pub fn new(files: std::collections::HashMap<String, Vec<u8>>) -> Self {
+        Self { files }
+    }
+}
+
+impl FileProvider for MapFileProvider {
+    fn get_file(&self, key: &str) -> Option<Vec<u8>> {
+        self.files.get(key).cloned()
+    }
+}
+
 /// No-op implementation of [`EventEmitter`] for plugins that don't emit events.
 pub struct NoopEventEmitter;
 
@@ -81,6 +119,8 @@ pub struct HostContext {
     pub plugin_id: String,
     /// Permission checker (None = deny all).
     pub permission_checker: Option<Arc<dyn PermissionChecker>>,
+    /// Provider of user-selected files (e.g. from CLI args or browser file picker).
+    pub file_provider: Arc<dyn FileProvider>,
 }
 
 impl HostContext {
@@ -92,6 +132,7 @@ impl HostContext {
             event_emitter: Arc::new(NoopEventEmitter),
             plugin_id: String::new(),
             permission_checker: Some(Arc::new(DenyAllPermissionChecker)),
+            file_provider: Arc::new(NoopFileProvider),
         }
     }
 
@@ -220,6 +261,13 @@ pub fn register_host_functions(
             [ValType::I64],
             user_data.clone(),
             host_run_wasi_module,
+        )
+        .with_function(
+            "host_request_file",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_request_file,
         )
         .with_function(
             "host_ws_request",
@@ -673,6 +721,44 @@ fn host_get_timestamp(
         .unwrap_or(0);
 
     plugin.memory_set_val(&mut outputs[0], now.to_string().as_str())?;
+    Ok(())
+}
+
+/// Host function: `host_request_file(input: {key}) -> {data: base64} or ""`
+///
+/// Requests a user-provided file by key name. The host decides where the
+/// file comes from (CLI: read from path in command args; browser: File picker).
+/// Returns base64-encoded bytes wrapped in JSON, or empty string if unavailable.
+fn host_request_file(
+    plugin: &mut CurrentPlugin,
+    inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    use base64::Engine;
+
+    let input: String = plugin.memory_get_val(&inputs[0])?;
+
+    #[derive(serde::Deserialize)]
+    struct RequestFileInput {
+        key: String,
+    }
+
+    let parsed: RequestFileInput = serde_json::from_str(&input)
+        .map_err(|e| ExtismError::msg(format!("host_request_file: invalid input: {e}")))?;
+
+    let ctx = user_data.get()?;
+    let ctx = ctx.lock().unwrap();
+
+    let result = match ctx.file_provider.get_file(&parsed.key) {
+        Some(data) => {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
+            serde_json::json!({ "data": encoded }).to_string()
+        }
+        None => String::new(),
+    };
+
+    plugin.memory_set_val(&mut outputs[0], result.as_str())?;
     Ok(())
 }
 

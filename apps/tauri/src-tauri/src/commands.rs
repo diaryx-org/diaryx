@@ -169,6 +169,7 @@ fn register_extism_plugins<FS: diaryx_core::fs::AsyncFileSystem + 'static>(
         event_emitter: Arc::new(diaryx_extism::NoopEventEmitter),
         plugin_id: String::new(),
         permission_checker: Some(make_permission_checker(diaryx.workspace_root())),
+        file_provider: Arc::new(diaryx_extism::NoopFileProvider),
     });
     let mut adapters = Vec::new();
     match diaryx_extism::load_plugins_from_dir(&plugins_dir, host_ctx) {
@@ -349,6 +350,7 @@ pub async fn load_sync_plugin<R: Runtime>(
         event_emitter,
         plugin_id: String::new(),
         permission_checker: Some(make_permission_checker(workspace_root)),
+        file_provider: Arc::new(diaryx_extism::NoopFileProvider),
     });
 
     // Load the plugin
@@ -486,6 +488,7 @@ pub async fn install_user_plugin<R: Runtime>(
         event_emitter: Arc::new(diaryx_extism::NoopEventEmitter),
         plugin_id: String::new(),
         permission_checker: Some(Arc::new(diaryx_extism::DenyAllPermissionChecker)),
+        file_provider: Arc::new(diaryx_extism::NoopFileProvider),
     });
 
     let adapter = diaryx_extism::load_plugin_from_wasm(&tmp_wasm, host_ctx, None).map_err(|e| {

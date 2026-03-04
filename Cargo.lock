@@ -2335,6 +2335,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "diaryx_import_extism"
+version = "1.2.1"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "diaryx_core",
+ "extism-pdk",
+ "indexmap 2.13.0",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+]
+
+[[package]]
 name = "diaryx_math_extism"
 version = "1.2.1"
 dependencies = [

@@ -596,15 +596,6 @@ export class WorkerBackendNew implements Backend {
     return slug ? `${slug}.md` : "untitled.md";
   }
 
-  parseDayOneJson = (bytes: Uint8Array): Promise<string> =>
-    this.remote!.call("parseDayOneJson", [bytes]) as Promise<string>;
-
-  parseMarkdownFile = (bytes: Uint8Array, filename: string): Promise<string> =>
-    this.remote!.call("parseMarkdownFile", [
-      bytes,
-      filename,
-    ]) as Promise<string>;
-
   attachEntryToParent = (entry: string, parent: string): Promise<string> =>
     this.remote!.call("attachToParent", [entry, parent]) as Promise<string>;
 

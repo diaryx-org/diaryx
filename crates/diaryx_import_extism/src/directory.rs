@@ -1,22 +1,18 @@
-//! In-place directory import: convert a directory of markdown files to Diaryx
+//! In-place directory import: convert a directory of files to Diaryx
 //! hierarchy format by adding `part_of`/`contents`/`attachments` frontmatter.
 //!
-//! This is the async, `AsyncFileSystem`-based equivalent of the CLI's
-//! `handle_import_markdown`. Unlike the CLI version, this operates **in-place**:
-//! files are not copied, only augmented with hierarchy metadata.
+//! Port of `diaryx_core::import::directory::import_directory_in_place` using
+//! host bridge calls instead of `AsyncFileSystem`.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
 
 use indexmap::IndexMap;
 
-use crate::entry::prettify_filename;
-use crate::error::Result;
-use crate::frontmatter;
-use crate::fs::AsyncFileSystem;
-use crate::metadata_writer;
+use diaryx_core::entry::prettify_filename;
+use diaryx_core::frontmatter;
+use diaryx_core::import::ImportResult;
 
-use super::ImportResult;
+use crate::host_bridge;
 
 /// Directories to skip when walking a source tree.
 const SKIP_DIRS: &[&str] = &[
@@ -38,16 +34,12 @@ const SKIP_DIRS: &[&str] = &[
 
 /// Convert a directory of markdown files to Diaryx hierarchy format in-place.
 ///
-/// Walks the directory tree rooted at `root`, detects or creates index files,
-/// and adds `part_of`/`contents`/`attachments` frontmatter to build the
-/// Diaryx workspace hierarchy.
+/// Uses `host_list_files` to enumerate all files, then derives directory
+/// structure from paths. Adds `part_of`/`contents`/`attachments` frontmatter.
 ///
 /// This operation is idempotent: files that already have correct metadata are
 /// skipped. Running it twice produces the same result.
-pub async fn import_directory_in_place<FS: AsyncFileSystem>(
-    fs: &FS,
-    root: &Path,
-) -> Result<ImportResult> {
+pub fn import_directory_in_place(root: &str) -> Result<ImportResult, String> {
     let mut result = ImportResult {
         imported: 0,
         skipped: 0,
@@ -56,27 +48,65 @@ pub async fn import_directory_in_place<FS: AsyncFileSystem>(
     };
 
     // --- Phase 1: Walk & classify ---
-    let mut md_files: Vec<String> = Vec::new(); // relative paths
+    // Use host_list_files to get all files, then derive directory structure.
+    let all_files = host_bridge::list_files(root)?;
+
+    let mut md_files: Vec<String> = Vec::new();
     let mut non_md_files: Vec<String> = Vec::new();
     let mut directories: HashSet<String> = HashSet::new();
     directories.insert(String::new()); // root directory
 
-    walk_dir(
-        fs,
-        root,
-        root,
-        &mut md_files,
-        &mut non_md_files,
-        &mut directories,
-    )
-    .await;
+    for file_path in &all_files {
+        // Compute relative path from root
+        let rel = if root.is_empty() {
+            file_path.clone()
+        } else if let Some(stripped) = file_path.strip_prefix(root) {
+            stripped.trim_start_matches('/').to_string()
+        } else {
+            file_path.clone()
+        };
+
+        if rel.is_empty() {
+            continue;
+        }
+
+        // Skip hidden files/dirs
+        if rel.split('/').any(|seg| seg.starts_with('.')) {
+            continue;
+        }
+
+        // Skip known build/dependency directories
+        if rel.split('/').any(|seg| SKIP_DIRS.contains(&seg)) {
+            continue;
+        }
+
+        // Register all parent directories
+        let mut current = String::new();
+        for segment in rel
+            .split('/')
+            .take(rel.split('/').count().saturating_sub(1))
+        {
+            if current.is_empty() {
+                current = segment.to_string();
+            } else {
+                current = format!("{current}/{segment}");
+            }
+            directories.insert(current.clone());
+        }
+
+        let name = rel.rsplit('/').next().unwrap_or(&rel);
+        if name.ends_with(".md") || name.ends_with(".MD") {
+            md_files.push(rel);
+        } else {
+            non_md_files.push(rel);
+        }
+    }
 
     if md_files.is_empty() && non_md_files.is_empty() {
         return Ok(result);
     }
 
     // --- Phase 2: Detect existing indexes ---
-    // Map from directory relative path → index file relative path
     let mut dir_index_map: IndexMap<String, String> = IndexMap::new();
 
     for rel_path in &md_files {
@@ -87,7 +117,7 @@ pub async fn import_directory_in_place<FS: AsyncFileSystem>(
 
         let is_index_by_contents = if !is_index_by_name {
             let full_path = join_path(root, rel_path);
-            match fs.read_to_string(&full_path).await {
+            match host_bridge::read_file(&full_path) {
                 Ok(content) => match frontmatter::parse_or_empty(&content) {
                     Ok(parsed) => parsed.frontmatter.contains_key("contents"),
                     Err(_) => false,
@@ -105,7 +135,6 @@ pub async fn import_directory_in_place<FS: AsyncFileSystem>(
 
     // --- Phase 3: Register missing indexes ---
     let mut all_dirs: Vec<String> = directories.iter().cloned().collect();
-    // Sort deepest-first so child indexes are registered before parents reference them.
     all_dirs.sort_by(|a, b| {
         let depth_a = if a.is_empty() {
             0
@@ -126,10 +155,11 @@ pub async fn import_directory_in_place<FS: AsyncFileSystem>(
         }
         let dir_name = if dir_rel.is_empty() {
             // Use the root directory name, or "index" as fallback
-            root.file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("index")
-                .to_string()
+            if root.is_empty() {
+                "index".to_string()
+            } else {
+                root.rsplit('/').next().unwrap_or("index").to_string()
+            }
         } else {
             dir_rel.rsplit('/').next().unwrap_or("index").to_string()
         };
@@ -161,7 +191,6 @@ pub async fn import_directory_in_place<FS: AsyncFileSystem>(
 
     // --- Phase 5: Update non-index markdown files (add part_of) ---
     for rel_path in &md_files {
-        // Skip index files
         if is_index_file(rel_path, &dir_index_map) {
             continue;
         }
@@ -175,26 +204,29 @@ pub async fn import_directory_in_place<FS: AsyncFileSystem>(
         let full_path = join_path(root, rel_path);
 
         // Idempotency: skip if part_of is already set
-        if let Ok(content) = fs.read_to_string(&full_path).await
+        if let Ok(content) = host_bridge::read_file(&full_path)
             && let Ok(parsed) = frontmatter::parse_or_empty(&content)
-            && parsed.frontmatter.contains_key("part_of")
         {
-            result.skipped += 1;
-            continue;
-        }
-
-        let metadata = serde_json::json!({
-            "part_of": index_path,
-        });
-
-        match metadata_writer::update_file_metadata(fs, &full_path, &metadata, None).await {
-            Ok(()) => {
-                result.imported += 1;
+            if parsed.frontmatter.contains_key("part_of") {
+                result.skipped += 1;
+                continue;
             }
-            Err(e) => {
-                result
-                    .errors
-                    .push(format!("Failed to update {rel_path}: {e}"));
+
+            // Add part_of
+            let mut fm = parsed.frontmatter;
+            fm.insert("part_of".to_string(), serde_yaml::Value::String(index_path));
+
+            if let Ok(updated) = frontmatter::serialize(&fm, &parsed.body) {
+                match host_bridge::write_file(&full_path, &updated) {
+                    Ok(()) => {
+                        result.imported += 1;
+                    }
+                    Err(e) => {
+                        result
+                            .errors
+                            .push(format!("Failed to update {rel_path}: {e}"));
+                    }
+                }
             }
         }
     }
@@ -214,14 +246,13 @@ pub async fn import_directory_in_place<FS: AsyncFileSystem>(
         let full_path = join_path(root, &index_rel);
 
         // Idempotency: skip if file already exists
-        if fs.exists(&full_path).await {
+        if host_bridge::file_exists(&full_path).unwrap_or(false) {
             result.skipped += 1;
             continue;
         }
 
         let metadata = build_index_metadata(
             dir_rel,
-            &index_rel,
             &dir_index_map,
             &md_files,
             &dir_attachments,
@@ -229,7 +260,8 @@ pub async fn import_directory_in_place<FS: AsyncFileSystem>(
             root,
         );
 
-        match metadata_writer::write_file_with_metadata(fs, &full_path, &metadata, "").await {
+        let content = format_metadata_as_markdown(&metadata);
+        match host_bridge::write_file(&full_path, &content) {
             Ok(()) => {
                 result.imported += 1;
             }
@@ -251,7 +283,7 @@ pub async fn import_directory_in_place<FS: AsyncFileSystem>(
         let full_path = join_path(root, index_rel);
 
         // Check what's missing
-        let (has_part_of, has_contents, has_attachments) = match fs.read_to_string(&full_path).await
+        let (has_part_of, has_contents, has_attachments) = match host_bridge::read_file(&full_path)
         {
             Ok(content) => match frontmatter::parse_or_empty(&content) {
                 Ok(parsed) => {
@@ -267,7 +299,6 @@ pub async fn import_directory_in_place<FS: AsyncFileSystem>(
             Err(_) => continue,
         };
 
-        // Skip if nothing to add
         let needs_part_of = !has_part_of && !dir_rel.is_empty();
         let needs_contents = !has_contents;
         let needs_attachments = !has_attachments && dir_attachments.contains_key(dir_rel.as_str());
@@ -277,14 +308,23 @@ pub async fn import_directory_in_place<FS: AsyncFileSystem>(
             continue;
         }
 
-        let mut metadata = serde_json::Map::new();
+        // Re-read file to update
+        let content = match host_bridge::read_file(&full_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let parsed = match frontmatter::parse_or_empty(&content) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        let mut fm = parsed.frontmatter;
 
         if needs_part_of {
             let parent_dir = parent_rel_path(dir_rel);
             if let Some(parent_index) = dir_index_map.get(&parent_dir) {
-                metadata.insert(
+                fm.insert(
                     "part_of".to_string(),
-                    serde_json::Value::String(parent_index.clone()),
+                    serde_yaml::Value::String(parent_index.clone()),
                 );
             }
         }
@@ -292,46 +332,43 @@ pub async fn import_directory_in_place<FS: AsyncFileSystem>(
         if needs_contents {
             let contents = collect_contents(dir_rel, &dir_index_map, &md_files, &all_dirs);
             if !contents.is_empty() {
-                metadata.insert(
+                fm.insert(
                     "contents".to_string(),
-                    serde_json::Value::Array(
+                    serde_yaml::Value::Sequence(
                         contents
                             .into_iter()
-                            .map(serde_json::Value::String)
+                            .map(serde_yaml::Value::String)
                             .collect(),
                     ),
                 );
             }
         }
 
-        if needs_attachments
-            && let Some(atts) = dir_attachments.get(dir_rel.as_str())
-            && !atts.is_empty()
-        {
-            metadata.insert(
-                "attachments".to_string(),
-                serde_json::Value::Array(
-                    atts.iter()
-                        .map(|a| serde_json::Value::String(a.clone()))
-                        .collect(),
-                ),
-            );
-        }
-
-        if metadata.is_empty() {
-            result.skipped += 1;
-            continue;
-        }
-
-        let json_value = serde_json::Value::Object(metadata);
-        match metadata_writer::update_file_metadata(fs, &full_path, &json_value, None).await {
-            Ok(()) => {
-                result.imported += 1;
+        if needs_attachments {
+            if let Some(atts) = dir_attachments.get(dir_rel.as_str()) {
+                if !atts.is_empty() {
+                    fm.insert(
+                        "attachments".to_string(),
+                        serde_yaml::Value::Sequence(
+                            atts.iter()
+                                .map(|a| serde_yaml::Value::String(a.clone()))
+                                .collect(),
+                        ),
+                    );
+                }
             }
-            Err(e) => {
-                result
-                    .errors
-                    .push(format!("Failed to update index {index_rel}: {e}"));
+        }
+
+        if let Ok(updated) = frontmatter::serialize(&fm, &parsed.body) {
+            match host_bridge::write_file(&full_path, &updated) {
+                Ok(()) => {
+                    result.imported += 1;
+                }
+                Err(e) => {
+                    result
+                        .errors
+                        .push(format!("Failed to update index {index_rel}: {e}"));
+                }
             }
         }
     }
@@ -340,65 +377,6 @@ pub async fn import_directory_in_place<FS: AsyncFileSystem>(
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
-
-/// Recursively walk a directory, collecting markdown files, non-markdown files,
-/// and directory paths.
-async fn walk_dir<FS: AsyncFileSystem>(
-    fs: &FS,
-    root: &Path,
-    current: &Path,
-    md_files: &mut Vec<String>,
-    non_md_files: &mut Vec<String>,
-    directories: &mut HashSet<String>,
-) {
-    let entries = match fs.list_files(current).await {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-
-    let mut entries = entries;
-    entries.sort();
-
-    for entry in entries {
-        let name = match entry.file_name().and_then(|n| n.to_str()) {
-            Some(n) => n.to_string(),
-            None => continue,
-        };
-
-        // Skip hidden files/dirs
-        if name.starts_with('.') {
-            continue;
-        }
-
-        if fs.is_dir(&entry).await {
-            // Skip build/dependency directories
-            if SKIP_DIRS.contains(&name.as_str()) {
-                continue;
-            }
-
-            let rel = relative_path(root, &entry);
-            directories.insert(rel);
-
-            Box::pin(walk_dir(
-                fs,
-                root,
-                &entry,
-                md_files,
-                non_md_files,
-                directories,
-            ))
-            .await;
-        } else {
-            let rel = relative_path(root, &entry);
-
-            if name.ends_with(".md") || name.ends_with(".MD") {
-                md_files.push(rel);
-            } else {
-                non_md_files.push(rel);
-            }
-        }
-    }
-}
 
 /// Collect the `contents` entries for a directory's index file.
 fn collect_contents(
@@ -439,24 +417,24 @@ fn collect_contents(
     contents
 }
 
-/// Build the metadata JSON for a new index file.
+/// Build the metadata for a new index file.
 fn build_index_metadata(
     dir_rel: &str,
-    _index_rel: &str,
     dir_index_map: &IndexMap<String, String>,
     md_files: &[String],
     dir_attachments: &HashMap<String, Vec<String>>,
     all_dirs: &[String],
-    root: &Path,
+    root: &str,
 ) -> serde_json::Value {
     let mut metadata = serde_json::Map::new();
 
     // title
     let dir_name = if dir_rel.is_empty() {
-        root.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("Index")
-            .to_string()
+        if root.is_empty() {
+            "Index".to_string()
+        } else {
+            root.rsplit('/').next().unwrap_or("Index").to_string()
+        }
     } else {
         dir_rel.rsplit('/').next().unwrap_or("Index").to_string()
     };
@@ -489,24 +467,44 @@ fn build_index_metadata(
     }
 
     // attachments
-    if let Some(atts) = dir_attachments.get(dir_rel)
-        && !atts.is_empty()
-    {
-        metadata.insert(
-            "attachments".to_string(),
-            serde_json::Value::Array(
-                atts.iter()
-                    .map(|a| serde_json::Value::String(a.clone()))
-                    .collect(),
-            ),
-        );
+    if let Some(atts) = dir_attachments.get(dir_rel) {
+        if !atts.is_empty() {
+            metadata.insert(
+                "attachments".to_string(),
+                serde_json::Value::Array(
+                    atts.iter()
+                        .map(|a| serde_json::Value::String(a.clone()))
+                        .collect(),
+                ),
+            );
+        }
     }
 
     serde_json::Value::Object(metadata)
 }
 
+/// Format metadata JSON as a markdown file with frontmatter.
+fn format_metadata_as_markdown(metadata: &serde_json::Value) -> String {
+    // Convert JSON to YAML frontmatter
+    let obj = match metadata.as_object() {
+        Some(o) => o,
+        None => return String::new(),
+    };
+
+    let mut fm = IndexMap::new();
+    for (key, value) in obj {
+        if let Ok(yaml_val) = serde_json::from_value::<serde_yaml::Value>(value.clone()) {
+            fm.insert(key.clone(), yaml_val);
+        }
+    }
+
+    frontmatter::serialize(&fm, "").unwrap_or_else(|_| {
+        let title = obj.get("title").and_then(|v| v.as_str()).unwrap_or("Index");
+        format!("---\ntitle: {title}\n---\n")
+    })
+}
+
 /// Get the parent relative path from a relative file path.
-/// Returns "" for files at the root level.
 fn parent_rel_path(rel_path: &str) -> String {
     match rel_path.rfind('/') {
         Some(idx) => rel_path[..idx].to_string(),
@@ -524,20 +522,13 @@ fn file_name(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-/// Compute a relative path from root to entry.
-fn relative_path(root: &Path, entry: &Path) -> String {
-    entry
-        .strip_prefix(root)
-        .unwrap_or(entry)
-        .to_string_lossy()
-        .replace('\\', "/")
-}
-
 /// Join root path with a relative path string.
-fn join_path(root: &Path, rel: &str) -> PathBuf {
-    if rel.is_empty() {
-        root.to_path_buf()
+fn join_path(root: &str, rel: &str) -> String {
+    if root.is_empty() {
+        rel.to_string()
+    } else if rel.is_empty() {
+        root.to_string()
     } else {
-        root.join(rel)
+        format!("{root}/{rel}")
     }
 }

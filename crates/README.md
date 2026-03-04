@@ -8,6 +8,7 @@ contents:
   - "[Diaryx Core README](/crates/diaryx_core/README.md)"
   - "[Diaryx Daily README](/crates/diaryx_daily/README.md)"
   - "[Diaryx Daily Extism README](/crates/diaryx_daily_extism/README.md)"
+  - "[Diaryx Import Extism README](/crates/diaryx_import_extism/README.md)"
   - "[Diaryx AI Extism README](/crates/diaryx_ai_extism/README.md)"
   - "[Diaryx Publish README](/crates/diaryx_publish/README.md)"
   - "[Diaryx Publish Extism README](/crates/diaryx_publish_extism/README.md)"
@@ -30,6 +31,7 @@ This folder contains Diaryx crates for core features and platform bindings.
 - `[diaryx_core](/crates/diaryx_core/README.md)`: Core functions shared across all Diaryx clients
 - `[diaryx_daily](/crates/diaryx_daily/README.md)`: Shared daily-entry domain logic for plugins
 - `[diaryx_daily_extism](/crates/diaryx_daily_extism/README.md)`: Extism daily plugin (optional, not built into vanilla hosts)
+- `[diaryx_import_extism](/crates/diaryx_import_extism/README.md)`: Extism import plugin — Day One, Markdown, and directory import orchestration
 - `[diaryx_ai_extism](/crates/diaryx_ai_extism/README.md)`: Extism AI assistant plugin with BYO and Diaryx Plus managed modes
 - `[diaryx_publish](/crates/diaryx_publish/README.md)`: Publishing pipeline — converts workspace markdown to HTML
 - `[diaryx_publish_extism](/crates/diaryx_publish_extism/README.md)`: Extism guest plugin for export/publish commands and runtime format conversion

@@ -21,7 +21,6 @@ use std::path::PathBuf;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use ts_rs::TS;
 
 use crate::link_parser::LinkFormat;
 use crate::search::SearchResults;
@@ -35,8 +34,9 @@ use crate::workspace::{TreeNode, WorkspaceConfig};
 /// All commands that can be executed against a Diaryx instance.
 ///
 /// Commands are serializable for cross-runtime usage (WASM, IPC, etc.).
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 #[serde(tag = "type", content = "params")]
 pub enum Command {
     // === Entry Operations ===
@@ -459,35 +459,6 @@ pub enum Command {
         body: Option<String>,
     },
 
-    // === Import ===
-    /// Import pre-parsed entries into the workspace.
-    ///
-    /// Takes a JSON-serialized array of [`ImportedEntry`] values and writes them
-    /// into the workspace, building the date-based folder hierarchy with proper
-    /// `part_of`/`contents` frontmatter links. Also grafts the import folder's
-    /// root index into the existing workspace hierarchy.
-    ImportEntries {
-        /// JSON-serialized `Vec<ImportedEntry>`.
-        entries_json: String,
-        /// Base folder name for the imported entries (e.g. "emails", "journal").
-        folder: String,
-        /// Optional workspace-relative path to the parent entry (e.g. "personal/personal.md").
-        /// When set, the import folder is placed under the parent's directory and grafted
-        /// into the parent's `contents`. When `None`, grafts into the workspace root.
-        parent_path: Option<String>,
-    },
-
-    /// Convert a directory of markdown files to Diaryx hierarchy format in-place.
-    ///
-    /// Walks the directory tree, detects or creates index files, and adds
-    /// `part_of`/`contents`/`attachments` frontmatter to build the workspace
-    /// hierarchy. This is idempotent — files that already have correct metadata
-    /// are skipped.
-    ImportDirectoryInPlace {
-        /// Optional subdirectory path to import (defaults to workspace root).
-        path: Option<String>,
-    },
-
     // === Storage ===
     /// Get storage usage information.
     GetStorageUsage,
@@ -858,8 +829,6 @@ impl Command {
             | Command::ValidatePublishingSlug { .. }
             | Command::NormalizeServerUrl { .. }
             | Command::ToWebSocketSyncUrl { .. }
-            | Command::ImportEntries { .. }
-            | Command::ImportDirectoryInPlace { .. }
             | Command::PluginCommand { .. }
             | Command::GetPluginManifests
             | Command::GetPluginConfig { .. }
@@ -877,8 +846,9 @@ impl Command {
 /// When creating a child under a leaf file, the leaf is converted to an index first.
 /// This struct provides both the new child path and the (possibly new) parent path,
 /// allowing the frontend to correctly update the tree and navigation.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct CreateChildResult {
     /// Path to the newly created child entry.
     pub child_path: String,
@@ -887,7 +857,7 @@ pub struct CreateChildResult {
     /// True if the parent was converted from a leaf to an index.
     pub parent_converted: bool,
     /// Original parent path before conversion (only set if parent_converted is true).
-    #[ts(optional)]
+    #[cfg_attr(feature = "typescript", ts(optional))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub original_parent_path: Option<String>,
 }
@@ -897,8 +867,9 @@ pub struct CreateChildResult {
 // ============================================================================
 
 /// Response from a command execution.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 #[serde(tag = "type", content = "data")]
 pub enum Response {
     /// Command completed successfully with no data.
@@ -958,9 +929,6 @@ pub enum Response {
     /// Link parser operation result.
     LinkParserResult(LinkParserResult),
 
-    /// Import result response.
-    ImportResult(crate::import::ImportResult),
-
     /// Result from a plugin command.
     PluginResult(JsonValue),
 
@@ -973,8 +941,9 @@ pub enum Response {
 // ============================================================================
 
 /// Data for a single diary entry.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct EntryData {
     /// Path to the entry.
     pub path: PathBuf,
@@ -987,8 +956,9 @@ pub struct EntryData {
 }
 
 /// Options for creating a new entry.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct CreateEntryOptions {
     /// Title for the entry.
     pub title: Option<String>,
@@ -1003,8 +973,9 @@ pub struct CreateEntryOptions {
 }
 
 /// Options for searching entries.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct SearchOptions {
     /// Workspace path to search in.
     pub workspace_path: Option<String>,
@@ -1019,8 +990,9 @@ pub struct SearchOptions {
 }
 
 /// An exported file with its path and content.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct ExportedFile {
     /// Relative path.
     pub path: String,
@@ -1029,8 +1001,9 @@ pub struct ExportedFile {
 }
 
 /// A binary file with its path and data.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct BinaryExportFile {
     /// Relative path.
     pub path: String,
@@ -1040,8 +1013,9 @@ pub struct BinaryExportFile {
 
 /// Binary file path info (without data) for efficient transfer.
 /// Use this when you need to list files and fetch data separately.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct BinaryFileInfo {
     /// Source path (absolute, for reading).
     pub source_path: String,
@@ -1050,8 +1024,9 @@ pub struct BinaryFileInfo {
 }
 
 /// Information about storage usage.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct StorageInfo {
     /// Bytes used.
     pub used: u64,
@@ -1062,8 +1037,9 @@ pub struct StorageInfo {
 }
 
 /// Summary of fix operations performed.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct FixSummary {
     /// Results from fixing errors.
     pub error_fixes: Vec<FixResult>,
@@ -1076,8 +1052,9 @@ pub struct FixSummary {
 }
 
 /// A single entry's attachments in the ancestor chain.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct AncestorAttachmentEntry {
     /// Path to the entry file.
     pub entry_path: String,
@@ -1088,8 +1065,9 @@ pub struct AncestorAttachmentEntry {
 }
 
 /// Result of GetAncestorAttachments command.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct AncestorAttachmentsResult {
     /// Attachments from current entry and all ancestors.
     /// Ordered from current entry first, then ancestors (closest to root).
@@ -1097,8 +1075,9 @@ pub struct AncestorAttachmentsResult {
 }
 
 /// Result of converting links to a new format.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct ConvertLinksResult {
     /// Number of files that were modified (or would be modified in dry-run).
     pub files_modified: usize,
@@ -1111,8 +1090,9 @@ pub struct ConvertLinksResult {
 }
 
 /// Link parser operation selector.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 #[serde(tag = "type", content = "params", rename_all = "snake_case")]
 pub enum LinkParserOperation {
     /// Parse a link string into title/path/path type.
@@ -1156,8 +1136,9 @@ pub enum LinkParserOperation {
 }
 
 /// Path classification from the link parser.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 #[serde(rename_all = "snake_case")]
 pub enum LinkPathType {
     /// Link path starts at workspace root (`/path/file.md`).
@@ -1169,8 +1150,9 @@ pub enum LinkPathType {
 }
 
 /// Parsed link payload.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct ParsedLinkResult {
     /// Markdown link title (if present).
     pub title: Option<String>,
@@ -1181,8 +1163,9 @@ pub struct ParsedLinkResult {
 }
 
 /// Result of running a link parser operation.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum LinkParserResult {
     /// Structured parse output.

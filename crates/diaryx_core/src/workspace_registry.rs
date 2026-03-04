@@ -7,30 +7,31 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use ts_rs::TS;
 use uuid::Uuid;
 
 /// A single workspace known to the user.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct WorkspaceEntry {
     /// Stable identifier (`local-<uuid>`).
     pub id: String,
     /// Display name.
     pub name: String,
     /// Filesystem path. `Some` for native clients, `None` for browser-only (OPFS).
-    #[ts(optional)]
+    #[cfg_attr(feature = "typescript", ts(optional))]
     pub path: Option<PathBuf>,
 }
 
 /// An ordered collection of workspace entries with an optional default.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct WorkspaceRegistry {
     /// All known workspace entries.
     pub entries: Vec<WorkspaceEntry>,
     /// ID of the default workspace (must match an entry's `id`).
-    #[ts(optional)]
+    #[cfg_attr(feature = "typescript", ts(optional))]
     pub default_id: Option<String>,
 }
 

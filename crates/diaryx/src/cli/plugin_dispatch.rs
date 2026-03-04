@@ -44,6 +44,11 @@ impl NativeHandlerRegistry {
         handlers.insert("publish", native_publish);
         handlers.insert("preview", native_preview);
 
+        // Import handlers
+        handlers.insert("import_email", native_import_email);
+        handlers.insert("import_dayone", native_import_dayone);
+        handlers.insert("import_markdown", native_import_markdown);
+
         Self { handlers }
     }
 
@@ -418,6 +423,72 @@ fn native_preview(matches: &ArgMatches, _workspace_root: Option<&Path>) {
     let title = matches.get_one::<String>("title").cloned();
 
     super::preview::handle_preview(None, port, no_open, audience, title);
+}
+
+fn native_import_email(matches: &ArgMatches, workspace_root: Option<&Path>) {
+    let ws_root = workspace_root
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(resolve_workspace_root);
+    let source = PathBuf::from(
+        matches
+            .get_one::<String>("source")
+            .cloned()
+            .unwrap_or_default(),
+    );
+    let folder = matches
+        .get_one::<String>("folder")
+        .cloned()
+        .unwrap_or_else(|| "emails".to_string());
+    let dry_run = matches.get_flag("dry-run");
+    let verbose = matches.get_flag("verbose");
+
+    super::import::handle_import_email(&source, &folder, dry_run, verbose, Some(ws_root));
+}
+
+fn native_import_dayone(matches: &ArgMatches, workspace_root: Option<&Path>) {
+    let ws_root = workspace_root
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(resolve_workspace_root);
+    let source = PathBuf::from(
+        matches
+            .get_one::<String>("source")
+            .cloned()
+            .unwrap_or_default(),
+    );
+    let folder = matches
+        .get_one::<String>("folder")
+        .cloned()
+        .unwrap_or_else(|| "journal".to_string());
+    let dry_run = matches.get_flag("dry-run");
+    let verbose = matches.get_flag("verbose");
+
+    super::import::handle_import_dayone(&source, &folder, dry_run, verbose, Some(ws_root));
+}
+
+fn native_import_markdown(matches: &ArgMatches, workspace_root: Option<&Path>) {
+    let ws_root = workspace_root
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(resolve_workspace_root);
+    let source = PathBuf::from(
+        matches
+            .get_one::<String>("source")
+            .cloned()
+            .unwrap_or_default(),
+    );
+    let folder = matches
+        .get_one::<String>("folder")
+        .cloned()
+        .unwrap_or_else(|| {
+            source
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("imported")
+                .to_string()
+        });
+    let dry_run = matches.get_flag("dry-run");
+    let verbose = matches.get_flag("verbose");
+
+    super::import::handle_import_markdown(&source, &folder, dry_run, verbose, Some(ws_root));
 }
 
 // ============================================================================

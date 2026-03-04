@@ -259,11 +259,6 @@ fn dispatch_core_command(cli: Cli) -> bool {
             true
         }
 
-        Commands::Import { command } => {
-            import::handle_import_command(command, cli.workspace);
-            true
-        }
-
         Commands::Plugin { command } => {
             plugin_manager::handle_plugin_command(command);
             true

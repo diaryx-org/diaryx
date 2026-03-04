@@ -28,7 +28,6 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use thiserror::Error;
-use ts_rs::TS;
 
 use crate::link_parser::LinkFormat;
 
@@ -38,8 +37,9 @@ pub use manifest::*;
 pub use registry::PluginRegistry;
 
 /// Unique identifier for a plugin.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct PluginId(pub String);
 
 impl fmt::Display for PluginId {

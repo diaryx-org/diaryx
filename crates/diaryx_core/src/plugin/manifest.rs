@@ -5,7 +5,6 @@
 //! to dynamically render settings tabs, sidebar panels, command palette items, etc.
 
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 use super::PluginId;
 
@@ -13,8 +12,9 @@ use super::PluginId;
 ///
 /// Returned by [`Plugin::manifest()`](super::Plugin::manifest) and consumed
 /// by the frontend to build extension-point UI.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct PluginManifest {
     /// Unique plugin identifier.
     pub id: PluginId,
@@ -34,8 +34,9 @@ pub struct PluginManifest {
 }
 
 /// A capability that a plugin can declare.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub enum PluginCapability {
     /// Listens to file lifecycle events (create, save, delete, move).
     FileEvents,
@@ -55,8 +56,9 @@ pub enum PluginCapability {
 }
 
 /// A UI extension point contributed by a plugin.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 #[serde(tag = "slot")]
 pub enum UiContribution {
     /// A tab in the settings dialog.
@@ -243,8 +245,9 @@ pub enum UiContribution {
 }
 
 /// Which sidebar a tab appears in.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub enum SidebarSide {
     /// Left sidebar.
     Left,
@@ -253,8 +256,9 @@ pub enum SidebarSide {
 }
 
 /// Where a status bar item appears.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub enum StatusBarPosition {
     /// Left-aligned.
     Left,
@@ -265,16 +269,18 @@ pub enum StatusBarPosition {
 }
 
 /// Which host context menu surface a plugin contribution targets.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub enum ContextMenuTarget {
     /// Context menu for entry nodes in the left sidebar file tree.
     LeftSidebarTree,
 }
 
 /// The kind of TipTap node an [`EditorExtension`](UiContribution::EditorExtension) creates.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub enum EditorNodeType {
     /// Inline atom node (like a footnote reference).
     InlineAtom,
@@ -294,8 +300,9 @@ pub enum EditorNodeType {
 }
 
 /// Markdown syntax delimiters for an editor extension.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct MarkdownSyntax {
     /// Whether this is an inline or block-level syntax.
     pub level: MarkdownLevel,
@@ -306,8 +313,9 @@ pub struct MarkdownSyntax {
 }
 
 /// Whether a markdown syntax is inline or block-level.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub enum MarkdownLevel {
     /// Inline-level (within a paragraph).
     Inline,
@@ -316,8 +324,9 @@ pub enum MarkdownLevel {
 }
 
 /// How the user edits the source content of an editor extension node.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub enum EditMode {
     /// Click opens a popover with a source text input (for inline nodes).
     Popover,
@@ -326,8 +335,9 @@ pub enum EditMode {
 }
 
 /// Click behavior for an inline mark extension.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub enum MarkClickBehavior {
     /// Toggle between two CSS classes on click (e.g., hidden ↔ revealed).
     ToggleClass {
@@ -343,8 +353,9 @@ pub enum MarkClickBehavior {
 /// When present on a [`BlockPickerItem`](UiContribution::BlockPickerItem),
 /// the host shows a `window.prompt()` dialog and merges the result into
 /// the editor command params at `param_key`.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct BlockPickerPrompt {
     /// Message shown in the prompt dialog.
     pub message: String,
@@ -359,8 +370,9 @@ pub struct BlockPickerPrompt {
 /// When present on an [`EditorExtension`](UiContribution::EditorExtension),
 /// the host renders a button in the appropriate menu (MoreStylesPicker for
 /// inline atoms, BlockPicker/BlockStylePicker for block atoms).
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct InsertCommand {
     /// Button label shown in the menu.
     pub label: String,
@@ -372,8 +384,9 @@ pub struct InsertCommand {
 }
 
 /// How to render a plugin-contributed UI panel.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 #[serde(tag = "type")]
 pub enum ComponentRef {
     /// Use an existing built-in component by ID.
@@ -397,8 +410,9 @@ pub enum ComponentRef {
 }
 
 /// A declarative settings field rendered as a form control.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 #[serde(tag = "type")]
 pub enum SettingsField {
     /// Text input.
@@ -476,8 +490,9 @@ pub enum SettingsField {
 }
 
 /// A select dropdown option.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct SelectOption {
     /// The value stored when selected.
     pub value: String,
@@ -498,8 +513,9 @@ fn default_true() -> bool {
 /// Plugins include these in their manifest to contribute commands to the
 /// `diaryx` CLI. The CLI reads cached manifests at startup and builds
 /// dynamic clap commands from these declarations.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct CliCommand {
     /// Subcommand name (e.g., `"publish"`).
     pub name: String,
@@ -531,8 +547,9 @@ pub struct CliCommand {
 }
 
 /// A CLI argument declared by a plugin command.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct CliArg {
     /// Argument name (used as the clap ID).
     pub name: String,
@@ -559,8 +576,9 @@ pub struct CliArg {
 }
 
 /// Value types for CLI arguments.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub enum CliArgType {
     /// String value (default).
     #[default]

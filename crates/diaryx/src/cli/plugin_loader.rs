@@ -396,6 +396,7 @@ fn create_host_context(workspace_root: &Path, plugin_id: &str) -> Arc<HostContex
         permission_checker: Some(Arc::new(FrontmatterPermissionChecker::from_workspace_root(
             Some(workspace_root.to_path_buf()),
         ))),
+        file_provider: Arc::new(diaryx_extism::NoopFileProvider),
     })
 }
 

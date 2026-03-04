@@ -6,14 +6,14 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use ts_rs::TS;
 
 /// Events emitted by filesystem operations.
 ///
 /// These events capture the semantics of filesystem changes, including both
 /// the operation type and relevant metadata for each type of change.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 #[serde(tag = "type")]
 pub enum FileSystemEvent {
     /// A new file was created.

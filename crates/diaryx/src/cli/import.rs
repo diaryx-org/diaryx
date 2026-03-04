@@ -1,5 +1,6 @@
-//! CLI handler for `diaryx import` subcommands.
+//! CLI handler for import subcommands.
 //!
+//! Provides native handler implementations for the import plugin's CLI commands.
 //! Responsible for filesystem I/O — the core import module stays pure.
 
 use std::collections::HashSet;
@@ -14,43 +15,8 @@ use diaryx_core::link_parser::format_link;
 use indexmap::IndexMap;
 use serde_yaml::Value;
 
-use super::args::ImportCommands;
-
-/// Dispatch import sub-commands.
-pub fn handle_import_command(command: ImportCommands, workspace_arg: Option<PathBuf>) {
-    match command {
-        ImportCommands::Email {
-            source,
-            folder,
-            dry_run,
-            verbose,
-        } => handle_import_email(&source, &folder, dry_run, verbose, workspace_arg),
-        ImportCommands::DayOne {
-            source,
-            folder,
-            dry_run,
-            verbose,
-        } => handle_import_dayone(&source, &folder, dry_run, verbose, workspace_arg),
-        ImportCommands::Markdown {
-            source,
-            folder,
-            dry_run,
-            verbose,
-        } => {
-            let folder_name = folder.unwrap_or_else(|| {
-                source
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("imported")
-                    .to_string()
-            });
-            handle_import_markdown(&source, &folder_name, dry_run, verbose, workspace_arg);
-        }
-    }
-}
-
 /// Import emails from a file, directory, or mbox archive.
-fn handle_import_email(
+pub fn handle_import_email(
     source: &Path,
     folder: &str,
     dry_run: bool,
@@ -121,7 +87,7 @@ fn handle_import_email(
 }
 
 /// Import entries from a Day One Journal.json export.
-fn handle_import_dayone(
+pub fn handle_import_dayone(
     source: &Path,
     folder: &str,
     dry_run: bool,
@@ -664,7 +630,7 @@ const SKIP_DIRS: &[&str] = &[
 ];
 
 /// Import a directory of markdown files, preserving directory structure.
-fn handle_import_markdown(
+pub fn handle_import_markdown(
     source: &Path,
     folder: &str,
     dry_run: bool,

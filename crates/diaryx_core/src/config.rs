@@ -36,9 +36,11 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+#[cfg(feature = "toml-config")]
 use crate::error::{DiaryxError, Result};
+#[cfg(feature = "toml-config")]
 use crate::fs::AsyncFileSystem;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "toml-config"))]
 use crate::fs::{FileSystem, SyncToAsyncFs};
 use crate::link_parser::LinkFormat;
 use crate::workspace_registry::{WorkspaceEntry, WorkspaceRegistry};
@@ -203,6 +205,7 @@ impl Config {
     // ========================================================================
 
     /// Load config from a specific path using an AsyncFileSystem.
+    #[cfg(feature = "toml-config")]
     pub async fn load_from<FS: AsyncFileSystem>(fs: &FS, path: &std::path::Path) -> Result<Self> {
         let contents = fs
             .read_to_string(path)
@@ -217,6 +220,7 @@ impl Config {
     }
 
     /// Save config to a specific path using an AsyncFileSystem.
+    #[cfg(feature = "toml-config")]
     pub async fn save_to<FS: AsyncFileSystem>(
         &self,
         fs: &FS,
@@ -235,6 +239,7 @@ impl Config {
     }
 
     /// Load config from an AsyncFileSystem, returning default if not found.
+    #[cfg(feature = "toml-config")]
     pub async fn load_from_or_default<FS: AsyncFileSystem>(
         fs: &FS,
         path: &std::path::Path,
@@ -255,19 +260,19 @@ impl Config {
     // blocking executor. On WASM, filesystem access is expected to be async.
 
     /// Sync wrapper for [`Config::load_from`].
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "toml-config"))]
     pub fn load_from_sync<FS: FileSystem>(fs: FS, path: &std::path::Path) -> Result<Self> {
         futures_lite::future::block_on(Self::load_from(&SyncToAsyncFs::new(fs), path))
     }
 
     /// Sync wrapper for [`Config::save_to`].
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "toml-config"))]
     pub fn save_to_sync<FS: FileSystem>(&self, fs: FS, path: &std::path::Path) -> Result<()> {
         futures_lite::future::block_on(self.save_to(&SyncToAsyncFs::new(fs), path))
     }
 
     /// Sync wrapper for [`Config::load_from_or_default`].
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "toml-config"))]
     pub fn load_from_or_default_sync<FS: FileSystem>(
         fs: FS,
         path: &std::path::Path,
@@ -306,7 +311,7 @@ impl Default for Config {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "toml-config"))]
 impl Config {
     /// Get the config file path (~/.config/diaryx/config.toml)
     /// Only available on native platforms

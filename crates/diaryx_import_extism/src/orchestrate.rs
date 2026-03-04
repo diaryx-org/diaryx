@@ -1,24 +1,19 @@
-//! Async orchestration for writing imported entries into a workspace.
+//! Synchronous orchestration for writing imported entries into a workspace.
 //!
-//! This module takes parsed [`ImportedEntry`] values and writes them to the
-//! filesystem via [`AsyncFileSystem`], building the date-based folder hierarchy
-//! with proper `part_of`/`contents` frontmatter links.
-//!
-//! The orchestration is shared between CLI, WASM, and Tauri frontends.
+//! Port of `diaryx_core::import::orchestrate::write_entries` using host bridge
+//! calls instead of `AsyncFileSystem`.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
 
 use indexmap::IndexMap;
 use serde_yaml::Value;
 
-use crate::entry::slugify;
-use crate::frontmatter;
-use crate::fs::AsyncFileSystem;
-use crate::link_parser::format_link;
-use crate::workspace::Workspace;
+use diaryx_core::entry::slugify;
+use diaryx_core::frontmatter;
+use diaryx_core::import::{ImportResult, ImportedEntry};
+use diaryx_core::link_parser::format_link;
 
-use super::{ImportResult, ImportedEntry};
+use crate::host_bridge;
 
 /// Write imported entries into the workspace, building the date-based hierarchy.
 ///
@@ -36,29 +31,22 @@ use super::{ImportResult, ImportedEntry};
 /// When `parent_path` is given, the folder is created under the parent entry's
 /// directory and grafted into the parent's `contents`. Otherwise it's placed at
 /// the workspace root.
-pub async fn write_entries<FS: AsyncFileSystem>(
-    fs: &FS,
-    workspace_root: &Path,
+pub fn write_entries(
     folder: &str,
     entries: &[ImportedEntry],
     parent_path: Option<&str>,
 ) -> ImportResult {
-    // Compute base directory and canonical prefix based on parent_path.
-    let parent_dir = parent_path
-        .and_then(|p| {
-            Path::new(p)
-                .parent()
-                .map(|d| d.to_string_lossy().replace('\\', "/"))
-        })
-        .filter(|d| !d.is_empty());
+    // Compute base directory prefix and canonical prefix based on parent_path.
+    let parent_dir = parent_path.and_then(|p| {
+        let parent = p.rfind('/').map(|idx| &p[..idx]);
+        parent.filter(|d| !d.is_empty()).map(|d| d.to_string())
+    });
 
-    let (base_dir, canonical_prefix) = match &parent_dir {
-        Some(dir) => (
-            workspace_root.join(dir).join(folder),
-            format!("{dir}/{folder}"),
-        ),
-        None => (workspace_root.join(folder), folder.to_string()),
+    let canonical_prefix = match &parent_dir {
+        Some(dir) => format!("{dir}/{folder}"),
+        None => folder.to_string(),
     };
+
     let mut result = ImportResult {
         imported: 0,
         skipped: 0,
@@ -71,7 +59,7 @@ pub async fn write_entries<FS: AsyncFileSystem>(
     }
 
     // Track used filenames within each directory to handle collisions.
-    let mut used_paths: HashSet<PathBuf> = HashSet::new();
+    let mut used_paths: HashSet<String> = HashSet::new();
 
     // Hierarchy tracking:
     //   year_canonical → { month_canonical → month_title }
@@ -86,15 +74,14 @@ pub async fn write_entries<FS: AsyncFileSystem>(
         let slug = entry_slug(&entry.title);
         let filename = format!("{date_prefix}-{slug}.md");
 
-        let month_dir = base_dir.join(&year).join(&month);
-        let mut entry_path = month_dir.join(&filename);
+        let month_dir = format!("{canonical_prefix}/{year}/{month}");
+        let mut entry_path = format!("{month_dir}/{filename}");
 
         // Handle filename collisions.
         entry_path = deduplicate_path(entry_path, &used_paths);
         used_paths.insert(entry_path.clone());
 
         // Compute canonical paths for hierarchy tracking.
-        let entry_canonical = canonical_path(workspace_root, &entry_path);
         let month_index_canonical = format!("{canonical_prefix}/{year}/{month}/{year}_{month}.md");
         let year_index_canonical = format!("{canonical_prefix}/{year}/{year}_index.md");
 
@@ -111,47 +98,32 @@ pub async fn write_entries<FS: AsyncFileSystem>(
             .or_insert_with(|| format!("{year}-{month}"));
 
         // Track: month → entries.
-        let entry_link = format_link(&entry_canonical, &entry.title);
+        let entry_link = format_link(&entry_path, &entry.title);
         month_to_entries
             .entry(month_index_canonical.clone())
             .or_default()
             .push(entry_link);
 
         // Build entry markdown.
-        let entry_content =
-            format_entry(entry, &entry_path, workspace_root, &month_index_canonical);
+        let entry_content = format_entry(entry, &entry_path, &month_index_canonical);
 
         // Write entry file.
-        if let Err(e) = fs.create_dir_all(&month_dir).await {
-            result.errors.push(format!(
-                "Failed to create directory {}: {e}",
-                month_dir.display()
-            ));
-            result.skipped += 1;
-            continue;
-        }
-        if let Err(e) = fs.write_file(&entry_path, &entry_content).await {
+        if let Err(e) = host_bridge::write_file(&entry_path, &entry_content) {
             result
                 .errors
-                .push(format!("Failed to write {}: {e}", entry_path.display()));
+                .push(format!("Failed to write {entry_path}: {e}"));
             result.skipped += 1;
             continue;
         }
 
         // Write attachments.
         if !entry.attachments.is_empty() {
-            let entry_stem = entry_path.file_stem().unwrap().to_string_lossy();
-            let attachments_dir = month_dir.join(format!("{entry_stem}/_attachments"));
+            let entry_stem = path_stem(&entry_path);
+            let attachments_dir = format!("{month_dir}/{entry_stem}/_attachments");
 
             for att in &entry.attachments {
-                let att_path = attachments_dir.join(&att.filename);
-                if let Err(e) = fs.create_dir_all(&attachments_dir).await {
-                    result
-                        .errors
-                        .push(format!("Failed to create attachment dir: {e}"));
-                    continue;
-                }
-                if let Err(e) = fs.write_binary(&att_path, &att.data).await {
+                let att_path = format!("{attachments_dir}/{}", att.filename);
+                if let Err(e) = host_bridge::write_binary(&att_path, &att.data) {
                     result
                         .errors
                         .push(format!("Failed to write attachment: {e}"));
@@ -166,29 +138,21 @@ pub async fn write_entries<FS: AsyncFileSystem>(
 
     // Write index hierarchy.
     write_index_hierarchy(
-        fs,
-        workspace_root,
-        &base_dir,
         folder,
         &canonical_prefix,
         &all_years,
         &year_to_months,
         &month_to_entries,
-    )
-    .await;
+    );
 
     // Graft into the parent entry (or workspace root) so entries appear in the sidebar.
-    graft_into_parent(fs, workspace_root, &canonical_prefix, folder, parent_path).await;
+    graft_into_parent(&canonical_prefix, folder, parent_path);
 
     result
 }
 
 /// Write the root, year, and month index files with `contents`/`part_of` links.
-#[allow(clippy::too_many_arguments)]
-async fn write_index_hierarchy<FS: AsyncFileSystem>(
-    fs: &FS,
-    workspace_root: &Path,
-    base_dir: &Path,
+fn write_index_hierarchy(
     folder: &str,
     canonical_prefix: &str,
     all_years: &IndexMap<String, String>,
@@ -198,8 +162,7 @@ async fn write_index_hierarchy<FS: AsyncFileSystem>(
     let root_index_canonical = format!("{canonical_prefix}/index.md");
 
     // Root index: {folder}/index.md
-    let root_index = base_dir.join("index.md");
-    if !fs.exists(&root_index).await {
+    if !host_bridge::file_exists(&root_index_canonical).unwrap_or(false) {
         let mut sorted_years: Vec<(&String, &String)> = all_years.iter().collect();
         sorted_years.sort_by_key(|(canonical, _)| (*canonical).clone());
 
@@ -215,14 +178,12 @@ async fn write_index_hierarchy<FS: AsyncFileSystem>(
         let yaml = serde_yaml::to_string(&fm).unwrap_or_default();
         let content = format!("---\n{yaml}---\n");
 
-        let _ = fs.create_dir_all(base_dir).await;
-        let _ = fs.write_file(&root_index, &content).await;
+        let _ = host_bridge::write_file(&root_index_canonical, &content);
     }
 
     // Year indexes.
     for (year_canonical, months) in year_to_months {
-        let year_path = workspace_root.join(year_canonical);
-        if !fs.exists(&year_path).await {
+        if !host_bridge::file_exists(year_canonical).unwrap_or(false) {
             let mut sorted_months: Vec<(&String, &String)> = months.iter().collect();
             sorted_months.sort_by_key(|(canonical, _)| (*canonical).clone());
 
@@ -231,11 +192,7 @@ async fn write_index_hierarchy<FS: AsyncFileSystem>(
                 .map(|(canonical, title)| Value::String(format_link(canonical, title)))
                 .collect();
 
-            let year_title = year_path
-                .file_stem()
-                .unwrap()
-                .to_string_lossy()
-                .replace("_index", "");
+            let year_title = path_stem(year_canonical).replace("_index", "");
 
             let mut fm = IndexMap::new();
             fm.insert("title".to_string(), Value::String(year_title));
@@ -248,21 +205,14 @@ async fn write_index_hierarchy<FS: AsyncFileSystem>(
             let yaml = serde_yaml::to_string(&fm).unwrap_or_default();
             let content = format!("---\n{yaml}---\n");
 
-            let year_dir = year_path.parent().unwrap();
-            let _ = fs.create_dir_all(year_dir).await;
-            let _ = fs.write_file(&year_path, &content).await;
+            let _ = host_bridge::write_file(year_canonical, &content);
         }
     }
 
     // Month indexes.
     for (month_canonical, entry_links) in month_to_entries {
-        let month_path = workspace_root.join(month_canonical);
-        if !fs.exists(&month_path).await {
-            let month_title = month_path
-                .file_stem()
-                .unwrap()
-                .to_string_lossy()
-                .replace('_', "-");
+        if !host_bridge::file_exists(month_canonical).unwrap_or(false) {
+            let month_title = path_stem(month_canonical).replace('_', "-");
 
             // Find parent year canonical.
             let year_canonical = year_to_months
@@ -279,12 +229,7 @@ async fn write_index_hierarchy<FS: AsyncFileSystem>(
             fm.insert("title".to_string(), Value::String(month_title.clone()));
 
             if let Some(ref yc) = year_canonical {
-                let year_title = workspace_root
-                    .join(yc)
-                    .file_stem()
-                    .unwrap()
-                    .to_string_lossy()
-                    .replace("_index", "");
+                let year_title = path_stem(yc).replace("_index", "");
                 fm.insert(
                     "part_of".to_string(),
                     Value::String(format_link(yc, &year_title)),
@@ -300,54 +245,38 @@ async fn write_index_hierarchy<FS: AsyncFileSystem>(
             let yaml = serde_yaml::to_string(&fm).unwrap_or_default();
             let content = format!("---\n{yaml}---\n");
 
-            let month_dir = month_path.parent().unwrap();
-            let _ = fs.create_dir_all(month_dir).await;
-            let _ = fs.write_file(&month_path, &content).await;
+            let _ = host_bridge::write_file(month_canonical, &content);
         }
     }
 }
 
 /// Graft the import folder's root index into the parent entry or workspace root.
-///
-/// When `parent_path` is given, grafts into that entry. Otherwise falls back to
-/// the workspace root index (the file with `contents` but no `part_of`).
-///
-/// 1. Add the import folder's index to the parent's `contents` if not already present.
-/// 2. Set `part_of` on the import folder's index pointing back to the parent.
-async fn graft_into_parent<FS: AsyncFileSystem>(
-    fs: &FS,
-    workspace_root: &Path,
-    canonical_prefix: &str,
-    folder: &str,
-    parent_path: Option<&str>,
-) {
+fn graft_into_parent(canonical_prefix: &str, folder: &str, parent_path: Option<&str>) {
     // Resolve the parent entry to graft into.
     let graft_target = if let Some(pp) = parent_path {
-        let abs = workspace_root.join(pp);
-        if fs.exists(&abs).await {
-            abs
+        if host_bridge::file_exists(pp).unwrap_or(false) {
+            pp.to_string()
         } else {
             return;
         }
     } else {
-        // Fall back to workspace root index.
-        let ws = Workspace::new(fs);
-        match ws.find_root_index_in_dir(workspace_root).await {
-            Ok(Some(path)) => path,
-            _ => return,
+        // Fall back to workspace root index: find a file at root level with `contents`
+        // but no `part_of`.
+        match find_root_index() {
+            Some(path) => path,
+            None => return,
         }
     };
 
-    let import_index_path = workspace_root.join(canonical_prefix).join("index.md");
-    if !fs.exists(&import_index_path).await {
+    let import_index_path = format!("{canonical_prefix}/index.md");
+    if !host_bridge::file_exists(&import_index_path).unwrap_or(false) {
         return;
     }
 
-    let import_index_canonical = format!("{canonical_prefix}/index.md");
     let import_title = capitalize(folder);
 
     // Step 1: Add to parent's contents.
-    if let Ok(parent_content) = fs.read_to_string(&graft_target).await
+    if let Ok(parent_content) = host_bridge::read_file(&graft_target)
         && let Ok(parsed) = frontmatter::parse_or_empty(&parent_content)
     {
         let mut fm = parsed.frontmatter;
@@ -358,14 +287,14 @@ async fn graft_into_parent<FS: AsyncFileSystem>(
             .map(|seq| {
                 seq.iter().any(|item| {
                     item.as_str()
-                        .map(|s| s.contains(&import_index_canonical))
+                        .map(|s| s.contains(&import_index_path))
                         .unwrap_or(false)
                 })
             })
             .unwrap_or(false);
 
         if !already_listed {
-            let link = Value::String(format_link(&import_index_canonical, &import_title));
+            let link = Value::String(format_link(&import_index_path, &import_title));
             match fm.get_mut("contents") {
                 Some(Value::Sequence(seq)) => {
                     seq.push(link);
@@ -376,24 +305,20 @@ async fn graft_into_parent<FS: AsyncFileSystem>(
             }
 
             if let Ok(updated) = frontmatter::serialize(&fm, &parsed.body) {
-                let _ = fs.write_file(&graft_target, &updated).await;
+                let _ = host_bridge::write_file(&graft_target, &updated);
             }
         }
     }
 
     // Step 2: Set part_of on the import folder's root index.
-    if let Ok(import_content) = fs.read_to_string(&import_index_path).await
+    if let Ok(import_content) = host_bridge::read_file(&import_index_path)
         && let Ok(parsed) = frontmatter::parse_or_empty(&import_content)
     {
         let mut fm = parsed.frontmatter;
 
         if !fm.contains_key("part_of") {
-            let parent_canonical = canonical_path(workspace_root, &graft_target);
-
             // Read the parent's title from its frontmatter if available.
-            let parent_title = fs
-                .read_to_string(&graft_target)
-                .await
+            let parent_title = host_bridge::read_file(&graft_target)
                 .ok()
                 .and_then(|c| frontmatter::parse_or_empty(&c).ok())
                 .and_then(|p| {
@@ -406,25 +331,45 @@ async fn graft_into_parent<FS: AsyncFileSystem>(
 
             fm.insert(
                 "part_of".to_string(),
-                Value::String(format_link(&parent_canonical, &parent_title)),
+                Value::String(format_link(&graft_target, &parent_title)),
             );
 
             if let Ok(updated) = frontmatter::serialize(&fm, &parsed.body) {
-                let _ = fs.write_file(&import_index_path, &updated).await;
+                let _ = host_bridge::write_file(&import_index_path, &updated);
             }
         }
     }
 }
 
+/// Find the workspace root index file (has `contents` but no `part_of`).
+fn find_root_index() -> Option<String> {
+    let files = host_bridge::list_files("").ok()?;
+    // Look for root-level markdown files (no slashes in path, or just "index.md")
+    for file in &files {
+        // Only check root-level files
+        if file.contains('/') {
+            continue;
+        }
+        if !file.ends_with(".md") {
+            continue;
+        }
+        if let Ok(content) = host_bridge::read_file(file) {
+            if let Ok(parsed) = frontmatter::parse_or_empty(&content) {
+                if parsed.frontmatter.contains_key("contents")
+                    && !parsed.frontmatter.contains_key("part_of")
+                {
+                    return Some(file.clone());
+                }
+            }
+        }
+    }
+    None
+}
+
 // ── Helper functions ──────────────────────────────────────────────────
 
 /// Format an ImportedEntry as a markdown string with frontmatter links.
-fn format_entry(
-    entry: &ImportedEntry,
-    entry_path: &Path,
-    workspace_root: &Path,
-    month_index_canonical: &str,
-) -> String {
+fn format_entry(entry: &ImportedEntry, entry_path: &str, month_index_canonical: &str) -> String {
     let mut fm = IndexMap::new();
 
     fm.insert("title".to_string(), Value::String(entry.title.clone()));
@@ -448,14 +393,18 @@ fn format_entry(
 
     // Attachments list.
     if !entry.attachments.is_empty() {
-        let entry_stem = entry_path.file_stem().unwrap().to_string_lossy();
-        let entry_dir = entry_path.parent().unwrap();
+        let entry_stem = path_stem(entry_path);
+        let entry_dir = path_parent(entry_path);
         let att_list: Vec<Value> = entry
             .attachments
             .iter()
             .map(|a| {
-                let att_abs = entry_dir.join(format!("{entry_stem}/_attachments/{}", a.filename));
-                Value::String(canonical_path(workspace_root, &att_abs))
+                let att_path = if entry_dir.is_empty() {
+                    format!("{entry_stem}/_attachments/{}", a.filename)
+                } else {
+                    format!("{entry_dir}/{entry_stem}/_attachments/{}", a.filename)
+                };
+                Value::String(att_path)
             })
             .collect();
         fm.insert("attachments".to_string(), Value::Sequence(att_list));
@@ -463,10 +412,9 @@ fn format_entry(
 
     let yaml = serde_yaml::to_string(&fm).unwrap_or_default();
 
-    // Resolve _attachments/ references in the body to include the entry stem,
-    // so they point to the correct sibling directory.
+    // Resolve _attachments/ references in the body to include the entry stem.
     let body = if !entry.attachments.is_empty() {
-        let entry_stem = entry_path.file_stem().unwrap().to_string_lossy();
+        let entry_stem = path_stem(entry_path);
         entry
             .body
             .replace("_attachments/", &format!("{entry_stem}/_attachments/"))
@@ -475,15 +423,6 @@ fn format_entry(
     };
 
     format!("---\n{yaml}---\n{body}")
-}
-
-/// Compute the canonical path (workspace-relative, forward slashes).
-fn canonical_path(workspace_root: &Path, abs_path: &Path) -> String {
-    abs_path
-        .strip_prefix(workspace_root)
-        .unwrap_or(abs_path)
-        .to_string_lossy()
-        .replace('\\', "/")
 }
 
 /// Extract (year, month, date_prefix) from an entry's date or fall back to today.
@@ -511,23 +450,15 @@ fn entry_slug(title: &str) -> String {
     }
 }
 
-/// Deduplicate a file path by appending -2, -3, etc. if it's already taken.
-fn deduplicate_path(path: PathBuf, used: &HashSet<PathBuf>) -> PathBuf {
+/// Deduplicate a path string by appending -2, -3, etc. if it's already taken.
+fn deduplicate_path(path: String, used: &HashSet<String>) -> String {
     if !used.contains(&path) {
         return path;
     }
 
-    let stem = path
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    let ext = path
-        .extension()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    let parent = path.parent().unwrap_or(Path::new("."));
+    let stem = path_stem(&path);
+    let ext = path_extension(&path);
+    let parent = path_parent(&path);
 
     let mut counter = 2;
     loop {
@@ -536,7 +467,11 @@ fn deduplicate_path(path: PathBuf, used: &HashSet<PathBuf>) -> PathBuf {
         } else {
             format!("{stem}-{counter}.{ext}")
         };
-        let candidate = parent.join(new_name);
+        let candidate = if parent.is_empty() {
+            new_name
+        } else {
+            format!("{parent}/{new_name}")
+        };
         if !used.contains(&candidate) {
             return candidate;
         }
@@ -554,9 +489,33 @@ fn capitalize(s: &str) -> String {
 }
 
 /// Extract a title from a file path's stem, prettified.
-fn fm_title_or_filename(path: &Path) -> String {
-    path.file_stem()
-        .and_then(|s| s.to_str())
-        .map(crate::entry::prettify_filename)
-        .unwrap_or_else(|| "Index".to_string())
+fn fm_title_or_filename(path: &str) -> String {
+    let stem = path_stem(path);
+    diaryx_core::entry::prettify_filename(&stem)
+}
+
+/// Get the file stem (name without extension) from a path string.
+fn path_stem(path: &str) -> String {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    match name.rfind('.') {
+        Some(idx) if idx > 0 => name[..idx].to_string(),
+        _ => name.to_string(),
+    }
+}
+
+/// Get the file extension from a path string.
+fn path_extension(path: &str) -> String {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    match name.rfind('.') {
+        Some(idx) if idx > 0 => name[idx + 1..].to_string(),
+        _ => String::new(),
+    }
+}
+
+/// Get the parent directory from a path string.
+fn path_parent(path: &str) -> String {
+    match path.rfind('/') {
+        Some(idx) => path[..idx].to_string(),
+        None => String::new(),
+    }
 }

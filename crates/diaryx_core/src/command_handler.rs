@@ -2020,40 +2020,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 Ok(Response::String(target_canonical_path))
             }
 
-            // === Import Operations ===
-            Command::ImportEntries {
-                entries_json,
-                folder,
-                parent_path,
-            } => {
-                let entries: Vec<crate::import::ImportedEntry> =
-                    serde_json::from_str(&entries_json).map_err(|e| DiaryxError::InvalidPath {
-                        path: PathBuf::from("<import entries>"),
-                        message: format!("Invalid ImportedEntry JSON: {e}"),
-                    })?;
-
-                let workspace_root = self.workspace_root().unwrap_or_else(|| PathBuf::from("."));
-                let result = crate::import::orchestrate::write_entries(
-                    self.fs(),
-                    &workspace_root,
-                    &folder,
-                    &entries,
-                    parent_path.as_deref(),
-                )
-                .await;
-
-                Ok(Response::ImportResult(result))
-            }
-
-            Command::ImportDirectoryInPlace { path } => {
-                let root = path
-                    .map(|p| self.resolve_fs_path(&p))
-                    .unwrap_or_else(|| PathBuf::from(""));
-                let result =
-                    crate::import::directory::import_directory_in_place(self.fs(), &root).await?;
-                Ok(Response::ImportResult(result))
-            }
-
             // === Storage Operations ===
             Command::GetStorageUsage => {
                 // This requires knowledge of the workspace path which we don't have

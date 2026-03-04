@@ -25,7 +25,6 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
-use ts_rs::TS;
 
 use crate::config::Config;
 use crate::error::{DiaryxError, Result};
@@ -34,8 +33,9 @@ use crate::link_parser::{self, LinkFormat};
 use crate::path_utils::normalize_sync_path;
 
 /// How to generate filenames from entry titles.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 #[serde(rename_all = "snake_case")]
 pub enum FilenameStyle {
     /// Keep the title as-is, stripping only filesystem-illegal characters.
@@ -57,8 +57,9 @@ fn default_true() -> bool {
 ///
 /// This allows workspace settings to live with the data (local-first philosophy)
 /// rather than in separate config files.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct WorkspaceConfig {
     /// Format for `part_of`, `contents`, and `attachments` links.
     /// Defaults to MarkdownRoot if not specified.
@@ -67,7 +68,7 @@ pub struct WorkspaceConfig {
 
     /// Link to the default template entry for new files (in link_format style).
     /// If absent, uses the built-in "note" template.
-    #[ts(optional)]
+    #[cfg_attr(feature = "typescript", ts(optional))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_template: Option<String>,
 
@@ -91,7 +92,7 @@ pub struct WorkspaceConfig {
     /// Audience tag that designates files for public viewing/publishing.
     /// Replaces the old hardcoded "private" magic. Files with this audience tag
     /// are included in public exports; files without it are excluded.
-    #[ts(optional)]
+    #[cfg_attr(feature = "typescript", ts(optional))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub public_audience: Option<String>,
 }

@@ -10,7 +10,6 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_yaml::Value;
-use ts_rs::TS;
 
 use crate::link_parser::{self, LinkFormat};
 use crate::plugin::permissions::PluginConfig;
@@ -285,8 +284,9 @@ impl IndexFile {
 }
 
 /// Node in the workspace tree (for display purposes)
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct TreeNode {
     /// Title of index/root file (or filename if no title)
     pub name: String,
@@ -297,7 +297,10 @@ pub struct TreeNode {
     /// `contents` property list
     pub children: Vec<TreeNode>,
     /// Additional frontmatter properties for display (populated by --properties flag)
-    #[ts(type = "Record<string, string> | undefined")]
+    #[cfg_attr(
+        feature = "typescript",
+        ts(type = "Record<string, string> | undefined")
+    )]
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub properties: HashMap<String, String>,
 }

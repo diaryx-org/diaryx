@@ -1,0 +1,20 @@
+[package]
+name = "diaryx_import_extism"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+description = "Extism guest plugin for Diaryx import functionality"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+diaryx_core = { workspace = true, features = ["import-dayone", "import-markdown"] }
+extism-pdk = "1.4"
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+chrono = { workspace = true }
+indexmap = { workspace = true }
+base64 = "0.22"

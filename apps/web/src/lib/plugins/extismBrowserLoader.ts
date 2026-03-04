@@ -109,6 +109,8 @@ export interface HostFunctionOptions {
   getPluginName: () => string;
   /** Callback to get current workspace plugin config. Returns undefined if not available. */
   getPluginsConfig?: () => Record<string, PluginConfig> | undefined;
+  /** Provider of user-selected files by key name (e.g. from file picker). */
+  getFile?: (key: string) => Promise<Uint8Array | null>;
 }
 
 /**
@@ -466,6 +468,26 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
           const event = JSON.parse(eventJson);
           backend.emitFileSystemEvent?.(event);
           return cp.store("");
+        } catch {
+          return cp.store("");
+        }
+      },
+      async host_request_file(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as
+            | { key: string }
+            | undefined;
+          if (!input?.key) return cp.store("");
+          if (!opts?.getFile) return cp.store("");
+          const bytes = await opts.getFile(input.key);
+          if (!bytes) return cp.store("");
+          // Encode as base64 and return {data: base64}
+          let binary = "";
+          for (let i = 0; i < bytes.length; i++) {
+            binary += String.fromCharCode(bytes[i]);
+          }
+          const b64 = btoa(binary);
+          return cp.store(JSON.stringify({ data: b64 }));
         } catch {
           return cp.store("");
         }

@@ -20,21 +20,14 @@ pathdiff = "0.2"
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
-toml = "0.9.8"
 thiserror.workspace = true
 async-trait = "0.1"
 urlencoding = "2"
 uuid = { version = "1", features = ["v4", "rng-getrandom"] }
 
-
-# TypeScript bindings generation
-ts-rs = { version = "10", features = ["serde-json-impl", "indexmap-impl", "no-serde-warnings"] }
-
-# Used by non-WASM sync wrappers (block_on) during the async-first refactor.
-# On WASM, the sync wrappers are cfg-gated off.
-futures-lite = "2"
-
 # Optional dependencies
+toml = { version = "0.9.8", optional = true }
+ts-rs = { version = "10", features = ["serde-json-impl", "indexmap-impl", "no-serde-warnings"], optional = true }
 git2 = { version = "0.19", optional = true, default-features = false }
 
 # Day One ZIP import (works on all platforms including WASM)
@@ -48,6 +41,7 @@ mbox-reader = { version = "0.2", optional = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dirs = "6.0"
 glob = "0.3"
+futures-lite = "2"
 rusqlite = { version = "0.34", features = ["bundled"], optional = true }
 html-to-markdown-rs = { version = "2", optional = true }
 
@@ -62,6 +56,12 @@ markdown = []
 
 # Placeholder feature for workspace crates that currently enable it.
 live-sync = []
+
+# TOML config file support (native CLI/Tauri only, not needed in WASM)
+toml-config = ["dep:toml"]
+
+# TypeScript binding generation (build-time only, not needed in WASM)
+typescript = ["dep:ts-rs"]
 
 # SQLite database support (enables Database error variant with rusqlite From impl)
 database = ["dep:rusqlite"]
@@ -82,8 +82,9 @@ import-markdown = []
 # Browser WASM support (uuid/js for browser crypto)
 browser-js = ["uuid/js"]
 
-# Default features for the library
-default = []
+# Default features — enabled for native builds (CLI, Tauri, Apple, Extism guests).
+# diaryx_wasm uses default-features = false to exclude these from the WASM binary.
+default = ["toml-config", "typescript"]
 
 [package.metadata.release]
 # This crate should be published to crates.io

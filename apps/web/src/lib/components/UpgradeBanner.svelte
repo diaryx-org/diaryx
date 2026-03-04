@@ -28,6 +28,7 @@
 
   let { feature, description, icon, onUpgraded }: Props = $props();
 
+  const authState = $derived(getAuthState());
   const billingProvider = getBillingProvider();
   let isUpgrading = $state(false);
   let upgradeError = $state<string | null>(null);
@@ -103,7 +104,9 @@
   {#if upgradeError}
     <p class="text-xs text-destructive">{upgradeError}</p>
   {/if}
-  {#if billingProvider === "apple_iap"}
+  {#if !authState.isAuthenticated}
+    <p class="text-xs text-muted-foreground">Sign in to upgrade to Plus.</p>
+  {:else if billingProvider === "apple_iap"}
     <Button
       variant="default"
       size="sm"

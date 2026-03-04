@@ -68,9 +68,13 @@ test.describe('Editor', () => {
     const h1Button = page.locator('.block-picker-menu .submenu-item').filter({ hasText: 'H1' })
     await h1Button.click()
 
+    // Wait for the heading node and click it to ensure editor focus
+    const heading = editor.editor.locator('h1')
+    await expect(heading).toBeVisible()
+    await heading.click()
+
     await page.keyboard.type('My Heading')
 
-    const heading = editor.editor.locator('h1')
     await expect(heading).toContainText('My Heading')
   })
 

@@ -1119,79 +1119,31 @@
       Diaryx
       <span class="text-xs font-normal text-sidebar-foreground/50">v{__APP_VERSION__}</span>
     </a>
-    <div class="flex items-center gap-1">
-      {#if onOpenMarketplace}
-        <Tooltip.Root>
-          <Tooltip.Trigger>
-            <Button
-              variant="ghost"
-              size="icon"
-              onclick={onOpenMarketplace}
-              class="size-8"
-              aria-label="Open plugin marketplace"
-            >
-              <Store class="size-4" />
-            </Button>
-          </Tooltip.Trigger>
-          {#if !mobileState.isMobile && !collapsed}
-            <Tooltip.Content>
-              Marketplace
-            </Tooltip.Content>
-          {/if}
-        </Tooltip.Root>
+    <Tooltip.Root>
+      <Tooltip.Trigger>
+        <Button
+          variant="ghost"
+          size="icon"
+          onclick={onToggleCollapse}
+          class="size-8"
+          aria-label="Collapse sidebar"
+        >
+          <PanelLeftClose class="size-4" />
+        </Button>
+      </Tooltip.Trigger>
+      {#if !mobileState.isMobile && !collapsed}
+        <Tooltip.Content>
+          <div class="flex items-center gap-2">
+            Collapse sidebar
+            <Kbd.Group>
+              <Kbd.Root>{modKey}</Kbd.Root>
+              <span>+</span>
+              <Kbd.Root>[</Kbd.Root>
+            </Kbd.Group>
+          </div>
+        </Tooltip.Content>
       {/if}
-      <Tooltip.Root>
-        <Tooltip.Trigger>
-          <Button
-            variant="ghost"
-            size="icon"
-            onclick={onOpenSettings}
-            class="size-8"
-            aria-label="Open settings"
-          >
-            <Settings class="size-4" />
-          </Button>
-        </Tooltip.Trigger>
-        {#if !mobileState.isMobile && !collapsed}
-          <Tooltip.Content>
-            <div class="flex items-center gap-2">
-              Settings
-              <Kbd.Group>
-                {#each settingsKeys as key, i}
-                  {#if i > 0}<span>+</span>{/if}
-                  <Kbd.Root>{key}</Kbd.Root>
-                {/each}
-              </Kbd.Group>
-            </div>
-          </Tooltip.Content>
-        {/if}
-      </Tooltip.Root>
-      <Tooltip.Root>
-        <Tooltip.Trigger>
-          <Button
-            variant="ghost"
-            size="icon"
-            onclick={onToggleCollapse}
-            class="size-8"
-            aria-label="Collapse sidebar"
-          >
-            <PanelLeftClose class="size-4" />
-          </Button>
-        </Tooltip.Trigger>
-        {#if !mobileState.isMobile && !collapsed}
-          <Tooltip.Content>
-            <div class="flex items-center gap-2">
-              Collapse sidebar
-              <Kbd.Group>
-                <Kbd.Root>{modKey}</Kbd.Root>
-                <span>+</span>
-                <Kbd.Root>[</Kbd.Root>
-              </Kbd.Group>
-            </div>
-          </Tooltip.Content>
-        {/if}
-      </Tooltip.Root>
-    </div>
+    </Tooltip.Root>
   </div>
 
   <!-- Workspace Selector -->
@@ -1443,31 +1395,81 @@
 
   <!-- Profile Footer -->
   <div class="border-t border-sidebar-border shrink-0 pb-[env(safe-area-inset-bottom)]">
-    <Popover.Root bind:open={profilePopoverOpen}>
-      <Popover.Trigger
-        class="w-full flex items-center gap-2.5 px-4 py-3 hover:bg-sidebar-accent active:bg-sidebar-accent transition-colors text-left"
-        aria-label={authState.isAuthenticated ? "Account settings" : "Sign in"}
-      >
-        <span class="relative shrink-0">
-          <CircleUser class="size-5 text-muted-foreground" />
-          {#if authState.isAuthenticated}
-            <span class="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full bg-emerald-500 ring-2 ring-sidebar"></span>
+    <div class="flex items-center gap-1 px-4 py-2">
+      <Popover.Root bind:open={profilePopoverOpen}>
+        <Popover.Trigger
+          class="flex items-center gap-2.5 flex-1 min-w-0 py-1 hover:bg-sidebar-accent active:bg-sidebar-accent rounded-md px-2 transition-colors text-left"
+          aria-label={authState.isAuthenticated ? "Account settings" : "Sign in"}
+        >
+          <span class="relative shrink-0">
+            <CircleUser class="size-5 text-muted-foreground" />
+            {#if authState.isAuthenticated}
+              <span class="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full bg-emerald-500 ring-2 ring-sidebar"></span>
+            {/if}
+          </span>
+          {#if authState.isAuthenticated && authState.user}
+            <span class="text-sm truncate text-sidebar-foreground">{authState.user.email}</span>
+          {:else}
+            <span class="text-sm text-muted-foreground">Sign in</span>
           {/if}
-        </span>
-        {#if authState.isAuthenticated && authState.user}
-          <span class="text-sm truncate text-sidebar-foreground">{authState.user.email}</span>
-        {:else}
-          <span class="text-sm text-muted-foreground">Sign in</span>
+        </Popover.Trigger>
+        <Popover.Content side="top" align="start" class="w-auto p-3">
+          <SignInPopover
+            onOpenAccountSettings={() => { profilePopoverOpen = false; onOpenAccountSettings(); }}
+            onAddWorkspace={async () => { profilePopoverOpen = false; await tick(); onAddWorkspace(); }}
+            onClose={() => { profilePopoverOpen = false; }}
+          />
+        </Popover.Content>
+      </Popover.Root>
+      <div class="flex items-center gap-1 shrink-0">
+        {#if onOpenMarketplace}
+          <Tooltip.Root>
+            <Tooltip.Trigger>
+              <Button
+                variant="ghost"
+                size="icon"
+                onclick={onOpenMarketplace}
+                class="size-8"
+                aria-label="Open plugin marketplace"
+              >
+                <Store class="size-4" />
+              </Button>
+            </Tooltip.Trigger>
+            {#if !mobileState.isMobile && !collapsed}
+              <Tooltip.Content>
+                Marketplace
+              </Tooltip.Content>
+            {/if}
+          </Tooltip.Root>
         {/if}
-      </Popover.Trigger>
-      <Popover.Content side="top" align="start" class="w-auto p-3">
-        <SignInPopover
-          onOpenAccountSettings={() => { profilePopoverOpen = false; onOpenAccountSettings(); }}
-          onAddWorkspace={async () => { profilePopoverOpen = false; await tick(); onAddWorkspace(); }}
-          onClose={() => { profilePopoverOpen = false; }}
-        />
-      </Popover.Content>
-    </Popover.Root>
+        <Tooltip.Root>
+          <Tooltip.Trigger>
+            <Button
+              variant="ghost"
+              size="icon"
+              onclick={onOpenSettings}
+              class="size-8"
+              aria-label="Open settings"
+            >
+              <Settings class="size-4" />
+            </Button>
+          </Tooltip.Trigger>
+          {#if !mobileState.isMobile && !collapsed}
+            <Tooltip.Content>
+              <div class="flex items-center gap-2">
+                Settings
+                <Kbd.Group>
+                  {#each settingsKeys as key, i}
+                    {#if i > 0}<span>+</span>{/if}
+                    <Kbd.Root>{key}</Kbd.Root>
+                  {/each}
+                </Kbd.Group>
+              </div>
+            </Tooltip.Content>
+          {/if}
+        </Tooltip.Root>
+      </div>
+    </div>
   </div>
 </aside>
 

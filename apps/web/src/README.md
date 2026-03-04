@@ -62,3 +62,11 @@ first-run flow.
 If a workspace root already exists (for example, pre-initialized by the Tauri
 backend), the "Get Started" flow upgrades that default scaffold to starter
 content instead of opening the add-workspace wizard.
+
+## Mobile Swipe Behavior
+
+`App.svelte` supports touch swipe gestures:
+
+- Swipe down from the top edge opens the command palette.
+- Swipe right closes an open right sidebar first; if right is already closed, it opens the left sidebar.
+- Swipe left closes an open left sidebar first; if left is already closed, it opens the right sidebar.

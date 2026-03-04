@@ -55,6 +55,11 @@ bun run tauri dev
 bun run tauri build
 ```
 
+For iOS dev builds, `bun run tauri:ios` now runs `bun run clean:ios-swift-cache`
+first. This clears stale `swift-rs` module artifacts for Tauri and Tauri plugin
+build scripts under `target/` that can break builds after moving the repository
+to a new absolute path.
+
 ## Tauri Commands
 
 All IPC commands are defined in `src-tauri/src/commands.rs` and registered in `src-tauri/src/lib.rs`.

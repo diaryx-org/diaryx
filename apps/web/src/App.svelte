@@ -583,8 +583,8 @@
 
       // Add swipe gestures for mobile:
       // - Swipe down from top: open command palette
-      // - Swipe right anywhere: open left sidebar
-      // - Swipe left anywhere: open right sidebar
+      // - Swipe right anywhere: open left sidebar (or close right sidebar if open)
+      // - Swipe left anywhere: open right sidebar (or close left sidebar if open)
       let touchStartY = 0;
       let touchStartX = 0;
       const SWIPE_THRESHOLD = 80; // minimum swipe distance
@@ -608,17 +608,23 @@
           return;
         }
 
-        // Swipe right anywhere, mostly horizontal → open left sidebar
+        // Swipe right anywhere, mostly horizontal:
+        // close right sidebar first, otherwise open left sidebar.
         if (deltaX > SWIPE_THRESHOLD && absDeltaY < CROSS_AXIS_MAX) {
-          if (leftSidebarCollapsed) {
+          if (!rightSidebarCollapsed) {
+            toggleRightSidebar();
+          } else if (leftSidebarCollapsed) {
             toggleLeftSidebar();
           }
           return;
         }
 
-        // Swipe left anywhere, mostly horizontal → open right sidebar
+        // Swipe left anywhere, mostly horizontal:
+        // close left sidebar first, otherwise open right sidebar.
         if (deltaX < -SWIPE_THRESHOLD && absDeltaY < CROSS_AXIS_MAX) {
-          if (rightSidebarCollapsed) {
+          if (!leftSidebarCollapsed) {
+            toggleLeftSidebar();
+          } else if (rightSidebarCollapsed) {
             toggleRightSidebar();
           }
           return;

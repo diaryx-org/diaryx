@@ -122,15 +122,10 @@ async function handleWelcomeScreenIfNeeded(page: Page, timeoutMs: number): Promi
 
   // If the welcome screen appeared, complete it
   if (await welcomeHeading.isVisible().catch(() => false)) {
-    // Click "Get Started" to open the AddWorkspaceDialog
+    // Click "Get Started" — this auto-creates a default workspace
     const getStartedButton = page.getByRole('button', { name: 'Get Started' })
     await expect(getStartedButton).toBeVisible({ timeout: 5000 })
     await getStartedButton.click()
-
-    // Click "Create Workspace" in the AddWorkspaceDialog
-    const createButton = page.getByRole('button', { name: 'Create Workspace' })
-    await expect(createButton).toBeVisible({ timeout: 5000 })
-    await createButton.click()
 
     // Wait for the editor to load after workspace creation
     await editor.first().waitFor({ state: 'visible', timeout: timeoutMs })

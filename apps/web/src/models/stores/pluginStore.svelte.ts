@@ -282,6 +282,21 @@ function getWorkspaceProviders(): Array<{
   );
 }
 
+/** Storage provider contributions across all plugins. */
+function getStorageProviders(): Array<{
+  pluginId: PluginId;
+  contribution: Extract<UiContribution, { slot: "StorageProvider" }>;
+}> {
+  return manifests.flatMap((m) =>
+    m.ui
+      .filter(
+        (c): c is Extract<UiContribution, { slot: "StorageProvider" }> =>
+          c.slot === "StorageProvider",
+      )
+      .map((contribution) => ({ pluginId: m.id, contribution })),
+  );
+}
+
 /** Block picker item contributions across all plugins. */
 function getBlockPickerItems(): Array<{
   pluginId: PluginId;
@@ -430,6 +445,9 @@ export function getPluginStore() {
     },
     get workspaceProviders() {
       return getWorkspaceProviders();
+    },
+    get storageProviders() {
+      return getStorageProviders();
     },
     get blockPickerItems() {
       return getBlockPickerItems();

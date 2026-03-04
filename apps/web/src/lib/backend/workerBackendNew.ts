@@ -239,18 +239,48 @@ export class WorkerBackendNew implements Backend {
   }
 
   /**
+   * Initialize the backend with a plugin-provided filesystem.
+   * Must run on the main thread because dispatchCommand() requires
+   * main-thread access to the Extism plugin manager.
+   */
+  private async initPluginStorage(pluginId: string): Promise<void> {
+    const mod = await import("./wasmWorkerNew");
+    this.remote = mod.workerApi as unknown as Comlink.Remote<WorkerApi>;
+    this.usingMainThreadFallback = true;
+
+    const { port1, port2 } = new MessageChannel();
+    this.attachEventPort(port1);
+
+    console.log(
+      `[WorkerBackendNew] Initializing plugin storage (main-thread): ${pluginId}`,
+    );
+
+    await this.remote.initFromPlugin(port2 as any, pluginId);
+  }
+
+  /**
    * Initialize the backend.
    * @param storageTypeOverride Optional storage type to use instead of the default.
    *                            Use 'memory' for guest mode (in-memory filesystem).
    * @param workspaceId Optional workspace UUID for CRDT document namespacing.
    * @param workspaceName Optional workspace display name for OPFS directory naming.
    *                      Falls back to localStorage('diaryx-workspace-name') or 'My Journal'.
+   * @param storagePluginId Optional plugin ID when storageType is 'plugin'.
    */
   async init(
     storageTypeOverride?: StorageType,
     workspaceId?: string,
     workspaceName?: string,
+    storagePluginId?: string,
   ): Promise<void> {
+    // Plugin storage must run on the main thread (needs dispatchCommand)
+    if (storageTypeOverride === "plugin" && storagePluginId) {
+      await this.initPluginStorage(storagePluginId);
+      this._ready = true;
+      console.log("[WorkerBackendNew] Ready (plugin storage)");
+      return;
+    }
+
     this.usingMainThreadFallback = false;
 
     // Create the worker

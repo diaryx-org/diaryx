@@ -4,6 +4,7 @@ import { setActiveWorkspaceId } from "$lib/auth";
 import {
   setCurrentWorkspaceId,
   getWorkspaceStorageType,
+  getWorkspaceStoragePluginId,
 } from "$lib/storage/localWorkspaceRegistry.svelte";
 
 export interface SwitchWorkspaceOptions {
@@ -30,6 +31,7 @@ export async function switchWorkspace(
     workspaceId,
     workspaceName,
     getWorkspaceStorageType(workspaceId),
+    getWorkspaceStoragePluginId(workspaceId),
   );
   workspaceStore.setBackend(backend);
 

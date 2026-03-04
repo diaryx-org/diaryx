@@ -200,8 +200,8 @@ export class PluginSyncAdapter {
     this.shouldReconnect = true;
     this._everConnected = false;
 
-    // Initialize the sync plugin
-    await this.syncPlugin.callCommand("init", {
+    // Initialize plugin lifecycle state before binary/typed sync calls.
+    await this.syncPlugin.callLifecycle("init", {
       workspace_id: workspaceId,
       write_to_disk: true,
     });

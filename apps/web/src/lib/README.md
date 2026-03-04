@@ -70,6 +70,8 @@ Key host pieces:
 - `PluginStatusItems.svelte` for generic status-bar contribution rendering
 - `SettingsDialog.svelte` plugin settings tab rendering (`Iframe` + declarative)
 - `workspace/switchWorkspace.ts` for backend lifecycle during workspace switches
+- Browser Extism runtime (`plugins/extismBrowserLoader.ts`) maps sync capabilities (`CrdtCommands`, `SyncTransport`) and supports lifecycle export calls (`init`/`shutdown`) used by sync transport orchestration.
+- Browser plugin typed-command routing (`plugins/commandRouter.ts`) preserves plugin `Response` envelopes for `PluginCommand` calls so `api.executePluginCommand()` receives the same payload shape across browser and native runtimes.
 
 ## Sidebar Layout
 

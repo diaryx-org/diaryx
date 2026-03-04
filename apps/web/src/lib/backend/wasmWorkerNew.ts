@@ -423,9 +423,56 @@ async function initWithDirectoryHandle(
  *
  * All methods use the unified command API through `execute()` except where noted.
  */
+/**
+ * Initialize the backend with a plugin-provided filesystem.
+ * Must run on the main thread because dispatchCommand() requires
+ * main-thread access to the Extism plugin manager.
+ */
+async function initFromPlugin(
+  port: MessagePort,
+  pluginId: string,
+): Promise<void> {
+  eventPort = port;
+
+  const wasmCdnUrl = (import.meta as any).env?.VITE_WASM_CDN_URL as
+    | string
+    | undefined;
+  let wasm: any;
+  if (wasmCdnUrl) {
+    wasm = await import(/* @vite-ignore */ `${wasmCdnUrl}/diaryx_wasm.js`);
+    await wasm.default({ module_or_path: `${wasmCdnUrl}/diaryx_wasm_bg.wasm` });
+  } else {
+    wasm = await import("@diaryx/wasm");
+    await wasm.default();
+  }
+
+  const { createPluginFileSystemCallbacks } = await import(
+    "$lib/storage/pluginFileSystem"
+  );
+  const callbacks = createPluginFileSystemCallbacks(pluginId);
+  backend = await wasm.DiaryxBackend.createFromJsFileSystem(callbacks);
+
+  if (backend.onFileSystemEvent && eventPort) {
+    fsEventSubscriptionId = backend.onFileSystemEvent((eventJson: any) => {
+      if (typeof eventJson === "object" && eventJson?.type === "SnapshotDownloaded") {
+        handleSnapshotDownloaded(eventJson.blob, eventJson.workspace_id);
+        return;
+      }
+      try {
+        eventPort!.postMessage({ type: "FileSystemEvent", data: eventJson });
+      } catch (e) {
+        console.error("[WasmWorker] Failed to forward filesystem event:", e);
+      }
+    });
+  }
+
+  console.log("[WasmWorker] DiaryxBackend initialized with plugin storage:", pluginId);
+}
+
 export const workerApi = {
   init,
   initWithDirectoryHandle,
+  initFromPlugin,
 
   isReady(): boolean {
     return backend !== null;

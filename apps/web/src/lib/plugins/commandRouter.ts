@@ -13,6 +13,40 @@ import {
 import { getPluginStore } from "@/models/stores/pluginStore.svelte";
 import type { Command, Response } from "$lib/backend/interface";
 
+const RESPONSE_TYPES = new Set<string>([
+  "Ok",
+  "String",
+  "Bool",
+  "Entry",
+  "Tree",
+  "Frontmatter",
+  "SearchResults",
+  "ValidationResult",
+  "FixResult",
+  "FixSummary",
+  "Strings",
+  "Bytes",
+  "StorageInfo",
+  "AncestorAttachments",
+  "LinkFormat",
+  "WorkspaceConfig",
+  "ConvertLinksResult",
+  "CreateChildResult",
+  "LinkParserResult",
+  "PluginResult",
+  "PluginManifests",
+]);
+
+function isBackendResponse(value: unknown): value is Response {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    "type" in value &&
+    typeof (value as { type: unknown }).type === "string" &&
+    RESPONSE_TYPES.has((value as { type: string }).type)
+  );
+}
+
 /**
  * Find a loaded browser plugin that handles the given command type.
  */
@@ -80,8 +114,10 @@ export async function tryBrowserPluginCommand(
     const response = await plugin.callTypedCommand(innerCommandObj);
     if (response == null) return null;
 
-    // Wrap the plugin response as PluginResult
-    return { type: "PluginResult", data: response } as Response;
+    // Modern plugins return a full backend Response; legacy plugins return raw data.
+    return isBackendResponse(response)
+      ? response
+      : ({ type: "PluginResult", data: response } as Response);
   }
 
   // Direct command type — search by capability

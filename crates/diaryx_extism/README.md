@@ -40,7 +40,7 @@ the host through a JSON protocol (`protocol.rs`).
 | `host_read_file` / `host_list_files` / `host_file_exists` | Workspace reads |
 | `host_write_file` / `host_write_binary` | Workspace writes (create/edit split by file existence) |
 | `host_delete_file` | Workspace deletes |
-| `host_http_request` | HTTP request bridge (feature-gated) |
+| `host_http_request` | HTTP request bridge (feature-gated, supports optional `timeout_ms`) |
 | `host_storage_get` / `host_storage_set` | Plugin persistent storage |
 | `host_run_wasi_module` | Execute a WASI module loaded from plugin storage (feature-gated) |
 | `host_emit_event` / `host_ws_request` / `host_get_timestamp` | Eventing and utility functions |

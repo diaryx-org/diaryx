@@ -71,6 +71,11 @@ export interface BrowserExtismPlugin {
   manifest: PluginManifest;
   /** Plugin-declared default permissions and reasons (optional). */
   requestedPermissions?: RequestedPermissionsManifest;
+  /** Call an optional lifecycle export (`init`/`shutdown`) with JSON input. */
+  callLifecycle(
+    exportName: "init" | "shutdown",
+    payload?: unknown,
+  ): Promise<void>;
   /** Send a lifecycle event to the guest. */
   callEvent(event: GuestEvent): Promise<void>;
   /** Dispatch a command to the guest. */
@@ -111,6 +116,20 @@ export interface HostFunctionOptions {
   getPluginsConfig?: () => Record<string, PluginConfig> | undefined;
   /** Provider of user-selected files by key name (e.g. from file picker). */
   getFile?: (key: string) => Promise<Uint8Array | null>;
+}
+
+const MIN_HTTP_TIMEOUT_MS = 1_000;
+const MAX_HTTP_TIMEOUT_MS = 300_000;
+
+function resolveHttpTimeoutMs(timeoutMs: unknown): number | null {
+  if (timeoutMs == null) return null;
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
+    return null;
+  }
+  const normalized = Math.trunc(timeoutMs);
+  if (normalized < MIN_HTTP_TIMEOUT_MS) return MIN_HTTP_TIMEOUT_MS;
+  if (normalized > MAX_HTTP_TIMEOUT_MS) return MAX_HTTP_TIMEOUT_MS;
+  return normalized;
 }
 
 /**
@@ -325,6 +344,7 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
         return cp.store(Date.now().toString());
       },
       async host_http_request(cp: CallContext, offs: bigint) {
+        let timeoutMs: number | null = null;
         try {
           const input = cp.read(offs)?.json() as
             | {
@@ -333,6 +353,7 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
                 headers: Record<string, string>;
                 body?: string;
                 body_base64?: string;
+                timeout_ms?: number;
               }
             | undefined;
           if (!input)
@@ -340,6 +361,7 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
               JSON.stringify({ status: 0, headers: {}, body: "no input" }),
             );
           await requirePermission(opts, "http_requests", input.url);
+          timeoutMs = resolveHttpTimeoutMs(input.timeout_ms);
           let fetchBody: BodyInit | undefined;
           if (input.body_base64) {
             const binary = atob(input.body_base64);
@@ -351,11 +373,27 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
           } else {
             fetchBody = input.body ?? undefined;
           }
-          const resp = await fetch(input.url, {
-            method: input.method,
-            headers: input.headers,
-            body: fetchBody,
-          });
+          const abortController =
+            timeoutMs !== null && typeof AbortController === "function"
+              ? new AbortController()
+              : null;
+          const timeoutId =
+            abortController !== null && timeoutMs !== null
+              ? globalThis.setTimeout(() => abortController.abort(), timeoutMs)
+              : null;
+          let resp: Response;
+          try {
+            resp = await fetch(input.url, {
+              method: input.method,
+              headers: input.headers,
+              body: fetchBody,
+              signal: abortController?.signal,
+            });
+          } finally {
+            if (timeoutId !== null) {
+              globalThis.clearTimeout(timeoutId);
+            }
+          }
           const respHeaders: Record<string, string> = {};
           resp.headers.forEach((v, k) => {
             respHeaders[k] = v;
@@ -381,7 +419,12 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
             }),
           );
         } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
+          const msg =
+            e instanceof Error && e.name === "AbortError" && timeoutMs !== null
+              ? `Request timed out after ${timeoutMs}ms`
+              : e instanceof Error
+                ? e.message
+                : String(e);
           return cp.store(
             JSON.stringify({ status: 0, headers: {}, body: msg }),
           );
@@ -544,6 +587,10 @@ function convertGuestManifest(guest: GuestManifest): PluginManifest {
           return "FileEvents" as PluginCapability;
         case "workspace_events":
           return "WorkspaceEvents" as PluginCapability;
+        case "crdt_commands":
+          return "CrdtCommands" as PluginCapability;
+        case "sync_transport":
+          return "SyncTransport" as PluginCapability;
         case "custom_commands":
           return {
             CustomCommands: { commands: guest.commands },
@@ -661,6 +708,20 @@ export async function loadBrowserPlugin(
   const guestManifest: GuestManifest = manifestOutput.json();
   const manifest = convertGuestManifest(guestManifest);
 
+  function isOptionalExportMissing(
+    error: unknown,
+    exportName: "init" | "shutdown",
+  ): boolean {
+    const message = (error instanceof Error ? error.message : String(error))
+      .toLowerCase();
+    return (
+      message.includes("function not found") ||
+      message.includes("unknown function") ||
+      message.includes(`no such export`) ||
+      (message.includes("not found") && message.includes(exportName))
+    );
+  }
+
   // Serialize all calls to the WASM plugin. WASM modules are single-threaded;
   // concurrent plugin.call() invocations cause response mix-ups.
   let callQueue: Promise<unknown> = Promise.resolve();
@@ -676,6 +737,26 @@ export async function loadBrowserPlugin(
   return {
     manifest,
     requestedPermissions: guestManifest.requested_permissions,
+
+    async callLifecycle(
+      exportName: "init" | "shutdown",
+      payload?: unknown,
+    ): Promise<void> {
+      return enqueue(async () => {
+        const input =
+          payload == null
+            ? "{}"
+            : typeof payload === "string"
+              ? payload
+              : JSON.stringify(payload);
+        try {
+          await plugin.call(exportName, input);
+        } catch (e) {
+          if (isOptionalExportMissing(e, exportName)) return;
+          throw e;
+        }
+      });
+    },
 
     async callEvent(event: GuestEvent): Promise<void> {
       return enqueue(async () => {
@@ -716,6 +797,14 @@ export async function loadBrowserPlugin(
           if (!text) return null;
           return JSON.parse(text);
         } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          if (message.includes("Plugin state not initialized")) {
+            // Expected before sync plugin lifecycle init; caller can fall back.
+            console.debug(
+              `[extism] ${manifest.id}: execute_typed_command skipped before init`,
+            );
+            return null;
+          }
           console.error(
             `[extism] ${manifest.id}: execute_typed_command failed:`,
             e,

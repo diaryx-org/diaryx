@@ -18,6 +18,7 @@ const MAX_TOOL_RESULT_BYTES: usize = 8192;
 const DEFAULT_BYO_ENDPOINT: &str = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_BYO_MODEL: &str = "anthropic/claude-sonnet-4-6";
 const DEFAULT_MANAGED_MODEL: &str = "google/gemini-3-flash-preview";
+const CHAT_HTTP_TIMEOUT_MS: u64 = 90_000;
 
 // ============================================================================
 // Types
@@ -461,6 +462,7 @@ fn run_one_iteration(state: &mut AgentState) -> IterationResult {
             "Authorization": format!("Bearer {}", state.api_key),
         },
         "body": serde_json::to_string(&request_body).unwrap_or_default(),
+        "timeout_ms": CHAT_HTTP_TIMEOUT_MS,
     });
 
     let http_result =

@@ -37,7 +37,7 @@ Reusable Svelte components for the editor and UI.
 | `FloatingMenuComponent.svelte` | TipTap floating menu |
 | `HighlightColorPicker.svelte` | Text highlight color picker |
 | `MoreStylesPicker.svelte` | Overflow formatting menu (strikethrough, inline code, spoiler) |
-| `PluginIframe.svelte` | Sandboxed plugin iframe host with command bridge, managed-context injection for `diaryx.ai`, and backend `executePluginCommand` fallback for native/Tauri plugin runtimes. |
+| `PluginIframe.svelte` | Sandboxed plugin iframe host with command bridge, managed-context injection for `diaryx.ai`, backend `executePluginCommand` fallback for native/Tauri runtimes, and response-shape normalization for plugin HTML payloads. |
 | `PluginSidebarPanel.svelte` | Sidebar wrapper for plugin component refs (Builtin/Declarative/Iframe). |
 | `UpgradeBanner.svelte` | Shared upsell surface for Plus-gated features (used for managed AI gating). |
 

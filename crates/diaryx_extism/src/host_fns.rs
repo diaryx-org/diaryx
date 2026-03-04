@@ -777,7 +777,7 @@ fn host_ws_request(
     Ok(())
 }
 
-/// Host function: `host_http_request(input: {url, method, headers, body?}) -> {status, headers, body}`
+/// Host function: `host_http_request(input: {url, method, headers, body?, timeout_ms?}) -> {status, headers, body}`
 ///
 /// Performs an HTTP request and returns the response. Only available when
 /// the `http` feature is enabled (native builds). On WASM the browser
@@ -801,6 +801,8 @@ fn host_http_request(
         body: Option<String>,
         /// Base64-encoded binary body. Takes priority over `body` when present.
         body_base64: Option<String>,
+        /// Optional request timeout in milliseconds.
+        timeout_ms: Option<u64>,
     }
 
     #[derive(serde::Serialize)]
@@ -821,7 +823,22 @@ fn host_http_request(
         ctx.check_perm(PermissionType::HttpRequests, &parsed.url)?;
     }
 
-    let mut request = ureq::request(&parsed.method, &parsed.url);
+    const MIN_HTTP_TIMEOUT_MS: u64 = 1_000;
+    const MAX_HTTP_TIMEOUT_MS: u64 = 300_000;
+
+    let agent = if let Some(timeout_ms) = parsed.timeout_ms {
+        let timeout_ms = timeout_ms.clamp(MIN_HTTP_TIMEOUT_MS, MAX_HTTP_TIMEOUT_MS);
+        let timeout = std::time::Duration::from_millis(timeout_ms);
+        ureq::AgentBuilder::new()
+            .timeout_connect(timeout)
+            .timeout_read(timeout)
+            .timeout_write(timeout)
+            .build()
+    } else {
+        ureq::AgentBuilder::new().build()
+    };
+
+    let mut request = agent.request(&parsed.method, &parsed.url);
     for (key, value) in &parsed.headers {
         request = request.set(key, value);
     }

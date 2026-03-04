@@ -13,7 +13,7 @@
 // Types
 // ============================================================================
 
-export type StorageType = 'opfs' | 'indexeddb' | 'filesystem-access' | 'memory';
+export type StorageType = 'opfs' | 'indexeddb' | 'filesystem-access' | 'memory' | 'plugin';
 
 const STORAGE_TYPE_KEY = 'diaryx-storage-type';
 const FS_HANDLE_KEY = 'diaryx-fs-handle';
@@ -45,6 +45,10 @@ export function isStorageTypeSupported(type: StorageType): boolean {
 
     case 'memory':
       // In-memory storage is always supported (used for guest mode)
+      return true;
+
+    case 'plugin':
+      // Plugin storage is always supported (the plugin handles I/O)
       return true;
 
     default:
@@ -319,6 +323,8 @@ export function getStorageTypeName(type: StorageType): string {
       return 'Browser Storage (IndexedDB)';
     case 'filesystem-access':
       return 'Local Folder';
+    case 'plugin':
+      return 'Plugin Storage';
     default:
       return type;
   }
@@ -335,6 +341,8 @@ export function getStorageTypeDescription(type: StorageType): string {
       return 'Traditional browser database. Compatible with all browsers.';
     case 'filesystem-access':
       return 'Store files in a folder on your computer. Requires Chrome or Edge.';
+    case 'plugin':
+      return 'Cloud storage provided by a plugin.';
     default:
       return '';
   }

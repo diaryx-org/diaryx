@@ -182,6 +182,21 @@ pub enum UiContribution {
         /// Optional icon name (Lucide kebab-case).
         icon: Option<String>,
     },
+    /// A storage provider contributed by a plugin.
+    ///
+    /// Plugins declaring this slot appear in the storage settings UI
+    /// as alternative filesystem backends. The host creates a
+    /// `JsFileSystem`-backed `DiaryxBackend` that delegates I/O to the plugin.
+    StorageProvider {
+        /// Unique provider identifier (usually the plugin ID).
+        id: String,
+        /// Human-readable label shown in storage picker.
+        label: String,
+        /// Optional icon name (Lucide kebab-case).
+        icon: Option<String>,
+        /// Optional description shown below the label.
+        description: Option<String>,
+    },
     /// An editor extension (TipTap node/mark) contributed by a plugin.
     ///
     /// The host generates a TipTap extension from this declaration and calls

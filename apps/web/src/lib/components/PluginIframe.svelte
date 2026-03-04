@@ -113,6 +113,25 @@
     }
   }
 
+  function extractComponentHtml(value: unknown): string | null {
+    if (typeof value === "string") return value;
+    if (!value || typeof value !== "object") return null;
+
+    const obj = value as Record<string, unknown>;
+
+    if (typeof obj.response === "string") return obj.response;
+    if (typeof obj.html === "string") return obj.html;
+    if (typeof obj.data === "string") return obj.data;
+    if (obj.type === "PluginResult" && typeof obj.data === "string") {
+      return obj.data;
+    }
+    if (obj.success === true) {
+      return extractComponentHtml(obj.data);
+    }
+
+    return null;
+  }
+
   /** CSS variable names forwarded to plugin iframes for theming. */
   const CSS_VAR_NAMES = [
     "--background", "--foreground",
@@ -148,12 +167,7 @@
       const result = await executePluginCommand("get_component_html", {
         component_id: componentId,
       });
-      // data may be a string directly, or nested if the response shape differs
-      const html = typeof result.data === "string"
-        ? result.data
-        : typeof (result as any).data?.response === "string"
-          ? (result as any).data.response
-          : null;
+      const html = extractComponentHtml(result.data);
       if (!result.success || !html) {
         console.error("[PluginIframe] get_component_html failed: success=%s, error=%s, data type=%s", result.success, result.error, typeof result.data);
         error = result.error ?? "Failed to load component HTML";

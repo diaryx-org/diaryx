@@ -320,6 +320,35 @@ export function setWorkspaceIsLocal(id: string, isLocal: boolean): void {
 }
 
 // ============================================================================
+// Plugin Storage Helpers
+// ============================================================================
+
+/**
+ * Get the storage plugin ID for a workspace, if it uses plugin storage.
+ * Returns undefined if the workspace doesn't use plugin storage.
+ */
+export function getWorkspaceStoragePluginId(id: string): string | undefined {
+  const ws = registryState.find(w => w.id === id);
+  if (ws?.storageType !== 'plugin') return undefined;
+  return ws?.pluginMetadata?.['storage']?.pluginId as string | undefined;
+}
+
+/**
+ * Set a workspace to use plugin storage with the given plugin ID.
+ * Updates both the storageType and plugin metadata.
+ */
+export function setWorkspaceStoragePlugin(id: string, pluginId: string): void {
+  const list = [...registryState];
+  const ws = list.find(w => w.id === id);
+  if (!ws) return;
+
+  ws.storageType = 'plugin';
+  if (!ws.pluginMetadata) ws.pluginMetadata = {};
+  ws.pluginMetadata['storage'] = { pluginId };
+  saveRegistry(list);
+}
+
+// ============================================================================
 // Plugin Metadata
 // ============================================================================
 

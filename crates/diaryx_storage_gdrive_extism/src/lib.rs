@@ -117,16 +117,25 @@ pub fn manifest(_input: String) -> FnResult<String> {
         version: env!("CARGO_PKG_VERSION").into(),
         description: "Google Drive as a filesystem backend".into(),
         capabilities: vec!["custom_commands".into()],
-        ui: vec![serde_json::json!({
-            "slot": "SettingsTab",
-            "id": "gdrive-storage-settings",
-            "label": "Google Drive",
-            "icon": "cloud",
-            "component": {
-                "type": "Iframe",
-                "component_id": "storage.gdrive.settings",
-            }
-        })],
+        ui: vec![
+            serde_json::json!({
+                "slot": "StorageProvider",
+                "id": "diaryx.storage.gdrive",
+                "label": "Google Drive",
+                "icon": "cloud",
+                "description": "Store files in Google Drive"
+            }),
+            serde_json::json!({
+                "slot": "SettingsTab",
+                "id": "gdrive-storage-settings",
+                "label": "Google Drive",
+                "icon": "cloud",
+                "component": {
+                    "type": "Iframe",
+                    "component_id": "storage.gdrive.settings",
+                }
+            }),
+        ],
         commands: vec![
             "ReadFile".into(),
             "WriteFile".into(),

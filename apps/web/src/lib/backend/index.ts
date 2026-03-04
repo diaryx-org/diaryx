@@ -88,7 +88,7 @@ function setBackendStorageType(type: StorageType | undefined): void {
  * const config = await backend.getConfig();
  * ```
  */
-export async function getBackend(workspaceId?: string, workspaceName?: string, storageType?: StorageType): Promise<Backend> {
+export async function getBackend(workspaceId?: string, workspaceName?: string, storageType?: StorageType, storagePluginId?: string): Promise<Backend> {
   const existing = getBackendInstance();
 
   // If a workspace ID is specified and it matches the current backend, reuse it
@@ -112,8 +112,8 @@ export async function getBackend(workspaceId?: string, workspaceName?: string, s
     return pending;
   }
 
-  console.log("[Backend] Starting initialization...", workspaceId ? `workspace: ${workspaceId}` : '', workspaceName ? `name: ${workspaceName}` : '', storageType ? `storage: ${storageType}` : '');
-  const promise = initializeBackend(workspaceId, workspaceName, storageType);
+  console.log("[Backend] Starting initialization...", workspaceId ? `workspace: ${workspaceId}` : '', workspaceName ? `name: ${workspaceName}` : '', storageType ? `storage: ${storageType}` : '', storagePluginId ? `plugin: ${storagePluginId}` : '');
+  const promise = initializeBackend(workspaceId, workspaceName, storageType, storagePluginId);
   setInitPromise(promise);
   return promise;
 }
@@ -121,7 +121,7 @@ export async function getBackend(workspaceId?: string, workspaceName?: string, s
 /**
  * Initialize the appropriate backend based on runtime environment.
  */
-async function initializeBackend(workspaceId?: string, workspaceName?: string, storageType?: StorageType): Promise<Backend> {
+async function initializeBackend(workspaceId?: string, workspaceName?: string, storageType?: StorageType, storagePluginId?: string): Promise<Backend> {
   console.log("[Backend] Detecting runtime environment...");
   console.log("[Backend] isTauri():", isTauri());
   console.log("[Backend] isBrowser():", isBrowser());
@@ -147,7 +147,7 @@ async function initializeBackend(workspaceId?: string, workspaceName?: string, s
     }
 
     console.log("[Backend] Calling backend.init()...");
-    await instance.init(storageType, workspaceId, workspaceName);
+    await instance.init(storageType, workspaceId, workspaceName, storagePluginId);
     console.log("[Backend] Backend initialized successfully");
     setBackendInstance(instance);
     setBackendWorkspaceId(workspaceId);

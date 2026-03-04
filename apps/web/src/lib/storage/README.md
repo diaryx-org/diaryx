@@ -17,4 +17,5 @@ Storage utilities for workspace registry and persistence.
 
 | File | Purpose |
 |------|---------|
-| `localWorkspaceRegistry.svelte.ts` | Local workspace registry + current workspace selection state (reactive, mirrored to localStorage). |
+| `localWorkspaceRegistry.svelte.ts` | Local workspace registry + current workspace selection state (reactive, mirrored to localStorage). Includes plugin storage helpers (`getWorkspaceStoragePluginId`, `setWorkspaceStoragePlugin`). |
+| `pluginFileSystem.ts` | Creates `JsAsyncFileSystem` callbacks that dispatch to a storage Extism plugin (S3, Google Drive). Used by `WorkerBackendNew.initPluginStorage()`. |

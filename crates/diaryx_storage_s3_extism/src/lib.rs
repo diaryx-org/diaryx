@@ -102,23 +102,32 @@ pub fn manifest(_input: String) -> FnResult<String> {
         version: env!("CARGO_PKG_VERSION").into(),
         description: "S3-compatible object storage as a filesystem backend".into(),
         capabilities: vec!["custom_commands".into()],
-        ui: vec![serde_json::json!({
-            "slot": "SettingsTab",
-            "id": "s3-storage-settings",
-            "label": "S3 Storage",
-            "icon": "cloud",
-            "fields": [
-                { "type": "Section", "label": "S3 Configuration" },
-                { "type": "Text", "key": "bucket", "label": "Bucket", "placeholder": "my-diaryx-bucket" },
-                { "type": "Text", "key": "region", "label": "Region", "placeholder": "us-east-1" },
-                { "type": "Text", "key": "prefix", "label": "Prefix", "description": "Key prefix within the bucket (e.g., \"diaryx/workspace1/\")", "placeholder": "diaryx/" },
-                { "type": "Text", "key": "endpoint", "label": "Custom Endpoint", "description": "For S3-compatible services: MinIO, Cloudflare R2, Backblaze B2, etc.", "placeholder": "https://s3.example.com" },
-                { "type": "Text", "key": "access_key_id", "label": "Access Key ID", "placeholder": "AKIAIOSFODNN7EXAMPLE" },
-                { "type": "Password", "key": "secret_access_key", "label": "Secret Access Key", "placeholder": "••••••••" },
-                { "type": "Toggle", "key": "path_style", "label": "Use path-style addressing" },
-                { "type": "Button", "label": "Test Connection", "command": "TestConnection", "variant": "outline" }
-            ]
-        })],
+        ui: vec![
+            serde_json::json!({
+                "slot": "StorageProvider",
+                "id": "diaryx.storage.s3",
+                "label": "Amazon S3",
+                "icon": "cloud",
+                "description": "Store files in an S3-compatible bucket"
+            }),
+            serde_json::json!({
+                "slot": "SettingsTab",
+                "id": "s3-storage-settings",
+                "label": "S3 Storage",
+                "icon": "cloud",
+                "fields": [
+                    { "type": "Section", "label": "S3 Configuration" },
+                    { "type": "Text", "key": "bucket", "label": "Bucket", "placeholder": "my-diaryx-bucket" },
+                    { "type": "Text", "key": "region", "label": "Region", "placeholder": "us-east-1" },
+                    { "type": "Text", "key": "prefix", "label": "Prefix", "description": "Key prefix within the bucket (e.g., \"diaryx/workspace1/\")", "placeholder": "diaryx/" },
+                    { "type": "Text", "key": "endpoint", "label": "Custom Endpoint", "description": "For S3-compatible services: MinIO, Cloudflare R2, Backblaze B2, etc.", "placeholder": "https://s3.example.com" },
+                    { "type": "Text", "key": "access_key_id", "label": "Access Key ID", "placeholder": "AKIAIOSFODNN7EXAMPLE" },
+                    { "type": "Password", "key": "secret_access_key", "label": "Secret Access Key", "placeholder": "••••••••" },
+                    { "type": "Toggle", "key": "path_style", "label": "Use path-style addressing" },
+                    { "type": "Button", "label": "Test Connection", "command": "TestConnection", "variant": "outline" }
+                ]
+            }),
+        ],
         commands: vec![
             "ReadFile".into(),
             "WriteFile".into(),

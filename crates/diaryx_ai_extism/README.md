@@ -24,6 +24,7 @@ exclude:
 - AI chat sidebar UI rendered via plugin iframe (`get_component_html`)
 - Multi-conversation history persisted in plugin storage
 - Tool-use loop for reading files (`read_file`, `list_files`)
+- Explicit per-request HTTP timeout for chat provider calls (avoids indefinite hangs)
 - Two provider modes:
   - `byo`: user supplies OpenAI-compatible endpoint/key/model
   - `managed`: Diaryx Plus managed mode (no user API key required)

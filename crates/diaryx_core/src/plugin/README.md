@@ -199,6 +199,21 @@ plugins:
         include: [all]
 ```
 
+## StorageProvider Slot
+
+Plugins can contribute `UiContribution::StorageProvider` to appear as storage
+backend options in the workspace storage settings. Each provider specifies an
+`id`, `label`, optional `icon`, and optional `description`.
+
+When the user selects a plugin storage provider, the host sets the workspace's
+`storageType` to `'plugin'` and stores the plugin ID in
+`pluginMetadata.storage.pluginId`. On backend init, the host creates a
+`JsFileSystem`-backed `DiaryxBackend` that dispatches filesystem operations
+(ReadFile, WriteFile, etc.) to the plugin via `pluginFileSystem.ts`.
+
+Plugin storage runs on the main thread (not in a Web Worker) because
+`dispatchCommand()` requires main-thread access to the Extism plugin manager.
+
 ## BlockPickerItem Slot
 
 Plugins can contribute items to the editor's block picker "More" submenu via

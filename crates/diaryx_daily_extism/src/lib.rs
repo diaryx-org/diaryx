@@ -7,7 +7,7 @@ use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
-use chrono::{Local, NaiveDate};
+use chrono::{Datelike, Local, NaiveDate};
 use diaryx_core::frontmatter;
 use diaryx_core::link_parser::parse_link;
 use diaryx_daily::{
@@ -464,6 +464,7 @@ fn all_commands() -> Vec<String> {
         "GetAdjacentDailyEntry".to_string(),
         "GetEntryState".to_string(),
         "ImportEntriesToDaily".to_string(),
+        "ListDailyEntryDates".to_string(),
         "OpenToday".to_string(),
         "OpenYesterday".to_string(),
         "CliDaily".to_string(),
@@ -661,6 +662,41 @@ fn dispatch_command(command: &str, params: JsonValue) -> Result<JsonValue, Strin
                     "created": created,
                 }))
             }
+        }
+        "ListDailyEntryDates" => {
+            let year = params
+                .get("year")
+                .and_then(|v| v.as_i64())
+                .ok_or("ListDailyEntryDates requires `year`")? as i32;
+            let month = params
+                .get("month")
+                .and_then(|v| v.as_i64())
+                .ok_or("ListDailyEntryDates requires `month`")? as u32;
+            if !(1..=12).contains(&month) {
+                return Err("month must be 1-12".to_string());
+            }
+            let folder = state.config.effective_entry_folder();
+            let prefix = to_fs_path(
+                &format!("{folder}/{year}/{month:02}/"),
+                state.workspace_root.as_deref(),
+            );
+            let files = host_bridge::list_files(&prefix).unwrap_or_default();
+            let mut dates: Vec<u32> = Vec::new();
+            for file in &files {
+                if let Ok(date) = path_to_date(file) {
+                    if date.year() == year && date.month() == month {
+                        dates.push(date.day());
+                    }
+                }
+            }
+            dates.sort();
+            dates.dedup();
+            Ok(serde_json::json!({
+                "year": year,
+                "month": month,
+                "dates": dates,
+                "folder": folder,
+            }))
         }
         "get_component_html" => {
             let component_id = params

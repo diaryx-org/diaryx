@@ -1641,4 +1641,31 @@ Content"#;
             Some("public")
         );
     }
+
+    #[test]
+    fn test_write_preserves_default_audience_in_crdt() {
+        let fs = create_test_crdt_fs();
+        let content =
+            "---\ntitle: My Journal\naudience:\n  - public\ndefault_audience: public\n---\nBody";
+
+        futures_lite::future::block_on(async {
+            fs.write_file(Path::new("README.md"), content)
+                .await
+                .unwrap();
+        });
+
+        let metadata = fs.workspace_crdt.get_file("README.md").unwrap();
+        assert!(
+            metadata.extra.contains_key("default_audience"),
+            "Expected 'default_audience' in extra, got keys: {:?}",
+            metadata.extra.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            metadata
+                .extra
+                .get("default_audience")
+                .and_then(|v| v.as_str()),
+            Some("public")
+        );
+    }
 }

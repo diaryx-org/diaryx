@@ -33,6 +33,15 @@ use diaryx_core::plugin::{
 // PublishPlugin struct
 // ============================================================================
 
+/// Configuration for the publish plugin, stored in root frontmatter at
+/// `plugins.diaryx.publish`.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct PublishPluginConfig {
+    /// Which audience tags are freely accessible (no token required).
+    #[serde(default)]
+    pub public_audiences: Vec<String>,
+}
+
 /// Plugin that handles HTML export, audience filtering, and publishing.
 ///
 /// Generic over `FS` (filesystem), but erased to `Arc<dyn WorkspacePlugin>` at registration.
@@ -40,6 +49,7 @@ pub struct PublishPlugin<FS: AsyncFileSystem + Clone> {
     fs: FS,
     workspace_root: RwLock<Option<PathBuf>>,
     link_format: RwLock<LinkFormat>,
+    config: RwLock<PublishPluginConfig>,
 }
 
 // ============================================================================
@@ -53,6 +63,7 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
             fs,
             workspace_root: RwLock::new(None),
             link_format: RwLock::new(LinkFormat::default()),
+            config: RwLock::new(PublishPluginConfig::default()),
         }
     }
 }
@@ -75,6 +86,80 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
         Exporter::new(self.fs.clone())
     }
 
+    /// Load publish plugin config from root frontmatter `plugins.diaryx.publish`.
+    async fn load_config(&self) {
+        let root = match self.workspace_root.read().unwrap().clone() {
+            Some(r) => r,
+            None => return,
+        };
+        if let Ok(content) = self.fs.read_to_string(&root).await {
+            if let Ok(parsed) = diaryx_core::frontmatter::parse_or_empty(&content) {
+                let config = parsed
+                    .frontmatter
+                    .get("plugins")
+                    .and_then(|v| v.get("diaryx"))
+                    .and_then(|v| v.get("publish"))
+                    .and_then(|v| {
+                        // Convert serde_yaml::Value to JSON then deserialize
+                        serde_json::to_value(v)
+                            .ok()
+                            .and_then(|jv| serde_json::from_value::<PublishPluginConfig>(jv).ok())
+                    })
+                    .unwrap_or_default();
+                *self.config.write().unwrap() = config;
+            }
+        }
+    }
+
+    /// Save publish plugin config to root frontmatter `plugins.diaryx.publish`.
+    async fn save_config_to_frontmatter(&self) -> Result<(), DiaryxError> {
+        let root = match self.workspace_root.read().unwrap().clone() {
+            Some(r) => r,
+            None => return Err(DiaryxError::Unsupported("no workspace root".into())),
+        };
+        let content = self
+            .fs
+            .read_to_string(&root)
+            .await
+            .map_err(|e| DiaryxError::FileRead {
+                path: root.clone(),
+                source: e,
+            })?;
+        let parsed = diaryx_core::frontmatter::parse_or_empty(&content)?;
+        let mut fm = parsed.frontmatter.clone();
+
+        let config = self.config.read().unwrap().clone();
+        let config_yaml = serde_yaml::to_value(&config).map_err(DiaryxError::Yaml)?;
+
+        // Ensure plugins.diaryx.publish path exists in the IndexMap
+        let plugins_key = "plugins".to_string();
+        let plugins_val = fm
+            .entry(plugins_key)
+            .or_insert_with(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+        if let Some(plugins_map) = plugins_val.as_mapping_mut() {
+            let diaryx = plugins_map
+                .entry(serde_yaml::Value::String("diaryx".into()))
+                .or_insert_with(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+            if let Some(diaryx_map) = diaryx.as_mapping_mut() {
+                diaryx_map.insert(serde_yaml::Value::String("publish".into()), config_yaml);
+            }
+        }
+
+        let new_content = diaryx_core::frontmatter::serialize(&fm, &parsed.body)?;
+        self.fs.write_file(&root, &new_content).await?;
+        Ok(())
+    }
+
+    /// Read default_audience from workspace config.
+    async fn default_audience(&self) -> Option<String> {
+        let root = self.workspace_root.read().unwrap().clone()?;
+        let ws = diaryx_core::workspace::Workspace::new(self.fs.clone());
+        ws.get_workspace_config(&root)
+            .await
+            .ok()
+            .and_then(|c| c.default_audience)
+    }
+
     /// Export files to memory as markdown, with body template rendering.
     async fn export_to_memory(
         &self,
@@ -87,9 +172,15 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
             audience
         );
 
+        let default_aud = self.default_audience().await;
         let plan = self
             .exporter()
-            .plan_export(root_path, audience, Path::new("/tmp/export"))
+            .plan_export(
+                root_path,
+                audience,
+                Path::new("/tmp/export"),
+                default_aud.as_deref(),
+            )
             .await?;
 
         log::debug!(
@@ -154,9 +245,15 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
         root_path: &Path,
         audience: &str,
     ) -> Result<Vec<ExportedFile>, DiaryxError> {
+        let default_aud = self.default_audience().await;
         let plan = self
             .exporter()
-            .plan_export(root_path, audience, Path::new("/tmp/export"))
+            .plan_export(
+                root_path,
+                audience,
+                Path::new("/tmp/export"),
+                default_aud.as_deref(),
+            )
             .await?;
 
         let mut files = Vec::new();
@@ -293,6 +390,8 @@ fn publish_plugin_manifest() -> PluginManifest {
                     "ExportBinaryAttachments".into(),
                     "GetExportFormats".into(),
                     "PublishWorkspace".into(),
+                    "GetPublishConfig".into(),
+                    "SetPublishConfig".into(),
                 ],
             },
         ],
@@ -358,6 +457,7 @@ impl<FS: AsyncFileSystem + Clone + 'static> Plugin for PublishPlugin<FS> {
 impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> WorkspacePlugin for PublishPlugin<FS> {
     async fn on_workspace_opened(&self, event: &WorkspaceOpenedEvent) {
         *self.workspace_root.write().unwrap() = Some(event.workspace_root.clone());
+        self.load_config().await;
     }
 
     async fn handle_command(
@@ -374,6 +474,7 @@ impl<FS: AsyncFileSystem + Clone + Send + Sync + 'static> WorkspacePlugin for Pu
 impl<FS: AsyncFileSystem + Clone + 'static> WorkspacePlugin for PublishPlugin<FS> {
     async fn on_workspace_opened(&self, event: &WorkspaceOpenedEvent) {
         *self.workspace_root.write().unwrap() = Some(event.workspace_root.clone());
+        self.load_config().await;
     }
 
     async fn handle_command(
@@ -398,9 +499,15 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                     .ok_or_else(|| PluginError::CommandError("missing root_path".into()))?;
                 let audience = params["audience"].as_str().unwrap_or("*");
                 let resolved = self.resolve_path(root_path);
+                let default_aud = self.default_audience().await;
                 let plan = self
                     .exporter()
-                    .plan_export(&resolved, audience, Path::new("/tmp/export"))
+                    .plan_export(
+                        &resolved,
+                        audience,
+                        Path::new("/tmp/export"),
+                        default_aud.as_deref(),
+                    )
                     .await
                     .map_err(|e| PluginError::CommandError(e.to_string()))?;
                 serde_json::to_value(plan).map_err(|e| PluginError::CommandError(e.to_string()))
@@ -468,12 +575,14 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                 let resolved_root = self.resolve_path(workspace_root);
                 let dest_path = PathBuf::from(destination);
 
+                let default_aud = self.default_audience().await;
                 let options = crate::types::PublishOptions {
                     single_file: params["single_file"].as_bool().unwrap_or(false),
                     title: params["title"].as_str().map(String::from),
                     audience: params["audience"].as_str().map(String::from),
                     force: params["force"].as_bool().unwrap_or(false),
                     copy_attachments: params["copy_attachments"].as_bool().unwrap_or(true),
+                    default_audience: default_aud,
                 };
 
                 let publisher = crate::publisher::Publisher::new(self.fs.clone());
@@ -486,6 +595,21 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                     "files_processed": result.files_processed,
                     "attachments_copied": result.attachments_copied,
                 }))
+            }
+
+            "GetPublishConfig" => {
+                let config = self.config.read().unwrap().clone();
+                serde_json::to_value(config).map_err(|e| PluginError::CommandError(e.to_string()))
+            }
+
+            "SetPublishConfig" => {
+                let new_config: PublishPluginConfig = serde_json::from_value(params)
+                    .map_err(|e| PluginError::CommandError(format!("invalid config: {}", e)))?;
+                *self.config.write().unwrap() = new_config;
+                self.save_config_to_frontmatter()
+                    .await
+                    .map_err(|e| PluginError::CommandError(e.to_string()))?;
+                Ok(serde_json::json!({ "ok": true }))
             }
 
             _ => Err(PluginError::CommandError(format!(
@@ -516,7 +640,7 @@ mod tests {
     fn test_manifest() {
         let plugin = create_test_plugin();
         let manifest = plugin.manifest();
-        assert_eq!(manifest.id.0, "publish");
+        assert_eq!(manifest.id.0, "diaryx.publish");
         assert_eq!(manifest.name, "Publish");
         assert!(!manifest.ui.is_empty());
     }

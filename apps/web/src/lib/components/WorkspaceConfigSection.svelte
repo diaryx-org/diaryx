@@ -13,8 +13,8 @@
 
   const configStore = getWorkspaceConfigStore();
 
-  // Local state for public_audience input (save on blur/Enter)
-  let publicAudience = $state("");
+  // Local state for default_audience input (save on blur/Enter)
+  let defaultAudience = $state("");
 
   // Load config when root index path changes
   $effect(() => {
@@ -23,15 +23,15 @@
     }
   });
 
-  // Sync public audience input from config
+  // Sync default audience input from config
   $effect(() => {
     if (configStore.config) {
-      publicAudience = configStore.config.public_audience ?? "";
+      defaultAudience = configStore.config.default_audience ?? "";
     }
   });
 
-  function savePublicAudience() {
-    configStore.setField("public_audience", publicAudience.trim());
+  function saveDefaultAudience() {
+    configStore.setField("default_audience", defaultAudience.trim());
   }
 
   const LINK_FORMAT_OPTIONS = [
@@ -83,19 +83,19 @@
     </Select.Root>
   </div>
 
-  <!-- Public Audience -->
+  <!-- Default Audience -->
   <div class="space-y-1">
-    <span class="text-xs text-muted-foreground">Public audience tag</span>
+    <span class="text-xs text-muted-foreground">Default audience tag</span>
     <Input
       type="text"
-      bind:value={publicAudience}
+      bind:value={defaultAudience}
       placeholder="e.g., public"
       class="h-7 text-xs"
       disabled={configStore.loading}
-      onblur={savePublicAudience}
+      onblur={saveDefaultAudience}
       onkeydown={(e) => {
         if (e.key === "Enter") {
-          savePublicAudience();
+          saveDefaultAudience();
           (e.target as HTMLInputElement).blur();
         }
       }}

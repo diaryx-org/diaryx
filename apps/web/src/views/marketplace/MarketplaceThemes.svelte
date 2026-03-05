@@ -16,25 +16,18 @@
   import { Badge } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
-  import {
-    fetchTypographyRegistry,
-    type TypographyRegistry,
-  } from "$lib/marketplace/typographyRegistry";
-  import type { TypographyRegistryEntry } from "$lib/marketplace/types";
   import { getAppearanceStore } from "$lib/stores/appearance.svelte";
-  import {
-    FONT_FAMILY_MAP,
-    type ContentWidth,
-    type FontFamily,
-    type TypographyDefinition,
-  } from "$lib/stores/appearance.types";
+  import type { ThemeDefinition } from "$lib/stores/appearance.types";
+  import { fetchThemeRegistry, type ThemeRegistry } from "$lib/marketplace/themeRegistry";
+  import type { ThemeRegistryEntry } from "$lib/marketplace/types";
+  import AccentHuePicker from "$lib/settings/AccentHuePicker.svelte";
 
   type SourceFilter = "all" | "installed" | "available";
-  type SortBy = "name" | "recent" | "installed";
+  type SortBy = "name" | "recent";
 
-  interface TypographyListEntry {
+  interface ThemeListEntry {
     id: string;
-    typography: TypographyDefinition;
+    theme: ThemeDefinition;
     name: string;
     version: string;
     summary: string;
@@ -49,38 +42,14 @@
     installed: boolean;
     builtin: boolean;
     active: boolean;
-    registry: TypographyRegistryEntry | null;
+    registry: ThemeRegistryEntry | null;
     installedAt: number | null;
     publishedAt: number | null;
   }
 
   const appearanceStore = getAppearanceStore();
 
-  const fontOptions: { value: FontFamily; label: string }[] = [
-    { value: "inter", label: "Inter" },
-    { value: "system", label: "System" },
-    { value: "serif", label: "Serif" },
-    { value: "mono", label: "Mono" },
-  ];
-
-  const fontSizeOptions = [14, 15, 16, 17, 18, 19, 20, 22];
-
-  const lineHeightOptions: { value: number; label: string }[] = [
-    { value: 1.4, label: "Compact" },
-    { value: 1.5, label: "Snug" },
-    { value: 1.6, label: "Default" },
-    { value: 1.8, label: "Relaxed" },
-    { value: 2.0, label: "Loose" },
-  ];
-
-  const widthOptions: { value: ContentWidth; label: string }[] = [
-    { value: "narrow", label: "Narrow" },
-    { value: "medium", label: "Medium" },
-    { value: "wide", label: "Wide" },
-    { value: "full", label: "Full" },
-  ];
-
-  let registryTypographies = $state<TypographyRegistryEntry[]>([]);
+  let registryThemes = $state<ThemeRegistryEntry[]>([]);
   let registryLoading = $state(true);
   let registryError = $state<string | null>(null);
 
@@ -92,52 +61,58 @@
   let sortBy = $state<SortBy>("name");
 
   let importingLocal = $state(false);
-  let detailTypographyId = $state<string | null>(null);
+  let detailThemeId = $state<string | null>(null);
   let localFileInputRef = $state<HTMLInputElement | null>(null);
 
   function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null;
   }
 
-  function isTypographyDefinition(value: unknown): value is TypographyDefinition {
+  function isThemeDefinition(value: unknown): value is ThemeDefinition {
     if (!isRecord(value)) return false;
     return (
       typeof value.id === "string" &&
       typeof value.name === "string" &&
       value.version === 1 &&
-      isRecord(value.settings) &&
-      typeof value.settings.baseFontSize === "number" &&
-      typeof value.settings.lineHeight === "number"
+      isRecord(value.colors) &&
+      isRecord(value.colors.light) &&
+      isRecord(value.colors.dark)
     );
   }
 
-  function extractImportedTypography(value: unknown): TypographyDefinition | null {
-    if (
-      isRecord(value) &&
-      "typography" in value &&
-      isTypographyDefinition(value.typography)
-    ) {
-      return value.typography;
+  function extractImportedTheme(value: unknown): ThemeDefinition | null {
+    if (isRecord(value) && "theme" in value && isThemeDefinition(value.theme)) {
+      return value.theme;
     }
 
-    if (isTypographyDefinition(value)) {
+    if (isThemeDefinition(value)) {
       return value;
     }
 
     return null;
   }
 
+  function themeSwatches(theme: ThemeDefinition, mode: "light" | "dark"): string[] {
+    const palette = mode === "dark" ? theme.colors.dark : theme.colors.light;
+    return [
+      palette.background,
+      palette.primary,
+      palette.accent,
+      palette.muted,
+      palette.foreground,
+    ];
+  }
+
   async function loadRegistry(): Promise<void> {
     registryLoading = true;
     registryError = null;
-
     try {
-      const registry: TypographyRegistry = await fetchTypographyRegistry();
-      registryTypographies = registry.typographies;
+      const registry: ThemeRegistry = await fetchThemeRegistry();
+      registryThemes = registry.themes;
     } catch (error) {
-      registryTypographies = [];
+      registryThemes = [];
       registryError =
-        error instanceof Error ? error.message : "Failed to load typography registry";
+        error instanceof Error ? error.message : "Failed to load theme registry";
     } finally {
       registryLoading = false;
     }
@@ -148,26 +123,22 @@
   });
 
   const allEntries = $derived.by(() => {
-    const installedTypographies = appearanceStore.listTypographies();
-    const installedById = new Map(
-      installedTypographies.map((entry) => [entry.typography.id, entry]),
-    );
-    const registryById = new Map(
-      registryTypographies.map((entry) => [entry.id, entry]),
-    );
+    const installedThemes = appearanceStore.listThemes();
+    const installedById = new Map(installedThemes.map((entry) => [entry.theme.id, entry]));
+    const registryById = new Map(registryThemes.map((entry) => [entry.id, entry]));
 
     const ids = new Set<string>([
       ...Array.from(installedById.keys()),
       ...Array.from(registryById.keys()),
     ]);
 
-    const entries: TypographyListEntry[] = [];
+    const entries: ThemeListEntry[] = [];
 
     for (const id of ids) {
       const installed = installedById.get(id);
       const registry = registryById.get(id) ?? null;
-      const typography = installed?.typography ?? registry?.typography;
-      if (!typography) continue;
+      const theme = installed?.theme ?? registry?.theme;
+      if (!theme) continue;
 
       const installedAt =
         typeof installed?.source.installedAt === "number"
@@ -179,18 +150,18 @@
 
       entries.push({
         id,
-        typography,
-        name: registry?.name ?? typography.name,
-        version: registry?.version ?? `${typography.version}`,
+        theme,
+        name: registry?.name ?? theme.name,
+        version: registry?.version ?? `${theme.version}`,
         summary:
           registry?.summary ??
-          typography.description ??
-          "A custom Diaryx typography preset.",
+          theme.description ??
+          "A custom Diaryx theme.",
         description:
           registry?.description ??
-          typography.description ??
+          theme.description ??
           "No description provided.",
-        author: registry?.author ?? typography.author ?? "Unknown",
+        author: registry?.author ?? theme.author ?? "Unknown",
         license: registry?.license ?? "Custom",
         repository: registry?.repository ?? null,
         categories: registry?.categories ?? [],
@@ -199,7 +170,7 @@
         screenshots: registry?.screenshots ?? [],
         installed: !!installed,
         builtin: installed?.builtin ?? false,
-        active: appearanceStore.typographyPresetId === id,
+        active: appearanceStore.presetId === id,
         registry,
         installedAt,
         publishedAt,
@@ -251,15 +222,7 @@
     });
 
     filtered.sort((a, b) => {
-      if (sortBy === "installed") {
-        if (a.installed !== b.installed) {
-          return Number(b.installed) - Number(a.installed);
-        }
-        return a.name.localeCompare(b.name);
-      }
-      if (sortBy === "name") {
-        return a.name.localeCompare(b.name);
-      }
+      if (sortBy === "name") return a.name.localeCompare(b.name);
       const aTs = a.publishedAt ?? a.installedAt ?? 0;
       const bTs = b.publishedAt ?? b.installedAt ?? 0;
       return bTs - aTs;
@@ -269,17 +232,17 @@
   });
 
   const detailEntry = $derived.by(() => {
-    if (!detailTypographyId) return null;
-    return allEntries.find((entry) => entry.id === detailTypographyId) ?? null;
+    if (!detailThemeId) return null;
+    return allEntries.find((entry) => entry.id === detailThemeId) ?? null;
   });
 
-  async function installTypography(entry: TypographyListEntry): Promise<void> {
+  async function installTheme(entry: ThemeListEntry): Promise<void> {
     if (!entry.registry) {
-      toast.error("This typography preset is not available from the curated registry.");
+      toast.error("This theme is not available from the curated registry.");
       return;
     }
 
-    const ok = appearanceStore.installTypography(entry.registry.typography, {
+    const ok = appearanceStore.installTheme(entry.registry.theme, {
       source: "registry",
       registryId: entry.registry.id,
     });
@@ -291,40 +254,40 @@
     }
   }
 
-  async function applyTypography(entry: TypographyListEntry): Promise<void> {
-    const ok = appearanceStore.applyTypographyPreset(entry.id);
+  async function applyTheme(entry: ThemeListEntry): Promise<void> {
+    const ok = appearanceStore.applyTheme(entry.id);
     if (ok) {
       toast.success(`Applied ${entry.name}`);
     } else {
-      toast.error(`Typography preset '${entry.id}' is unavailable.`);
+      toast.error(`Theme '${entry.id}' is unavailable.`);
     }
   }
 
-  async function uninstallTypography(entry: TypographyListEntry): Promise<void> {
+  async function uninstallTheme(entry: ThemeListEntry): Promise<void> {
     if (entry.builtin) {
-      toast.error("Built-in typography presets cannot be uninstalled.");
+      toast.error("Built-in themes cannot be uninstalled.");
       return;
     }
 
-    const ok = appearanceStore.uninstallTypography(entry.id);
+    const ok = appearanceStore.uninstallTheme(entry.id);
     if (ok) {
       toast.success(`Removed ${entry.name}`);
-      if (detailTypographyId === entry.id) {
-        detailTypographyId = null;
+      if (detailThemeId === entry.id) {
+        detailThemeId = null;
       }
     } else {
       toast.error(`Failed to remove ${entry.name}`);
     }
   }
 
-  function exportTypography(): void {
-    const data = appearanceStore.exportTypography();
+  function exportTheme(): void {
+    const data = appearanceStore.exportTheme();
     const json = JSON.stringify(data, null, 2);
     const blob = new Blob([json], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `diaryx-typography-${appearanceStore.typographyPresetId}.json`;
+    a.download = `diaryx-theme-${appearanceStore.presetId}.json`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -343,24 +306,24 @@
     try {
       const text = await file.text();
       const parsed = JSON.parse(text);
-      const typography = extractImportedTypography(parsed);
-      if (!typography) {
-        toast.error("Invalid typography file.");
+      const theme = extractImportedTheme(parsed);
+      if (!theme) {
+        toast.error("Invalid theme file.");
         return;
       }
 
-      const installed = appearanceStore.installTypography(typography, {
+      const installed = appearanceStore.installTheme(theme, {
         source: "local",
         fileName: file.name,
       });
       if (!installed) {
-        toast.error("Failed to import typography preset.");
+        toast.error("Failed to import theme.");
         return;
       }
 
-      toast.success(`Imported ${typography.name}`);
+      toast.success(`Imported ${theme.name}`);
     } catch {
-      toast.error("Failed to read typography file.");
+      toast.error("Failed to read theme file.");
     } finally {
       importingLocal = false;
     }
@@ -379,13 +342,7 @@
   {@const entry = detailEntry}
   <div class="flex flex-col h-full">
     <div class="flex items-center gap-2 px-3 py-2 border-b shrink-0">
-      <Button
-        variant="ghost"
-        size="icon"
-        class="size-7"
-        onclick={() => (detailTypographyId = null)}
-        aria-label="Back"
-      >
+      <Button variant="ghost" size="icon" class="size-7" onclick={() => (detailThemeId = null)} aria-label="Back">
         <ArrowLeft class="size-4" />
       </Button>
       <h3 class="text-sm font-medium truncate">{entry.name}</h3>
@@ -408,26 +365,17 @@
 
       <div class="space-y-2">
         <p class="text-xs font-medium">Preview</p>
-        <div class="rounded-md border p-2.5 space-y-1.5">
-          <p
-            class="text-sm"
-            style:font-family={FONT_FAMILY_MAP[entry.typography.settings.fontFamily]}
-            style:font-size={`${entry.typography.settings.baseFontSize}px`}
-            style:line-height={String(entry.typography.settings.lineHeight)}
-            style:max-width={entry.typography.settings.contentWidth === "narrow"
-              ? "55ch"
-              : entry.typography.settings.contentWidth === "medium"
-                ? "65ch"
-                : entry.typography.settings.contentWidth === "wide"
-                  ? "85ch"
-                  : "none"}
-          >
-            The quick brown fox jumps over the lazy dog. Diaryx keeps typography
-            readable while preserving your preferred writing rhythm.
-          </p>
-          <p class="text-[11px] text-muted-foreground">
-            {entry.typography.settings.fontFamily} · {entry.typography.settings.baseFontSize}px · {entry.typography.settings.lineHeight} line-height · {entry.typography.settings.contentWidth} width
-          </p>
+        <div class="space-y-1">
+          <div class="flex items-center gap-1">
+            {#each themeSwatches(entry.theme, "light") as swatch}
+              <span class="size-4 rounded-full border border-black/10" style:background={swatch}></span>
+            {/each}
+          </div>
+          <div class="flex items-center gap-1">
+            {#each themeSwatches(entry.theme, "dark") as swatch}
+              <span class="size-4 rounded-full border border-white/20" style:background={swatch}></span>
+            {/each}
+          </div>
         </div>
       </div>
 
@@ -464,106 +412,12 @@
         </div>
       {/if}
 
-      <div class="flex items-center gap-2 pt-1">
-        {#if !entry.installed}
-          <Button size="sm" onclick={() => installTypography(entry)}>
-            <Download class="size-3.5 mr-1.5" />Install
-          </Button>
-        {:else}
-          <Button
-            size="sm"
-            variant={entry.active ? "secondary" : "default"}
-            onclick={() => applyTypography(entry)}
-          >
-            <Check class="size-3.5 mr-1.5" />{entry.active ? "Applied" : "Apply"}
-          </Button>
-          {#if !entry.builtin}
-            <Button variant="outline" size="sm" onclick={() => uninstallTypography(entry)}>
-              <Trash2 class="size-3.5 mr-1.5" />Uninstall
-            </Button>
-          {/if}
-        {/if}
-      </div>
-
-      <div class="border-t pt-3 space-y-2">
-        <div class="flex items-center justify-between gap-2">
-          <h4 class="text-xs font-medium">Overrides</h4>
-          <Button
-            variant="ghost"
-            size="sm"
-            class="h-6 text-[11px]"
-            onclick={() => appearanceStore.clearTypographyOverrides()}
-            disabled={!entry.active}
-          >
-            Clear overrides
-          </Button>
-        </div>
-
-        {#if entry.active}
-          <div class="grid grid-cols-2 gap-1.5">
-            <select
-              class="h-7 rounded-md border bg-background px-2 text-xs"
-              value={appearanceStore.typography.fontFamily}
-              onchange={(e) =>
-                appearanceStore.setFontFamily(
-                  (e.target as HTMLSelectElement).value as FontFamily,
-                )}
-            >
-              {#each fontOptions as opt}
-                <option value={opt.value}>{opt.label}</option>
-              {/each}
-            </select>
-
-            <select
-              class="h-7 rounded-md border bg-background px-2 text-xs"
-              value={appearanceStore.typography.baseFontSize}
-              onchange={(e) =>
-                appearanceStore.setBaseFontSize(
-                  parseInt((e.target as HTMLSelectElement).value, 10),
-                )}
-            >
-              {#each fontSizeOptions as size}
-                <option value={size}>{size}px</option>
-              {/each}
-            </select>
-
-            <select
-              class="h-7 rounded-md border bg-background px-2 text-xs"
-              value={appearanceStore.typography.lineHeight}
-              onchange={(e) =>
-                appearanceStore.setLineHeight(
-                  parseFloat((e.target as HTMLSelectElement).value),
-                )}
-            >
-              {#each lineHeightOptions as opt}
-                <option value={opt.value}>{opt.label}</option>
-              {/each}
-            </select>
-
-            <select
-              class="h-7 rounded-md border bg-background px-2 text-xs"
-              value={appearanceStore.layout.contentWidth}
-              onchange={(e) =>
-                appearanceStore.setContentWidth(
-                  (e.target as HTMLSelectElement).value as ContentWidth,
-                )}
-            >
-              {#each widthOptions as opt}
-                <option value={opt.value}>{opt.label}</option>
-              {/each}
-            </select>
-          </div>
-
-          {#if Object.keys(appearanceStore.typographyOverrides).length > 0}
-            <p class="text-[11px] text-muted-foreground">
-              Overrides active: {Object.keys(appearanceStore.typographyOverrides).join(", ")}
-            </p>
-          {/if}
-        {:else}
-          <p class="text-[11px] text-muted-foreground">
-            Apply this typography preset to adjust per-field overrides.
-          </p>
-        {/if}
+      <div class="space-y-1.5">
+        <h4 class="text-xs font-medium">Accent color</h4>
+        <AccentHuePicker
+          value={appearanceStore.accentHue}
+          onchange={(hue) => appearanceStore.setAccentHue(hue)}
+        />
       </div>
 
       {#if entry.repository}
@@ -575,6 +429,23 @@
           Repository <ExternalLink class="size-3" />
         </button>
       {/if}
+
+      <div class="flex items-center gap-2 pt-1">
+        {#if !entry.installed}
+          <Button size="sm" onclick={() => installTheme(entry)}>
+            <Download class="size-3.5 mr-1.5" />Install
+          </Button>
+        {:else}
+          <Button size="sm" variant={entry.active ? "secondary" : "default"} onclick={() => applyTheme(entry)}>
+            <Check class="size-3.5 mr-1.5" />{entry.active ? "Applied" : "Apply"}
+          </Button>
+          {#if !entry.builtin}
+            <Button variant="outline" size="sm" onclick={() => uninstallTheme(entry)}>
+              <Trash2 class="size-3.5 mr-1.5" />Uninstall
+            </Button>
+          {/if}
+        {/if}
+      </div>
     </div>
   </div>
 {:else}
@@ -591,30 +462,29 @@
       {#if registryLoading}
         <div class="flex items-center justify-center py-8 text-muted-foreground gap-2">
           <Loader2 class="size-4 animate-spin" />
-          <span class="text-xs">Loading typography presets...</span>
+          <span class="text-xs">Loading themes...</span>
         </div>
       {:else if filteredEntries.length === 0}
-        <div class="px-3 py-4 text-xs text-muted-foreground">No typography presets match your filters.</div>
+        <div class="px-3 py-4 text-xs text-muted-foreground">No themes match your filters.</div>
       {:else}
         <div class="p-2 space-y-1.5">
           {#each filteredEntries as entry}
             <button
               type="button"
               class="w-full text-left rounded-md border p-2.5 transition hover:border-foreground/40"
-              onclick={() => (detailTypographyId = entry.id)}
+              onclick={() => (detailThemeId = entry.id)}
             >
-              <div
-                class="rounded border bg-muted/30 px-2 py-1.5 mb-1.5 overflow-hidden"
-              >
-                <p
-                  class="text-[13px] leading-snug truncate"
-                  style:font-family={FONT_FAMILY_MAP[entry.typography.settings.fontFamily]}
-                >
-                  The quick brown fox jumps over the lazy dog
-                </p>
-                <p class="text-[9px] text-muted-foreground mt-0.5">
-                  {entry.typography.settings.fontFamily} · {entry.typography.settings.baseFontSize}px · {entry.typography.settings.lineHeight} lh
-                </p>
+              <div class="flex gap-1.5 mb-1.5">
+                <div class="flex items-center gap-px">
+                  {#each themeSwatches(entry.theme, "light") as swatch}
+                    <span class="size-3.5 first:rounded-l-sm last:rounded-r-sm border border-black/10" style:background={swatch}></span>
+                  {/each}
+                </div>
+                <div class="flex items-center gap-px">
+                  {#each themeSwatches(entry.theme, "dark") as swatch}
+                    <span class="size-3.5 first:rounded-l-sm last:rounded-r-sm border border-white/20" style:background={swatch}></span>
+                  {/each}
+                </div>
               </div>
               <div class="flex items-center justify-between gap-2">
                 <h3 class="text-xs font-medium truncate">{entry.name}</h3>
@@ -641,7 +511,7 @@
                     class="h-6 text-[11px] px-2"
                     onclick={(event) => {
                       event.stopPropagation();
-                      void installTypography(entry);
+                      void installTheme(entry);
                     }}
                     disabled={!entry.registry}
                   >
@@ -654,7 +524,7 @@
                     class="h-6 text-[11px] px-2"
                     onclick={(event) => {
                       event.stopPropagation();
-                      void applyTypography(entry);
+                      void applyTheme(entry);
                     }}
                   >
                     <Check class="size-3 mr-1" />Apply
@@ -691,7 +561,6 @@
             <select class="flex-1 h-7 rounded-md border bg-background px-2 text-xs" bind:value={sortBy}>
               <option value="name">Name</option>
               <option value="recent">Recent</option>
-              <option value="installed">Installed</option>
             </select>
           </div>
         </div>
@@ -700,7 +569,7 @@
       <div class="flex items-center gap-2">
         <div class="relative flex-1 min-w-0">
           <Search class="size-3.5 absolute left-2 top-2 text-muted-foreground" />
-          <Input class="pl-7 h-7 text-xs" placeholder="Search typography" bind:value={search} />
+          <Input class="pl-7 h-7 text-xs" placeholder="Search themes" bind:value={search} />
         </div>
 
         <Button
@@ -713,13 +582,7 @@
           <SlidersHorizontal class="size-3.5" />
         </Button>
 
-        <Button
-          variant="outline"
-          size="icon"
-          class="size-7 shrink-0"
-          onclick={triggerLocalImport}
-          aria-label="Import local typography"
-        >
+        <Button variant="outline" size="icon" class="size-7 shrink-0" onclick={triggerLocalImport} aria-label="Import local theme">
           {#if importingLocal}
             <Loader2 class="size-3.5 animate-spin" />
           {:else}
@@ -727,13 +590,7 @@
           {/if}
         </Button>
 
-        <Button
-          variant="outline"
-          size="icon"
-          class="size-7 shrink-0"
-          onclick={exportTypography}
-          aria-label="Export current typography"
-        >
+        <Button variant="outline" size="icon" class="size-7 shrink-0" onclick={exportTheme} aria-label="Export current theme">
           <Download class="size-3.5" />
         </Button>
       </div>

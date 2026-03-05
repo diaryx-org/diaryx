@@ -1283,10 +1283,12 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     await runValidation();
 
     if (currentEntry?.path === path) {
-      // Re-fetch entry to get updated frontmatter
+      // Re-fetch entry to get updated frontmatter and body (H1 synced by backend)
       try {
-        const updatedEntry = await api.getEntry(effectivePath);
-        entryStore.setCurrentEntry(updatedEntry);
+        const refreshed = await api.getEntry(effectivePath);
+        refreshed.frontmatter = normalizeFrontmatter(refreshed.frontmatter);
+        entryStore.setCurrentEntry(refreshed);
+        entryStore.setDisplayContent(refreshed.content);
       } catch {
         entryStore.setCurrentEntry({
           ...currentEntry,
@@ -1296,33 +1298,6 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
       }
       if (collaborationEnabled) {
         collaborationStore.setCollaborationPath(toCollaborationPath(effectivePath));
-      }
-
-      // Sync editor H1 if this is the current entry
-      if (editorRef) {
-        const editor = editorRef.getEditor();
-        if (editor) {
-          const { doc } = editor.state;
-          let firstHeadingPos: number | null = null;
-          let firstHeadingSize = 0;
-          doc.descendants((node: any, pos: number) => {
-            if (firstHeadingPos === null && node.type.name === 'heading' && node.attrs.level === 1) {
-              firstHeadingPos = pos;
-              firstHeadingSize = node.content.size;
-              return false;
-            }
-          });
-          if (firstHeadingPos !== null) {
-            editor.chain()
-              .setTextSelection({ from: firstHeadingPos + 1, to: firstHeadingPos + 1 + firstHeadingSize })
-              .insertContent(newTitle)
-              .run();
-          } else {
-            editor.chain()
-              .insertContentAt(0, { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: newTitle }] })
-              .run();
-          }
-        }
       }
     }
 
@@ -1766,59 +1741,34 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
           // Returns new path string if rename occurred, null otherwise
           const newPath = await api.setFrontmatterProperty(path, key, value, tree?.path);
 
+          const effectivePath = newPath ?? path;
+
           if (newPath) {
-            // Rename happened — update UI state to new path
+            // Rename happened — update expanded node tracking
             if (expandedNodes.has(path)) {
               workspaceStore.collapseNode(path);
               workspaceStore.expandNode(newPath);
             }
-
-            const updatedEntry = {
-              ...currentEntry,
-              path: newPath,
-              frontmatter: { ...normalizedFrontmatter, [key]: value },
-            };
-            entryStore.setCurrentEntry(updatedEntry);
             if (collaborationEnabled) {
               collaborationStore.setCollaborationPath(toCollaborationPath(newPath));
             }
-          } else {
-            // No rename — just update frontmatter in store
+          }
+
+          // Re-read the entry from disk so the editor picks up the
+          // backend's H1 sync (and any other on-disk changes).
+          try {
+            const refreshed = await api.getEntry(effectivePath);
+            refreshed.frontmatter = normalizeFrontmatter(refreshed.frontmatter);
+            entryStore.setCurrentEntry(refreshed);
+            entryStore.setDisplayContent(refreshed.content);
+          } catch {
+            // Fallback: just update frontmatter in store
             const updatedEntry = {
               ...currentEntry,
+              path: effectivePath,
               frontmatter: { ...normalizedFrontmatter, [key]: value },
             };
             entryStore.setCurrentEntry(updatedEntry);
-          }
-
-          // Sync editor H1 to match the new title (backend already wrote to disk,
-          // but we must update the in-memory editor to prevent the next save from reverting)
-          if (editorRef) {
-            const editor = editorRef.getEditor();
-            if (editor) {
-              const { doc } = editor.state;
-              let firstHeadingPos: number | null = null;
-              let firstHeadingSize = 0;
-              doc.descendants((node: any, pos: number) => {
-                if (firstHeadingPos === null && node.type.name === 'heading' && node.attrs.level === 1) {
-                  firstHeadingPos = pos;
-                  firstHeadingSize = node.content.size;
-                  return false;
-                }
-              });
-              if (firstHeadingPos !== null) {
-                // Replace existing H1 text
-                editor.chain()
-                  .setTextSelection({ from: firstHeadingPos + 1, to: firstHeadingPos + 1 + firstHeadingSize })
-                  .insertContent(value)
-                  .run();
-              } else {
-                // Prepend H1 at start of document
-                editor.chain()
-                  .insertContentAt(0, { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: value }] })
-                  .run();
-              }
-            }
           }
 
           titleError = null;

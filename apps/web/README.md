@@ -8,6 +8,7 @@ audience:
 part_of: "[README](/apps/README.md)"
 contents:
   - "[README](/apps/web/src/README.md)"
+  - "[Marketplace Dist](/apps/web/marketplace-dist/README.md)"
   - "[Tiptap Custom Extensions](/apps/web/docs/tiptap-custom-extensions.md)"
 attachments:
   - "[package.json](/apps/web/package.json)"

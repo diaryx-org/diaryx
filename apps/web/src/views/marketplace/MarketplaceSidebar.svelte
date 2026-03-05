@@ -1,14 +1,14 @@
 <script lang="ts">
-  import MarketplaceColors from "./MarketplaceColors.svelte";
+  import MarketplaceThemes from "./MarketplaceThemes.svelte";
   import MarketplaceTypography from "./MarketplaceTypography.svelte";
   import MarketplacePlugins from "./MarketplacePlugins.svelte";
   import MarketplaceBundles from "./MarketplaceBundles.svelte";
 
-  type Section = "colors" | "typography" | "plugins" | "bundles";
-  let activeSection = $state<Section>("colors");
+  type Section = "themes" | "typography" | "plugins" | "bundles";
+  let activeSection = $state<Section>("themes");
 
   const sections: { id: Section; label: string }[] = [
-    { id: "colors", label: "Colors" },
+    { id: "themes", label: "Themes" },
     { id: "typography", label: "Typography" },
     { id: "plugins", label: "Plugins" },
     { id: "bundles", label: "Bundles" },
@@ -18,8 +18,8 @@
 <div class="flex flex-col h-full">
   <!-- Content -->
   <div class="flex-1 min-h-0 overflow-y-auto">
-    {#if activeSection === "colors"}
-      <MarketplaceColors />
+    {#if activeSection === "themes"}
+      <MarketplaceThemes />
     {:else if activeSection === "typography"}
       <MarketplaceTypography />
     {:else if activeSection === "plugins"}

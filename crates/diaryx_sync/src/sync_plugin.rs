@@ -1376,18 +1376,23 @@ impl<FS: AsyncFileSystem + Clone + 'static> SyncPlugin<FS> {
                 })?
         };
 
-        // Get link format hint from workspace config
-        let link_format_hint = ws
-            .get_workspace_config(&root_index)
-            .await
-            .map(|cfg| cfg.link_format)
-            .ok();
+        // Get workspace config for link format and default_audience
+        let ws_config = ws.get_workspace_config(&root_index).await.ok();
+        let link_format_hint = ws_config.as_ref().map(|cfg| cfg.link_format);
+        let default_audience = ws_config
+            .as_ref()
+            .and_then(|cfg| cfg.default_audience.clone());
 
         // Audience filtering
         let allowed_paths: Option<HashSet<PathBuf>> = if let Some(ref aud) = audience {
             let exporter = Exporter::new(self.fs.clone());
             let plan = exporter
-                .plan_export(&root_index, aud, Path::new("/tmp"))
+                .plan_export(
+                    &root_index,
+                    aud,
+                    Path::new("/tmp"),
+                    default_audience.as_deref(),
+                )
                 .await
                 .map_err(map_err)?;
             Some(

@@ -12,6 +12,7 @@ type SiteMeta = {
   audiences: string[];
   revoked_tokens: string[];
   attachment_prefix: string;
+  public_audiences?: string[];
 };
 
 type AuthResult = {
@@ -115,7 +116,13 @@ async function authenticateAudience(
     }
   }
 
-  return { audience: 'public' };
+  // Use the first public audience, or fall back to 'public' for backwards compat.
+  // If public_audiences is explicitly empty, deny unauthenticated visitors.
+  const publicAud = siteMeta.public_audiences;
+  if (publicAud && publicAud.length === 0) {
+    return { audience: 'public', earlyResponse: forbidden('Authentication required to view this site.') };
+  }
+  return { audience: publicAud?.[0] ?? 'public' };
 }
 
 async function serveCustomDomain(
@@ -222,7 +229,11 @@ async function authenticateAudienceCustomDomain(
     }
   }
 
-  return { audience: 'public' };
+  const publicAud = siteMeta.public_audiences;
+  if (publicAud && publicAud.length === 0) {
+    return { audience: 'public', earlyResponse: forbidden('Authentication required to view this site.') };
+  }
+  return { audience: publicAud?.[0] ?? 'public' };
 }
 
 function isClaimsAllowed(claims: TokenClaims, siteMeta: SiteMeta, slug: string): boolean {
@@ -339,6 +350,9 @@ async function getSiteMeta(slug: string, env: Env): Promise<SiteMeta | null> {
     audiences: parsed.audiences.filter((x): x is string => typeof x === 'string'),
     revoked_tokens: parsed.revoked_tokens.filter((x): x is string => typeof x === 'string'),
     attachment_prefix: parsed.attachment_prefix,
+    public_audiences: Array.isArray((parsed as any).public_audiences)
+      ? (parsed as any).public_audiences.filter((x: unknown): x is string => typeof x === 'string')
+      : undefined,
   };
   metaCache.set(slug, { expiresAt: now + META_TTL_MS, value });
   return value;

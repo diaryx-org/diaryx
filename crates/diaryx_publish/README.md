@@ -24,7 +24,8 @@ The `ContentProvider` trait (defined in `diaryx_core`) abstracts where content c
 ## Key Types
 
 - `Publisher` — main entry point; takes an `AsyncFileSystem` and publishes a workspace to a destination directory
-- `PublishOptions` — configuration (single-file mode, audience filter, title, force overwrite, attachment copying)
+- `PublishOptions` — configuration (single-file mode, audience filter, default_audience, title, force overwrite, attachment copying)
+- `PublishPluginConfig` — plugin config stored in root frontmatter at `plugins.diaryx.publish` (includes `public_audiences: Vec<String>` for controlling which audiences are served without a token)
 - `PublishResult` / `PublishedPage` — output metadata
 - `FilesystemContentProvider` — reads workspace content from the local filesystem
 - `ContentProvider` / `MaterializedFile` — re-exported from `diaryx_core` for convenience

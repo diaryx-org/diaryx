@@ -5,7 +5,7 @@
  * with no accent override produces zero visual change.
  */
 
-import type { ThemeDefinition } from "./appearance.types";
+import type { ThemeDefinition, TypographyDefinition } from "./appearance.types";
 
 // ---------------------------------------------------------------------------
 // Default (current app.css values verbatim)
@@ -289,18 +289,97 @@ const rosePinePreset: ThemeDefinition = {
 // Exports
 // ---------------------------------------------------------------------------
 
-/** All built-in presets, keyed by id for O(1) lookup. */
-export const PRESETS: Record<string, ThemeDefinition> = {
-  default: defaultPreset,
-  sepia: sepiaPreset,
-  nord: nordPreset,
-  "rose-pine": rosePinePreset,
-};
-
-/** Ordered list for UI rendering. */
-export const PRESET_LIST: ThemeDefinition[] = [
+/** Ordered list for built-in presets. */
+export const BUILTIN_PRESET_LIST: ThemeDefinition[] = [
   defaultPreset,
   sepiaPreset,
   nordPreset,
   rosePinePreset,
 ];
+
+/** All built-in presets, keyed by id for O(1) lookup. */
+export const BUILTIN_PRESETS: Readonly<Record<string, ThemeDefinition>> =
+  Object.freeze(
+    Object.fromEntries(
+      BUILTIN_PRESET_LIST.map((preset) => [preset.id, preset]),
+    ) as Record<string, ThemeDefinition>,
+  );
+
+// Backward-compatible aliases for existing imports.
+export const PRESETS = BUILTIN_PRESETS;
+export const PRESET_LIST = BUILTIN_PRESET_LIST;
+
+// ---------------------------------------------------------------------------
+// Built-in typography presets
+// ---------------------------------------------------------------------------
+
+const defaultTypographyPreset: TypographyDefinition = {
+  id: "default",
+  name: "Default",
+  description: "Balanced defaults tuned for everyday writing.",
+  version: 1,
+  settings: {
+    fontFamily: "inter",
+    baseFontSize: 16,
+    lineHeight: 1.6,
+    contentWidth: "medium",
+  },
+};
+
+const editorialTypographyPreset: TypographyDefinition = {
+  id: "editorial-serif",
+  name: "Editorial Serif",
+  description: "Book-like reading with serif body text and comfortable spacing.",
+  version: 1,
+  settings: {
+    fontFamily: "serif",
+    baseFontSize: 18,
+    lineHeight: 1.8,
+    contentWidth: "narrow",
+  },
+};
+
+const compactTypographyPreset: TypographyDefinition = {
+  id: "compact-system",
+  name: "Compact System",
+  description: "Dense UI-adjacent writing with tighter rhythm.",
+  version: 1,
+  settings: {
+    fontFamily: "system",
+    baseFontSize: 15,
+    lineHeight: 1.5,
+    contentWidth: "wide",
+  },
+};
+
+const codeNotebookTypographyPreset: TypographyDefinition = {
+  id: "code-notebook",
+  name: "Code Notebook",
+  description: "Monospaced notes for logs, commands, and technical journals.",
+  version: 1,
+  settings: {
+    fontFamily: "mono",
+    baseFontSize: 15,
+    lineHeight: 1.6,
+    contentWidth: "full",
+  },
+};
+
+export const BUILTIN_TYPOGRAPHY_PRESET_LIST: TypographyDefinition[] = [
+  defaultTypographyPreset,
+  editorialTypographyPreset,
+  compactTypographyPreset,
+  codeNotebookTypographyPreset,
+];
+
+export const BUILTIN_TYPOGRAPHY_PRESETS: Readonly<
+  Record<string, TypographyDefinition>
+> = Object.freeze(
+  Object.fromEntries(
+    BUILTIN_TYPOGRAPHY_PRESET_LIST.map((preset) => [preset.id, preset]),
+  ) as Record<string, TypographyDefinition>,
+);
+
+// Backward-compatible aliases for existing imports.
+export const TYPOGRAPHY_PRESETS = BUILTIN_TYPOGRAPHY_PRESETS;
+export const TYPOGRAPHY_PRESET_LIST = BUILTIN_TYPOGRAPHY_PRESET_LIST;

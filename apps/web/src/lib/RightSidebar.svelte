@@ -548,7 +548,7 @@
     "auto_update_timestamp",
     "auto_rename_to_title",
     "filename_style",
-    "public_audience",
+    "default_audience",
   ];
 
   // Get frontmatter entries sorted with common fields first
@@ -603,6 +603,24 @@
   function handleArrayItemRemove(key: string, index: number) {
     if (!entry) return;
     const currentArray = entry.frontmatter[key] as unknown[];
+    const newArray = [...currentArray];
+    newArray.splice(index, 1);
+    onPropertyChange?.(key, newArray);
+  }
+
+  // Handle contents item removal — also deletes the linked file
+  async function handleContentsItemRemove(key: string, index: number) {
+    if (!entry) return;
+    const currentArray = entry.frontmatter[key] as unknown[];
+    const item = currentArray[index];
+    const parsed = parseLinkDisplay(String(item));
+    if (parsed?.path && api) {
+      try {
+        await api.deleteEntry(parsed.path);
+      } catch (e) {
+        console.error(`[RightSidebar] Failed to delete entry ${parsed.path}:`, e);
+      }
+    }
     const newArray = [...currentArray];
     newArray.splice(index, 1);
     onPropertyChange?.(key, newArray);
@@ -773,7 +791,7 @@
                       {#each value as item, i}
                         {@const parsed = parseLinkDisplay(String(item))}
                         <span
-                          class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-secondary text-secondary-foreground group/tag"
+                          class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-secondary text-secondary-foreground"
                         >
                           {#if parsed}
                             <button
@@ -789,8 +807,8 @@
                           {/if}
                           <button
                             type="button"
-                            class="opacity-0 group-hover/tag:opacity-100 hover:text-destructive transition-opacity"
-                            onclick={() => handleArrayItemRemove(key, i)}
+                            class="text-muted-foreground hover:text-destructive transition-colors"
+                            onclick={() => handleContentsItemRemove(key, i)}
                             aria-label="Remove item"
                           >
                             <X class="size-3" />

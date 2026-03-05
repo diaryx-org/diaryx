@@ -50,6 +50,9 @@ struct SiteMeta {
     audiences: Vec<String>,
     revoked_tokens: Vec<String>,
     attachment_prefix: String,
+    /// Which audience tags are freely accessible (no token required).
+    #[serde(default)]
+    public_audiences: Vec<String>,
 }
 
 pub fn new_publish_lock() -> PublishLock {
@@ -183,8 +186,8 @@ pub async fn publish_workspace_to_r2(
         }
     }
 
-    // Extract public_audience from workspace root index frontmatter
-    let public_audience = {
+    // Extract default_audience from workspace root index frontmatter (with fallback to public_audience)
+    let default_audience = {
         let root_rel = workspace_root
             .file_name()
             .and_then(|n| n.to_str())
@@ -198,16 +201,48 @@ pub async fn publish_workspace_to_r2(
                     .and_then(|parsed| {
                         parsed
                             .frontmatter
-                            .get("public_audience")
+                            .get("default_audience")
+                            .or_else(|| parsed.frontmatter.get("public_audience"))
                             .and_then(|v| v.as_str().map(|s| s.to_string()))
                     })
             })
     };
 
+    // Extract public_audiences from plugins.diaryx.publish.public_audiences in root frontmatter
+    let public_audiences: Vec<String> = {
+        let root_rel = workspace_root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("README.md");
+        files
+            .iter()
+            .find(|f| f.path == root_rel || f.path.ends_with(root_rel))
+            .and_then(|f| {
+                diaryx_core::frontmatter::parse_or_empty(&f.content)
+                    .ok()
+                    .and_then(|parsed| {
+                        parsed
+                            .frontmatter
+                            .get("plugins")
+                            .and_then(|v| v.get("diaryx"))
+                            .and_then(|v| v.get("publish"))
+                            .and_then(|v| v.get("public_audiences"))
+                            .and_then(|v| v.as_sequence())
+                            .map(|seq| {
+                                seq.iter()
+                                    .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                                    .collect()
+                            })
+                    })
+            })
+            .unwrap_or_default()
+    };
+
     info!(
         workspace_id,
-        public_audience = ?public_audience,
-        "publish: extracted public_audience from root index"
+        default_audience = ?default_audience,
+        public_audiences = ?public_audiences,
+        "publish: extracted default_audience and public_audiences from root index"
     );
 
     let discovered_audiences = discover_audiences(&files);
@@ -218,7 +253,7 @@ pub async fn publish_workspace_to_r2(
     );
 
     let mut audiences_to_build =
-        build_audiences_to_build(discovered_audiences, public_audience.as_deref());
+        build_audiences_to_build(discovered_audiences, default_audience.as_deref());
 
     if let Some(requested) = requested_audience {
         let requested_lower = requested.trim().to_lowercase();
@@ -303,6 +338,7 @@ pub async fn publish_workspace_to_r2(
             force: true,
             // Server handles attachments via R2 URL rewriting, not file copying
             copy_attachments: false,
+            default_audience: default_audience.clone(),
         };
 
         let result = publisher
@@ -311,8 +347,14 @@ pub async fn publish_workspace_to_r2(
             .map_err(|e| format!("publish failed for audience {}: {}", audience, e))?;
 
         if result.pages.is_empty() {
-            log_zero_build_diagnostics(&workspace_root, &workspace_dir, audience, &output_dir)
-                .await;
+            log_zero_build_diagnostics(
+                &workspace_root,
+                &workspace_dir,
+                audience,
+                &output_dir,
+                default_audience.as_deref(),
+            )
+            .await;
         }
 
         // Replace each audience prefix atomically-ish by clearing old artifacts
@@ -387,7 +429,14 @@ pub async fn publish_workspace_to_r2(
     repo.update_site_published(&site.id, &db_builds)
         .map_err(|e| format!("failed to update site build metadata: {}", e))?;
 
-    write_site_meta(repo, sites_store, attachments_store, site).await?;
+    write_site_meta_with_public_audiences(
+        repo,
+        sites_store,
+        attachments_store,
+        site,
+        public_audiences,
+    )
+    .await?;
 
     Ok(PublishWorkspaceResult {
         slug: site.slug.clone(),
@@ -401,6 +450,16 @@ pub async fn write_site_meta(
     sites_store: &dyn BlobStore,
     attachments_store: &dyn BlobStore,
     site: &PublishedSiteInfo,
+) -> Result<(), String> {
+    write_site_meta_with_public_audiences(repo, sites_store, attachments_store, site, vec![]).await
+}
+
+pub async fn write_site_meta_with_public_audiences(
+    repo: &AuthRepo,
+    sites_store: &dyn BlobStore,
+    attachments_store: &dyn BlobStore,
+    site: &PublishedSiteInfo,
+    public_audiences: Vec<String>,
 ) -> Result<(), String> {
     let mut audiences: Vec<String> = repo
         .list_site_audience_builds(&site.id)
@@ -429,6 +488,7 @@ pub async fn write_site_meta(
         audiences,
         revoked_tokens,
         attachment_prefix,
+        public_audiences,
     };
 
     let payload = serde_json::to_vec_pretty(&meta)
@@ -706,19 +766,19 @@ fn discover_audiences(files: &[MaterializedFile]) -> HashSet<String> {
 
 fn build_audiences_to_build(
     discovered_audiences: HashSet<String>,
-    public_audience: Option<&str>,
+    default_audience: Option<&str>,
 ) -> Vec<String> {
     let mut audiences_to_build: Vec<String> = Vec::new();
 
-    // Always include the public_audience first if configured
-    if let Some(pa) = public_audience {
-        let pa_lower = pa.trim().to_lowercase();
-        if !pa_lower.is_empty() {
-            audiences_to_build.push(pa_lower);
+    // Always include the default_audience first if configured
+    if let Some(da) = default_audience {
+        let da_lower = da.trim().to_lowercase();
+        if !da_lower.is_empty() {
+            audiences_to_build.push(da_lower);
         }
     }
 
-    // Add all discovered audiences (sorted, deduped against public_audience)
+    // Add all discovered audiences (sorted, deduped against default_audience)
     let mut discovered: Vec<String> = discovered_audiences.into_iter().collect();
     discovered.sort();
     for audience in discovered {
@@ -735,10 +795,11 @@ async fn log_zero_build_diagnostics(
     workspace_dir: &Path,
     audience: &str,
     destination: &Path,
+    default_audience: Option<&str>,
 ) {
     let exporter = Exporter::new(SyncToAsyncFs::new(RealFileSystem));
     let plan = match exporter
-        .plan_export(workspace_root, audience, destination)
+        .plan_export(workspace_root, audience, destination, default_audience)
         .await
     {
         Ok(plan) => plan,
@@ -956,7 +1017,7 @@ mod tests {
     }
 
     #[test]
-    fn build_audiences_to_build_includes_public_audience_first() {
+    fn build_audiences_to_build_includes_default_audience_first() {
         let discovered = ["public".to_string(), "family".to_string()]
             .into_iter()
             .collect();
@@ -965,7 +1026,7 @@ mod tests {
     }
 
     #[test]
-    fn build_audiences_to_build_without_public_audience() {
+    fn build_audiences_to_build_without_default_audience() {
         let discovered = ["family".to_string(), "friends".to_string()]
             .into_iter()
             .collect();
@@ -974,9 +1035,9 @@ mod tests {
     }
 
     #[test]
-    fn discover_audiences_from_file_with_public_audience_config() {
-        // Simulates the user's scenario: root index with audience + public_audience
-        let content = "---\ntitle: My Journal\ncontents:\n  - '[New Entry](/new-entry.md)'\ndescription: A diaryx workspace\naudience:\n  - public\npublic_audience: public\n---\n\nHello world\n";
+    fn discover_audiences_from_file_with_default_audience_config() {
+        // Simulates the user's scenario: root index with audience + default_audience
+        let content = "---\ntitle: My Journal\ncontents:\n  - '[New Entry](/new-entry.md)'\ndescription: A diaryx workspace\naudience:\n  - public\ndefault_audience: public\n---\n\nHello world\n";
         let files = vec![materialized("README.md", content)];
         let discovered = discover_audiences(&files);
         assert!(
@@ -985,16 +1046,60 @@ mod tests {
             discovered
         );
 
-        // Also verify public_audience is extractable from the frontmatter
+        // Also verify default_audience is extractable from the frontmatter
         let parsed = diaryx_core::frontmatter::parse_or_empty(content).unwrap();
-        let public_audience = parsed
+        let default_audience = parsed
             .frontmatter
-            .get("public_audience")
+            .get("default_audience")
             .and_then(|v| v.as_str());
-        assert_eq!(public_audience, Some("public"));
+        assert_eq!(default_audience, Some("public"));
 
-        let audiences = build_audiences_to_build(discovered, public_audience);
+        let audiences = build_audiences_to_build(discovered, default_audience);
         assert_eq!(audiences, vec!["public".to_string()]);
+    }
+
+    #[test]
+    fn discover_audiences_from_file_with_legacy_public_audience_config() {
+        // Test backwards compatibility: public_audience still works
+        let content = "---\ntitle: My Journal\naudience:\n  - public\npublic_audience: public\n---\n\nHello world\n";
+        let files = vec![materialized("README.md", content)];
+        let discovered = discover_audiences(&files);
+        assert!(discovered.contains("public"));
+
+        let parsed = diaryx_core::frontmatter::parse_or_empty(content).unwrap();
+        let default_audience = parsed
+            .frontmatter
+            .get("default_audience")
+            .or_else(|| parsed.frontmatter.get("public_audience"))
+            .and_then(|v| v.as_str());
+        assert_eq!(default_audience, Some("public"));
+    }
+
+    #[test]
+    fn site_meta_serializes_public_audiences() {
+        let meta = SiteMeta {
+            user_id: "u1".into(),
+            audiences: vec!["public".into()],
+            revoked_tokens: vec![],
+            attachment_prefix: "prefix".into(),
+            public_audiences: vec!["public".into()],
+        };
+        let json = serde_json::to_value(&meta).unwrap();
+        let pa = json["public_audiences"].as_array().unwrap();
+        assert_eq!(pa.len(), 1);
+        assert_eq!(pa[0], "public");
+    }
+
+    #[test]
+    fn site_meta_defaults_public_audiences_when_missing() {
+        let json = serde_json::json!({
+            "user_id": "u1",
+            "audiences": ["public"],
+            "revoked_tokens": [],
+            "attachment_prefix": "prefix"
+        });
+        let meta: SiteMeta = serde_json::from_value(json).unwrap();
+        assert!(meta.public_audiences.is_empty());
     }
 
     #[test]

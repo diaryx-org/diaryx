@@ -128,9 +128,10 @@ pub struct IndexFrontmatter {
     pub part_of: Option<String>,
 
     /// Audience groups that can see this file and its contents.
-    /// If absent, inherits from parent; if at root with no audience, excluded from
-    /// audience-specific exports. Use `public_audience` in workspace config to
-    /// designate which audience tag means "publishable".
+    /// If absent, inherits from parent; if at root with no audience and no
+    /// `default_audience` in workspace config, the entry is private (excluded
+    /// from exports). When `default_audience` is set, unconstrained entries
+    /// are treated as belonging to that audience tag.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",

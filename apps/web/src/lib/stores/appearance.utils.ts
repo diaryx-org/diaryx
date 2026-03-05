@@ -10,6 +10,7 @@ import type {
   ThemeColorPalette,
   ThemeColorKey,
   ThemeDefinition,
+  TypographySettings,
   UserAppearance,
 } from "./appearance.types";
 import { FONT_FAMILY_MAP, CONTENT_WIDTH_MAP } from "./appearance.types";
@@ -113,8 +114,7 @@ const ALL_COLOR_KEYS: ThemeColorKey[] = [
  */
 export function applyCssVars(
   palette: ThemeColorPalette,
-  typography: UserAppearance["typography"],
-  layout: UserAppearance["layout"],
+  typography: TypographySettings,
 ): Record<string, string> {
   const vars: Record<string, string> = {};
   const style = document.documentElement.style;
@@ -141,7 +141,7 @@ export function applyCssVars(
   vars["--editor-line-height"] = lineHeight;
 
   // Layout
-  const maxWidth = CONTENT_WIDTH_MAP[layout.contentWidth];
+  const maxWidth = CONTENT_WIDTH_MAP[typography.contentWidth];
   style.setProperty("--editor-content-max-width", maxWidth);
   vars["--editor-content-max-width"] = maxWidth;
 
@@ -210,12 +210,6 @@ export function resolveEffectivePalette(
 export const DEFAULT_APPEARANCE: UserAppearance = {
   presetId: "default",
   accentHue: null,
-  typography: {
-    fontFamily: "inter",
-    baseFontSize: 16,
-    lineHeight: 1.6,
-  },
-  layout: {
-    contentWidth: "medium",
-  },
+  typographyPresetId: "default",
+  typographyOverrides: {},
 };

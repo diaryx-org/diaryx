@@ -10,6 +10,7 @@ contents:
   - "[README](/apps/web/src/lib/extensions/README.md)"
   - "[README](/apps/web/src/lib/history/README.md)"
   - "[README](/apps/web/src/lib/hooks/README.md)"
+  - "[README](/apps/web/src/lib/marketplace/README.md)"
   - "[README](/apps/web/src/lib/publish/README.md)"
   - "[README](/apps/web/src/lib/settings/README.md)"
   - "[README](/apps/web/src/lib/share/README.md)"
@@ -51,6 +52,7 @@ Shared libraries, components, and utilities for the web application.
 | `extensions/` | TipTap editor extensions               |
 | `history/`    | Version history components             |
 | `hooks/`      | Svelte hooks                           |
+| `marketplace/`| Marketplace asset registry/apply logic (themes, typographies, bundles) |
 | `publish/`    | Publishing and export components       |
 | `settings/`   | Settings panel components              |
 | `share/`      | Share session components               |
@@ -138,6 +140,7 @@ limited to backup/import actions.
 - Right sidebar: built-in `Properties` tab plus plugin-contributed tabs.
 - Marketplace: opened from a dedicated modal surface
   (`MarketplaceDialog.svelte`): desktop `Dialog`, mobile `Drawer`.
+- Marketplace tabs now own appearance customization (`Themes`, `Typography`, `Bundles`) in addition to plugin browsing, with curated + local registries for themes and typography presets.
 - Plugin sidebars are host-rendered with `components/PluginSidebarPanel.svelte`.
 - Status-bar plugin items are host-rendered with `components/PluginStatusItems.svelte`.
 - `RightSidebar.svelte` resets collapse-button tooltip state when collapsing to

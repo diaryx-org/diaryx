@@ -25,7 +25,6 @@
   import ClearDataSettings from "./settings/ClearDataSettings.svelte";
   import DebugInfo from "./settings/DebugInfo.svelte";
   import WorkspaceManagement from "./settings/WorkspaceManagement.svelte";
-  import PluginsSettings from "./settings/PluginsSettings.svelte";
   import PluginSettingsTab from "./settings/PluginSettingsTab.svelte";
   import PluginIframe from "./components/PluginIframe.svelte";
   import UpgradeBanner from "$lib/components/UpgradeBanner.svelte";
@@ -182,7 +181,6 @@
     { id: "account", label: "Account" },
     { id: "billing", label: "Billing" },
     { id: "data", label: "Data" },
-    { id: "plugins", label: "Plugins" },
     { id: "debug", label: "Debug" },
   ]);
 
@@ -223,10 +221,6 @@
           <ImportSettings {workspacePath} />
           <FormatImportSettings {workspacePath} />
           <ClearDataSettings />
-        </div>
-      {:else if activeTab === "plugins"}
-        <div class="space-y-4">
-          <PluginsSettings />
         </div>
       {:else if activeTab === "debug"}
         <div class="space-y-4">

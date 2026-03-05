@@ -145,7 +145,7 @@ let exporter = Exporter::new(fs);
 
 // Use futures_lite::future::block_on for sync contexts
 let plan = futures_lite::future::block_on(
-    exporter.plan_export(&workspace_root, audience, destination)
+    exporter.plan_export(&workspace_root, audience, destination, None)
 ).unwrap();
 
 let force = false;

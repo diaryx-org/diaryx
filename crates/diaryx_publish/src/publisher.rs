@@ -37,8 +37,13 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
     ) -> Result<PublishResult> {
         // Collect files to publish
         let pages = if let Some(ref audience) = options.audience {
-            self.collect_with_audience(workspace_root, destination, audience)
-                .await?
+            self.collect_with_audience(
+                workspace_root,
+                destination,
+                audience,
+                options.default_audience.as_deref(),
+            )
+            .await?
         } else {
             self.collect_all(workspace_root).await?
         };
@@ -147,10 +152,11 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
         workspace_root: &Path,
         destination: &Path,
         audience: &str,
+        default_audience: Option<&str>,
     ) -> Result<Vec<PublishedPage>> {
         let exporter = Exporter::new(self.fs.clone());
         let plan = exporter
-            .plan_export(workspace_root, audience, destination)
+            .plan_export(workspace_root, audience, destination, default_audience)
             .await?;
 
         let workspace_dir = workspace_root.parent().unwrap_or(workspace_root);

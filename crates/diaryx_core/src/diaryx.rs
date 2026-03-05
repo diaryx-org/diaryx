@@ -593,9 +593,10 @@ impl<'a, FS: AsyncFileSystem + Clone> ExportOps<'a, FS> {
         workspace_root: &std::path::Path,
         audience: &str,
         destination: &std::path::Path,
+        default_audience: Option<&str>,
     ) -> crate::error::Result<crate::export::ExportPlan> {
         self.inner()
-            .plan_export(workspace_root, audience, destination)
+            .plan_export(workspace_root, audience, destination, default_audience)
             .await
     }
 

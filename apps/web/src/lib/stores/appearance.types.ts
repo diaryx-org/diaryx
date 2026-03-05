@@ -57,24 +57,78 @@ export interface ThemeDefinition {
   };
 }
 
+export type ThemeSource = "builtin" | "registry" | "local" | "bundle";
+
+export interface ThemeSourceMetadata {
+  source: ThemeSource;
+  registryId?: string;
+  fileName?: string;
+  installedAt?: number;
+}
+
+export interface ThemeLibraryEntry {
+  theme: ThemeDefinition;
+  source: ThemeSourceMetadata;
+}
+
+export interface ThemeCatalogEntry {
+  theme: ThemeDefinition;
+  source: ThemeSourceMetadata;
+  builtin: boolean;
+}
+
 // ---------------------------------------------------------------------------
-// User appearance (stored in localStorage)
+// Typography definition (preset or exported)
 // ---------------------------------------------------------------------------
 
 export type FontFamily = "inter" | "system" | "serif" | "mono";
 export type ContentWidth = "narrow" | "medium" | "wide" | "full";
 
+export interface TypographySettings {
+  fontFamily: FontFamily;
+  baseFontSize: number;
+  lineHeight: number;
+  contentWidth: ContentWidth;
+}
+
+export interface TypographyDefinition {
+  id: string;
+  name: string;
+  description?: string;
+  author?: string;
+  version: 1;
+  settings: TypographySettings;
+}
+
+export type TypographySource = "builtin" | "registry" | "local" | "bundle";
+
+export interface TypographySourceMetadata {
+  source: TypographySource;
+  registryId?: string;
+  fileName?: string;
+  installedAt?: number;
+}
+
+export interface TypographyLibraryEntry {
+  typography: TypographyDefinition;
+  source: TypographySourceMetadata;
+}
+
+export interface TypographyCatalogEntry {
+  typography: TypographyDefinition;
+  source: TypographySourceMetadata;
+  builtin: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// User appearance (stored in localStorage)
+// ---------------------------------------------------------------------------
+
 export interface UserAppearance {
   presetId: string;
   accentHue: number | null;
-  typography: {
-    fontFamily: FontFamily;
-    baseFontSize: number;
-    lineHeight: number;
-  };
-  layout: {
-    contentWidth: ContentWidth;
-  };
+  typographyPresetId: string;
+  typographyOverrides: Partial<TypographySettings>;
 }
 
 // ---------------------------------------------------------------------------
@@ -84,6 +138,11 @@ export interface UserAppearance {
 export interface ThemeExport {
   $schema: string;
   theme: ThemeDefinition;
+}
+
+export interface TypographyExport {
+  $schema: string;
+  typography: TypographyDefinition;
 }
 
 // ---------------------------------------------------------------------------

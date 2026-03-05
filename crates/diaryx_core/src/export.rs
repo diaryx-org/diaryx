@@ -120,11 +120,15 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
 
     /// Plan an export operation without executing it
     /// This traverses the workspace and determines which files would be included/excluded
+    ///
+    /// `default_audience` is the audience tag assigned to entries with no explicit
+    /// or inherited audience. When `None`, such entries are private (excluded).
     pub async fn plan_export(
         &self,
         workspace_root: &Path,
         audience: &str,
         destination: &Path,
+        default_audience: Option<&str>,
     ) -> Result<ExportPlan> {
         let mut included = Vec::new();
         let mut excluded = Vec::new();
@@ -143,6 +147,7 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
             destination,
             audience,
             None, // No inherited audience at root
+            default_audience,
             &mut included,
             &mut excluded,
             &mut visited,
@@ -167,6 +172,7 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
         dest_dir: &Path,
         audience: &str,
         inherited_audience: Option<&Vec<String>>,
+        default_audience: Option<&str>,
         included: &mut Vec<ExportFile>,
         excluded: &mut Vec<ExcludedFile>,
         visited: &mut HashSet<PathBuf>,
@@ -208,11 +214,16 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
 
         // Determine visibility
         let (is_visible, effective_audience) =
-            self.check_visibility(&frontmatter, audience, inherited_audience);
+            self.check_visibility(&frontmatter, audience, inherited_audience, default_audience);
 
         if !is_visible {
             // Record exclusion reason
-            let reason = self.get_exclusion_reason(&frontmatter, audience, inherited_audience);
+            let reason = self.get_exclusion_reason(
+                &frontmatter,
+                audience,
+                inherited_audience,
+                default_audience,
+            );
             excluded.push(ExcludedFile {
                 path: path.to_path_buf(),
                 reason,
@@ -250,6 +261,7 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
                         dest_dir,
                         audience,
                         child_audience,
+                        default_audience,
                         included,
                         excluded,
                         visited,
@@ -281,6 +293,7 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
         frontmatter: &IndexFrontmatter,
         audience: &str,
         inherited: Option<&Vec<String>>,
+        default_audience: Option<&str>,
     ) -> (bool, Option<Vec<String>>) {
         let audience = audience.trim();
 
@@ -306,8 +319,13 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
             return (visible, None);
         }
 
-        // No audience defined anywhere — visible to all audiences
-        (true, None)
+        // No audience defined anywhere — apply default_audience if set, otherwise private
+        if let Some(default) = default_audience {
+            let visible = default.eq_ignore_ascii_case(audience);
+            (visible, Some(vec![default.to_string()]))
+        } else {
+            (false, None)
+        }
     }
 
     /// Determine the reason a file was excluded.
@@ -316,10 +334,19 @@ impl<FS: AsyncFileSystem> Exporter<FS> {
         frontmatter: &IndexFrontmatter,
         audience: &str,
         _inherited: Option<&Vec<String>>,
+        default_audience: Option<&str>,
     ) -> ExclusionReason {
         if let Some(file_audience) = &frontmatter.audience {
             return ExclusionReason::AudienceMismatch {
                 file_audience: file_audience.clone(),
+                requested: audience.to_string(),
+            };
+        }
+
+        if let Some(default) = default_audience {
+            // Has a default audience but it didn't match the requested audience
+            return ExclusionReason::AudienceMismatch {
+                file_audience: vec![default.to_string()],
                 requested: audience.to_string(),
             };
         }
@@ -531,6 +558,7 @@ mod tests {
             Path::new("/workspace/README.md"),
             "family",
             Path::new("/export"),
+            None,
         ))
         .unwrap();
 
@@ -565,6 +593,7 @@ mod tests {
             Path::new("/workspace/README.md"),
             "family",
             Path::new("/export"),
+            None,
         ))
         .unwrap();
 
@@ -574,7 +603,7 @@ mod tests {
     }
 
     #[test]
-    fn test_no_audience_included() {
+    fn test_no_audience_private_by_default() {
         let fs = make_test_fs();
         fs.write_file(
             Path::new("/workspace/README.md"),
@@ -588,10 +617,108 @@ mod tests {
             Path::new("/workspace/README.md"),
             "family",
             Path::new("/export"),
+            None,
         ))
         .unwrap();
 
-        // Root has no audience — visible to all audiences
+        // No audience + no default_audience = private (excluded)
+        assert_eq!(plan.included.len(), 0);
+        assert_eq!(plan.excluded.len(), 1);
+        assert_eq!(plan.excluded[0].reason, ExclusionReason::NoAudienceDefined);
+    }
+
+    #[test]
+    fn test_no_audience_with_default_audience_included() {
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("/workspace/README.md"),
+            "---\ntitle: Root\ncontents: []\n---\n\n# Root with no audience\n",
+        )
+        .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let exporter = Exporter::new(async_fs);
+        let plan = block_on_test(exporter.plan_export(
+            Path::new("/workspace/README.md"),
+            "public",
+            Path::new("/export"),
+            Some("public"),
+        ))
+        .unwrap();
+
+        // No audience + default_audience=public, requesting "public" = included
+        assert_eq!(plan.included.len(), 1);
+        assert_eq!(plan.excluded.len(), 0);
+    }
+
+    #[test]
+    fn test_no_audience_with_default_audience_mismatch() {
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("/workspace/README.md"),
+            "---\ntitle: Root\ncontents: []\n---\n\n# Root with no audience\n",
+        )
+        .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let exporter = Exporter::new(async_fs);
+        let plan = block_on_test(exporter.plan_export(
+            Path::new("/workspace/README.md"),
+            "family",
+            Path::new("/export"),
+            Some("public"),
+        ))
+        .unwrap();
+
+        // No audience + default_audience=public, requesting "family" = excluded
+        assert_eq!(plan.included.len(), 0);
+        assert_eq!(plan.excluded.len(), 1);
+    }
+
+    #[test]
+    fn test_explicit_audience_overrides_default() {
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("/workspace/README.md"),
+            "---\ntitle: Root\ncontents: []\naudience:\n  - family\n---\n\n# Root\n",
+        )
+        .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let exporter = Exporter::new(async_fs);
+        // Explicit audience "family" should override default_audience "public"
+        let plan = block_on_test(exporter.plan_export(
+            Path::new("/workspace/README.md"),
+            "family",
+            Path::new("/export"),
+            Some("public"),
+        ))
+        .unwrap();
+
+        assert_eq!(plan.included.len(), 1);
+        assert_eq!(plan.excluded.len(), 0);
+    }
+
+    #[test]
+    fn test_wildcard_audience_includes_all() {
+        let fs = make_test_fs();
+        fs.write_file(
+            Path::new("/workspace/README.md"),
+            "---\ntitle: Root\ncontents: []\n---\n\n# Root\n",
+        )
+        .unwrap();
+
+        let async_fs: TestFs = SyncToAsyncFs::new(fs);
+        let exporter = Exporter::new(async_fs);
+        let plan = block_on_test(exporter.plan_export(
+            Path::new("/workspace/README.md"),
+            "*",
+            Path::new("/export"),
+            None,
+        ))
+        .unwrap();
+
+        // Wildcard always includes everything
         assert_eq!(plan.included.len(), 1);
         assert_eq!(plan.excluded.len(), 0);
     }
@@ -621,6 +748,7 @@ mod tests {
             Path::new("/workspace/README.md"),
             "family",
             Path::new("/export"),
+            None,
         ))
         .unwrap();
 
@@ -655,12 +783,14 @@ mod tests {
             Path::new("/workspace/README.md"),
             "family",
             Path::new("/export"),
+            None,
         ))
         .unwrap();
         let plan_engl = block_on_test(exporter.plan_export(
             Path::new("/workspace/README.md"),
             "engl212",
             Path::new("/export"),
+            None,
         ))
         .unwrap();
 

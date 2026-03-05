@@ -914,11 +914,9 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         .to_path_buf()
                 });
 
-                let link_format = ws
-                    .get_workspace_config(&current_path)
-                    .await
-                    .map(|c| c.link_format)
-                    .ok();
+                let ws_config = ws.get_workspace_config(&current_path).await.ok();
+                let link_format = ws_config.as_ref().map(|c| c.link_format);
+                let default_audience = ws_config.as_ref().and_then(|c| c.default_audience.clone());
 
                 // Parse the entry's frontmatter
                 let index = ws.parse_index_with_hint(&current_path, link_format).await?;
@@ -931,6 +929,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         inherited: false,
                         source_title: None,
                         can_inherit,
+                        default_audience_applied: false,
                     }));
                 }
 
@@ -938,12 +937,23 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                 let part_of: String = match &index.frontmatter.part_of {
                     Some(po) => po.clone(),
                     None => {
-                        // Root entry, cannot inherit
+                        // Root entry with no audience — apply default_audience if set
+                        if let Some(ref da) = default_audience {
+                            return Ok(Response::EffectiveAudience(EffectiveAudienceResult {
+                                tags: vec![da.clone()],
+                                inherited: false,
+                                source_title: None,
+                                can_inherit: false,
+                                default_audience_applied: true,
+                            }));
+                        }
+                        // No default_audience = private
                         return Ok(Response::EffectiveAudience(EffectiveAudienceResult {
                             tags: vec![],
                             inherited: false,
                             source_title: None,
                             can_inherit: false,
+                            default_audience_applied: false,
                         }));
                     }
                 };
@@ -977,6 +987,7 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                                 inherited: true,
                                 source_title: ancestor.frontmatter.title.clone(),
                                 can_inherit: true,
+                                default_audience_applied: false,
                             }));
                         }
 
@@ -996,13 +1007,25 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     }
                 }
 
-                // Exhausted chain with no audience found
-                Ok(Response::EffectiveAudience(EffectiveAudienceResult {
-                    tags: vec![],
-                    inherited: false,
-                    source_title: None,
-                    can_inherit: true,
-                }))
+                // Exhausted chain with no audience found — apply default_audience if set
+                if let Some(ref da) = default_audience {
+                    Ok(Response::EffectiveAudience(EffectiveAudienceResult {
+                        tags: vec![da.clone()],
+                        inherited: false,
+                        source_title: None,
+                        can_inherit: true,
+                        default_audience_applied: true,
+                    }))
+                } else {
+                    // No default_audience = private
+                    Ok(Response::EffectiveAudience(EffectiveAudienceResult {
+                        tags: vec![],
+                        inherited: false,
+                        source_title: None,
+                        can_inherit: true,
+                        default_audience_applied: false,
+                    }))
+                }
             }
 
             Command::GetWorkspaceTree {
@@ -1509,6 +1532,18 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             Command::RenameEntry { path, new_filename } => {
                 let from_path = self.resolve_fs_path(&path);
 
+                // Write the title FIRST so that rename_entry's resolve_title
+                // reads the new title when formatting links in parent contents.
+                use crate::entry::prettify_filename;
+                let title = prettify_filename(new_filename.trim_end_matches(".md"));
+                self.entry()
+                    .set_frontmatter_property(
+                        &path,
+                        "title",
+                        serde_yaml::Value::String(title.clone()),
+                    )
+                    .await?;
+
                 // Use rename_entry which handles both leaf files and index files
                 // (directory rename + children migration + part_of/contents updates)
                 let ws = self.workspace().inner();
@@ -1535,19 +1570,8 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                     );
                 }
 
-                // Sync title and H1 to match the new filename
-                {
-                    use crate::entry::prettify_filename;
-                    let title = prettify_filename(new_filename.trim_end_matches(".md"));
-                    self.entry()
-                        .set_frontmatter_property(
-                            &to_path_str,
-                            "title",
-                            serde_yaml::Value::String(title.clone()),
-                        )
-                        .await?;
-                    self.sync_heading_to_title(&to_path_str, &title).await?;
-                }
+                // Sync H1 heading to match the new title
+                self.sync_heading_to_title(&to_path_str, &title).await?;
 
                 // Emit file-moved event to file plugins
                 self.plugin_registry()

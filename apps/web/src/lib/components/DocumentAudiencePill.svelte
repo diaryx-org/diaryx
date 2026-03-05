@@ -33,6 +33,8 @@
   let inheritedSourceTitle = $state<string | null>(null);
   /** Whether this entry has a parent (part_of) and can inherit at all */
   let canInherit = $state(false);
+  /** Whether this entry's audience came from the workspace default_audience config */
+  let defaultAudienceApplied = $state(false);
 
   // Resolve inherited audience via the backend command
   async function resolveInheritedAudience() {
@@ -40,13 +42,18 @@
     inheritedTags = [];
     inheritedSourceTitle = null;
     canInherit = false;
+    defaultAudienceApplied = false;
 
     try {
       const result = await api.getEffectiveAudience(entryPath);
       canInherit = result.can_inherit;
+      defaultAudienceApplied = result.default_audience_applied;
       if (result.inherited) {
         inheritedTags = result.tags;
         inheritedSourceTitle = result.source_title ?? null;
+      } else if (result.default_audience_applied) {
+        // Tags from default_audience — show them as "default" tags
+        inheritedTags = result.tags;
       }
     } catch (e) {
       console.warn("[DocumentAudiencePill] Failed to resolve inherited audience:", e);
@@ -61,8 +68,13 @@
   });
 
   const isInheriting = $derived(audience === null && canInherit);
-  const displayTags = $derived(isInheriting ? inheritedTags : (audience ?? []));
-  const isPrivate = $derived(displayTags.length === 0);
+  const isDefault = $derived(audience === null && !canInherit && defaultAudienceApplied);
+  const displayTags = $derived(
+    isInheriting ? inheritedTags :
+    isDefault ? (inheritedTags.length > 0 ? inheritedTags : []) :
+    (audience ?? [])
+  );
+  const isPrivate = $derived(displayTags.length === 0 && !defaultAudienceApplied);
 
   // Load available audiences when picker opens
   $effect(() => {
@@ -156,7 +168,7 @@
     class="pill-area"
     role="button"
     tabindex="0"
-    aria-label="Audience: {isPrivate ? 'Private' : isInheriting && inheritedTags.length > 0 ? 'Inherited: ' + inheritedTags.join(', ') : displayTags.join(', ')}. Click to edit."
+    aria-label="Audience: {isPrivate ? 'Private' : isDefault ? displayTags.join(', ') + ' (default)' : isInheriting && inheritedTags.length > 0 ? 'Inherited: ' + inheritedTags.join(', ') : displayTags.join(', ')}. Click to edit."
     title="Who this entire journal entry is shared with"
   >
     {#if isInheriting && inheritedTags.length > 0}
@@ -170,6 +182,17 @@
         <ArrowUpRight class="size-2.5" />
         {inheritedSourceTitle}
       </span>
+      <span class="pill-add" aria-hidden="true">
+        <Plus class="size-3" />
+      </span>
+    {:else if isDefault && displayTags.length > 0}
+      {#each displayTags as tag (tag)}
+        <span class="pill-tag pill-inherited">
+          <span class="pill-dot {getAudienceColor(tag, colorStore.audienceColors)}"></span>
+          {tag}
+        </span>
+      {/each}
+      <span class="pill-inherited-hint">(default)</span>
       <span class="pill-add" aria-hidden="true">
         <Plus class="size-3" />
       </span>

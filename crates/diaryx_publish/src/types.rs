@@ -19,6 +19,9 @@ pub struct PublishOptions {
     pub force: bool,
     /// Copy referenced attachment files to the output directory
     pub copy_attachments: bool,
+    /// Audience tag assigned to entries with no explicit or inherited audience.
+    /// When None, such entries are private (excluded from exports).
+    pub default_audience: Option<String>,
 }
 
 impl Default for PublishOptions {
@@ -29,6 +32,7 @@ impl Default for PublishOptions {
             audience: None,
             force: false,
             copy_attachments: true,
+            default_audience: None,
         }
     }
 }

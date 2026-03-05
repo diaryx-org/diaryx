@@ -30,7 +30,7 @@ Workspace-level configuration lives in the root index file's YAML frontmatter `e
 | `auto_update_timestamp` | `bool` | `true` | Auto-set `updated` on save |
 | `auto_rename_to_title` | `bool` | `true` | Auto-rename file when title changes |
 | `filename_style` | `FilenameStyle` | `Preserve` | How titles map to filenames |
-| `public_audience` | `Option<String>` | `None` | Audience tag for publishable entries |
+| `default_audience` | `Option<String>` | `None` | Audience tag assigned to entries with no explicit/inherited audience. Unset = private. |
 
 ## FilenameStyle
 
@@ -43,7 +43,7 @@ Controls how entry titles are converted to filenames:
 
 ## Audience Visibility
 
-`IndexFrontmatter.is_visible_to(audience)` checks whether an entry should be included for a given audience. There is no special "private" value -- all audience tags are treated equally. The `public_audience` workspace config field designates which audience tag means "publishable" for the publish pipeline.
+`IndexFrontmatter.is_visible_to(audience)` checks whether an entry should be included for a given audience. There is no special "private" value -- all audience tags are treated equally. The `default_audience` workspace config field assigns a default audience to entries with no explicit or inherited audience tag. When unset, unconstrained entries are private (excluded from exports).
 
 ## Rename/Move Consistency
 

@@ -2174,7 +2174,7 @@ pub async fn export_to_format<R: Runtime>(
     let aud = audience.as_deref().unwrap_or("*");
     let tmp_dest = std::env::temp_dir().join(format!("diaryx-export-{}", uuid::Uuid::new_v4()));
     let plan = exporter
-        .plan_export(&root_index, aud, &tmp_dest)
+        .plan_export(&root_index, aud, &tmp_dest, None)
         .await
         .map_err(|e| SerializableError {
             kind: "ExportError".to_string(),

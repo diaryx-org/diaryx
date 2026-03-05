@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-03-04T22:56:25Z
+updated: 2026-03-05T00:46:10Z
 part_of: '[README](/README.md)'
 ---
 # Instructions for AI agents
@@ -29,6 +29,7 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │   │   │   ├── Extensions - TipTap editor extensions - apps/web/src/lib/extensions/README.md
 │   │   │   │   ├── History - Version history components - apps/web/src/lib/history/README.md
 │   │   │   │   ├── Hooks - Svelte hooks - apps/web/src/lib/hooks/README.md
+│   │   │   │   ├── Marketplace - Marketplace registries and bundle apply execution - apps/web/src/lib/marketplace/README.md
 │   │   │   │   ├── Publish - Publishing and export UI components - apps/web/src/lib/publish/README.md
 │   │   │   │   ├── Settings - Settings panel components - apps/web/src/lib/settings/README.md
 │   │   │   │   ├── Share - Legacy share/publish panel module - apps/web/src/lib/share/README.md
@@ -47,6 +48,7 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │   │   │   ├── Shared Views - Shared view components - apps/web/src/views/shared/README.md
 │   │   │   │   └── Sidebar Views - Sidebar components - apps/web/src/views/sidebar/README.md
 │   │   │   └── LICENSE - PolyForm Shield License 1.0.0 - apps/web/src/LICENSE.md
+│   │   ├── Marketplace Dist - Preassembled marketplace payloads for themes, typographies, and bundles - apps/web/marketplace-dist/README.md
 │   │   └── TipTap Custom Extensions - Guide to creating custom TipTap extensions with markdown support - apps/web/docs/tiptap-custom-extensions.md
 │   ├── tauri - Web app + native backend - apps/tauri/README.md
 │   └── apple - Native SwiftUI app for Diaryx using WKWebView + TipTap - apps/apple/README.md

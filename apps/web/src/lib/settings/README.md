@@ -16,7 +16,6 @@ attachments:
   - "[StorageSettings.svelte](/apps/web/src/lib/settings/StorageSettings.svelte)"
   - "[WorkspaceManagement.svelte](/apps/web/src/lib/settings/WorkspaceManagement.svelte)"
   - "[WorkspaceSettings.svelte](/apps/web/src/lib/settings/WorkspaceSettings.svelte)"
-  - "[AppearanceSettings.svelte](/apps/web/src/lib/settings/AppearanceSettings.svelte)"
   - "[PluginsSettings.svelte](/apps/web/src/lib/settings/PluginsSettings.svelte)"
   - "[PluginSettingsTab.svelte](/apps/web/src/lib/settings/PluginSettingsTab.svelte)"
   - "[syncSettingsLogic.ts](/apps/web/src/lib/settings/syncSettingsLogic.ts)"
@@ -33,7 +32,7 @@ Settings panel components for `SettingsDialog.svelte`.
 
 | File | Purpose |
 | --- | --- |
-| `DisplaySettings.svelte` / `AppearanceSettings.svelte` | Display, typography, and theme preferences. |
+| `DisplaySettings.svelte` | Display mode and focus-mode preferences. |
 | `WorkspaceSettings.svelte` / `WorkspaceManagement.svelte` | Workspace config and provider link/unlink management. |
 | `StorageSettings.svelte` | Local storage backend settings. |
 | `ImportSettings.svelte` / `FormatImportSettings.svelte` | ZIP import and format import flows. |
@@ -62,6 +61,7 @@ so long tabs (for example Workspace) do not push the bottom tab bar off-screen.
 
 - The dedicated marketplace is a separate app surface (`views/marketplace/PluginMarketplace.svelte`), not just a settings panel.
 - Settings keeps an installed/local management focus and links to marketplace via `Open Marketplace`.
+- Theme and typography customization now lives in the marketplace tabs (`Themes`, `Typography`, `Bundles`) rather than a separate settings section, including installable typography presets with per-field overrides.
 - Local uploads are explicitly labeled unmanaged and are separate from curated registry trust.
 
 ## Managed AI Notes

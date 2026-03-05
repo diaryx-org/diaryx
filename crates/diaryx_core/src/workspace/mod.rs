@@ -89,12 +89,16 @@ pub struct WorkspaceConfig {
     #[serde(default)]
     pub filename_style: FilenameStyle,
 
-    /// Audience tag that designates files for public viewing/publishing.
-    /// Replaces the old hardcoded "private" magic. Files with this audience tag
-    /// are included in public exports; files without it are excluded.
+    /// Audience tag assigned to entries with no explicit or inherited audience.
+    /// Unset = private (excluded from exports). Entries that have this tag via
+    /// the default are included in audience-filtered exports for that tag.
     #[cfg_attr(feature = "typescript", ts(optional))]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub public_audience: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "public_audience"
+    )]
+    pub default_audience: Option<String>,
 }
 
 /// Workspace operations (async-first).
@@ -780,8 +784,9 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             })
             .unwrap_or_default();
 
-        let public_audience = extra
-            .get("public_audience")
+        let default_audience = extra
+            .get("default_audience")
+            .or_else(|| extra.get("public_audience"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
@@ -792,7 +797,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             auto_update_timestamp,
             auto_rename_to_title,
             filename_style,
-            public_audience,
+            default_audience,
         })
     }
 

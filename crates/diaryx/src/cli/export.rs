@@ -41,10 +41,21 @@ pub fn handle_export(
     }
 
     let fs = SyncToAsyncFs::new(RealFileSystem);
-    let exporter = Exporter::new(fs);
+    let exporter = Exporter::new(fs.clone());
+
+    // Read workspace config for default_audience
+    let ws = Workspace::new(fs);
+    let default_audience = block_on(ws.get_workspace_config(&workspace_root))
+        .ok()
+        .and_then(|c| c.default_audience);
 
     // Plan the export
-    let plan = match block_on(exporter.plan_export(&workspace_root, audience, destination)) {
+    let plan = match block_on(exporter.plan_export(
+        &workspace_root,
+        audience,
+        destination,
+        default_audience.as_deref(),
+    )) {
         Ok(plan) => plan,
         Err(e) => {
             eprintln!("✗ Failed to plan export: {}", e);

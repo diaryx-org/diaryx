@@ -515,7 +515,7 @@ pub enum Command {
     SetWorkspaceConfig {
         /// Path to the workspace root index file.
         root_index_path: String,
-        /// Field name to set (e.g., "filename_style", "public_audience").
+        /// Field name to set (e.g., "filename_style", "default_audience").
         field: String,
         /// Value to set (stored as a string in frontmatter).
         value: String,
@@ -1096,6 +1096,9 @@ pub struct EffectiveAudienceResult {
     pub source_title: Option<String>,
     /// Whether this entry has a parent and can potentially inherit.
     pub can_inherit: bool,
+    /// Whether this entry's audience was resolved from the workspace `default_audience`
+    /// config (i.e., the entry has no explicit or inherited audience tags).
+    pub default_audience_applied: bool,
 }
 
 /// Result of converting links to a new format.

@@ -2100,27 +2100,35 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
         </button>
       </div>
     {/if}
-    <!-- Mobile sidebar buttons -->
-    <button
-      type="button"
-      class="absolute top-[calc(env(safe-area-inset-top)+0.5rem)] left-2 z-20 p-2 md:hidden"
-      onclick={toggleLeftSidebar}
-      aria-label="Toggle navigation"
-    >
-      <Menu class="size-5 text-muted-foreground" />
-    </button>
-    {#if rightSidebarCollapsed}
-      <button
-        type="button"
-        class="absolute top-[calc(env(safe-area-inset-top)+0.5rem)] right-2 z-20 p-2 md:hidden"
-        onclick={toggleRightSidebar}
-        aria-label="Open properties panel"
-      >
-        <PanelRight class="size-4 text-muted-foreground" />
-      </button>
-    {/if}
-
     {#if currentEntry}
+      <!-- Mobile header bar -->
+      <header class="flex items-center justify-between px-2 py-1.5 border-b border-border bg-background shrink-0 md:hidden">
+        <button
+          type="button"
+          class="p-2"
+          onclick={toggleLeftSidebar}
+          aria-label="Toggle navigation"
+        >
+          <Menu class="size-5 text-muted-foreground" />
+        </button>
+        <span class="text-sm font-medium text-foreground truncate mx-2">
+          {typeof currentEntry.frontmatter?.title === "string"
+            ? currentEntry.frontmatter.title
+            : currentEntry.path.split("/").pop()?.replace(".md", "") ?? ""}
+        </span>
+        {#if rightSidebarCollapsed}
+          <button
+            type="button"
+            class="p-2"
+            onclick={toggleRightSidebar}
+            aria-label="Open properties panel"
+          >
+            <PanelRight class="size-4 text-muted-foreground" />
+          </button>
+        {:else}
+          <div class="size-9"></div>
+        {/if}
+      </header>
       <EditorContent
         {Editor}
         bind:editorRef

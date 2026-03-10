@@ -504,10 +504,14 @@
       key: string,
       value: unknown,
     ) => Promise<string | null>;
+    deleteEntry: (path: string) => Promise<boolean>;
     openEntryForSync: (path: string) => Promise<void>;
     listSyncedFiles: () => Promise<string[]>;
     getSyncStatus: () => Promise<string | null>;
     setAutoAllowPermissions: (enabled: boolean) => void;
+    uploadAttachment: (entryPath: string, filename: string, dataBase64: string) => Promise<string>;
+    getAttachments: (entryPath: string) => Promise<string[]>;
+    getAttachmentData: (entryPath: string, attachmentPath: string) => Promise<number[]>;
     getPluginDiagnostics: () => { loaded: string[]; enabled: string[] };
     installPluginInCurrentWorkspace: (wasmBase64: string) => Promise<void>;
   };
@@ -596,6 +600,10 @@
           workspaceStore.tree?.path,
         );
       },
+      async deleteEntry(path: string): Promise<boolean> {
+        const apiInstance = await getCurrentApiForE2E();
+        return await deleteEntryWithSync(apiInstance, path, null);
+      },
       async openEntryForSync(path: string): Promise<void> {
         await browserPlugins.dispatchFileOpenedEvent(path);
       },
@@ -628,6 +636,23 @@
       },
       setAutoAllowPermissions(enabled: boolean): void {
         permissionStore.setAutoAllow(enabled);
+      },
+      async uploadAttachment(entryPath: string, filename: string, dataBase64: string): Promise<string> {
+        const apiInstance = await getCurrentApiForE2E();
+        const binary = atob(dataBase64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+        return await apiInstance.uploadAttachment(entryPath, filename, bytes);
+      },
+      async getAttachments(entryPath: string): Promise<string[]> {
+        const apiInstance = await getCurrentApiForE2E();
+        return await apiInstance.getAttachments(entryPath);
+      },
+      async getAttachmentData(entryPath: string, attachmentPath: string): Promise<number[]> {
+        const apiInstance = await getCurrentApiForE2E();
+        return await apiInstance.getAttachmentData(entryPath, attachmentPath);
       },
       getPluginDiagnostics(): { loaded: string[]; enabled: string[] } {
         const pluginStore = getPluginStore();

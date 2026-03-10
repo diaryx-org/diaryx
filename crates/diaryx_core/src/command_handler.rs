@@ -270,30 +270,6 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
         }
     }
 
-    /// Resolve a template from a workspace config link value.
-    /// The link is in the workspace's configured link_format (e.g., `[Template](/templates/note.md)`).
-    /// Returns the file content as a Template, or None if resolution fails.
-    async fn resolve_template_from_link(
-        &self,
-        link: &str,
-        workspace_root_path: &Path,
-    ) -> Option<crate::template::Template> {
-        let parsed = link_parser::parse_link(link);
-        // to_canonical expects the current file path (the root index) to resolve relative links
-        let canonical = link_parser::to_canonical(&parsed, workspace_root_path);
-        let workspace_dir = workspace_root_path
-            .parent()
-            .unwrap_or_else(|| Path::new(""));
-        let file_path = workspace_dir.join(&canonical);
-        let content = self.fs().read_to_string(&file_path).await.ok()?;
-        let name = Path::new(&canonical)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("template")
-            .to_string();
-        Some(crate::template::Template::new(name, content))
-    }
-
     /// Notify plugins that the workspace was modified (for sync broadcast).
     async fn emit_workspace_sync(&self) {
         self.plugin_registry().notify_workspace_modified().await;
@@ -1333,35 +1309,63 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
                         .to_string()
                 });
 
-                // Resolve template: workspace config link → built-in "note"
-                let content = if let Some(ref rip) = options.root_index_path {
-                    let workspace_root_path = self.resolve_fs_path(rip);
-                    let ws_config = self
-                        .workspace()
-                        .inner()
-                        .get_workspace_config(&workspace_root_path)
-                        .await
-                        .ok();
-                    let tmpl = if let Some(ref cfg) = ws_config
-                        && let Some(ref tmpl_link) = cfg.default_template
-                    {
-                        self.resolve_template_from_link(tmpl_link, &workspace_root_path)
+                // Resolve template via the templating plugin, falling back to
+                // a simple hardcoded template when the plugin isn't available.
+                let content = 'tmpl: {
+                    if let Some(ref rip) = options.root_index_path {
+                        // Try to resolve the workspace's default_template name
+                        let workspace_root_path = self.resolve_fs_path(rip);
+                        let ws_config = self
+                            .workspace()
+                            .inner()
+                            .get_workspace_config(&workspace_root_path)
                             .await
-                    } else {
-                        None
-                    };
-                    let tmpl = tmpl.unwrap_or_else(crate::template::Template::builtin_note);
-                    let ctx = crate::template::TemplateContext::new()
-                        .with_title(&title)
-                        .with_filename(
-                            path_buf
-                                .file_stem()
-                                .and_then(|s| s.to_str())
-                                .unwrap_or("untitled"),
-                        );
-                    tmpl.render(&ctx)
-                } else {
-                    // No workspace context — use simple hardcoded template
+                            .ok();
+
+                        // Extract template name from config (may be a link or a plain name)
+                        let template_name = ws_config
+                            .as_ref()
+                            .and_then(|cfg| cfg.default_template.as_ref())
+                            .map(|link| {
+                                // Support legacy link format: extract filename stem
+                                let parsed = link_parser::parse_link(link);
+                                if !parsed.path.is_empty() {
+                                    std::path::Path::new(&parsed.path)
+                                        .file_stem()
+                                        .and_then(|s| s.to_str())
+                                        .unwrap_or(link)
+                                        .to_string()
+                                } else {
+                                    link.clone()
+                                }
+                            });
+
+                        let filename = path_buf
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("untitled");
+
+                        let params = serde_json::json!({
+                            "template": template_name.as_deref().unwrap_or("note"),
+                            "title": title,
+                            "filename": filename,
+                        });
+
+                        if let Some(Ok(result)) = self
+                            .plugin_registry()
+                            .handle_plugin_command(
+                                "diaryx.templating",
+                                "RenderCreationTemplate",
+                                params,
+                            )
+                            .await
+                            && let Some(content) = result.as_str()
+                        {
+                            break 'tmpl content.to_string();
+                        }
+                    }
+
+                    // Fallback: simple hardcoded template
                     format!("---\ntitle: {}\n---\n\n# {}\n\n", title, title)
                 };
 

@@ -329,7 +329,8 @@ pub async fn publish_workspace_to_r2(
         std::fs::create_dir_all(&output_dir)
             .map_err(|e| format!("failed to create audience output dir: {}", e))?;
 
-        let publisher = Publisher::new(SyncToAsyncFs::new(RealFileSystem));
+        let renderer = diaryx_publish::NoopBodyRenderer;
+        let publisher = Publisher::new(SyncToAsyncFs::new(RealFileSystem), &renderer);
         let options = PublishOptions {
             single_file: false,
             title: None,

@@ -34,7 +34,6 @@ use crate::date;
 use crate::error::{DiaryxError, Result};
 use crate::fs::{AsyncFileSystem, FileSystem};
 use crate::link_parser;
-use crate::template::{Template, TemplateContext, TemplateManager};
 use indexmap::IndexMap;
 use serde_yaml::Value;
 use std::path::{Path, PathBuf};
@@ -76,42 +75,6 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
                 source: e,
             })?;
         Ok(())
-    }
-
-    /// Template-based entry creation is temporarily disabled for the async-first API.
-    ///
-    /// `TemplateManager` is still `FileSystem`-based. Once it is refactored to `AsyncFileSystem`,
-    /// these methods can be re-enabled.
-    #[allow(dead_code)]
-    pub fn template_manager(&self, _workspace_dir: Option<&Path>) -> TemplateManager<&FS> {
-        unimplemented!("TemplateManager is not yet refactored to AsyncFileSystem");
-    }
-
-    /// Template-based entry creation is temporarily disabled for the async-first API.
-    #[allow(dead_code)]
-    pub async fn create_entry_with_template(
-        &self,
-        _path: &Path,
-        _template: &Template,
-        _context: &TemplateContext,
-    ) -> Result<()> {
-        Err(DiaryxError::Unsupported(
-            "Template-based entry creation is not yet supported for AsyncFileSystem".to_string(),
-        ))
-    }
-
-    /// Template-based entry creation is temporarily disabled for the async-first API.
-    #[allow(dead_code)]
-    pub async fn create_entry_from_template(
-        &self,
-        _path: &Path,
-        _template_name: Option<&str>,
-        _title: Option<&str>,
-        _workspace_dir: Option<&Path>,
-    ) -> Result<()> {
-        Err(DiaryxError::Unsupported(
-            "Template-based entry creation is not yet supported for AsyncFileSystem".to_string(),
-        ))
     }
 
     /// Parses a markdown file and extracts frontmatter and body.
@@ -474,75 +437,6 @@ impl<FS: FileSystem> DiaryxAppSync<FS> {
         let content = format!("---\ntitle: {}\n---\n\n# {}\n\n", path, path);
         self.fs.create_new(std::path::Path::new(path), &content)?;
         Ok(())
-    }
-
-    /// Create a new entry using a template
-    ///
-    /// # Arguments
-    /// * `path` - Path where the entry will be created
-    /// * `template` - The template to use
-    /// * `context` - Context for variable substitution
-    pub fn create_entry_with_template(
-        &self,
-        path: &Path,
-        template: &Template,
-        context: &TemplateContext,
-    ) -> Result<()> {
-        let content = template.render(context);
-        self.fs.create_new(path, &content)?;
-        Ok(())
-    }
-
-    /// Create a new entry, optionally using a template
-    ///
-    /// If template_name is provided, looks up the template and uses it.
-    /// Falls back to the "note" built-in template if not found.
-    ///
-    /// # Arguments
-    /// * `path` - Path where the entry will be created
-    /// * `template_name` - Optional template name to use
-    /// * `title` - Optional title for the entry
-    /// * `workspace_dir` - Optional workspace directory for template lookup
-    pub fn create_entry_from_template(
-        &self,
-        path: &Path,
-        template_name: Option<&str>,
-        title: Option<&str>,
-        workspace_dir: Option<&Path>,
-    ) -> Result<()> {
-        let manager = self.template_manager(workspace_dir);
-
-        // Get template (use "note" as default)
-        let template_name = template_name.unwrap_or("note");
-        let template = manager
-            .get(template_name)
-            .ok_or_else(|| DiaryxError::TemplateNotFound(template_name.to_string()))?;
-
-        // Build context
-        let filename = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("Untitled");
-
-        let mut context = TemplateContext::new().with_filename(filename);
-
-        if let Some(t) = title {
-            context = context.with_title(t);
-        } else {
-            // Use filename as title, but prettified
-            context = context.with_title(prettify_filename(filename));
-        }
-
-        self.create_entry_with_template(path, &template, &context)
-    }
-
-    /// Get a template manager configured for this app
-    pub fn template_manager(&self, workspace_dir: Option<&Path>) -> TemplateManager<&FS> {
-        let mut manager = TemplateManager::new(&self.fs);
-        if let Some(dir) = workspace_dir {
-            manager = manager.with_workspace_dir(dir);
-        }
-        manager
     }
 
     /// Parses a markdown file and extracts frontmatter and body

@@ -19,15 +19,10 @@ serde_yaml.workspace = true
 async-trait = "0.1"
 log = "0.4"
 pathdiff = "0.2"
-handlebars = { version = "6", optional = true }
-
 [features]
 # comrak is always included — markdown-to-HTML is the core purpose of this crate.
 # The "markdown" feature exists for compatibility with cfg gates inherited from diaryx_core.
 markdown = []
-
-# Enable render-time body templating helpers in this crate.
-templating = ["dep:handlebars"]
 
 default = ["markdown"]
 

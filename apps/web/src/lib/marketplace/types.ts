@@ -4,7 +4,7 @@ import type {
   TypographySettings,
 } from "$lib/stores/appearance.types";
 
-export type MarketplaceKind = "plugin" | "theme" | "typography" | "bundle";
+export type MarketplaceKind = "plugin" | "theme" | "typography" | "bundle" | "template" | "starter-workspace";
 
 export interface MarketplaceArtifact {
   url: string;
@@ -78,4 +78,48 @@ export interface BundleRegistryEntry {
   typography_id: string | null;
   typography: BundleTypographyPreset | null;
   plugins: BundlePluginDependency[];
+}
+
+export interface TemplateRegistryEntry {
+  kind: "template";
+  id: string;
+  name: string;
+  version: string;
+  summary: string;
+  description: string;
+  author: string;
+  license: string;
+  repository: string | null;
+  categories: string[];
+  tags: string[];
+  icon: string | null;
+  screenshots: string[];
+  artifact: MarketplaceArtifact | null;
+  template_variables: string[];
+  preview: string | null;
+}
+
+export interface StarterWorkspaceFile {
+  path: string;
+  content: string;
+}
+
+export interface StarterWorkspaceRegistryEntry {
+  kind: "starter-workspace";
+  id: string;
+  name: string;
+  version: string;
+  summary: string;
+  description: string;
+  author: string;
+  license: string;
+  repository: string | null;
+  categories: string[];
+  tags: string[];
+  icon: string | null;
+  screenshots: string[];
+  artifact: MarketplaceArtifact | null;
+  file_count: number;
+  bundle_id: string | null;
+  includes_templates: boolean;
 }

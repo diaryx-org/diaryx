@@ -8,6 +8,8 @@ attachments:
   - '[MarketplaceTypography.svelte](/apps/web/src/views/marketplace/MarketplaceTypography.svelte)'
   - '[MarketplacePlugins.svelte](/apps/web/src/views/marketplace/MarketplacePlugins.svelte)'
   - '[MarketplaceBundles.svelte](/apps/web/src/views/marketplace/MarketplaceBundles.svelte)'
+  - '[MarketplaceTemplates.svelte](/apps/web/src/views/marketplace/MarketplaceTemplates.svelte)'
+  - '[MarketplaceStarters.svelte](/apps/web/src/views/marketplace/MarketplaceStarters.svelte)'
   - '[PluginMarketplace.svelte](/apps/web/src/views/marketplace/PluginMarketplace.svelte)'
 exclude:
   - '*.lock'
@@ -26,4 +28,6 @@ Marketplace UI for theme/style presets and plugin discovery/management.
 | `MarketplaceTypography.svelte` | Typography catalog browsing with install/apply/uninstall, local import/export, and per-field overrides |
 | `MarketplacePlugins.svelte` | Plugin registry browsing and install/uninstall flows, including live plugin activation without a page reload and immediate local-vs-registry source reclassification after installs |
 | `MarketplaceBundles.svelte` | Bundle catalog browsing with guided apply (theme + typography preset/overrides + plugin dependencies) |
+| `MarketplaceTemplates.svelte` | Creation-time template catalog browsing with install to workspace `_templates/` |
+| `MarketplaceStarters.svelte` | Starter workspace catalog browsing with apply (seed files + templates into workspace) |
 | `PluginMarketplace.svelte` | Full-screen marketplace implementation (legacy/alternate surface) |

@@ -11,19 +11,21 @@ use diaryx_core::fs::AsyncFileSystem;
 use diaryx_core::link_parser;
 use diaryx_core::workspace::Workspace;
 
+use crate::body_renderer::BodyRenderer;
 use crate::types::{NavLink, PublishOptions, PublishResult, PublishedPage};
 
 /// Publisher for converting workspace to HTML (async-first)
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-pub struct Publisher<FS: AsyncFileSystem> {
+pub struct Publisher<'a, FS: AsyncFileSystem> {
     fs: FS,
+    body_renderer: &'a dyn BodyRenderer,
 }
 
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
+impl<'a, FS: AsyncFileSystem + Clone> Publisher<'a, FS> {
     /// Create a new publisher
-    pub fn new(fs: FS) -> Self {
-        Self { fs }
+    pub fn new(fs: FS, body_renderer: &'a dyn BodyRenderer) -> Self {
+        Self { fs, body_renderer }
     }
 
     /// Publish a workspace to HTML
@@ -295,29 +297,19 @@ impl<FS: AsyncFileSystem + Clone> Publisher<FS> {
             .await;
 
         // Render body templates (if any) before markdown-to-HTML conversion
-        #[cfg(feature = "templating")]
-        let rendered_body = if crate::template_render::has_templates(&parsed.body) {
-            let context = match _target_audience {
-                Some(audience) => crate::template_render::build_publish_context(
+        let rendered_body = if self.body_renderer.has_templates(&parsed.body) {
+            self.body_renderer
+                .render_body(
+                    &parsed.body,
                     &parsed.frontmatter,
                     path,
                     Some(workspace_root),
-                    audience,
-                ),
-                None => crate::template_render::build_context(
-                    &parsed.frontmatter,
-                    path,
-                    Some(workspace_root),
-                ),
-            };
-            crate::template_render::BodyTemplateRenderer::new()
-                .render(&parsed.body, &context)
+                    _target_audience,
+                )
                 .unwrap_or_else(|_| parsed.body.clone())
         } else {
             parsed.body.clone()
         };
-        #[cfg(not(feature = "templating"))]
-        let rendered_body = parsed.body.clone();
 
         // Convert markdown to HTML and transform .md links to .html
         let html_body = self.markdown_to_html(&rendered_body);
@@ -1914,7 +1906,8 @@ mod tests {
     #[test]
     fn test_transform_links_no_corruption() {
         let fs = diaryx_core::fs::SyncToAsyncFs::new(diaryx_core::fs::RealFileSystem);
-        let publisher = Publisher::new(fs);
+        let renderer = crate::body_renderer::NoopBodyRenderer;
+        let publisher = Publisher::new(fs, &renderer);
 
         // Simulate comrak output for: [Click me!](/family.md)
         let html1 = r#"<p><a href="/family.md">Click me!</a></p>"#;
@@ -2098,7 +2091,8 @@ mod tests {
             .unwrap();
 
         let async_fs = diaryx_core::fs::SyncToAsyncFs::new(fs.clone());
-        let publisher = Publisher::new(async_fs);
+        let renderer = crate::body_renderer::NoopBodyRenderer;
+        let publisher = Publisher::new(async_fs, &renderer);
         let dest = Path::new("/output");
 
         // Publish with copy_attachments: true
@@ -2205,7 +2199,8 @@ mod tests {
     #[test]
     fn test_markdown_to_html_footnotes() {
         let fs = diaryx_core::fs::SyncToAsyncFs::new(diaryx_core::fs::RealFileSystem);
-        let publisher = Publisher::new(fs);
+        let renderer = crate::body_renderer::NoopBodyRenderer;
+        let publisher = Publisher::new(fs, &renderer);
         let md = "Here is a footnote[^1].\n\n[^1]: This is the footnote content.";
         let html = publisher.markdown_to_html(md);
         assert!(
@@ -2227,7 +2222,8 @@ mod tests {
     #[test]
     fn test_markdown_to_html_colored_highlight() {
         let fs = diaryx_core::fs::SyncToAsyncFs::new(diaryx_core::fs::RealFileSystem);
-        let publisher = Publisher::new(fs);
+        let renderer = crate::body_renderer::NoopBodyRenderer;
+        let publisher = Publisher::new(fs, &renderer);
         let md = "This is =={red}important== text.";
         let html = publisher.markdown_to_html(md);
         eprintln!("Colored highlight HTML: {}", html);

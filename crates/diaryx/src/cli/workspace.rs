@@ -4,7 +4,6 @@ use diaryx_core::config::Config;
 use diaryx_core::entry::{DiaryxAppSync, prettify_filename, slugify};
 use diaryx_core::fs::{FileSystem, RealFileSystem, SyncToAsyncFs};
 use diaryx_core::link_parser::LinkFormat;
-use diaryx_core::template::TemplateContext;
 use diaryx_core::validate::ValidationFixer;
 use diaryx_core::workspace::Workspace;
 use serde_yaml::Value;
@@ -2749,44 +2748,55 @@ fn handle_create(
         prettify_filename(stem)
     });
 
-    // Get template manager and template
-    let manager = app.template_manager(Some(&config.default_workspace));
     let template_name = template.as_deref().unwrap_or("note");
+    let filename = child_filename.trim_end_matches(".md");
 
-    // Try to get the template, fall back to building content manually if not found
-    let content = if let Some(tmpl) = manager.get(template_name) {
-        // Use template system
-        let filename = child_filename.trim_end_matches(".md");
-        let mut context = TemplateContext::new()
-            .with_title(&display_title)
-            .with_filename(filename)
-            .with_part_of(&relative_parent);
+    // Try to render template via the templating plugin
+    let content = 'tmpl: {
+        #[cfg(feature = "plugins")]
+        {
+            let workspace_root = &config.default_workspace;
+            if let Ok(ctx) =
+                super::plugin_loader::CliPluginContext::load(workspace_root, "diaryx.templating")
+            {
+                let mut custom = serde_json::Map::new();
+                if let Some(ref desc) = description {
+                    custom.insert(
+                        "description".into(),
+                        serde_json::Value::String(desc.clone()),
+                    );
+                }
 
-        // Add description as custom variable if provided
-        if let Some(ref desc) = description {
-            context = context.with_custom("description", desc.as_str());
-        }
+                let params = serde_json::json!({
+                    "template": template_name,
+                    "title": display_title,
+                    "filename": filename,
+                    "part_of": relative_parent,
+                    "custom": custom,
+                });
 
-        let mut rendered = tmpl.render(&context);
+                if let Ok(result) = ctx.cmd("RenderCreationTemplate", params) {
+                    if let Some(rendered) = result.as_str() {
+                        let mut rendered = rendered.to_string();
 
-        // If this should be an index, we need to add contents: [] to frontmatter
-        // We do this by modifying the rendered content
-        if is_index && !rendered.contains("contents:") {
-            // Insert contents: [] before the closing ---
-            if let Some(idx) = rendered.find("\n---\n") {
-                // Find the position after the first ---\n
-                if rendered.starts_with("---\n") {
-                    let insert_pos = idx;
-                    rendered.insert_str(insert_pos, "\ncontents: []");
+                        // If this should be an index, add contents: [] to frontmatter
+                        if is_index && !rendered.contains("contents:") {
+                            if let Some(idx) = rendered.find("\n---\n") {
+                                if rendered.starts_with("---\n") {
+                                    rendered.insert_str(idx, "\ncontents: []");
+                                }
+                            }
+                        }
+
+                        break 'tmpl rendered;
+                    }
                 }
             }
         }
 
-        rendered
-    } else {
-        // Fallback: build content manually (template not found)
+        // Fallback: build content manually (plugin not available)
         eprintln!(
-            "⚠ Template '{}' not found, using default format",
+            "Warning: Template '{}' not found, using default format",
             template_name
         );
         let mut frontmatter = format!("---\ntitle: {}\n", display_title);

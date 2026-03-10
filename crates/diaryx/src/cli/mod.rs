@@ -187,7 +187,7 @@ fn dispatch_core_command(cli: Cli) -> bool {
 
         Commands::Property { operation } => property::handle_property_command(&app_sync, operation),
 
-        Commands::Template { command } => template::handle_template_command(command, &app_sync),
+        Commands::Template { command } => template::handle_template_command(command),
 
         Commands::Sort {
             path,

@@ -14,7 +14,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
@@ -28,6 +28,8 @@ use diaryx_core::plugin::{
     Plugin, PluginCapability, PluginContext, PluginError, PluginId, PluginManifest, UiContribution,
     WorkspaceOpenedEvent, WorkspacePlugin,
 };
+
+use crate::body_renderer::BodyRenderer;
 
 // ============================================================================
 // PublishPlugin struct
@@ -78,6 +80,7 @@ pub struct PublishPlugin<FS: AsyncFileSystem + Clone> {
     workspace_root: RwLock<Option<PathBuf>>,
     link_format: RwLock<LinkFormat>,
     config: RwLock<PublishPluginConfig>,
+    body_renderer: Arc<dyn BodyRenderer>,
 }
 
 // ============================================================================
@@ -85,14 +88,20 @@ pub struct PublishPlugin<FS: AsyncFileSystem + Clone> {
 // ============================================================================
 
 impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
-    /// Create a new PublishPlugin with the given filesystem.
-    pub fn new(fs: FS) -> Self {
+    /// Create a new PublishPlugin with the given filesystem and body renderer.
+    pub fn with_renderer(fs: FS, body_renderer: Arc<dyn BodyRenderer>) -> Self {
         Self {
             fs,
             workspace_root: RwLock::new(None),
             link_format: RwLock::new(LinkFormat::default()),
             config: RwLock::new(PublishPluginConfig::default()),
+            body_renderer,
         }
+    }
+
+    /// Create a new PublishPlugin with the given filesystem and a noop body renderer.
+    pub fn new(fs: FS) -> Self {
+        Self::with_renderer(fs, Arc::new(crate::body_renderer::NoopBodyRenderer))
     }
 }
 
@@ -222,20 +231,18 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                 Ok(content) => {
                     // When exporting for a specific audience, render body templates
                     // so {{#for-audience}} blocks resolve. For "all" (*), leave raw.
-                    #[cfg(feature = "templating")]
-                    let content = if audience != "*"
-                        && crate::template_render::has_templates(&content)
-                    {
+                    let content = if audience != "*" && self.body_renderer.has_templates(&content) {
                         match diaryx_core::frontmatter::parse_or_empty(&content) {
                             Ok(parsed) => {
-                                let context = crate::template_render::build_publish_context(
-                                    &parsed.frontmatter,
-                                    &included.source_path,
-                                    Some(root_path),
-                                    audience,
-                                );
-                                let rendered = crate::template_render::BodyTemplateRenderer::new()
-                                    .render(&parsed.body, &context)
+                                let rendered = self
+                                    .body_renderer
+                                    .render_body(
+                                        &parsed.body,
+                                        &parsed.frontmatter,
+                                        &included.source_path,
+                                        Some(root_path),
+                                        Some(audience),
+                                    )
                                     .unwrap_or_else(|_| parsed.body.clone());
                                 diaryx_core::frontmatter::serialize(&parsed.frontmatter, &rendered)
                                     .unwrap_or(content)
@@ -631,7 +638,8 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                     default_audience: default_aud,
                 };
 
-                let publisher = crate::publisher::Publisher::new(self.fs.clone());
+                let publisher =
+                    crate::publisher::Publisher::new(self.fs.clone(), &*self.body_renderer);
                 let result = publisher
                     .publish(&resolved_root, &dest_path, &options)
                     .await

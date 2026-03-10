@@ -3,15 +3,19 @@
   import MarketplaceTypography from "./MarketplaceTypography.svelte";
   import MarketplacePlugins from "./MarketplacePlugins.svelte";
   import MarketplaceBundles from "./MarketplaceBundles.svelte";
+  import MarketplaceTemplates from "./MarketplaceTemplates.svelte";
+  import MarketplaceStarters from "./MarketplaceStarters.svelte";
 
-  type Section = "themes" | "typography" | "plugins" | "bundles";
+  type Section = "themes" | "typography" | "plugins" | "bundles" | "templates" | "starters";
   let activeSection = $state<Section>("themes");
 
   const sections: { id: Section; label: string }[] = [
     { id: "themes", label: "Themes" },
-    { id: "typography", label: "Typography" },
+    { id: "typography", label: "Type" },
     { id: "plugins", label: "Plugins" },
     { id: "bundles", label: "Bundles" },
+    { id: "templates", label: "Templates" },
+    { id: "starters", label: "Starters" },
   ];
 </script>
 
@@ -26,6 +30,10 @@
       <MarketplacePlugins />
     {:else if activeSection === "bundles"}
       <MarketplaceBundles />
+    {:else if activeSection === "templates"}
+      <MarketplaceTemplates />
+    {:else if activeSection === "starters"}
+      <MarketplaceStarters />
     {/if}
   </div>
 
@@ -35,7 +43,7 @@
       {#each sections as section (section.id)}
         <button
           type="button"
-          class="flex-1 px-2 py-1.5 text-xs font-medium rounded transition-colors {activeSection === section.id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+          class="flex-1 px-1 py-1.5 text-xs font-medium rounded transition-colors {activeSection === section.id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
           onclick={() => (activeSection = section.id)}
         >
           {section.label}

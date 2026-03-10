@@ -1,320 +1,319 @@
-//! Template command handlers
+//! Template command handlers — routes to the templating plugin via CLI plugin context.
 
-use diaryx_core::config::Config;
-use diaryx_core::fs::RealFileSystem;
-use diaryx_core::template::{TEMPLATE_VARIABLES, TemplateManager, TemplateSource};
-use std::io::{self, Write};
-
-use crate::cli::CliDiaryxAppSync;
 use crate::cli::args::TemplateCommands;
-use crate::editor::launch_editor;
 
-/// Handle template subcommands
-/// Returns true on success, false on error
-pub fn handle_template_command(command: TemplateCommands, app: &CliDiaryxAppSync) -> bool {
-    let config = Config::load().ok();
-    let workspace_dir = config.as_ref().map(|c| c.default_workspace.as_path());
-    let manager = app.template_manager(workspace_dir);
-
-    match command {
-        TemplateCommands::List { paths } => {
-            handle_list(&manager, paths);
-            true
-        }
-
-        TemplateCommands::Show { name } => handle_show(&manager, &name),
-
-        TemplateCommands::New { name, from, edit } => {
-            handle_new(&manager, &name, from.as_deref(), edit, config.as_ref())
-        }
-
-        TemplateCommands::Edit { name } => handle_edit(&manager, &name, config.as_ref()),
-
-        TemplateCommands::Delete { name, yes } => handle_delete(&manager, &name, yes),
-
-        TemplateCommands::Path => {
-            handle_path(&manager);
-            true
-        }
-
-        TemplateCommands::Variables => {
-            handle_variables();
-            true
-        }
-    }
-}
-
-/// Handle the 'template list' command
-fn handle_list(manager: &TemplateManager<&RealFileSystem>, show_paths: bool) {
-    let templates = manager.list();
-
-    if templates.is_empty() {
-        println!("No templates found.");
-        return;
-    }
-
-    println!("Available templates:\n");
-
-    for info in templates {
-        if show_paths {
-            let path_str = info
-                .path
-                .as_ref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "(built-in)".to_string());
-            println!("  {} [{}]", info.name, info.source);
-            println!("    {}", path_str);
-        } else {
-            println!("  {} [{}]", info.name, info.source);
-        }
-    }
-
-    println!();
-    println!("Use 'diaryx template show <name>' to view a template's contents.");
-}
-
-/// Handle the 'template show' command
-fn handle_show(manager: &TemplateManager<&RealFileSystem>, name: &str) -> bool {
-    match manager.get(name) {
-        Some(template) => {
-            println!("Template: {}\n", template.name);
-            println!("{}", template.raw_content);
-            true
-        }
-        None => {
-            eprintln!("✗ Template not found: {}", name);
-            eprintln!("  Use 'diaryx template list' to see available templates.");
-            false
-        }
-    }
-}
-
-/// Handle the 'template new' command
-fn handle_new(
-    manager: &TemplateManager<&RealFileSystem>,
-    name: &str,
-    from: Option<&str>,
-    edit: bool,
-    config: Option<&Config>,
-) -> bool {
-    // Check if template already exists in user directory
-    let user_templates = manager.list();
-    let exists_in_user = user_templates
-        .iter()
-        .any(|t| t.name == name && t.source == TemplateSource::User);
-
-    if exists_in_user {
-        eprintln!("✗ Template '{}' already exists in user templates.", name);
-        eprintln!("  Use 'diaryx template edit {}' to modify it.", name);
+/// Handle template subcommands.
+/// Returns true on success, false on error.
+pub fn handle_template_command(command: TemplateCommands) -> bool {
+    #[cfg(not(feature = "plugins"))]
+    {
+        let _ = command;
+        eprintln!("Template commands require the 'plugins' feature.");
         return false;
     }
 
-    // Get initial content
-    let content = if let Some(source_name) = from {
-        // Copy from existing template
-        match manager.get(source_name) {
-            Some(template) => template.raw_content.clone(),
-            None => {
-                eprintln!("✗ Source template not found: {}", source_name);
-                return false;
-            }
-        }
-    } else {
-        // Create a default template structure
-        default_template_content(name)
-    };
-
-    // Create the template
-    match manager.create_template(name, &content) {
-        Ok(path) => {
-            println!("✓ Created template: {}", path.display());
-
-            if edit {
-                if let Some(cfg) = config {
-                    println!("Opening in editor...");
-                    if let Err(e) = launch_editor(&path, cfg) {
-                        eprintln!("✗ Error launching editor: {}", e);
-                        return false;
-                    }
-                } else {
-                    eprintln!("⚠ No config found, cannot open editor.");
-                }
-            } else {
-                println!("  Use 'diaryx template edit {}' to customize it.", name);
-            }
-            true
-        }
-        Err(e) => {
-            eprintln!("✗ Error creating template: {}", e);
-            false
-        }
-    }
+    #[cfg(feature = "plugins")]
+    plugin_impl::handle_template_command_impl(command)
 }
 
-/// Handle the 'template edit' command
-fn handle_edit(
-    manager: &TemplateManager<&RealFileSystem>,
-    name: &str,
-    config: Option<&Config>,
-) -> bool {
-    let templates = manager.list();
+#[cfg(feature = "plugins")]
+mod plugin_impl {
+    use std::io::{self, Write};
+    use std::path::Path;
 
-    // Find the template
-    let template_info = templates.iter().find(|t| t.name == name);
+    use diaryx_core::config::Config;
+    use serde_json::Value as JsonValue;
 
-    match template_info {
-        Some(info) => {
-            match &info.source {
-                TemplateSource::Builtin => {
-                    // Can't edit built-in, offer to copy to user templates
-                    eprintln!("✗ Cannot edit built-in template '{}' directly.", name);
+    use crate::cli::args::TemplateCommands;
+    use crate::cli::plugin_loader::CliPluginContext;
+    use crate::editor::launch_editor;
+
+    const PLUGIN_ID: &str = "diaryx.templating";
+
+    pub fn handle_template_command_impl(command: TemplateCommands) -> bool {
+        let config = Config::load().ok();
+        let workspace_root = config
+            .as_ref()
+            .map(|c| c.default_workspace.clone())
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
+
+        let ctx = match CliPluginContext::load(&workspace_root, PLUGIN_ID) {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                eprintln!("Failed to load templating plugin: {}", e);
+                eprintln!("Is the diaryx.templating plugin installed?");
+                return false;
+            }
+        };
+
+        match command {
+            TemplateCommands::List { paths } => handle_list(&ctx, paths),
+            TemplateCommands::Show { name } => handle_show(&ctx, &name),
+            TemplateCommands::New { name, from, edit } => {
+                handle_new(&ctx, &name, from.as_deref(), edit, config.as_ref())
+            }
+            TemplateCommands::Edit { name } => handle_edit(&ctx, &name, config.as_ref()),
+            TemplateCommands::Delete { name, yes } => handle_delete(&ctx, &name, yes),
+            TemplateCommands::Path => handle_path(&ctx),
+            TemplateCommands::Variables => handle_variables(&ctx),
+        }
+    }
+
+    fn handle_list(ctx: &CliPluginContext, show_paths: bool) -> bool {
+        match ctx.cmd("ListTemplates", serde_json::json!({})) {
+            Ok(data) => {
+                let templates = data.as_array().cloned().unwrap_or_default();
+                if templates.is_empty() {
+                    println!("No templates found.");
+                    return true;
+                }
+
+                println!("Available templates:\n");
+                for tmpl in &templates {
+                    let name = tmpl.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+                    let source = tmpl.get("source").and_then(|v| v.as_str()).unwrap_or("?");
+                    println!("  {} [{}]", name, source);
+                    if show_paths {
+                        if let Ok(info) =
+                            ctx.cmd("GetTemplatePath", serde_json::json!({ "name": name }))
+                        {
+                            let path_str = info
+                                .get("path")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("(built-in)");
+                            println!("    {}", path_str);
+                        }
+                    }
+                }
+                println!();
+                println!("Use 'diaryx template show <name>' to view a template's contents.");
+                true
+            }
+            Err(e) => {
+                eprintln!("Failed to list templates: {}", e);
+                false
+            }
+        }
+    }
+
+    fn handle_show(ctx: &CliPluginContext, name: &str) -> bool {
+        match ctx.cmd("GetTemplate", serde_json::json!({ "name": name })) {
+            Ok(data) => {
+                let content = data.as_str().unwrap_or("");
+                println!("Template: {}\n", name);
+                println!("{}", content);
+                true
+            }
+            Err(e) => {
+                eprintln!("Template not found: {}", e);
+                eprintln!("  Use 'diaryx template list' to see available templates.");
+                false
+            }
+        }
+    }
+
+    fn handle_new(
+        ctx: &CliPluginContext,
+        name: &str,
+        from: Option<&str>,
+        edit: bool,
+        config: Option<&Config>,
+    ) -> bool {
+        let content = if let Some(source_name) = from {
+            match ctx.cmd("GetTemplate", serde_json::json!({ "name": source_name })) {
+                Ok(data) => data.as_str().unwrap_or("").to_string(),
+                Err(e) => {
+                    eprintln!("Source template not found: {}", e);
+                    return false;
+                }
+            }
+        } else {
+            default_template_content()
+        };
+
+        match ctx.cmd(
+            "SaveTemplate",
+            serde_json::json!({ "name": name, "content": content }),
+        ) {
+            Ok(_) => {
+                println!("Created template: {}", name);
+                if edit {
+                    if let Ok(info) =
+                        ctx.cmd("GetTemplatePath", serde_json::json!({ "name": name }))
+                    {
+                        if let Some(path_str) = info.get("path").and_then(|v| v.as_str()) {
+                            if let Some(cfg) = config {
+                                println!("Opening in editor...");
+                                if let Err(e) = launch_editor(Path::new(path_str), cfg) {
+                                    eprintln!("Error launching editor: {}", e);
+                                    return false;
+                                }
+                            } else {
+                                eprintln!("No config found, cannot open editor.");
+                            }
+                        }
+                    }
+                } else {
+                    println!("  Use 'diaryx template edit {}' to customize it.", name);
+                }
+                true
+            }
+            Err(e) => {
+                eprintln!("Error creating template: {}", e);
+                false
+            }
+        }
+    }
+
+    fn handle_edit(ctx: &CliPluginContext, name: &str, config: Option<&Config>) -> bool {
+        match ctx.cmd("GetTemplatePath", serde_json::json!({ "name": name })) {
+            Ok(info) => {
+                let source = info
+                    .get("source")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                if source == "builtin" {
+                    eprintln!("Cannot edit built-in template '{}' directly.", name);
                     eprintln!(
                         "  Use 'diaryx template new {} --from {}' to create an editable copy.",
                         name, name
                     );
-                    false
+                    return false;
                 }
-                TemplateSource::User | TemplateSource::Workspace => {
-                    if let Some(path) = &info.path {
-                        if let Some(cfg) = config {
-                            println!("Opening: {}", path.display());
-                            if let Err(e) = launch_editor(path, cfg) {
-                                eprintln!("✗ Error launching editor: {}", e);
-                                return false;
-                            }
-                            true
-                        } else {
-                            eprintln!("✗ No config found, cannot determine editor.");
-                            eprintln!("  Template file: {}", path.display());
-                            false
+                if let Some(path_str) = info.get("path").and_then(|v| v.as_str()) {
+                    if let Some(cfg) = config {
+                        println!("Opening: {}", path_str);
+                        if let Err(e) = launch_editor(Path::new(path_str), cfg) {
+                            eprintln!("Error launching editor: {}", e);
+                            return false;
                         }
+                        true
                     } else {
-                        eprintln!("✗ Template path not found.");
+                        eprintln!("No config found, cannot determine editor.");
+                        eprintln!("  Template file: {}", path_str);
                         false
                     }
-                }
-            }
-        }
-        None => {
-            eprintln!("✗ Template not found: {}", name);
-            eprintln!("  Use 'diaryx template list' to see available templates.");
-            false
-        }
-    }
-}
-
-/// Handle the 'template delete' command
-fn handle_delete(manager: &TemplateManager<&RealFileSystem>, name: &str, yes: bool) -> bool {
-    let templates = manager.list();
-
-    // Find the template
-    let template_info = templates.iter().find(|t| t.name == name);
-
-    match template_info {
-        Some(info) => {
-            match &info.source {
-                TemplateSource::Builtin => {
-                    eprintln!("✗ Cannot delete built-in template '{}'.", name);
+                } else {
+                    eprintln!("Template path not found.");
                     false
                 }
-                TemplateSource::User | TemplateSource::Workspace => {
-                    if let Some(path) = &info.path {
-                        // Confirm deletion
-                        if !yes {
-                            print!("Delete template '{}' at {}? [y/N] ", name, path.display());
-                            io::stdout().flush().unwrap();
-
-                            let mut input = String::new();
-                            if io::stdin().read_line(&mut input).is_err() {
-                                eprintln!("✗ Failed to read input");
-                                return false;
-                            }
-
-                            let input = input.trim().to_lowercase();
-                            if input != "y" && input != "yes" {
-                                println!("Cancelled.");
-                                return true; // User cancelled, not an error
-                            }
-                        }
-
-                        // Delete the file
-                        match std::fs::remove_file(path) {
-                            Ok(()) => {
-                                println!("✓ Deleted template: {}", name);
-                                true
-                            }
-                            Err(e) => {
-                                eprintln!("✗ Error deleting template: {}", e);
-                                false
-                            }
-                        }
-                    } else {
-                        eprintln!("✗ Template path not found.");
-                        false
-                    }
-                }
+            }
+            Err(e) => {
+                eprintln!("Template not found: {}", e);
+                eprintln!("  Use 'diaryx template list' to see available templates.");
+                false
             }
         }
-        None => {
-            eprintln!("✗ Template not found: {}", name);
-            eprintln!("  Use 'diaryx template list' to see available templates.");
-            false
+    }
+
+    fn handle_delete(ctx: &CliPluginContext, name: &str, yes: bool) -> bool {
+        let info = match ctx.cmd("GetTemplatePath", serde_json::json!({ "name": name })) {
+            Ok(info) => info,
+            Err(e) => {
+                eprintln!("Template not found: {}", e);
+                eprintln!("  Use 'diaryx template list' to see available templates.");
+                return false;
+            }
+        };
+
+        let source = info
+            .get("source")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        if source == "builtin" {
+            eprintln!("Cannot delete built-in template '{}'.", name);
+            return false;
+        }
+
+        let path_str = info.get("path").and_then(|v| v.as_str()).unwrap_or(name);
+
+        if !yes {
+            print!("Delete template '{}' at {}? [y/N] ", name, path_str);
+            io::stdout().flush().unwrap();
+            let mut input = String::new();
+            if io::stdin().read_line(&mut input).is_err() {
+                eprintln!("Failed to read input");
+                return false;
+            }
+            let input = input.trim().to_lowercase();
+            if input != "y" && input != "yes" {
+                println!("Cancelled.");
+                return true;
+            }
+        }
+
+        match ctx.cmd("DeleteTemplate", serde_json::json!({ "name": name })) {
+            Ok(_) => {
+                println!("Deleted template: {}", name);
+                true
+            }
+            Err(e) => {
+                eprintln!("Error deleting template: {}", e);
+                false
+            }
         }
     }
-}
 
-/// Handle the 'template path' command
-fn handle_path(manager: &TemplateManager<&RealFileSystem>) {
-    println!("Template directories (in priority order):\n");
-
-    if let Some(workspace_dir) = manager.workspace_templates_dir() {
-        let exists = workspace_dir.exists();
-        let status = if exists { "✓" } else { "○" };
-        println!("  {} Workspace: {}", status, workspace_dir.display());
-    } else {
-        println!("  ○ Workspace: (not configured)");
+    fn handle_path(ctx: &CliPluginContext) -> bool {
+        match ctx.cmd("GetTemplatePaths", serde_json::json!({})) {
+            Ok(data) => {
+                println!("Template directories:\n");
+                if let Some(dir) = data.get("workspace_templates_dir").and_then(|v| v.as_str()) {
+                    let exists = Path::new(dir).exists();
+                    let status = if exists { "+" } else { "o" };
+                    println!("  {} Workspace: {}", status, dir);
+                }
+                println!("  + Built-in:  (compiled into plugin)");
+                println!();
+                println!("Legend: + = exists, o = does not exist");
+                true
+            }
+            Err(e) => {
+                eprintln!("Failed to get template paths: {}", e);
+                false
+            }
+        }
     }
 
-    if let Some(user_dir) = manager.user_templates_dir() {
-        let exists = user_dir.exists();
-        let status = if exists { "✓" } else { "○" };
-        println!("  {} User:      {}", status, user_dir.display());
-    } else {
-        println!("  ○ User:      (not available)");
+    fn handle_variables(ctx: &CliPluginContext) -> bool {
+        match ctx.cmd("GetTemplateVariables", serde_json::json!({})) {
+            Ok(data) => {
+                println!("Available template variables:\n");
+                if let JsonValue::Array(vars) = &data {
+                    for var in vars {
+                        if let JsonValue::Array(pair) = var {
+                            let name = pair.first().and_then(|v| v.as_str()).unwrap_or("?");
+                            let desc = pair.get(1).and_then(|v| v.as_str()).unwrap_or("");
+                            println!("  {{{{{}}}}}  ", name);
+                            println!("      {}", desc);
+                            println!();
+                        }
+                    }
+                }
+                println!("Custom format examples:");
+                println!("  {{{{date:%B %d, %Y}}}}     -> \"January 15, 2024\"");
+                println!("  {{{{time:%H:%M:%S}}}}      -> \"14:30:45\"");
+                println!("  {{{{datetime:%A, %B %d}}}} -> \"Monday, January 15\"");
+                println!();
+                println!("Format codes follow strftime conventions.");
+                true
+            }
+            Err(e) => {
+                eprintln!("Failed to get template variables: {}", e);
+                false
+            }
+        }
     }
 
-    println!("  ✓ Built-in:  (compiled into binary)");
-    println!();
-    println!("Legend: ✓ = exists, ○ = does not exist");
-}
-
-/// Handle the 'template variables' command
-fn handle_variables() {
-    println!("Available template variables:\n");
-
-    for (name, description) in TEMPLATE_VARIABLES {
-        println!("  {{{{{}}}}}  ", name);
-        println!("      {}", description);
-        println!();
-    }
-
-    println!("Custom format examples:");
-    println!("  {{{{date:%B %d, %Y}}}}     → \"January 15, 2024\"");
-    println!("  {{{{time:%H:%M:%S}}}}      → \"14:30:45\"");
-    println!("  {{{{datetime:%A, %B %d}}}} → \"Monday, January 15\"");
-    println!();
-    println!("Format codes follow strftime conventions.");
-}
-
-/// Generate default content for a new template
-fn default_template_content(_name: &str) -> String {
-    r#"---
-title: "{{{{title}}}}"
-created: {{{{timestamp}}}}
+    fn default_template_content() -> String {
+        r#"---
+title: "{{title}}"
+created: {{timestamp}}
 ---
 
-# {{{{title}}}}
+# {{title}}
 
 "#
-    .to_string()
+        .to_string()
+    }
 }

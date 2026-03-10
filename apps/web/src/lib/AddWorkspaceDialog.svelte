@@ -5,7 +5,8 @@
    * Local-first: workspaces are always created locally, with an optional
    * provider dropdown to link to a sync provider (e.g., Diaryx Sync).
    *
-   * Content Sources: Start fresh, Import from ZIP, Open existing folder.
+   * Content Sources: Start fresh (with optional starter template),
+   * Import from ZIP, Open existing folder.
    */
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
@@ -18,6 +19,7 @@
     Upload,
     Plus,
     FolderOpen,
+    FolderTree,
     Cloud,
     CloudDownload,
   } from "@lucide/svelte";
@@ -48,6 +50,15 @@
     captureProviderPluginForTransfer,
     installCapturedProviderPlugin,
   } from "$lib/sync/browserProviderBootstrap";
+  import {
+    fetchStarterWorkspaceRegistry,
+  } from "$lib/marketplace/starterWorkspaceRegistry";
+  import type { StarterWorkspaceRegistryEntry } from "$lib/marketplace/types";
+  import {
+    fetchStarterWorkspaceManifest,
+    applyStarterWorkspace,
+    type StarterApplyRuntime,
+  } from "$lib/marketplace/starterWorkspaceApply";
 
   interface Props {
     open?: boolean;
@@ -91,6 +102,11 @@
   let selectedFolderHandle = $state<FileSystemDirectoryHandle | null>(null);
   let selectedFolderName = $state<string | null>(null);
 
+  // Starter workspace state (shown within the "start_fresh" card)
+  let starterWorkspaces = $state<StarterWorkspaceRegistryEntry[]>([]);
+  let starterLoading = $state(false);
+  let selectedStarterId = $state<string | null>(null); // null = empty/fresh
+
   // Tauri workspace path
   let workspacePath = $state('');
 
@@ -108,6 +124,11 @@
 
   let workspaceProviders = $derived(pluginStore.workspaceProviders);
   let showOpenFolder = $derived(isTauri() || isStorageTypeSupported('filesystem-access'));
+  let selectedStarter = $derived(
+    selectedStarterId
+      ? starterWorkspaces.find((s) => s.id === selectedStarterId) ?? null
+      : null,
+  );
 
   // ========================================================================
   // Effects
@@ -165,8 +186,10 @@
     providerStatus = null;
     cloudWorkspaces = [];
     selectedRemoteWorkspace = null;
+    selectedStarterId = null;
     newWorkspaceName = getNextLocalWorkspaceName();
     contentSource = 'start_fresh';
+    loadStarterWorkspaces();
   }
 
   function getNextLocalWorkspaceName(): string {
@@ -182,6 +205,18 @@
       index += 1;
     }
     return `${base} ${index}`;
+  }
+
+  async function loadStarterWorkspaces() {
+    starterLoading = true;
+    try {
+      const registry = await fetchStarterWorkspaceRegistry();
+      starterWorkspaces = registry.starters;
+    } catch {
+      starterWorkspaces = [];
+    } finally {
+      starterLoading = false;
+    }
   }
 
   async function handleProviderChange(providerId: string | null) {
@@ -311,7 +346,7 @@
    * Unified initialization handler.
    *
    * 1. Create local workspace (always)
-   * 2. Import content if needed (ZIP or folder)
+   * 2. Import content if needed (ZIP, folder, or starter)
    * 3. If provider selected, link to provider
    * 4. Switch to new workspace, close dialog
    */
@@ -352,6 +387,7 @@
       } else if (contentSource === 'import_zip') {
         await handleImportZip(wsName);
       } else {
+        // start_fresh — may include a starter workspace
         await handleCreateFresh(wsName);
       }
 
@@ -400,6 +436,35 @@
     const localWs = createLocalWorkspace(wsName, undefined, wsPath);
     await switchWorkspace(localWs.id, localWs.name);
     await ensureRootIndexForCurrentWorkspace(localWs.name, localWs.path);
+
+    // If a starter workspace is selected, apply its content
+    if (selectedStarter) {
+      progressMessage = "Applying starter content...";
+      const manifest = await fetchStarterWorkspaceManifest(selectedStarter);
+      const backend = await getBackend();
+      const api = createApi(backend);
+      const workspaceDir = backend.getWorkspacePath()
+        .replace(/\/index\.md$/, '')
+        .replace(/\/README\.md$/, '');
+
+      const runtime: StarterApplyRuntime = {
+        createWorkspace: (path, name) => api.createWorkspace(path, name),
+        findRootIndex: (dir) => api.findRootIndex(dir),
+        saveEntry: (path, content, rootIndexPath) => api.saveEntry(path, content, rootIndexPath),
+        saveTemplate: (name, content, wsPath) => api.saveTemplate(name, content, wsPath),
+      };
+
+      await applyStarterWorkspace(
+        manifest,
+        workspaceDir,
+        runtime,
+        (progress) => {
+          importProgress = Math.round(progress.percent * (selectedProviderId ? 0.1 : 1));
+          progressMessage = progress.message;
+        },
+      );
+    }
+
     importProgress = selectedProviderId ? 10 : 100;
     progressMessage = selectedProviderId ? "Local workspace created." : "Done.";
   }
@@ -758,7 +823,7 @@
               {/if}
             {/if}
 
-            <!-- Start fresh -->
+            <!-- Start fresh (with starter workspace selector) -->
             <button
               type="button"
               class="w-full text-left p-3 rounded-lg border-2 transition-colors {contentSource === 'start_fresh' ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
@@ -772,13 +837,72 @@
                   <Plus class="size-5 {contentSource === 'start_fresh' ? 'text-primary' : 'text-muted-foreground'}" />
                 </div>
                 <div>
-                  <div class="font-medium text-sm">Start fresh</div>
+                  <div class="font-medium text-sm">
+                    {#if selectedStarter}
+                      Start from "{selectedStarter.name}"
+                    {:else}
+                      Start fresh
+                    {/if}
+                  </div>
                   <div class="text-xs text-muted-foreground mt-0.5">
-                    Create an empty workspace with a root index file
+                    {#if selectedStarter}
+                      {selectedStarter.summary}
+                    {:else}
+                      Create an empty workspace with a root index file
+                    {/if}
                   </div>
                 </div>
               </div>
             </button>
+
+            {#if contentSource === 'start_fresh' && (starterWorkspaces.length > 0 || starterLoading)}
+              <div class="space-y-1.5 pl-8">
+                <p class="text-xs text-muted-foreground font-medium">Workspace starter</p>
+                {#if starterLoading}
+                  <div class="flex items-center gap-2 text-xs text-muted-foreground py-1">
+                    <Loader2 class="size-3.5 animate-spin" />
+                    Loading starters...
+                  </div>
+                {:else}
+                  <!-- Empty / fresh option -->
+                  <button
+                    type="button"
+                    class="w-full text-left p-2 rounded-md border transition-colors {selectedStarterId === null ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
+                    onclick={() => { selectedStarterId = null; }}
+                  >
+                    <div class="flex items-center gap-2">
+                      <Plus class="size-3.5 text-muted-foreground shrink-0" />
+                      <div>
+                        <span class="text-sm">Empty workspace</span>
+                        <p class="text-xs text-muted-foreground">Just a root index file</p>
+                      </div>
+                    </div>
+                  </button>
+
+                  <!-- Starter options from registry -->
+                  {#each starterWorkspaces as starter (starter.id)}
+                    <button
+                      type="button"
+                      class="w-full text-left p-2 rounded-md border transition-colors {selectedStarterId === starter.id ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
+                      onclick={() => { selectedStarterId = starter.id; }}
+                    >
+                      <div class="flex items-center gap-2">
+                        <FolderTree class="size-3.5 text-muted-foreground shrink-0" />
+                        <div class="min-w-0">
+                          <span class="text-sm truncate block">{starter.name}</span>
+                          <p class="text-xs text-muted-foreground truncate">
+                            {starter.summary}
+                            <span class="text-muted-foreground/60">
+                              &middot; {starter.file_count} file{starter.file_count === 1 ? '' : 's'}
+                            </span>
+                          </p>
+                        </div>
+                      </div>
+                    </button>
+                  {/each}
+                {/if}
+              </div>
+            {/if}
           </div>
         </div>
       {/if}

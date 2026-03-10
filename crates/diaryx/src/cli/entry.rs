@@ -6,6 +6,9 @@ use crate::cli::CliDiaryxAppSync;
 use crate::cli::util::{apply_workspace_config, load_config, resolve_paths};
 use crate::editor::launch_editor;
 
+#[cfg(feature = "plugins")]
+use super::plugin_loader::CliPluginContext;
+
 /// Handle the 'open' command
 pub fn handle_open(app: &CliDiaryxAppSync, path_or_date: &str) -> bool {
     let config = match load_config() {
@@ -50,7 +53,7 @@ pub fn handle_open(app: &CliDiaryxAppSync, path_or_date: &str) -> bool {
 
 /// Handle the 'create' command
 pub fn handle_create(
-    app: &CliDiaryxAppSync,
+    _app: &CliDiaryxAppSync,
     path: &str,
     template: Option<String>,
     title: Option<String>,
@@ -72,14 +75,43 @@ pub fn handle_create(
         return false;
     }
 
-    // Use template-based creation
-    let workspace_dir = Some(config.default_workspace.as_path());
-    match app.create_entry_from_template(
-        path_buf,
-        template.as_deref(),
-        title.as_deref(),
-        workspace_dir,
-    ) {
+    // Derive title from filename if not provided
+    let title = title.unwrap_or_else(|| {
+        path_buf
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Untitled")
+            .to_string()
+    });
+
+    let filename = path_buf
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("untitled");
+
+    // Try to render template via the templating plugin
+    let content = 'tmpl: {
+        #[cfg(feature = "plugins")]
+        {
+            let workspace_root = &config.default_workspace;
+            if let Ok(ctx) = CliPluginContext::load(workspace_root, "diaryx.templating") {
+                let params = serde_json::json!({
+                    "template": template.as_deref().unwrap_or("note"),
+                    "title": title,
+                    "filename": filename,
+                });
+                if let Ok(result) = ctx.cmd("RenderCreationTemplate", params) {
+                    if let Some(content) = result.as_str() {
+                        break 'tmpl content.to_string();
+                    }
+                }
+            }
+        }
+        // Fallback
+        format!("---\ntitle: {}\n---\n\n# {}\n\n", title, title)
+    };
+
+    match std::fs::write(path_buf, &content) {
         Ok(_) => {
             println!("✓ Created entry: {}", path);
             true

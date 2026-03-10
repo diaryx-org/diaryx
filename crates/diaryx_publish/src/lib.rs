@@ -8,13 +8,13 @@
 #![doc = "- [`FilesystemContentProvider`] — reads content from the local filesystem"]
 #![doc = "- [`ContentProvider`] (re-exported from `diaryx_core`) — trait for content sources"]
 
+mod body_renderer;
 mod fs_content_provider;
 pub mod plugin;
 mod publisher;
-#[cfg(feature = "templating")]
-mod template_render;
 mod types;
 
+pub use body_renderer::{BodyRenderer, NoopBodyRenderer};
 pub use fs_content_provider::FilesystemContentProvider;
 pub use plugin::{AudienceAccessState, AudiencePublishConfig, PublishPlugin, PublishPluginConfig};
 pub use publisher::Publisher;

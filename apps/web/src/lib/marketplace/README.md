@@ -8,6 +8,10 @@ attachments:
   - "[typographyRegistry.ts](/apps/web/src/lib/marketplace/typographyRegistry.ts)"
   - "[bundleRegistry.ts](/apps/web/src/lib/marketplace/bundleRegistry.ts)"
   - "[bundleApply.ts](/apps/web/src/lib/marketplace/bundleApply.ts)"
+  - "[templateRegistry.ts](/apps/web/src/lib/marketplace/templateRegistry.ts)"
+  - "[templateInstall.ts](/apps/web/src/lib/marketplace/templateInstall.ts)"
+  - "[starterWorkspaceRegistry.ts](/apps/web/src/lib/marketplace/starterWorkspaceRegistry.ts)"
+  - "[starterWorkspaceApply.ts](/apps/web/src/lib/marketplace/starterWorkspaceApply.ts)"
 exclude:
   - "*.lock"
 ---
@@ -22,8 +26,12 @@ entries assembled into a generated `registry.md` and published to CDN-backed R2.
 
 | File | Purpose |
 | --- | --- |
-| `types.ts` | Shared marketplace asset types (`theme`, `typography`, `bundle`, plugin dependency metadata). |
+| `types.ts` | Shared marketplace asset types (`theme`, `typography`, `bundle`, `template`, `starter-workspace`, plugin dependency metadata). |
 | `themeRegistry.ts` | Trusted curated theme registry client (`registry.md` parser + validation + cache). |
 | `typographyRegistry.ts` | Trusted curated typography registry client (`registry.md` parser + validation + cache). |
 | `bundleRegistry.ts` | Trusted curated bundle registry client (`registry.md` parser + validation + cache). |
 | `bundleApply.ts` | Bundle apply planning/execution (theme install/apply, typography preset install/apply + override apply, plugin dependency install/enable) with guided best-effort behavior. |
+| `templateRegistry.ts` | Trusted curated template registry client (`registry.md` parser + validation + cache). |
+| `templateInstall.ts` | Template install service (fetch artifact, save to workspace `_templates/` via templating plugin). |
+| `starterWorkspaceRegistry.ts` | Trusted curated starter workspace registry client (`registry.md` parser + validation + cache). |
+| `starterWorkspaceApply.ts` | Starter workspace apply service (fetch manifest, create files + templates in workspace with progress). |

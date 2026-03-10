@@ -28,6 +28,7 @@ Business logic services that coordinate between stores and backend.
 
 ## Migration Notes
 
-`shareService.ts` and `workspaceCrdtService.ts` were removed from the web app.
-Sync/share/provider operations are now plugin-command-driven via the sync
-plugin, with host-side wiring in `src/lib/sync/`.
+`workspaceCrdtService.ts` was removed from the web app.
+Sync/share/provider operations are plugin-command-driven via the sync plugin.
+Host-owned API services remain appropriate for non-CRDT domains such as site
+publishing.

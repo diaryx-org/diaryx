@@ -43,6 +43,7 @@ HTTP route handlers for the sync server API.
 Workspace creation returns `403` when the user's workspace limit is reached, and `409` for duplicate names.
 The per-user workspace limit defaults to the user's tier (Free=1, Plus=10) and can be overridden via `workspace_limit` on the users table.
 The `GET /auth/me` response includes `workspace_limit`, `tier`, `published_site_limit`, and `attachment_limit_bytes`.
+Auth verification also enforces the tier device cap during session creation; Free and Plus users can keep up to two registered devices, and extra sign-ins return `403` until a device is deleted.
 
 ### Snapshot Endpoints
 
@@ -99,7 +100,8 @@ attachment limits. Over-limit requests return `413` with
 - `POST /api/workspaces/{id}/site` — create published site config (`slug`, optional `enabled`, optional `auto_publish`).
 - `GET /api/workspaces/{id}/site` — fetch site config + per-audience build status.
 - `DELETE /api/workspaces/{id}/site` — unpublish site and delete static artifacts from the sites bucket.
-- `POST /api/workspaces/{id}/site/publish` — trigger immediate publish to the sites bucket.
+- `POST /api/workspaces/{id}/site/publish` — deprecated legacy publish trigger. Prefer `POST /api/workspaces/{id}/site/publish-with-fallback`.
+- `POST /api/workspaces/{id}/site/publish-with-fallback` — preferred publish endpoint. Publishes from server state when available and can fall back to an uploaded snapshot body.
 - `POST /api/workspaces/{id}/site/tokens` — create signed access token (`audience`, optional `label`, optional `expires_in`).
 - `GET /api/workspaces/{id}/site/tokens` — list token metadata for the workspace site.
 - `DELETE /api/workspaces/{id}/site/tokens/{token_id}` — revoke a token and refresh `_meta.json` revocation list.

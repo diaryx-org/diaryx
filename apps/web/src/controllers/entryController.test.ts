@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { markClean, setSaving, setError } = vi.hoisted(() => ({
+const { markClean, setSaving, setError, reverseBlobUrlsToAttachmentPaths } = vi.hoisted(() => ({
   markClean: vi.fn(),
   setSaving: vi.fn(),
   setError: vi.fn(),
+  reverseBlobUrlsToAttachmentPaths: vi.fn((markdown: string) => markdown),
 }));
 
 vi.mock('../models/stores', () => ({
@@ -19,24 +20,33 @@ vi.mock('../models/stores', () => ({
 }));
 
 vi.mock('../models/services', () => ({
-  reverseBlobUrlsToAttachmentPaths: (markdown: string) => markdown,
+  reverseBlobUrlsToAttachmentPaths,
   transformAttachmentPaths: vi.fn(),
   revokeBlobUrls: vi.fn(),
 }));
 
-import { saveEntryWithSync } from './entryController';
+import { getEditorBodyMarkdown, saveEntryWithSync } from './entryController';
 
 describe('entryController saveEntryWithSync', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    reverseBlobUrlsToAttachmentPaths.mockImplementation((markdown: string) => markdown);
   });
 
   afterEach(() => {
     vi.useRealTimers();
   });
 
+  it('normalizes live editor markdown through attachment path reversal', () => {
+    reverseBlobUrlsToAttachmentPaths.mockReturnValue('# normalized');
+
+    expect(getEditorBodyMarkdown({ getMarkdown: () => '# raw' })).toBe('# normalized');
+    expect(reverseBlobUrlsToAttachmentPaths).toHaveBeenCalledWith('# raw');
+  });
+
   it('retries transient save failures and eventually saves', async () => {
     vi.useFakeTimers();
+    reverseBlobUrlsToAttachmentPaths.mockReturnValue('# normalized');
 
     const api = {
       saveEntry: vi
@@ -53,6 +63,7 @@ describe('entryController saveEntryWithSync', () => {
     await promise;
 
     expect(api.saveEntry).toHaveBeenCalledTimes(2);
+    expect(api.saveEntry).toHaveBeenCalledWith('README.md', '# normalized', undefined, undefined);
     expect(markClean).toHaveBeenCalledTimes(1);
     expect(setError).not.toHaveBeenCalled();
   });

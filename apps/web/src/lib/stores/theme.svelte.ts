@@ -4,9 +4,19 @@
  * Persists preference to localStorage and respects system preference.
  */
 
+import {
+  getThemeModePath,
+  readWorkspaceText,
+  writeWorkspaceText,
+} from "$lib/workspace/workspaceAssetStorage";
+
 export type ThemeMode = "light" | "dark" | "system";
 
 const STORAGE_KEY = "diaryx-theme";
+
+function isThemeMode(value: unknown): value is ThemeMode {
+  return value === "light" || value === "dark" || value === "system";
+}
 
 /**
  * Creates reactive theme state with persistence.
@@ -18,10 +28,57 @@ export function createThemeStore() {
   // Listeners notified after the resolved mode changes (used by appearance store)
   const modeChangeListeners: Array<() => void> = [];
 
+  function applyResolvedTheme(nextMode: ThemeMode) {
+    if (typeof window === "undefined") return;
+
+    if (nextMode === "system") {
+      const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+      resolvedTheme = mediaQuery.matches ? "dark" : "light";
+    } else {
+      resolvedTheme = nextMode;
+    }
+
+    applyTheme(resolvedTheme);
+    for (const fn of modeChangeListeners) fn();
+  }
+
+  function persistLegacyMode(nextMode: ThemeMode): void {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem(STORAGE_KEY, nextMode);
+  }
+
+  async function persistWorkspaceMode(nextMode: ThemeMode): Promise<void> {
+    try {
+      await writeWorkspaceText(
+        getThemeModePath(),
+        JSON.stringify({ mode: nextMode }, null, 2),
+      );
+    } catch (error) {
+      console.warn("[themeStore] Failed to persist workspace theme mode:", error);
+    }
+  }
+
+  function setModeInternal(
+    newMode: ThemeMode,
+    options: { persistLegacy?: boolean; persistWorkspace?: boolean } = {},
+  ) {
+    const { persistLegacy = true, persistWorkspace = true } = options;
+    mode = newMode;
+
+    if (persistLegacy) {
+      persistLegacyMode(newMode);
+    }
+    if (persistWorkspace) {
+      void persistWorkspaceMode(newMode);
+    }
+
+    applyResolvedTheme(newMode);
+  }
+
   // Initialize from localStorage or default to system
   if (typeof window !== "undefined") {
     const stored = localStorage.getItem(STORAGE_KEY) as ThemeMode | null;
-    if (stored && ["light", "dark", "system"].includes(stored)) {
+    if (isThemeMode(stored)) {
       mode = stored;
     }
 
@@ -29,13 +86,7 @@ export function createThemeStore() {
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
     function updateResolvedTheme() {
-      if (mode === "system") {
-        resolvedTheme = mediaQuery.matches ? "dark" : "light";
-      } else {
-        resolvedTheme = mode;
-      }
-      applyTheme(resolvedTheme);
-      for (const fn of modeChangeListeners) fn();
+      applyResolvedTheme(mode);
     }
 
     mediaQuery.addEventListener("change", updateResolvedTheme);
@@ -56,29 +107,33 @@ export function createThemeStore() {
   }
 
   function setMode(newMode: ThemeMode) {
-    mode = newMode;
-
-    // Persist to localStorage
-    if (typeof localStorage !== "undefined") {
-      localStorage.setItem(STORAGE_KEY, newMode);
-    }
-
-    // Update resolved theme
-    if (typeof window !== "undefined") {
-      if (newMode === "system") {
-        const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-        resolvedTheme = mediaQuery.matches ? "dark" : "light";
-      } else {
-        resolvedTheme = newMode;
-      }
-      applyTheme(resolvedTheme);
-      for (const fn of modeChangeListeners) fn();
-    }
+    setModeInternal(newMode);
   }
 
   function toggle() {
     // Toggle between light and dark (skip system in toggle)
     setMode(resolvedTheme === "dark" ? "light" : "dark");
+  }
+
+  async function reloadFromWorkspace(): Promise<void> {
+    try {
+      const raw = await readWorkspaceText(getThemeModePath());
+      if (!raw) {
+        persistLegacyMode(mode);
+        void persistWorkspaceMode(mode);
+        return;
+      }
+
+      const parsed = JSON.parse(raw) as { mode?: unknown };
+      if (isThemeMode(parsed.mode)) {
+        setModeInternal(parsed.mode, {
+          persistLegacy: true,
+          persistWorkspace: false,
+        });
+      }
+    } catch (error) {
+      console.warn("[themeStore] Failed to reload workspace theme mode:", error);
+    }
   }
 
   return {
@@ -93,6 +148,7 @@ export function createThemeStore() {
     },
     setMode,
     toggle,
+    reloadFromWorkspace,
     /** Register a callback invoked after light/dark mode changes. */
     onModeChange(fn: () => void) {
       modeChangeListeners.push(fn);
@@ -124,6 +180,7 @@ export function getThemeStore() {
       },
       setMode: () => {},
       toggle: () => {},
+      reloadFromWorkspace: async () => {},
       onModeChange: () => () => {},
     };
   }

@@ -1,16 +1,26 @@
 <script lang="ts">
   import * as Dialog from "$lib/components/ui/dialog";
-  import { X } from "@lucide/svelte";
+  import { Loader2, X } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
+  import type { AttachmentMediaKind } from "@/models/services/attachmentService";
 
   interface Props {
     open: boolean;
-    imageUrl: string | null;
-    imageName: string;
+    mediaUrl: string | null;
+    mediaName: string;
+    mediaKind?: AttachmentMediaKind;
+    loading?: boolean;
     onOpenChange: (open: boolean) => void;
   }
 
-  let { open, imageUrl, imageName, onOpenChange }: Props = $props();
+  let {
+    open,
+    mediaUrl,
+    mediaName,
+    mediaKind = "image",
+    loading = false,
+    onOpenChange,
+  }: Props = $props();
 </script>
 
 <Dialog.Root {open} {onOpenChange}>
@@ -21,7 +31,7 @@
     <div class="relative flex items-center justify-center w-full h-full">
       <!-- Header bar -->
       <div class="absolute top-0 left-0 right-0 flex items-center justify-between px-4 py-2 bg-gradient-to-b from-black/60 to-transparent z-10">
-        <span class="text-sm text-white/80 truncate">{imageName}</span>
+        <span class="text-sm text-white/80 truncate">{mediaName}</span>
         <Button
           variant="ghost"
           size="icon"
@@ -33,14 +43,46 @@
         </Button>
       </div>
 
-      <!-- Image -->
-      {#if imageUrl}
-        <img
-          src={imageUrl}
-          alt={imageName}
-          class="max-w-[88vw] max-h-[85vh] object-contain select-none"
-          draggable="false"
-        />
+      {#if mediaUrl}
+        {#if mediaKind === "video"}
+          <!-- svelte-ignore a11y_media_has_caption -->
+          <video
+            src={mediaUrl}
+            controls
+            preload="metadata"
+            playsinline
+            class="max-w-[88vw] max-h-[85vh] rounded object-contain"
+          ></video>
+        {:else if mediaKind === "audio"}
+          <div class="flex items-center justify-center w-[min(36rem,88vw)] h-[24rem] px-6">
+            <audio
+              src={mediaUrl}
+              controls
+              preload="metadata"
+              class="w-full"
+            ></audio>
+          </div>
+        {:else}
+          <img
+            src={mediaUrl}
+            alt={mediaName}
+            class="max-w-[88vw] max-h-[85vh] object-contain select-none"
+            draggable="false"
+          />
+        {/if}
+      {:else if loading}
+        <div class="flex items-center justify-center w-[60vw] h-[50vh]">
+          <Loader2 class="size-8 text-white/70 animate-spin" />
+        </div>
+      {/if}
+
+      {#if loading}
+        <div class="absolute inset-x-0 bottom-0 flex items-center justify-center pb-4 pointer-events-none">
+          <div class="inline-flex items-center gap-2 rounded-full bg-black/60 px-3 py-1 text-xs text-white/80">
+            <Loader2 class="size-3.5 animate-spin" />
+            {mediaKind === "image" ? "Loading full image" : "Loading preview"}
+          </div>
+        </div>
       {/if}
     </div>
   </Dialog.Content>

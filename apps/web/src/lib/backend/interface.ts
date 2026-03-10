@@ -354,6 +354,22 @@ export interface Backend {
    */
   isCrdtEnabled?(): Promise<boolean>;
 
+  /**
+   * Enter an isolated guest workspace mode.
+   * Hosts may swap to an in-memory backend or otherwise isolate local writes.
+   */
+  startGuestMode?(sessionCode: string): Promise<void>;
+
+  /**
+   * Leave guest workspace mode and restore the prior workspace/backend.
+   */
+  endGuestMode?(): Promise<void>;
+
+  /**
+   * Check whether the backend is currently operating in guest mode.
+   */
+  isGuestMode?(): Promise<boolean>;
+
   // --------------------------------------------------------------------------
   // Unified Command API
   // --------------------------------------------------------------------------
@@ -527,14 +543,14 @@ export interface Backend {
   /**
    * Focus on specific files for body sync.
    * Available in Tauri (native Rust sync).
-   * For WASM, body sync is handled by the PluginSyncAdapter.
+   * For browser-loaded plugins, body sync is handled by the Extism host bridge.
    */
   focusSyncFiles?(files: string[]): Promise<void>;
 
   /**
    * Request body sync for specific files.
    * Available in Tauri (native Rust sync).
-   * For WASM, body sync is handled by the PluginSyncAdapter.
+   * For browser-loaded plugins, body sync is handled by the Extism host bridge.
    */
   requestBodySync?(files: string[]): Promise<void>;
 

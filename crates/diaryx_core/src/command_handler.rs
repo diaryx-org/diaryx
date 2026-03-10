@@ -1951,38 +1951,10 @@ impl<FS: AsyncFileSystem + Clone> Diaryx<FS> {
             }
 
             // === Attachment Operations ===
-            Command::UploadAttachment {
+            Command::RegisterAttachment {
                 entry_path,
                 filename,
-                data_base64,
             } => {
-                use base64::{Engine as _, engine::general_purpose::STANDARD};
-
-                let entry = PathBuf::from(&entry_path);
-                let entry_dir = entry.parent().unwrap_or_else(|| Path::new("."));
-                let attachments_dir = entry_dir.join("_attachments");
-
-                // Resolve against workspace root for direct fs operations
-                let resolved_attachments_dir = self.resolve_fs_path(&attachments_dir);
-
-                // Create _attachments directory if needed
-                self.fs().create_dir_all(&resolved_attachments_dir).await?;
-
-                // Decode base64 data
-                let data = STANDARD.decode(&data_base64).map_err(|e| {
-                    DiaryxError::Unsupported(format!("Failed to decode base64: {}", e))
-                })?;
-
-                // Write file
-                let dest_path = resolved_attachments_dir.join(&filename);
-                self.fs()
-                    .write_binary(&dest_path, &data)
-                    .await
-                    .map_err(|e| DiaryxError::FileWrite {
-                        path: dest_path.clone(),
-                        source: e,
-                    })?;
-
                 // Build canonical path for the attachment (entry_dir + _attachments/filename)
                 let attachment_rel_path = format!("_attachments/{}", filename);
                 let entry_parent = Path::new(&entry_path)

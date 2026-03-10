@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   getCurrentWorkspaceIdMock,
   getServerWorkspaceIdMock,
+  isWorkspaceSyncEnabledMock,
   enqueueAttachmentUploadMock,
   isAttachmentSyncEnabledMock,
   sha256HexMock,
@@ -10,6 +11,7 @@ const {
 } = vi.hoisted(() => ({
   getCurrentWorkspaceIdMock: vi.fn(),
   getServerWorkspaceIdMock: vi.fn(),
+  isWorkspaceSyncEnabledMock: vi.fn(() => true),
   enqueueAttachmentUploadMock: vi.fn(),
   isAttachmentSyncEnabledMock: vi.fn(() => false),
   sha256HexMock: vi.fn(),
@@ -25,8 +27,10 @@ vi.mock("../models/stores", () => ({
 vi.mock("../models/services/attachmentService", () => ({
   trackBlobUrl: vi.fn(),
   computeRelativeAttachmentPath: vi.fn(),
+  formatMarkdownDestination: vi.fn((path: string) => path),
   getMimeType: vi.fn(() => "application/octet-stream"),
-  bytesToBase64: vi.fn(),
+  getAttachmentMediaKind: vi.fn(() => "file"),
+  isPreviewableAttachmentKind: vi.fn(() => false),
 }));
 
 vi.mock("$lib/sync/attachmentSyncService", () => ({
@@ -40,6 +44,7 @@ vi.mock("$lib/sync/attachmentSyncService", () => ({
 vi.mock("$lib/storage/localWorkspaceRegistry.svelte", () => ({
   getCurrentWorkspaceId: getCurrentWorkspaceIdMock,
   getServerWorkspaceId: getServerWorkspaceIdMock,
+  isWorkspaceSyncEnabled: isWorkspaceSyncEnabledMock,
 }));
 
 import { enqueueIncrementalAttachmentUpload } from "./attachmentController";
@@ -58,6 +63,7 @@ describe("enqueueIncrementalAttachmentUpload", () => {
     sha256HexMock.mockResolvedValue("a".repeat(64));
     getCurrentWorkspaceIdMock.mockReturnValue("local-workspace-1");
     getServerWorkspaceIdMock.mockReturnValue("server-workspace-1");
+    isWorkspaceSyncEnabledMock.mockReturnValue(true);
   });
 
   it("indexes attachment metadata and enqueues upload for synced workspaces", async () => {
@@ -85,8 +91,10 @@ describe("enqueueIncrementalAttachmentUpload", () => {
   it("skips upload when the current workspace is not linked to sync", async () => {
     getCurrentWorkspaceIdMock.mockReturnValue("local-workspace-1");
     getServerWorkspaceIdMock.mockReturnValue(null);
+    isWorkspaceSyncEnabledMock.mockReturnValue(true);
 
     const file = makeMockFile([7, 8, 9]);
+    const arrayBufferSpy = vi.spyOn(file, "arrayBuffer");
 
     await enqueueIncrementalAttachmentUpload(
       "my-journal.md",
@@ -96,5 +104,7 @@ describe("enqueueIncrementalAttachmentUpload", () => {
 
     expect(indexAttachmentRefsMock).not.toHaveBeenCalled();
     expect(enqueueAttachmentUploadMock).not.toHaveBeenCalled();
+    expect(sha256HexMock).not.toHaveBeenCalled();
+    expect(arrayBufferSpy).not.toHaveBeenCalled();
   });
 });

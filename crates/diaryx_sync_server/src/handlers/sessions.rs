@@ -49,14 +49,19 @@ pub struct SessionInfoResponse {
     pub peer_count: usize,
 }
 
-/// Create session routes
-pub fn session_routes(state: SessionsState) -> Router {
+/// Create live share session routes.
+pub fn share_session_routes(state: SessionsState) -> Router {
     Router::new()
         .route("/", post(create_session))
         .route("/{code}", get(get_session))
         .route("/{code}", patch(update_session))
         .route("/{code}", delete(delete_session))
         .with_state(state)
+}
+
+/// Backward-compatible alias for older callers that still refer to session routes.
+pub fn session_routes(state: SessionsState) -> Router {
+    share_session_routes(state)
 }
 
 /// POST /api/sessions - Create a new share session

@@ -39,6 +39,8 @@ pub enum SyncEvent {
     BodyChanged {
         /// Path of the changed file.
         file_path: String,
+        /// Latest body content after applying the remote update.
+        body: String,
     },
     /// An error occurred.
     Error {

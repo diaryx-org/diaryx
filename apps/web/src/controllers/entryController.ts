@@ -18,10 +18,17 @@ import {
   revokeBlobUrls,
   reverseBlobUrlsToAttachmentPaths,
 } from '../models/services';
+import { dispatchFileOpenedEvent } from '../lib/plugins/browserPluginManager.svelte';
 
 // Sync/body orchestration is plugin-owned; host keeps local filesystem workflows.
-async function ensureBodySync(_path: string): Promise<void> {}
+async function ensureBodySync(path: string): Promise<void> {
+  await dispatchFileOpenedEvent(path);
+}
 function closeBodySync(_path: string): void {}
+
+type EditorMarkdownRef = {
+  getMarkdown?: () => string | undefined;
+} | null | undefined;
 
 const SAVE_RETRY_DELAYS_MS = [100, 200, 400, 800, 1600, 3200];
 
@@ -58,6 +65,15 @@ async function saveEntryWithRetry(
   }
   console.warn(`[EntryController] saveEntry failed for '${path}' after retries:`, lastError);
   throw lastError;
+}
+
+/**
+ * Get the current editor body markdown, reversing any transient blob URLs so
+ * callers receive the same attachment paths that persist to disk.
+ */
+export function getEditorBodyMarkdown(editorRef: EditorMarkdownRef): string {
+  const markdownWithBlobUrls = editorRef?.getMarkdown?.() ?? '';
+  return reverseBlobUrlsToAttachmentPaths(markdownWithBlobUrls);
 }
 
 /**
@@ -188,9 +204,7 @@ export async function saveEntry(
 
   try {
     entryStore.setSaving(true);
-    const markdownWithBlobUrls = editorRef.getMarkdown();
-    // Reverse-transform blob URLs back to attachment paths
-    const markdown = reverseBlobUrlsToAttachmentPaths(markdownWithBlobUrls || '');
+    const markdown = getEditorBodyMarkdown(editorRef);
 
     // Note: saveEntry expects only the body content, not frontmatter.
     // Frontmatter is preserved by the backend's save_content() method.
@@ -667,9 +681,7 @@ export async function saveEntryWithSync(
 
   try {
     entryStore.setSaving(true);
-    const markdownWithBlobUrls = editorRef.getMarkdown();
-    // Reverse-transform blob URLs back to attachment paths
-    const markdown = reverseBlobUrlsToAttachmentPaths(markdownWithBlobUrls || '');
+    const markdown = getEditorBodyMarkdown(editorRef);
 
     // Save to backend - Rust handles CRDT sync automatically
     const newPath = await saveEntryWithRetry(api, currentEntry.path, markdown, rootIndexPath, detectH1Title);

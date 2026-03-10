@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-03-05T00:46:10Z
+updated: 2026-03-10T15:46:36Z
 part_of: '[README](/README.md)'
 ---
 # Instructions for AI agents
@@ -30,7 +30,7 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │   │   │   ├── History - Version history components - apps/web/src/lib/history/README.md
 │   │   │   │   ├── Hooks - Svelte hooks - apps/web/src/lib/hooks/README.md
 │   │   │   │   ├── Marketplace - Marketplace registries and bundle apply execution - apps/web/src/lib/marketplace/README.md
-│   │   │   │   ├── Publish - Publishing and export UI components - apps/web/src/lib/publish/README.md
+│   │   │   │   ├── Publish - Publishing and export UI wiring - apps/web/src/lib/publish/README.md
 │   │   │   │   ├── Settings - Settings panel components - apps/web/src/lib/settings/README.md
 │   │   │   │   ├── Share - Legacy share/publish panel module - apps/web/src/lib/share/README.md
 │   │   │   │   ├── Sync - Host-side sync plugin integration services - apps/web/src/lib/sync/README.md

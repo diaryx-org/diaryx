@@ -9,6 +9,8 @@ import type {
   Command,
   Response,
   Config,
+  FileSystemEvent,
+  FileSystemEventCallback,
   SyncStatus,
   SyncEvent,
   SyncEventCallback,
@@ -120,10 +122,13 @@ export class TauriBackend implements Backend {
   private appPaths: AppPaths | null = null;
   private config: Config | null = null;
   private eventEmitter = new BackendEventEmitter();
+  private fsEventCallbacks = new Map<number, FileSystemEventCallback>();
+  private nextFsEventId = 1;
 
   // Sync event listeners
   private syncEventCallbacks = new Set<SyncEventCallback>();
   private syncEventUnlisteners: UnlistenFn[] = [];
+  private extismEventUnlisteners: UnlistenFn[] = [];
 
   async init(
     _storageTypeOverride?: string,
@@ -235,6 +240,7 @@ export class TauriBackend implements Backend {
       default_workspace: this.appPaths.default_workspace,
     };
 
+    await this.setupExtismEventListeners();
     this.ready = true;
     console.log("[TauriBackend] Initialization complete!");
   }
@@ -265,6 +271,76 @@ export class TauriBackend implements Backend {
       throw new BackendError("Tauri not initialized", "NotInitialized");
     }
     return this.invoke;
+  }
+
+  private async syncRuntimeContext(): Promise<void> {
+    const invoke = this.getInvoke();
+    const [{ getAuthState, getToken, getServerUrl }, workspaceRegistry] =
+      await Promise.all([
+        import("$lib/auth"),
+        import("$lib/storage/localWorkspaceRegistry.svelte"),
+      ]);
+
+    const authState = getAuthState();
+    const currentWorkspaceId = workspaceRegistry.getCurrentWorkspaceId();
+    const currentWorkspace = currentWorkspaceId
+      ? workspaceRegistry.getLocalWorkspace(currentWorkspaceId)
+      : null;
+    const providerLinks = currentWorkspaceId
+      ? workspaceRegistry.getWorkspaceProviderLinks(currentWorkspaceId)
+      : [];
+
+    await invoke("set_runtime_context", {
+      contextJson: JSON.stringify({
+        server_url: getServerUrl() ?? authState.serverUrl ?? null,
+        auth_token: getToken() ?? null,
+        tier: authState.tier ?? null,
+        guest_mode: await this.isGuestMode(),
+        current_workspace: currentWorkspace
+          ? {
+              local_id: currentWorkspace.id,
+              name: currentWorkspace.name,
+              path: currentWorkspace.path ?? null,
+              plugin_metadata: currentWorkspace.pluginMetadata ?? {},
+              provider_links: providerLinks.map((link: {
+                pluginId: string;
+                remoteWorkspaceId: string;
+                syncEnabled: boolean;
+              }) => ({
+                plugin_id: link.pluginId,
+                remote_workspace_id: link.remoteWorkspaceId,
+                sync_enabled: link.syncEnabled,
+              })),
+            }
+          : null,
+      }),
+    });
+  }
+
+  private async setupExtismEventListeners(): Promise<void> {
+    if (!this.listen) {
+      return;
+    }
+
+    for (const unlisten of this.extismEventUnlisteners) {
+      unlisten();
+    }
+    this.extismEventUnlisteners = [];
+
+    const unlistenFs = await this.listen<string>(
+      "extism-filesystem-event",
+      (event) => {
+        try {
+          const parsed = JSON.parse(event.payload) as FileSystemEvent;
+          for (const callback of this.fsEventCallbacks.values()) {
+            callback(parsed);
+          }
+        } catch (error) {
+          console.error("[TauriBackend] Failed to parse extism filesystem event:", error);
+        }
+      },
+    );
+    this.extismEventUnlisteners.push(unlistenFs);
   }
 
   /**
@@ -334,12 +410,33 @@ export class TauriBackend implements Backend {
     this.eventEmitter.off(event, listener);
   }
 
+  onFileSystemEvent(callback: FileSystemEventCallback): number {
+    const id = this.nextFsEventId++;
+    this.fsEventCallbacks.set(id, callback);
+    return id;
+  }
+
+  offFileSystemEvent(id: number): boolean {
+    return this.fsEventCallbacks.delete(id);
+  }
+
+  emitFileSystemEvent(event: FileSystemEvent): void {
+    for (const callback of this.fsEventCallbacks.values()) {
+      callback(event);
+    }
+  }
+
+  eventSubscriberCount(): number {
+    return this.fsEventCallbacks.size;
+  }
+
   // --------------------------------------------------------------------------
   // Unified Command API
   // --------------------------------------------------------------------------
 
   async execute(command: Command): Promise<Response> {
     try {
+      await this.syncRuntimeContext();
       // Custom replacer to handle BigInt serialization
       const commandJson = JSON.stringify(command, (_key, value) =>
         typeof value === 'bigint' ? Number(value) : value

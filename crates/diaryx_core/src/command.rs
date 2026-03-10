@@ -357,14 +357,12 @@ pub enum Command {
         path: String,
     },
 
-    /// Upload an attachment.
-    UploadAttachment {
+    /// Register an already-written attachment in entry frontmatter.
+    RegisterAttachment {
         /// Path to the entry file.
         entry_path: String,
         /// Filename for the attachment.
         filename: String,
-        /// Base64 encoded data.
-        data_base64: String,
     },
 
     /// Delete an attachment.
@@ -756,7 +754,7 @@ impl Command {
             Command::FixAll { .. } => {}
 
             // --- Attachments (entry_path only; attachment_path is a link ref) ---
-            Command::UploadAttachment { entry_path, .. }
+            Command::RegisterAttachment { entry_path, .. }
             | Command::DeleteAttachment { entry_path, .. }
             | Command::GetAttachmentData { entry_path, .. }
             | Command::ResolveAttachmentPath { entry_path, .. } => {

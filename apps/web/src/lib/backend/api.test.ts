@@ -1,4 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+const browserPluginEventMocks = vi.hoisted(() => ({
+  dispatchFileCreatedEvent: vi.fn().mockResolvedValue(undefined),
+  dispatchFileDeletedEvent: vi.fn().mockResolvedValue(undefined),
+  dispatchFileMovedEvent: vi.fn().mockResolvedValue(undefined),
+  dispatchFileSavedEvent: vi.fn().mockResolvedValue(undefined),
+}))
+
+const workspaceMirrorMocks = vi.hoisted(() => ({
+  mirrorCurrentWorkspaceMutationToLinkedProviders: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock('$lib/plugins/browserPluginManager.svelte', () => browserPluginEventMocks)
+vi.mock('$lib/sync/browserWorkspaceMutationMirror', () => workspaceMirrorMocks)
+
 import { createApi } from './api'
 import type { Backend } from './interface'
 
@@ -22,6 +37,7 @@ describe('api', () => {
       importFromZip: vi.fn().mockResolvedValue({ success: true, files_imported: 0 }),
     }
     api = createApi(mockBackend)
+    vi.clearAllMocks()
   })
 
   describe('getEntry', () => {
@@ -67,6 +83,23 @@ describe('api', () => {
         type: 'SaveEntry',
         params: { path: 'test.md', content: '# Updated Content', root_index_path: null, detect_h1_title: false },
       })
+      expect(browserPluginEventMocks.dispatchFileSavedEvent).toHaveBeenCalledWith('test.md')
+      expect(browserPluginEventMocks.dispatchFileMovedEvent).not.toHaveBeenCalled()
+      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).not.toHaveBeenCalled()
+    })
+
+    it('should mirror workspace metadata after a save-driven rename', async () => {
+      vi.mocked(mockBackend.execute).mockResolvedValue({
+        type: 'String',
+        data: 'renamed.md',
+      })
+
+      const result = await api.saveEntry('test.md', '# Updated Content', 'README.md', true)
+
+      expect(result).toBe('renamed.md')
+      expect(browserPluginEventMocks.dispatchFileMovedEvent).toHaveBeenCalledWith('test.md', 'renamed.md')
+      expect(browserPluginEventMocks.dispatchFileSavedEvent).toHaveBeenCalledWith('renamed.md')
+      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -87,6 +120,8 @@ describe('api', () => {
         },
       })
       expect(result).toBe('new-entry.md')
+      expect(browserPluginEventMocks.dispatchFileCreatedEvent).toHaveBeenCalledWith('new-entry.md')
+      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
 
     it('should create entry with options', async () => {
@@ -108,6 +143,8 @@ describe('api', () => {
           options: { title: 'New Entry', part_of: 'index.md', template: 'note', root_index_path: null },
         },
       })
+      expect(browserPluginEventMocks.dispatchFileCreatedEvent).toHaveBeenCalledWith('new-entry.md')
+      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -121,6 +158,8 @@ describe('api', () => {
         type: 'DeleteEntry',
         params: { path: 'test.md', hard_delete: false },
       })
+      expect(browserPluginEventMocks.dispatchFileDeletedEvent).toHaveBeenCalledWith('test.md')
+      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -134,6 +173,8 @@ describe('api', () => {
         type: 'MoveEntry',
         params: { from: 'old/path.md', to: 'new/path.md' },
       })
+      expect(browserPluginEventMocks.dispatchFileMovedEvent).toHaveBeenCalledWith('old/path.md', 'new/path.md')
+      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -151,6 +192,9 @@ describe('api', () => {
         params: { path: 'folder/old-name.md', new_filename: 'new-name.md' },
       })
       expect(result).toBe('folder/new-name.md')
+      expect(browserPluginEventMocks.dispatchFileMovedEvent).toHaveBeenCalledWith('folder/old-name.md', 'folder/new-name.md')
+      expect(browserPluginEventMocks.dispatchFileSavedEvent).toHaveBeenCalledWith('folder/new-name.md')
+      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -295,6 +339,31 @@ describe('api', () => {
         type: 'SetFrontmatterProperty',
         params: { path: 'test.md', key: 'title', value: 'New Title', root_index_path: null },
       })
+      expect(browserPluginEventMocks.dispatchFileSavedEvent).toHaveBeenCalledWith('test.md')
+      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
+    })
+
+    it('should dispatch file-saved for non-title frontmatter updates', async () => {
+      vi.mocked(mockBackend.execute).mockResolvedValue({ type: 'Ok' })
+
+      await api.setFrontmatterProperty('test.md', 'description', 'Updated description')
+
+      expect(browserPluginEventMocks.dispatchFileSavedEvent).toHaveBeenCalledWith('test.md')
+      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
+    })
+
+    it('should mirror frontmatter renames through plugin events', async () => {
+      vi.mocked(mockBackend.execute).mockResolvedValue({
+        type: 'String',
+        data: 'renamed.md',
+      })
+
+      const result = await api.setFrontmatterProperty('test.md', 'title', 'Renamed', 'README.md')
+
+      expect(result).toBe('renamed.md')
+      expect(browserPluginEventMocks.dispatchFileMovedEvent).toHaveBeenCalledWith('test.md', 'renamed.md')
+      expect(browserPluginEventMocks.dispatchFileSavedEvent).toHaveBeenCalledWith('renamed.md')
+      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
 
     it('should remove frontmatter property', async () => {
@@ -306,6 +375,8 @@ describe('api', () => {
         type: 'RemoveFrontmatterProperty',
         params: { path: 'test.md', key: 'author' },
       })
+      expect(browserPluginEventMocks.dispatchFileSavedEvent).toHaveBeenCalledWith('test.md')
+      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -326,26 +397,41 @@ describe('api', () => {
     })
 
     it('should upload attachment', async () => {
-      vi.mocked(mockBackend.execute).mockResolvedValue({
-        type: 'String',
-        data: 'attachments/image.png',
+      vi.mocked(mockBackend.execute)
+        .mockResolvedValueOnce({
+          type: 'String',
+          data: '/workspace/_attachments/image.png',
+        })
+        .mockResolvedValueOnce({
+          type: 'String',
+          data: '_attachments/image.png',
+        })
+
+      const bytes = new Uint8Array([1, 2, 3])
+      const result = await api.uploadAttachment('test.md', 'image.png', bytes)
+
+      expect(mockBackend.execute).toHaveBeenNthCalledWith(1, {
+        type: 'ResolveAttachmentPath',
+        params: {
+          entry_path: 'test.md',
+          attachment_path: '_attachments/image.png',
+        },
       })
-
-      const result = await api.uploadAttachment('test.md', 'image.png', 'base64data')
-
-      expect(mockBackend.execute).toHaveBeenCalledWith({
-        type: 'UploadAttachment',
+      expect(mockBackend.writeBinary).toHaveBeenCalledWith('/workspace/_attachments/image.png', bytes)
+      expect(mockBackend.execute).toHaveBeenNthCalledWith(2, {
+        type: 'RegisterAttachment',
         params: {
           entry_path: 'test.md',
           filename: 'image.png',
-          data_base64: 'base64data',
         },
       })
-      expect(result).toBe('attachments/image.png')
+      expect(result).toBe('_attachments/image.png')
     })
 
     it('should delete attachment', async () => {
-      vi.mocked(mockBackend.execute).mockResolvedValue({ type: 'Ok' })
+      vi.mocked(mockBackend.execute).mockResolvedValue({
+        type: 'Ok',
+      })
 
       await api.deleteAttachment('test.md', 'image.png')
 

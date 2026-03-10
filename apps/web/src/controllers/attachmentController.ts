@@ -15,8 +15,11 @@ import { entryStore } from '../models/stores';
 import {
   trackBlobUrl,
   computeRelativeAttachmentPath,
+  formatMarkdownDestination,
   getMimeType,
-  bytesToBase64,
+  getAttachmentMediaKind,
+  isPreviewableAttachmentKind,
+  type AttachmentMediaKind,
 } from '../models/services/attachmentService';
 import {
   enqueueAttachmentUpload,
@@ -27,7 +30,11 @@ import {
 } from '$lib/sync/attachmentSyncService';
 import type { QueueItemEvent } from '$lib/sync/attachmentSyncService';
 import { showLoading } from '../models/services/toastService';
-import { getCurrentWorkspaceId, getServerWorkspaceId } from '$lib/storage/localWorkspaceRegistry.svelte';
+import {
+  getCurrentWorkspaceId,
+  getServerWorkspaceId,
+  isWorkspaceSyncEnabled,
+} from '$lib/storage/localWorkspaceRegistry.svelte';
 import { toast } from 'svelte-sonner';
 
 // ============================================================================
@@ -98,26 +105,10 @@ function normalizeFrontmatter(frontmatter: any): Record<string, any> {
   return frontmatter;
 }
 
-/**
- * Convert a File to base64 string.
- */
-export function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      // Extract base64 part from data URL
-      const base64 = result.split(',')[1];
-      resolve(base64);
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
 function getActiveSyncWorkspaceId(): string | null {
   const localWorkspaceId = getCurrentWorkspaceId();
   if (!localWorkspaceId) return null;
+  if (!isWorkspaceSyncEnabled(localWorkspaceId)) return null;
   return getServerWorkspaceId(localWorkspaceId);
 }
 
@@ -146,15 +137,27 @@ function indexAttachmentMetadata(
   );
 }
 
+function createAttachmentPreviewBlobUrl(
+  file: File,
+  bytes: Uint8Array,
+  kind: AttachmentMediaKind,
+): string | undefined {
+  if (!isPreviewableAttachmentKind(kind)) return undefined;
+  const mimeType = file.type || getMimeType(file.name);
+  const blob = new Blob([bytes as unknown as BlobPart], { type: mimeType });
+  return URL.createObjectURL(blob);
+}
+
 export async function enqueueIncrementalAttachmentUpload(
   entryPath: string,
   attachmentMetadataPath: string,
   file: File,
+  bytes?: Uint8Array,
 ): Promise<void> {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  const hash = await sha256Hex(bytes);
   const workspaceId = getActiveSyncWorkspaceId();
   if (!workspaceId) return;
+  const resolvedBytes = bytes ?? new Uint8Array(await file.arrayBuffer());
+  const hash = await sha256Hex(resolvedBytes);
   indexAttachmentMetadata(
     entryPath,
     attachmentMetadataPath,
@@ -277,15 +280,13 @@ export async function handleAttachmentFileSelect(
   }
 
   try {
-    // Convert file to base64
     const bytes = new Uint8Array(await file.arrayBuffer());
-    const dataBase64 = bytesToBase64(bytes);
+    const mediaKind = getAttachmentMediaKind(file.name, file.type);
 
-    // Upload attachment
     const attachmentPath = await api.uploadAttachment(
       pendingAttachmentPath,
       file.name,
-      dataBase64
+      bytes
     );
     const canonicalAttachmentPath = await api.canonicalizeLink(
       attachmentPath,
@@ -301,6 +302,7 @@ export async function handleAttachmentFileSelect(
       pendingAttachmentPath,
       canonicalAttachmentPath,
       file,
+      bytes,
     );
 
     // Refresh the entry if it's currently open
@@ -312,17 +314,14 @@ export async function handleAttachmentFileSelect(
         onEntryUpdate(entry);
       }
 
-      // If it's an image, also insert it into the editor at cursor
-      if (file.type.startsWith('image/') && editorRef) {
-        // Use the bytes already in memory — no need to re-read from storage
-        const blob = new Blob([bytes], { type: file.type });
-        const blobUrl = URL.createObjectURL(blob);
-
-        // Track for cleanup
-        trackBlobUrl(entryRelativePath, blobUrl);
-
-        // Insert image at cursor
-        editorRef.insertImage(blobUrl, file.name);
+      // Insert previewable media immediately at the cursor using the bytes
+      // already in memory, so we do not have to re-read the uploaded file.
+      if (editorRef && isPreviewableAttachmentKind(mediaKind)) {
+        const blobUrl = createAttachmentPreviewBlobUrl(file, bytes, mediaKind);
+        if (blobUrl) {
+          trackBlobUrl(entryRelativePath, blobUrl);
+          editorRef.insertImage(blobUrl, file.name);
+        }
       }
     }
 
@@ -343,7 +342,7 @@ export async function handleEditorFileDrop(
   api: Api,
   currentEntry: EntryData | null,
   onEntryUpdate?: (entry: EntryData) => void
-): Promise<{ blobUrl: string; attachmentPath: string } | null> {
+): Promise<{ blobUrl: string; attachmentPath: string; kind: AttachmentMediaKind } | null> {
   if (!currentEntry) return null;
 
   // Check size limit
@@ -354,11 +353,11 @@ export async function handleEditorFileDrop(
 
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
-    const dataBase64 = bytesToBase64(bytes);
+    const mediaKind = getAttachmentMediaKind(file.name, file.type);
     const attachmentPath = await api.uploadAttachment(
       currentEntry.path,
       file.name,
-      dataBase64
+      bytes
     );
     const canonicalAttachmentPath = await api.canonicalizeLink(
       attachmentPath,
@@ -374,6 +373,7 @@ export async function handleEditorFileDrop(
       currentEntry.path,
       canonicalAttachmentPath,
       file,
+      bytes,
     );
 
     // Refresh the entry to update attachments list
@@ -384,21 +384,16 @@ export async function handleEditorFileDrop(
       onEntryUpdate(entry);
     }
 
-    // For images, create blob URL for display in editor
-    if (file.type.startsWith('image/')) {
-      // Use the bytes already in memory — no need to re-read from storage
-      const mimeType = file.type || getMimeType(file.name);
-      const blob = new Blob([bytes], { type: mimeType });
-      const blobUrl = URL.createObjectURL(blob);
-
-      // Track for cleanup
+    // For previewable media, create a blob URL for immediate display in editor.
+    const blobUrl = createAttachmentPreviewBlobUrl(file, bytes, mediaKind);
+    if (blobUrl) {
       trackBlobUrl(entryRelativePath, blobUrl);
-
-      return { blobUrl, attachmentPath: entryRelativePath };
+      return { blobUrl, attachmentPath: entryRelativePath, kind: mediaKind };
     }
 
-    // For non-image files, just return the path (no blob URL for editor display)
-    return { blobUrl: '', attachmentPath: entryRelativePath };
+    // Non-previewable files still upload successfully, but the editor does not
+    // have an inline representation for them.
+    return { blobUrl: '', attachmentPath: entryRelativePath, kind: mediaKind };
   } catch (e) {
     console.error('[AttachmentController] handleEditorFileDrop failed:', e);
     attachmentError = e instanceof Error ? e.message : String(e);
@@ -439,7 +434,7 @@ export async function handleDeleteAttachment(
 export function handleAttachmentInsert(
   selection: {
     path: string;
-    isImage: boolean;
+    kind: AttachmentMediaKind;
     blobUrl?: string;
     sourceEntryPath: string;
   },
@@ -458,14 +453,15 @@ export function handleAttachmentInsert(
   );
 
   // Always embed mode
-  if (selection.isImage && selection.blobUrl) {
+  if (isPreviewableAttachmentKind(selection.kind) && selection.blobUrl) {
     // Track the blob URL for reverse transformation on save
     trackBlobUrl(relativePath, selection.blobUrl);
-    // Insert image with blob URL
     editorRef.insertImage(selection.blobUrl, filename);
+  } else if (isPreviewableAttachmentKind(selection.kind)) {
+    editorRef.insertImage(relativePath, filename);
   } else {
-    // For non-images or images without blob URL, insert markdown syntax
-    const markdown = `![${filename}](${relativePath})`;
+    // Preserve the legacy markdown-embed fallback for non-previewable files.
+    const markdown = `![${filename}](${formatMarkdownDestination(relativePath)})`;
     editorRef.setContent(editorRef.getMarkdown() + `\n${markdown}\n`);
   }
 }

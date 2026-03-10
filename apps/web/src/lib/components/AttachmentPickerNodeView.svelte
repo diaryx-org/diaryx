@@ -9,8 +9,12 @@
   } from "@lucide/svelte";
   import type { Api } from "$lib/backend/api";
   import {
-    isHeicFile,
-    convertHeicToJpeg,
+    getAttachmentThumbnailUrl,
+    getFilename,
+    getAttachmentMediaKind,
+    getMimeType,
+    isPreviewableAttachmentKind,
+    type AttachmentMediaKind,
   } from "$lib/../models/services/attachmentService";
   import { enqueueIncrementalAttachmentUpload } from "@/controllers/attachmentController";
 
@@ -23,7 +27,7 @@
 
   interface AttachmentResult {
     path: string;
-    isImage: boolean;
+    kind: AttachmentMediaKind;
     blobUrl?: string;
     sourceEntryPath: string;
   }
@@ -35,7 +39,7 @@
     entryTitle: string | null;
     attachments: Array<{
       path: string;
-      isImage: boolean;
+      kind: AttachmentMediaKind;
       thumbnail?: string;
     }>;
   }
@@ -46,6 +50,7 @@
   let activeTab = $state<"existing" | "upload">("existing");
   let isDragging = $state(false);
   let fileInput: HTMLInputElement | null = $state(null);
+  let loadGeneration = 0;
 
   // Load attachments on mount
   $effect(() => {
@@ -83,6 +88,7 @@
 
   async function loadAttachments() {
     if (!api) return;
+    const generation = ++loadGeneration;
     loading = true;
     error = null;
 
@@ -103,7 +109,7 @@
           new Set(normalizedPaths),
         ).map((path) => ({
           path,
-          isImage: isImageFile(path),
+          kind: getAttachmentMediaKind(path),
           thumbnail: undefined as string | undefined,
         }));
 
@@ -116,80 +122,37 @@
         });
       }
 
+      if (generation !== loadGeneration) return;
       groups = newGroups;
       loading = false;
 
       if (newGroups.length === 0) {
         activeTab = "upload";
       }
-
-      // Load thumbnails in background
-      for (const group of newGroups) {
-        for (const attachment of group.attachments) {
-          if (attachment.isImage) {
-            loadThumbnail(group.entryPath, attachment.path).then((url) => {
-              if (url) {
-                attachment.thumbnail = url;
-                groups = [...groups]; // trigger reactivity
-              }
-            });
-          }
-        }
-      }
     } catch (e) {
+      if (generation !== loadGeneration) return;
       error = e instanceof Error ? e.message : String(e);
       loading = false;
     }
   }
 
-  async function loadThumbnail(
+  async function ensureThumbnail(
+    attachment: AttachmentGroup["attachments"][number],
     sourceEntryPath: string,
-    attachmentPath: string
   ): Promise<string | undefined> {
-    if (!api) return undefined;
-    try {
-      const data = await api.getAttachmentData(sourceEntryPath, attachmentPath);
-      const mimeType = getMimeType(attachmentPath);
-      let blob = new Blob([new Uint8Array(data)], { type: mimeType });
+    if (!api || attachment.kind !== "image") return undefined;
+    if (attachment.thumbnail) return attachment.thumbnail;
 
-      // Convert HEIC to JPEG for browser display
-      if (isHeicFile(attachmentPath)) {
-        blob = await convertHeicToJpeg(blob);
-      }
-
-      return URL.createObjectURL(blob);
-    } catch {
-      return undefined;
-    }
-  }
-
-  function isImageFile(path: string): boolean {
-    const ext = path.split(".").pop()?.toLowerCase() || "";
-    return ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "heic", "heif"].includes(
-      ext
+    const url = await getAttachmentThumbnailUrl(
+      api,
+      sourceEntryPath,
+      attachment.path,
     );
-  }
-
-  function getMimeType(path: string): string {
-    const ext = path.split(".").pop()?.toLowerCase() || "";
-    const mimeTypes: Record<string, string> = {
-      png: "image/png",
-      jpg: "image/jpeg",
-      jpeg: "image/jpeg",
-      gif: "image/gif",
-      webp: "image/webp",
-      svg: "image/svg+xml",
-      bmp: "image/bmp",
-      ico: "image/x-icon",
-      heic: "image/heic",
-      heif: "image/heif",
-      pdf: "application/pdf",
-    };
-    return mimeTypes[ext] || "application/octet-stream";
-  }
-
-  function getFilename(path: string): string {
-    return path.split("/").pop() || path;
+    if (url && attachment.thumbnail !== url) {
+      attachment.thumbnail = url;
+      groups = [...groups];
+    }
+    return url;
   }
 
   function getFileIcon(path: string) {
@@ -206,15 +169,53 @@
     }
   }
 
-  // Convert bytes to base64 in chunks to avoid stack overflow
-  function bytesToBase64(bytes: Uint8Array): string {
-    const chunkSize = 8192;
-    let binary = '';
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
-      binary += String.fromCharCode(...chunk);
-    }
-    return btoa(binary);
+  function lazyThumbnailTarget(
+    node: HTMLElement,
+    params: {
+      attachment: AttachmentGroup["attachments"][number];
+      sourceEntryPath: string;
+    },
+  ) {
+    let current = params;
+    let cancelled = false;
+    let observer: IntersectionObserver | null = null;
+
+    const load = async () => {
+      if (cancelled) return;
+      await ensureThumbnail(current.attachment, current.sourceEntryPath);
+    };
+
+    const startObserving = () => {
+      if (current.attachment.kind !== "image" || current.attachment.thumbnail) return;
+      if (typeof IntersectionObserver === "undefined") {
+        void load();
+        return;
+      }
+      observer?.disconnect();
+      observer = new IntersectionObserver(
+        (entries) => {
+          if (entries.some((entry) => entry.isIntersecting)) {
+            observer?.disconnect();
+            void load();
+          }
+        },
+        { rootMargin: "200px" },
+      );
+      observer.observe(node);
+    };
+
+    startObserving();
+
+    return {
+      update(next: typeof params) {
+        current = next;
+        startObserving();
+      },
+      destroy() {
+        cancelled = true;
+        observer?.disconnect();
+      },
+    };
   }
 
   async function handleSelect(
@@ -224,13 +225,13 @@
     let blobUrl = attachment.thumbnail;
 
     // If thumbnail not loaded yet, load it now
-    if (!blobUrl && attachment.isImage && api) {
-      blobUrl = await loadThumbnail(sourceEntryPath, attachment.path);
+    if (!blobUrl && attachment.kind === "image" && api) {
+      blobUrl = await ensureThumbnail(attachment, sourceEntryPath);
     }
 
     onSelect({
       path: attachment.path,
-      isImage: attachment.isImage,
+      kind: attachment.kind,
       blobUrl,
       sourceEntryPath,
     });
@@ -245,12 +246,11 @@
 
       const arrayBuffer = await file.arrayBuffer();
       const bytes = new Uint8Array(arrayBuffer);
-      const base64 = bytesToBase64(bytes);
 
       const attachmentPath = await api.uploadAttachment(
         entryPath,
         file.name,
-        base64
+        bytes
       );
       const canonicalAttachmentPath = await api.canonicalizeLink(
         attachmentPath,
@@ -265,13 +265,20 @@
         entryPath,
         canonicalAttachmentPath,
         file,
+        bytes,
       );
-      const blobUrl = URL.createObjectURL(file);
-      const isImage = isImageFile(file.name);
+      const kind = getAttachmentMediaKind(file.name, file.type);
+      const blobUrl = isPreviewableAttachmentKind(kind)
+        ? URL.createObjectURL(
+            new Blob([bytes as unknown as BlobPart], {
+              type: file.type || getMimeType(file.name),
+            }),
+          )
+        : undefined;
 
       onSelect({
         path: entryRelativePath,
-        isImage,
+        kind,
         blobUrl,
         sourceEntryPath: entryPath,
       });
@@ -352,8 +359,9 @@
                     type="button"
                     class="attachment-item"
                     onclick={() => handleSelect(attachment, group.entryPath)}
+                    use:lazyThumbnailTarget={{ attachment, sourceEntryPath: group.entryPath }}
                   >
-                    {#if attachment.isImage && attachment.thumbnail}
+                    {#if attachment.kind === "image" && attachment.thumbnail}
                       <img
                         src={attachment.thumbnail}
                         alt=""

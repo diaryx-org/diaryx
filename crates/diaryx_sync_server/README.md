@@ -130,6 +130,10 @@ GET /auth/me
 Authorization: Bearer <session_token>
 ```
 
+Free and Plus accounts can register up to two devices for sync. Signing in on a third
+device returns `403` until an existing device is removed with
+`DELETE /auth/devices/{device_id}`.
+
 #### Logout
 
 ```
@@ -299,7 +303,8 @@ Returns attachment bytes for hashes referenced by the workspace.
 POST   /api/workspaces/{workspace_id}/site
 GET    /api/workspaces/{workspace_id}/site
 DELETE /api/workspaces/{workspace_id}/site
-POST   /api/workspaces/{workspace_id}/site/publish
+POST   /api/workspaces/{workspace_id}/site/publish                (deprecated)
+POST   /api/workspaces/{workspace_id}/site/publish-with-fallback
 POST   /api/workspaces/{workspace_id}/site/tokens
 GET    /api/workspaces/{workspace_id}/site/tokens
 DELETE /api/workspaces/{workspace_id}/site/tokens/{token_id}
@@ -400,10 +405,10 @@ Stub endpoint for App Store Server Notifications V2. Currently returns 200 OK.
 
 Share sessions allow real-time collaboration with guests who don't need accounts.
 
-#### Create Session
+#### Create Live Share Session
 
 ```
-POST /api/sessions
+POST /api/share/sessions
 Authorization: Bearer <session_token>
 Content-Type: application/json
 
@@ -420,10 +425,10 @@ Response:
 }
 ```
 
-#### Get Session Info
+#### Get Live Share Session Info
 
 ```
-GET /api/sessions/{code}
+GET /api/share/sessions/{code}
 ```
 
 Response:
@@ -437,22 +442,24 @@ Response:
 }
 ```
 
-#### Update Session (toggle read-only)
+#### Update Live Share Session (toggle read-only)
 
 ```
-PATCH /api/sessions/{code}
+PATCH /api/share/sessions/{code}
 Authorization: Bearer <session_token>
 Content-Type: application/json
 
 { "read_only": true }
 ```
 
-#### End Session
+#### End Live Share Session
 
 ```
-DELETE /api/sessions/{code}
+DELETE /api/share/sessions/{code}
 Authorization: Bearer <session_token>
 ```
+
+The legacy `/api/sessions` endpoints remain available as a compatibility alias.
 
 ### WebSocket Sync
 

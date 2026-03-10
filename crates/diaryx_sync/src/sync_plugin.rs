@@ -33,7 +33,7 @@ use diaryx_core::fs::AsyncFileSystem;
 use diaryx_core::link_parser::{self, LinkFormat};
 use diaryx_core::path_utils::normalize_sync_path;
 use diaryx_core::plugin::{
-    ComponentRef, Plugin, PluginCapability, PluginContext, PluginError, PluginId, PluginManifest,
+    Plugin, PluginCapability, PluginContext, PluginError, PluginId, PluginManifest, SettingsField,
     UiContribution, WorkspaceOpenedEvent, WorkspacePlugin,
 };
 use diaryx_core::types::{BinaryRef, FileMetadata};
@@ -193,10 +193,59 @@ fn sync_plugin_manifest() -> PluginManifest {
             id: "sync-settings".into(),
             label: "Sync".into(),
             icon: None,
-            fields: vec![],
-            component: Some(ComponentRef::Builtin {
-                component_id: "sync.settings".into(),
-            }),
+            fields: vec![
+                SettingsField::AuthStatus {
+                    label: "Account".into(),
+                    description: Some("Sign in to enable sync.".into()),
+                },
+                SettingsField::Conditional {
+                    condition: "not_plus".into(),
+                    fields: vec![
+                        SettingsField::Section {
+                            label: "Free Plan".into(),
+                            description: Some(
+                                "Free accounts can stay signed in on up to two devices and sync one hosted workspace."
+                                    .into(),
+                            ),
+                        },
+                        SettingsField::Section {
+                            label: "Plus Unlocks".into(),
+                            description: Some(
+                                "Upgrade to Plus for up to ten synced workspaces, one published website, and higher storage limits."
+                                    .into(),
+                            ),
+                        },
+                    ],
+                },
+                SettingsField::UpgradeBanner {
+                    feature: "More Sync".into(),
+                    description: Some(
+                        "Free includes one synced workspace on up to two devices. Upgrade for more synced workspaces and publishing."
+                            .into(),
+                    ),
+                },
+                SettingsField::Conditional {
+                    condition: "plus".into(),
+                    fields: vec![
+                        SettingsField::Section {
+                            label: "Connection".into(),
+                            description: None,
+                        },
+                        SettingsField::Text {
+                            key: "server_url".into(),
+                            label: "Server URL".into(),
+                            description: Some("Automatically configured when you sign in.".into()),
+                            placeholder: Some("https://sync.diaryx.org".into()),
+                        },
+                        SettingsField::Button {
+                            label: "Check Status".into(),
+                            command: "GetProviderStatus".into(),
+                            variant: Some("outline".into()),
+                        },
+                    ],
+                },
+            ],
+            component: None,
         }],
         cli: vec![],
     }
@@ -1726,6 +1775,52 @@ mod tests {
         let _sh = plugin.sync_handler();
         let _sm = plugin.sync_manager();
         let _st = plugin.storage();
+    }
+
+    #[test]
+    fn test_sync_manifest_shows_free_plan_and_plus_upgrade_states() {
+        let manifest = sync_plugin_manifest();
+        let settings_fields = manifest
+            .ui
+            .iter()
+            .find_map(|entry| match entry {
+                UiContribution::SettingsTab { id, fields, .. } if id == "sync-settings" => {
+                    Some(fields)
+                }
+                _ => None,
+            })
+            .expect("sync settings tab");
+
+        assert!(matches!(
+            settings_fields.first(),
+            Some(SettingsField::AuthStatus { .. })
+        ));
+        assert!(settings_fields.iter().any(|field| matches!(
+            field,
+            SettingsField::Conditional { condition, fields }
+                if condition == "not_plus"
+                    && fields.iter().any(|entry| matches!(
+                        entry,
+                        SettingsField::Section { label, .. } if label == "Free Plan"
+                    ))
+                    && fields.iter().any(|entry| matches!(
+                        entry,
+                        SettingsField::Section { label, .. } if label == "Plus Unlocks"
+                    ))
+        )));
+        assert!(settings_fields.iter().any(|field| matches!(
+            field,
+            SettingsField::UpgradeBanner { feature, .. } if feature == "More Sync"
+        )));
+        assert!(settings_fields.iter().any(|field| matches!(
+            field,
+            SettingsField::Conditional { condition, fields }
+                if condition == "plus"
+                    && fields.iter().any(|entry| matches!(
+                        entry,
+                        SettingsField::Button { command, .. } if command == "GetProviderStatus"
+                    ))
+        )));
     }
 
     #[tokio::test]

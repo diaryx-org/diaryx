@@ -75,6 +75,18 @@ bun run test:e2e
 
 Sync E2E tests expect a running sync server (`http://127.0.0.1:3030` by
 default). The dev-mode magic-link response (`dev_link`) is used for auth flows.
+If `DIARYX_SYNC_PLUGIN_WASM` is not set, the E2E builds the sibling
+`../plugin-sync` workspace and installs that fresh guest artifact before the
+browser flow starts.
+
+The Chromium sync E2E covers the browser-hosted provider flow end to end:
+
+- install the sync guest into both clients
+- sign both clients in with the same account
+- link a workspace on client A
+- upload a fresh provider snapshot from client A
+- download/bootstrap the linked workspace on client B
+- verify client B renders the uploaded content and rejoins the sync session
 
 Environment variables:
 
@@ -82,6 +94,7 @@ Environment variables:
 - `SYNC_SERVER_HOST`: host for auto-started sync server (`127.0.0.1` default)
 - `SYNC_SERVER_PORT`: base port for auto-started sync server (`3030` default)
 - `SYNC_E2E_START_SERVER`: set `0` to skip auto-starting the sync server
+- `DIARYX_SYNC_PLUGIN_WASM`: use an explicit prebuilt sync guest artifact
 
 ## Developer Guide
 

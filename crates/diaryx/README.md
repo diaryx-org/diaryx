@@ -208,6 +208,9 @@ You can also validate specific files or directories:
 
 Diaryx can sync your workspace with a remote server for backup and multi-device access:
 
+On native hosts, Diaryx account/session state is stored separately from general
+CLI config in `~/.config/diaryx/auth.toml`.
+
 ```bash
 # Login with magic link authentication
 > diaryx sync login your-email@example.com

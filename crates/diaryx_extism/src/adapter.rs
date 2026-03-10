@@ -119,6 +119,15 @@ impl ExtismPluginAdapter {
     }
 }
 
+#[cfg(feature = "ws-transport")]
+impl crate::ws_transport::SyncGuestBridge for ExtismPluginAdapter {
+    fn call_binary_export(&self, export_name: &str, input: &[u8]) -> Result<(), String> {
+        self.call_guest_binary(export_name, input)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}
+
 // ============================================================================
 // Plugin trait
 // ============================================================================
@@ -134,6 +143,21 @@ impl Plugin for ExtismPluginAdapter {
     }
 
     async fn init(&self, ctx: &PluginContext) -> Result<(), PluginError> {
+        let existing_config = self
+            .config
+            .lock()
+            .map_err(|e| PluginError::Other(format!("Failed to lock config: {e}")))?
+            .clone();
+        if !existing_config.is_null()
+            && !existing_config
+                .as_object()
+                .is_some_and(|entries| entries.is_empty())
+        {
+            let config_input = serde_json::to_string(&existing_config)
+                .map_err(|e| PluginError::InitFailed(format!("Failed to serialize config: {e}")))?;
+            let _ = self.call_guest("set_config", &config_input);
+        }
+
         let ctx_json = serde_json::json!({
             "workspace_root": ctx.workspace_root,
         });
@@ -145,7 +169,7 @@ impl Plugin for ExtismPluginAdapter {
     }
 
     async fn shutdown(&self) -> Result<(), PluginError> {
-        // WASM plugins don't hold resources that need explicit release.
+        let _ = self.call_guest("shutdown", "{}");
         Ok(())
     }
 }
@@ -227,9 +251,13 @@ impl WorkspacePlugin for ExtismPluginAdapter {
                     if resp.success {
                         Some(Ok(resp.data.unwrap_or(JsonValue::Null)))
                     } else {
-                        Some(Err(PluginError::CommandError(
-                            resp.error.unwrap_or_else(|| "Unknown error".into()),
-                        )))
+                        let msg = resp.error.unwrap_or_else(|| "Unknown error".into());
+                        let err = match resp.error_code.as_deref() {
+                            Some("permission_denied") => PluginError::PermissionDenied(msg),
+                            Some("config_error") => PluginError::ConfigError(msg),
+                            _ => PluginError::CommandError(msg),
+                        };
+                        Some(Err(err))
                     }
                 }
                 Err(e) => Some(Err(PluginError::CommandError(format!(
@@ -316,6 +344,8 @@ fn convert_guest_manifest(guest: &GuestManifest) -> PluginManifest {
         .filter_map(|cap| match cap.as_str() {
             "file_events" => Some(PluginCapability::FileEvents),
             "workspace_events" => Some(PluginCapability::WorkspaceEvents),
+            "crdt_commands" => Some(PluginCapability::CrdtCommands),
+            "sync_transport" => Some(PluginCapability::SyncTransport),
             "custom_commands" => Some(PluginCapability::CustomCommands {
                 commands: guest.commands.clone(),
             }),

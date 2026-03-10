@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Blob as NodeBlob } from 'node:buffer';
 import JSZip from 'jszip';
 import {
   addFilesToZip,
   importFilesFromZip,
+  importFilesFromZipBlob,
   type TreeNode,
   type ExportFileReader,
   type ImportFileWriter,
@@ -60,6 +62,22 @@ async function buildZip(
   // Round-trip through binary so the JSZip instance looks like a real loaded zip
   const blob = await zip.generateAsync({ type: 'arraybuffer' });
   return JSZip.loadAsync(blob);
+}
+
+async function buildZipBlob(
+  files: Record<string, string | Uint8Array>,
+): Promise<Blob> {
+  const zip = new JSZip();
+  for (const [name, content] of Object.entries(files)) {
+    if (content instanceof Uint8Array) {
+      zip.file(name, content, { binary: true });
+    } else {
+      zip.file(name, content);
+    }
+  }
+  return new NodeBlob([await zip.generateAsync({ type: 'arraybuffer' })], {
+    type: 'application/zip',
+  }) as unknown as Blob;
 }
 
 // ============================================================================
@@ -400,6 +418,32 @@ describe('importFilesFromZip (import)', () => {
     expect(result.files_imported).toBe(0);
     expect(result.files_skipped).toBe(0);
     expect(result.success).toBe(true);
+  });
+});
+
+describe('importFilesFromZipBlob (streaming import)', () => {
+  it('streams zip imports without keeping a JSZip archive in memory', async () => {
+    const zipBlob = await buildZipBlob({
+      '__MACOSX/._index.md': 'metadata',
+      'Backup/index.md': '# Root',
+      'Backup/notes.md': '# Notes',
+      'Backup/photo.png': new Uint8Array([1, 2, 3]),
+      'Backup/data.csv': 'skip me',
+    });
+
+    const writer = mockWriter();
+    const progressCalls: [number, number][] = [];
+    const result = await importFilesFromZipBlob(zipBlob, 'workspace', writer, (done, total) => {
+      progressCalls.push([done, total]);
+    });
+
+    expect(result.files_imported).toBe(3);
+    expect(result.files_skipped).toBe(2);
+    expect(writer.written.has('workspace/index.md')).toBe(true);
+    expect(writer.written.has('workspace/notes.md')).toBe(true);
+    expect(writer.written.has('workspace/photo.png')).toBe(true);
+    expect(writer.written.has('workspace/Backup/index.md')).toBe(false);
+    expect(progressCalls.at(-1)?.[0]).toBe(progressCalls.at(-1)?.[1]);
   });
 });
 

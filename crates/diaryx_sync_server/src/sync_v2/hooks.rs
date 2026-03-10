@@ -81,13 +81,6 @@ impl CloudSyncHook {
             ));
         }
 
-        // Sync requires Plus subscription
-        match self.repo.get_user_tier(&auth.user.id) {
-            Ok(UserTier::Plus) => {}
-            Ok(UserTier::Free) => return Err("Sync requires a Plus subscription".into()),
-            Err(e) => return Err(format!("Failed to check user tier: {}", e)),
-        }
-
         let workspace_id = workspace_id.to_string();
 
         Ok(AuthenticatedUser {

@@ -1,8 +1,9 @@
-//! Date parsing utilities.
+//! Date parsing and formatting utilities.
 //!
-//! This module provides natural language date parsing via chrono-english.
+//! This module provides natural language date parsing via chrono-english and
+//! helpers for serializing timestamps with the local timezone offset.
 
-use chrono::{Local, NaiveDate};
+use chrono::{Local, NaiveDate, SecondsFormat, TimeZone};
 use chrono_english::{Dialect, parse_date_string};
 
 use crate::error::{DiaryxError, Result};
@@ -28,10 +29,23 @@ pub fn parse_date(date_str: &str) -> Result<NaiveDate> {
         .map_err(|_| DiaryxError::InvalidDateFormat(date_str.to_string()))
 }
 
+/// Format the current local timestamp as RFC 3339 with an explicit offset.
+pub fn current_local_timestamp_rfc3339() -> String {
+    Local::now().to_rfc3339_opts(SecondsFormat::Secs, false)
+}
+
+/// Format an epoch-millis timestamp as local RFC 3339 with an explicit offset.
+pub fn timestamp_millis_to_local_rfc3339(timestamp_millis: i64) -> Option<String> {
+    Local
+        .timestamp_millis_opt(timestamp_millis)
+        .single()
+        .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Millis, false))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Duration;
+    use chrono::{DateTime, Duration};
 
     #[test]
     fn test_parse_date_iso_format() {
@@ -66,5 +80,24 @@ mod tests {
     #[test]
     fn test_parse_date_invalid() {
         assert!(parse_date("not a date").is_err());
+    }
+
+    #[test]
+    fn test_current_local_timestamp_rfc3339_uses_explicit_offset() {
+        let timestamp = current_local_timestamp_rfc3339();
+        let parsed = DateTime::parse_from_rfc3339(&timestamp).unwrap();
+        assert_eq!(
+            parsed.to_rfc3339_opts(SecondsFormat::Secs, false),
+            timestamp
+        );
+        assert!(!timestamp.ends_with('Z'));
+    }
+
+    #[test]
+    fn test_timestamp_millis_to_local_rfc3339_round_trips_epoch() {
+        let timestamp = timestamp_millis_to_local_rfc3339(1_700_000_000_000).unwrap();
+        let parsed = DateTime::parse_from_rfc3339(&timestamp).unwrap();
+        assert_eq!(parsed.timestamp_millis(), 1_700_000_000_000);
+        assert!(!timestamp.ends_with('Z'));
     }
 }

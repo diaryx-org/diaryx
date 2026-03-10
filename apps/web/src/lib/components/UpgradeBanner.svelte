@@ -21,13 +21,13 @@
   import { isTauri } from "$lib/backend/interface";
 
   interface Props {
-    feature: string;
+    feature?: string;
     description: string;
     icon?: Component;
     onUpgraded?: () => void;
   }
 
-  let { feature, description, icon, onUpgraded }: Props = $props();
+  let { description, icon, onUpgraded }: Props = $props();
 
   const authState = $derived(getAuthState());
   const billingProvider = getBillingProvider();
@@ -100,7 +100,7 @@
   {:else}
     <Sparkles class="size-8 mx-auto text-muted-foreground" />
   {/if}
-  <h3 class="font-medium text-sm">{feature} Requires Plus</h3>
+  <h3 class="font-medium text-sm">Upgrade to Plus</h3>
   <p class="text-xs text-muted-foreground">{description}</p>
   {#if upgradeError}
     <p class="text-xs text-destructive">{upgradeError}</p>

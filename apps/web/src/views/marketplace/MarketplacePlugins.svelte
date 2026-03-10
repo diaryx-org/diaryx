@@ -30,6 +30,8 @@
     installRegistryPlugin,
     uninstallPlugin,
   } from "$lib/plugins/pluginInstallService";
+  import { getInstalledPluginSources } from "$lib/plugins/pluginInstallSource.svelte";
+  import { classifyMarketplacePlugins } from "./marketplacePluginClassification";
   import { getPluginStore } from "@/models/stores/pluginStore.svelte";
   import { openExternalUrl } from "$lib/billing";
 
@@ -59,12 +61,23 @@
     new Set(pluginStore.allManifests.map((m) => String(m.id))),
   );
 
-  const localPlugins = $derived.by(() => {
-    const registryIds = new Set(registryPlugins.map((r) => r.id));
-    return pluginStore.allManifests
-      .filter((m) => !registryIds.has(String(m.id)))
-      .sort((a, b) => String(a.name ?? a.id).localeCompare(String(b.name ?? b.id)));
-  });
+  const installedPluginSources = $derived(getInstalledPluginSources());
+
+  const marketplaceClassification = $derived.by(() =>
+    classifyMarketplacePlugins(
+      pluginStore.allManifests,
+      registryPlugins,
+      installedPluginSources,
+    ),
+  );
+
+  const localOverrides = $derived.by(() => marketplaceClassification.localOverrides);
+
+  const localOverrideIds = $derived.by(
+    () => marketplaceClassification.localOverrideIds,
+  );
+
+  const localPlugins = $derived.by(() => marketplaceClassification.localPlugins);
 
   const categories = $derived.by(() => {
     const all = new Set<string>();
@@ -86,6 +99,7 @@
     const query = search.trim().toLowerCase();
 
     const filtered = registryPlugins.filter((plugin) => {
+      if (localOverrideIds.has(plugin.id)) return false;
       if (sourceFilter === "installed" && !installedIds.has(plugin.id)) return false;
       if (categoryFilter !== "all" && !plugin.categories.includes(categoryFilter)) return false;
       if (capabilityFilter !== "all" && !plugin.capabilities.includes(capabilityFilter)) return false;
@@ -108,6 +122,66 @@
 
     return filtered;
   });
+
+  const filteredLocalOverrides = $derived.by(() => {
+    const query = search.trim().toLowerCase();
+    const filtered = localOverrides.filter(({ registry, installed }) => {
+      if (categoryFilter !== "all" && !registry.categories.includes(categoryFilter)) return false;
+      if (capabilityFilter !== "all" && !registry.capabilities.includes(capabilityFilter)) return false;
+      if (!query) return true;
+      const haystack = [
+        registry.id,
+        registry.name,
+        registry.summary,
+        registry.description,
+        registry.author,
+        registry.license,
+        ...registry.tags,
+        ...registry.categories,
+        String(installed.name ?? installed.id),
+        String(installed.version ?? ""),
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+
+    filtered.sort((a, b) =>
+      String(a.installed.name ?? a.installed.id).localeCompare(
+        String(b.installed.name ?? b.installed.id),
+      ),
+    );
+
+    return filtered;
+  });
+
+  const filteredLocalPlugins = $derived.by(() => {
+    const query = search.trim().toLowerCase();
+    const filtered = localPlugins.filter((plugin) => {
+      if (!query) return true;
+      const haystack = [
+        String(plugin.id),
+        String(plugin.name ?? plugin.id),
+        String(plugin.description ?? ""),
+        String(plugin.version ?? ""),
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+
+    filtered.sort((a, b) =>
+      String(a.name ?? a.id).localeCompare(String(b.name ?? b.id)),
+    );
+    return filtered;
+  });
+
+  const hasAnyVisiblePlugins = $derived.by(
+    () =>
+      filteredPlugins.length > 0 ||
+      filteredLocalOverrides.length > 0 ||
+      filteredLocalPlugins.length > 0,
+  );
 
   $effect(() => {
     loadRegistry();
@@ -308,9 +382,14 @@
         </div>
       {:else if registryError}
         <div class="px-3 py-4 text-xs text-muted-foreground">{registryError}</div>
-      {:else if filteredPlugins.length === 0}
+      {:else if !hasAnyVisiblePlugins}
         <div class="px-3 py-4 text-xs text-muted-foreground">No plugins match your filters.</div>
       {:else}
+        {#if filteredPlugins.length > 0}
+          <div class="px-3 pt-2">
+            <h4 class="text-[11px] font-medium text-muted-foreground">Curated Plugins</h4>
+          </div>
+        {/if}
         <div class="p-2 space-y-1.5">
           {#each filteredPlugins as plugin}
             {@const installed = installedIds.has(plugin.id)}
@@ -363,12 +442,67 @@
         </div>
       {/if}
 
-      <!-- Local Plugins -->
-      {#if localPlugins.length > 0}
+      {#if filteredLocalOverrides.length > 0}
         <Separator />
         <div class="p-2 space-y-1.5">
-          <h4 class="text-[11px] font-medium text-muted-foreground px-1">Local Plugins</h4>
-          {#each localPlugins as plugin}
+          <h4 class="text-[11px] font-medium text-muted-foreground px-1">Local Overrides (Same Plugin ID)</h4>
+          {#each filteredLocalOverrides as item}
+            {@const pluginId = String(item.installed.id)}
+            {@const removing = removingIds.has(pluginId)}
+            {@const installing = installingIds.has(pluginId)}
+            <div class="rounded-md border p-2.5 space-y-1.5">
+              <div class="flex items-center justify-between gap-2">
+                <p class="text-xs font-medium truncate">{item.installed.name}</p>
+                <Badge variant="outline" class="text-[9px] shrink-0">Local Override</Badge>
+              </div>
+              <p class="text-[11px] text-muted-foreground truncate">{item.installed.description || pluginId}</p>
+              <div class="flex items-center gap-1.5">
+                <Badge variant="secondary" class="text-[9px]">Local v{item.installed.version}</Badge>
+                <Badge variant="outline" class="text-[9px]">Registry v{item.registry.version}</Badge>
+              </div>
+              <div class="flex items-center justify-between gap-2">
+                <div class="flex items-center gap-1.5">
+                  <Switch
+                    id={`mp-override-enabled-${pluginId}`}
+                    checked={pluginStore.isPluginEnabled(pluginId)}
+                    onCheckedChange={(checked) => setEnabled(pluginId, checked)}
+                    disabled={!pluginsSupported}
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    class="h-6 text-[11px] px-2"
+                    onclick={() => installFromRegistry(item.registry)}
+                    disabled={installing || !pluginsSupported}
+                  >
+                    {#if installing}
+                      <Loader2 class="size-3 mr-1 animate-spin" />
+                      ...
+                    {:else}
+                      <Download class="size-3 mr-1" />
+                      Use Registry
+                    {/if}
+                  </Button>
+                </div>
+                <Button variant="ghost" size="icon-sm" onclick={() => removePlugin(pluginId, String(item.installed.name ?? pluginId))} disabled={removing}>
+                  {#if removing}
+                    <Loader2 class="size-3 animate-spin" />
+                  {:else}
+                    <Trash2 class="size-3 text-destructive" />
+                  {/if}
+                </Button>
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
+
+      <!-- Local Plugins -->
+      {#if filteredLocalPlugins.length > 0}
+        <Separator />
+        <div class="p-2 space-y-1.5">
+          <h4 class="text-[11px] font-medium text-muted-foreground px-1">Local Plugins (Unmanaged IDs)</h4>
+          {#each filteredLocalPlugins as plugin}
             {@const pluginId = String(plugin.id)}
             {@const removing = removingIds.has(pluginId)}
             <div class="rounded-md border p-2.5 flex items-center justify-between gap-2">

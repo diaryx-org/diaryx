@@ -74,6 +74,11 @@ export interface EditorExtensionManifest {
   } | null;
 }
 
+export interface EditorExtensionFactoryOptions {
+  preserveOnly?: boolean;
+  pluginName?: string;
+}
+
 /** Check if a UiContribution is an EditorExtension. */
 export function isEditorExtension(ui: unknown): ui is EditorExtensionManifest {
   return (
@@ -105,17 +110,20 @@ export type RenderFn = (
 export function createExtensionFromManifest(
   ext: EditorExtensionManifest,
   renderFn: RenderFn,
+  options: EditorExtensionFactoryOptions = {},
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): any {
   const isInline = ext.node_type === "InlineAtom";
   const isBlock = ext.node_type === "BlockAtom";
+  const preserveOnly = options.preserveOnly === true;
+  const missingPluginLabel = options.pluginName ?? ext.insert_command?.label ?? ext.extension_id;
 
   // Escape delimiters for use in regex
   const openEsc = escapeRegex(ext.markdown.open);
   const closeEsc = escapeRegex(ext.markdown.close);
 
   // Inject CSS if declared
-  if (ext.css) {
+  if (ext.css && !preserveOnly) {
     injectCss(ext.extension_id, ext.css);
   }
 
@@ -157,6 +165,9 @@ export function createExtensionFromManifest(
     },
 
     addNodeView() {
+      if (preserveOnly) {
+        return createMissingAtomView(ext, missingPluginLabel);
+      }
       if (isInline) {
         return createInlineAtomView(ext, renderFn);
       }
@@ -234,8 +245,10 @@ export function createExtensionFromManifest(
  */
 export function createMarkFromManifest(
   ext: EditorExtensionManifest,
+  options: EditorExtensionFactoryOptions = {},
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): any {
+  const preserveOnly = options.preserveOnly === true;
   const openEsc = escapeRegex(ext.markdown.open);
   const closeEsc = escapeRegex(ext.markdown.close);
 
@@ -250,8 +263,11 @@ export function createMarkFromManifest(
   const revealedClass = clickBehavior?.revealed_class ?? `${ext.extension_id}-revealed`;
 
   // Inject CSS if declared
-  if (ext.css) {
+  if (ext.css && !preserveOnly) {
     injectCss(ext.extension_id, ext.css);
+  }
+  if (preserveOnly) {
+    injectMissingPluginCss();
   }
 
   // PascalCase name for commands (e.g., "spoiler" → "Spoiler")
@@ -269,13 +285,18 @@ export function createMarkFromManifest(
         "span",
         mergeAttributes(HTMLAttributes, {
           [`data-${ext.extension_id}`]: "",
-          class: `${ext.extension_id}-mark ${hiddenClass}`,
+          class: preserveOnly
+            ? "plugin-missing-mark"
+            : `${ext.extension_id}-mark ${hiddenClass}`,
         }),
         0,
       ];
     },
 
     addCommands() {
+      if (preserveOnly) {
+        return {};
+      }
       return {
         [`set${pascalName}`]:
           () =>
@@ -299,7 +320,7 @@ export function createMarkFromManifest(
     },
 
     addKeyboardShortcuts() {
-      if (!ext.keyboard_shortcut) return {};
+      if (preserveOnly || !ext.keyboard_shortcut) return {};
       return {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         [ext.keyboard_shortcut]: () => (this as any).editor.commands[`toggle${pascalName}`](),
@@ -307,6 +328,7 @@ export function createMarkFromManifest(
     },
 
     addInputRules() {
+      if (preserveOnly) return [];
       return [
         markInputRule({
           find: inputRegex,
@@ -316,6 +338,7 @@ export function createMarkFromManifest(
     },
 
     addPasteRules() {
+      if (preserveOnly) return [];
       return [
         markPasteRule({
           find: pasteRegex,
@@ -325,7 +348,7 @@ export function createMarkFromManifest(
     },
 
     addProseMirrorPlugins() {
-      if (!clickBehavior) return [];
+      if (preserveOnly || !clickBehavior) return [];
 
       const dataAttr = `data-${ext.extension_id}`;
 
@@ -408,6 +431,7 @@ function escapeRegex(s: string): string {
 }
 
 const injectedCss = new Set<string>();
+let missingPluginCssInjected = false;
 
 function injectCss(id: string, css: string) {
   if (injectedCss.has(id)) return;
@@ -415,6 +439,22 @@ function injectCss(id: string, css: string) {
   const style = document.createElement("style");
   style.setAttribute("data-plugin-css", id);
   style.textContent = css;
+  document.head.appendChild(style);
+}
+
+function injectMissingPluginCss() {
+  if (missingPluginCssInjected) return;
+  missingPluginCssInjected = true;
+  const style = document.createElement("style");
+  style.setAttribute("data-plugin-missing-css", "");
+  style.textContent = `
+    .plugin-missing-mark {
+      background: color-mix(in srgb, var(--muted) 75%, transparent);
+      border: 1px dashed var(--border);
+      border-radius: 3px;
+      padding: 0 2px;
+    }
+  `;
   document.head.appendChild(style);
 }
 
@@ -447,9 +487,92 @@ function injectAtomNodeViewCss() {
     .atom-block-error { display: flex; flex-direction: column; gap: 4px; align-items: center; }
     .atom-block-error code { font-size: 13px; color: var(--foreground); }
     .atom-block-error-msg { font-size: 11px; color: var(--destructive); }
+    .atom-inline-missing {
+      display: inline-block;
+      color: var(--muted-foreground);
+      border: 1px dashed var(--border);
+      border-radius: 3px;
+      padding: 0 4px;
+      font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
+      font-size: 0.85em;
+    }
+    .atom-block-missing { border-style: solid; }
+    .atom-block-missing-label { color: var(--destructive); }
+    .atom-block-missing-body {
+      padding: 12px;
+      white-space: pre-wrap;
+      font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
+      font-size: 13px;
+      color: var(--muted-foreground);
+      background: var(--card);
+    }
     .atom-block-source { width: 100%; min-height: 60px; padding: 12px; border: none; background: var(--card); color: var(--foreground); font-family: "SF Mono", Monaco, "Cascadia Code", monospace; font-size: 13px; line-height: 1.5; resize: vertical; outline: none; box-sizing: border-box; field-sizing: content; }
   `;
   document.head.appendChild(style);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function createMissingAtomView(ext: EditorExtensionManifest, pluginName: string): any {
+  const isInline = ext.node_type === "InlineAtom";
+
+  return ({ node }: { node: any }) => {
+    if (isInline) {
+      const dom = document.createElement("span");
+      dom.className = "atom-inline-missing";
+      dom.setAttribute("contenteditable", "false");
+
+      const renderSource = (source: string) => {
+        dom.textContent = `${ext.markdown.open}${source}${ext.markdown.close}`;
+        dom.title = `${pluginName} plugin removed — raw markdown preserved`;
+      };
+
+      renderSource((node.attrs.source as string) || "");
+
+      return {
+        dom,
+        update(updatedNode: any) {
+          if (updatedNode.type.name !== ext.extension_id) return false;
+          renderSource((updatedNode.attrs.source as string) || "");
+          return true;
+        },
+        destroy() {},
+      };
+    }
+
+    const dom = document.createElement("div");
+    dom.className = "atom-block-container atom-block-missing";
+    dom.setAttribute("contenteditable", "false");
+
+    const header = document.createElement("div");
+    header.className = "atom-block-header";
+
+    const label = document.createElement("span");
+    label.className = "atom-block-label atom-block-missing-label";
+    label.textContent = `${pluginName} removed`;
+
+    header.append(label);
+
+    const content = document.createElement("div");
+    content.className = "atom-block-missing-body";
+
+    const renderSource = (source: string) => {
+      content.textContent = `${ext.markdown.open}\n${source}\n${ext.markdown.close}`;
+      content.title = `${pluginName} plugin removed — raw markdown preserved`;
+    };
+
+    renderSource((node.attrs.source as string) || "");
+    dom.append(header, content);
+
+    return {
+      dom,
+      update(updatedNode: any) {
+        if (updatedNode.type.name !== ext.extension_id) return false;
+        renderSource((updatedNode.attrs.source as string) || "");
+        return true;
+      },
+      destroy() {},
+    };
+  };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

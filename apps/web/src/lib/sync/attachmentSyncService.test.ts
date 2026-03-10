@@ -1,21 +1,51 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BinaryRef } from "$lib/backend/generated";
-import { AuthError } from "$lib/auth/authService";
+
+const createApi = vi.fn();
+const createAuthService = vi.fn();
+
+class MockAuthError extends Error {
+  constructor(
+    message: string,
+    readonly statusCode: number,
+    readonly details?: unknown,
+  ) {
+    super(message);
+    this.name = "AuthError";
+  }
+}
+
+vi.mock("$lib/backend/api", () => ({
+  createApi,
+}));
+
+vi.mock("$lib/auth/authService", () => ({
+  AuthError: MockAuthError,
+  createAuthService,
+}));
+
+vi.mock("$lib/auth/authStore.svelte", () => ({
+  refreshUserStorageUsage: vi.fn().mockResolvedValue(undefined),
+}));
+
+type AttachmentSyncServiceModule = typeof import("./attachmentSyncService");
+
+let service: AttachmentSyncServiceModule;
 
 describe("attachmentSyncService", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
+    vi.clearAllMocks();
     localStorage.clear();
+    service = await import("./attachmentSyncService");
   });
 
   it("computes stable sha256 hashes", async () => {
-    const service = await import("./attachmentSyncService");
     const hash = await service.sha256Hex(new TextEncoder().encode("hello"));
     expect(hash).toBe("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
   });
 
   it("deduplicates upload jobs by attachment key", async () => {
-    const service = await import("./attachmentSyncService");
     service.enqueueAttachmentUpload({
       workspaceId: "ws-1",
       entryPath: "workspace/day.md",
@@ -39,7 +69,6 @@ describe("attachmentSyncService", () => {
   });
 
   it("indexes BinaryRefs and enqueues missing download requests", async () => {
-    const service = await import("./attachmentSyncService");
     const refs: BinaryRef[] = [
       {
         path: "_attachments/a.png",
@@ -65,12 +94,11 @@ describe("attachmentSyncService", () => {
   });
 
   it("treats quota errors as terminal", async () => {
-    const service = await import("./attachmentSyncService");
     expect(
-      service.isTerminalAttachmentSyncError(new AuthError("quota", 413)),
+      service.isTerminalAttachmentSyncError(new MockAuthError("quota", 413)),
     ).toBe(true);
     expect(
-      service.isTerminalAttachmentSyncError(new AuthError("other", 500)),
+      service.isTerminalAttachmentSyncError(new MockAuthError("other", 500)),
     ).toBe(false);
   });
 });

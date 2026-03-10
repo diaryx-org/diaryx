@@ -14,6 +14,7 @@ export {
 
 export {
   openEntry,
+  getEditorBodyMarkdown,
   saveEntry,
   saveEntryWithSync,
   createChildEntry,
@@ -54,7 +55,6 @@ export {
   handleDeleteAttachment,
   handleAttachmentInsert,
   handleMoveAttachment,
-  fileToBase64,
   getPendingAttachmentPath,
   setPendingAttachmentPath,
   getAttachmentError,

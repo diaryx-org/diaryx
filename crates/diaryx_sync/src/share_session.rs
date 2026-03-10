@@ -1,4 +1,4 @@
-//! Share session REST client.
+//! Live share session REST client.
 //!
 //! Platform-agnostic client for the share session REST API.
 //! The HTTP transport is abstracted via `HttpClient`, which has
@@ -86,13 +86,13 @@ struct ErrorResponse {
 // ShareSessionClient
 // ============================================================================
 
-/// REST client for the share session API.
+/// REST client for the live share session API.
 ///
 /// Wraps an `HttpClient` and provides typed methods for session lifecycle:
-/// - `create_session()` — `POST /api/sessions`
-/// - `lookup_session()` — `GET /api/sessions/{code}`
-/// - `delete_session()` — `DELETE /api/sessions/{code}`
-/// - `update_read_only()` — `PATCH /api/sessions/{code}`
+/// - `create_session()` — `POST /api/share/sessions`
+/// - `lookup_session()` — `GET /api/share/sessions/{code}`
+/// - `delete_session()` — `DELETE /api/share/sessions/{code}`
+/// - `update_read_only()` — `PATCH /api/share/sessions/{code}`
 pub struct ShareSessionClient<H: HttpClient> {
     http: H,
     base_url: String,
@@ -123,15 +123,19 @@ impl<H: HttpClient> ShareSessionClient<H> {
         headers
     }
 
+    fn sessions_base_path(&self) -> String {
+        format!("{}/api/share/sessions", self.base_url)
+    }
+
     /// Create a new share session.
     ///
-    /// `POST /api/sessions`
+    /// `POST /api/share/sessions`
     pub async fn create_session(
         &self,
         workspace_id: &str,
         read_only: bool,
     ) -> Result<SessionCreatedResponse, String> {
-        let url = format!("{}/api/sessions", self.base_url);
+        let url = self.sessions_base_path();
         let body = serde_json::to_vec(&CreateSessionRequest {
             workspace_id: workspace_id.to_string(),
             read_only,
@@ -157,10 +161,10 @@ impl<H: HttpClient> ShareSessionClient<H> {
 
     /// Look up an existing session by join code.
     ///
-    /// `GET /api/sessions/{code}`
+    /// `GET /api/share/sessions/{code}`
     pub async fn lookup_session(&self, join_code: &str) -> Result<SessionInfoResponse, String> {
         let code = join_code.to_uppercase();
-        let url = format!("{}/api/sessions/{}", self.base_url, code);
+        let url = format!("{}/{}", self.sessions_base_path(), code);
 
         let headers = self.headers();
 
@@ -181,10 +185,10 @@ impl<H: HttpClient> ShareSessionClient<H> {
 
     /// Delete a session (owner only).
     ///
-    /// `DELETE /api/sessions/{code}`
+    /// `DELETE /api/share/sessions/{code}`
     pub async fn delete_session(&self, join_code: &str) -> Result<(), String> {
         let code = join_code.to_uppercase();
-        let url = format!("{}/api/sessions/{}", self.base_url, code);
+        let url = format!("{}/{}", self.sessions_base_path(), code);
 
         let headers = self.headers();
 
@@ -205,10 +209,10 @@ impl<H: HttpClient> ShareSessionClient<H> {
 
     /// Update session read-only status (owner only).
     ///
-    /// `PATCH /api/sessions/{code}`
+    /// `PATCH /api/share/sessions/{code}`
     pub async fn update_read_only(&self, join_code: &str, read_only: bool) -> Result<(), String> {
         let code = join_code.to_uppercase();
-        let url = format!("{}/api/sessions/{}", self.base_url, code);
+        let url = format!("{}/{}", self.sessions_base_path(), code);
         let body = serde_json::to_vec(&serde_json::json!({ "read_only": read_only }))
             .map_err(|e| format!("Serialize error: {}", e))?;
 

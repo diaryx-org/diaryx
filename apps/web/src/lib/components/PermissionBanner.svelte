@@ -35,7 +35,7 @@
 </script>
 
 {#if permissionStore.hasPendingRequests}
-  <div class="flex flex-col gap-1 border-b border-border bg-muted/50">
+  <div class="fixed top-0 inset-x-0 z-[100] flex flex-col gap-1 border-b border-border bg-muted shadow-lg">
     {#each permissionStore.pendingRequests as request (request.id)}
       <div class="flex items-center gap-3 px-4 py-2">
         <Shield class="size-4 shrink-0 text-amber-500" />

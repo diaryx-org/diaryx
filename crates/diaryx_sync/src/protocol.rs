@@ -17,8 +17,11 @@ use yrs::{Update, updates::decoder::Decode};
 pub enum DocType {
     /// Workspace metadata CRDT (workspace:<id>)
     Workspace(String),
-    /// Body document CRDT (body:<workspace_id>/<path>)
-    Body { workspace_id: String, path: String },
+    /// Body document CRDT (body:<workspace_id>/<body_id>)
+    Body {
+        workspace_id: String,
+        body_id: String,
+    },
 }
 
 impl DocType {
@@ -27,11 +30,11 @@ impl DocType {
         if let Some(workspace_id) = doc_id.strip_prefix("workspace:") {
             Some(DocType::Workspace(workspace_id.to_string()))
         } else if let Some(rest) = doc_id.strip_prefix("body:") {
-            // Format: body:<workspace_id>/<path>
-            let (workspace_id, path) = rest.split_once('/')?;
+            // Format: body:<workspace_id>/<body_id>
+            let (workspace_id, body_id) = rest.split_once('/')?;
             Some(DocType::Body {
                 workspace_id: workspace_id.to_string(),
-                path: path.to_string(),
+                body_id: body_id.to_string(),
             })
         } else {
             // Legacy format: just workspace_id (treat as workspace doc)
@@ -51,7 +54,10 @@ impl DocType {
     pub fn storage_key(&self) -> String {
         match self {
             DocType::Workspace(id) => format!("workspace:{}", id),
-            DocType::Body { workspace_id, path } => format!("body:{}/{}", workspace_id, path),
+            DocType::Body {
+                workspace_id,
+                body_id,
+            } => format!("body:{}/{}", workspace_id, body_id),
         }
     }
 }
@@ -210,16 +216,16 @@ mod tests {
 
     #[test]
     fn test_doc_type_parse_body() {
-        let dt = DocType::parse("body:abc123/path/to/file.md").unwrap();
+        let dt = DocType::parse("body:abc123/some-uuid-123").unwrap();
         assert_eq!(
             dt,
             DocType::Body {
                 workspace_id: "abc123".to_string(),
-                path: "path/to/file.md".to_string(),
+                body_id: "some-uuid-123".to_string(),
             }
         );
         assert_eq!(dt.workspace_id(), "abc123");
-        assert_eq!(dt.storage_key(), "body:abc123/path/to/file.md");
+        assert_eq!(dt.storage_key(), "body:abc123/some-uuid-123");
     }
 
     #[test]

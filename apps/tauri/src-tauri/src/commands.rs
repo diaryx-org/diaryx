@@ -22,6 +22,7 @@ use diaryx_core::{
     workspace::Workspace,
 };
 use serde::Serialize;
+use serde_json::Value as JsonValue;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 // ============================================================================
@@ -108,6 +109,27 @@ impl Default for GuestModeState {
     }
 }
 
+#[cfg(feature = "extism-plugins")]
+pub struct RuntimeContextState {
+    pub context: Mutex<JsonValue>,
+}
+
+#[cfg(feature = "extism-plugins")]
+impl RuntimeContextState {
+    pub fn new() -> Self {
+        Self {
+            context: Mutex::new(serde_json::json!({})),
+        }
+    }
+}
+
+#[cfg(feature = "extism-plugins")]
+impl Default for RuntimeContextState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Helper function to safely acquire a mutex lock without panicking.
 ///
 /// Returns a SerializableError if the mutex is poisoned, instead of panicking.
@@ -138,6 +160,28 @@ fn workspace_plugins_dir<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     Some(ws_path.join(".diaryx").join("plugins"))
 }
 
+#[cfg(feature = "extism-plugins")]
+fn make_plugin_storage(workspace_root: Option<PathBuf>) -> Arc<dyn diaryx_extism::PluginStorage> {
+    match workspace_root {
+        Some(root) => Arc::new(diaryx_extism::FilePluginStorage::new(
+            root.join(".diaryx").join("plugin-state"),
+        )),
+        None => Arc::new(diaryx_extism::NoopStorage),
+    }
+}
+
+#[cfg(feature = "extism-plugins")]
+fn make_plugin_secret_store(
+    workspace_root: Option<PathBuf>,
+) -> Arc<dyn diaryx_extism::PluginSecretStore> {
+    match workspace_root {
+        Some(root) => Arc::new(diaryx_extism::FilePluginSecretStore::new(
+            root.join(".diaryx").join("plugin-secrets"),
+        )),
+        None => Arc::new(diaryx_extism::NoopSecretStore),
+    }
+}
+
 /// Load and register any third-party Extism WASM plugins from the workspace-local
 /// plugin directory (`{workspace_root}/.diaryx/plugins/`).
 ///
@@ -148,7 +192,8 @@ fn workspace_plugins_dir<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
 /// Returns the loaded adapters so they can also be stored in [`PluginAdapters`]
 /// for render IPC calls.
 #[cfg(feature = "extism-plugins")]
-fn register_extism_plugins<FS: diaryx_core::fs::AsyncFileSystem + 'static>(
+fn register_extism_plugins<R: Runtime, FS: diaryx_core::fs::AsyncFileSystem + 'static>(
+    app: &AppHandle<R>,
     diaryx: &mut Diaryx<FS>,
 ) -> Vec<Arc<diaryx_extism::ExtismPluginAdapter>> {
     let workspace_root = match diaryx.workspace_root() {
@@ -163,19 +208,37 @@ fn register_extism_plugins<FS: diaryx_core::fs::AsyncFileSystem + 'static>(
     // Use a basic real filesystem for host function file access.
     let fs: Arc<dyn diaryx_core::fs::AsyncFileSystem> =
         Arc::new(SyncToAsyncFs::new(RealFileSystem));
+    let workspace_root = diaryx.workspace_root();
+    let event_emitter: Arc<dyn diaryx_extism::EventEmitter> =
+        Arc::new(TauriEventEmitter { app: app.clone() });
+    let ws_bridge = Arc::new(diaryx_extism::TokioWebSocketBridge::new());
     let host_ctx = Arc::new(diaryx_extism::HostContext {
         fs,
-        storage: Arc::new(diaryx_extism::NoopStorage),
-        event_emitter: Arc::new(diaryx_extism::NoopEventEmitter),
+        storage: make_plugin_storage(workspace_root.clone()),
+        secret_store: make_plugin_secret_store(workspace_root.clone()),
+        event_emitter,
         plugin_id: String::new(),
-        permission_checker: Some(make_permission_checker(diaryx.workspace_root())),
+        permission_checker: Some(make_permission_checker(workspace_root)),
         file_provider: Arc::new(diaryx_extism::NoopFileProvider),
+        ws_bridge: ws_bridge.clone(),
+        plugin_command_bridge: Arc::new(TauriPluginCommandBridge { app: app.clone() }),
+        runtime_context_provider: Arc::new(TauriRuntimeContextProvider { app: app.clone() }),
     });
     let mut adapters = Vec::new();
     match diaryx_extism::load_plugins_from_dir(&plugins_dir, host_ctx) {
         Ok(plugins) => {
+            use diaryx_core::plugin::Plugin;
             for plugin in plugins {
                 let arc = Arc::new(plugin);
+                if arc
+                    .manifest()
+                    .capabilities
+                    .iter()
+                    .any(|cap| matches!(cap, diaryx_core::plugin::PluginCapability::SyncTransport))
+                {
+                    let sync_guest: Arc<dyn diaryx_extism::SyncGuestBridge> = arc.clone();
+                    ws_bridge.set_guest_bridge(Arc::downgrade(&sync_guest));
+                }
                 diaryx
                     .plugin_registry_mut()
                     .register_workspace_plugin(arc.clone());
@@ -193,13 +256,12 @@ fn register_extism_plugins<FS: diaryx_core::fs::AsyncFileSystem + 'static>(
 }
 
 // ============================================================================
-// Extism Sync Plugin Loading
+// Extism Host Bridges
 // ============================================================================
 
-/// Tauri event emitter for the Extism sync plugin.
+/// Tauri event emitter for Extism plugins.
 ///
-/// Forwards `host_emit_event` calls from the guest plugin to the Tauri frontend
-/// via `AppHandle::emit()`.
+/// Uppercase `type` payloads are forwarded as generic filesystem events.
 #[cfg(feature = "extism-plugins")]
 struct TauriEventEmitter<R: Runtime> {
     app: AppHandle<R>,
@@ -208,31 +270,81 @@ struct TauriEventEmitter<R: Runtime> {
 #[cfg(feature = "extism-plugins")]
 impl<R: Runtime> diaryx_extism::EventEmitter for TauriEventEmitter<R> {
     fn emit(&self, event_json: &str) {
-        // Try to parse the event to route to the right Tauri event name.
-        // Falls back to a generic "sync-plugin-event" if parsing fails.
-        if let Ok(event) = serde_json::from_str::<serde_json::Value>(event_json) {
-            let event_type = event
+        if let Ok(event) = serde_json::from_str::<JsonValue>(event_json)
+            && event
                 .get("type")
-                .and_then(|t| t.as_str())
-                .unwrap_or("unknown");
-
-            match event_type {
-                "status_changed" => {
-                    let _ = self.app.emit("sync-status-changed", event_json);
-                }
-                "files_changed" => {
-                    let _ = self.app.emit("sync-files-changed", event_json);
-                }
-                "body_changed" => {
-                    let _ = self.app.emit("sync-body-changed", event_json);
-                }
-                _ => {
-                    let _ = self.app.emit("sync-plugin-event", event_json);
-                }
-            }
-        } else {
-            let _ = self.app.emit("sync-plugin-event", event_json);
+                .and_then(|value| value.as_str())
+                .is_some_and(|value| value.chars().next().is_some_and(|ch| ch.is_uppercase()))
+        {
+            let _ = self.app.emit("extism-filesystem-event", event_json);
         }
+
+        let _ = self.app.emit("extism-plugin-event", event_json);
+    }
+}
+
+#[cfg(feature = "extism-plugins")]
+struct TauriPluginCommandBridge<R: Runtime> {
+    app: AppHandle<R>,
+}
+
+#[cfg(feature = "extism-plugins")]
+impl<R: Runtime> diaryx_extism::PluginCommandBridge for TauriPluginCommandBridge<R> {
+    fn call(
+        &self,
+        caller_plugin_id: &str,
+        plugin_id: &str,
+        command: &str,
+        params: JsonValue,
+    ) -> Result<JsonValue, String> {
+        if caller_plugin_id == plugin_id {
+            return Err("Plugins cannot call their own commands via host_plugin_command".into());
+        }
+
+        let adapters = self.app.state::<PluginAdapters>();
+        let guard = adapters
+            .adapters
+            .lock()
+            .map_err(|e| format!("Failed to lock plugin adapters: {e}"))?;
+        let adapter = guard
+            .get(plugin_id)
+            .ok_or_else(|| format!("Plugin '{plugin_id}' is not loaded"))?;
+
+        let input = serde_json::json!({
+            "command": command,
+            "params": params,
+        })
+        .to_string();
+        let output = adapter
+            .call_guest("handle_command", &input)
+            .map_err(|e| e.to_string())?;
+        let response = serde_json::from_str::<JsonValue>(&output)
+            .map_err(|e| format!("Invalid plugin response: {e}"))?;
+
+        if response.get("success").and_then(|value| value.as_bool()) == Some(true) {
+            Ok(response.get("data").cloned().unwrap_or(JsonValue::Null))
+        } else {
+            Err(response
+                .get("error")
+                .and_then(|value| value.as_str())
+                .unwrap_or("Unknown plugin error")
+                .to_string())
+        }
+    }
+}
+
+#[cfg(feature = "extism-plugins")]
+struct TauriRuntimeContextProvider<R: Runtime> {
+    app: AppHandle<R>,
+}
+
+#[cfg(feature = "extism-plugins")]
+impl<R: Runtime> diaryx_extism::RuntimeContextProvider for TauriRuntimeContextProvider<R> {
+    fn get_context(&self, _plugin_id: &str) -> JsonValue {
+        self.app
+            .try_state::<RuntimeContextState>()
+            .and_then(|state| state.context.lock().ok().map(|value| value.clone()))
+            .unwrap_or_else(|| serde_json::json!({}))
     }
 }
 
@@ -259,186 +371,6 @@ impl Default for PluginAdapters {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// State for the Extism sync plugin (loaded on demand).
-///
-/// Holds the loaded [`ExtismPluginAdapter`] so it can be used for sync operations
-/// (binary message handling, drain, etc.) and registered as a WorkspacePlugin.
-#[cfg(feature = "extism-plugins")]
-pub struct ExtismSyncState {
-    /// The loaded Extism sync plugin adapter.
-    pub plugin: Mutex<Option<Arc<diaryx_extism::ExtismPluginAdapter>>>,
-}
-
-#[cfg(feature = "extism-plugins")]
-impl ExtismSyncState {
-    pub fn new() -> Self {
-        Self {
-            plugin: Mutex::new(None),
-        }
-    }
-}
-
-#[cfg(feature = "extism-plugins")]
-impl Default for ExtismSyncState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Load the Extism sync plugin from the bundled WASM file.
-///
-/// Creates a [`diaryx_extism::HostContext`] with:
-/// - Filesystem: real filesystem via `SyncToAsyncFs<RealFileSystem>`
-/// - Storage: SQLite-backed `SqlitePluginStorage` from the active CRDT storage
-/// - Events: `TauriEventEmitter` forwarding to the Tauri frontend
-///
-/// The loaded plugin is registered as a WorkspacePlugin on the cached Diaryx
-/// instance, and stored in `ExtismSyncState` for binary sync operations.
-#[cfg(feature = "extism-plugins")]
-#[tauri::command]
-pub async fn load_sync_plugin<R: Runtime>(
-    app: AppHandle<R>,
-    wasm_path: Option<String>,
-) -> Result<(), SerializableError> {
-    log::info!("[load_sync_plugin] Loading Extism sync plugin");
-
-    // Determine WASM path: explicit, bundled, or default location
-    let wasm_file = if let Some(path) = wasm_path {
-        PathBuf::from(path)
-    } else {
-        // Check bundled location first, then workspace-local plugins dir
-        let bundled = app
-            .path()
-            .resource_dir()
-            .ok()
-            .map(|d| d.join("plugins").join("diaryx_sync.wasm"));
-        let workspace_local =
-            workspace_plugins_dir(&app).map(|d| d.join("diaryx_sync").join("plugin.wasm"));
-
-        bundled
-            .filter(|p| p.exists())
-            .or_else(|| workspace_local.filter(|p| p.exists()))
-            .unwrap_or_else(|| PathBuf::from("diaryx_sync.wasm"))
-    };
-
-    if !wasm_file.exists() {
-        return Err(SerializableError {
-            kind: "PluginError".to_string(),
-            message: format!("Sync plugin WASM not found at {}", wasm_file.display()),
-            path: None,
-        });
-    }
-
-    log::info!("[load_sync_plugin] Loading from {}", wasm_file.display());
-
-    // Build HostContext with event emitter (plugin manages its own state)
-    let event_emitter: Arc<dyn diaryx_extism::EventEmitter> =
-        Arc::new(TauriEventEmitter { app: app.clone() });
-
-    let fs: Arc<dyn diaryx_core::fs::AsyncFileSystem> =
-        Arc::new(SyncToAsyncFs::new(RealFileSystem));
-
-    let workspace_root = app
-        .try_state::<AppState>()
-        .and_then(|state| state.workspace_path.lock().ok().and_then(|v| (*v).clone()));
-
-    let host_ctx = Arc::new(diaryx_extism::HostContext {
-        fs,
-        storage: Arc::new(diaryx_extism::NoopStorage),
-        event_emitter,
-        plugin_id: String::new(),
-        permission_checker: Some(make_permission_checker(workspace_root)),
-        file_provider: Arc::new(diaryx_extism::NoopFileProvider),
-    });
-
-    // Load the plugin
-    let adapter =
-        diaryx_extism::load_plugin_from_wasm(&wasm_file, host_ctx, None).map_err(|e| {
-            SerializableError {
-                kind: "PluginError".to_string(),
-                message: format!("Failed to load sync plugin: {e}"),
-                path: None,
-            }
-        })?;
-
-    let adapter = Arc::new(adapter);
-
-    // Store in ExtismSyncState
-    let extism_sync_state = app.state::<ExtismSyncState>();
-    {
-        let mut plugin_guard = acquire_lock(&extism_sync_state.plugin)?;
-        *plugin_guard = Some(Arc::clone(&adapter));
-    }
-
-    // Clear cached Diaryx instance so next execute() picks up the plugin
-    let app_state = app.state::<AppState>();
-    {
-        let mut diaryx_guard = acquire_lock(&app_state.diaryx)?;
-        *diaryx_guard = None;
-    }
-
-    {
-        use diaryx_core::plugin::Plugin;
-        log::info!(
-            "[load_sync_plugin] Sync plugin loaded: {} ({})",
-            adapter.manifest().name,
-            adapter.manifest().id,
-        );
-    }
-
-    Ok(())
-}
-
-/// Unload the Extism sync plugin.
-#[cfg(feature = "extism-plugins")]
-#[tauri::command]
-pub async fn unload_sync_plugin<R: Runtime>(app: AppHandle<R>) -> Result<(), SerializableError> {
-    log::info!("[unload_sync_plugin] Unloading Extism sync plugin");
-
-    let extism_sync_state = app.state::<ExtismSyncState>();
-    {
-        let mut plugin_guard = acquire_lock(&extism_sync_state.plugin)?;
-        *plugin_guard = None;
-    }
-
-    // Clear cached Diaryx to remove the registered plugin
-    let app_state = app.state::<AppState>();
-    {
-        let mut diaryx_guard = acquire_lock(&app_state.diaryx)?;
-        *diaryx_guard = None;
-    }
-
-    log::info!("[unload_sync_plugin] Sync plugin unloaded");
-    Ok(())
-}
-
-/// Stub: load_sync_plugin when extism-plugins feature is disabled.
-#[cfg(not(feature = "extism-plugins"))]
-#[tauri::command]
-pub async fn load_sync_plugin<R: Runtime>(
-    _app: AppHandle<R>,
-    _wasm_path: Option<String>,
-) -> Result<(), SerializableError> {
-    Err(SerializableError {
-        kind: "Unsupported".to_string(),
-        message: "Extism plugin support is not enabled. Build with --features extism-plugins."
-            .to_string(),
-        path: None,
-    })
-}
-
-/// Stub: unload_sync_plugin when extism-plugins feature is disabled.
-#[cfg(not(feature = "extism-plugins"))]
-#[tauri::command]
-pub async fn unload_sync_plugin<R: Runtime>(_app: AppHandle<R>) -> Result<(), SerializableError> {
-    Err(SerializableError {
-        kind: "Unsupported".to_string(),
-        message: "Extism plugin support is not enabled. Build with --features extism-plugins."
-            .to_string(),
-        path: None,
-    })
 }
 
 // ============================================================================
@@ -485,10 +417,14 @@ pub async fn install_user_plugin<R: Runtime>(
     let host_ctx = Arc::new(diaryx_extism::HostContext {
         fs,
         storage: Arc::new(diaryx_extism::NoopStorage),
+        secret_store: Arc::new(diaryx_extism::NoopSecretStore),
         event_emitter: Arc::new(diaryx_extism::NoopEventEmitter),
         plugin_id: String::new(),
         permission_checker: Some(Arc::new(diaryx_extism::DenyAllPermissionChecker)),
         file_provider: Arc::new(diaryx_extism::NoopFileProvider),
+        ws_bridge: Arc::new(diaryx_extism::NoopWebSocketBridge),
+        plugin_command_bridge: Arc::new(diaryx_extism::NoopPluginCommandBridge),
+        runtime_context_provider: Arc::new(diaryx_extism::NoopRuntimeContextProvider),
     });
 
     let adapter = diaryx_extism::load_plugin_from_wasm(&tmp_wasm, host_ctx, None).map_err(|e| {
@@ -671,6 +607,33 @@ pub async fn call_plugin_render<R: Runtime>(
     })
 }
 
+#[cfg(feature = "extism-plugins")]
+#[tauri::command]
+pub fn set_runtime_context<R: Runtime>(
+    app: AppHandle<R>,
+    context_json: String,
+) -> Result<(), SerializableError> {
+    let context: JsonValue =
+        serde_json::from_str(&context_json).map_err(|e| SerializableError {
+            kind: "ParseError".to_string(),
+            message: format!("Failed to parse runtime context JSON: {e}"),
+            path: None,
+        })?;
+    let state = app.state::<RuntimeContextState>();
+    let mut guard = acquire_lock(&state.context)?;
+    *guard = context;
+    Ok(())
+}
+
+#[cfg(not(feature = "extism-plugins"))]
+#[tauri::command]
+pub fn set_runtime_context<R: Runtime>(
+    _app: AppHandle<R>,
+    _context_json: String,
+) -> Result<(), SerializableError> {
+    Ok(())
+}
+
 // ============================================================================
 // Unified Command API
 // ============================================================================
@@ -764,9 +727,10 @@ pub async fn execute<R: Runtime>(
             }
             #[cfg(feature = "extism-plugins")]
             {
-                let adapters = register_extism_plugins(&mut d);
+                let adapters = register_extism_plugins(&app, &mut d);
                 if let Some(plugin_adapters) = app.try_state::<PluginAdapters>() {
                     if let Ok(mut guard) = plugin_adapters.adapters.lock() {
+                        guard.clear();
                         for adapter in adapters {
                             use diaryx_core::plugin::Plugin;
                             guard.insert(adapter.manifest().id.0.clone(), adapter);
@@ -774,23 +738,13 @@ pub async fn execute<R: Runtime>(
                     }
                 }
             }
-            #[cfg(feature = "extism-plugins")]
-            {
-                if let Some(extism_sync_state) = app.try_state::<ExtismSyncState>() {
-                    if let Ok(guard) = extism_sync_state.plugin.lock() {
-                        if let Some(ref plugin) = *guard {
-                            d.plugin_registry_mut()
-                                .register_workspace_plugin(Arc::clone(plugin)
-                                    as Arc<dyn diaryx_core::plugin::WorkspacePlugin>);
-                            log::debug!("[execute] Registered Extism sync plugin");
-                        }
-                    }
-                }
-            }
             let new_diaryx = Arc::new(d);
 
             // Initialize plugins (seeds workspace root and link format)
-            new_diaryx.init_plugins().await.ok();
+            let init_failures = new_diaryx.init_plugins().await;
+            for (id, err) in &init_failures {
+                log::error!("Plugin {} failed to init: {}", id, err);
+            }
 
             // Cache the new instance for future commands
             {

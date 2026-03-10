@@ -131,12 +131,9 @@ function shouldSkipZipPath(path: string): boolean {
     .some((part) => isHiddenOrSystemSegment(part));
 }
 
-function detectCommonRootPrefix(
-  zip: JSZipType,
-  fileNames: string[],
-): string {
+function detectCommonRootPrefix(fileNames: string[]): string {
   const candidates = fileNames
-    .filter((name) => !zip.files[name].dir)
+    .filter((name) => name.length > 0)
     .filter((name) => !shouldSkipZipPath(name));
 
   if (candidates.length === 0) {
@@ -187,7 +184,9 @@ export async function importFilesFromZip(
 
   // Detect common root directory prefix to strip.
   // Ignore hidden/system entries so "__MACOSX" or dotfiles don't break detection.
-  const commonPrefix = detectCommonRootPrefix(zip, fileNames);
+  const commonPrefix = detectCommonRootPrefix(
+    fileNames.filter((name) => !zip.files[name].dir),
+  );
 
   for (let i = 0; i < fileNames.length; i++) {
     let fileName = fileNames[i];
@@ -236,4 +235,101 @@ export async function importFilesFromZip(
   }
 
   return { success: true, files_imported: filesImported, files_skipped: filesSkipped };
+}
+
+/**
+ * Stream files from a ZIP blob into the workspace without buffering the whole
+ * archive in memory first.
+ */
+export async function importFilesFromZipBlob(
+  zipBlob: Blob,
+  workspace: string,
+  writer: ImportFileWriter,
+  onProgress?: (done: number, total: number) => void,
+): Promise<ImportResult> {
+  const { ZipReader, BlobReader, TextWriter, Uint8ArrayWriter } =
+    await import('@zip.js/zip.js');
+
+  const zipReader = new ZipReader(new BlobReader(zipBlob));
+
+  try {
+    const entries = await zipReader.getEntries();
+    const files = entries.filter((entry) => !entry.directory);
+    const commonPrefix = detectCommonRootPrefix(
+      files.map((entry) => entry.filename),
+    );
+
+    let filesImported = 0;
+    let filesSkipped = 0;
+    let processedWeight = 0;
+    const now = () =>
+      typeof performance !== 'undefined' && typeof performance.now === 'function'
+        ? performance.now()
+        : Date.now();
+    let lastProgressEmitAt = now();
+
+    const entryWeights = files.map((entry) => {
+      const sizeGuess = entry.uncompressedSize || entry.compressedSize || 0;
+      return sizeGuess > 0 ? sizeGuess : 1;
+    });
+    const totalWeight = entryWeights.reduce((sum, weight) => sum + weight, 0);
+
+    for (let i = 0; i < files.length; i++) {
+      const entry = files[i];
+      let fileName = entry.filename;
+
+      if (commonPrefix && fileName.startsWith(commonPrefix)) {
+        fileName = fileName.substring(commonPrefix.length);
+        if (fileName === '') {
+          continue;
+        }
+      }
+
+      if (shouldSkipZipPath(fileName)) {
+        filesSkipped++;
+        continue;
+      }
+
+      const isMarkdown = fileName.endsWith('.md');
+      const isAttachment = COMMON_ATTACHMENT_RE.test(fileName);
+      if (!isMarkdown && !isAttachment) {
+        filesSkipped++;
+        continue;
+      }
+
+      const filePath = `${workspace}/${fileName}`;
+
+      try {
+        if (isMarkdown) {
+          const content = await entry.getData!(new TextWriter());
+          await writer.writeText(filePath, content as string);
+        } else {
+          const data = await entry.getData!(new Uint8ArrayWriter());
+          await writer.writeBinary(filePath, data as Uint8Array);
+        }
+        filesImported++;
+      } catch {
+        filesSkipped++;
+      }
+
+      if (onProgress && totalWeight > 0) {
+        processedWeight = Math.min(totalWeight, processedWeight + entryWeights[i]);
+        const tick = now();
+        const shouldEmit =
+          processedWeight >= totalWeight || tick - lastProgressEmitAt >= 120;
+        if (shouldEmit) {
+          onProgress(processedWeight, totalWeight);
+          lastProgressEmitAt = tick;
+        }
+      }
+    }
+
+    if (onProgress) {
+      onProgress(totalWeight, totalWeight);
+    }
+
+    return { success: true, files_imported: filesImported, files_skipped: filesSkipped };
+  } finally {
+    await zipReader.close();
+  }
 }

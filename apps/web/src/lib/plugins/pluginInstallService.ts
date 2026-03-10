@@ -6,13 +6,22 @@ import {
   installPlugin as browserInstallPlugin,
   uninstallPlugin as browserUninstallPlugin,
 } from "$lib/plugins/browserPluginManager.svelte";
+import {
+  clearPreservedPluginEditorExtensions,
+  preservePluginEditorExtensions,
+} from "$lib/plugins/preservedEditorExtensions.svelte";
 import type {
   PermissionType,
   PluginConfig,
   PluginPermissions,
 } from "@/models/stores/permissionStore.svelte";
+import { getPluginStore } from "@/models/stores/pluginStore.svelte";
 import type { RegistryPlugin } from "$lib/plugins/pluginRegistry";
 import { workspaceStore } from "@/models/stores/workspaceStore.svelte";
+import {
+  clearInstalledPluginSource,
+  setInstalledPluginSource,
+} from "$lib/plugins/pluginInstallSource.svelte";
 
 const PERMISSION_LABELS: Record<PermissionType, string> = {
   read_files: "Read files",
@@ -34,24 +43,29 @@ function formatRuleSummary(
   return rule.include.join(", ");
 }
 
+async function refreshTauriPluginStore(backend: Backend): Promise<void> {
+  const pluginStore = getPluginStore();
+  await pluginStore.init(createApi(backend));
+  await pluginStore.preloadInsertCommandIcons();
+}
+
 async function platformInstall(
   bytes: ArrayBuffer,
   name?: string,
   expectedPluginId?: string,
-): Promise<void> {
+): Promise<string | null> {
   if (isTauri()) {
     const backend: Backend = await getBackend();
     if (backend.installPlugin) {
       const manifestJson = await backend.installPlugin(new Uint8Array(bytes));
+      let installedId: string | null = null;
+      try {
+        const parsed = JSON.parse(manifestJson);
+        if (typeof parsed?.id === "string") installedId = parsed.id;
+      } catch {
+        // Ignore parse errors; the mismatch check below will handle required IDs.
+      }
       if (expectedPluginId) {
-        let installedId: string | null = null;
-        try {
-          const parsed = JSON.parse(manifestJson);
-          if (typeof parsed?.id === "string") installedId = parsed.id;
-        } catch {
-          // Keep null to fail below.
-        }
-
         if (!installedId) {
           throw new Error(
             "Installed plugin manifest did not include a valid plugin ID.",
@@ -63,23 +77,37 @@ async function platformInstall(
           );
         }
       }
-      return;
+      if (installedId) {
+        clearPreservedPluginEditorExtensions(installedId);
+      }
+      await refreshTauriPluginStore(backend);
+      return installedId ?? expectedPluginId ?? null;
     }
   }
 
-  await browserInstallPlugin(bytes, name);
+  const manifest = await browserInstallPlugin(bytes, name);
+  return String(manifest.id);
 }
 
 export async function uninstallPlugin(pluginId: string): Promise<void> {
   if (isTauri()) {
     const backend: Backend = await getBackend();
     if (backend.uninstallPlugin) {
+      const removedManifest =
+        getPluginStore().allManifests.find(
+          (manifest) => String(manifest.id) === pluginId,
+        ) ?? null;
       await backend.uninstallPlugin(pluginId);
+      clearInstalledPluginSource(pluginId);
+      getPluginStore().clearPluginEnabled(pluginId);
+      preservePluginEditorExtensions(removedManifest);
+      await refreshTauriPluginStore(backend);
       return;
     }
   }
 
   await browserUninstallPlugin(pluginId);
+  clearInstalledPluginSource(pluginId);
 }
 
 function normalizeSha256(value: string): string {
@@ -154,10 +182,9 @@ async function reviewAndInstall(
   bytes: ArrayBuffer,
   fallbackName?: string,
   expectedPluginId?: string,
-): Promise<void> {
+): Promise<string | null> {
   if (isTauri()) {
-    await platformInstall(bytes, fallbackName, expectedPluginId);
-    return;
+    return await platformInstall(bytes, fallbackName, expectedPluginId);
   }
 
   const inspected = await inspectPluginWasm(bytes);
@@ -197,19 +224,24 @@ async function reviewAndInstall(
   );
 
   if (!approved) {
-    return;
+    return null;
   }
 
   if (requested?.defaults) {
     await persistDefaultPermissions(pluginId, requested.defaults);
   }
 
-  await platformInstall(bytes, fallbackName ?? pluginName, expectedPluginId);
+  return await platformInstall(bytes, fallbackName ?? pluginName, expectedPluginId);
 }
 
 export async function installRegistryPlugin(
   plugin: RegistryPlugin,
 ): Promise<void> {
+  console.info("[pluginInstallService] Installing registry plugin", {
+    pluginId: plugin.id,
+    version: plugin.version,
+    url: plugin.artifact.url,
+  });
   const response = await fetch(plugin.artifact.url);
   if (!response.ok) {
     throw new Error(`Download failed: ${response.status}`);
@@ -217,12 +249,20 @@ export async function installRegistryPlugin(
 
   const bytes = await response.arrayBuffer();
   await verifyRegistryArtifact(bytes, plugin.artifact.sha256);
-  await reviewAndInstall(bytes, plugin.name, plugin.id);
+  const installedPluginId = await reviewAndInstall(bytes, plugin.name, plugin.id);
+  setInstalledPluginSource(installedPluginId ?? plugin.id, "registry");
 }
 
 export async function installLocalPlugin(
   bytes: ArrayBuffer,
   fallbackName?: string,
 ): Promise<void> {
-  await reviewAndInstall(bytes, fallbackName);
+  console.info("[pluginInstallService] Installing local plugin bytes", {
+    fallbackName: fallbackName ?? null,
+    bytes: bytes.byteLength,
+  });
+  const installedPluginId = await reviewAndInstall(bytes, fallbackName);
+  if (installedPluginId) {
+    setInstalledPluginSource(installedPluginId, "local");
+  }
 }

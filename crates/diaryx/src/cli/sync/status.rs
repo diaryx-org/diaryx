@@ -4,26 +4,42 @@
 
 use std::path::Path;
 
+use diaryx_core::auth::{AuthCredentials, DEFAULT_SYNC_SERVER, NativeFileAuthStorage};
 use diaryx_core::config::Config;
 
-use crate::cli::plugin_loader::CliSyncContext;
+use crate::cli::plugin_loader::{CliSyncContext, resolve_sync_runtime_state};
+
+fn current_auth_credentials() -> Option<AuthCredentials> {
+    NativeFileAuthStorage::load_global_credentials()
+}
+
+fn default_auth_credentials() -> AuthCredentials {
+    AuthCredentials {
+        server_url: DEFAULT_SYNC_SERVER.to_string(),
+        session_token: None,
+        email: None,
+        workspace_id: None,
+    }
+}
 
 /// Handle the status command - show sync status.
 pub fn handle_status(config: &Config, workspace_root: &Path) {
+    let runtime = resolve_sync_runtime_state(config, workspace_root);
+    let credentials = current_auth_credentials();
+
     println!("Sync Status");
     println!("===========");
     println!();
 
     // Server configuration
-    if let Some(server) = &config.sync_server_url {
-        println!("Server: {}", server);
-    } else {
-        println!("Server: (not configured)");
-    }
+    println!("Server: {}", runtime.server_url);
 
     // Account status
-    if let Some(email) = &config.sync_email {
-        if config.sync_session_token.is_some() {
+    if let Some(email) = credentials
+        .as_ref()
+        .and_then(|creds| creds.email.as_deref())
+    {
+        if runtime.auth_token.is_some() {
             println!("Account: {} (logged in)", email);
         } else {
             println!("Account: {} (not logged in)", email);
@@ -33,7 +49,7 @@ pub fn handle_status(config: &Config, workspace_root: &Path) {
     }
 
     // Workspace ID
-    if let Some(workspace_id) = &config.sync_workspace_id {
+    if let Some(workspace_id) = &runtime.remote_workspace_id {
         println!("Workspace ID: {}", workspace_id);
     } else {
         println!("Workspace ID: (not configured)");
@@ -61,10 +77,10 @@ pub fn handle_status(config: &Config, workspace_root: &Path) {
 
     // Quick check if we can sync
     println!();
-    if config.sync_session_token.is_none() {
+    if runtime.auth_token.is_none() {
         println!("To start syncing, first log in:");
         println!("  diaryx sync login <your-email>");
-    } else if config.sync_workspace_id.is_none() {
+    } else if runtime.remote_workspace_id.is_none() {
         println!("Workspace ID not configured. It will be set automatically when syncing,");
         println!("or you can set it manually:");
         println!("  diaryx sync config --workspace-id <id>");
@@ -75,28 +91,22 @@ pub fn handle_status(config: &Config, workspace_root: &Path) {
 }
 
 /// Handle the config command - configure sync settings.
-pub fn handle_config(
-    config: &Config,
-    server: Option<String>,
-    workspace_id: Option<String>,
-    show: bool,
-) {
+pub fn handle_config(server: Option<String>, workspace_id: Option<String>, show: bool) {
+    let credentials = current_auth_credentials().unwrap_or_else(default_auth_credentials);
+
     // If --show or no options, display current config
     if show || (server.is_none() && workspace_id.is_none()) {
         println!("Sync Configuration");
         println!("==================");
         println!();
-        println!(
-            "Server URL: {}",
-            config.sync_server_url.as_deref().unwrap_or("(not set)")
-        );
+        println!("Server URL: {}", credentials.server_url);
         println!(
             "Email: {}",
-            config.sync_email.as_deref().unwrap_or("(not set)")
+            credentials.email.as_deref().unwrap_or("(not set)")
         );
         println!(
             "Session: {}",
-            if config.sync_session_token.is_some() {
+            if credentials.session_token.is_some() {
                 "active"
             } else {
                 "(not logged in)"
@@ -104,22 +114,22 @@ pub fn handle_config(
         );
         println!(
             "Workspace ID: {}",
-            config.sync_workspace_id.as_deref().unwrap_or("(not set)")
+            credentials.workspace_id.as_deref().unwrap_or("(not set)")
         );
         return;
     }
 
     // Update configuration
-    let mut new_config = config.clone();
+    let mut updated_credentials = credentials;
     let mut changes = Vec::new();
 
     if let Some(s) = server {
-        new_config.sync_server_url = Some(s.clone());
+        updated_credentials.server_url = s.clone();
         changes.push(format!("Server URL: {}", s));
     }
 
     if let Some(wid) = workspace_id {
-        new_config.sync_workspace_id = Some(wid.clone());
+        updated_credentials.workspace_id = Some(wid.clone());
         changes.push(format!("Workspace ID: {}", wid));
     }
 
@@ -129,7 +139,7 @@ pub fn handle_config(
     }
 
     // Save config
-    match new_config.save() {
+    match NativeFileAuthStorage::save_global_credentials(&updated_credentials) {
         Ok(()) => {
             println!("Configuration updated:");
             for change in changes {
@@ -146,67 +156,60 @@ pub fn handle_config(
 mod tests {
     use super::*;
 
-    /// Helper to create a default config for testing.
-    fn create_test_config() -> Config {
-        Config::default()
-    }
-
     // =========================================================================
     // Config State Tests
     // =========================================================================
 
     #[test]
-    fn test_config_with_all_fields() {
-        let mut config = create_test_config();
-        config.sync_server_url = Some("https://custom.server.com".to_string());
-        config.sync_email = Some("test@example.com".to_string());
-        config.sync_session_token = Some("token123".to_string());
-        config.sync_workspace_id = Some("workspace-abc".to_string());
+    fn test_default_auth_credentials() {
+        let credentials = default_auth_credentials();
 
-        // Verify all fields are set
-        assert_eq!(
-            config.sync_server_url.as_deref(),
-            Some("https://custom.server.com")
-        );
-        assert_eq!(config.sync_email.as_deref(), Some("test@example.com"));
-        assert!(config.sync_session_token.is_some());
-        assert_eq!(config.sync_workspace_id.as_deref(), Some("workspace-abc"));
+        assert_eq!(credentials.server_url, DEFAULT_SYNC_SERVER);
+        assert!(credentials.email.is_none());
+        assert!(credentials.session_token.is_none());
+        assert!(credentials.workspace_id.is_none());
     }
 
     #[test]
-    fn test_config_default_values() {
-        let config = create_test_config();
+    fn test_status_session_active_display() {
+        let credentials = AuthCredentials {
+            server_url: DEFAULT_SYNC_SERVER.to_string(),
+            session_token: Some("token".to_string()),
+            email: None,
+            workspace_id: None,
+        };
 
-        assert!(config.sync_server_url.is_none());
-        assert!(config.sync_email.is_none());
-        assert!(config.sync_session_token.is_none());
-        assert!(config.sync_workspace_id.is_none());
+        let session_display = if credentials.session_token.is_some() {
+            "active"
+        } else {
+            "(not logged in)"
+        };
+
+        assert_eq!(session_display, "active");
     }
 
     #[test]
-    fn test_config_logged_in_status() {
-        let mut config = create_test_config();
+    fn test_status_session_inactive_display() {
+        let credentials = default_auth_credentials();
 
-        // Not logged in by default
-        assert!(config.sync_session_token.is_none());
+        let session_display = if credentials.session_token.is_some() {
+            "active"
+        } else {
+            "(not logged in)"
+        };
 
-        // Set token to simulate logged in state
-        config.sync_session_token = Some("token".to_string());
-        assert!(config.sync_session_token.is_some());
+        assert_eq!(session_display, "(not logged in)");
     }
 
     #[test]
-    fn test_config_partial_setup() {
-        let mut config = create_test_config();
+    fn test_status_optional_field_display() {
+        let credentials = default_auth_credentials();
 
-        // User has logged in but workspace ID not yet set
-        config.sync_email = Some("user@example.com".to_string());
-        config.sync_session_token = Some("token".to_string());
-        config.sync_server_url = Some("https://sync.diaryx.org".to_string());
-        // workspace_id is None
+        let email_display = credentials.email.as_deref().unwrap_or("(not set)");
+        let workspace_display = credentials.workspace_id.as_deref().unwrap_or("(not set)");
 
-        assert!(config.sync_session_token.is_some());
-        assert!(config.sync_workspace_id.is_none());
+        assert_eq!(email_display, "(not set)");
+        assert_eq!(workspace_display, "(not set)");
     }
 
     // =========================================================================
@@ -215,51 +218,35 @@ mod tests {
 
     #[test]
     fn test_config_update_server_url() {
-        let mut config = create_test_config();
+        let mut credentials = default_auth_credentials();
+        credentials.server_url = "https://new.server.com".to_string();
 
-        // Simulate updating server URL
-        let new_server = Some("https://new.server.com".to_string());
-        if let Some(s) = new_server {
-            config.sync_server_url = Some(s);
-        }
-
-        assert_eq!(
-            config.sync_server_url.as_deref(),
-            Some("https://new.server.com")
-        );
+        assert_eq!(credentials.server_url, "https://new.server.com");
     }
 
     #[test]
     fn test_config_update_workspace_id() {
-        let mut config = create_test_config();
-
-        // Simulate updating workspace ID
-        let new_workspace = Some("new-workspace-id".to_string());
-        if let Some(wid) = new_workspace {
-            config.sync_workspace_id = Some(wid);
-        }
+        let mut credentials = default_auth_credentials();
+        credentials.workspace_id = Some("new-workspace-id".to_string());
 
         assert_eq!(
-            config.sync_workspace_id.as_deref(),
+            credentials.workspace_id.as_deref(),
             Some("new-workspace-id")
         );
     }
 
     #[test]
     fn test_config_update_both_fields() {
-        let mut config = create_test_config();
+        let mut credentials = default_auth_credentials();
+        credentials.server_url = "https://server.com".to_string();
+        credentials.workspace_id = Some("workspace-id".to_string());
 
-        config.sync_server_url = Some("https://server.com".to_string());
-        config.sync_workspace_id = Some("workspace-id".to_string());
-
-        assert!(config.sync_server_url.is_some());
-        assert!(config.sync_workspace_id.is_some());
+        assert_eq!(credentials.server_url, "https://server.com");
+        assert_eq!(credentials.workspace_id.as_deref(), Some("workspace-id"));
     }
 
     #[test]
     fn test_config_no_changes_when_none() {
-        let config = create_test_config();
-
         // Simulate handle_config with no options
         let server: Option<String> = None;
         let workspace_id: Option<String> = None;
@@ -273,64 +260,20 @@ mod tests {
         }
 
         assert!(changes.is_empty(), "No changes should be recorded");
-        assert!(config.sync_server_url.is_none()); // Config unchanged
-    }
-
-    // =========================================================================
-    // Status Display Logic Tests
-    // =========================================================================
-
-    #[test]
-    fn test_status_session_active_display() {
-        let mut config = create_test_config();
-        config.sync_session_token = Some("token".to_string());
-
-        let session_display = if config.sync_session_token.is_some() {
-            "active"
-        } else {
-            "(not logged in)"
-        };
-
-        assert_eq!(session_display, "active");
-    }
-
-    #[test]
-    fn test_status_session_inactive_display() {
-        let config = create_test_config();
-
-        let session_display = if config.sync_session_token.is_some() {
-            "active"
-        } else {
-            "(not logged in)"
-        };
-
-        assert_eq!(session_display, "(not logged in)");
-    }
-
-    #[test]
-    fn test_status_optional_field_display() {
-        let config = create_test_config();
-
-        // Test display fallback for None values
-        let server_display = config.sync_server_url.as_deref().unwrap_or("(not set)");
-        let email_display = config.sync_email.as_deref().unwrap_or("(not set)");
-        let workspace_display = config.sync_workspace_id.as_deref().unwrap_or("(not set)");
-
-        assert_eq!(server_display, "(not set)");
-        assert_eq!(email_display, "(not set)");
-        assert_eq!(workspace_display, "(not set)");
     }
 
     #[test]
     fn test_status_with_configured_fields() {
-        let mut config = create_test_config();
-        config.sync_server_url = Some("https://sync.example.com".to_string());
-        config.sync_email = Some("user@example.com".to_string());
-        config.sync_workspace_id = Some("ws-123".to_string());
+        let credentials = AuthCredentials {
+            server_url: "https://sync.example.com".to_string(),
+            email: Some("user@example.com".to_string()),
+            session_token: None,
+            workspace_id: Some("ws-123".to_string()),
+        };
 
-        let server_display = config.sync_server_url.as_deref().unwrap_or("(not set)");
-        let email_display = config.sync_email.as_deref().unwrap_or("(not set)");
-        let workspace_display = config.sync_workspace_id.as_deref().unwrap_or("(not set)");
+        let server_display = credentials.server_url.as_str();
+        let email_display = credentials.email.as_deref().unwrap_or("(not set)");
+        let workspace_display = credentials.workspace_id.as_deref().unwrap_or("(not set)");
 
         assert_eq!(server_display, "https://sync.example.com");
         assert_eq!(email_display, "user@example.com");

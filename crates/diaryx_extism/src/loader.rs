@@ -19,7 +19,7 @@ use thiserror::Error;
 
 use crate::adapter::ExtismPluginAdapter;
 use crate::host_fns::{self, HostContext};
-use crate::protocol::GuestManifest;
+use crate::protocol::{CURRENT_PROTOCOL_VERSION, GuestManifest, MIN_SUPPORTED_PROTOCOL_VERSION};
 
 /// Errors that can occur during plugin loading.
 #[derive(Debug, Error)]
@@ -48,6 +48,35 @@ pub enum ExtismLoadError {
         plugin_name: String,
         source: serde_json::Error,
     },
+
+    /// The guest's protocol version is incompatible with this host.
+    #[error(
+        "Protocol version mismatch for plugin '{plugin_name}': \
+             guest has v{guest_version}, host supports v{min}..=v{max}"
+    )]
+    ProtocolMismatch {
+        plugin_name: String,
+        guest_version: u32,
+        min: u32,
+        max: u32,
+    },
+}
+
+/// Check that the guest's protocol version is within the range this host supports.
+fn validate_protocol_version(
+    manifest: &GuestManifest,
+    plugin_name: &str,
+) -> Result<(), ExtismLoadError> {
+    let v = manifest.protocol_version;
+    if v < MIN_SUPPORTED_PROTOCOL_VERSION || v > CURRENT_PROTOCOL_VERSION {
+        return Err(ExtismLoadError::ProtocolMismatch {
+            plugin_name: plugin_name.to_string(),
+            guest_version: v,
+            min: MIN_SUPPORTED_PROTOCOL_VERSION,
+            max: CURRENT_PROTOCOL_VERSION,
+        });
+    }
+    Ok(())
 }
 
 fn parse_guest_manifest(
@@ -94,7 +123,15 @@ pub fn inspect_plugin_wasm_manifest(wasm_path: &Path) -> Result<GuestManifest, E
         source: e,
     })?;
 
-    parse_guest_manifest(&mut plugin, &plugin_name)
+    let manifest = parse_guest_manifest(&mut plugin, &plugin_name)?;
+
+    // Log a warning for incompatible plugins but don't fail — CI inspection
+    // should still show metadata even for incompatible plugins.
+    if let Err(e) = validate_protocol_version(&manifest, &plugin_name) {
+        log::warn!("{e}");
+    }
+
+    Ok(manifest)
 }
 
 /// Load all WASM plugins from the given directory.
@@ -175,10 +212,14 @@ pub fn load_plugin_from_wasm(
     let user_data = UserData::new(HostContext {
         fs: host_context.fs.clone(),
         storage: host_context.storage.clone(),
+        secret_store: host_context.secret_store.clone(),
         event_emitter: host_context.event_emitter.clone(),
         plugin_id: plugin_name.clone(),
         permission_checker: host_context.permission_checker.clone(),
         file_provider: host_context.file_provider.clone(),
+        ws_bridge: host_context.ws_bridge.clone(),
+        plugin_command_bridge: host_context.plugin_command_bridge.clone(),
+        runtime_context_provider: host_context.runtime_context_provider.clone(),
     });
 
     let builder = PluginBuilder::new(extism_manifest).with_wasi(true);
@@ -190,6 +231,8 @@ pub fn load_plugin_from_wasm(
 
     // Call the guest's manifest export.
     let guest_manifest = parse_guest_manifest(&mut plugin, &plugin_name)?;
+    validate_protocol_version(&guest_manifest, &plugin_name)?;
+
     if let Ok(ctx) = user_data.get()
         && let Ok(mut guard) = ctx.lock()
     {
@@ -237,10 +280,14 @@ fn load_single_plugin(
     let user_data = UserData::new(HostContext {
         fs: host_context.fs.clone(),
         storage: host_context.storage.clone(),
+        secret_store: host_context.secret_store.clone(),
         event_emitter: host_context.event_emitter.clone(),
         plugin_id: plugin_name.to_string(),
         permission_checker: host_context.permission_checker.clone(),
         file_provider: host_context.file_provider.clone(),
+        ws_bridge: host_context.ws_bridge.clone(),
+        plugin_command_bridge: host_context.plugin_command_bridge.clone(),
+        runtime_context_provider: host_context.runtime_context_provider.clone(),
     });
 
     let builder = PluginBuilder::new(extism_manifest).with_wasi(true);
@@ -266,6 +313,8 @@ fn load_single_plugin(
         cache_manifest(&manifest_path, &gm);
         gm
     };
+    validate_protocol_version(&guest_manifest, plugin_name)?;
+
     if let Ok(ctx) = user_data.get()
         && let Ok(mut guard) = ctx.lock()
     {

@@ -13,6 +13,8 @@
   import PluginSettingsTab from "$lib/settings/PluginSettingsTab.svelte";
   import PluginIframe from "$lib/components/PluginIframe.svelte";
   import { getPlugin as getBrowserPlugin } from "$lib/plugins/browserPluginManager.svelte";
+  import { mergeRuntimePluginConfig } from "$lib/plugins/pluginRuntimeConfig";
+  import { getLegacyBuiltinFields } from "$lib/components/pluginBuiltinCompat";
 
   interface Props {
     pluginId: PluginId;
@@ -25,6 +27,11 @@
   let { pluginId, component, api, entry = null, onHostAction }: Props = $props();
 
   let config = $state<Record<string, JsonValue>>({});
+  let legacyBuiltinFields = $derived(
+    component.type === "Builtin"
+      ? getLegacyBuiltinFields(component.component_id)
+      : null,
+  );
 
   $effect(() => {
     // Only load config for Declarative components that actually use it.
@@ -40,11 +47,17 @@
       const browserPlugin = getBrowserPlugin(pluginId as unknown as string);
       if (browserPlugin) {
         const raw = await browserPlugin.getConfig();
-        config = (raw as Record<string, JsonValue>) ?? {};
+        config = mergeRuntimePluginConfig(
+          pluginId as unknown as string,
+          ((raw as Record<string, JsonValue>) ?? {}),
+        );
         return;
       }
       const raw = await api.getPluginConfig(pluginId);
-      config = (raw as Record<string, JsonValue>) ?? {};
+      config = mergeRuntimePluginConfig(
+        pluginId as unknown as string,
+        ((raw as Record<string, JsonValue>) ?? {}),
+      );
     } catch {
       config = {};
     }
@@ -81,6 +94,17 @@
         fields={component.fields}
         {config}
         onConfigChange={handleConfigChange}
+        {api}
+        {onHostAction}
+      />
+    {:else if legacyBuiltinFields}
+      <PluginSettingsTab
+        pluginId={pluginId as unknown as string}
+        fields={legacyBuiltinFields}
+        {config}
+        onConfigChange={handleConfigChange}
+        {api}
+        {onHostAction}
       />
     {:else if component.type === "Builtin"}
       <p class="text-sm text-muted-foreground">

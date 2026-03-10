@@ -385,30 +385,62 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
         metadata
     }
 
-    /// Look up a doc_id by path, returning the path as the key for backward compatibility.
+    /// Look up a doc_id by path, or create a new UUID-keyed entry.
     ///
-    /// This maintains backward compatibility with existing code that expects
-    /// path-based CRDT keys. The doc-ID based system is used when:
-    /// 1. The workspace has been migrated (needs_migration() returns false)
-    /// 2. A file is explicitly created with create_file()
+    /// Uses the doc-ID (UUID) based system:
+    /// 1. Try `find_by_path()` to get an existing doc_id
+    /// 2. If not found, `create_file()` to generate a new UUID
     ///
-    /// For now, this returns the path as the key, which maintains compatibility
-    /// with all existing tests and functionality. The migration to doc-IDs
-    /// will be triggered explicitly via migrate_to_doc_ids().
+    /// Returns the UUID doc_id used as the CRDT key.
     fn path_to_doc_id(&self, path: &Path, _metadata: &FileMetadata) -> Option<String> {
-        // Normalize the path to a canonical form for CRDT storage
         let normalized = self.normalize_crdt_path(path);
+        let normalized_path = Path::new(&normalized);
 
-        // For backward compatibility, always use path as the key
-        // The doc-ID based system is opt-in via explicit migration
-        //
-        // In the future, after migration:
-        // 1. Try find_by_path() to get existing doc_id
-        // 2. If not found, create_file() to generate new UUID
-        //
-        // But for now, maintain compatibility with existing code
+        // Try to find existing UUID for this path
+        if let Some(doc_id) = self.workspace_crdt.find_by_path(normalized_path) {
+            return Some(doc_id);
+        }
 
-        Some(normalized)
+        // No existing entry — generate a new UUID
+        // The caller (update_crdt_for_file_internal) will call set_file() with the final metadata
+        let doc_id = diaryx_core::uuid::Uuid::new_v4().to_string();
+        log::debug!("[CrdtFs] Generated new UUID {} for path {:?}", doc_id, path);
+        Some(doc_id)
+    }
+
+    /// Resolve path-based `part_of` and `contents` references to UUIDs.
+    ///
+    /// After `extract_metadata` produces canonical paths for these fields,
+    /// this method converts them to UUIDs by looking up the workspace CRDT.
+    /// If a referenced path has no UUID entry yet, the path is kept as-is
+    /// (it will be resolved on the next upsert when the referenced file exists).
+    fn resolve_metadata_refs_to_uuids(&self, metadata: &mut FileMetadata) {
+        if let Some(ref parent_path) = metadata.part_of {
+            // Only resolve if it looks like a path (not already a UUID)
+            if parent_path.contains('/') || parent_path.contains('.') {
+                if let Some(parent_uuid) = self.workspace_crdt.find_by_path(Path::new(parent_path))
+                {
+                    metadata.part_of = Some(parent_uuid);
+                }
+            }
+        }
+
+        if let Some(ref contents) = metadata.contents {
+            let resolved: Vec<String> = contents
+                .iter()
+                .map(|child_ref| {
+                    // Only resolve if it looks like a path (not already a UUID)
+                    if child_ref.contains('/') || child_ref.contains('.') {
+                        self.workspace_crdt
+                            .find_by_path(Path::new(child_ref))
+                            .unwrap_or_else(|| child_ref.clone())
+                    } else {
+                        child_ref.clone()
+                    }
+                })
+                .collect();
+            metadata.contents = Some(resolved);
+        }
     }
 
     /// Convert frontmatter to FileMetadata.
@@ -486,9 +518,11 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
         );
         let mut metadata = self.extract_metadata(path, content).await;
 
+        // Resolve part_of and contents paths to UUIDs
+        self.resolve_metadata_refs_to_uuids(&mut metadata);
+
         // Get or create doc_id for this path
-        // In doc-ID mode, this finds existing doc_id or creates new UUID
-        // In legacy mode, this just returns the path as the key
+        // Finds existing doc_id via find_by_path() or creates new UUID via create_file()
         let doc_key = self
             .path_to_doc_id(path, &metadata)
             .unwrap_or(path_str.clone());
@@ -551,40 +585,33 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
 
     /// Update parent's contents array when a child is moved or deleted.
     ///
-    /// For rename/move: `new_path` is Some with the new path.
-    /// For delete: `new_path` is None.
-    fn update_parent_contents(&self, old_path: &str, new_path: Option<&str>) {
+    /// `doc_id` is the UUID doc_id of the child being moved/deleted.
+    /// For rename/move: `new_doc_id` is Some with the new doc_id.
+    /// For delete: `new_doc_id` is None.
+    fn update_parent_contents(&self, doc_id: &str, new_doc_id: Option<&str>) {
         if !self.is_enabled() {
             return;
         }
 
-        let old_metadata = match self.workspace_crdt.get_file(old_path) {
+        let metadata = match self.workspace_crdt.get_file(doc_id) {
             Some(m) => m,
             None => return,
         };
 
-        if let Some(ref parent_path) = old_metadata.part_of
-            && let Some(mut parent) = self.workspace_crdt.get_file(parent_path)
+        if let Some(ref parent_id) = metadata.part_of
+            && let Some(mut parent) = self.workspace_crdt.get_file(parent_id)
             && let Some(ref mut contents) = parent.contents
         {
-            // Find old filename in contents
-            let old_filename = std::path::Path::new(old_path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or(old_path);
-
+            // Find old doc_id in contents (match by UUID or legacy filename/path)
+            let old_filename = &metadata.filename;
             if let Some(idx) = contents
                 .iter()
-                .position(|e| e == old_filename || e == old_path)
+                .position(|e| e == doc_id || e == old_filename)
             {
-                match new_path {
-                    Some(np) => {
-                        // Rename: replace with new filename
-                        let new_filename = std::path::Path::new(np)
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or(np);
-                        contents[idx] = new_filename.to_string();
+                match new_doc_id {
+                    Some(new_id) => {
+                        // Move: replace with new doc_id
+                        contents[idx] = new_id.to_string();
                     }
                     None => {
                         // Delete: remove from contents
@@ -592,7 +619,7 @@ impl<FS: AsyncFileSystem> CrdtFs<FS> {
                     }
                 }
                 parent.modified_at = crate::time::now_timestamp_millis();
-                let _ = self.workspace_crdt.set_file(parent_path, parent);
+                let _ = self.workspace_crdt.set_file(parent_id, parent);
             }
         }
     }
@@ -694,15 +721,21 @@ impl<FS: AsyncFileSystem + Send + Sync> AsyncFileSystem for CrdtFs<FS> {
                     return result;
                 }
 
-                let path_str = self.normalize_crdt_path(path);
+                let normalized = self.normalize_crdt_path(path);
+
+                // Find UUID for this path, or fall back to path-based lookup
+                let doc_key = self
+                    .workspace_crdt
+                    .find_by_path(Path::new(&normalized))
+                    .unwrap_or_else(|| normalized.clone());
 
                 // Update parent's contents to remove the deleted file
-                self.update_parent_contents(&path_str, None);
+                self.update_parent_contents(&doc_key, None);
 
-                if let Err(e) = self.workspace_crdt.delete_file(&path_str) {
+                if let Err(e) = self.workspace_crdt.delete_file(&doc_key) {
                     log::warn!(
                         "Failed to mark file as deleted in CRDT for {}: {}",
-                        path_str,
+                        doc_key,
                         e
                     );
                 }
@@ -752,43 +785,8 @@ impl<FS: AsyncFileSystem + Send + Sync> AsyncFileSystem for CrdtFs<FS> {
                     return result;
                 }
 
-                let from_str = self.normalize_crdt_path(from);
-                let to_str = self.normalize_crdt_path(to);
-
                 // Find the doc_id for the file being moved
                 if let Some(doc_id) = self.workspace_crdt.find_by_path(from) {
-                    // Legacy path-key mode stores files under path keys (e.g. "notes/file.md")
-                    // rather than stable doc IDs. In that mode, rename_file() only updates
-                    // metadata.filename and keeps the old key, so body/doc routing diverges.
-                    // Detect legacy keys and force delete+create semantics.
-                    let legacy_path_key = doc_id.contains('/') || doc_id.ends_with(".md");
-                    if legacy_path_key {
-                        log::debug!(
-                            "CrdtFs: Legacy path key '{}' detected, using delete+create move semantics",
-                            doc_id
-                        );
-
-                        self.update_parent_contents(&from_str, Some(&to_str));
-
-                        if let Err(e) = self.workspace_crdt.delete_file(&doc_id) {
-                            log::warn!(
-                                "Failed to mark legacy source as deleted in CRDT ({}): {}",
-                                doc_id,
-                                e
-                            );
-                        }
-
-                        if let Ok(content) = self.inner.read_to_string(to).await {
-                            // Destination key is logically new in legacy mode; clear stale body
-                            // state so old updates don't merge into unrelated prior history.
-                            self.update_crdt_for_new_file(to, &content).await;
-                        }
-
-                        self.mark_local_write_end(from);
-                        self.mark_local_write_end(to);
-                        return result;
-                    }
-
                     let new_filename = to
                         .file_name()
                         .and_then(|n| n.to_str())
@@ -840,23 +838,13 @@ impl<FS: AsyncFileSystem + Send + Sync> AsyncFileSystem for CrdtFs<FS> {
                             log::warn!("Failed to rename file during move in CRDT: {}", e);
                         }
                     }
-
-                    // Update parent's contents list (replace old path with new path)
-                    self.update_parent_contents(&from_str, Some(&to_str));
+                    // No need to update parent's contents — doc_id is stable,
+                    // and child discovery uses part_of relationships.
                 } else {
-                    // Fallback for legacy path-based entries: use old delete+create behavior
-                    log::debug!(
-                        "CrdtFs: No doc_id found for {:?}, using legacy move behavior",
-                        from
-                    );
-                    self.update_parent_contents(&from_str, Some(&to_str));
-
-                    if let Err(e) = self.workspace_crdt.delete_file(&from_str) {
-                        log::warn!("Failed to mark old path as deleted in CRDT: {}", e);
-                    }
+                    // No existing UUID entry — create new entry at destination
+                    log::debug!("CrdtFs: No doc_id found for {:?}, creating new entry", from);
 
                     if let Ok(content) = self.inner.read_to_string(to).await {
-                        // Treat destination as new to avoid stale body-doc history reuse.
                         self.update_crdt_for_new_file(to, &content).await;
                     }
                 }
@@ -978,15 +966,21 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for CrdtFs<FS> {
                     return result;
                 }
 
-                let path_str = self.normalize_crdt_path(path);
+                let normalized = self.normalize_crdt_path(path);
+
+                // Find UUID for this path, or fall back to path-based lookup
+                let doc_key = self
+                    .workspace_crdt
+                    .find_by_path(Path::new(&normalized))
+                    .unwrap_or_else(|| normalized.clone());
 
                 // Update parent's contents to remove the deleted file
-                self.update_parent_contents(&path_str, None);
+                self.update_parent_contents(&doc_key, None);
 
-                if let Err(e) = self.workspace_crdt.delete_file(&path_str) {
+                if let Err(e) = self.workspace_crdt.delete_file(&doc_key) {
                     log::warn!(
                         "Failed to mark file as deleted in CRDT for {}: {}",
-                        path_str,
+                        doc_key,
                         e
                     );
                 }
@@ -1036,43 +1030,8 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for CrdtFs<FS> {
                     return result;
                 }
 
-                let from_str = self.normalize_crdt_path(from);
-                let to_str = self.normalize_crdt_path(to);
-
                 // Find the doc_id for the file being moved
                 if let Some(doc_id) = self.workspace_crdt.find_by_path(from) {
-                    // Legacy path-key mode stores files under path keys (e.g. "notes/file.md")
-                    // rather than stable doc IDs. In that mode, rename_file() only updates
-                    // metadata.filename and keeps the old key, so body/doc routing diverges.
-                    // Detect legacy keys and force delete+create semantics.
-                    let legacy_path_key = doc_id.contains('/') || doc_id.ends_with(".md");
-                    if legacy_path_key {
-                        log::debug!(
-                            "CrdtFs: Legacy path key '{}' detected, using delete+create move semantics",
-                            doc_id
-                        );
-
-                        self.update_parent_contents(&from_str, Some(&to_str));
-
-                        if let Err(e) = self.workspace_crdt.delete_file(&doc_id) {
-                            log::warn!(
-                                "Failed to mark legacy source as deleted in CRDT ({}): {}",
-                                doc_id,
-                                e
-                            );
-                        }
-
-                        if let Ok(content) = self.inner.read_to_string(to).await {
-                            // Destination key is logically new in legacy mode; clear stale body
-                            // state so old updates don't merge into unrelated prior history.
-                            self.update_crdt_for_new_file(to, &content).await;
-                        }
-
-                        self.mark_local_write_end(from);
-                        self.mark_local_write_end(to);
-                        return result;
-                    }
-
                     let new_filename = to
                         .file_name()
                         .and_then(|n| n.to_str())
@@ -1117,33 +1076,20 @@ impl<FS: AsyncFileSystem> AsyncFileSystem for CrdtFs<FS> {
                         }
 
                         // Also update filename if it changed
-                        if let Some(meta) = self.workspace_crdt.get_file(&doc_id) {
-                            if meta.filename != new_filename {
-                                if let Err(e) =
-                                    self.workspace_crdt.rename_file(&doc_id, &new_filename)
-                                {
-                                    log::warn!("Failed to rename file during move in CRDT: {}", e);
-                                }
-                            }
+                        if let Some(meta) = self.workspace_crdt.get_file(&doc_id)
+                            && meta.filename != new_filename
+                            && let Err(e) = self.workspace_crdt.rename_file(&doc_id, &new_filename)
+                        {
+                            log::warn!("Failed to rename file during move in CRDT: {}", e);
                         }
                     }
-
-                    // Update parent's contents list (replace old path with new path)
-                    self.update_parent_contents(&from_str, Some(&to_str));
+                    // No need to update parent's contents — doc_id is stable,
+                    // and child discovery uses part_of relationships.
                 } else {
-                    // Fallback for legacy path-based entries: use old delete+create behavior
-                    log::debug!(
-                        "CrdtFs: No doc_id found for {:?}, using legacy move behavior",
-                        from
-                    );
-                    self.update_parent_contents(&from_str, Some(&to_str));
-
-                    if let Err(e) = self.workspace_crdt.delete_file(&from_str) {
-                        log::warn!("Failed to mark old path as deleted in CRDT: {}", e);
-                    }
+                    // No existing UUID entry — create new entry at destination
+                    log::debug!("CrdtFs: No doc_id found for {:?}, creating new entry", from);
 
                     if let Ok(content) = self.inner.read_to_string(to).await {
-                        // Treat destination as new to avoid stale body-doc history reuse.
                         self.update_crdt_for_new_file(to, &content).await;
                     }
                 }
@@ -1211,6 +1157,32 @@ mod tests {
         fs
     }
 
+    /// Helper to look up file metadata by path in the UUID-keyed CRDT.
+    /// Falls back to filename matching for test cases where directory entries
+    /// don't exist in the CRDT.
+    fn get_file_by_path(crdt: &WorkspaceCrdt, path: &str) -> Option<FileMetadata> {
+        // First, try the hierarchy-based lookup
+        if let Some(uuid) = crdt.find_by_path(Path::new(path)) {
+            return crdt.get_file(&uuid);
+        }
+
+        // Fallback: search all files for matching filename
+        let target_filename = Path::new(path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(path);
+        for (key, meta) in crdt.list_files() {
+            if meta.filename == target_filename && !meta.deleted {
+                return Some(meta);
+            }
+            // Also check if the key itself matches (legacy path keys)
+            if key == path {
+                return Some(meta);
+            }
+        }
+        None
+    }
+
     #[test]
     fn test_write_updates_crdt() {
         let fs = create_test_crdt_fs();
@@ -1221,8 +1193,9 @@ mod tests {
         });
 
         // Check CRDT was updated
-        let metadata = fs.workspace_crdt.get_file("test.md").unwrap();
+        let metadata = get_file_by_path(&fs.workspace_crdt, "test.md").unwrap();
         assert_eq!(metadata.title, Some("Test".to_string()));
+        // part_of stays as path since "index.md" doesn't exist in CRDT yet
         assert_eq!(metadata.part_of, Some("index.md".to_string()));
     }
 
@@ -1235,7 +1208,7 @@ mod tests {
             fs.write_file(Path::new("test.md"), content).await.unwrap();
         });
 
-        let metadata = fs.workspace_crdt.get_file("test.md").unwrap();
+        let metadata = get_file_by_path(&fs.workspace_crdt, "test.md").unwrap();
         assert_eq!(metadata.attachments.len(), 1);
         assert_eq!(metadata.attachments[0].path, "_attachments/a.png");
     }
@@ -1250,7 +1223,7 @@ mod tests {
             fs.write_file(Path::new("test.md"), initial).await.unwrap();
         });
 
-        let mut metadata = fs.workspace_crdt.get_file("test.md").unwrap();
+        let mut metadata = get_file_by_path(&fs.workspace_crdt, "test.md").unwrap();
         metadata.attachments = vec![BinaryRef {
             path: "_attachments/a.png".to_string(),
             source: "local".to_string(),
@@ -1260,13 +1233,18 @@ mod tests {
             uploaded_at: Some(1),
             deleted: false,
         }];
-        fs.workspace_crdt.set_file("test.md", metadata).unwrap();
+        // Update metadata on the UUID-keyed entry
+        let uuid = fs
+            .workspace_crdt
+            .find_by_path(Path::new("test.md"))
+            .unwrap();
+        fs.workspace_crdt.set_file(&uuid, metadata).unwrap();
 
         futures_lite::future::block_on(async {
             fs.write_file(Path::new("test.md"), updated).await.unwrap();
         });
 
-        let after = fs.workspace_crdt.get_file("test.md").unwrap();
+        let after = get_file_by_path(&fs.workspace_crdt, "test.md").unwrap();
         assert_eq!(after.attachments.len(), 1);
         assert_eq!(after.attachments[0].path, "_attachments/a.png");
         assert_eq!(after.attachments[0].hash, "a".repeat(64));
@@ -1279,11 +1257,20 @@ mod tests {
 
         futures_lite::future::block_on(async {
             fs.write_file(Path::new("test.md"), content).await.unwrap();
+        });
+
+        // Save the UUID before deleting
+        let uuid = fs
+            .workspace_crdt
+            .find_by_path(Path::new("test.md"))
+            .unwrap();
+
+        futures_lite::future::block_on(async {
             fs.delete_file(Path::new("test.md")).await.unwrap();
         });
 
-        // Check file is marked as deleted in CRDT
-        let metadata = fs.workspace_crdt.get_file("test.md").unwrap();
+        // Check file is marked as deleted in CRDT (look up by UUID directly)
+        let metadata = fs.workspace_crdt.get_file(&uuid).unwrap();
         assert!(metadata.deleted);
     }
 
@@ -1299,7 +1286,7 @@ mod tests {
         });
 
         // CRDT should not have the file
-        assert!(fs.workspace_crdt.get_file("test.md").is_none());
+        assert!(get_file_by_path(&fs.workspace_crdt, "test.md").is_none());
     }
 
     #[test]
@@ -1365,7 +1352,7 @@ mod tests {
         futures_lite::future::block_on(async {
             fs.write_file(Path::new("test1.md"), content).await.unwrap();
         });
-        assert!(fs.workspace_crdt.get_file("test1.md").is_some());
+        assert!(get_file_by_path(&fs.workspace_crdt, "test1.md").is_some());
 
         // Now, mark sync write and write - should NOT update CRDT
         fs.mark_sync_write_start(Path::new("test2.md"));
@@ -1379,7 +1366,7 @@ mod tests {
             fs.exists(Path::new("test2.md"))
         ));
         assert!(
-            fs.workspace_crdt.get_file("test2.md").is_none(),
+            get_file_by_path(&fs.workspace_crdt, "test2.md").is_none(),
             "CRDT should not have been updated for sync write"
         );
     }
@@ -1408,10 +1395,10 @@ mod tests {
             fs.mark_sync_write_end(Path::new("test.md"));
         });
 
-        let metadata = fs.workspace_crdt.get_file("test.md").unwrap();
+        let metadata = get_file_by_path(&fs.workspace_crdt, "test.md").unwrap();
         assert_eq!(metadata.filename, "test.md");
         assert!(!metadata.deleted);
-        assert!(fs.workspace_crdt.get_file("test.md.bak").is_none());
+        assert!(get_file_by_path(&fs.workspace_crdt, "test.md.bak").is_none());
     }
 
     #[test]
@@ -1428,12 +1415,12 @@ mod tests {
             fs.mark_sync_write_end(Path::new("test-delete.md"));
         });
 
-        let metadata = fs.workspace_crdt.get_file("test-delete.md").unwrap();
+        let metadata = get_file_by_path(&fs.workspace_crdt, "test-delete.md").unwrap();
         assert!(!metadata.deleted);
     }
 
     #[test]
-    fn test_move_file_legacy_paths_emit_delete_create_keys() {
+    fn test_move_file_updates_filename_same_uuid() {
         let fs = create_test_crdt_fs();
         let content = "---\ntitle: New Entry\n---\nBody content";
 
@@ -1441,32 +1428,38 @@ mod tests {
             fs.write_file(Path::new("new-entry.md"), content)
                 .await
                 .unwrap();
+        });
+
+        // Save the UUID before rename
+        let uuid = fs
+            .workspace_crdt
+            .find_by_path(Path::new("new-entry.md"))
+            .unwrap();
+
+        futures_lite::future::block_on(async {
             fs.move_file(Path::new("new-entry.md"), Path::new("wow.md"))
                 .await
                 .unwrap();
         });
 
-        let old_meta = fs
+        // Same UUID, just updated filename
+        let meta = fs
             .workspace_crdt
-            .get_file("new-entry.md")
-            .expect("old path should remain as tombstone");
-        assert!(old_meta.deleted, "old path should be tombstoned after move");
+            .get_file(&uuid)
+            .expect("same UUID should still exist after rename");
+        assert!(!meta.deleted);
+        assert_eq!(meta.filename, "wow.md");
 
-        let new_meta = fs
-            .workspace_crdt
-            .get_file("wow.md")
-            .expect("new path should exist after move");
-        assert!(!new_meta.deleted);
-        assert_eq!(new_meta.filename, "wow.md");
+        // Old path no longer resolves
+        assert!(
+            fs.workspace_crdt
+                .find_by_path(Path::new("new-entry.md"))
+                .is_none()
+        );
 
-        let active_paths: Vec<String> = fs
-            .workspace_crdt
-            .list_active_files()
-            .into_iter()
-            .map(|(path, _)| path)
-            .collect();
-        assert!(active_paths.contains(&"wow.md".to_string()));
-        assert!(!active_paths.contains(&"new-entry.md".to_string()));
+        // New path resolves to same UUID
+        let new_uuid = fs.workspace_crdt.find_by_path(Path::new("wow.md")).unwrap();
+        assert_eq!(new_uuid, uuid);
     }
 
     // =========================================================================
@@ -1487,7 +1480,7 @@ mod tests {
         });
 
         // Check CRDT stores canonical path (without leading /)
-        let metadata = fs.workspace_crdt.get_file("Folder/child.md").unwrap();
+        let metadata = get_file_by_path(&fs.workspace_crdt, "Folder/child.md").unwrap();
         assert_eq!(metadata.part_of, Some("Folder/parent.md".to_string()));
     }
 
@@ -1504,7 +1497,7 @@ mod tests {
         });
 
         // Check CRDT stores canonical path
-        let metadata = fs.workspace_crdt.get_file("Folder/Sub/child.md").unwrap();
+        let metadata = get_file_by_path(&fs.workspace_crdt, "Folder/Sub/child.md").unwrap();
         assert_eq!(metadata.part_of, Some("Folder/index.md".to_string()));
     }
 
@@ -1519,7 +1512,7 @@ mod tests {
         });
 
         // Check CRDT stores canonical path
-        let metadata = fs.workspace_crdt.get_file("child.md").unwrap();
+        let metadata = get_file_by_path(&fs.workspace_crdt, "child.md").unwrap();
         assert_eq!(metadata.part_of, Some("index.md".to_string()));
     }
 
@@ -1542,7 +1535,7 @@ Content"#;
         });
 
         // Check CRDT stores canonical paths (without leading /)
-        let metadata = fs.workspace_crdt.get_file("Folder/index.md").unwrap();
+        let metadata = get_file_by_path(&fs.workspace_crdt, "Folder/index.md").unwrap();
         assert_eq!(
             metadata.contents,
             Some(vec![
@@ -1571,7 +1564,7 @@ Content"#;
         });
 
         // Check CRDT stores canonical paths
-        let metadata = fs.workspace_crdt.get_file("Folder/index.md").unwrap();
+        let metadata = get_file_by_path(&fs.workspace_crdt, "Folder/index.md").unwrap();
         assert_eq!(
             metadata.contents,
             Some(vec![
@@ -1602,7 +1595,7 @@ Content"#;
         });
 
         // Check CRDT stores all paths as canonical
-        let metadata = fs.workspace_crdt.get_file("Folder/index.md").unwrap();
+        let metadata = get_file_by_path(&fs.workspace_crdt, "Folder/index.md").unwrap();
         assert_eq!(metadata.part_of, Some("README.md".to_string()));
         assert_eq!(
             metadata.contents,
@@ -1625,7 +1618,7 @@ Content"#;
                 .unwrap();
         });
 
-        let metadata = fs.workspace_crdt.get_file("README.md").unwrap();
+        let metadata = get_file_by_path(&fs.workspace_crdt, "README.md").unwrap();
         assert_eq!(metadata.title, Some("My Journal".to_string()));
         assert_eq!(metadata.audience, Some(vec!["public".to_string()]));
         assert!(
@@ -1654,7 +1647,7 @@ Content"#;
                 .unwrap();
         });
 
-        let metadata = fs.workspace_crdt.get_file("README.md").unwrap();
+        let metadata = get_file_by_path(&fs.workspace_crdt, "README.md").unwrap();
         assert!(
             metadata.extra.contains_key("default_audience"),
             "Expected 'default_audience' in extra, got keys: {:?}",

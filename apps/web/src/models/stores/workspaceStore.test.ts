@@ -173,22 +173,6 @@ describe('workspaceStore', () => {
       expect(store.showHiddenFiles).toBe(false)
     })
 
-    it('should toggle editor title visibility', () => {
-      store.setShowEditorTitle(true)
-      expect(store.showEditorTitle).toBe(true)
-
-      store.setShowEditorTitle(false)
-      expect(store.showEditorTitle).toBe(false)
-    })
-
-    it('should toggle editor path visibility', () => {
-      store.setShowEditorPath(true)
-      expect(store.showEditorPath).toBe(true)
-
-      store.setShowEditorPath(false)
-      expect(store.showEditorPath).toBe(false)
-    })
-
     it('should toggle focus mode', () => {
       store.setFocusMode(true)
       expect(store.focusMode).toBe(true)

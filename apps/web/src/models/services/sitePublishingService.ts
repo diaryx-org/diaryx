@@ -59,6 +59,11 @@ export interface CreateTokenRequest {
   expires_in?: string | null;
 }
 
+export interface PublishSiteOptions {
+  audience?: string;
+  snapshot?: Blob | null;
+}
+
 export interface ApiError extends Error {
   status: number;
   code?: string;
@@ -146,13 +151,17 @@ function mapErrorMessage(status: number, code: string | undefined, details: unkn
     return backendMessage ?? 'Conflict while processing publishing request.';
   }
 
+  if (status === 412 && code === 'snapshot_required') {
+    return backendMessage ?? 'The server needs a workspace snapshot to publish this workspace.';
+  }
+
   if (status >= 500 && backendMessage) {
     const normalized = backendMessage.toLowerCase();
     if (
       normalized.includes('workspace has no materialized markdown files')
       || normalized.includes('failed to open workspace storage')
     ) {
-      return 'Sync must be enabled and completed at least once before publishing this workspace.';
+      return 'The server does not have a current snapshot for this workspace yet.';
     }
   }
 
@@ -267,11 +276,22 @@ export async function deleteSite(workspaceId: string): Promise<void> {
   });
 }
 
-export async function publishSite(workspaceId: string, audience?: string): Promise<PublishResult> {
-  const body = audience ? { audience } : {};
-  return apiFetch<PublishResult>(workspaceId, '/site/publish', {
+export async function publishSite(
+  workspaceId: string,
+  options: PublishSiteOptions = {},
+): Promise<PublishResult> {
+  const params = new URLSearchParams();
+  if (options.audience?.trim()) {
+    params.set('audience', options.audience.trim());
+  }
+
+  const path = `/site/publish-with-fallback${params.size > 0 ? `?${params.toString()}` : ''}`;
+  return apiFetch<PublishResult>(workspaceId, path, {
     method: 'POST',
-    body: JSON.stringify(body),
+    body: options.snapshot ?? undefined,
+    headers: options.snapshot
+      ? { 'Content-Type': 'application/zip' }
+      : undefined,
   });
 }
 

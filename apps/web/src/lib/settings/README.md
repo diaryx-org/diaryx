@@ -10,7 +10,6 @@ attachments:
   - "[ClearDataSettings.svelte](/apps/web/src/lib/settings/ClearDataSettings.svelte)"
   - "[DebugInfo.svelte](/apps/web/src/lib/settings/DebugInfo.svelte)"
   - "[DisplaySettings.svelte](/apps/web/src/lib/settings/DisplaySettings.svelte)"
-  - "[FormatImportSettings.svelte](/apps/web/src/lib/settings/FormatImportSettings.svelte)"
   - "[ImportSettings.svelte](/apps/web/src/lib/settings/ImportSettings.svelte)"
   - "[LinkSettings.svelte](/apps/web/src/lib/settings/LinkSettings.svelte)"
   - "[StorageSettings.svelte](/apps/web/src/lib/settings/StorageSettings.svelte)"
@@ -19,7 +18,6 @@ attachments:
   - "[PluginsSettings.svelte](/apps/web/src/lib/settings/PluginsSettings.svelte)"
   - "[PluginSettingsTab.svelte](/apps/web/src/lib/settings/PluginSettingsTab.svelte)"
   - "[syncSettingsLogic.ts](/apps/web/src/lib/settings/syncSettingsLogic.ts)"
-  - "[workspaceSnapshotUpload.ts](/apps/web/src/lib/settings/workspaceSnapshotUpload.ts)"
 exclude:
   - "*.lock"
 ---
@@ -35,27 +33,38 @@ Settings panel components for `SettingsDialog.svelte`.
 | `DisplaySettings.svelte` | Display mode and focus-mode preferences. |
 | `WorkspaceSettings.svelte` / `WorkspaceManagement.svelte` | Workspace config and provider link/unlink management. |
 | `StorageSettings.svelte` | Local storage backend settings. |
-| `ImportSettings.svelte` / `FormatImportSettings.svelte` | ZIP import and format import flows. |
+| `ImportSettings.svelte` | ZIP import flow for importing a Diaryx workspace export. |
 | `AccountSettings.svelte` / `BillingSettings.svelte` | Authentication/account and billing surfaces. |
 | `PluginsSettings.svelte` | Installed/local plugin management surface. Includes local `.wasm` upload, enable/disable, uninstall, and a shortcut into the dedicated marketplace. Registry installs are SHA-256 verified. |
-| `PluginSettingsTab.svelte` | Declarative plugin field renderer. |
+| `PluginSettingsTab.svelte` | Declarative plugin field renderer, including generic host actions, follow-up commands, and workspace metadata patch handling. |
 | `syncSettingsLogic.ts` | Shared sync/storage usage helpers used by settings UIs. |
-| `workspaceSnapshotUpload.ts` | Shared snapshot builder used by provider/sync bootstrap flows. |
 
 ## Plugin Settings Tabs
 
 `SettingsDialog.svelte` renders plugin-contributed settings tabs dynamically:
 
-- `ComponentRef::Iframe` contributions render via `PluginIframe` (used by sync, GDrive, templating plugins)
+- `ComponentRef::Iframe` contributions render via `PluginIframe` (still used by sync snapshots/history and templating plugin panels)
+- `ComponentRef::Builtin` contributions can resolve through `pluginBuiltinCompat` for host-backed compatibility fields when needed
 - Declarative field contributions render via `PluginSettingsTab`
+- `PluginSettingsTab` can invoke arbitrary host-managed actions, apply config patches, write plugin-scoped workspace metadata patches from command results, and gate nested field groups with conditions like `authenticated` or `config:import_format=markdown`
 
-All plugin settings (sync, GDrive storage, templating) now use the iframe approach.
+Google Drive storage uses declarative settings plus a host-managed OAuth action. `diaryx.sync` and `diaryx.share` both use declarative settings surfaces, while snapshots/history and templating remain iframe-backed.
 
 ## Mobile Drawer Layout
 
 `SettingsDialog.svelte` keeps mobile tab content scrollable by using a strict
 flex-height chain (`h-[70vh]`, `min-h-0`, `flex-1`) inside `Drawer.Content`,
 so long tabs (for example Workspace) do not push the bottom tab bar off-screen.
+
+## ZIP Import Behavior
+
+- `ImportSettings.svelte` uses backend ZIP import APIs for large backup imports.
+- `diaryx.import` now owns the Day One / markdown format import settings tab declaratively, using generic host actions for file, directory, and workspace-entry picking.
+- The shared ZIP import helpers still stream Markdown Directory ZIP imports with `@zip.js/zip.js` so large archives are processed entry-by-entry instead of loading the full ZIP into one `ArrayBuffer` first.
+
+The shared settings content scroller is also reused by `WorkspaceManagement.svelte`
+to preserve scroll position when inline workspace actions swap a row into
+confirmation controls (for example, delete confirmations in the Account tab).
 
 ## Marketplace Integration
 

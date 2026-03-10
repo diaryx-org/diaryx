@@ -1,12 +1,18 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from "svelte";
-  import { getBackend, isTauri, resetBackend } from "./lib/backend";
+  import { getBackend, getBackendSync, getApiSync, isTauri, replaceBackend, resetBackend } from "./lib/backend";
   import { FsaGestureRequiredError } from "./lib/backend/fsaErrors";
   import * as browserPlugins from "$lib/plugins/browserPluginManager.svelte";
   import { addFilesToZip } from "./lib/settings/zipUtils";
+  import {
+    getMobileSwipeStartContext,
+    hasNonCollapsedSelection,
+    isSidebarSwipeEdgeStart,
+  } from "$lib/mobileSwipe";
   import { createApi, type Api } from "./lib/backend/api";
   import type { JsonValue } from "./lib/backend/generated/serde_json/JsonValue";
   import { isIOS } from "$lib/hooks/useMobile.svelte";
+  import { openOauthWindow } from "$lib/plugins/oauthWindow";
   import LeftSidebar from "./lib/LeftSidebar.svelte";
   import RightSidebar from "./lib/RightSidebar.svelte";
   import NewEntryModal from "./lib/NewEntryModal.svelte";
@@ -16,6 +22,7 @@
   import ExportDialog from "./lib/ExportDialog.svelte";
   import AddWorkspaceDialog from "./lib/AddWorkspaceDialog.svelte";
   import ImagePreviewDialog from "./lib/ImagePreviewDialog.svelte";
+  import PermissionBanner from "./lib/components/PermissionBanner.svelte";
   import AudienceEditor from "./lib/components/AudienceEditor.svelte";
   import MarkdownPreviewDialog from "./lib/MarkdownPreviewDialog.svelte";
   import EditorFooter from "./views/editor/EditorFooter.svelte";
@@ -28,6 +35,10 @@
   import { Button } from "$lib/components/ui/button";
   import { PanelLeft, PanelRight, Menu } from "@lucide/svelte";
   import { toast } from "svelte-sonner";
+  import {
+    handleStandardPluginHostUiAction,
+    isStandardPluginHostUiAction,
+  } from "$lib/plugins/pluginHostUiActions";
   // Note: Button, icons, and LoadingSpinner are now only used in extracted view components
 
   // Import stores
@@ -50,19 +61,25 @@
   import { getLocalWorkspace, getLocalWorkspaces, getCurrentWorkspaceId, getWorkspaceStorageType, discoverOpfsWorkspaces, createLocalWorkspace, setCurrentWorkspaceId } from "$lib/storage/localWorkspaceRegistry.svelte";
 
   // Initialize theme store immediately
-  getThemeStore();
+  const themeStore = getThemeStore();
 
   // Initialize template context store (feeds live values to editor template variables)
   const templateContextStore = getTemplateContextStore();
 
   // Initialize appearance store (theme presets, typography, layout)
-  getAppearanceStore();
+  const appearanceStore = getAppearanceStore();
 
   // Import services
   import {
     revokeBlobUrls,
   } from "./models/services";
-  import { getMimeType, isHeicFile, convertHeicToJpeg } from "./models/services/attachmentService";
+  import {
+    getMimeType,
+    getAttachmentMediaKind,
+    isHeicFile,
+    convertHeicToJpeg,
+    type AttachmentMediaKind,
+  } from "./models/services/attachmentService";
 
   // Sync/CRDT orchestration is entirely plugin-owned (diaryx_sync plugin).
   function initEventSubscription(backendInstance: any): () => void {
@@ -76,7 +93,14 @@
         if (event.status === "error" && event.error) {
           collaborationStore.setSyncError(event.error);
         } else {
-          collaborationStore.setSyncStatus(event.status);
+          // Map Rust sync plugin statuses to the TS SyncStatus type
+          const statusMap: Record<string, string> = {
+            connected: "syncing",
+            reconnecting: "connecting",
+            disconnected: "idle",
+          };
+          const mapped = statusMap[event.status] ?? event.status;
+          collaborationStore.setSyncStatus(mapped as any);
         }
         return;
       }
@@ -207,6 +231,27 @@
   let showDeleteConfirm = $state(false);
   let pendingDeletePath = $state<string | null>(null);
 
+  // Generic plugin-hosted confirmation dialog state
+  let showPluginConfirmDialog = $state(false);
+  let pluginConfirmTitle = $state("Confirm");
+  let pluginConfirmDescription = $state("");
+  let pluginConfirmConfirmLabel = $state("Confirm");
+  let pluginConfirmCancelLabel = $state("Cancel");
+  let pluginConfirmVariant = $state<"default" | "destructive">("default");
+  let pluginConfirmResolve: ((result: boolean) => void) | null = null;
+
+  // Generic plugin-hosted prompt dialog state
+  let showPluginPromptDialog = $state(false);
+  let pluginPromptTitle = $state("Prompt");
+  let pluginPromptDescription = $state("");
+  let pluginPromptConfirmLabel = $state("OK");
+  let pluginPromptCancelLabel = $state("Cancel");
+  let pluginPromptVariant = $state<"default" | "destructive">("default");
+  let pluginPromptValue = $state("");
+  let pluginPromptPlaceholder = $state("");
+  let pluginPromptResolve: ((result: string | null) => void) | null = null;
+  let pluginPromptInput: HTMLInputElement | null = $state(null);
+
   // Audience dialog state
   let showAudienceDialog = $state(false);
   let audienceDialogPath = $state<string | null>(null);
@@ -256,6 +301,11 @@
 
   // Collaboration state - proxied from collaborationStore
   let collaborationEnabled = $derived(collaborationStore.collaborationEnabled);
+  let authState = $derived(getAuthState());
+  let pluginManifestCount = $derived(getPluginStore().allManifests.length);
+  let activeLocalWorkspaceId = $derived(
+    authState.activeWorkspaceId ?? getCurrentWorkspaceId(),
+  );
 
   // ========================================================================
   // Non-store state (component-specific, not shared)
@@ -271,6 +321,25 @@
 
   // Event subscription cleanup (for filesystem events from Rust backend)
   let cleanupEventSubscription: (() => void) | null = null;
+  let cleanupMobileGestureListeners: (() => void) | null = null;
+  let guestWorkspaceState:
+    | {
+        previousBackend: typeof backend;
+        previousWorkspaceId: string | null;
+        previousWorkspaceName: string | null;
+        previousStorageType: ReturnType<typeof getWorkspaceStorageType> | undefined;
+      }
+    | null = null;
+
+  // Mobile shell gesture tracking
+  let touchStartX = 0;
+  let touchStartY = 0;
+  let trackingTouchGesture = false;
+  let touchBlocksShellSwipe = false;
+  let touchStartedInSelectableContent = false;
+  const SWIPE_THRESHOLD = 80;
+  const CROSS_AXIS_MAX = 50;
+  const COMMAND_PALETTE_EDGE_ZONE_PX = 100;
 
   // Helper to handle mixed frontmatter types (Map from WASM vs Object from JSON/Tauri)
   function normalizeFrontmatter(frontmatter: any): Record<string, any> {
@@ -321,6 +390,25 @@
     pluginPermissionsConfig = nextConfig;
   }
 
+  async function reloadWorkspaceScopedBrowserState(): Promise<void> {
+    await Promise.all([
+      themeStore.reloadFromWorkspace?.(),
+      appearanceStore.reloadFromWorkspace?.(),
+    ]);
+
+    const pluginSupport = browserPlugins.getBrowserPluginSupport();
+    if (!pluginSupport.supported) {
+      console.info('[App] Browser plugins disabled:', pluginSupport.reason);
+      return;
+    }
+
+    browserPlugins.setPluginPermissionConfigProvider(() => pluginPermissionsConfig);
+    await browserPlugins.loadAllPlugins().catch((e: unknown) =>
+      console.warn('[App] Failed to load browser plugins:', e),
+    );
+    getPluginStore().preloadInsertCommandIcons();
+  }
+
   function toCollaborationPath(path: string): string {
     let workspaceDir = tree?.path || "";
     if (workspaceDir.endsWith("/")) {
@@ -339,6 +427,111 @@
     return path;
   }
 
+  function resetTouchGestureTracking() {
+    touchStartX = 0;
+    touchStartY = 0;
+    trackingTouchGesture = false;
+    touchBlocksShellSwipe = false;
+    touchStartedInSelectableContent = false;
+  }
+
+  function handleTouchStart(e: TouchEvent) {
+    if (e.touches.length !== 1) {
+      resetTouchGestureTracking();
+      return;
+    }
+
+    const touch = e.touches[0];
+    const swipeContext = getMobileSwipeStartContext(e.target);
+
+    touchStartX = touch.clientX;
+    touchStartY = touch.clientY;
+    trackingTouchGesture = true;
+    touchBlocksShellSwipe = swipeContext.blocksShellSwipe;
+    touchStartedInSelectableContent = swipeContext.startsInSelectableContent;
+  }
+
+  function handleTouchEnd(e: TouchEvent) {
+    if (!trackingTouchGesture || e.changedTouches.length === 0) {
+      resetTouchGestureTracking();
+      return;
+    }
+
+    const touch = e.changedTouches[0];
+    const deltaY = touch.clientY - touchStartY;
+    const deltaX = touch.clientX - touchStartX;
+    const absDeltaY = Math.abs(deltaY);
+    const absDeltaX = Math.abs(deltaX);
+    const viewportWidth = window.innerWidth;
+    const selection =
+      typeof window.getSelection === "function" ? window.getSelection() : null;
+
+    if (touchBlocksShellSwipe) {
+      resetTouchGestureTracking();
+      return;
+    }
+
+    if (touchStartedInSelectableContent && hasNonCollapsedSelection(selection)) {
+      resetTouchGestureTracking();
+      return;
+    }
+
+    if (
+      touchStartY < COMMAND_PALETTE_EDGE_ZONE_PX &&
+      deltaY > SWIPE_THRESHOLD &&
+      absDeltaX < CROSS_AXIS_MAX
+    ) {
+      uiStore.openCommandPalette();
+      resetTouchGestureTracking();
+      return;
+    }
+
+    if (deltaX > SWIPE_THRESHOLD && absDeltaY < CROSS_AXIS_MAX) {
+      if (!rightSidebarCollapsed) {
+        toggleRightSidebar();
+      } else if (
+        leftSidebarCollapsed &&
+        isSidebarSwipeEdgeStart(touchStartX, viewportWidth, "right")
+      ) {
+        toggleLeftSidebar();
+      }
+      resetTouchGestureTracking();
+      return;
+    }
+
+    if (deltaX < -SWIPE_THRESHOLD && absDeltaY < CROSS_AXIS_MAX) {
+      if (!leftSidebarCollapsed) {
+        toggleLeftSidebar();
+      } else if (
+        rightSidebarCollapsed &&
+        isSidebarSwipeEdgeStart(touchStartX, viewportWidth, "left")
+      ) {
+        toggleRightSidebar();
+      }
+      resetTouchGestureTracking();
+      return;
+    }
+
+    resetTouchGestureTracking();
+  }
+
+  function attachMobileGestureListeners() {
+    if (cleanupMobileGestureListeners) return;
+
+    document.addEventListener("touchstart", handleTouchStart, { passive: true });
+    document.addEventListener("touchend", handleTouchEnd, { passive: true });
+    document.addEventListener("touchcancel", resetTouchGestureTracking, {
+      passive: true,
+    });
+
+    cleanupMobileGestureListeners = () => {
+      document.removeEventListener("touchstart", handleTouchStart);
+      document.removeEventListener("touchend", handleTouchEnd);
+      document.removeEventListener("touchcancel", resetTouchGestureTracking);
+      cleanupMobileGestureListeners = null;
+    };
+  }
+
   // Attachment state
   let attachmentError: string | null = $state(null);
   let attachmentFileInput: HTMLInputElement | null = $state(null);
@@ -347,6 +540,7 @@
   let imagePreviewOpen = $state(false);
   let previewImageUrl: string | null = $state(null);
   let previewImageName = $state("");
+  let previewImageKind: AttachmentMediaKind = $state("image");
 
   // Markdown preview state
   let markdownPreviewOpen = $state(false);
@@ -366,9 +560,13 @@
     }
   });
 
-  // Sync current entry's frontmatter to the template context store
-  // so template variable NodeViews and conditional block decorations update live.
-  // Only active when the templating plugin is loaded.
+  $effect(() => {
+    void pluginManifestCount;
+    void activeLocalWorkspaceId;
+    if (!collaborationEnabled || !currentEntry?.path) return;
+    void browserPlugins.dispatchFileOpenedEvent(currentEntry.path);
+  });
+
   $effect(() => {
     if (!getPluginStore().isPluginEnabled("diaryx.templating")) return;
     if (currentEntry?.frontmatter) {
@@ -390,6 +588,25 @@
   onMount(async () => {
     // Refresh tree when zip import completes (from ImportSettings)
     window.addEventListener("import:complete", handleImportComplete);
+
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const isOauthCallback = window.location.pathname === "/oauth/callback";
+      const code = params.get("code");
+      const error = params.get("error");
+      if (isOauthCallback && window.opener && (code || error)) {
+        window.opener.postMessage(
+          {
+            type: "oauth-callback",
+            code,
+            error,
+          },
+          window.location.origin,
+        );
+        window.close();
+        return;
+      }
+    }
 
     // Expand sidebars on desktop
     if (window.innerWidth >= 768) {
@@ -546,20 +763,9 @@
         savePluginsConfig: persistPluginPermissionsConfig,
       });
 
-      // Load browser-side Extism WASM plugins from IndexedDB
+      // Reload workspace-scoped browser assets (appearance + Extism plugins)
       Promise.resolve().then(async () => {
-        const pluginSupport = browserPlugins.getBrowserPluginSupport();
-        if (!pluginSupport.supported) {
-          console.info('[App] Browser plugins disabled:', pluginSupport.reason);
-          return;
-        }
-
-        browserPlugins.setPluginPermissionConfigProvider(() => pluginPermissionsConfig);
-        await browserPlugins.loadAllPlugins().catch((e: unknown) =>
-          console.warn('[App] Failed to load browser plugins:', e),
-        );
-        // Eagerly load icons for plugin insert commands so they're cached before menus open.
-        getPluginStore().preloadInsertCommandIcons();
+        await reloadWorkspaceScopedBrowserState();
       });
 
 
@@ -584,55 +790,12 @@
 
       // Add swipe gestures for mobile:
       // - Swipe down from top: open command palette
-      // - Swipe right anywhere: open left sidebar (or close right sidebar if open)
-      // - Swipe left anywhere: open right sidebar (or close left sidebar if open)
-      let touchStartY = 0;
-      let touchStartX = 0;
-      const SWIPE_THRESHOLD = 80; // minimum swipe distance
-      const CROSS_AXIS_MAX = 50; // max movement in perpendicular direction
+      // - Swipe right from the left edge: open left sidebar (or close right sidebar if open)
+      // - Swipe left from the right edge: open right sidebar (or close left sidebar if open)
+      // Gestures that begin inside modal surfaces or become text selections are ignored.
+      attachMobileGestureListeners();
 
-      const handleTouchStart = (e: TouchEvent) => {
-        touchStartY = e.touches[0].clientY;
-        touchStartX = e.touches[0].clientX;
-      };
-      const handleTouchEnd = (e: TouchEvent) => {
-        const touchEndY = e.changedTouches[0].clientY;
-        const touchEndX = e.changedTouches[0].clientX;
-        const deltaY = touchEndY - touchStartY;
-        const deltaX = touchEndX - touchStartX;
-        const absDeltaY = Math.abs(deltaY);
-        const absDeltaX = Math.abs(deltaX);
-
-        // Swipe down from top 100px of screen, mostly vertical → open command palette
-        if (touchStartY < 100 && deltaY > SWIPE_THRESHOLD && absDeltaX < CROSS_AXIS_MAX) {
-          uiStore.openCommandPalette();
-          return;
-        }
-
-        // Swipe right anywhere, mostly horizontal:
-        // close right sidebar first, otherwise open left sidebar.
-        if (deltaX > SWIPE_THRESHOLD && absDeltaY < CROSS_AXIS_MAX) {
-          if (!rightSidebarCollapsed) {
-            toggleRightSidebar();
-          } else if (leftSidebarCollapsed) {
-            toggleLeftSidebar();
-          }
-          return;
-        }
-
-        // Swipe left anywhere, mostly horizontal:
-        // close left sidebar first, otherwise open right sidebar.
-        if (deltaX < -SWIPE_THRESHOLD && absDeltaY < CROSS_AXIS_MAX) {
-          if (!leftSidebarCollapsed) {
-            toggleLeftSidebar();
-          } else if (rightSidebarCollapsed) {
-            toggleRightSidebar();
-          }
-          return;
-        }
-      };
-      document.addEventListener("touchstart", handleTouchStart);
-      document.addEventListener("touchend", handleTouchEnd);
+      // E2E bridge is set up outside the try block (see below)
 
     } catch (e) {
       if (e instanceof FsaGestureRequiredError) {
@@ -645,13 +808,139 @@
     } finally {
       entryStore.setLoading(false);
     }
+
+    // Expose E2E test bridge in dev mode for Playwright sync tests.
+    // Placed outside the try block so it's available even when the welcome screen
+    // is shown (early return). Uses dynamic getBackendSync()/getApiSync() instead
+    // of captured variables so it always operates on the current workspace.
+    if (import.meta.env.DEV) {
+      (globalThis as any).__diaryx_e2e = {
+        getRootEntryPath(): string | null {
+          return workspaceStore.tree?.path ?? null;
+        },
+        async createEntryWithMarker(stem: string, marker: string): Promise<string> {
+          const b = getBackendSync();
+          const a = getApiSync();
+          const wsPath = b.getWorkspacePath();
+          const entryPath = `${wsPath}/${stem}.md`;
+          const createdPath = await a.createEntry(entryPath);
+          await a.saveEntry(createdPath, marker);
+          await browserPlugins.dispatchFileCreatedEvent(createdPath);
+          await browserPlugins.dispatchFileSavedEvent(createdPath);
+          return createdPath;
+        },
+        async appendMarkerToEntry(path: string, marker: string): Promise<void> {
+          const a = getApiSync();
+          const entry = await a.getEntry(path);
+          const newContent = entry.content ? `${entry.content}\n${marker}` : marker;
+          await a.saveEntry(path, newContent);
+          await browserPlugins.dispatchFileSavedEvent(path);
+        },
+        async renameEntry(path: string, newFilename: string): Promise<string> {
+          const newPath = await getApiSync().renameEntry(path, newFilename);
+          await browserPlugins.dispatchFileMovedEvent(path, newPath);
+          return newPath;
+        },
+        async moveEntryToParent(path: string, parentPath: string): Promise<string> {
+          const newPath = await getApiSync().attachEntryToParent(path, parentPath);
+          await browserPlugins.dispatchFileMovedEvent(path, newPath);
+          return newPath;
+        },
+        async createIndexEntry(stem: string): Promise<string> {
+          const b = getBackendSync();
+          const a = getApiSync();
+          const wsPath = b.getWorkspacePath();
+          const entryPath = `${wsPath}/${stem}.md`;
+          const createdPath = await a.createEntry(entryPath);
+          const convertedPath = await a.convertToIndex(createdPath);
+          return convertedPath;
+        },
+        async readEntryBody(path: string): Promise<string | null> {
+          try {
+            const entry = await getApiSync().getEntry(path);
+            return entry.content ?? null;
+          } catch { return null; }
+        },
+        async readFrontmatter(path: string): Promise<Record<string, unknown> | null> {
+          try {
+            const entry = await getApiSync().getEntry(path);
+            return entry.frontmatter ?? null;
+          } catch { return null; }
+        },
+        async entryExists(path: string): Promise<boolean> {
+          return await getApiSync().fileExists(path);
+        },
+        async setFrontmatterProperty(path: string, key: string, value: unknown): Promise<string | null> {
+          const result = await getApiSync().setFrontmatterProperty(path, key, value as any);
+          await browserPlugins.dispatchFileSavedEvent(result ?? path);
+          return result;
+        },
+        async openEntryForSync(path: string): Promise<void> {
+          await browserPlugins.dispatchFileOpenedEvent(path);
+        },
+        async syncFileNow(path: string): Promise<void> {
+          const b = getBackendSync();
+          if (b.requestBodySync) {
+            await b.requestBodySync([path]);
+          } else if (b.focusSyncFiles) {
+            await b.focusSyncFiles([path]);
+          }
+        },
+        async listSyncedFiles(): Promise<string[]> {
+          try {
+            const b = getBackendSync();
+            const wsPath = b.getWorkspacePath();
+            const result = await getApiSync().executePluginCommand(
+              "diaryx.sync", "MaterializeWorkspace", {},
+            ) as any;
+            const files = Array.isArray(result) ? result : result?.files;
+            if (Array.isArray(files)) {
+              return files
+                .map((f: any) => {
+                  const rel = f.path ?? f;
+                  return rel ? `${wsPath}/${rel}` : null;
+                })
+                .filter((path): path is string => path !== null);
+            }
+            return [];
+          } catch (e) { console.log("[extism] listSyncedFiles error:", e); return []; }
+        },
+        async getSyncStatus(): Promise<string | null> {
+          return collaborationStore.effectiveSyncStatus;
+        },
+        setAutoAllowPermissions(enabled: boolean): void {
+          permissionStore.setAutoAllow(enabled);
+        },
+        getPluginDiagnostics(): { loaded: string[]; enabled: string[] } {
+          const pluginStore = getPluginStore();
+          const loaded = Array.from(browserPlugins.getBrowserManifests().map(m => m.id));
+          const enabled = loaded.filter(id => pluginStore.isPluginEnabled(id));
+          return { loaded, enabled };
+        },
+        async installPluginInCurrentWorkspace(wasmBase64: string): Promise<void> {
+          const { installLocalPlugin } = await import("$lib/plugins/pluginInstallService");
+          const binary = atob(wasmBase64);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+          }
+          const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+          await installLocalPlugin(buffer, "diaryx-sync-e2e");
+        },
+      };
+    }
   });
 
   onDestroy(() => {
+    // Cleanup E2E bridge
+    if (import.meta.env.DEV) {
+      (globalThis as any).__diaryx_e2e = null;
+    }
     // Cleanup blob URLs
     revokeBlobUrls();
     // Cleanup filesystem event subscription
     cleanupEventSubscription?.();
+    cleanupMobileGestureListeners?.();
     // Cleanup import:complete listener
     window.removeEventListener("import:complete", handleImportComplete);
   });
@@ -707,8 +996,12 @@
     const newBackend = await getBackend();
     workspaceStore.setBackend(newBackend);
     rustApi = null;
+    // Re-subscribe to filesystem events on the new backend
+    cleanupEventSubscription?.();
+    cleanupEventSubscription = initEventSubscription(newBackend);
     // Refresh tree and validation from new workspace
     await refreshTree();
+    await reloadWorkspaceScopedBrowserState();
     // Navigate to the root entry of the new workspace
     if (tree && !currentEntry) {
       workspaceStore.expandNode(tree.path);
@@ -795,7 +1088,8 @@
 
   // Handle content changes - triggers debounced auto-save
   // Sync propagation is handled by plugin-owned filesystem event processing.
-  function handleContentChange(markdown: string) {
+  function handleContentChange() {
+    const markdown = editorRef?.getMarkdown?.() ?? displayContent;
     if (markdown === displayContent) {
       return;
     }
@@ -883,11 +1177,194 @@
   /**
    * Handle generic host actions requested by plugin iframes.
    */
+  async function enterGuestWorkspace(sessionCode: string): Promise<{ entered: true }> {
+    if (!sessionCode.trim()) {
+      throw new Error("enter-guest-workspace requires a session code");
+    }
+
+    workspaceStore.saveTreeState();
+    entryStore.setCurrentEntry(null);
+    workspaceStore.setTree(null);
+
+    if (isTauri()) {
+      if (!backend?.startGuestMode) {
+        throw new Error("Guest mode is unavailable for this backend");
+      }
+      await backend.startGuestMode(sessionCode);
+      cleanupEventSubscription?.();
+      cleanupEventSubscription = initEventSubscription(backend);
+      await refreshTree();
+      return { entered: true };
+    }
+
+    if (!backend) {
+      throw new Error("Workspace backend is unavailable");
+    }
+
+    const currentWorkspaceId = getCurrentWorkspaceId();
+    const currentWorkspace = currentWorkspaceId
+      ? getLocalWorkspace(currentWorkspaceId)
+      : null;
+    guestWorkspaceState = {
+      previousBackend: backend,
+      previousWorkspaceId: currentWorkspaceId,
+      previousWorkspaceName: currentWorkspace?.name ?? null,
+      previousStorageType: currentWorkspaceId
+        ? getWorkspaceStorageType(currentWorkspaceId)
+        : undefined,
+    };
+
+    const { createGuestBackend } = await import("$lib/backend/workerBackendNew");
+    const guestBackend = await createGuestBackend();
+
+    cleanupEventSubscription?.();
+    replaceBackend(guestBackend);
+    workspaceStore.setBackend(guestBackend);
+    cleanupEventSubscription = initEventSubscription(guestBackend);
+    await refreshTree();
+    return { entered: true };
+  }
+
+  async function leaveGuestWorkspace(): Promise<{ left: true }> {
+    if (isTauri()) {
+      if (backend?.endGuestMode) {
+        await backend.endGuestMode();
+        cleanupEventSubscription?.();
+        cleanupEventSubscription = initEventSubscription(backend);
+        await refreshTree();
+      }
+      workspaceStore.restoreTreeState();
+      return { left: true };
+    }
+
+    if (!guestWorkspaceState?.previousBackend) {
+      workspaceStore.restoreTreeState();
+      return { left: true };
+    }
+
+    cleanupEventSubscription?.();
+    replaceBackend(
+      guestWorkspaceState.previousBackend,
+      guestWorkspaceState.previousWorkspaceId ?? undefined,
+      guestWorkspaceState.previousWorkspaceName ?? undefined,
+      guestWorkspaceState.previousStorageType,
+    );
+    workspaceStore.setBackend(guestWorkspaceState.previousBackend);
+    cleanupEventSubscription = initEventSubscription(guestWorkspaceState.previousBackend);
+    guestWorkspaceState = null;
+    await refreshTree();
+    workspaceStore.restoreTreeState();
+    return { left: true };
+  }
+
   async function handlePluginHostAction(action: { type: string; payload?: unknown }) {
     const actionType = action?.type;
     const payload = (action?.payload ?? {}) as Record<string, unknown>;
 
+    if (isStandardPluginHostUiAction(actionType)) {
+      return handleStandardPluginHostUiAction(action, {
+        showToast: ({ message, description, variant }) => {
+          switch (variant) {
+            case "success":
+              toast.success(message, { description });
+              break;
+            case "warning":
+              toast.warning(message, { description });
+              break;
+            case "error":
+              toast.error(message, { description });
+              break;
+            default:
+              toast.info(message, { description });
+              break;
+          }
+        },
+        confirm: async ({ title, description, confirmLabel, cancelLabel, variant }) => {
+          if (pluginConfirmResolve || pluginPromptResolve) {
+            throw new Error("Another plugin dialog is already open");
+          }
+
+          pluginConfirmTitle = title;
+          pluginConfirmDescription = description;
+          pluginConfirmConfirmLabel = confirmLabel;
+          pluginConfirmCancelLabel = cancelLabel;
+          pluginConfirmVariant = variant;
+          showPluginConfirmDialog = true;
+
+          return await new Promise<boolean>((resolve) => {
+            pluginConfirmResolve = resolve;
+          });
+        },
+        prompt: async ({
+          title,
+          description,
+          confirmLabel,
+          cancelLabel,
+          variant,
+          value,
+          placeholder,
+        }) => {
+          if (pluginConfirmResolve || pluginPromptResolve) {
+            throw new Error("Another plugin dialog is already open");
+          }
+
+          pluginPromptTitle = title;
+          pluginPromptDescription = description;
+          pluginPromptConfirmLabel = confirmLabel;
+          pluginPromptCancelLabel = cancelLabel;
+          pluginPromptVariant = variant;
+          pluginPromptValue = value;
+          pluginPromptPlaceholder = placeholder;
+          showPluginPromptDialog = true;
+
+          await tick();
+          pluginPromptInput?.focus();
+          pluginPromptInput?.select();
+
+          return await new Promise<string | null>((resolve) => {
+            pluginPromptResolve = resolve;
+          });
+        },
+      });
+    }
+
     switch (actionType) {
+      case "get-workspace-tree": {
+        if (!api) throw new Error("Workspace API is unavailable");
+        if (tree) return JSON.parse(JSON.stringify(tree));
+        return api.getWorkspaceTree();
+      }
+      case "create-ai-conversation-entry": {
+        const title = typeof payload.title === "string" ? payload.title.trim() : "";
+        const parentPath =
+          typeof payload.parentPath === "string" ? payload.parentPath : null;
+        if (!title) {
+          throw new Error(
+            "host-action create-ai-conversation-entry requires payload.title",
+          );
+        }
+        return createAiConversationEntry(title, parentPath);
+      }
+      case "delete-entry": {
+        const path = typeof payload.path === "string" ? payload.path : null;
+        if (!path) throw new Error("host-action delete-entry requires payload.path");
+        if (!api) throw new Error("Workspace API is unavailable");
+        const parentPath = workspaceStore.getParentNodePath(path);
+        const deleted = await deleteEntryWithSync(
+          api,
+          path,
+          currentEntry?.path ?? null,
+          async () => {
+            await refreshTree();
+            if (parentPath) {
+              await loadNodeChildren(parentPath);
+            }
+            await runValidation();
+          },
+        );
+        if (!deleted) throw new Error(`Failed to delete entry: ${path}`);
+        return { deleted: path };
+      }
       case "open-entry": {
         const path = typeof payload.path === "string" ? payload.path : null;
         if (!path) throw new Error("host-action open-entry requires payload.path");
@@ -907,6 +1384,13 @@
         showSettingsDialog = false;
         showMarketplaceDialog = true;
         return { opened: "marketplace" };
+      case "open-export-dialog":
+        exportPath = tree?.path ?? ".";
+        showExportDialog = true;
+        return { opened: "export-dialog", path: exportPath };
+      case "open-add-workspace":
+        showAddWorkspace = true;
+        return { opened: "add-workspace" };
       case "toggle-left-sidebar":
         toggleLeftSidebar();
         return { toggled: "left" };
@@ -914,41 +1398,42 @@
         toggleRightSidebar();
         return { toggled: "right" };
       case "open-oauth": {
-        const oauthUrl = typeof payload.url === "string" ? payload.url : null;
-        if (!oauthUrl) throw new Error("open-oauth requires payload.url");
-
-        if (isTauri()) {
-          const { invoke } = await import("@tauri-apps/api/core");
-          const redirectPrefix = typeof payload.redirect_uri_prefix === "string"
-            ? payload.redirect_uri_prefix : "http://localhost/oauth/callback";
-          const result = await invoke<{ code: string }>("oauth_webview", {
-            url: oauthUrl, redirectPrefix,
-          });
-          return { code: result.code, redirect_uri: redirectPrefix };
-        }
-
-        // Web: popup + postMessage
-        const popup = window.open(oauthUrl, "oauth-popup", "width=500,height=600");
-        if (!popup) throw new Error("Popup blocked — please allow popups");
-        return new Promise((resolve, reject) => {
-          const timeout = setTimeout(() => {
-            window.removeEventListener("message", handler);
-            reject(new Error("OAuth timed out"));
-          }, 120000);
-          const handler = (event: MessageEvent) => {
-            if (event.origin !== window.location.origin) return;
-            if (event.data?.type !== "oauth-callback") return;
-            clearTimeout(timeout);
-            window.removeEventListener("message", handler);
-            if (event.data.error) reject(new Error(event.data.error));
-            else resolve({ code: event.data.code, redirect_uri: `${window.location.origin}/oauth/callback` });
-          };
-          window.addEventListener("message", handler);
+        return openOauthWindow({
+          url: typeof payload.url === "string" ? payload.url : "",
+          redirect_uri_prefix:
+            typeof payload.redirect_uri_prefix === "string"
+              ? payload.redirect_uri_prefix
+              : undefined,
         });
       }
+      case "enter-guest-workspace": {
+        const sessionCode =
+          typeof payload.session_code === "string"
+            ? payload.session_code
+            : typeof payload.join_code === "string"
+              ? payload.join_code
+              : "";
+        return enterGuestWorkspace(sessionCode);
+      }
+      case "leave-guest-workspace":
+        return leaveGuestWorkspace();
       default:
         throw new Error(`Unknown host action: ${actionType ?? "undefined"}`);
     }
+  }
+
+  function resolvePluginConfirm(result: boolean) {
+    showPluginConfirmDialog = false;
+    const resolve = pluginConfirmResolve;
+    pluginConfirmResolve = null;
+    resolve?.(result);
+  }
+
+  function resolvePluginPrompt(result: string | null) {
+    showPluginPromptDialog = false;
+    const resolve = pluginPromptResolve;
+    pluginPromptResolve = null;
+    resolve?.(result);
   }
 
   /**
@@ -1035,6 +1520,39 @@
     }
   }
 
+  async function createAiConversationEntry(title: string, parentPath: string | null) {
+    if (!api) throw new Error("Workspace API is unavailable");
+    if (!tree?.path) throw new Error("A workspace must be open to create AI conversations");
+
+    const filename = await api.generateFilename(title, tree.path);
+    const newPath = await createEntryWithSync(
+      api,
+      filename,
+      { title, rootIndexPath: tree.path },
+      async () => {
+        await refreshTree();
+      },
+    );
+
+    if (!newPath) {
+      throw new Error("Failed to create the conversation file");
+    }
+
+    let finalPath = newPath;
+    if (parentPath) {
+      try {
+        finalPath = await api.attachEntryToParent(newPath, parentPath);
+        await refreshTree();
+      } catch (e) {
+        toast.error("Conversation file created but failed to attach to parent");
+        console.error("[App] attachEntryToParent failed for AI conversation:", e);
+      }
+    }
+
+    await runValidation();
+    return { path: finalPath, title };
+  }
+
   // Initialize an empty workspace with a root index
   async function handleInitializeWorkspace() {
     if (!api || !backend) return;
@@ -1075,6 +1593,10 @@
       const newBackend = await getBackend();
       workspaceStore.setBackend(newBackend);
       rustApi = null;
+
+      // Re-subscribe to filesystem events on the new backend
+      cleanupEventSubscription?.();
+      cleanupEventSubscription = initEventSubscription(newBackend);
 
       await refreshTree();
 
@@ -1644,7 +2166,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
 
   async function handleEditorFileDrop(
     file: File,
-  ): Promise<{ blobUrl: string; attachmentPath: string } | null> {
+  ): Promise<{ blobUrl: string; attachmentPath: string; kind: AttachmentMediaKind } | null> {
     if (!api) return null;
     return editorFileDropHandler(file, api, currentEntry);
   }
@@ -1665,13 +2187,16 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
       const data = await api.getAttachmentData(currentEntry.path, attachmentPath);
       const mimeType = getMimeType(attachmentPath);
       let blob = new Blob([new Uint8Array(data)], { type: mimeType });
+      let mediaKind = getAttachmentMediaKind(attachmentPath, mimeType);
       if (isHeicFile(attachmentPath)) {
         blob = await convertHeicToJpeg(blob);
+        mediaKind = "image";
       }
       // Revoke previous preview URL if any
       if (previewImageUrl) URL.revokeObjectURL(previewImageUrl);
       previewImageUrl = URL.createObjectURL(blob);
       previewImageName = displayName;
+      previewImageKind = mediaKind;
       imagePreviewOpen = true;
     } catch (e) {
       console.error("[App] Failed to load image preview:", e);
@@ -1683,12 +2208,13 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     if (!open && previewImageUrl) {
       URL.revokeObjectURL(previewImageUrl);
       previewImageUrl = null;
+      previewImageKind = "image";
     }
   }
 
   function handleAttachmentInsert(selection: {
     path: string;
-    isImage: boolean;
+    kind: AttachmentMediaKind;
     blobUrl?: string;
     sourceEntryPath: string;
   }) {
@@ -1844,6 +2370,8 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
 
 <svelte:window onkeydown={handleKeydown} />
 
+<PermissionBanner />
+
 {#if showNewEntryModal}
   <NewEntryModal
     {tree}
@@ -1855,11 +2383,11 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
 {/if}
 
 <!-- Command Palette -->
-<CommandPalette
-  bind:open={uiStore.showCommandPalette}
-  {api}
-  hasEntry={!!currentEntry}
-  hasEditor={!!editorRef}
+  <CommandPalette
+    bind:open={uiStore.showCommandPalette}
+    {api}
+    hasEntry={!!currentEntry}
+    hasEditor={!!editorRef}
   onImportFromClipboard={handleImportFromClipboard}
   onImportMarkdownFile={handleImportMarkdownFile}
   onOpenBackupImport={handleQuickBackupExport}
@@ -1867,11 +2395,15 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
   onRenameEntry={cmdRenameEntry}
   onDeleteEntry={cmdDeleteEntry}
   onMoveEntry={cmdMoveEntry}
-  onCreateChildEntry={cmdCreateChildEntry}
-  onRefreshTree={refreshTree}
-  onValidateWorkspace={cmdValidateWorkspace}
-  onFindInFile={handleFindInFile}
-  onWordCount={cmdWordCount}
+    onCreateChildEntry={cmdCreateChildEntry}
+    onRefreshTree={refreshTree}
+    onValidateWorkspace={cmdValidateWorkspace}
+    onOpenWorkspaceSettings={() => {
+      settingsInitialTab = "workspace";
+      showSettingsDialog = true;
+    }}
+    onFindInFile={handleFindInFile}
+    onWordCount={cmdWordCount}
   onCopyAsMarkdown={cmdCopyAsMarkdown}
   onViewMarkdown={cmdViewMarkdown}
   onReorderFootnotes={cmdReorderFootnotes}
@@ -1929,6 +2461,72 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     <Dialog.Footer>
       <Button variant="outline" onclick={cancelDeleteEntry}>Cancel</Button>
       <Button variant="destructive" onclick={confirmDeleteEntry}>Delete</Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
+
+<!-- Plugin Confirmation Dialog -->
+<Dialog.Root
+  bind:open={showPluginConfirmDialog}
+  onOpenChange={(open) => {
+    if (!open && pluginConfirmResolve) resolvePluginConfirm(false);
+  }}
+>
+  <Dialog.Content showCloseButton={false} class="sm:max-w-md">
+    <Dialog.Header>
+      <Dialog.Title>{pluginConfirmTitle}</Dialog.Title>
+      <Dialog.Description>{pluginConfirmDescription}</Dialog.Description>
+    </Dialog.Header>
+    <Dialog.Footer>
+      <Button variant="outline" onclick={() => resolvePluginConfirm(false)}>
+        {pluginConfirmCancelLabel}
+      </Button>
+      <Button
+        variant={pluginConfirmVariant === "destructive" ? "destructive" : "default"}
+        onclick={() => resolvePluginConfirm(true)}
+      >
+        {pluginConfirmConfirmLabel}
+      </Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
+
+<!-- Plugin Prompt Dialog -->
+<Dialog.Root
+  bind:open={showPluginPromptDialog}
+  onOpenChange={(open) => {
+    if (!open && pluginPromptResolve) resolvePluginPrompt(null);
+  }}
+>
+  <Dialog.Content showCloseButton={false} class="sm:max-w-md">
+    <Dialog.Header>
+      <Dialog.Title>{pluginPromptTitle}</Dialog.Title>
+      <Dialog.Description>{pluginPromptDescription}</Dialog.Description>
+    </Dialog.Header>
+    <div class="py-2">
+      <input
+        bind:this={pluginPromptInput}
+        bind:value={pluginPromptValue}
+        placeholder={pluginPromptPlaceholder}
+        class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        onkeydown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            resolvePluginPrompt(pluginPromptValue);
+          }
+        }}
+      />
+    </div>
+    <Dialog.Footer>
+      <Button variant="outline" onclick={() => resolvePluginPrompt(null)}>
+        {pluginPromptCancelLabel}
+      </Button>
+      <Button
+        variant={pluginPromptVariant === "destructive" ? "destructive" : "default"}
+        onclick={() => resolvePluginPrompt(pluginPromptValue)}
+      >
+        {pluginPromptConfirmLabel}
+      </Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
@@ -2101,7 +2699,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
       </div>
     {/if}
     {#if currentEntry}
-      <!-- Mobile header bar -->
+      <!-- Mobile top navigation strip -->
       <header class="flex items-center justify-between px-2 py-1.5 border-b border-border bg-background shrink-0 md:hidden">
         <button
           type="button"
@@ -2225,8 +2823,9 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
 <!-- Image Preview Dialog -->
 <ImagePreviewDialog
   open={imagePreviewOpen}
-  imageUrl={previewImageUrl}
-  imageName={previewImageName}
+  mediaUrl={previewImageUrl}
+  mediaName={previewImageName}
+  mediaKind={previewImageKind}
   onOpenChange={handleImagePreviewClose}
 />
 

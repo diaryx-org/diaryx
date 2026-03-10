@@ -15,6 +15,7 @@ Plugins can also declare host UI surface ownership in their manifest via
 
 - `CommandPalette` — plugin-owned command palette surface UI
 - `ContextMenu` — plugin-owned context menu UI (currently `LeftSidebarTree` target)
+- `WorkspaceProvider` — provider entry surfaced in workspace link/download UI
 
 Plugins are registered in the `PluginRegistry`, which is stored on the `Diaryx<FS>` struct and wired into the command handler.
 
@@ -62,7 +63,10 @@ let mut diaryx = Diaryx::new(fs);
 diaryx.plugin_registry_mut().register_workspace_plugin(Arc::new(MyPlugin));
 
 // Initialize all plugins with current state:
-diaryx.init_plugins().await.unwrap();
+let failures = diaryx.init_plugins().await;
+for (id, err) in &failures {
+    eprintln!("Plugin {id} failed to init: {err}");
+}
 ```
 
 ## Command Routing
@@ -97,3 +101,7 @@ that component as the command palette UI instead of the built-in command list.
 When a plugin contributes `UiContribution::ContextMenu { target: LeftSidebarTree, ... }`,
 the web host routes left-sidebar tree context menu interactions to the plugin-owned
 surface component.
+
+When a plugin contributes `UiContribution::WorkspaceProvider`, hosts can show it
+as an explicit remote-workspace provider instead of inferring provider support
+from command names alone.

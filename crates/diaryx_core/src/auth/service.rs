@@ -694,7 +694,7 @@ mod tests {
                     "devices": [],
                     "workspace_limit": 10,
                     "tier": "plus",
-                    "published_site_limit": 5,
+                    "published_site_limit": 1,
                     "attachment_limit_bytes": 2147483648
                 }"#
                 .to_string(),

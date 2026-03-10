@@ -176,6 +176,26 @@ export function resetBackend(): void {
   apiInstance = null;
 }
 
+/**
+ * Replace the active backend singleton without reinitializing through the factory.
+ *
+ * Used by generic host orchestration flows such as guest workspaces where the
+ * app temporarily swaps to an already-initialized backend instance.
+ */
+export function replaceBackend(
+  backend: Backend | null,
+  workspaceId?: string,
+  workspaceName?: string,
+  storageType?: StorageType,
+): void {
+  setBackendInstance(backend);
+  setInitPromise(null);
+  setBackendWorkspaceId(workspaceId);
+  setBackendWorkspaceName(workspaceName);
+  setBackendStorageType(storageType);
+  apiInstance = null;
+}
+
 // ============================================================================
 // Convenience Functions
 // ============================================================================

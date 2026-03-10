@@ -54,3 +54,7 @@ Quota rejections (`413` + `storage_limit_exceeded`) are parsed into
 `getUserStorageUsage()` sends `cache: "no-store"` plus `Cache-Control: no-cache`
 and `Pragma: no-cache` headers so `/api/user/storage` refreshes always request
 fresh usage data.
+
+Provider sync/share flows read auth state through the generic plugin runtime
+context. `server_url` and `auth_token` stay runtime-scoped; the host no longer
+mirrors them into provider plugin config or command params.

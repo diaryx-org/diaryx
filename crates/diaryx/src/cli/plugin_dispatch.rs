@@ -327,28 +327,25 @@ fn load_config_and_workspace(
 }
 
 fn native_sync_login(matches: &ArgMatches, _workspace_root: Option<&Path>) {
-    let config = Config::load().unwrap_or_default();
     let email = matches
         .get_one::<String>("email")
         .cloned()
         .unwrap_or_default();
     let server = matches.get_one::<String>("server").map(|s| s.as_str());
-    super::sync::auth::handle_login(&config, &email, server);
+    super::sync::auth::handle_login(&email, server);
 }
 
 fn native_sync_verify(matches: &ArgMatches, _workspace_root: Option<&Path>) {
-    let config = Config::load().unwrap_or_default();
     let token = matches
         .get_one::<String>("token")
         .cloned()
         .unwrap_or_default();
     let device_name = matches.get_one::<String>("device-name").map(|s| s.as_str());
-    super::sync::auth::handle_verify(&config, &token, device_name);
+    super::sync::auth::handle_verify(&token, device_name);
 }
 
 fn native_sync_logout(_matches: &ArgMatches, _workspace_root: Option<&Path>) {
-    let config = Config::load().unwrap_or_default();
-    super::sync::auth::handle_logout(&config);
+    super::sync::auth::handle_logout();
 }
 
 fn native_sync_status(_matches: &ArgMatches, workspace_root: Option<&Path>) {
@@ -377,11 +374,10 @@ fn native_sync_pull(_matches: &ArgMatches, workspace_root: Option<&Path>) {
 }
 
 fn native_sync_config(matches: &ArgMatches, _ws: Option<&Path>) {
-    let config = Config::load().unwrap_or_default();
     let server = matches.get_one::<String>("server").cloned();
     let workspace_id = matches.get_one::<String>("workspace-id").cloned();
     let show = matches.get_flag("show");
-    super::sync::status::handle_config(&config, server, workspace_id, show);
+    super::sync::status::handle_config(server, workspace_id, show);
 }
 
 fn native_publish(matches: &ArgMatches, _workspace_root: Option<&Path>) {

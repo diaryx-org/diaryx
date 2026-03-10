@@ -22,6 +22,7 @@
     Cloud,
     CloudOff,
     CloudUpload,
+    CloudDownload,
   } from "@lucide/svelte";
   import {
     getAuthState,
@@ -30,13 +31,14 @@
     deleteServerWorkspace,
   } from "$lib/auth";
   import { isTierLimitError } from "$lib/billing";
-  import UpgradeBanner from "$lib/components/UpgradeBanner.svelte";
   import {
     removeLocalWorkspace,
     renameLocalWorkspace,
     getLocalWorkspaces,
     getCurrentWorkspaceId,
     getServerWorkspaceId,
+    isWorkspaceSyncEnabled,
+    setPluginMetadata,
   } from "$lib/storage/localWorkspaceRegistry.svelte";
   import { deleteLocalWorkspaceData } from "$lib/settings/clearData";
   import { toast } from "svelte-sonner";
@@ -45,12 +47,15 @@
     getProviderStatus,
     linkWorkspace,
     unlinkWorkspace,
+    listRemoteWorkspaces,
+    downloadWorkspace,
+    type RemoteWorkspace,
   } from "$lib/sync/workspaceProviderService";
+  import { tick } from "svelte";
 
   const pluginStore = getPluginStore();
 
   let authState = $derived(getAuthState());
-  let isPlus = $derived(authState.tier === "plus");
   let serverWorkspaces = $derived(getWorkspaces());
   let currentId = $derived(authState.activeWorkspaceId ?? getCurrentWorkspaceId());
   let allLocal = $derived(getLocalWorkspaces());
@@ -77,7 +82,18 @@
     });
   });
 
-  let hasAnyWorkspaces = $derived(syncedWorkspaces.length > 0 || localWorkspaces.length > 0);
+  // Server workspaces not linked locally (fallback when sync plugin isn't installed).
+  let unlinkedServerWorkspaces = $derived.by(() => {
+    if (!authState.isAuthenticated) return [];
+    const linkedServerIds = new Set(
+      allLocal
+        .map(ws => getServerWorkspaceId(ws.id))
+        .filter((id): id is string => !!id),
+    );
+    return serverWorkspaces.filter(sw => !linkedServerIds.has(sw.id));
+  });
+
+  let hasAnyWorkspaces = $derived(syncedWorkspaces.length > 0 || localWorkspaces.length > 0 || unlinkedServerWorkspaces.length > 0);
   type ActionTone = "info" | "success" | "error";
   let syncActionStatus = $state<{
     active: boolean;
@@ -120,6 +136,10 @@
     };
   }
 
+  // Cloud workspaces (remote-only, not linked locally)
+  let cloudWorkspaces = $state<RemoteWorkspace[]>([]);
+  let downloadingId = $state<string | null>(null);
+
   // Default provider for link button
   let defaultProvider = $derived(workspaceProviders[0] ?? null);
   let providerReady = $state(false);
@@ -136,6 +156,29 @@
     })();
   });
 
+  // Load cloud workspaces when the provider is ready.
+  $effect(() => {
+    const provider = defaultProvider;
+    if (!provider || !providerReady) {
+      cloudWorkspaces = [];
+      return;
+    }
+    void (async () => {
+      try {
+        const linkedServerIds = new Set(
+          allLocal
+            .map(ws => getServerWorkspaceId(ws.id))
+            .filter((id): id is string => !!id),
+        );
+        const remote = await listRemoteWorkspaces(provider.contribution.id);
+        cloudWorkspaces = remote.filter(w => !linkedServerIds.has(w.id));
+      } catch (e) {
+        console.warn("[WorkspaceManagement] Failed to list cloud workspaces:", e);
+        cloudWorkspaces = [];
+      }
+    })();
+  });
+
   // Rename state
   let renamingId = $state<string | null>(null);
   let renameValue = $state("");
@@ -145,6 +188,33 @@
   let actionId = $state<string | null>(null);
   let actionLoading = $state(false);
   let confirmAction = $state<{ id: string; type: 'delete-local' | 'delete-server' } | null>(null);
+  let rootEl = $state<HTMLDivElement | null>(null);
+
+  function getSettingsScrollContainer(): HTMLElement | null {
+    const scrollContainer = rootEl?.closest("[data-settings-scroll-container]");
+    return scrollContainer instanceof HTMLElement ? scrollContainer : null;
+  }
+
+  async function preserveSettingsScroll<T>(update: () => T | Promise<T>): Promise<T> {
+    const scrollContainer = getSettingsScrollContainer();
+    const savedScrollTop = scrollContainer?.scrollTop ?? null;
+
+    try {
+      return await update();
+    } finally {
+      if (savedScrollTop !== null) {
+        await tick();
+        const nextScrollContainer = getSettingsScrollContainer();
+        if (nextScrollContainer) {
+          const maxScrollTop = Math.max(
+            0,
+            nextScrollContainer.scrollHeight - nextScrollContainer.clientHeight,
+          );
+          nextScrollContainer.scrollTop = Math.min(savedScrollTop, maxScrollTop);
+        }
+      }
+    }
+  }
 
   function startRename(id: string, currentName: string) {
     renamingId = id;
@@ -182,9 +252,11 @@
   /** Unlink a workspace from its provider — marks it as local, server copy untouched. */
   async function handleUnlink(id: string) {
     const providerId = defaultProvider?.contribution.id;
-    if (!providerId) return;
-
-    await unlinkWorkspace(providerId, id);
+    if (providerId && isWorkspaceSyncEnabled(id)) {
+      await unlinkWorkspace(providerId, id);
+    } else {
+      setPluginMetadata(id, "sync", null);
+    }
 
     toast.success(
       id === currentId
@@ -194,7 +266,7 @@
   }
 
   /** Link a local workspace to a provider. */
-  async function handleLink(id: string, name: string) {
+  async function handleLink(id: string, name: string, remoteId?: string) {
     const providerId = defaultProvider?.contribution.id;
     if (!providerId) return;
 
@@ -219,7 +291,7 @@
     try {
       await linkWorkspace(
         providerId,
-        { localId: id, name: normalizedName },
+        { localId: id, name: normalizedName, remoteId },
         (progress) => {
           setSyncActionStatus({
             progress: progress.percent,
@@ -232,7 +304,7 @@
       toast.success("Workspace is now synced");
     } catch (e: any) {
       const message = isTierLimitError(e)
-        ? "Sync requires a Plus subscription. Upgrade to enable sync."
+        ? "Workspace sync limit reached. Free plans can sync one workspace; upgrade to sync more."
         : (e?.message || "Failed to sync workspace");
       completeSyncActionStatus("error", message);
       toast.error(message);
@@ -245,50 +317,102 @@
   /** Delete a workspace from the server only — keeps local data, marks as local. */
   async function handleDeleteFromServer(id: string) {
     if (confirmAction?.id !== id || confirmAction?.type !== 'delete-server') {
-      confirmAction = { id, type: 'delete-server' };
+      await preserveSettingsScroll(() => {
+        confirmAction = { id, type: 'delete-server' };
+      });
       return;
     }
 
-    actionLoading = true;
-    actionId = id;
-    try {
-      await deleteServerWorkspace(id);
-      await handleUnlink(id);
-      toast.success("Deleted from server");
+    const serverId = getServerWorkspaceId(id);
+    if (!serverId) {
       confirmAction = null;
-    } catch (e: any) {
-      toast.error(e?.message || "Failed to delete from server");
-    } finally {
-      actionLoading = false;
-      actionId = null;
+      toast.error("Workspace is not linked to a cloud copy");
+      return;
     }
+
+    await preserveSettingsScroll(async () => {
+      actionLoading = true;
+      actionId = id;
+      try {
+        await deleteServerWorkspace(serverId);
+        await handleUnlink(id);
+        toast.success("Deleted from server");
+        confirmAction = null;
+      } catch (e: any) {
+        toast.error(e?.message || "Failed to delete from server");
+      } finally {
+        actionLoading = false;
+        actionId = null;
+      }
+    });
   }
 
   /** Delete a workspace's local data. */
   async function handleDeleteLocal(id: string) {
     if (confirmAction?.id !== id || confirmAction?.type !== 'delete-local') {
-      confirmAction = { id, type: 'delete-local' };
+      await preserveSettingsScroll(() => {
+        confirmAction = { id, type: 'delete-local' };
+      });
       return;
     }
 
-    actionLoading = true;
-    actionId = id;
-    try {
-      const ws = allLocal.find(w => w.id === id);
-      await deleteLocalWorkspaceData(id, ws?.name);
-      removeLocalWorkspace(id);
-      toast.success("Workspace deleted");
-      confirmAction = null;
-    } catch (e: any) {
-      toast.error(e?.message || "Failed to delete workspace");
-    } finally {
-      actionLoading = false;
-      actionId = null;
-    }
+    await preserveSettingsScroll(async () => {
+      actionLoading = true;
+      actionId = id;
+      try {
+        const ws = allLocal.find(w => w.id === id);
+        await deleteLocalWorkspaceData(id, ws?.name);
+        removeLocalWorkspace(id);
+        toast.success("Workspace deleted");
+        confirmAction = null;
+      } catch (e: any) {
+        toast.error(e?.message || "Failed to delete workspace");
+      } finally {
+        actionLoading = false;
+        actionId = null;
+      }
+    });
   }
 
-  function cancelConfirm() {
-    confirmAction = null;
+  async function cancelConfirm() {
+    await preserveSettingsScroll(() => {
+      confirmAction = null;
+    });
+  }
+
+  async function handleDownloadCloud(remote: RemoteWorkspace) {
+    const providerId = defaultProvider?.contribution.id;
+    if (!providerId) return;
+
+    downloadingId = remote.id;
+    setSyncActionStatus({
+      active: true,
+      workspaceId: null,
+      workspaceName: remote.name,
+      progress: 8,
+      tone: "info",
+      message: `Downloading "${remote.name}"...`,
+    });
+
+    try {
+      await downloadWorkspace(
+        providerId,
+        { remoteId: remote.id, name: remote.name, link: true },
+        (progress) => {
+          setSyncActionStatus({
+            progress: progress.percent,
+            message: progress.message,
+          });
+        },
+      );
+      completeSyncActionStatus("success", `"${remote.name}" downloaded and linked.`);
+      toast.success(`Workspace "${remote.name}" downloaded`);
+    } catch (e: any) {
+      completeSyncActionStatus("error", e?.message || "Failed to download workspace");
+      toast.error(e?.message || "Failed to download workspace");
+    } finally {
+      downloadingId = null;
+    }
   }
 </script>
 
@@ -347,7 +471,7 @@
 {/snippet}
 
 {#if hasAnyWorkspaces}
-  <div class="space-y-4">
+  <div bind:this={rootEl} class="space-y-4">
     {#if syncActionStatus.message}
       <div
         class="rounded-md border p-2 space-y-2 {syncActionStatus.tone === 'error'
@@ -384,13 +508,13 @@
       </div>
     {/if}
 
-    <!-- Synced workspaces section -->
+    <!-- Cloud-linked workspaces section -->
     {#if syncedWorkspaces.length > 0}
       <div class="space-y-3">
         <div class="flex items-center justify-between">
           <h3 class="text-sm font-medium flex items-center gap-1.5">
             <Cloud class="size-3.5 text-muted-foreground" />
-            Synced Workspaces
+            Cloud-linked Workspaces
           </h3>
           <span class="text-xs text-muted-foreground">
             {syncedWorkspaces.length}
@@ -408,6 +532,9 @@
                 <span class="flex items-center gap-1.5 flex-1 min-w-0">
                   <Cloud class="size-3.5 shrink-0 text-muted-foreground" />
                   <span class="text-sm truncate">{ws.name}</span>
+                  <span class="text-[10px] px-1 py-0.5 rounded bg-muted text-muted-foreground shrink-0">
+                    {isWorkspaceSyncEnabled(ws.id) ? 'sync enabled' : 'publish only'}
+                  </span>
                   {#if ws.id === currentId}
                     <span class="text-[10px] px-1 py-0.5 rounded bg-primary/10 text-primary shrink-0">active</span>
                   {/if}
@@ -429,15 +556,28 @@
                     >
                       <Pencil class="size-3" />
                     </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      class="size-6"
-                      onclick={() => handleUnlink(ws.id)}
-                      title="Unlink from provider"
-                    >
-                      <CloudOff class="size-3" />
-                    </Button>
+                    {#if defaultProvider}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        class="size-6"
+                        onclick={() => isWorkspaceSyncEnabled(ws.id)
+                          ? handleUnlink(ws.id)
+                          : handleLink(ws.id, ws.name, getServerWorkspaceId(ws.id) ?? undefined)}
+                        disabled={ws.id !== currentId || (actionLoading && actionId === ws.id)}
+                        title={isWorkspaceSyncEnabled(ws.id)
+                          ? 'Unlink from provider'
+                          : (ws.id === currentId ? 'Enable sync using this cloud-linked workspace' : 'Switch to this workspace first to enable sync')}
+                      >
+                        {#if actionLoading && actionId === ws.id}
+                          <Loader2 class="size-3 animate-spin" />
+                        {:else if isWorkspaceSyncEnabled(ws.id)}
+                          <CloudOff class="size-3" />
+                        {:else}
+                          <CloudUpload class="size-3" />
+                        {/if}
+                      </Button>
+                    {/if}
                     <Button
                       variant="ghost"
                       size="icon"
@@ -454,6 +594,86 @@
             </div>
           {/each}
         </div>
+      </div>
+    {/if}
+
+    <!-- Cloud workspaces (remote-only, not linked locally) -->
+    {#if providerReady && cloudWorkspaces.length > 0}
+      <div class="space-y-3">
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-medium flex items-center gap-1.5">
+            <CloudDownload class="size-3.5 text-muted-foreground" />
+            Cloud Workspaces
+          </h3>
+          <span class="text-xs text-muted-foreground">
+            {cloudWorkspaces.length}
+          </span>
+        </div>
+
+        <Separator />
+
+        <div class="space-y-1">
+          {#each cloudWorkspaces as remote (remote.id)}
+            <div class="flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-muted/50">
+              <span class="flex items-center gap-1.5 flex-1 min-w-0">
+                <Cloud class="size-3.5 shrink-0 text-muted-foreground" />
+                <span class="text-sm truncate">{remote.name}</span>
+                <span class="text-[10px] px-1 py-0.5 rounded bg-muted text-muted-foreground shrink-0">cloud only</span>
+              </span>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="size-6"
+                onclick={() => handleDownloadCloud(remote)}
+                disabled={downloadingId === remote.id}
+                title="Download to this device"
+              >
+                {#if downloadingId === remote.id}
+                  <Loader2 class="size-3 animate-spin" />
+                {:else}
+                  <CloudDownload class="size-3" />
+                {/if}
+              </Button>
+            </div>
+          {/each}
+        </div>
+
+        <p class="text-xs text-muted-foreground">
+          These workspaces exist on the server but are not on this device.
+        </p>
+      </div>
+    {/if}
+
+    <!-- Read-only cloud workspaces (no sync plugin available) -->
+    {#if !defaultProvider && unlinkedServerWorkspaces.length > 0}
+      <div class="space-y-3">
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-medium flex items-center gap-1.5">
+            <Cloud class="size-3.5 text-muted-foreground" />
+            Cloud Workspaces
+          </h3>
+          <span class="text-xs text-muted-foreground">
+            {unlinkedServerWorkspaces.length}
+          </span>
+        </div>
+
+        <Separator />
+
+        <div class="space-y-1">
+          {#each unlinkedServerWorkspaces as ws (ws.id)}
+            <div class="flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-muted/50">
+              <span class="flex items-center gap-1.5 flex-1 min-w-0">
+                <Cloud class="size-3.5 shrink-0 text-muted-foreground" />
+                <span class="text-sm truncate">{ws.name}</span>
+                <span class="text-[10px] px-1 py-0.5 rounded bg-muted text-muted-foreground shrink-0">cloud only</span>
+              </span>
+            </div>
+          {/each}
+        </div>
+
+        <p class="text-xs text-muted-foreground">
+          Install the Sync plugin to download and sync these workspaces on this device.
+        </p>
       </div>
     {/if}
 
@@ -508,14 +728,16 @@
                     >
                       <Pencil class="size-3" />
                     </Button>
-                    {#if defaultProvider && providerReady && isPlus}
+                    {#if defaultProvider && providerReady}
                       <Button
                         variant="ghost"
                         size="icon"
                         class="size-6"
                         onclick={() => handleLink(ws.id, ws.name)}
-                        disabled={actionLoading && actionId === ws.id}
-                        title="Link to {defaultProvider.contribution.label}"
+                        disabled={ws.id !== currentId || (actionLoading && actionId === ws.id)}
+                        title={ws.id === currentId
+                          ? "Sync to cloud"
+                          : "Switch to this workspace first to enable sync"}
                       >
                         {#if actionLoading && actionId === ws.id}
                           <Loader2 class="size-3 animate-spin" />
@@ -541,18 +763,18 @@
           {/each}
         </div>
 
-        {#if defaultProvider && !isPlus}
-          <UpgradeBanner
-            feature="Sync"
-            description="Upgrade to sync workspaces across devices."
-            icon={Cloud}
-          />
-        {:else if defaultProvider}
+        {#if defaultProvider}
           <p class="text-xs text-muted-foreground">
-            Local workspaces are stored on this device only.
+            Free includes one synced workspace on up to two devices. Upgrade to Plus for more synced workspaces.
           </p>
         {/if}
       </div>
+    {/if}
+
+    {#if syncedWorkspaces.length > 0}
+      <p class="text-xs text-muted-foreground">
+        Cloud-linked workspaces can publish with auth only. Enable sync when you want faster server-side publishes.
+      </p>
     {/if}
 
   </div>

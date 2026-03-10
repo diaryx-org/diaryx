@@ -15,6 +15,7 @@
 
   // Local state for default_audience input (save on blur/Enter)
   let defaultAudience = $state("");
+  let dailyEntryFolder = $state("");
 
   // Load config when root index path changes
   $effect(() => {
@@ -27,11 +28,16 @@
   $effect(() => {
     if (configStore.config) {
       defaultAudience = configStore.config.default_audience ?? "";
+      dailyEntryFolder = configStore.config.daily_entry_folder ?? "";
     }
   });
 
   function saveDefaultAudience() {
     configStore.setField("default_audience", defaultAudience.trim());
+  }
+
+  function saveDailyEntryFolder() {
+    configStore.setField("daily_entry_folder", dailyEntryFolder.trim());
   }
 
   const LINK_FORMAT_OPTIONS = [
@@ -100,6 +106,28 @@
         }
       }}
     />
+  </div>
+
+  <!-- Daily Folder -->
+  <div class="space-y-1">
+    <span class="text-xs text-muted-foreground">Daily folder</span>
+    <Input
+      type="text"
+      bind:value={dailyEntryFolder}
+      placeholder="e.g., Daily or Journal/Daily"
+      class="h-7 text-xs"
+      disabled={configStore.loading}
+      onblur={saveDailyEntryFolder}
+      onkeydown={(e) => {
+        if (e.key === "Enter") {
+          saveDailyEntryFolder();
+          (e.target as HTMLInputElement).blur();
+        }
+      }}
+    />
+    <p class="text-[10px] text-muted-foreground">
+      Used by the Daily plugin for yearly/monthly/daily entry creation.
+    </p>
   </div>
 
   <!-- Filename Style -->

@@ -3,22 +3,34 @@
 //! The registry is the central hub that holds all registered plugins and
 //! provides methods to emit events and route commands.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use serde_json::Value as JsonValue;
 
 use super::events::*;
 use super::manifest::{PluginManifest, UiContribution};
-use super::{FilePlugin, Plugin, PluginContext, PluginError, PluginId, WorkspacePlugin};
+use super::{
+    FilePlugin, Plugin, PluginContext, PluginError, PluginHealth, PluginId, WorkspacePlugin,
+};
+
+/// Per-plugin health tracking state.
+struct PluginHealthTracker {
+    health: HashMap<PluginId, PluginHealth>,
+}
 
 /// Central registry that holds all registered plugins.
 ///
 /// Plugins are registered by namespace (workspace, file) and the registry
 /// dispatches events and commands to the appropriate plugins.
+///
+/// The registry tracks plugin health — plugins that fail to initialize are
+/// marked as [`PluginHealth::Failed`] and skipped for subsequent dispatches.
 pub struct PluginRegistry {
     plugins: Vec<Arc<dyn Plugin>>,
     workspace_plugins: Vec<Arc<dyn WorkspacePlugin>>,
     file_plugins: Vec<Arc<dyn FilePlugin>>,
+    health: Mutex<PluginHealthTracker>,
 }
 
 impl PluginRegistry {
@@ -28,6 +40,9 @@ impl PluginRegistry {
             plugins: Vec::new(),
             workspace_plugins: Vec::new(),
             file_plugins: Vec::new(),
+            health: Mutex::new(PluginHealthTracker {
+                health: HashMap::new(),
+            }),
         }
     }
 
@@ -66,6 +81,50 @@ impl PluginRegistry {
     }
 
     // ========================================================================
+    // Health Tracking
+    // ========================================================================
+
+    fn set_health(&self, id: PluginId, health: PluginHealth) {
+        if let Ok(mut tracker) = self.health.lock() {
+            tracker.health.insert(id, health);
+        }
+    }
+
+    fn is_plugin_healthy(&self, id: &PluginId) -> bool {
+        if let Ok(tracker) = self.health.lock() {
+            !matches!(tracker.health.get(id), Some(PluginHealth::Failed(_)))
+        } else {
+            // If lock is poisoned, assume healthy to avoid blocking everything.
+            true
+        }
+    }
+
+    /// Get the health status of a specific plugin.
+    pub fn get_plugin_health(&self, plugin_id: &PluginId) -> PluginHealth {
+        if let Ok(tracker) = self.health.lock() {
+            tracker
+                .health
+                .get(plugin_id)
+                .cloned()
+                .unwrap_or(PluginHealth::Healthy)
+        } else {
+            PluginHealth::Healthy
+        }
+    }
+
+    /// Get health status of all registered plugins.
+    pub fn get_all_plugin_health(&self) -> Vec<(PluginId, PluginHealth)> {
+        self.plugins
+            .iter()
+            .map(|p| {
+                let id = p.id();
+                let health = self.get_plugin_health(&id);
+                (id, health)
+            })
+            .collect()
+    }
+
+    // ========================================================================
     // Manifests
     // ========================================================================
 
@@ -90,11 +149,26 @@ impl PluginRegistry {
     // ========================================================================
 
     /// Initialize all registered plugins.
-    pub async fn init_all(&self, ctx: &PluginContext) -> Result<(), PluginError> {
+    ///
+    /// Plugins that fail to init are marked as [`PluginHealth::Failed`] and
+    /// skipped for subsequent event dispatch. Returns a list of all failures
+    /// (empty means all plugins initialized successfully).
+    pub async fn init_all(&self, ctx: &PluginContext) -> Vec<(PluginId, PluginError)> {
+        let mut errors = Vec::new();
         for plugin in &self.plugins {
-            plugin.init(ctx).await?;
+            match plugin.init(ctx).await {
+                Ok(()) => {
+                    self.set_health(plugin.id(), PluginHealth::Healthy);
+                }
+                Err(e) => {
+                    let id = plugin.id();
+                    log::error!("Plugin {} failed to init: {}", id, e);
+                    self.set_health(id.clone(), PluginHealth::Failed(e.to_string()));
+                    errors.push((id, e));
+                }
+            }
         }
-        Ok(())
+        errors
     }
 
     /// Shut down all registered plugins (in reverse registration order).
@@ -109,30 +183,42 @@ impl PluginRegistry {
     // Workspace Events
     // ========================================================================
 
-    /// Emit a workspace-opened event to all workspace plugins.
+    /// Emit a workspace-opened event to all healthy workspace plugins.
     pub async fn emit_workspace_opened(&self, event: &WorkspaceOpenedEvent) {
         for plugin in &self.workspace_plugins {
+            if !self.is_plugin_healthy(&plugin.id()) {
+                continue;
+            }
             plugin.on_workspace_opened(event).await;
         }
     }
 
-    /// Emit a workspace-closed event to all workspace plugins.
+    /// Emit a workspace-closed event to all healthy workspace plugins.
     pub async fn emit_workspace_closed(&self, event: &WorkspaceClosedEvent) {
         for plugin in &self.workspace_plugins {
+            if !self.is_plugin_healthy(&plugin.id()) {
+                continue;
+            }
             plugin.on_workspace_closed(event).await;
         }
     }
 
-    /// Emit a workspace-changed event to all workspace plugins.
+    /// Emit a workspace-changed event to all healthy workspace plugins.
     pub async fn emit_workspace_changed(&self, event: &WorkspaceChangedEvent) {
         for plugin in &self.workspace_plugins {
+            if !self.is_plugin_healthy(&plugin.id()) {
+                continue;
+            }
             plugin.on_workspace_changed(event).await;
         }
     }
 
-    /// Emit a workspace-committed event to all workspace plugins.
+    /// Emit a workspace-committed event to all healthy workspace plugins.
     pub async fn emit_workspace_committed(&self, event: &WorkspaceCommittedEvent) {
         for plugin in &self.workspace_plugins {
+            if !self.is_plugin_healthy(&plugin.id()) {
+                continue;
+            }
             plugin.on_workspace_committed(event).await;
         }
     }
@@ -141,30 +227,42 @@ impl PluginRegistry {
     // File Events
     // ========================================================================
 
-    /// Emit a file-saved event to all file plugins.
+    /// Emit a file-saved event to all healthy file plugins.
     pub async fn emit_file_saved(&self, event: &FileSavedEvent) {
         for plugin in &self.file_plugins {
+            if !self.is_plugin_healthy(&plugin.id()) {
+                continue;
+            }
             plugin.on_file_saved(event).await;
         }
     }
 
-    /// Emit a file-created event to all file plugins.
+    /// Emit a file-created event to all healthy file plugins.
     pub async fn emit_file_created(&self, event: &FileCreatedEvent) {
         for plugin in &self.file_plugins {
+            if !self.is_plugin_healthy(&plugin.id()) {
+                continue;
+            }
             plugin.on_file_created(event).await;
         }
     }
 
-    /// Emit a file-deleted event to all file plugins.
+    /// Emit a file-deleted event to all healthy file plugins.
     pub async fn emit_file_deleted(&self, event: &FileDeletedEvent) {
         for plugin in &self.file_plugins {
+            if !self.is_plugin_healthy(&plugin.id()) {
+                continue;
+            }
             plugin.on_file_deleted(event).await;
         }
     }
 
-    /// Emit a file-moved event to all file plugins.
+    /// Emit a file-moved event to all healthy file plugins.
     pub async fn emit_file_moved(&self, event: &FileMovedEvent) {
         for plugin in &self.file_plugins {
+            if !self.is_plugin_healthy(&plugin.id()) {
+                continue;
+            }
             plugin.on_file_moved(event).await;
         }
     }
@@ -173,39 +271,54 @@ impl PluginRegistry {
     // CRDT Side-Effect Dispatch
     // ========================================================================
 
-    /// Notify all workspace plugins that a workspace-modifying operation completed.
+    /// Notify all healthy workspace plugins that a workspace-modifying operation completed.
     ///
     /// Plugins managing sync state should broadcast CRDT workspace updates.
     pub async fn notify_workspace_modified(&self) {
         for plugin in &self.workspace_plugins {
+            if !self.is_plugin_healthy(&plugin.id()) {
+                continue;
+            }
             plugin.notify_workspace_modified().await;
         }
     }
 
-    /// Notify all workspace plugins that a body document was renamed.
+    /// Notify all healthy workspace plugins that a body document was renamed.
     pub async fn emit_body_doc_renamed(&self, old_path: &str, new_path: &str) {
         for plugin in &self.workspace_plugins {
+            if !self.is_plugin_healthy(&plugin.id()) {
+                continue;
+            }
             plugin.on_body_doc_renamed(old_path, new_path).await;
         }
     }
 
-    /// Notify all workspace plugins that a body document was deleted.
+    /// Notify all healthy workspace plugins that a body document was deleted.
     pub async fn emit_body_doc_deleted(&self, path: &str) {
         for plugin in &self.workspace_plugins {
+            if !self.is_plugin_healthy(&plugin.id()) {
+                continue;
+            }
             plugin.on_body_doc_deleted(path).await;
         }
     }
 
-    /// Ask workspace plugins to track CRDT metadata for echo detection.
+    /// Ask healthy workspace plugins to track CRDT metadata for echo detection.
     pub async fn track_file_for_sync(&self, canonical_path: &str) {
         for plugin in &self.workspace_plugins {
+            if !self.is_plugin_healthy(&plugin.id()) {
+                continue;
+            }
             plugin.track_file_for_sync(canonical_path).await;
         }
     }
 
-    /// Ask workspace plugins to track body content for echo detection.
+    /// Ask healthy workspace plugins to track body content for echo detection.
     pub fn track_content_for_sync(&self, canonical_path: &str, content: &str) {
         for plugin in &self.workspace_plugins {
+            if !self.is_plugin_healthy(&plugin.id()) {
+                continue;
+            }
             plugin.track_content_for_sync(canonical_path, content);
         }
     }
@@ -241,6 +354,8 @@ impl PluginRegistry {
     /// Finds the first workspace plugin whose [`PluginId`] matches `plugin_id`
     /// and calls [`WorkspacePlugin::handle_command`]. Returns `None` if no
     /// plugin matches or the matched plugin doesn't handle the command.
+    ///
+    /// Returns an error if the matched plugin is in a [`PluginHealth::Failed`] state.
     pub async fn handle_plugin_command(
         &self,
         plugin_id: &str,
@@ -249,6 +364,12 @@ impl PluginRegistry {
     ) -> Option<Result<JsonValue, PluginError>> {
         for plugin in &self.workspace_plugins {
             if plugin.id().0 == plugin_id {
+                if !self.is_plugin_healthy(&plugin.id()) {
+                    return Some(Err(PluginError::Other(format!(
+                        "Plugin '{}' is in failed state",
+                        plugin_id
+                    ))));
+                }
                 return plugin.handle_command(cmd, params).await;
             }
         }

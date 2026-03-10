@@ -44,10 +44,8 @@
   import WorkspaceSelector from "./WorkspaceSelector.svelte";
   import AudienceFilter from "./components/AudienceFilter.svelte";
   import PluginSidebarPanel from "./components/PluginSidebarPanel.svelte";
-  import PublishTab from "./publish/PublishTab.svelte";
   import { Share2, History, FolderTree, Globe } from "@lucide/svelte";
   import { getPluginStore } from "@/models/stores/pluginStore.svelte";
-  import { getPublishBuiltinTabKeyByComponentId } from "$lib/publish/publishBuiltinUiRegistry";
 
   interface Props {
     tree: TreeNode | null;
@@ -162,7 +160,6 @@
     icon: string | null;
     pluginId: PluginId | null;
     component: ComponentRef | null;
-    publishBuiltinKey: "publish" | null;
   };
 
   const pluginStore = getPluginStore();
@@ -195,18 +192,12 @@
 
     for (const tab of pluginStore.leftSidebarTabs) {
       if (tab.contribution.id === "files") continue;
-      const component = tab.contribution.component;
-      const publishBuiltinKey =
-        component.type === "Builtin"
-          ? getPublishBuiltinTabKeyByComponentId(component.component_id)
-          : null;
       tabMap.set(tab.contribution.id, {
         id: tab.contribution.id,
         label: tab.contribution.label,
         icon: tab.contribution.icon,
         pluginId: tab.pluginId,
-        component,
-        publishBuiltinKey,
+        component: tab.contribution.component,
       });
     }
 
@@ -217,7 +208,6 @@
         icon: "files",
         pluginId: null,
         component: null,
-        publishBuiltinKey: null,
       },
       ...Array.from(tabMap.values()),
     ];
@@ -1223,13 +1213,7 @@
       {/if}
     {:else}
       {@const activePluginTab = leftTabs.find((tab) => tab.id === leftTab) ?? null}
-      {#if activePluginTab?.publishBuiltinKey === "publish"}
-        <PublishTab
-          rootPath={tree?.path ?? "."}
-          {api}
-          {onAddWorkspace}
-        />
-      {:else if activePluginTab?.pluginId && activePluginTab.component && api}
+      {#if activePluginTab?.pluginId && activePluginTab.component && api}
         <PluginSidebarPanel
           pluginId={activePluginTab.pluginId}
           component={activePluginTab.component}
@@ -1395,11 +1379,11 @@
   <!-- Tab Bar (hidden when only one tab) -->
   {#if leftTabs.length > 1}
   <div class="px-3 pt-1 pb-1 shrink-0">
-    <div class="flex items-center gap-1 bg-muted rounded-md p-0.5">
+    <div class="flex items-center gap-1 bg-muted rounded-md p-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       {#each leftTabs as tab (tab.id)}
         <button
           type="button"
-          class="flex-1 flex items-center justify-center gap-1.5 px-2 py-1 text-[11px] font-medium rounded transition-colors {leftTab === tab.id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+          class="flex-1 shrink-0 whitespace-nowrap flex items-center justify-center gap-1.5 px-2 py-1 text-[11px] font-medium rounded transition-colors {leftTab === tab.id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
           onclick={() => (leftTab = tab.id)}
         >
           {#if tab.id === "files"}
@@ -1408,7 +1392,7 @@
             <Share2 class="size-3" />
           {:else if tab.icon === "history"}
             <History class="size-3" />
-          {:else if tab.publishBuiltinKey === "publish" || tab.icon === "globe"}
+          {:else if tab.icon === "globe"}
             <Globe class="size-3" />
           {/if}
           {tab.label}

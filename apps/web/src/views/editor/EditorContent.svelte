@@ -8,6 +8,7 @@
 
   import LoadingSpinner from "../shared/LoadingSpinner.svelte";
   import type { Api } from "$lib/backend/api";
+  import type { AttachmentMediaKind } from "@/models/services/attachmentService";
 
   interface Props {
     Editor: typeof import("$lib/Editor.svelte").default | null;
@@ -15,17 +16,19 @@
     content: string;
     editorKey: string;
     readonly?: boolean;
-    onchange: (markdown: string) => void;
+    onchange: () => void;
     onblur: () => void;
     // These match the Editor component prop types
-    onFileDrop?: (file: File) => Promise<{ blobUrl: string; attachmentPath: string } | null>;
+    onFileDrop?: (
+      file: File,
+    ) => Promise<{ blobUrl: string; attachmentPath: string; kind: AttachmentMediaKind } | null>;
     onLinkClick?: (href: string) => void;
     // Attachment picker props
     entryPath?: string;
     api?: Api | null;
     onAttachmentInsert?: (selection: {
       path: string;
-      isImage: boolean;
+      kind: AttachmentMediaKind;
       blobUrl?: string;
       sourceEntryPath: string;
     }) => void;

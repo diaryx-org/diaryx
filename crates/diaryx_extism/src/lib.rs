@@ -27,16 +27,25 @@ pub mod loader;
 pub mod permission_checker;
 pub mod plugin_fs;
 pub mod protocol;
+#[cfg(feature = "testing")]
+pub mod testing;
 #[cfg(feature = "wasi-runner")]
 pub mod wasi_runner;
+#[cfg(feature = "ws-transport")]
+pub mod ws_transport;
 
 pub use adapter::ExtismPluginAdapter;
 pub use host_fns::{
-    EventEmitter, FileProvider, HostContext, MapFileProvider, NoopEventEmitter, NoopFileProvider,
-    NoopStorage, PermissionChecker, PluginStorage,
+    EventEmitter, FilePluginSecretStore, FilePluginStorage, FileProvider, HostContext,
+    MapFileProvider, NoopEventEmitter, NoopFileProvider, NoopPluginCommandBridge,
+    NoopRuntimeContextProvider, NoopSecretStore, NoopStorage, NoopWebSocketBridge,
+    PermissionChecker, PluginCommandBridge, PluginSecretStore, PluginStorage,
+    RuntimeContextProvider, WebSocketBridge,
 };
 pub use loader::{
     ExtismLoadError, inspect_plugin_wasm_manifest, load_plugin_from_wasm, load_plugins_from_dir,
 };
 pub use permission_checker::{DenyAllPermissionChecker, FrontmatterPermissionChecker};
 pub use plugin_fs::PluginFileSystem;
+#[cfg(feature = "ws-transport")]
+pub use ws_transport::{SyncGuestBridge, TokioWebSocketBridge};

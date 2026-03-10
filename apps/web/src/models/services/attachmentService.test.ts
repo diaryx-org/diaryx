@@ -2,13 +2,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   getMimeType,
   isHeicFile,
+  getAttachmentMediaKind,
+  formatMarkdownDestination,
+  isPreviewableAttachmentKind,
   convertHeicToJpeg,
   revokeBlobUrls,
+  clearAttachmentThumbnailCache,
+  clearAttachmentVerificationCache,
   transformAttachmentPaths,
+  queueResolveAttachment,
   reverseBlobUrlsToAttachmentPaths,
   getBlobUrl,
   trackBlobUrl,
   hasBlobUrls,
+  attachmentExistsLocally,
+  getAttachmentAvailability,
   computeRelativeAttachmentPath,
 } from './attachmentService'
 
@@ -16,6 +24,8 @@ describe('attachmentService', () => {
   beforeEach(() => {
     // Clean up blob URLs before each test
     revokeBlobUrls()
+    clearAttachmentThumbnailCache()
+    clearAttachmentVerificationCache()
   })
 
   describe('getMimeType', () => {
@@ -102,6 +112,29 @@ describe('attachmentService', () => {
     })
   })
 
+  describe('getAttachmentMediaKind', () => {
+    it('should classify image, video, audio, and generic files from extensions', () => {
+      expect(getAttachmentMediaKind('photo.png')).toBe('image')
+      expect(getAttachmentMediaKind('clip.mp4')).toBe('video')
+      expect(getAttachmentMediaKind('voice.mp3')).toBe('audio')
+      expect(getAttachmentMediaKind('doc.pdf')).toBe('file')
+    })
+
+    it('should prefer MIME type when extension is ambiguous', () => {
+      expect(getAttachmentMediaKind('sample.ogg', 'audio/ogg')).toBe('audio')
+      expect(getAttachmentMediaKind('sample.ogg', 'video/ogg')).toBe('video')
+    })
+  })
+
+  describe('isPreviewableAttachmentKind', () => {
+    it('should only allow inline preview for media kinds', () => {
+      expect(isPreviewableAttachmentKind('image')).toBe(true)
+      expect(isPreviewableAttachmentKind('video')).toBe(true)
+      expect(isPreviewableAttachmentKind('audio')).toBe(true)
+      expect(isPreviewableAttachmentKind('file')).toBe(false)
+    })
+  })
+
   describe('convertHeicToJpeg', () => {
     it('should convert HEIC blob to JPEG', async () => {
       const heicBlob = new Blob(['mock-heic-data'], { type: 'image/heic' })
@@ -147,6 +180,55 @@ describe('attachmentService', () => {
       expect(hasBlobUrls()).toBe(false)
       expect(getBlobUrl('image1.png')).toBeUndefined()
       expect(getBlobUrl('image2.png')).toBeUndefined()
+    })
+  })
+
+  describe('attachment availability', () => {
+    it('should check local existence without reading attachment bytes', async () => {
+      const mockApi = {
+        resolveAttachmentStoragePath: vi.fn().mockResolvedValue('/workspace/_attachments/test.png'),
+        fileExists: vi.fn().mockResolvedValue(true),
+      }
+
+      const result = await attachmentExistsLocally(
+        mockApi as any,
+        'entry.md',
+        '_attachments/test.png',
+      )
+
+      expect(result).toBe(true)
+      expect(mockApi.resolveAttachmentStoragePath).toHaveBeenCalledWith('entry.md', '_attachments/test.png')
+      expect(mockApi.fileExists).toHaveBeenCalledWith('/workspace/_attachments/test.png')
+    })
+
+    it('should report remote availability when local file is missing but metadata exists', async () => {
+      const mockApi = {
+        resolveAttachmentStoragePath: vi.fn().mockResolvedValue('/workspace/_attachments/test.png'),
+        fileExists: vi.fn().mockResolvedValue(false),
+      }
+
+      const { indexAttachmentRefs } = await import('$lib/sync/attachmentSyncService')
+      indexAttachmentRefs(
+        'entry-remote.md',
+        [{
+          path: '_attachments/test.png',
+          source: 'local',
+          hash: 'abc123',
+          mime_type: 'image/png',
+          size: BigInt(12),
+          uploaded_at: BigInt(Date.now()),
+          deleted: false,
+        }],
+        'ws-1',
+      )
+
+      const result = await getAttachmentAvailability(
+        mockApi as any,
+        'entry-remote.md',
+        '_attachments/test.png',
+      )
+
+      expect(result).toBe('remote')
     })
   })
 
@@ -205,6 +287,42 @@ describe('attachmentService', () => {
       expect(mockApi.formatLink).not.toHaveBeenCalled()
       expect(result).toContain('blob:')
       expect(result).toContain('![test image]')
+    })
+
+    it('should cache successful attachment hash verification across blob URL resets', async () => {
+      const expectedHash = 'a'.repeat(64)
+      const syncService = await import('$lib/sync/attachmentSyncService')
+      const shaSpy = vi.spyOn(syncService, 'sha256Hex').mockResolvedValue(expectedHash)
+
+      syncService.indexAttachmentRefs(
+        'entry.md',
+        [{
+          path: 'test.png',
+          source: 'local',
+          hash: expectedHash,
+          mime_type: 'image/png',
+          size: BigInt(3),
+          uploaded_at: BigInt(Date.now()),
+          deleted: false,
+        }],
+        'ws-1',
+      )
+
+      const mockData = new Uint8Array([1, 2, 3])
+      const mockApi = {
+        resolveAttachmentStoragePath: vi.fn().mockResolvedValue('resolved/test.png'),
+        readBinary: vi.fn().mockResolvedValue(mockData),
+        canonicalizeLink: vi.fn(async (path: string) => path),
+        formatLink: vi.fn(async (path: string) => path),
+      }
+
+      await transformAttachmentPaths('![alt](test.png)', 'entry.md', mockApi as any)
+      revokeBlobUrls()
+      await transformAttachmentPaths('![alt](test.png)', 'entry.md', mockApi as any)
+
+      expect(mockApi.readBinary).toHaveBeenCalledTimes(2)
+      expect(shaSpy).toHaveBeenCalledTimes(1)
+      shaSpy.mockRestore()
     })
 
     it('should fall back to link-parser normalization when direct lookup fails', async () => {
@@ -300,6 +418,34 @@ describe('attachmentService', () => {
     })
   })
 
+  describe('queueResolveAttachment', () => {
+    it('should drain queued attachment resolutions after earlier images finish', async () => {
+      let activeReads = 0
+      let maxReads = 0
+      const mockApi = {
+        resolveAttachmentStoragePath: vi.fn(async (_entryPath: string, attachmentPath: string) => attachmentPath),
+        readBinary: vi.fn(async (resolvedPath: string) => {
+          activeReads += 1
+          maxReads = Math.max(maxReads, activeReads)
+          await Promise.resolve()
+          activeReads -= 1
+          return new TextEncoder().encode(resolvedPath)
+        }),
+      }
+
+      const results = await Promise.all([
+        queueResolveAttachment(mockApi as any, 'entry.md', '/img-1.png'),
+        queueResolveAttachment(mockApi as any, 'entry.md', '/img-2.png'),
+        queueResolveAttachment(mockApi as any, 'entry.md', '/img-3.png'),
+      ])
+
+      expect(results).toEqual(['blob:mock-url', 'blob:mock-url', 'blob:mock-url'])
+      expect(mockApi.resolveAttachmentStoragePath).toHaveBeenCalledTimes(3)
+      expect(mockApi.readBinary).toHaveBeenCalledTimes(3)
+      expect(maxReads).toBe(1)
+    })
+  })
+
   describe('reverseBlobUrlsToAttachmentPaths', () => {
     it('should reverse blob URLs to original paths', () => {
       trackBlobUrl('image.png', 'blob:url-1')
@@ -333,6 +479,26 @@ describe('attachmentService', () => {
       const content = '![alt](image.png)'
       const result = reverseBlobUrlsToAttachmentPaths(content)
       expect(result).toBe(content)
+    })
+  })
+
+  describe('formatMarkdownDestination', () => {
+    it('should wrap destinations with whitespace in angle brackets', () => {
+      expect(formatMarkdownDestination('path with spaces/video.mov')).toBe(
+        '<path with spaces/video.mov>',
+      )
+    })
+
+    it('should preserve already wrapped destinations', () => {
+      expect(formatMarkdownDestination('<path with spaces/video.mov>')).toBe(
+        '<path with spaces/video.mov>',
+      )
+    })
+
+    it('should leave plain destinations unchanged', () => {
+      expect(formatMarkdownDestination('_attachments/video.mov')).toBe(
+        '_attachments/video.mov',
+      )
     })
   })
 

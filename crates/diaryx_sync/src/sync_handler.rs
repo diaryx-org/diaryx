@@ -30,6 +30,7 @@ use diaryx_core::fs::{AsyncFileSystem, FileSystemEvent};
 use diaryx_core::metadata_writer;
 use diaryx_core::path_utils::{normalize_sync_path, strip_workspace_root_prefix};
 use diaryx_core::types::FileMetadata;
+use diaryx_core::workspace::Workspace;
 
 /// Configuration for guest mode sync.
 ///
@@ -565,6 +566,15 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
         }
 
         let storage_path = self.get_storage_path(canonical_path);
+
+        if crdt_metadata.is_some_and(|metadata| metadata.deleted) {
+            log::debug!(
+                "[SyncHandler] Skipping remote body update for deleted file '{}'",
+                canonical_path
+            );
+            return Ok(());
+        }
+
         log::info!(
             "[SyncHandler] handle_remote_body_update START: canonical_path='{}', storage_path='{:?}', body_len={}, body_preview='{}'",
             canonical_path,
@@ -800,14 +810,56 @@ impl<FS: AsyncFileSystem> SyncHandler<FS> {
         self.fs.exists(&storage_path).await
     }
 
+    fn get_storage_root(&self) -> PathBuf {
+        let gc = self.guest_config.read().unwrap();
+        let base_path = match &*gc {
+            Some(config) if config.uses_opfs => {
+                PathBuf::from(format!("guest/{}", config.join_code))
+            }
+            _ => PathBuf::from("."),
+        };
+
+        let wr = self.workspace_root.read().unwrap();
+        match &*wr {
+            Some(root) if base_path == Path::new(".") => root.clone(),
+            Some(root) => root.join(base_path),
+            None => base_path,
+        }
+    }
+
+    fn is_direct_root_child(root_dir: &Path, path: &Path) -> bool {
+        if root_dir == Path::new(".") || root_dir.as_os_str().is_empty() {
+            return path
+                .parent()
+                .is_some_and(|parent| parent.as_os_str().is_empty() || parent == Path::new("."));
+        }
+
+        path.parent() == Some(root_dir)
+    }
+
     /// Check if the filesystem already has a root index file.
     ///
     /// Used to distinguish hosts (who already have files on disk) from guests
-    /// (whose in-memory FS starts empty). Returns true if `index.md` or `.`
-    /// exists at the workspace root.
+    /// (whose in-memory FS starts empty). Returns true if the workspace root
+    /// already contains an index file with `contents` and no `part_of`.
     pub async fn fs_has_root(&self) -> bool {
-        let root_path = self.get_storage_path("index.md");
-        self.fs.exists(&root_path).await
+        let root_dir = self.get_storage_root();
+        let md_files = match self.fs.list_md_files(&root_dir).await {
+            Ok(files) => files,
+            Err(_) => return false,
+        };
+        let workspace = Workspace::new(&self.fs);
+
+        for path in md_files {
+            if !Self::is_direct_root_child(&root_dir, &path) {
+                continue;
+            }
+            if workspace.is_root_index(&path).await {
+                return true;
+            }
+        }
+
+        false
     }
 }
 
@@ -887,6 +939,40 @@ mod tests {
 
         let path = handler.get_storage_path("notes/hello.md");
         assert_eq!(path, PathBuf::from("notes/hello.md"));
+    }
+
+    #[test]
+    fn test_fs_has_root_detects_semantic_root_file() {
+        let fs = SyncToAsyncFs::new(InMemoryFileSystem::new());
+        let handler = SyncHandler::new(fs);
+
+        futures_lite::future::block_on(handler.fs.write_file(
+            Path::new("journal.md"),
+            "---\ntitle: Root\ncontents: []\n---\n",
+        ))
+        .expect("semantic root file should be written");
+
+        assert!(futures_lite::future::block_on(handler.fs_has_root()));
+    }
+
+    #[test]
+    fn test_fs_has_root_ignores_non_root_indexes() {
+        let fs = SyncToAsyncFs::new(InMemoryFileSystem::new());
+        let handler = SyncHandler::new(fs);
+
+        futures_lite::future::block_on(handler.fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Child Index\npart_of: parent.md\ncontents: []\n---\n",
+        ))
+        .expect("non-root index should be written");
+
+        futures_lite::future::block_on(handler.fs.write_file(
+            Path::new("notes/index.md"),
+            "---\ntitle: Nested Root\ncontents: []\n---\n",
+        ))
+        .expect("nested index should be written");
+
+        assert!(!futures_lite::future::block_on(handler.fs_has_root()));
     }
 
     #[test]
@@ -1060,6 +1146,31 @@ mod tests {
                     if path == &PathBuf::from("new-entry.md")
             )),
             "old path should not emit FileCreated after rename detection"
+        );
+    }
+
+    #[test]
+    fn test_remote_body_update_does_not_recreate_deleted_file() {
+        let fs = SyncToAsyncFs::new(InMemoryFileSystem::new());
+        let handler = SyncHandler::new(fs);
+
+        let deleted_metadata = FileMetadata {
+            filename: "deleted.md".to_string(),
+            title: Some("Deleted".to_string()),
+            deleted: true,
+            ..Default::default()
+        };
+
+        futures_lite::future::block_on(handler.handle_remote_body_update(
+            "deleted.md",
+            "resurrected body",
+            Some(&deleted_metadata),
+        ))
+        .expect("deleted body update should be ignored");
+
+        assert!(
+            !futures_lite::future::block_on(handler.file_exists("deleted.md")),
+            "late body updates must not recreate tombstoned files"
         );
     }
 }

@@ -62,6 +62,11 @@
     enqueueAttachmentDownload,
     isAttachmentSyncEnabled,
   } from "$lib/sync/attachmentSyncService";
+  import {
+    getAttachmentAvailability,
+    getAttachmentMediaKind,
+    isPreviewableAttachmentKind,
+  } from "@/models/services/attachmentService";
   import { parseLinkDisplay } from "$lib/utils/linkParser";
 
   interface CrdtHistoryEntry {
@@ -377,23 +382,16 @@
     return attachment;
   }
 
-  const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico'];
-
-  function isImageAttachment(filename: string): boolean {
-    const ext = filename.split('.').pop()?.toLowerCase() || '';
-    return IMAGE_EXTS.includes(ext);
-  }
-
   // Get file type icon based on extension
   function getFileIcon(filename: string): Component {
+    const mediaKind = getAttachmentMediaKind(filename);
     const ext = filename.split('.').pop()?.toLowerCase() || '';
-    const imageExts = IMAGE_EXTS;
     const docExts = ['pdf', 'doc', 'docx', 'txt', 'md', 'rtf'];
     const spreadsheetExts = ['xls', 'xlsx', 'csv'];
     const archiveExts = ['zip', 'tar', 'gz', '7z', 'rar'];
     const codeExts = ['json', 'xml', 'html', 'css', 'js', 'ts'];
 
-    if (imageExts.includes(ext)) return FileImage;
+    if (mediaKind === 'image') return FileImage;
     if (docExts.includes(ext)) return FileText;
     if (spreadsheetExts.includes(ext)) return FileSpreadsheet;
     if (archiveExts.includes(ext)) return FileArchive;
@@ -413,6 +411,7 @@
     const entryPath = entry.path;
     const currentApi = api;
     const statuses = new Map<string, AttachmentStatus>();
+    let cancelled = false;
 
     // Start with 'unknown' then probe each attachment
     for (const attachment of attachments) {
@@ -423,18 +422,29 @@
 
     // Probe each attachment asynchronously
     void (async () => {
+      let changed = false;
       for (const attachment of attachments) {
+        if (cancelled) return;
         const attachPath = getAttachmentPath(attachment);
-        try {
-          await currentApi.getAttachmentData(entryPath, attachPath);
-          statuses.set(attachPath, 'local');
-        } catch {
-          const meta = getAttachmentMetadata(entryPath, attachPath);
-          statuses.set(attachPath, meta ? 'remote' : 'unknown');
+        const availability = await getAttachmentAvailability(
+          currentApi,
+          entryPath,
+          attachPath,
+        );
+        if (cancelled) return;
+        if (statuses.get(attachPath) !== availability) {
+          statuses.set(attachPath, availability);
+          changed = true;
         }
       }
-      attachmentStatuses = new Map(statuses);
+      if (!cancelled && changed) {
+        attachmentStatuses = new Map(statuses);
+      }
     })();
+
+    return () => {
+      cancelled = true;
+    };
   });
 
   function formatFileSize(bytes: number): string {
@@ -1191,8 +1201,9 @@
             {#each getAttachments() as attachment}
               {@const displayName = getAttachmentDisplayName(attachment)}
               {@const attachPath = getAttachmentPath(attachment)}
-              {@const Icon = getFileIcon(displayName)}
-              {@const isImage = isImageAttachment(displayName)}
+              {@const Icon = getFileIcon(attachPath)}
+              {@const previewKind = getAttachmentMediaKind(attachPath)}
+              {@const canPreview = isPreviewableAttachmentKind(previewKind)}
               {@const status = attachmentStatuses.get(attachPath) ?? 'unknown'}
               {@const meta = entry ? getAttachmentMetadata(entry.path, attachPath) : null}
               <div
@@ -1210,15 +1221,15 @@
               >
                 <button
                   type="button"
-                  class="flex items-center gap-2 min-w-0 {isImage ? 'hover:text-primary cursor-pointer' : 'cursor-default'}"
-                  onclick={() => isImage && onPreviewAttachment?.(attachment)}
-                  disabled={!isImage}
+                  class="flex items-center gap-2 min-w-0 {canPreview ? 'hover:text-primary cursor-pointer' : 'cursor-default'}"
+                  onclick={() => canPreview && onPreviewAttachment?.(attachment)}
+                  disabled={!canPreview}
                 >
                   <Icon class="size-3.5 shrink-0 text-muted-foreground" />
                   <div class="flex flex-col min-w-0">
                     <span
-                      class="text-xs text-foreground truncate {isImage ? 'hover:underline' : ''}"
-                      title={isImage ? `Preview ${displayName}` : attachPath}
+                      class="text-xs text-foreground truncate {canPreview ? 'hover:underline' : ''}"
+                      title={canPreview ? `Preview ${displayName}` : attachPath}
                     >
                       {displayName}
                     </span>
@@ -1443,11 +1454,11 @@
 
   <!-- Tab Toggle (hidden when only one tab) -->
   {#if historyTabId || nonHistoryPluginTabs.length > 0}
-  <div class="px-3 pt-1 pb-1 shrink-0">
-    <div class="flex items-center gap-1 bg-muted rounded-md p-0.5">
+  <div class="px-3 pt-1 pb-[calc(env(safe-area-inset-bottom)+0.25rem)] shrink-0">
+    <div class="flex items-center gap-1 bg-muted rounded-md p-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       <button
         type="button"
-        class="flex-1 px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === 'properties' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+        class="flex-1 shrink-0 whitespace-nowrap px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === 'properties' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
         onclick={() => activeTab = "properties"}
       >
         Props
@@ -1455,7 +1466,7 @@
       {#if historyTabId}
         <button
           type="button"
-          class="flex-1 px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === historyTabId ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+          class="flex-1 shrink-0 whitespace-nowrap px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === historyTabId ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
           onclick={() => activeTab = historyTabId}
         >
           {historyTabLabel}
@@ -1464,7 +1475,7 @@
       {#each nonHistoryPluginTabs as tab}
         <button
           type="button"
-          class="flex-1 px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === tab.contribution.id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+          class="flex-1 shrink-0 whitespace-nowrap px-2 py-1 text-xs font-medium rounded transition-colors {activeTab === tab.contribution.id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
           onclick={() => activeTab = tab.contribution.id}
         >
           {tab.contribution.label}

@@ -99,6 +99,11 @@ pub struct WorkspaceConfig {
         alias = "public_audience"
     )]
     pub default_audience: Option<String>,
+
+    /// Folder used by the Daily plugin for date-based entries.
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daily_entry_folder: Option<String>,
 }
 
 /// Workspace operations (async-first).
@@ -790,6 +795,11 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
+        let daily_entry_folder = extra
+            .get("daily_entry_folder")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
         Ok(WorkspaceConfig {
             link_format,
             default_template,
@@ -798,6 +808,7 @@ impl<FS: AsyncFileSystem> Workspace<FS> {
             auto_rename_to_title,
             filename_style,
             default_audience,
+            daily_entry_folder,
         })
     }
 
@@ -3191,6 +3202,22 @@ mod tests {
         assert_eq!(index.frontmatter.title, Some("Test".to_string()));
         assert!(index.frontmatter.is_index());
         assert!(index.body.contains("Body content"));
+    }
+
+    #[test]
+    fn test_get_workspace_config_reads_daily_entry_folder() {
+        let fs = InMemoryFileSystem::new();
+        fs.write_file(
+            Path::new("README.md"),
+            "---\ntitle: Root\ncontents: []\ndaily_entry_folder: Journal/Daily\n---\n",
+        )
+        .unwrap();
+
+        let async_fs = SyncToAsyncFs::new(fs);
+        let ws = Workspace::new(async_fs);
+
+        let config = block_on_test(ws.get_workspace_config(Path::new("README.md"))).unwrap();
+        assert_eq!(config.daily_entry_folder.as_deref(), Some("Journal/Daily"));
     }
 
     #[test]

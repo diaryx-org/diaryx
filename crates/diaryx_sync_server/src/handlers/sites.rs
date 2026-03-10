@@ -7,10 +7,12 @@ use crate::publish::{
     try_acquire_publish_lock, write_site_meta,
 };
 use crate::rate_limit::RateLimiter;
-use crate::sync_v2::SyncV2State;
+use crate::sync_v2::{SnapshotError, SnapshotImportMode, SyncV2State};
+use axum::http::{HeaderValue, header};
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    body::Bytes,
+    extract::{DefaultBodyLimit, Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{delete, get, post},
@@ -48,6 +50,13 @@ struct CreateSiteRequest {
 #[derive(Debug, Deserialize, Default)]
 struct PublishRequest {
     audience: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct PublishWithFallbackQuery {
+    audience: Option<String>,
+    mode: Option<String>,
+    include_attachments: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -102,6 +111,15 @@ struct PublishAudienceResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct StorageLimitErrorResponse {
+    error: String,
+    message: String,
+    used_bytes: u64,
+    limit_bytes: u64,
+    requested_bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
 struct AccessTokenResponse {
     id: String,
     audience: String,
@@ -130,6 +148,10 @@ pub fn site_routes(state: SitesState) -> Router {
         .route(
             "/workspaces/{workspace_id}/site/publish",
             post(trigger_publish),
+        )
+        .route(
+            "/workspaces/{workspace_id}/site/publish-with-fallback",
+            post(trigger_publish_with_fallback).layer(DefaultBodyLimit::disable()),
         )
         .route(
             "/workspaces/{workspace_id}/site/domain",
@@ -374,6 +396,93 @@ async fn trigger_publish(
         10,
         std::time::Duration::from_secs(3600),
     ) {
+        return deprecated_publish_response(
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                [("Retry-After", retry_after.to_string())],
+                "Rate limit exceeded",
+            )
+                .into_response(),
+            &workspace_id,
+        );
+    }
+
+    if let Err(resp) = ensure_workspace_owner(&state, &auth.user.id, &workspace_id) {
+        return deprecated_publish_response(resp, &workspace_id);
+    }
+
+    let site = match state.repo.get_site_for_workspace(&workspace_id) {
+        Ok(Some(site)) => site,
+        Ok(None) => {
+            return deprecated_publish_response(
+                error_response(StatusCode::NOT_FOUND, "not_found", "Site not found"),
+                &workspace_id,
+            );
+        }
+        Err(_) => {
+            return deprecated_publish_response(
+                error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "db_error",
+                    "Failed to query site",
+                ),
+                &workspace_id,
+            );
+        }
+    };
+
+    if !try_acquire_publish_lock(&state.publish_lock, &workspace_id).await {
+        return deprecated_publish_response(
+            error_response(
+                StatusCode::CONFLICT,
+                "publish_in_progress",
+                "Site publish is currently running",
+            ),
+            &workspace_id,
+        );
+    }
+
+    let requested_audience = body.and_then(|b| b.0.audience);
+
+    let result = publish_workspace_to_r2(
+        state.repo.as_ref(),
+        state.sync_v2.storage_cache.as_ref(),
+        state.sites_store.as_ref(),
+        state.attachments_store.as_ref(),
+        &workspace_id,
+        &site,
+        requested_audience.as_deref(),
+    )
+    .await;
+
+    release_publish_lock(&state.publish_lock, &workspace_id).await;
+
+    match result {
+        Ok(result) => deprecated_publish_response(publish_result_response(result), &workspace_id),
+        Err(err) => deprecated_publish_response(
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "publish_failed",
+                &format!("Publish failed: {}", err),
+            ),
+            &workspace_id,
+        ),
+    }
+}
+
+async fn trigger_publish_with_fallback(
+    State(state): State<SitesState>,
+    RequireAuth(auth): RequireAuth,
+    Path(workspace_id): Path<String>,
+    Query(query): Query<PublishWithFallbackQuery>,
+    snapshot: Bytes,
+) -> Response {
+    if let Err(retry_after) = state.rate_limiter.check(
+        &auth.user.id,
+        "publish",
+        10,
+        std::time::Duration::from_secs(3600),
+    ) {
         return (
             StatusCode::TOO_MANY_REQUESTS,
             [("Retry-After", retry_after.to_string())],
@@ -408,40 +517,28 @@ async fn trigger_publish(
         );
     }
 
-    let requested_audience = body.and_then(|b| b.0.audience);
+    let requested_audience = query
+        .audience
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
 
-    let result = publish_workspace_to_r2(
-        state.repo.as_ref(),
-        state.sync_v2.storage_cache.as_ref(),
-        state.sites_store.as_ref(),
-        state.attachments_store.as_ref(),
+    let result = publish_workspace_with_optional_snapshot(
+        &state,
+        &auth.user.id,
         &workspace_id,
         &site,
-        requested_audience.as_deref(),
+        requested_audience,
+        &query,
+        snapshot,
     )
     .await;
 
     release_publish_lock(&state.publish_lock, &workspace_id).await;
 
     match result {
-        Ok(result) => Json(PublishResponse {
-            slug: result.slug,
-            audiences: result
-                .audiences
-                .into_iter()
-                .map(|aud| PublishAudienceResponse {
-                    name: aud.name,
-                    file_count: aud.file_count,
-                })
-                .collect(),
-            published_at: result.published_at,
-        })
-        .into_response(),
-        Err(err) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "publish_failed",
-            &format!("Publish failed: {}", err),
-        ),
+        Ok(result) => publish_result_response(result),
+        Err(response) => response,
     }
 }
 
@@ -910,6 +1007,204 @@ fn error_response(status: StatusCode, error: &str, message: &str) -> Response {
         }),
     )
         .into_response()
+}
+
+fn publish_result_response(result: crate::publish::PublishWorkspaceResult) -> Response {
+    Json(PublishResponse {
+        slug: result.slug,
+        audiences: result
+            .audiences
+            .into_iter()
+            .map(|aud| PublishAudienceResponse {
+                name: aud.name,
+                file_count: aud.file_count,
+            })
+            .collect(),
+        published_at: result.published_at,
+    })
+    .into_response()
+}
+
+fn deprecated_publish_response(response: Response, workspace_id: &str) -> Response {
+    let successor = format!(
+        "</api/workspaces/{}/site/publish-with-fallback>; rel=\"successor-version\"",
+        workspace_id
+    );
+    let mut response = response;
+    response.headers_mut().insert(
+        header::WARNING,
+        HeaderValue::from_static(
+            "299 - \"Deprecated API: use /api/workspaces/{workspace_id}/site/publish-with-fallback\"",
+        ),
+    );
+    response.headers_mut().insert(
+        header::HeaderName::from_static("deprecation"),
+        HeaderValue::from_static("true"),
+    );
+    if let Ok(value) = HeaderValue::from_str(&successor) {
+        response.headers_mut().insert(header::LINK, value);
+    }
+    response
+}
+
+fn storage_limit_exceeded_response(
+    used_bytes: u64,
+    limit_bytes: u64,
+    requested_bytes: u64,
+) -> Response {
+    (
+        StatusCode::PAYLOAD_TOO_LARGE,
+        Json(StorageLimitErrorResponse {
+            error: "storage_limit_exceeded".to_string(),
+            message: "Attachment storage limit exceeded".to_string(),
+            used_bytes,
+            limit_bytes,
+            requested_bytes,
+        }),
+    )
+        .into_response()
+}
+
+fn is_stale_or_missing_server_data_error(message: &str) -> bool {
+    let normalized = message.to_lowercase();
+    normalized.contains("workspace has no materialized markdown files")
+        || normalized.contains("failed to open workspace storage")
+        || normalized.contains("is not in the discovered audience set")
+}
+
+async fn publish_workspace_with_optional_snapshot(
+    state: &SitesState,
+    user_id: &str,
+    workspace_id: &str,
+    site: &PublishedSiteInfo,
+    requested_audience: Option<&str>,
+    query: &PublishWithFallbackQuery,
+    snapshot: Bytes,
+) -> Result<crate::publish::PublishWorkspaceResult, Response> {
+    match publish_workspace_to_r2(
+        state.repo.as_ref(),
+        state.sync_v2.storage_cache.as_ref(),
+        state.sites_store.as_ref(),
+        state.attachments_store.as_ref(),
+        workspace_id,
+        site,
+        requested_audience,
+    )
+    .await
+    {
+        Ok(result) => return Ok(result),
+        Err(err) if !is_stale_or_missing_server_data_error(&err) => {
+            return Err(error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "publish_failed",
+                &format!("Publish failed: {}", err),
+            ));
+        }
+        Err(_) if snapshot.is_empty() => {
+            return Err(error_response(
+                StatusCode::PRECONDITION_FAILED,
+                "snapshot_required",
+                "The server needs a workspace snapshot to publish this workspace.",
+            ));
+        }
+        Err(_) => {}
+    }
+
+    let temp_file = match tempfile::Builder::new()
+        .prefix("diaryx-publish-")
+        .suffix(".zip")
+        .tempfile()
+    {
+        Ok(file) => file,
+        Err(err) => {
+            return Err(error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "snapshot_import_failed",
+                &format!("Failed to create temporary snapshot file: {}", err),
+            ));
+        }
+    };
+
+    if let Err(err) = tokio::fs::write(temp_file.path(), &snapshot).await {
+        return Err(error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "snapshot_import_failed",
+            &format!("Failed to persist snapshot upload: {}", err),
+        ));
+    }
+
+    let mode = match query.mode.as_deref() {
+        Some("merge") => SnapshotImportMode::Merge,
+        _ => SnapshotImportMode::Replace,
+    };
+    let include_attachments = query.include_attachments.unwrap_or(true);
+
+    match state
+        .sync_v2
+        .store
+        .import_snapshot_zip_from_path(
+            workspace_id,
+            user_id,
+            temp_file.path(),
+            mode,
+            include_attachments,
+            state.repo.as_ref(),
+            state.attachments_store.as_ref(),
+        )
+        .await
+    {
+        Ok(_) => {}
+        Err(SnapshotError::QuotaExceeded {
+            used_bytes,
+            limit_bytes,
+            requested_bytes,
+        }) => {
+            return Err(storage_limit_exceeded_response(
+                used_bytes,
+                limit_bytes,
+                requested_bytes,
+            ));
+        }
+        Err(SnapshotError::Parse(err)) => {
+            return Err(error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_snapshot",
+                &format!("Snapshot could not be imported: {}", err),
+            ));
+        }
+        Err(SnapshotError::ZipFormat(err)) => {
+            return Err(error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_snapshot",
+                &format!("Snapshot is not a valid zip archive: {}", err),
+            ));
+        }
+        Err(err) => {
+            return Err(error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "snapshot_import_failed",
+                &format!("Failed to import workspace snapshot: {}", err),
+            ));
+        }
+    }
+
+    publish_workspace_to_r2(
+        state.repo.as_ref(),
+        state.sync_v2.storage_cache.as_ref(),
+        state.sites_store.as_ref(),
+        state.attachments_store.as_ref(),
+        workspace_id,
+        site,
+        requested_audience,
+    )
+    .await
+    .map_err(|err| {
+        error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "publish_failed",
+            &format!("Publish failed after snapshot import: {}", err),
+        )
+    })
 }
 
 fn site_to_response(

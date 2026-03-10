@@ -8,7 +8,7 @@ mod commands;
 
 use commands::{AppState, GuestModeState};
 #[cfg(feature = "extism-plugins")]
-use commands::{ExtismSyncState, PluginAdapters};
+use commands::{PluginAdapters, RuntimeContextState};
 
 /// Configure the iOS WKWebView to render edge-to-edge, extending content into
 /// safe areas. Without this, the webview stops at the bottom safe area boundary,
@@ -79,7 +79,7 @@ pub fn run() {
     #[cfg(feature = "extism-plugins")]
     {
         builder = builder
-            .manage(ExtismSyncState::new())
+            .manage(RuntimeContextState::new())
             .manage(PluginAdapters::new());
     }
 
@@ -119,13 +119,11 @@ pub fn run() {
             commands::start_guest_mode,
             commands::end_guest_mode,
             commands::is_guest_mode,
+            commands::set_runtime_context,
             // Workspace Reinitialization
             commands::reinitialize_workspace,
             // HTTP Proxy (iOS CORS bypass)
             commands::proxy_fetch,
-            // Extism Sync Plugin (load/unload on demand)
-            commands::load_sync_plugin,
-            commands::unload_sync_plugin,
             // Extism User Plugin Management
             commands::install_user_plugin,
             commands::uninstall_user_plugin,

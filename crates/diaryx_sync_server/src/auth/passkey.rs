@@ -11,7 +11,7 @@ use webauthn_rs_proto::{
     RequestChallengeResponse,
 };
 
-use super::magic_link::{MagicLinkService, VerifyResult};
+use super::magic_link::{MagicLinkError, MagicLinkService, VerifyResult};
 
 /// Passkey authentication service.
 pub struct PasskeyService {
@@ -29,6 +29,7 @@ pub enum PasskeyError {
     InvalidCredential(String),
     DatabaseError(String),
     WebauthnError(String),
+    DeviceLimitReached { limit: u32 },
     SessionError(String),
 }
 
@@ -41,6 +42,9 @@ impl std::fmt::Display for PasskeyError {
             PasskeyError::InvalidCredential(e) => write!(f, "Invalid credential: {}", e),
             PasskeyError::DatabaseError(e) => write!(f, "Database error: {}", e),
             PasskeyError::WebauthnError(e) => write!(f, "WebAuthn error: {}", e),
+            PasskeyError::DeviceLimitReached { limit } => {
+                write!(f, "Device limit reached for this account (max {})", limit)
+            }
             PasskeyError::SessionError(e) => write!(f, "Session error: {}", e),
         }
     }
@@ -55,6 +59,13 @@ pub struct PasskeyInfo {
     pub name: String,
     pub created_at: i64,
     pub last_used_at: Option<i64>,
+}
+
+fn map_session_error(err: MagicLinkError) -> PasskeyError {
+    match err {
+        MagicLinkError::DeviceLimitReached { limit } => PasskeyError::DeviceLimitReached { limit },
+        other => PasskeyError::SessionError(other.to_string()),
+    }
 }
 
 impl PasskeyService {
@@ -273,7 +284,7 @@ impl PasskeyService {
         // Create session via the shared helper
         self.magic_link_service
             .create_session_for_email(&challenge.email, device_name, user_agent)
-            .map_err(|e| PasskeyError::SessionError(e.to_string()))
+            .map_err(map_session_error)
     }
 
     /// List passkeys for a user (for UI display).
@@ -412,7 +423,7 @@ impl PasskeyService {
         // Create session via the shared helper
         self.magic_link_service
             .create_session_for_email(&user.email, device_name, user_agent)
-            .map_err(|e| PasskeyError::SessionError(e.to_string()))
+            .map_err(map_session_error)
     }
 
     /// Unified finish that dispatches based on the challenge type stored in DB.

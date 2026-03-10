@@ -3,7 +3,8 @@
 //! Provides [`LocalSyncHook`] (a no-auth `SyncHookDelegate`) and [`start_local_server`]
 //! which spins up a minimal siphonophore + axum server serving:
 //!
-//! - `GET /api/sessions/{code}` — returns session info for guest join
+//! - `GET /api/share/sessions/{code}` — returns session info for guest join
+//! - `GET /api/sessions/{code}` — backward-compatible alias for guest join
 //! - `GET /sync2` — siphonophore WebSocket endpoint (upgrade to WS)
 //!
 //! The CLI's `diaryx edit` command uses this to enable web-based editing.
@@ -179,7 +180,7 @@ struct LocalServerState {
     session_code: String,
 }
 
-/// GET /api/sessions/{code} — returns session info for guest join.
+/// GET /api/share/sessions/{code} — returns session info for guest join.
 async fn get_session(
     State(state): State<LocalServerState>,
     Path(code): Path<String>,
@@ -236,6 +237,7 @@ pub fn create_local_router(
     );
 
     Router::new()
+        .route("/api/share/sessions/{code}", get(get_session))
         .route("/api/sessions/{code}", get(get_session))
         .with_state(rest_state)
         .merge(sync_server.router)

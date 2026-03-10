@@ -11,18 +11,31 @@ import createPlugin, {
   type CallContext,
 } from "@extism/extism";
 import { handleHostRunWasiModule, type WasiRunRequest } from "./wasiRunner";
+import {
+  deletePluginSecret,
+  getPluginSecret,
+  setPluginSecret,
+} from "./pluginSecretStore";
 import type {
   PluginManifest,
   PluginCapability,
   UiContribution,
 } from "$lib/backend/generated";
 import { getBackendSync } from "$lib/backend";
+import type { FileSystemEvent } from "$lib/backend/interface";
 import {
   permissionStore,
   type PermissionType,
   type PluginPermissions,
   type PluginConfig,
 } from "@/models/stores/permissionStore.svelte";
+import {
+  getPluginStoragePath,
+  readWorkspaceBinary,
+  writeWorkspaceBinary,
+} from "$lib/workspace/workspaceAssetStorage";
+import { collectFilesystemTreePaths } from "./filesystemTreePaths";
+import { normalizeExtismHostPath } from "./extismHostPaths";
 
 // ============================================================================
 // Protocol types (mirrors diaryx_extism::protocol)
@@ -56,6 +69,11 @@ export interface CommandResponse {
   error?: string;
 }
 
+export interface BrowserPluginCallOptions {
+  /** Provider of temporary user-selected files for this command call only. */
+  getFile?: (key: string) => Promise<Uint8Array | null>;
+}
+
 export interface BrowserPluginRuntimeSupport {
   supported: boolean;
   reason?: string;
@@ -79,7 +97,11 @@ export interface BrowserExtismPlugin {
   /** Send a lifecycle event to the guest. */
   callEvent(event: GuestEvent): Promise<void>;
   /** Dispatch a command to the guest. */
-  callCommand(cmd: string, params: unknown): Promise<CommandResponse>;
+  callCommand(
+    cmd: string,
+    params: unknown,
+    options?: BrowserPluginCallOptions,
+  ): Promise<CommandResponse>;
   /**
    * Execute a typed Command (same format as backend.execute).
    * Calls the guest's `execute_typed_command` export.
@@ -130,6 +152,460 @@ function resolveHttpTimeoutMs(timeoutMs: unknown): number | null {
   if (normalized < MIN_HTTP_TIMEOUT_MS) return MIN_HTTP_TIMEOUT_MS;
   if (normalized > MAX_HTTP_TIMEOUT_MS) return MAX_HTTP_TIMEOUT_MS;
   return normalized;
+}
+
+function formatLocalRfc3339(date: Date = new Date()): string {
+  const pad = (value: number) => value.toString().padStart(2, "0");
+  const year = date.getFullYear();
+  const month = pad(date.getMonth() + 1);
+  const day = pad(date.getDate());
+  const hour = pad(date.getHours());
+  const minute = pad(date.getMinutes());
+  const second = pad(date.getSeconds());
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? "+" : "-";
+  const absoluteOffset = Math.abs(offsetMinutes);
+  const offsetHours = pad(Math.floor(absoluteOffset / 60));
+  const offsetRemainder = pad(absoluteOffset % 60);
+  return `${year}-${month}-${day}T${hour}:${minute}:${second}${sign}${offsetHours}:${offsetRemainder}`;
+}
+
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+async function getRuntimeContextSnapshot(): Promise<Record<string, unknown>> {
+  const [
+    authModule,
+    workspaceRegistryModule,
+  ] = await Promise.all([
+    import("$lib/auth"),
+    import("$lib/storage/localWorkspaceRegistry.svelte"),
+  ]);
+
+  const authState = authModule.getAuthState();
+  const currentWorkspaceId = workspaceRegistryModule.getCurrentWorkspaceId();
+  const currentWorkspace = currentWorkspaceId
+    ? workspaceRegistryModule.getLocalWorkspace(currentWorkspaceId)
+    : null;
+  const providerLinks = currentWorkspaceId
+    ? workspaceRegistryModule.getWorkspaceProviderLinks(currentWorkspaceId)
+    : [];
+
+  let guestMode = false;
+  try {
+    const backend = getBackendSync() as { isGuestMode?: () => Promise<boolean> };
+    guestMode = (await backend.isGuestMode?.()) ?? false;
+  } catch {
+    guestMode = false;
+  }
+
+  return {
+    server_url: authModule.getServerUrl() ?? authState.serverUrl ?? null,
+    auth_token: authModule.getToken() ?? null,
+    tier: authState.tier ?? null,
+    guest_mode: guestMode,
+    current_workspace: currentWorkspace
+      ? {
+          local_id: currentWorkspace.id,
+          name: currentWorkspace.name,
+          path: currentWorkspace.path ?? null,
+          plugin_metadata: currentWorkspace.pluginMetadata ?? {},
+          provider_links: providerLinks.map((link: {
+            pluginId: string;
+            remoteWorkspaceId: string;
+            syncEnabled: boolean;
+          }) => ({
+            plugin_id: link.pluginId,
+            remote_workspace_id: link.remoteWorkspaceId,
+            sync_enabled: link.syncEnabled,
+          })),
+        }
+      : null,
+  };
+}
+
+function normalizeWorkspaceRoot(path: string | null | undefined): string | null {
+  const trimmed = path?.trim();
+  if (!trimmed) return null;
+
+  if (trimmed.endsWith("/index.md") || trimmed.endsWith("/README.md")) {
+    return trimmed.slice(0, trimmed.lastIndexOf("/")) || ".";
+  }
+
+  return trimmed;
+}
+
+function readPluginWorkspaceId(
+  runtime: Record<string, unknown>,
+  pluginId: string,
+): string | null {
+  const currentWorkspace =
+    runtime.current_workspace && typeof runtime.current_workspace === "object"
+      ? runtime.current_workspace as Record<string, unknown>
+      : null;
+  const providerLinks = Array.isArray(currentWorkspace?.provider_links)
+    ? currentWorkspace.provider_links as Array<Record<string, unknown>>
+    : [];
+
+  for (const link of providerLinks) {
+    if (
+      link.plugin_id === pluginId &&
+      typeof link.remote_workspace_id === "string" &&
+      link.remote_workspace_id.trim().length > 0
+    ) {
+      return link.remote_workspace_id;
+    }
+  }
+
+  const pluginMetadata =
+    currentWorkspace?.plugin_metadata
+    && typeof currentWorkspace.plugin_metadata === "object"
+      ? currentWorkspace.plugin_metadata as Record<string, unknown>
+      : null;
+  const metadata =
+    pluginMetadata?.[pluginId]
+    && typeof pluginMetadata[pluginId] === "object"
+      ? pluginMetadata[pluginId] as Record<string, unknown>
+        : null;
+
+  const remoteWorkspaceId = metadata?.remoteWorkspaceId;
+  if (typeof remoteWorkspaceId === "string" && remoteWorkspaceId.trim().length > 0) {
+    return remoteWorkspaceId;
+  }
+
+  return typeof metadata?.serverId === "string" && metadata.serverId.trim().length > 0
+    ? metadata.serverId
+    : null;
+}
+
+async function buildBrowserPluginInitPayload(pluginId: string): Promise<Record<string, unknown>> {
+  const runtime = await getRuntimeContextSnapshot();
+  const currentWorkspace =
+    runtime.current_workspace && typeof runtime.current_workspace === "object"
+      ? runtime.current_workspace as Record<string, unknown>
+      : null;
+
+  let workspaceRoot = normalizeWorkspaceRoot(
+    typeof currentWorkspace?.path === "string" ? currentWorkspace.path : null,
+  );
+
+  if (!workspaceRoot) {
+    try {
+      const backend = getBackendSync() as { getWorkspacePath?: () => string };
+      workspaceRoot = normalizeWorkspaceRoot(backend.getWorkspacePath?.() ?? null);
+    } catch {
+      workspaceRoot = null;
+    }
+  }
+
+  return {
+    workspace_root: workspaceRoot,
+    workspace_id: readPluginWorkspaceId(runtime, pluginId),
+    write_to_disk: true,
+    server_url: typeof runtime.server_url === "string" ? runtime.server_url : null,
+    auth_token: typeof runtime.auth_token === "string" ? runtime.auth_token : null,
+  };
+}
+
+interface LoadBrowserPluginOptions {
+  initializeLifecycle?: boolean;
+}
+
+interface SyncTransportConnectRequest {
+  type: "connect";
+  server_url: string;
+  workspace_id: string;
+  auth_token?: string;
+  session_code?: string;
+  write_to_disk?: boolean;
+}
+
+interface SyncTransportSendBinaryRequest {
+  type: "send_binary";
+  data: string;
+}
+
+interface SyncTransportSendTextRequest {
+  type: "send_text";
+  text: string;
+}
+
+interface SyncTransportDisconnectRequest {
+  type: "disconnect";
+}
+
+type SyncTransportRequest =
+  | SyncTransportConnectRequest
+  | SyncTransportSendBinaryRequest
+  | SyncTransportSendTextRequest
+  | SyncTransportDisconnectRequest;
+
+interface SyncTransportCallbacks {
+  invokeBinaryExport(exportName: string, input: Uint8Array): Promise<void>;
+}
+
+function emitPluginHostEvent(event: unknown): void {
+  const backend = getBackendSync();
+  if (!backend) return;
+  if (
+    event &&
+    typeof event === "object" &&
+    typeof (event as { type?: unknown }).type === "string"
+  ) {
+    const type = (event as { type: string }).type;
+    if (/^[A-Z]/.test(type)) {
+      backend.emitFileSystemEvent?.(event as FileSystemEvent);
+      return;
+    }
+  }
+}
+
+class BrowserSyncTransportController {
+  private callbacks: SyncTransportCallbacks | null = null;
+  private ws: WebSocket | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempt = 0;
+  private readonly maxReconnectDelay = 30_000;
+  private shouldReconnect = false;
+  private connectionKey: string | null = null;
+  private connectRequest: SyncTransportConnectRequest | null = null;
+  private connected = false;
+
+  bindCallbacks(callbacks: SyncTransportCallbacks): void {
+    this.callbacks = callbacks;
+  }
+
+  async handleRequest(rawRequest: string): Promise<string> {
+    const request = JSON.parse(rawRequest) as SyncTransportRequest;
+    switch (request.type) {
+      case "connect":
+        await this.connect(request);
+        return JSON.stringify({ ok: true });
+      case "send_binary":
+        this.sendBinary(base64ToBytes(request.data));
+        return JSON.stringify({ ok: true });
+      case "send_text":
+        this.sendText(request.text);
+        return JSON.stringify({ ok: true });
+      case "disconnect":
+        await this.disconnect();
+        return JSON.stringify({ ok: true });
+      default:
+        return JSON.stringify({ ok: false, error: "unknown_request" });
+    }
+  }
+
+  async dispose(): Promise<void> {
+    await this.disconnect();
+    this.callbacks = null;
+  }
+
+  private normalizeServerBase(serverUrl: string): string {
+    let base = serverUrl.trim().replace(/\/+$/, "");
+    while (base.endsWith("/sync2") || base.endsWith("/sync")) {
+      base = base.replace(/\/(?:sync2|sync)$/, "");
+    }
+    return base;
+  }
+
+  private buildConnectionKey(request: SyncTransportConnectRequest): string {
+    return [
+      request.server_url.trim(),
+      request.workspace_id.trim(),
+      request.auth_token ?? "",
+      request.session_code ?? "",
+      request.write_to_disk === false ? "0" : "1",
+    ].join("|");
+  }
+
+  private buildWebSocketUrl(request: SyncTransportConnectRequest): string {
+    const base = this.normalizeServerBase(request.server_url);
+    const url = new URL(`${base}/sync2`);
+    url.searchParams.set("workspace_id", request.workspace_id);
+    if (request.auth_token) {
+      url.searchParams.set("token", request.auth_token);
+    }
+    if (request.session_code) {
+      url.searchParams.set("session", request.session_code);
+    }
+    return url.toString();
+  }
+
+  private async invokeBinaryExport(
+    exportName: string,
+    input: Uint8Array,
+  ): Promise<void> {
+    if (!this.callbacks) return;
+    await this.callbacks.invokeBinaryExport(exportName, input);
+  }
+
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+
+  private async connect(request: SyncTransportConnectRequest): Promise<void> {
+    const nextKey = this.buildConnectionKey(request);
+    if (
+      this.connectionKey === nextKey &&
+      this.ws &&
+      (this.ws.readyState === WebSocket.OPEN ||
+        this.ws.readyState === WebSocket.CONNECTING)
+    ) {
+      return;
+    }
+
+    await this.disconnect(false);
+
+    this.shouldReconnect = true;
+    this.connectRequest = request;
+    this.connectionKey = nextKey;
+    this.reconnectAttempt = 0;
+    this.openWebSocket(request);
+  }
+
+  private openWebSocket(request: SyncTransportConnectRequest): void {
+    const ws = new WebSocket(this.buildWebSocketUrl(request));
+    ws.binaryType = "arraybuffer";
+    this.ws = ws;
+
+    ws.onopen = () => {
+      this.connected = true;
+      this.reconnectAttempt = 0;
+      void this.invokeBinaryExport(
+        "on_connected",
+        new TextEncoder().encode(
+          JSON.stringify({
+            workspace_id: request.workspace_id,
+            write_to_disk: request.write_to_disk ?? true,
+          }),
+        ),
+      );
+    };
+
+    ws.onmessage = (event: MessageEvent) => {
+      if (event.data instanceof ArrayBuffer) {
+        // DEBUG: log doc_id from v2 frame
+        const arr = new Uint8Array(event.data);
+        if (arr.length > 1) {
+          const idLen = arr[0];
+          if (idLen > 0 && arr.length >= 1 + idLen) {
+            const docId = new TextDecoder().decode(arr.slice(1, 1 + idLen));
+            if (docId.startsWith("body:")) {
+              console.debug(`[ws:recv] body doc_id=${docId} bytes=${arr.length}`);
+            }
+          }
+        }
+        void this.invokeBinaryExport(
+          "handle_binary_message",
+          new Uint8Array(event.data),
+        );
+        return;
+      }
+      if (typeof event.data === "string") {
+        void this.invokeBinaryExport(
+          "handle_text_message",
+          new TextEncoder().encode(event.data),
+        );
+      }
+    };
+
+    ws.onerror = (event) => {
+      console.error("[extism] browser sync transport error:", event);
+    };
+
+    ws.onclose = () => {
+      if (this.ws === ws) {
+        this.ws = null;
+      }
+      this.connected = false;
+      void this.invokeBinaryExport("on_disconnected", new Uint8Array());
+      if (this.shouldReconnect && this.connectRequest) {
+        this.scheduleReconnect(this.connectRequest);
+      }
+    };
+  }
+
+  private scheduleReconnect(request: SyncTransportConnectRequest): void {
+    this.clearReconnectTimer();
+    this.reconnectAttempt += 1;
+    const delay = Math.min(
+      1000 * Math.pow(1.5, this.reconnectAttempt - 1),
+      this.maxReconnectDelay,
+    );
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.shouldReconnect) {
+        this.openWebSocket(request);
+      }
+    }, delay);
+  }
+
+  private sendBinary(data: Uint8Array): void {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      // DEBUG: log doc_id from v2 frame
+      if (data.length > 1) {
+        const idLen = data[0];
+        if (idLen > 0 && data.length >= 1 + idLen) {
+          const docId = new TextDecoder().decode(data.slice(1, 1 + idLen));
+          if (docId.startsWith("body:")) {
+            console.debug(`[ws:send] body doc_id=${docId} bytes=${data.length}`);
+          }
+        }
+      }
+      this.ws.send(data);
+    }
+  }
+
+  private sendText(text: string): void {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(text);
+    }
+  }
+
+  private async disconnect(clearState = true): Promise<void> {
+    this.shouldReconnect = false;
+    this.clearReconnectTimer();
+
+    const ws = this.ws;
+    this.ws = null;
+    const shouldNotify = this.connected;
+    this.connected = false;
+
+    if (ws) {
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onerror = null;
+      ws.onclose = null;
+      ws.close();
+    }
+
+    if (shouldNotify) {
+      await this.invokeBinaryExport("on_disconnected", new Uint8Array());
+    }
+
+    if (clearState) {
+      this.connectionKey = null;
+      this.connectRequest = null;
+      this.reconnectAttempt = 0;
+    }
+  }
 }
 
 /**
@@ -188,7 +664,10 @@ async function requirePermission(
   await checkBrowserPermission(opts, permType, target);
 }
 
-function buildHostFunctions(opts?: HostFunctionOptions) {
+function buildHostFunctions(
+  transport: BrowserSyncTransportController,
+  opts?: HostFunctionOptions,
+) {
   return {
     "extism:host/user": {
       host_log(cp: CallContext, offs: bigint) {
@@ -197,7 +676,8 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
             | { level: string; message: string }
             | undefined;
           if (!input) return cp.store("");
-          const prefix = `[extism-plugin]`;
+          const pluginId = opts?.getPluginId?.() ?? "unknown-plugin";
+          const prefix = `[extism-plugin:${pluginId}]`;
           switch (input.level) {
             case "error":
               console.error(prefix, input.message);
@@ -220,11 +700,12 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
         try {
           const input = cp.read(offs)?.json() as { path: string } | undefined;
           if (!input) return cp.store("");
-          await requirePermission(opts, "read_files", input.path);
+          const path = normalizeExtismHostPath(input.path);
+          await requirePermission(opts, "read_files", path);
           const backend = getBackendSync();
           const response: any = await backend.execute({
             type: "ReadFile",
-            params: { path: input.path },
+            params: { path },
           } as any);
           if (response.type === "String") {
             return cp.store(response.data);
@@ -234,11 +715,26 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
           return cp.store("");
         }
       },
+      async host_read_binary(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as { path: string } | undefined;
+          if (!input) return cp.store("");
+          const path = normalizeExtismHostPath(input.path);
+          await requirePermission(opts, "read_files", path);
+          const backend = getBackendSync();
+          const data = await backend.readBinary(path);
+          return cp.store(JSON.stringify({ data: bytesToBase64(data) }));
+        } catch {
+          return cp.store("");
+        }
+      },
       async host_list_files(cp: CallContext, offs: bigint) {
         try {
           const input = cp.read(offs)?.json() as { prefix: string } | undefined;
           if (!input) return cp.store("[]");
-          const prefix = typeof input.prefix === "string" ? input.prefix : "";
+          const prefix = normalizeExtismHostPath(
+            typeof input.prefix === "string" ? input.prefix : "",
+          );
           await requirePermission(opts, "read_files", prefix);
           const backend = getBackendSync();
           const response: any = await backend.execute({
@@ -252,22 +748,7 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
           if (response.type !== "Tree") {
             return cp.store("[]");
           }
-          // Walk tree to extract leaf file paths (skip the root directory node)
-          const files: string[] = [];
-          const walk = (node: any) => {
-            if (!node || typeof node.path !== "string") return;
-            const children = Array.isArray(node.children) ? node.children : [];
-            if (children.length === 0) {
-              files.push(node.path);
-              return;
-            }
-            for (const child of children) walk(child);
-          };
-          const root = response.data;
-          if (root && Array.isArray(root.children)) {
-            for (const child of root.children) walk(child);
-          }
-          return cp.store(JSON.stringify(files));
+          return cp.store(JSON.stringify(collectFilesystemTreePaths(response.data)));
         } catch {
           return cp.store("[]");
         }
@@ -276,11 +757,12 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
         try {
           const input = cp.read(offs)?.json() as { path: string } | undefined;
           if (!input) return cp.store("false");
-          await requirePermission(opts, "read_files", input.path);
+          const path = normalizeExtismHostPath(input.path);
+          await requirePermission(opts, "read_files", path);
           const backend = getBackendSync();
           const response: any = await backend.execute({
             type: "FileExists",
-            params: { path: input.path },
+            params: { path },
           } as any);
           if (response.type === "Bool") {
             return cp.store(response.data ? "true" : "false");
@@ -305,9 +787,24 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
             );
           }
           const pluginId = opts.getPluginId();
-          const raw = localStorage.getItem(`diaryx-plugin:${pluginId}:${input.key}`);
+          const storagePath = getPluginStoragePath(pluginId, input.key);
+          const bytes = await readWorkspaceBinary(storagePath);
+          if (bytes) {
+            return cp.store(JSON.stringify({ data: bytesToBase64(bytes) }));
+          }
+
+          // Migration path for pre-workspace browser plugin storage.
+          const legacyKey = `diaryx-plugin:${pluginId}:${input.key}`;
+          const raw = localStorage.getItem(legacyKey);
           if (!raw) return cp.store("");
-          // Return in the same {data: base64} format the Rust host uses
+          try {
+            const parsed = JSON.parse(raw) as { data?: string };
+            if (typeof parsed.data === "string" && parsed.data.length > 0) {
+              await writeWorkspaceBinary(storagePath, base64ToBytes(parsed.data));
+            }
+          } catch {
+            // Ignore malformed legacy state and return the raw value for compatibility.
+          }
           return cp.store(raw);
         } catch {
           return cp.store("");
@@ -330,11 +827,76 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
             );
           }
           const pluginId = opts.getPluginId();
-          // Store the base64 data wrapped in JSON matching Rust host format
-          localStorage.setItem(
-            `diaryx-plugin:${pluginId}:${input.key}`,
-            JSON.stringify({ data: input.data }),
+          await writeWorkspaceBinary(
+            getPluginStoragePath(pluginId, input.key),
+            base64ToBytes(input.data),
           );
+          return cp.store("");
+        } catch {
+          return cp.store("");
+        }
+      },
+      async host_secret_get(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as { key: string } | undefined;
+          if (!input?.key) return cp.store("");
+          await requirePermission(opts, "plugin_storage", input.key);
+          if (!opts) {
+            throw new Error(
+              JSON.stringify({
+                error: "permission_checker_missing",
+                permission: "plugin_storage",
+                target: input.key,
+              }),
+            );
+          }
+          const pluginId = opts.getPluginId();
+          const value = await getPluginSecret(pluginId, input.key);
+          if (!value) return cp.store("");
+          return cp.store(JSON.stringify({ value }));
+        } catch {
+          return cp.store("");
+        }
+      },
+      async host_secret_set(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as
+            | { key: string; value: string }
+            | undefined;
+          if (!input?.key) return cp.store("");
+          await requirePermission(opts, "plugin_storage", input.key);
+          if (!opts) {
+            throw new Error(
+              JSON.stringify({
+                error: "permission_checker_missing",
+                permission: "plugin_storage",
+                target: input.key,
+              }),
+            );
+          }
+          const pluginId = opts.getPluginId();
+          await setPluginSecret(pluginId, input.key, input.value ?? "");
+          return cp.store("");
+        } catch {
+          return cp.store("");
+        }
+      },
+      async host_secret_delete(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as { key: string } | undefined;
+          if (!input?.key) return cp.store("");
+          await requirePermission(opts, "plugin_storage", input.key);
+          if (!opts) {
+            throw new Error(
+              JSON.stringify({
+                error: "permission_checker_missing",
+                permission: "plugin_storage",
+                target: input.key,
+              }),
+            );
+          }
+          const pluginId = opts.getPluginId();
+          await deletePluginSecret(pluginId, input.key);
           return cp.store("");
         } catch {
           return cp.store("");
@@ -342,6 +904,9 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
       },
       host_get_timestamp(cp: CallContext, _offs: bigint) {
         return cp.store(Date.now().toString());
+      },
+      host_get_now(cp: CallContext, _offs: bigint) {
+        return cp.store(formatLocalRfc3339());
       },
       async host_http_request(cp: CallContext, offs: bigint) {
         let timeoutMs: number | null = null;
@@ -431,85 +996,74 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
         }
       },
       async host_write_file(cp: CallContext, offs: bigint) {
-        try {
-          const input = cp.read(offs)?.json() as
-            | { path: string; content: string }
-            | undefined;
-          if (!input) return cp.store("");
-          const backend = getBackendSync();
-          const existsResp: any = await backend.execute({
-            type: "FileExists",
-            params: { path: input.path },
-          } as any);
-          const exists = existsResp?.type === "Bool" && !!existsResp.data;
-          await requirePermission(
-            opts,
-            exists ? "edit_files" : "create_files",
-            input.path,
-          );
-          await backend.execute({
-            type: "WriteFile",
-            params: { path: input.path, content: input.content },
-          } as any);
-          return cp.store("");
-        } catch {
-          return cp.store("");
-        }
+        const input = cp.read(offs)?.json() as
+          | { path: string; content: string }
+          | undefined;
+        if (!input) return cp.store("");
+        const path = normalizeExtismHostPath(input.path);
+        const backend = getBackendSync();
+        const existsResp: any = await backend.execute({
+          type: "FileExists",
+          params: { path },
+        } as any);
+        const exists = existsResp?.type === "Bool" && !!existsResp.data;
+        await requirePermission(
+          opts,
+          exists ? "edit_files" : "create_files",
+          path,
+        );
+        await backend.execute({
+          type: "WriteFile",
+          params: { path, content: input.content },
+        } as any);
+        return cp.store("");
       },
       async host_delete_file(cp: CallContext, offs: bigint) {
-        try {
-          const input = cp.read(offs)?.json() as
-            | { path: string }
-            | undefined;
-          if (!input) return cp.store("");
-          await requirePermission(opts, "delete_files", input.path);
-          const backend = getBackendSync();
-          await backend.execute({
-            type: "DeleteFile",
-            params: { path: input.path },
-          } as any);
-          return cp.store("");
-        } catch {
-          return cp.store("");
-        }
+        const input = cp.read(offs)?.json() as
+          | { path: string }
+          | undefined;
+        if (!input) return cp.store("");
+        const path = normalizeExtismHostPath(input.path);
+        await requirePermission(opts, "delete_files", path);
+        const backend = getBackendSync();
+        await backend.execute({
+          type: "DeleteFile",
+          params: { path },
+        } as any);
+        return cp.store("");
       },
       async host_write_binary(cp: CallContext, offs: bigint) {
-        try {
-          const input = cp.read(offs)?.json() as
-            | { path: string; content: string }
-            | undefined;
-          if (!input) return cp.store("");
-          const backend = getBackendSync();
-          const existsResp: any = await backend.execute({
-            type: "FileExists",
-            params: { path: input.path },
-          } as any);
-          const exists = existsResp?.type === "Bool" && !!existsResp.data;
-          await requirePermission(
-            opts,
-            exists ? "edit_files" : "create_files",
-            input.path,
-          );
-          // Decode base64 to Uint8Array
-          const binary = atob(input.content);
-          const bytes = new Uint8Array(binary.length);
-          for (let i = 0; i < binary.length; i++) {
-            bytes[i] = binary.charCodeAt(i);
-          }
-          await backend.writeBinary(input.path, bytes);
-          return cp.store("");
-        } catch {
-          return cp.store("");
+        const input = cp.read(offs)?.json() as
+          | { path: string; content: string }
+          | undefined;
+        if (!input) return cp.store("");
+        const path = normalizeExtismHostPath(input.path);
+        const backend = getBackendSync();
+        const existsResp: any = await backend.execute({
+          type: "FileExists",
+          params: { path },
+        } as any);
+        const exists = existsResp?.type === "Bool" && !!existsResp.data;
+        await requirePermission(
+          opts,
+          exists ? "edit_files" : "create_files",
+          path,
+        );
+        // Decode base64 to Uint8Array
+        const binary = atob(input.content);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+          bytes[i] = binary.charCodeAt(i);
         }
+        await backend.writeBinary(path, bytes);
+        return cp.store("");
       },
       host_emit_event(cp: CallContext, offs: bigint) {
         try {
           const eventJson = cp.read(offs)?.text();
           if (!eventJson) return cp.store("");
-          const backend = getBackendSync();
-          if (!backend) return cp.store("");
           const event = JSON.parse(eventJson);
-          backend.emitFileSystemEvent?.(event);
+          emitPluginHostEvent(event);
           return cp.store("");
         } catch {
           return cp.store("");
@@ -524,20 +1078,84 @@ function buildHostFunctions(opts?: HostFunctionOptions) {
           if (!opts?.getFile) return cp.store("");
           const bytes = await opts.getFile(input.key);
           if (!bytes) return cp.store("");
-          // Encode as base64 and return {data: base64}
-          let binary = "";
-          for (let i = 0; i < bytes.length; i++) {
-            binary += String.fromCharCode(bytes[i]);
-          }
-          const b64 = btoa(binary);
-          return cp.store(JSON.stringify({ data: b64 }));
+          return cp.store(bytes);
         } catch {
           return cp.store("");
         }
       },
-      host_ws_request(cp: CallContext, _offs: bigint) {
-        // No-op stub — WebSocket lifecycle is managed by the TypeScript transport.
-        return cp.store("");
+      async host_plugin_command(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.json() as
+            | {
+                plugin_id?: string;
+                command?: string;
+                params?: unknown;
+              }
+            | undefined;
+          const targetPluginId = input?.plugin_id?.trim();
+          const command = input?.command?.trim();
+          if (!targetPluginId || !command) {
+            return cp.store(
+              JSON.stringify({
+                success: false,
+                error: "plugin_id and command are required",
+              }),
+            );
+          }
+
+          const callerPluginId = opts?.getPluginId?.() ?? "unknown-plugin";
+          if (targetPluginId === callerPluginId) {
+            return cp.store(
+              JSON.stringify({
+                success: false,
+                error:
+                  "Plugins cannot call their own commands via host_plugin_command",
+              }),
+            );
+          }
+
+          await requirePermission(
+            opts,
+            "execute_commands",
+            `${targetPluginId}:${command}`,
+          );
+
+          const { dispatchCommand } = await import(
+            "$lib/plugins/browserPluginManager.svelte"
+          );
+          const result = await dispatchCommand(
+            targetPluginId,
+            command,
+            input?.params ?? {},
+          );
+          return cp.store(JSON.stringify(result));
+        } catch (e) {
+          return cp.store(
+            JSON.stringify({
+              success: false,
+              error: e instanceof Error ? e.message : String(e),
+            }),
+          );
+        }
+      },
+      async host_get_runtime_context(cp: CallContext, _offs: bigint) {
+        try {
+          return cp.store(JSON.stringify(await getRuntimeContextSnapshot()));
+        } catch {
+          return cp.store(JSON.stringify({}));
+        }
+      },
+      async host_ws_request(cp: CallContext, offs: bigint) {
+        try {
+          const input = cp.read(offs)?.text();
+          if (!input) {
+            return cp.store(JSON.stringify({ ok: false, error: "missing_input" }));
+          }
+          return cp.store(await transport.handleRequest(input));
+        } catch (e) {
+          const error = e instanceof Error ? e.message : String(e);
+          return cp.store(JSON.stringify({ ok: false, error }));
+        }
       },
       async host_run_wasi_module(cp: CallContext, offs: bigint) {
         try {
@@ -685,6 +1303,7 @@ export function getBrowserPluginRuntimeSupport(): BrowserPluginRuntimeSupport {
 export async function loadBrowserPlugin(
   wasmBytes: ArrayBuffer,
   hostOpts?: HostFunctionOptions,
+  options?: LoadBrowserPluginOptions,
 ): Promise<BrowserExtismPlugin> {
   const support = getBrowserPluginRuntimeSupport();
   if (!support.supported) {
@@ -693,10 +1312,22 @@ export async function loadBrowserPlugin(
     );
   }
 
+  const transport = new BrowserSyncTransportController();
+  let activeCallGetFile: HostFunctionOptions["getFile"] | undefined;
+  const effectiveHostOpts = hostOpts
+    ? {
+        ...hostOpts,
+        getFile: async (key: string) => {
+          const provider = activeCallGetFile ?? hostOpts.getFile;
+          if (!provider) return null;
+          return provider(key);
+        },
+      }
+    : undefined;
   const plugin: ExtismPlugin = await createPlugin(wasmBytes, {
     useWasi: true,
     runInWorker: support.useWorkerFallback ?? false,
-    functions: buildHostFunctions(hostOpts),
+    functions: buildHostFunctions(transport, effectiveHostOpts),
   });
 
   // Call guest `manifest` export to get the plugin's manifest.
@@ -712,11 +1343,17 @@ export async function loadBrowserPlugin(
     error: unknown,
     exportName: "init" | "shutdown",
   ): boolean {
-    const message = (error instanceof Error ? error.message : String(error))
-      .toLowerCase();
+    const message = (
+      error instanceof Error
+        ? error.message
+        : typeof error === "object" && error !== null && "message" in error
+          ? String((error as { message?: unknown }).message ?? "")
+          : String(error)
+    ).toLowerCase();
     return (
       message.includes("function not found") ||
       message.includes("unknown function") ||
+      message.includes("does not exist") ||
       message.includes(`no such export`) ||
       (message.includes("not found") && message.includes(exportName))
     );
@@ -725,8 +1362,26 @@ export async function loadBrowserPlugin(
   // Serialize all calls to the WASM plugin. WASM modules are single-threaded;
   // concurrent plugin.call() invocations cause response mix-ups.
   let callQueue: Promise<unknown> = Promise.resolve();
-  function enqueue<T>(fn: () => Promise<T>): Promise<T> {
-    const next = callQueue.then(fn, fn);
+  let queueDepth = 0;
+  function enqueue<T>(label: string, fn: () => Promise<T>): Promise<T> {
+    const waitingBefore = queueDepth;
+    queueDepth += 1;
+    const run = async () => {
+      const startedAt = performance.now();
+      console.debug(`[extism] ${manifest.id}: ${label} start`, {
+        waitingBefore,
+      });
+      try {
+        return await fn();
+      } finally {
+        queueDepth = Math.max(0, queueDepth - 1);
+        console.debug(`[extism] ${manifest.id}: ${label} done`, {
+          elapsedMs: Math.round(performance.now() - startedAt),
+          queueDepth,
+        });
+      }
+    };
+    const next = callQueue.then(run, run);
     callQueue = next.then(
       () => {},
       () => {},
@@ -734,7 +1389,35 @@ export async function loadBrowserPlugin(
     return next;
   }
 
-  return {
+  async function withCallOptions<T>(
+    callOptions: BrowserPluginCallOptions | undefined,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const previousGetFile = activeCallGetFile;
+    activeCallGetFile = callOptions?.getFile;
+    try {
+      return await fn();
+    } finally {
+      activeCallGetFile = previousGetFile;
+    }
+  }
+
+  transport.bindCallbacks({
+    invokeBinaryExport(exportName: string, input: Uint8Array): Promise<void> {
+      return enqueue(`transport:${exportName}`, async () => {
+        try {
+          await plugin.call(exportName, input);
+        } catch (e) {
+          console.warn(
+            `[extism] ${manifest.id}: transport callback ${exportName} failed:`,
+            e,
+          );
+        }
+      });
+    },
+  });
+
+  const browserPlugin: BrowserExtismPlugin = {
     manifest,
     requestedPermissions: guestManifest.requested_permissions,
 
@@ -742,7 +1425,7 @@ export async function loadBrowserPlugin(
       exportName: "init" | "shutdown",
       payload?: unknown,
     ): Promise<void> {
-      return enqueue(async () => {
+      return enqueue(`callLifecycle:${exportName}`, async () => {
         const input =
           payload == null
             ? "{}"
@@ -759,7 +1442,7 @@ export async function loadBrowserPlugin(
     },
 
     async callEvent(event: GuestEvent): Promise<void> {
-      return enqueue(async () => {
+      return enqueue("callEvent:on_event", async () => {
         try {
           await plugin.call("on_event", JSON.stringify(event));
         } catch (e) {
@@ -768,25 +1451,46 @@ export async function loadBrowserPlugin(
       });
     },
 
-    async callCommand(cmd: string, params: unknown): Promise<CommandResponse> {
-      return enqueue(async () => {
-        const request = JSON.stringify({ command: cmd, params });
-        try {
-          const output = await plugin.call("handle_command", request);
-          if (!output)
-            return { success: false, error: "No response from plugin" };
-          return output.json() as CommandResponse;
-        } catch (e) {
-          return {
-            success: false,
-            error: e instanceof Error ? e.message : String(e),
-          };
-        }
+    async callCommand(
+      cmd: string,
+      params: unknown,
+      callOptions?: BrowserPluginCallOptions,
+    ): Promise<CommandResponse> {
+      return enqueue(`callCommand:${cmd}`, async () => {
+        return withCallOptions(callOptions, async () => {
+          const request = JSON.stringify({ command: cmd, params });
+          try {
+            console.debug(`[extism] ${manifest.id}: handle_command request`, {
+              command: cmd,
+              params,
+            });
+            const output = await plugin.call("handle_command", request);
+            if (!output)
+              return { success: false, error: "No response from plugin" };
+            const response = output.json() as CommandResponse;
+            console.debug(`[extism] ${manifest.id}: handle_command response`, {
+              command: cmd,
+              success: response.success,
+              hasData: response.data != null,
+              error: response.error ?? null,
+            });
+            return response;
+          } catch (e) {
+            console.error(`[extism] ${manifest.id}: handle_command failed`, {
+              command: cmd,
+              error: e instanceof Error ? e.message : String(e),
+            });
+            return {
+              success: false,
+              error: e instanceof Error ? e.message : String(e),
+            };
+          }
+        });
       });
     },
 
     async callTypedCommand(command: unknown): Promise<unknown | null> {
-      return enqueue(async () => {
+      return enqueue("callTypedCommand:execute_typed_command", async () => {
         try {
           const output = await plugin.call(
             "execute_typed_command",
@@ -805,11 +1509,9 @@ export async function loadBrowserPlugin(
             );
             return null;
           }
-          console.error(
-            `[extism] ${manifest.id}: execute_typed_command failed:`,
-            e,
-          );
-          return null;
+          // Re-throw so callers get the actual error instead of silently
+          // falling through to the WASM backend (which has no sync plugin).
+          throw e;
         }
       });
     },
@@ -818,7 +1520,7 @@ export async function loadBrowserPlugin(
       exportName: string,
       data: Uint8Array,
     ): Promise<Uint8Array | null> {
-      return enqueue(async () => {
+      return enqueue(`callBinary:${exportName}`, async () => {
         try {
           const output = await plugin.call(exportName, data);
           if (!output) return null;
@@ -838,7 +1540,7 @@ export async function loadBrowserPlugin(
       source: string,
       options: Record<string, unknown>,
     ): Promise<{ html?: string; error?: string }> {
-      return enqueue(async () => {
+      return enqueue(`callRender:${exportName}`, async () => {
         try {
           const input = JSON.stringify({ source, ...options });
           const output = await plugin.call(exportName, input);
@@ -851,7 +1553,7 @@ export async function loadBrowserPlugin(
     },
 
     async getConfig(): Promise<Record<string, unknown>> {
-      return enqueue(async () => {
+      return enqueue("getConfig:get_config", async () => {
         try {
           const output = await plugin.call("get_config", "");
           if (!output) return {};
@@ -865,7 +1567,7 @@ export async function loadBrowserPlugin(
     },
 
     async setConfig(config: Record<string, unknown>): Promise<void> {
-      return enqueue(async () => {
+      return enqueue("setConfig:set_config", async () => {
         try {
           await plugin.call("set_config", JSON.stringify(config));
         } catch (e) {
@@ -875,9 +1577,24 @@ export async function loadBrowserPlugin(
     },
 
     async close(): Promise<void> {
+      try {
+        await plugin.call("shutdown", "{}");
+      } catch {
+        // Optional lifecycle export.
+      }
+      await transport.dispose();
       await plugin.close();
     },
   };
+
+  if (options?.initializeLifecycle !== false) {
+    await browserPlugin.callLifecycle(
+      "init",
+      await buildBrowserPluginInitPayload(String(manifest.id)),
+    );
+  }
+
+  return browserPlugin;
 }
 
 /**
@@ -886,7 +1603,9 @@ export async function loadBrowserPlugin(
 export async function inspectBrowserPlugin(
   wasmBytes: ArrayBuffer,
 ): Promise<{ manifest: PluginManifest; requestedPermissions?: RequestedPermissionsManifest }> {
-  const plugin = await loadBrowserPlugin(wasmBytes);
+  const plugin = await loadBrowserPlugin(wasmBytes, undefined, {
+    initializeLifecycle: false,
+  });
   try {
     return {
       manifest: plugin.manifest,

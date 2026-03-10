@@ -17,6 +17,7 @@
 
 import { Node, mergeAttributes } from "@tiptap/core";
 import type { Api } from "$lib/backend/api";
+import { formatMarkdownDestination } from "@/models/services/attachmentService";
 import DrawingBlockNodeView from "../components/DrawingBlockNodeView.svelte";
 import { mount, unmount } from "svelte";
 
@@ -205,8 +206,7 @@ export const DrawingBlock = Node.create<DrawingBlockOptions>({
   renderMarkdown(node: any) {
     const alt = node.attrs?.alt ?? "";
     const src = node.attrs?.src ?? "";
-    // Wrap src in angle brackets if it contains spaces
-    const formattedSrc = src.includes(" ") ? `<${src}>` : src;
+    const formattedSrc = formatMarkdownDestination(src);
     return `![drawing:${alt}](${formattedSrc})\n`;
   },
 });

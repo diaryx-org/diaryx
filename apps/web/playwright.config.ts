@@ -7,6 +7,7 @@ const appBaseUrl = process.env.PW_BASE_URL ?? `http://localhost:${webPort}`
 
 export default defineConfig({
   testDir: './e2e',
+  testIgnore: process.env.CI ? ['plugins/**/*.spec.ts'] : undefined,
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 1,

@@ -30,11 +30,11 @@ pub use helpers::{
     sanitize_filename, slugify, slugify_title, sync_h1_in_body,
 };
 
+use crate::date;
 use crate::error::{DiaryxError, Result};
 use crate::fs::{AsyncFileSystem, FileSystem};
 use crate::link_parser;
 use crate::template::{Template, TemplateContext, TemplateManager};
-use chrono::Utc;
 use indexmap::IndexMap;
 use serde_yaml::Value;
 use std::path::{Path, PathBuf};
@@ -322,7 +322,7 @@ impl<FS: AsyncFileSystem> DiaryxApp<FS> {
     /// Update the 'updated' frontmatter property with the current timestamp (RFC 3339 format).
     /// Creates frontmatter if none exists.
     pub async fn touch_updated(&self, path: &str) -> Result<()> {
-        let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let timestamp = date::current_local_timestamp_rfc3339();
         self.set_frontmatter_property(path, "updated", Value::String(timestamp))
             .await
     }

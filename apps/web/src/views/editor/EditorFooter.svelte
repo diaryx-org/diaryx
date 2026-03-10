@@ -30,7 +30,7 @@
     rightSidebarOpen: boolean;
     readonly?: boolean;
     commandPaletteOpen?: boolean;
-    onSave: () => void;
+    onSave: () => void | Promise<void>;
     onOpenCommandPalette: () => void;
     /** API wrapper for plugin status bar commands */
     api?: Api | null;

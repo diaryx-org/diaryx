@@ -609,11 +609,36 @@ impl WorkspaceCrdt {
             .collect();
 
         // Start search from root files
-        for (doc_id, meta) in root_files {
+        for (doc_id, meta) in &root_files {
             if let Some(found) =
                 self.find_by_path_recursive(doc_id, meta, &path_components, 0, &files)
             {
                 return Some(found);
+            }
+        }
+
+        // Fallback: also search files whose part_of references a non-existent entry.
+        // These are effectively "orphaned" root files (part_of points to something
+        // not in the CRDT). Treat them as root-level for path matching purposes.
+        let root_ids: std::collections::HashSet<&str> =
+            root_files.iter().map(|(id, _)| id.as_str()).collect();
+        let all_keys: std::collections::HashSet<&str> =
+            files.iter().map(|(id, _)| id.as_str()).collect();
+
+        for (doc_id, meta) in &files {
+            if meta.deleted || meta.part_of.is_none() || root_ids.contains(doc_id.as_str()) {
+                continue;
+            }
+            // Check if part_of references a non-existent or deleted entry
+            let parent_ref = meta.part_of.as_deref().unwrap();
+            let parent_exists = all_keys.contains(parent_ref)
+                && files.iter().any(|(id, m)| id == parent_ref && !m.deleted);
+            if !parent_exists {
+                if let Some(found) =
+                    self.find_by_path_recursive(doc_id, meta, &path_components, 0, &files)
+                {
+                    return Some(found);
+                }
             }
         }
 
@@ -643,10 +668,24 @@ impl WorkspaceCrdt {
             return Some(doc_id.to_string());
         }
 
-        // Otherwise, search children
+        // Search children by part_of (primary mechanism for UUID-keyed entries)
+        for (child_id, child_meta) in all_files {
+            if !child_meta.deleted && child_meta.part_of.as_deref() == Some(doc_id) {
+                if let Some(found) = self.find_by_path_recursive(
+                    child_id,
+                    child_meta,
+                    path_components,
+                    depth + 1,
+                    all_files,
+                ) {
+                    return Some(found);
+                }
+            }
+        }
+
+        // Fallback: search via explicit contents references (legacy compatibility)
         if let Some(ref contents) = meta.contents {
             for child_id in contents {
-                // Find the child in all_files
                 if let Some((_, child_meta)) = all_files
                     .iter()
                     .find(|(id, m)| id == child_id && !m.deleted)

@@ -1,36 +1,78 @@
 //! Sync client command handlers.
 //!
 //! Uses the Extism sync plugin via `CliSyncContext` for all CRDT operations.
-//! The WebSocket bridge (`WsBridge`) handles the transport layer.
+//! The generic host `TokioWebSocketBridge` handles the transport layer.
 
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use diaryx_core::config::Config;
+use diaryx_extism::WebSocketBridge;
 
-use crate::cli::plugin_loader::CliSyncContext;
+use crate::cli::plugin_loader::{CliSyncContext, resolve_sync_runtime_state};
 
 use super::progress;
-use super::ws_bridge::{WsBridge, WsBridgeConfig};
+const ONE_SHOT_TIMEOUT: Duration = Duration::from_secs(30);
+const SYNC_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
-const DEFAULT_SYNC_SERVER: &str = "https://sync.diaryx.org";
+fn connect_sync_bridge(
+    ctx: &CliSyncContext,
+    server_url: &str,
+    workspace_id: &str,
+    auth_token: &str,
+    write_to_disk: bool,
+) -> Result<(), String> {
+    let request = serde_json::json!({
+        "type": "connect",
+        "server_url": server_url,
+        "workspace_id": workspace_id,
+        "auth_token": auth_token,
+        "write_to_disk": write_to_disk,
+    });
+
+    ctx.websocket_bridge()
+        .request(&request.to_string())
+        .map(|_| ())
+}
+
+fn disconnect_sync_bridge(ctx: &CliSyncContext) {
+    let _ = ctx.websocket_bridge().request(r#"{"type":"disconnect"}"#);
+}
+
+fn wait_for_sync_completion(ctx: &CliSyncContext, timeout: Duration) -> Result<bool, String> {
+    let deadline = Instant::now() + timeout;
+
+    while Instant::now() < deadline {
+        let complete = ctx
+            .cmd("IsSyncComplete", serde_json::json!({}))?
+            .get("complete")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+
+        if complete {
+            return Ok(true);
+        }
+
+        thread::sleep(SYNC_POLL_INTERVAL);
+    }
+
+    Ok(false)
+}
 
 /// Handle the start command - start continuous sync via WS bridge.
 pub fn handle_start(config: &Config, workspace_root: &Path) {
+    let runtime = resolve_sync_runtime_state(config, workspace_root);
+
     // Validate configuration
-    let Some(session_token) = &config.sync_session_token else {
+    let Some(session_token) = runtime.auth_token.as_deref() else {
         eprintln!("Not logged in. Please log in first:");
         eprintln!("  diaryx sync login <your-email>");
         return;
     };
 
-    let server_url = config
-        .sync_server_url
-        .as_deref()
-        .unwrap_or(DEFAULT_SYNC_SERVER);
-
-    let workspace_id = config.sync_workspace_id.as_deref().unwrap_or("default");
+    let server_url = runtime.server_url.as_str();
+    let workspace_id = runtime.remote_workspace_id.as_deref().unwrap_or("default");
 
     println!("Starting sync...");
     println!("  Server: {}", server_url);
@@ -66,60 +108,40 @@ pub fn handle_start(config: &Config, workspace_root: &Path) {
         }
     }
 
-    // Build WS URL
-    let ws_server = server_url
-        .replace("https://", "wss://")
-        .replace("http://", "ws://");
-    let ws_url = format!("{}/sync2", ws_server);
-
-    let bridge_config = WsBridgeConfig {
-        ws_url,
-        auth_token: Some(session_token.clone()),
-        workspace_id: workspace_id.to_string(),
-    };
-
-    // Take the plugin out of CliSyncContext for the bridge
-    let plugin = ctx.into_plugin();
-    let bridge = WsBridge::new(bridge_config, plugin);
-
-    // Set up shutdown flag
-    let running = Arc::new(AtomicBool::new(true));
-
     // Ensure progress bar is cleared on exit
     let _progress_guard = progress::ProgressGuard::new();
 
     // Show connecting state
     progress::show_indeterminate();
 
-    // Run the sync loop
-    let runtime = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
+    if let Err(e) = connect_sync_bridge(&ctx, server_url, workspace_id, session_token, true) {
+        eprintln!("Sync error: {}", e);
+        return;
+    }
 
+    // Run until interrupted; the generic websocket bridge handles reconnects.
+    let runtime = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
     runtime.block_on(async {
-        match bridge.run(running).await {
-            Ok(()) => {}
-            Err(e) => {
-                eprintln!("Sync error: {}", e);
-            }
-        }
+        let _ = tokio::signal::ctrl_c().await;
     });
+
+    disconnect_sync_bridge(&ctx);
 
     println!("Sync stopped.");
 }
 
 /// Handle the push command - one-shot push via WS bridge.
 pub fn handle_push(config: &Config, workspace_root: &Path) {
-    let Some(session_token) = &config.sync_session_token else {
+    let runtime = resolve_sync_runtime_state(config, workspace_root);
+
+    let Some(session_token) = runtime.auth_token.as_deref() else {
         eprintln!("Not logged in. Please log in first:");
         eprintln!("  diaryx sync login <your-email>");
         return;
     };
 
-    let server_url = config
-        .sync_server_url
-        .as_deref()
-        .unwrap_or(DEFAULT_SYNC_SERVER);
-
-    let workspace_id = config.sync_workspace_id.as_deref().unwrap_or("default");
+    let server_url = runtime.server_url.as_str();
+    let workspace_id = runtime.remote_workspace_id.as_deref().unwrap_or("default");
 
     println!("Pushing local changes...");
 
@@ -149,58 +171,33 @@ pub fn handle_push(config: &Config, workspace_root: &Path) {
         }
     }
 
-    // Build WS URL and run one-shot sync
-    let ws_server = server_url
-        .replace("https://", "wss://")
-        .replace("http://", "ws://");
-    let ws_url = format!("{}/sync2", ws_server);
+    if let Err(e) = connect_sync_bridge(&ctx, server_url, workspace_id, session_token, false) {
+        eprintln!("Push failed: {}", e);
+        return;
+    }
 
-    let bridge_config = WsBridgeConfig {
-        ws_url,
-        auth_token: Some(session_token.clone()),
-        workspace_id: workspace_id.to_string(),
-    };
+    let result = wait_for_sync_completion(&ctx, ONE_SHOT_TIMEOUT);
+    disconnect_sync_bridge(&ctx);
 
-    let plugin = ctx.into_plugin();
-    let bridge = WsBridge::new(bridge_config, plugin);
-
-    // Run sync with auto-stop after completion
-    let running = Arc::new(AtomicBool::new(true));
-    let running_clone = running.clone();
-
-    let runtime = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
-
-    // Set a timeout for push — stop after 30 seconds
-    runtime.block_on(async {
-        tokio::select! {
-            result = bridge.run(running) => {
-                match result {
-                    Ok(()) => println!("Push complete."),
-                    Err(e) => eprintln!("Push failed: {}", e),
-                }
-            }
-            _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
-                running_clone.store(false, Ordering::SeqCst);
-                println!("Push timed out after 30 seconds.");
-            }
-        }
-    });
+    match result {
+        Ok(true) => println!("Push complete."),
+        Ok(false) => println!("Push timed out after 30 seconds."),
+        Err(e) => eprintln!("Push failed: {}", e),
+    }
 }
 
 /// Handle the pull command - one-shot pull via WS bridge.
 pub fn handle_pull(config: &Config, workspace_root: &Path) {
-    let Some(session_token) = &config.sync_session_token else {
+    let runtime = resolve_sync_runtime_state(config, workspace_root);
+
+    let Some(session_token) = runtime.auth_token.as_deref() else {
         eprintln!("Not logged in. Please log in first:");
         eprintln!("  diaryx sync login <your-email>");
         return;
     };
 
-    let server_url = config
-        .sync_server_url
-        .as_deref()
-        .unwrap_or(DEFAULT_SYNC_SERVER);
-
-    let workspace_id = config.sync_workspace_id.as_deref().unwrap_or("default");
+    let server_url = runtime.server_url.as_str();
+    let workspace_id = runtime.remote_workspace_id.as_deref().unwrap_or("default");
 
     println!("Pulling remote changes...");
 
@@ -213,38 +210,17 @@ pub fn handle_pull(config: &Config, workspace_root: &Path) {
         }
     };
 
-    // Build WS URL and run one-shot sync (pull-only)
-    let ws_server = server_url
-        .replace("https://", "wss://")
-        .replace("http://", "ws://");
-    let ws_url = format!("{}/sync2", ws_server);
+    if let Err(e) = connect_sync_bridge(&ctx, server_url, workspace_id, session_token, true) {
+        eprintln!("Pull failed: {}", e);
+        return;
+    }
 
-    let bridge_config = WsBridgeConfig {
-        ws_url,
-        auth_token: Some(session_token.clone()),
-        workspace_id: workspace_id.to_string(),
-    };
+    let result = wait_for_sync_completion(&ctx, ONE_SHOT_TIMEOUT);
+    disconnect_sync_bridge(&ctx);
 
-    let plugin = ctx.into_plugin();
-    let bridge = WsBridge::new(bridge_config, plugin);
-
-    let running = Arc::new(AtomicBool::new(true));
-    let running_clone = running.clone();
-
-    let runtime = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
-
-    runtime.block_on(async {
-        tokio::select! {
-            result = bridge.run(running) => {
-                match result {
-                    Ok(()) => println!("Pull complete."),
-                    Err(e) => eprintln!("Pull failed: {}", e),
-                }
-            }
-            _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
-                running_clone.store(false, Ordering::SeqCst);
-                println!("Pull timed out after 30 seconds.");
-            }
-        }
-    });
+    match result {
+        Ok(true) => println!("Pull complete."),
+        Ok(false) => println!("Pull timed out after 30 seconds."),
+        Err(e) => eprintln!("Pull failed: {}", e),
+    }
 }

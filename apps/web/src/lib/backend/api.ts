@@ -6,6 +6,13 @@
  */
 
 import type { Backend, TemplateInfo } from './interface';
+import {
+  dispatchFileCreatedEvent,
+  dispatchFileDeletedEvent,
+  dispatchFileMovedEvent,
+  dispatchFileSavedEvent,
+} from '$lib/plugins/browserPluginManager.svelte';
+import { mirrorCurrentWorkspaceMutationToLinkedProviders } from '$lib/sync/browserWorkspaceMutationMirror';
 import type {
   Response,
   EntryData,
@@ -98,6 +105,31 @@ export function createApi(backend: Backend) {
     return expectResponse(response, 'PluginResult').data;
   }
 
+  async function resolveAttachmentStoragePath(
+    entryPath: string,
+    attachmentPath: string,
+  ): Promise<string> {
+    const response = await backend.execute({
+      type: 'ResolveAttachmentPath',
+      params: { entry_path: entryPath, attachment_path: attachmentPath },
+    } as any);
+    return expectResponse(response, 'String').data;
+  }
+
+  async function mirrorWorkspaceMutation(): Promise<void> {
+    await mirrorCurrentWorkspaceMutationToLinkedProviders({
+      backend: {
+        getWorkspacePath: () => backend.getWorkspacePath(),
+        resolveRootIndex: async (workspacePath) => {
+          const finder = (backend as { findRootIndex?: (path: string) => Promise<string> }).findRootIndex;
+          return typeof finder === "function" ? await finder(workspacePath) : workspacePath;
+        },
+      },
+      runPluginCommand: async (pluginId, command, params = null) =>
+        await pluginCommand(pluginId, command, params),
+    });
+  }
+
   return {
     // =========================================================================
     // Entry Operations
@@ -112,10 +144,16 @@ export function createApi(backend: Backend) {
     /** Save an entry's content. Returns new path if H1→title sync caused a rename, null otherwise. */
     async saveEntry(path: string, content: string, rootIndexPath?: string, detectH1Title?: boolean): Promise<string | null> {
       const response = await backend.execute({ type: 'SaveEntry', params: { path, content, root_index_path: rootIndexPath ?? null, detect_h1_title: detectH1Title ?? false } } as any);
-      if (response.type === 'String') {
-        return response.data;
+      const newPath = response.type === 'String' ? response.data : null;
+      const effectivePath = newPath && newPath.length > 0 ? newPath : path;
+
+      if (effectivePath !== path) {
+        await dispatchFileMovedEvent(path, effectivePath);
+        await mirrorWorkspaceMutation();
       }
-      return null;
+      await dispatchFileSavedEvent(effectivePath);
+
+      return newPath;
     },
 
     /** Create a new entry. Returns the path to the created entry. */
@@ -130,17 +168,24 @@ export function createApi(backend: Backend) {
         type: 'CreateEntry',
         params: { path, options: fullOptions },
       } as any);
-      return expectResponse(response, 'String').data;
+      const createdPath = expectResponse(response, 'String').data;
+      await dispatchFileCreatedEvent(createdPath);
+      await mirrorWorkspaceMutation();
+      return createdPath;
     },
 
     /** Delete an entry. */
     async deleteEntry(path: string): Promise<void> {
       await backend.execute({ type: 'DeleteEntry', params: { path, hard_delete: false } });
+      await dispatchFileDeletedEvent(path);
+      await mirrorWorkspaceMutation();
     },
 
     /** Move/rename an entry from one path to another. */
     async moveEntry(from: string, to: string): Promise<void> {
       await backend.execute({ type: 'MoveEntry', params: { from, to } });
+      await dispatchFileMovedEvent(from, to);
+      await mirrorWorkspaceMutation();
     },
 
     /** Rename an entry file. Returns the new path. */
@@ -149,7 +194,11 @@ export function createApi(backend: Backend) {
         type: 'RenameEntry',
         params: { path, new_filename: newFilename },
       });
-      return expectResponse(response, 'String').data;
+      const renamedPath = expectResponse(response, 'String').data;
+      await dispatchFileMovedEvent(path, renamedPath);
+      await dispatchFileSavedEvent(renamedPath);
+      await mirrorWorkspaceMutation();
+      return renamedPath;
     },
 
     /** Duplicate an entry, creating a copy. Returns the new path. */
@@ -158,19 +207,26 @@ export function createApi(backend: Backend) {
         type: 'DuplicateEntry',
         params: { path },
       });
-      return expectResponse(response, 'String').data;
+      const duplicatedPath = expectResponse(response, 'String').data;
+      await dispatchFileCreatedEvent(duplicatedPath);
+      await mirrorWorkspaceMutation();
+      return duplicatedPath;
     },
 
     /** Convert a leaf file to an index file with a directory. */
     async convertToIndex(path: string): Promise<string> {
       const response = await backend.execute({ type: 'ConvertToIndex', params: { path } });
-      return expectResponse(response, 'String').data;
+      const convertedPath = expectResponse(response, 'String').data;
+      await mirrorWorkspaceMutation();
+      return convertedPath;
     },
 
     /** Convert an empty index file back to a leaf file. */
     async convertToLeaf(path: string): Promise<string> {
       const response = await backend.execute({ type: 'ConvertToLeaf', params: { path } });
-      return expectResponse(response, 'String').data;
+      const convertedPath = expectResponse(response, 'String').data;
+      await mirrorWorkspaceMutation();
+      return convertedPath;
     },
 
     /**
@@ -186,7 +242,13 @@ export function createApi(backend: Backend) {
         type: 'CreateChildEntry',
         params: { parent_path: parentPath },
       });
-      return expectResponse(response, 'CreateChildResult').data;
+      const result = expectResponse(response, 'CreateChildResult').data;
+      await dispatchFileCreatedEvent(result.child_path);
+      if (result.parent_converted && result.original_parent_path && result.original_parent_path !== result.parent_path) {
+        await dispatchFileMovedEvent(result.original_parent_path, result.parent_path);
+      }
+      await mirrorWorkspaceMutation();
+      return result;
     },
 
     /** Attach an existing entry to a parent index. Returns the (possibly moved) entry path. */
@@ -195,7 +257,12 @@ export function createApi(backend: Backend) {
         type: 'AttachEntryToParent',
         params: { entry_path: entryPath, parent_path: parentPath },
       });
-      return expectResponse(response, 'String').data;
+      const nextPath = expectResponse(response, 'String').data;
+      if (nextPath !== entryPath) {
+        await dispatchFileMovedEvent(entryPath, nextPath);
+      }
+      await mirrorWorkspaceMutation();
+      return nextPath;
     },
 
     // =========================================================================
@@ -261,6 +328,7 @@ export function createApi(backend: Backend) {
         type: 'SetWorkspaceConfig',
         params: { root_index_path: rootIndexPath, field, value },
       } as any);
+      await mirrorWorkspaceMutation();
     },
 
     // =========================================================================
@@ -279,6 +347,13 @@ export function createApi(backend: Backend) {
         type: 'SetFrontmatterProperty',
         params: { path, key, value, root_index_path: rootIndexPath ?? null },
       } as any);
+      const nextPath = response.type === 'String' ? response.data : null;
+      const effectivePath = nextPath && nextPath.length > 0 ? nextPath : path;
+      if (effectivePath !== path) {
+        await dispatchFileMovedEvent(path, effectivePath);
+      }
+      await dispatchFileSavedEvent(effectivePath);
+      await mirrorWorkspaceMutation();
       if (response.type === 'String') {
         return response.data;
       }
@@ -291,6 +366,8 @@ export function createApi(backend: Backend) {
         type: 'RemoveFrontmatterProperty',
         params: { path, key },
       });
+      await dispatchFileSavedEvent(path);
+      await mirrorWorkspaceMutation();
     },
 
     // =========================================================================
@@ -620,11 +697,15 @@ export function createApi(backend: Backend) {
       return expectResponse(response, 'Strings').data;
     },
 
-    /** Upload an attachment. Returns the path to the uploaded file. */
-    async uploadAttachment(entryPath: string, filename: string, dataBase64: string): Promise<string> {
+    /** Upload an attachment over the binary backend path and register it in frontmatter. */
+    async uploadAttachment(entryPath: string, filename: string, data: Uint8Array): Promise<string> {
+      const attachmentPath = `_attachments/${filename}`;
+      const storagePath = await resolveAttachmentStoragePath(entryPath, attachmentPath);
+      await backend.writeBinary(storagePath, data);
+
       const response = await backend.execute({
-        type: 'UploadAttachment',
-        params: { entry_path: entryPath, filename, data_base64: dataBase64 },
+        type: 'RegisterAttachment',
+        params: { entry_path: entryPath, filename },
       });
       return expectResponse(response, 'String').data;
     },
@@ -648,11 +729,7 @@ export function createApi(backend: Backend) {
 
     /** Resolve an attachment path to its storage path (for use with readBinary). */
     async resolveAttachmentStoragePath(entryPath: string, attachmentPath: string): Promise<string> {
-      const response = await backend.execute({
-        type: 'ResolveAttachmentPath',
-        params: { entry_path: entryPath, attachment_path: attachmentPath },
-      } as any);
-      return expectResponse(response, 'String').data;
+      return resolveAttachmentStoragePath(entryPath, attachmentPath);
     },
 
     /** Move an attachment from one entry to another. Returns the new attachment path. */

@@ -7,4 +7,3 @@ pub mod auth;
 pub mod client;
 pub(crate) mod progress;
 pub mod status;
-pub mod ws_bridge;

@@ -106,6 +106,11 @@ pub struct RustSyncManager<FS: AsyncFileSystem> {
     // Files this client is focused on (for focus-based sync).
     // Used to track which files to re-focus on reconnect.
     focused_files: RwLock<HashSet<String>>,
+
+    // Bidirectional UUID ↔ path resolution cache.
+    // Rebuilt from workspace CRDT after each metadata update.
+    uuid_to_path: RwLock<HashMap<String, String>>,
+    path_to_uuid: RwLock<HashMap<String, String>>,
 }
 
 impl<FS: AsyncFileSystem> RustSyncManager<FS> {
@@ -130,6 +135,8 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
             last_synced_workspace_sv: RwLock::new(None),
             last_synced_body_svs: RwLock::new(HashMap::new()),
             focused_files: RwLock::new(HashSet::new()),
+            uuid_to_path: RwLock::new(HashMap::new()),
+            path_to_uuid: RwLock::new(HashMap::new()),
         }
     }
 
@@ -371,6 +378,9 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
             }
         }
 
+        // Rebuild UUID ↔ path maps after workspace CRDT changes.
+        self.rebuild_uuid_maps();
+
         // Keep body-doc state aligned with workspace renames so follow-up body
         // updates continue under the new canonical path.
         if !all_renames.is_empty() {
@@ -438,10 +448,11 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
             }
 
             {
+                // Remove the old path from body_synced but do NOT add the new path.
+                // The server tracks subscriptions by doc_id, so after a rename the
+                // client must re-subscribe via SyncStep1 for the new body doc_id.
                 let mut synced = self.body_synced.write().unwrap();
-                if synced.remove(&old_path) {
-                    synced.insert(new_path.clone());
-                }
+                synced.remove(&old_path);
             }
             {
                 let mut content = self.last_known_content.write().unwrap();
@@ -938,6 +949,13 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         synced.contains(&doc_name)
     }
 
+    /// Clear the body_synced flag for a document so it can be re-subscribed.
+    pub fn clear_body_synced(&self, doc_name: &str) {
+        let doc_name = normalize_sync_path(doc_name);
+        let mut synced = self.body_synced.write().unwrap();
+        synced.remove(&doc_name);
+    }
+
     /// Check if a body document is currently loaded in memory.
     pub fn is_body_loaded(&self, doc_name: &str) -> bool {
         let doc_name = normalize_sync_path(doc_name);
@@ -1194,6 +1212,9 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         // Mark sync as complete since we now have the authoritative state
         self.mark_sync_complete();
 
+        // Rebuild UUID ↔ path maps after applying state.
+        self.rebuild_uuid_maps();
+
         let files = self.workspace_crdt.list_active_files();
         log::info!(
             "[SyncManager] handle_crdt_state: workspace now has {} active files, fs_has_root={}",
@@ -1229,6 +1250,65 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
     /// protocol to prevent CRDT corruption.
     pub fn is_workspace_empty(&self) -> bool {
         self.workspace_crdt.list_active_files().is_empty()
+    }
+
+    // =========================================================================
+    // UUID ↔ Path Resolution
+    // =========================================================================
+
+    /// Rebuild the bidirectional UUID ↔ path mapping from the workspace CRDT.
+    ///
+    /// Should be called after any workspace CRDT mutation (handle_workspace_message,
+    /// handle_crdt_state, or local metadata changes).
+    pub fn rebuild_uuid_maps(&self) {
+        let mut uuid_to_path = HashMap::new();
+        let mut path_to_uuid = HashMap::new();
+
+        for (doc_id, _meta) in self.workspace_crdt.list_active_files() {
+            if let Some(path) = self.workspace_crdt.get_path(&doc_id) {
+                let path_str = normalize_sync_path(&path.to_string_lossy());
+                if !path_str.is_empty() {
+                    uuid_to_path.insert(doc_id.clone(), path_str.clone());
+                    path_to_uuid.insert(path_str, doc_id.clone());
+                }
+            }
+            // Also map the raw doc_id (CRDT key) to itself.
+            // On flat filesystems (OPFS), files stay at the root even when
+            // part_of is set, so get_path() returns a hierarchical path that
+            // doesn't match the actual file path. The CRDT key IS the flat
+            // filename, so mapping it directly allows resolve_uuid(flat_path)
+            // to succeed.
+            let normalized_id = normalize_sync_path(&doc_id);
+            if !normalized_id.is_empty() {
+                path_to_uuid
+                    .entry(normalized_id.clone())
+                    .or_insert(doc_id.clone());
+                uuid_to_path.entry(doc_id).or_insert(normalized_id);
+            }
+        }
+
+        *self.uuid_to_path.write().unwrap() = uuid_to_path;
+        *self.path_to_uuid.write().unwrap() = path_to_uuid;
+    }
+
+    /// Resolve a UUID to its current filesystem path.
+    pub fn resolve_path(&self, uuid: &str) -> Option<String> {
+        self.uuid_to_path.read().unwrap().get(uuid).cloned()
+    }
+
+    /// Resolve a filesystem path to its UUID in the workspace CRDT.
+    pub fn resolve_uuid(&self, path: &str) -> Option<String> {
+        let normalized = normalize_sync_path(path);
+        self.path_to_uuid.read().unwrap().get(&normalized).cloned()
+    }
+
+    /// Get all active file UUIDs in the workspace CRDT.
+    pub fn get_all_file_uuids(&self) -> Vec<String> {
+        self.workspace_crdt
+            .list_active_files()
+            .into_iter()
+            .map(|(uuid, _)| uuid)
+            .collect()
     }
 
     // =========================================================================
@@ -1274,6 +1354,16 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         {
             let mut cache = self.last_synced_body_svs.write().unwrap();
             cache.clear();
+        }
+
+        {
+            let mut uuid_map = self.uuid_to_path.write().unwrap();
+            uuid_map.clear();
+        }
+
+        {
+            let mut path_map = self.path_to_uuid.write().unwrap();
+            path_map.clear();
         }
 
         // Note: We intentionally do NOT clear focused_files on reset.

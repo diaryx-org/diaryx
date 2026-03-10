@@ -37,6 +37,14 @@ import {
   resolveEffectivePalette,
 } from "./appearance.utils";
 import { getThemeStore } from "./theme.svelte";
+import {
+  getThemeLibraryPath,
+  getThemeSettingsPath,
+  getTypographyLibraryPath,
+  getTypographySettingsPath,
+  readWorkspaceText,
+  writeWorkspaceText,
+} from "$lib/workspace/workspaceAssetStorage";
 
 const APPEARANCE_STORAGE_KEY = "diaryx-appearance";
 const THEME_LIBRARY_STORAGE_KEY = "diaryx-theme-library-v1";
@@ -271,42 +279,44 @@ function saveAppearance(appearance: UserAppearance): void {
   }
 }
 
+function parseThemeLibraryInput(input: unknown): Record<string, ThemeLibraryEntry> {
+  if (!Array.isArray(input)) return {};
+
+  const out: Record<string, ThemeLibraryEntry> = {};
+  for (const item of input) {
+    if (!isRecord(item) || !isThemeDefinition(item.theme)) continue;
+    const sourceRaw = isRecord(item.source) ? item.source : {};
+    const source: ThemeSourceMetadata = {
+      source:
+        sourceRaw.source === "registry" ||
+        sourceRaw.source === "local" ||
+        sourceRaw.source === "bundle"
+          ? sourceRaw.source
+          : "local",
+      registryId:
+        typeof sourceRaw.registryId === "string" ? sourceRaw.registryId : undefined,
+      fileName:
+        typeof sourceRaw.fileName === "string" ? sourceRaw.fileName : undefined,
+      installedAt:
+        typeof sourceRaw.installedAt === "number"
+          ? sourceRaw.installedAt
+          : undefined,
+    };
+
+    const theme = cloneTheme(item.theme);
+    out[theme.id] = { theme, source };
+  }
+
+  return out;
+}
+
 function loadThemeLibrary(): Record<string, ThemeLibraryEntry> {
   if (typeof window === "undefined") return {};
 
   try {
     const raw = localStorage.getItem(THEME_LIBRARY_STORAGE_KEY);
     if (!raw) return {};
-
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return {};
-
-    const out: Record<string, ThemeLibraryEntry> = {};
-    for (const item of parsed) {
-      if (!isRecord(item) || !isThemeDefinition(item.theme)) continue;
-      const sourceRaw = isRecord(item.source) ? item.source : {};
-      const source: ThemeSourceMetadata = {
-        source:
-          sourceRaw.source === "registry" ||
-          sourceRaw.source === "local" ||
-          sourceRaw.source === "bundle"
-            ? sourceRaw.source
-            : "local",
-        registryId:
-          typeof sourceRaw.registryId === "string" ? sourceRaw.registryId : undefined,
-        fileName:
-          typeof sourceRaw.fileName === "string" ? sourceRaw.fileName : undefined,
-        installedAt:
-          typeof sourceRaw.installedAt === "number"
-            ? sourceRaw.installedAt
-            : undefined,
-      };
-
-      const theme = cloneTheme(item.theme);
-      out[theme.id] = { theme, source };
-    }
-
-    return out;
+    return parseThemeLibraryInput(JSON.parse(raw));
   } catch {
     return {};
   }
@@ -325,42 +335,46 @@ function saveThemeLibrary(library: Record<string, ThemeLibraryEntry>): void {
   }
 }
 
+function parseTypographyLibraryInput(
+  input: unknown,
+): Record<string, TypographyLibraryEntry> {
+  if (!Array.isArray(input)) return {};
+
+  const out: Record<string, TypographyLibraryEntry> = {};
+  for (const item of input) {
+    if (!isRecord(item) || !isTypographyDefinition(item.typography)) continue;
+    const sourceRaw = isRecord(item.source) ? item.source : {};
+    const source: TypographySourceMetadata = {
+      source:
+        sourceRaw.source === "registry" ||
+        sourceRaw.source === "local" ||
+        sourceRaw.source === "bundle"
+          ? sourceRaw.source
+          : "local",
+      registryId:
+        typeof sourceRaw.registryId === "string" ? sourceRaw.registryId : undefined,
+      fileName:
+        typeof sourceRaw.fileName === "string" ? sourceRaw.fileName : undefined,
+      installedAt:
+        typeof sourceRaw.installedAt === "number"
+          ? sourceRaw.installedAt
+          : undefined,
+    };
+
+    const typography = cloneTypography(item.typography);
+    out[typography.id] = { typography, source };
+  }
+
+  return out;
+}
+
 function loadTypographyLibrary(): Record<string, TypographyLibraryEntry> {
   if (typeof window === "undefined") return {};
 
   try {
     const raw = localStorage.getItem(TYPOGRAPHY_LIBRARY_STORAGE_KEY);
     if (!raw) return {};
-
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return {};
-
-    const out: Record<string, TypographyLibraryEntry> = {};
-    for (const item of parsed) {
-      if (!isRecord(item) || !isTypographyDefinition(item.typography)) continue;
-      const sourceRaw = isRecord(item.source) ? item.source : {};
-      const source: TypographySourceMetadata = {
-        source:
-          sourceRaw.source === "registry" ||
-          sourceRaw.source === "local" ||
-          sourceRaw.source === "bundle"
-            ? sourceRaw.source
-            : "local",
-        registryId:
-          typeof sourceRaw.registryId === "string" ? sourceRaw.registryId : undefined,
-        fileName:
-          typeof sourceRaw.fileName === "string" ? sourceRaw.fileName : undefined,
-        installedAt:
-          typeof sourceRaw.installedAt === "number"
-            ? sourceRaw.installedAt
-            : undefined,
-      };
-
-      const typography = cloneTypography(item.typography);
-      out[typography.id] = { typography, source };
-    }
-
-    return out;
+    return parseTypographyLibraryInput(JSON.parse(raw));
   } catch {
     return {};
   }
@@ -378,6 +392,94 @@ function saveTypographyLibrary(
     );
   } catch {
     // Ignore storage write errors.
+  }
+}
+
+function parseThemeSettingsInput(input: unknown): Partial<UserAppearance> {
+  if (!isRecord(input)) return {};
+
+  const next: Partial<UserAppearance> = {};
+  if (typeof input.presetId === "string" && input.presetId.length > 0) {
+    next.presetId = input.presetId;
+  }
+  if (isFiniteNumber(input.accentHue)) {
+    next.accentHue = input.accentHue;
+  } else if (input.accentHue === null) {
+    next.accentHue = null;
+  }
+  return next;
+}
+
+function parseTypographySettingsFileInput(
+  input: unknown,
+): Partial<UserAppearance> {
+  if (!isRecord(input)) return {};
+
+  const next: Partial<UserAppearance> = {};
+  if (
+    typeof input.typographyPresetId === "string" &&
+    input.typographyPresetId.length > 0
+  ) {
+    next.typographyPresetId = input.typographyPresetId;
+  }
+  next.typographyOverrides = parseTypographySettingsInput(input.typographyOverrides);
+  return next;
+}
+
+async function persistThemeWorkspaceFiles(
+  appearance: UserAppearance,
+  library: Record<string, ThemeLibraryEntry>,
+): Promise<void> {
+  try {
+    await Promise.all([
+      writeWorkspaceText(
+        getThemeSettingsPath(),
+        JSON.stringify(
+          {
+            presetId: appearance.presetId,
+            accentHue: appearance.accentHue,
+          },
+          null,
+          2,
+        ),
+      ),
+      writeWorkspaceText(
+        getThemeLibraryPath(),
+        JSON.stringify(Object.values(library), null, 2),
+      ),
+    ]);
+  } catch (error) {
+    console.warn("[appearanceStore] Failed to persist workspace themes:", error);
+  }
+}
+
+async function persistTypographyWorkspaceFiles(
+  appearance: UserAppearance,
+  library: Record<string, TypographyLibraryEntry>,
+): Promise<void> {
+  try {
+    await Promise.all([
+      writeWorkspaceText(
+        getTypographySettingsPath(),
+        JSON.stringify(
+          {
+            typographyPresetId: appearance.typographyPresetId,
+            typographyOverrides: appearance.typographyOverrides,
+          },
+          null,
+          2,
+        ),
+      ),
+      writeWorkspaceText(
+        getTypographyLibraryPath(),
+        JSON.stringify(Object.values(library), null, 2),
+      ),
+    ]);
+  } catch (error) {
+    console.warn(
+      "[appearanceStore] Failed to persist workspace typographies:",
+      error,
+    );
   }
 }
 
@@ -580,6 +682,8 @@ export function createAppearanceStore() {
     );
 
     saveAppearance(appearance);
+    void persistThemeWorkspaceFiles(appearance, themeLibrary);
+    void persistTypographyWorkspaceFiles(appearance, typographyLibrary);
     apply();
   }
 
@@ -614,9 +718,11 @@ export function createAppearanceStore() {
       },
     };
     saveThemeLibrary(themeLibrary);
+    void persistThemeWorkspaceFiles(appearance, themeLibrary);
 
     appearance = normalizeAppearance(appearance, getThemeMap(), getTypographyMap());
     saveAppearance(appearance);
+    void persistTypographyWorkspaceFiles(appearance, typographyLibrary);
     apply();
 
     return true;
@@ -630,12 +736,14 @@ export function createAppearanceStore() {
     delete nextLibrary[themeId];
     themeLibrary = nextLibrary;
     saveThemeLibrary(themeLibrary);
+    void persistThemeWorkspaceFiles(appearance, themeLibrary);
 
     if (appearance.presetId === themeId) {
       update({ presetId: "default" });
     } else {
       appearance = normalizeAppearance(appearance, getThemeMap(), getTypographyMap());
       saveAppearance(appearance);
+      void persistTypographyWorkspaceFiles(appearance, typographyLibrary);
       apply();
     }
 
@@ -679,9 +787,11 @@ export function createAppearanceStore() {
       },
     };
     saveTypographyLibrary(typographyLibrary);
+    void persistTypographyWorkspaceFiles(appearance, typographyLibrary);
 
     appearance = normalizeAppearance(appearance, getThemeMap(), getTypographyMap());
     saveAppearance(appearance);
+    void persistThemeWorkspaceFiles(appearance, themeLibrary);
     apply();
 
     return true;
@@ -695,6 +805,7 @@ export function createAppearanceStore() {
     delete nextLibrary[typographyId];
     typographyLibrary = nextLibrary;
     saveTypographyLibrary(typographyLibrary);
+    void persistTypographyWorkspaceFiles(appearance, typographyLibrary);
 
     if (appearance.typographyPresetId === typographyId) {
       update({
@@ -752,6 +863,63 @@ export function createAppearanceStore() {
   if (typeof window !== "undefined") {
     const themeStore = getThemeStore();
     themeStore.onModeChange(() => apply());
+  }
+
+  async function reloadFromWorkspace(): Promise<void> {
+    try {
+      const [
+        rawThemeSettings,
+        rawThemeLibrary,
+        rawTypographySettings,
+        rawTypographyLibrary,
+      ] = await Promise.all([
+        readWorkspaceText(getThemeSettingsPath()),
+        readWorkspaceText(getThemeLibraryPath()),
+        readWorkspaceText(getTypographySettingsPath()),
+        readWorkspaceText(getTypographyLibraryPath()),
+      ]);
+
+      const hasWorkspaceState = [
+        rawThemeSettings,
+        rawThemeLibrary,
+        rawTypographySettings,
+        rawTypographyLibrary,
+      ].some((value) => typeof value === "string" && value.length > 0);
+
+      if (!hasWorkspaceState) {
+        void persistThemeWorkspaceFiles(appearance, themeLibrary);
+        void persistTypographyWorkspaceFiles(appearance, typographyLibrary);
+        return;
+      }
+
+      themeLibrary = rawThemeLibrary
+        ? parseThemeLibraryInput(JSON.parse(rawThemeLibrary))
+        : {};
+      typographyLibrary = rawTypographyLibrary
+        ? parseTypographyLibraryInput(JSON.parse(rawTypographyLibrary))
+        : {};
+
+      appearance = normalizeAppearance(
+        {
+          ...cloneDefaultAppearance(),
+          ...parseThemeSettingsInput(
+            rawThemeSettings ? JSON.parse(rawThemeSettings) : null,
+          ),
+          ...parseTypographySettingsFileInput(
+            rawTypographySettings ? JSON.parse(rawTypographySettings) : null,
+          ),
+        },
+        getThemeMap(),
+        getTypographyMap(),
+      );
+
+      saveThemeLibrary(themeLibrary);
+      saveTypographyLibrary(typographyLibrary);
+      saveAppearance(appearance);
+      apply();
+    } catch (error) {
+      console.warn("[appearanceStore] Failed to reload workspace appearance:", error);
+    }
   }
 
   return {
@@ -838,11 +1006,15 @@ export function createAppearanceStore() {
       update({ typographyOverrides: {} });
     },
 
+    reloadFromWorkspace,
+
     reapply: apply,
 
     reset() {
       appearance = cloneDefaultAppearance();
       saveAppearance(appearance);
+      void persistThemeWorkspaceFiles(appearance, themeLibrary);
+      void persistTypographyWorkspaceFiles(appearance, typographyLibrary);
       clearCssVars();
       clearVarsCache();
     },
@@ -964,6 +1136,7 @@ export function getAppearanceStore() {
       setLineHeight: () => {},
       setContentWidth: () => {},
       clearTypographyOverrides: () => {},
+      reloadFromWorkspace: async () => {},
       reapply: () => {},
       reset: () => {},
       exportTheme: () => ({ $schema: "", theme: BUILTIN_PRESETS.default }),

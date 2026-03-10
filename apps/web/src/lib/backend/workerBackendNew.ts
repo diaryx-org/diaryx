@@ -46,6 +46,7 @@ export class WorkerBackendNew implements Backend {
   private eventEmitter = new BackendEventEmitter();
   private _ready = false;
   private usingMainThreadFallback = false;
+  private guestMode = false;
 
   // Filesystem event subscription management
   private fsEventCallbacks = new Map<number, FileSystemEventCallback>();
@@ -431,6 +432,14 @@ export class WorkerBackendNew implements Backend {
     return this._ready;
   }
 
+  setGuestMode(guestMode: boolean): void {
+    this.guestMode = guestMode;
+  }
+
+  async isGuestMode(): Promise<boolean> {
+    return this.guestMode;
+  }
+
   /**
    * Get the workspace path.
    * For WASM, this is "." (OPFS root = diaryx/).
@@ -811,5 +820,6 @@ export class WorkerBackendNew implements Backend {
 export async function createGuestBackend(): Promise<WorkerBackendNew> {
   const backend = new WorkerBackendNew();
   await backend.init("memory");
+  backend.setGuestMode(true);
   return backend;
 }

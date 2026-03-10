@@ -178,8 +178,12 @@ export const ConditionalBlock = Node.create<ConditionalBlockOptions>({
           const emptyParagraph1 = paragraphType.create();
           const emptyParagraph2 = paragraphType.create();
 
-          // Insert after the current block
-          const insertPos = tr.selection.$from.end(1) + 1;
+          // Node selections on top-level block atoms resolve at doc depth 0,
+          // so `end(1)` is invalid there. Fall back to inserting after the
+          // selected node/current cursor position in that case.
+          const insertPos = tr.selection.$from.depth >= 1
+            ? tr.selection.$from.after(1)
+            : tr.selection.to;
 
           const fragment = [
             openMarker,

@@ -65,9 +65,54 @@ pub enum PluginError {
     #[error("Plugin command error: {0}")]
     CommandError(String),
 
+    /// Permission denied for a host function call.
+    #[error("Permission denied: {0}")]
+    PermissionDenied(String),
+
+    /// A guest call exceeded its time budget.
+    #[error("Plugin call timed out: {0}")]
+    Timeout(String),
+
+    /// No plugin with the given ID is registered.
+    #[error("Plugin not found: {0}")]
+    PluginNotFound(String),
+
+    /// The guest's protocol version is incompatible with the host.
+    #[error("Protocol version mismatch: {0}")]
+    ProtocolMismatch(String),
+
+    /// Plugin configuration is invalid.
+    #[error("Plugin config error: {0}")]
+    ConfigError(String),
+
     /// Generic plugin error.
     #[error("{0}")]
     Other(String),
+}
+
+impl PluginError {
+    /// Whether this error could succeed if retried (e.g., timeouts).
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, PluginError::Timeout(_))
+    }
+
+    /// Whether this error is a permission denial.
+    pub fn is_permission_error(&self) -> bool {
+        matches!(self, PluginError::PermissionDenied(_))
+    }
+}
+
+/// Health status of a registered plugin.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
+pub enum PluginHealth {
+    /// Plugin is functioning normally.
+    Healthy,
+    /// Plugin has experienced non-fatal issues.
+    Degraded(String),
+    /// Plugin has failed and is not receiving dispatches.
+    Failed(String),
 }
 
 /// Context provided to plugins during initialization.

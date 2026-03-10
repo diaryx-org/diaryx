@@ -802,6 +802,10 @@ export class AuthService {
       },
     });
 
+    if (response.status === 404) {
+      return;
+    }
+
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
       throw new AuthError(data.error || "Failed to delete workspace", response.status);

@@ -2,7 +2,20 @@
  * Site Publishing Store - Manages published-site state in the Share sidebar.
  */
 
-import { getCurrentWorkspace } from '$lib/auth';
+import {
+  createServerWorkspace,
+  getAuthState,
+} from '$lib/auth';
+import { createLocalWorkspaceSnapshot } from '$lib/publish/workspaceSnapshot';
+import {
+  getCurrentWorkspaceId,
+  getLocalWorkspace,
+  getServerWorkspaceId,
+  isWorkspaceSyncEnabled,
+  setPluginMetadata,
+  type LocalWorkspace,
+} from '$lib/storage/localWorkspaceRegistry.svelte';
+import { collaborationStore } from './collaborationStore.svelte';
 import {
   createSite,
   createToken,
@@ -13,9 +26,11 @@ import {
   removeCustomDomain,
   revokeToken,
   setCustomDomain,
+  type ApiError,
   type AudienceBuildSummary,
   type CreateSiteRequest,
   type CreateTokenRequest,
+  type PublishResult,
   type PublishedSite,
   type SiteAccessToken,
 } from '../services/sitePublishingService';
@@ -73,7 +88,11 @@ class SitePublishingStore {
   }
 
   get defaultWorkspaceId(): string | null {
-    return getCurrentWorkspace()?.id ?? null;
+    return this.getDefaultWorkspace()?.id ?? null;
+  }
+
+  get defaultWorkspaceName(): string | null {
+    return this.getDefaultWorkspace()?.name ?? null;
   }
 
   get hasDefaultWorkspace(): boolean {
@@ -103,24 +122,83 @@ class SitePublishingStore {
     this.error = null;
   }
 
-  private resolveWorkspaceId(workspaceId?: string): string | null {
-    const resolved = workspaceId ?? this.defaultWorkspaceId;
-    if (!resolved) {
-      this.error = 'No default workspace is available for publishing.';
+  private getDefaultWorkspace(): LocalWorkspace | null {
+    const workspaceId = getAuthState().activeWorkspaceId ?? getCurrentWorkspaceId();
+    return workspaceId ? getLocalWorkspace(workspaceId) : null;
+  }
+
+  private resolveLocalWorkspace(workspaceId?: string): LocalWorkspace | null {
+    const workspace = workspaceId
+      ? getLocalWorkspace(workspaceId)
+      : this.getDefaultWorkspace();
+
+    if (!workspace) {
+      this.error = 'No local workspace is available for publishing.';
       return null;
     }
-    return resolved;
+
+    return workspace;
+  }
+
+  private resolveLinkedWorkspace(workspaceId?: string): { localWorkspace: LocalWorkspace; serverWorkspaceId: string } | null {
+    const localWorkspace = this.resolveLocalWorkspace(workspaceId);
+    if (!localWorkspace) return null;
+
+    const serverWorkspaceId = getServerWorkspaceId(localWorkspace.id);
+    if (!serverWorkspaceId) {
+      this.error = 'This workspace has not been linked to the server yet.';
+      return null;
+    }
+
+    return { localWorkspace, serverWorkspaceId };
+  }
+
+  private async ensureLinkedWorkspace(workspaceId?: string): Promise<{ localWorkspace: LocalWorkspace; serverWorkspaceId: string } | null> {
+    const localWorkspace = this.resolveLocalWorkspace(workspaceId);
+    if (!localWorkspace) return null;
+
+    const existingServerWorkspaceId = getServerWorkspaceId(localWorkspace.id);
+    if (existingServerWorkspaceId) {
+      return { localWorkspace, serverWorkspaceId: existingServerWorkspaceId };
+    }
+
+    const remoteWorkspace = await createServerWorkspace(localWorkspace.name);
+    setPluginMetadata(localWorkspace.id, 'sync', {
+      serverId: remoteWorkspace.id,
+      syncEnabled: false,
+    });
+
+    return { localWorkspace, serverWorkspaceId: remoteWorkspace.id };
+  }
+
+  private shouldUseSyncFastPath(localWorkspaceId: string): boolean {
+    return (
+      isWorkspaceSyncEnabled(localWorkspaceId)
+      && collaborationStore.collaborationEnabled
+      && collaborationStore.effectiveSyncStatus === 'synced'
+    );
   }
 
   async load(workspaceId?: string): Promise<void> {
     if (this.isLoading) return;
 
-    const resolvedWorkspaceId = this.resolveWorkspaceId(workspaceId);
+    const localWorkspace = this.resolveLocalWorkspace(workspaceId);
+    if (!localWorkspace) {
+      this.site = null;
+      this.audiences = [];
+      this.tokens = [];
+      this.lastPublishedAt = null;
+      return;
+    }
+
+    const resolvedWorkspaceId = getServerWorkspaceId(localWorkspace.id);
     if (!resolvedWorkspaceId) {
       this.site = null;
       this.audiences = [];
       this.tokens = [];
       this.lastPublishedAt = null;
+      this.lastCreatedAccessUrl = null;
+      this.error = null;
       return;
     }
 
@@ -143,7 +221,7 @@ class SitePublishingStore {
       this.audiences = response.audiences;
       this.lastPublishedAt = response.site.last_published_at;
 
-      await this.refreshTokens(resolvedWorkspaceId);
+      await this.refreshTokens(localWorkspace.id);
     } catch (error) {
       this.error = getErrorMessage(error);
       console.error('[SitePublishingStore] Failed to load publishing state:', error);
@@ -155,20 +233,20 @@ class SitePublishingStore {
   async create(input: CreateSiteRequest, workspaceId?: string): Promise<PublishedSite | null> {
     if (this.isCreatingSite) return null;
 
-    const resolvedWorkspaceId = this.resolveWorkspaceId(workspaceId);
-    if (!resolvedWorkspaceId) return null;
+    const workspace = await this.ensureLinkedWorkspace(workspaceId);
+    if (!workspace) return null;
 
     this.isCreatingSite = true;
     this.error = null;
 
     try {
-      const site = await createSite(resolvedWorkspaceId, input);
+      const site = await createSite(workspace.serverWorkspaceId, input);
       this.site = site;
       this.audiences = [];
       this.tokens = [];
       this.lastPublishedAt = site.last_published_at;
       this.lastCreatedAccessUrl = null;
-      await this.refreshTokens(resolvedWorkspaceId);
+      await this.refreshTokens(workspace.localWorkspace.id);
       return site;
     } catch (error) {
       this.error = getErrorMessage(error);
@@ -182,14 +260,14 @@ class SitePublishingStore {
   async remove(workspaceId?: string): Promise<boolean> {
     if (this.isDeletingSite) return false;
 
-    const resolvedWorkspaceId = this.resolveWorkspaceId(workspaceId);
-    if (!resolvedWorkspaceId) return false;
+    const workspace = this.resolveLinkedWorkspace(workspaceId);
+    if (!workspace) return false;
 
     this.isDeletingSite = true;
     this.error = null;
 
     try {
-      await deleteSite(resolvedWorkspaceId);
+      await deleteSite(workspace.serverWorkspaceId);
       this.site = null;
       this.audiences = [];
       this.tokens = [];
@@ -208,14 +286,31 @@ class SitePublishingStore {
   async publishNow(audience?: string, workspaceId?: string): Promise<boolean> {
     if (this.isPublishing) return false;
 
-    const resolvedWorkspaceId = this.resolveWorkspaceId(workspaceId);
-    if (!resolvedWorkspaceId) return false;
+    const workspace = await this.ensureLinkedWorkspace(workspaceId);
+    if (!workspace) return false;
 
     this.isPublishing = true;
     this.error = null;
 
     try {
-      const result = await publishSite(resolvedWorkspaceId, audience);
+      const useSyncFastPath = this.shouldUseSyncFastPath(workspace.localWorkspace.id);
+      let result: PublishResult;
+      if (useSyncFastPath) {
+        try {
+          result = await publishSite(workspace.serverWorkspaceId, { audience });
+        } catch (error) {
+          if ((error as ApiError | undefined)?.code !== 'snapshot_required') {
+            throw error;
+          }
+
+          const snapshot = await createLocalWorkspaceSnapshot(workspace.localWorkspace.id);
+          result = await publishSite(workspace.serverWorkspaceId, { audience, snapshot });
+        }
+      } else {
+        const snapshot = await createLocalWorkspaceSnapshot(workspace.localWorkspace.id);
+        result = await publishSite(workspace.serverWorkspaceId, { audience, snapshot });
+      }
+
       this.lastPublishedAt = result.published_at;
 
       if (this.site) {
@@ -245,14 +340,14 @@ class SitePublishingStore {
   async createToken(input: CreateTokenRequest, workspaceId?: string): Promise<SiteAccessToken | null> {
     if (this.isCreatingToken) return null;
 
-    const resolvedWorkspaceId = this.resolveWorkspaceId(workspaceId);
-    if (!resolvedWorkspaceId) return null;
+    const workspace = this.resolveLinkedWorkspace(workspaceId);
+    if (!workspace) return null;
 
     this.isCreatingToken = true;
     this.error = null;
 
     try {
-      const result = await createToken(resolvedWorkspaceId, input);
+      const result = await createToken(workspace.serverWorkspaceId, input);
       this.tokens = [result.token, ...this.tokens.filter((token) => token.id !== result.token.id)];
       this.lastCreatedAccessUrl = result.accessUrl;
       return result.token;
@@ -268,8 +363,11 @@ class SitePublishingStore {
   async refreshTokens(workspaceId?: string): Promise<void> {
     if (this.isRefreshingTokens) return;
 
-    const resolvedWorkspaceId = this.resolveWorkspaceId(workspaceId);
-    if (!resolvedWorkspaceId) return;
+    const workspace = this.resolveLinkedWorkspace(workspaceId);
+    if (!workspace) {
+      if (!this.site) this.tokens = [];
+      return;
+    }
 
     if (!this.site) {
       this.tokens = [];
@@ -279,7 +377,7 @@ class SitePublishingStore {
     this.isRefreshingTokens = true;
 
     try {
-      const tokens = await listTokens(resolvedWorkspaceId);
+      const tokens = await listTokens(workspace.serverWorkspaceId);
       this.tokens = [...tokens].sort((a, b) => b.created_at - a.created_at);
     } catch (error) {
       this.error = getErrorMessage(error);
@@ -292,14 +390,14 @@ class SitePublishingStore {
   async revokeToken(tokenId: string, workspaceId?: string): Promise<boolean> {
     if (this.isRevokingToken) return false;
 
-    const resolvedWorkspaceId = this.resolveWorkspaceId(workspaceId);
-    if (!resolvedWorkspaceId) return false;
+    const workspace = this.resolveLinkedWorkspace(workspaceId);
+    if (!workspace) return false;
 
     this.isRevokingToken = true;
     this.error = null;
 
     try {
-      await revokeToken(resolvedWorkspaceId, tokenId);
+      await revokeToken(workspace.serverWorkspaceId, tokenId);
       this.tokens = this.tokens.filter((token) => token.id !== tokenId);
       return true;
     } catch (error) {
@@ -314,14 +412,14 @@ class SitePublishingStore {
   async setDomain(domain: string, workspaceId?: string): Promise<boolean> {
     if (this.isSettingDomain) return false;
 
-    const resolvedWorkspaceId = this.resolveWorkspaceId(workspaceId);
-    if (!resolvedWorkspaceId) return false;
+    const workspace = this.resolveLinkedWorkspace(workspaceId);
+    if (!workspace) return false;
 
     this.isSettingDomain = true;
     this.error = null;
 
     try {
-      const updated = await setCustomDomain(resolvedWorkspaceId, domain);
+      const updated = await setCustomDomain(workspace.serverWorkspaceId, domain);
       this.site = updated;
       return true;
     } catch (error) {
@@ -336,14 +434,14 @@ class SitePublishingStore {
   async removeDomain(workspaceId?: string): Promise<boolean> {
     if (this.isRemovingDomain) return false;
 
-    const resolvedWorkspaceId = this.resolveWorkspaceId(workspaceId);
-    if (!resolvedWorkspaceId) return false;
+    const workspace = this.resolveLinkedWorkspace(workspaceId);
+    if (!workspace) return false;
 
     this.isRemovingDomain = true;
     this.error = null;
 
     try {
-      await removeCustomDomain(resolvedWorkspaceId);
+      await removeCustomDomain(workspace.serverWorkspaceId);
       if (this.site) {
         this.site = { ...this.site, custom_domain: null };
       }

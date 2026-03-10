@@ -40,5 +40,5 @@ loaded at runtime by the browser plugin manager.
 
 `backend.rs` exposes import parsing functions (`parseDayOneJson`, `parseMarkdownFile`)
 that take raw file bytes from JavaScript and return parsed entries as JSON. These
-are used by the web UI's `FormatImportSettings` component. The actual entry
+are consumed by the web app's import flows and plugin host actions. The actual entry
 writing is handled by the `ImportEntries` command through `execute()`/`executeJs()`.

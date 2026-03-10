@@ -13,7 +13,6 @@
   } from "@lucide/svelte";
   import type { Api } from "$lib/backend/api";
   import {
-    bytesToBase64,
     trackBlobUrl,
   } from "@/models/services/attachmentService";
   import {
@@ -462,7 +461,6 @@
       const svgString = generateSvgString();
       const encoder = new TextEncoder();
       const bytes = new Uint8Array(encoder.encode(svgString));
-      const dataBase64 = bytesToBase64(bytes);
 
       // Reuse existing filename when editing, otherwise generate a new one
       const filename = existingFilename
@@ -473,7 +471,7 @@
       const attachmentPath = await api.uploadAttachment(
         entryPath,
         filename,
-        dataBase64,
+        bytes,
       );
       const canonicalPath = await api.canonicalizeLink(
         attachmentPath,
@@ -499,6 +497,7 @@
         entryPath,
         canonicalPath,
         file,
+        bytes,
       );
 
       // Create blob URL for display

@@ -21,15 +21,17 @@
   import AccountSettings from "./settings/AccountSettings.svelte";
   import BackupSettings from "./settings/BackupSettings.svelte";
   import ImportSettings from "./settings/ImportSettings.svelte";
-  import FormatImportSettings from "./settings/FormatImportSettings.svelte";
   import ClearDataSettings from "./settings/ClearDataSettings.svelte";
   import DebugInfo from "./settings/DebugInfo.svelte";
   import WorkspaceManagement from "./settings/WorkspaceManagement.svelte";
   import PluginSettingsTab from "./settings/PluginSettingsTab.svelte";
   import PluginIframe from "./components/PluginIframe.svelte";
+  import { getLegacyBuiltinFields } from "./components/pluginBuiltinCompat";
   import UpgradeBanner from "$lib/components/UpgradeBanner.svelte";
   import { getPluginStore } from "../models/stores/pluginStore.svelte";
   import { getPlugin as getBrowserPlugin } from "$lib/plugins/browserPluginManager.svelte";
+  import { runPluginUpdateConfigFlow } from "$lib/plugins/configUpdateFlow";
+  import { mergeRuntimePluginConfig } from "$lib/plugins/pluginRuntimeConfig";
   import type { Api } from "$lib/backend/api";
   import type { JsonValue } from "$lib/backend/generated/serde_json/JsonValue";
 
@@ -77,61 +79,20 @@
     return typeof mode === "string" && mode.toLowerCase() === "managed";
   }
 
-  async function ensureManagedSyncPermission(
-    pluginId: string,
-    updated: Record<string, JsonValue>,
-  ) {
-    if (pluginId !== "diaryx.ai" || !isManagedMode(updated)) return;
-    if (!api || !workspacePath) return;
-
+  function getServerHostname(): string | null {
     const serverUrl = authState.serverUrl;
-    if (!serverUrl) return;
-
-    let hostname: string;
+    if (!serverUrl) return null;
     try {
-      hostname = new URL(serverUrl).hostname;
+      return new URL(serverUrl).hostname;
     } catch {
-      return;
+      return null;
     }
+  }
 
-    const fm = await api.getFrontmatter(workspacePath);
-    const existingPlugins =
-      (fm.plugins as Record<string, Record<string, unknown>> | undefined) ?? {};
-    const aiPlugin = { ...(existingPlugins["diaryx.ai"] ?? {}) };
-    const permissions =
-      (aiPlugin.permissions as Record<string, unknown> | undefined) ?? {};
-    const httpRule =
-      (permissions.http_requests as Record<string, unknown> | undefined) ?? {};
-
-    const includes = Array.isArray(httpRule.include)
-      ? httpRule.include.filter((value): value is string => typeof value === "string")
-      : [];
-    if (includes.includes(hostname)) return;
-
-    const excludes = Array.isArray(httpRule.exclude)
-      ? httpRule.exclude.filter((value): value is string => typeof value === "string")
-      : [];
-
-    const nextPlugins = {
-      ...existingPlugins,
-      "diaryx.ai": {
-        ...aiPlugin,
-        permissions: {
-          ...permissions,
-          http_requests: {
-            include: [...includes, hostname],
-            exclude: excludes,
-          },
-        },
-      },
-    };
-
-    await api.setFrontmatterProperty(
-      workspacePath,
-      "plugins",
-      nextPlugins as unknown as JsonValue,
-      workspacePath,
-    );
+  function getBuiltinFieldsForTab(tab: (typeof pluginSettingsTabs)[number]) {
+    return tab.contribution.component?.type === "Builtin"
+      ? getLegacyBuiltinFields(tab.contribution.component.component_id)
+      : null;
   }
 
   async function loadPluginConfig(pluginId: string) {
@@ -140,12 +101,24 @@
       const browserPlugin = getBrowserPlugin(pluginId);
       if (browserPlugin) {
         const raw = await browserPlugin.getConfig();
-        pluginConfigs = { ...pluginConfigs, [pluginId]: (raw as Record<string, JsonValue>) ?? {} };
+        pluginConfigs = {
+          ...pluginConfigs,
+          [pluginId]: mergeRuntimePluginConfig(
+            pluginId,
+            ((raw as Record<string, JsonValue>) ?? {}),
+          ),
+        };
         return;
       }
       if (!api) return;
       const raw = await api.getPluginConfig(pluginId);
-      pluginConfigs = { ...pluginConfigs, [pluginId]: (raw as Record<string, JsonValue>) ?? {} };
+      pluginConfigs = {
+        ...pluginConfigs,
+        [pluginId]: mergeRuntimePluginConfig(
+          pluginId,
+          ((raw as Record<string, JsonValue>) ?? {}),
+        ),
+      };
     } catch {
       pluginConfigs = { ...pluginConfigs, [pluginId]: {} };
     }
@@ -165,7 +138,18 @@
         await api.setPluginConfig(pluginId, updated);
       }
 
-      await ensureManagedSyncPermission(pluginId, updated);
+      await runPluginUpdateConfigFlow({
+        pluginId,
+        api,
+        workspacePath,
+        params: {
+          source: "plugin_config",
+          config: updated,
+          ...(pluginId === "diaryx.ai" && isManagedMode(updated) && getServerHostname()
+            ? { server_hostname: getServerHostname() }
+            : {}),
+        },
+      });
     } catch (e) {
       console.error(`[Settings] Failed to save plugin config for ${pluginId}:`, e);
     }
@@ -173,6 +157,17 @@
 
   // Track active tab
   let activeTab = $state("general");
+
+  // Eagerly load plugin config when a plugin settings tab is active.
+  // This replaces the old {#await} pattern so the UI renders immediately.
+  $effect(() => {
+    const match = pluginSettingsTabs.find(
+      (t) => activeTab === `plugin-${t.contribution.id}`,
+    );
+    if (match && !(match.pluginId in pluginConfigs)) {
+      void loadPluginConfig(match.pluginId);
+    }
+  });
 
   const settingsTabs = $derived([
     { id: "general", label: "General" },
@@ -195,7 +190,7 @@
 {#snippet settingsContent()}
   <div class="flex h-full min-h-0 flex-col">
     <!-- Content -->
-    <div class="flex-1 min-h-0 overflow-y-auto pr-2">
+    <div class="flex-1 min-h-0 overflow-y-auto pr-2" data-settings-scroll-container>
       {#if activeTab === "general"}
         <div class="space-y-4">
           <DisplaySettings bind:focusMode />
@@ -219,7 +214,6 @@
         <div class="space-y-4">
           <BackupSettings {workspacePath} />
           <ImportSettings {workspacePath} />
-          <FormatImportSettings {workspacePath} />
           <ClearDataSettings />
         </div>
       {:else if activeTab === "debug"}
@@ -239,8 +233,7 @@
                     {onHostAction}
                   />
                 </div>
-              {:else if tab.contribution.fields.length > 0}
-                {#await loadPluginConfig(tab.pluginId) then}
+              {:else if tab.contribution.fields.length > 0 || getBuiltinFieldsForTab(tab)}
                   {#if tab.pluginId === "diaryx.ai" && isManagedMode(pluginConfigs[tab.pluginId] ?? {}) && authState.tier !== "plus"}
                     <UpgradeBanner
                       feature="Managed AI"
@@ -249,11 +242,12 @@
                   {/if}
                   <PluginSettingsTab
                     pluginId={tab.pluginId}
-                    fields={tab.contribution.fields}
+                    fields={tab.contribution.fields.length > 0 ? tab.contribution.fields : (getBuiltinFieldsForTab(tab) ?? [])}
                     config={pluginConfigs[tab.pluginId] ?? {}}
                     onConfigChange={(key, value) => handlePluginConfigChange(tab.pluginId, key, value)}
+                    {api}
+                    {onHostAction}
                   />
-                {/await}
               {:else}
                 <p class="text-sm text-muted-foreground">
                   No configurable settings for this plugin.

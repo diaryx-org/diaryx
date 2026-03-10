@@ -40,6 +40,7 @@ export type { MarkdownLevel } from './MarkdownLevel';
 export type { MarkdownSyntax } from './MarkdownSyntax';
 export type { ParsedLinkResult } from './ParsedLinkResult';
 export type { PluginCapability } from './PluginCapability';
+export type { PluginHealth } from './PluginHealth';
 export type { PluginId } from './PluginId';
 export type { PluginManifest } from './PluginManifest';
 export type { Response } from './Response';

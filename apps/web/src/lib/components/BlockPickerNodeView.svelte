@@ -145,6 +145,7 @@
     const { contribution } = item;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const params: Record<string, any> = { ...(contribution.params as Record<string, unknown> ?? {}) };
+    const editorCommand = contribution.editor_command;
     if (contribution.prompt) {
       const input = window.prompt(contribution.prompt.message, contribution.prompt.default_value);
       if (!input) return;
@@ -152,9 +153,18 @@
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const commands = editor.commands as Record<string, any>;
-    const commandFn = commands[contribution.editor_command];
+    const commandFn = commands[editorCommand];
     if (typeof commandFn === "function") {
-      onSelect(() => commandFn(params));
+      onSelect(() => {
+        // Re-read the command after the picker atom removes itself so the
+        // command executes against the editor's current state.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const nextCommands = editor.commands as Record<string, any>;
+        const nextCommandFn = nextCommands[editorCommand];
+        if (typeof nextCommandFn === "function") {
+          nextCommandFn(params);
+        }
+      });
     }
   }
 

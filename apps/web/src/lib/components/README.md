@@ -13,6 +13,7 @@ attachments:
   - '[FloatingMenuComponent.svelte](/apps/web/src/lib/components/FloatingMenuComponent.svelte)'
   - '[HighlightColorPicker.svelte](/apps/web/src/lib/components/HighlightColorPicker.svelte)'
   - '[MoreStylesPicker.svelte](/apps/web/src/lib/components/MoreStylesPicker.svelte)'
+  - '[PluginStatusItems.svelte](/apps/web/src/lib/components/PluginStatusItems.svelte)'
   - '[PluginIframe.svelte](/apps/web/src/lib/components/PluginIframe.svelte)'
   - '[PluginSidebarPanel.svelte](/apps/web/src/lib/components/PluginSidebarPanel.svelte)'
   - '[UpgradeBanner.svelte](/apps/web/src/lib/components/UpgradeBanner.svelte)'
@@ -29,14 +30,15 @@ Reusable Svelte components for the editor and UI.
 
 | File | Purpose |
 |------|---------|
-| `AttachmentPicker.svelte` | Attachment selection dialog (normalizes ancestor/upload refs via backend link parser before thumbnail reads and insertion) |
-| `AttachmentPickerNodeView.svelte` | Inline attachment node (same link-parser normalization path as dialog picker) |
+| `AttachmentPicker.svelte` | Attachment selection dialog (normalizes ancestor/upload refs via backend link parser, classifies attachments by media kind, and lazy-loads cached thumbnails only as image tiles approach the viewport). |
+| `AttachmentPickerNodeView.svelte` | Inline attachment node (same normalized attachment lookup path and media-kind classification as the dialog picker, with the same viewport-gated thumbnail loading). |
 | `BubbleMenuComponent.svelte` | TipTap bubble menu |
 | `DrawingBlockNodeView.svelte` | Drawing block node view (view mode + edit overlay) |
 | `DrawingCanvas.svelte` | Freehand drawing editor with perfect-freehand |
 | `FloatingMenuComponent.svelte` | TipTap floating menu |
 | `HighlightColorPicker.svelte` | Text highlight color picker |
 | `MoreStylesPicker.svelte` | Overflow formatting menu (strikethrough, inline code, spoiler) |
+| `PluginStatusItems.svelte` | Footer status-bar renderer for plugin-contributed items; the host displays plugin-reported status but does not hardcode sync-specific actions. |
 | `PluginIframe.svelte` | Sandboxed plugin iframe host with command bridge, managed-context injection for `diaryx.ai`, backend `executePluginCommand` fallback for native/Tauri runtimes, and response-shape normalization for plugin HTML payloads. |
 | `PluginSidebarPanel.svelte` | Sidebar wrapper for plugin component refs (Builtin/Declarative/Iframe). |
 | `UpgradeBanner.svelte` | Shared upsell surface for Plus-gated features (used for managed AI gating). |

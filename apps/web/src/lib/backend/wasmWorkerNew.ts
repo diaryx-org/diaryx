@@ -169,47 +169,59 @@ async function loadWasmModule(): Promise<any> {
 }
 
 /**
- * Migrate legacy OPFS workspace directory to a new name.
- * Copies files from "diaryx/" to the target name, then deletes the old directory.
- * Also migrates legacy ".diaryx/" at OPFS root into the workspace directory.
+ * Migrate legacy OPFS workspace directories into the stable workspace ID root.
+ * Copies files from legacy name-based roots into the target ID directory.
  */
-async function migrateWorkspaceDirectory(targetName: string): Promise<void> {
-  if (targetName === "diaryx") return;
+async function migrateWorkspaceDirectory(
+  targetWorkspaceKey: string,
+  workspaceName?: string,
+): Promise<void> {
+  if (targetWorkspaceKey === "diaryx") return;
 
   try {
     const root = await navigator.storage.getDirectory();
 
     // Check if target already exists — no migration needed
     try {
-      await root.getDirectoryHandle(targetName, { create: false });
+      await root.getDirectoryHandle(targetWorkspaceKey, { create: false });
       // Target exists. Still check for legacy .diaryx/ at root to migrate into workspace.
-      await migrateLegacyCrdtDir(root, targetName);
+      await migrateLegacyCrdtDir(root, targetWorkspaceKey);
       return;
     } catch {
-      // Target doesn't exist, check for old directory
+      // Target doesn't exist, check legacy directories.
     }
 
-    // Check if old "diaryx" directory exists
-    let oldDir: FileSystemDirectoryHandle;
-    try {
-      oldDir = await root.getDirectoryHandle("diaryx", { create: false });
-    } catch {
-      // Neither exists — fresh install, also migrate legacy .diaryx/ if present
-      await migrateLegacyCrdtDir(root, targetName);
-      return;
-    }
-
-    // Old directory exists — copy recursively to new name
-    console.log(
-      `[WasmWorker] Migrating workspace directory: diaryx -> ${targetName}`,
+    const candidates = Array.from(
+      new Set(
+        [workspaceName, "diaryx"].filter(
+          (value): value is string =>
+            !!value && value.length > 0 && value !== targetWorkspaceKey,
+        ),
+      ),
     );
-    const newDir = await root.getDirectoryHandle(targetName, { create: true });
-    await copyDirectoryRecursive(oldDir, newDir);
-    await root.removeEntry("diaryx", { recursive: true });
-    console.log(`[WasmWorker] Migration complete: diaryx -> ${targetName}`);
 
-    // Also migrate legacy .diaryx/ at root
-    await migrateLegacyCrdtDir(root, targetName);
+    for (const candidate of candidates) {
+      try {
+        const oldDir = await root.getDirectoryHandle(candidate, { create: false });
+        console.log(
+          `[WasmWorker] Migrating workspace directory: ${candidate} -> ${targetWorkspaceKey}`,
+        );
+        const newDir = await root.getDirectoryHandle(targetWorkspaceKey, {
+          create: true,
+        });
+        await copyDirectoryRecursive(oldDir, newDir);
+        await root.removeEntry(candidate, { recursive: true });
+        console.log(
+          `[WasmWorker] Migration complete: ${candidate} -> ${targetWorkspaceKey}`,
+        );
+        await migrateLegacyCrdtDir(root, targetWorkspaceKey);
+        return;
+      } catch {
+        // Candidate doesn't exist — continue scanning.
+      }
+    }
+
+    await migrateLegacyCrdtDir(root, targetWorkspaceKey);
   } catch (e) {
     console.error("[WasmWorker] Migration failed:", e);
   }
@@ -220,7 +232,7 @@ async function migrateWorkspaceDirectory(targetName: string): Promise<void> {
  */
 async function migrateLegacyCrdtDir(
   root: FileSystemDirectoryHandle,
-  workspaceName: string,
+  workspaceKey: string,
 ): Promise<void> {
   try {
     const legacyDir = await root.getDirectoryHandle(".diaryx", {
@@ -228,7 +240,7 @@ async function migrateLegacyCrdtDir(
     });
     // Legacy .diaryx/ exists at root — copy crdt.db into workspace/.diaryx/
     console.log("[WasmWorker] Migrating legacy .diaryx/ into workspace");
-    const wsDir = await root.getDirectoryHandle(workspaceName, {
+    const wsDir = await root.getDirectoryHandle(workspaceKey, {
       create: true,
     });
     const targetDir = await wsDir.getDirectoryHandle(".diaryx", {
@@ -243,56 +255,30 @@ async function migrateLegacyCrdtDir(
 }
 
 /**
- * Migrate a UUID-named OPFS directory to a name-based one.
- * This handles users who previously had UUID-named directories from workspace switching.
+ * Persist workspace metadata inside the workspace so OPFS discovery does not
+ * depend on the directory name.
  */
-async function migrateUuidToName(
+async function persistWorkspaceMetadata(
   workspaceId: string,
   workspaceName: string,
 ): Promise<void> {
   try {
-    const root = await navigator.storage.getDirectory();
-
-    // Check if name-based directory already exists
-    try {
-      await root.getDirectoryHandle(workspaceName, { create: false });
-      // Name-based dir already exists — skip migration, just clean up UUID dir if present
-      try {
-        await root.removeEntry(workspaceId, { recursive: true });
-        console.log(
-          `[WasmWorker] Cleaned up orphaned UUID directory: ${workspaceId}`,
-        );
-      } catch {
-        // UUID dir doesn't exist — nothing to clean up
-      }
-      return;
-    } catch {
-      // Name-based dir doesn't exist — check for UUID dir to migrate
-    }
-
-    // Check if UUID-named directory exists
-    let uuidDir: FileSystemDirectoryHandle;
-    try {
-      uuidDir = await root.getDirectoryHandle(workspaceId, { create: false });
-    } catch {
-      // Neither exists — nothing to migrate
+    if (!workspaceId) {
       return;
     }
-
-    // UUID dir exists, name dir doesn't — copy UUID → name and delete UUID
-    console.log(
-      `[WasmWorker] Migrating UUID directory to name: ${workspaceId} -> ${workspaceName}`,
-    );
-    const nameDir = await root.getDirectoryHandle(workspaceName, {
-      create: true,
+    await executeCommand("WriteFile", {
+      path: ".diaryx/workspace.json",
+      content: JSON.stringify(
+        {
+          id: workspaceId,
+          name: workspaceName,
+        },
+        null,
+        2,
+      ),
     });
-    await copyDirectoryRecursive(uuidDir, nameDir);
-    await root.removeEntry(workspaceId, { recursive: true });
-    console.log(
-      `[WasmWorker] UUID-to-name migration complete: ${workspaceId} -> ${workspaceName}`,
-    );
   } catch (e) {
-    console.error("[WasmWorker] UUID-to-name migration failed:", e);
+    console.warn("[WasmWorker] Failed to persist workspace metadata:", e);
   }
 }
 
@@ -361,18 +347,12 @@ async function init(
   // Store event port for forwarding filesystem events
   eventPort = port;
 
-  // Use workspace name for OPFS directory naming (human-readable).
-  // The workspaceId is only used for workspace-scoped persistence keys, not path naming.
+  const resolvedWorkspaceId = workspaceId || workspaceName || "My Journal";
   const resolvedWorkspaceName = workspaceName || "My Journal";
 
-  // For OPFS, run legacy "diaryx" -> name migration
+  // For OPFS, run legacy directory migrations into the stable workspace ID root.
   if (storageType === "opfs") {
-    await migrateWorkspaceDirectory(resolvedWorkspaceName);
-
-    // Also migrate UUID-named directories to name-based (for users who had UUID dirs)
-    if (workspaceId && workspaceId !== resolvedWorkspaceName) {
-      await migrateUuidToName(workspaceId, resolvedWorkspaceName);
-    }
+    await migrateWorkspaceDirectory(resolvedWorkspaceId, resolvedWorkspaceName);
   }
 
   // CRDT storage bridge setup was removed from the web host. Sync/CRDT state
@@ -383,10 +363,10 @@ async function init(
   // Create backend with specified storage type
   if (storageType === "opfs") {
     try {
-      backend = await wasm.DiaryxBackend.createOpfs(resolvedWorkspaceName);
+      backend = await wasm.DiaryxBackend.createOpfs(resolvedWorkspaceId);
     } catch (e) {
       console.warn("[WasmWorker] OPFS unavailable, falling back to IndexedDB:", e);
-      backend = await wasm.DiaryxBackend.createIndexedDb(workspaceId ?? undefined);
+      backend = await wasm.DiaryxBackend.createIndexedDb(resolvedWorkspaceId);
     }
   } else if (storageType === "filesystem-access") {
     if (!directoryHandle) {
@@ -404,9 +384,11 @@ async function init(
     backend = (wasm.DiaryxBackend as any).createInMemory();
   } else {
     backend = await wasm.DiaryxBackend.createIndexedDb(
-      workspaceId ?? undefined,
+      resolvedWorkspaceId,
     );
   }
+
+  await persistWorkspaceMetadata(resolvedWorkspaceId, resolvedWorkspaceName);
 
   // Subscribe to filesystem events and forward them to the main thread.
   // The callback receives either a JSON string (FileSystemEvent) or a raw
@@ -878,26 +860,6 @@ export const workerApi = {
     if (b.notifySnapshotImported) {
       b.notifySnapshotImported();
     }
-  },
-
-  // =========================================================================
-  // Share Session REST API (Rust-backed)
-  // =========================================================================
-
-  async createShareSession(serverUrl: string, workspaceId: string, authToken: string, readOnly: boolean): Promise<any> {
-    return getBackend().createShareSession(serverUrl, workspaceId, authToken, readOnly);
-  },
-
-  async lookupShareSession(serverUrl: string, joinCode: string, authToken?: string): Promise<any> {
-    return getBackend().lookupShareSession(serverUrl, joinCode, authToken);
-  },
-
-  async deleteShareSession(serverUrl: string, joinCode: string, authToken: string): Promise<void> {
-    return getBackend().deleteShareSession(serverUrl, joinCode, authToken);
-  },
-
-  async setShareSessionReadOnly(serverUrl: string, joinCode: string, authToken: string, readOnly: boolean): Promise<void> {
-    return getBackend().setShareSessionReadOnly(serverUrl, joinCode, authToken, readOnly);
   },
 
   // =========================================================================

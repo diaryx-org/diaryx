@@ -19,14 +19,13 @@
     Plus,
     FolderOpen,
     Cloud,
+    CloudDownload,
   } from "@lucide/svelte";
   import { toast } from "svelte-sonner";
   import { untrack } from "svelte";
   import { getBackend, createApi } from "./backend";
   import { isTauri } from "$lib/backend/interface";
-  import { getAuthState } from "$lib/auth";
   import { isTierLimitError } from "$lib/billing";
-  import UpgradeBanner from "$lib/components/UpgradeBanner.svelte";
   import {
     getLocalWorkspaces,
     createLocalWorkspace,
@@ -40,8 +39,15 @@
   import {
     getProviderStatus,
     linkWorkspace,
+    listRemoteWorkspaces,
+    downloadWorkspace,
     type ProviderStatus,
+    type RemoteWorkspace,
   } from "$lib/sync/workspaceProviderService";
+  import {
+    captureProviderPluginForTransfer,
+    installCapturedProviderPlugin,
+  } from "$lib/sync/browserProviderBootstrap";
 
   interface Props {
     open?: boolean;
@@ -61,10 +67,15 @@
   // State
   // ========================================================================
 
-  type ContentSource = 'import_zip' | 'start_fresh' | 'open_folder';
+  type ContentSource = 'import_zip' | 'start_fresh' | 'open_folder' | 'download_cloud';
 
   let newWorkspaceName = $state("");
   let contentSource = $state<ContentSource>('start_fresh');
+
+  // Download from cloud state
+  let cloudWorkspaces = $state<RemoteWorkspace[]>([]);
+  let cloudLoading = $state(false);
+  let selectedRemoteWorkspace = $state<RemoteWorkspace | null>(null);
 
   // Provider (sync) state
   let selectedProviderId = $state<string | null>(null);
@@ -96,7 +107,6 @@
   // ========================================================================
 
   let workspaceProviders = $derived(pluginStore.workspaceProviders);
-  let isPlus = $derived(getAuthState().tier === "plus");
   let showOpenFolder = $derived(isTauri() || isStorageTypeSupported('filesystem-access'));
 
   // ========================================================================
@@ -153,6 +163,8 @@
     selectedFolderName = null;
     selectedProviderId = null;
     providerStatus = null;
+    cloudWorkspaces = [];
+    selectedRemoteWorkspace = null;
     newWorkspaceName = getNextLocalWorkspaceName();
     contentSource = 'start_fresh';
   }
@@ -190,6 +202,7 @@
       case 'start_fresh': return selectedProviderId ? 'Create & Sync' : 'Create Workspace';
       case 'import_zip': return selectedProviderId ? 'Import & Sync' : 'Import Workspace';
       case 'open_folder': return selectedProviderId ? 'Open & Sync' : 'Open Workspace';
+      case 'download_cloud': return 'Download Workspace';
     }
     return 'Create Workspace';
   }
@@ -201,6 +214,7 @@
     if (!newWorkspaceName.trim()) return true;
     if (contentSource === 'import_zip' && !importZipFile) return true;
     if (contentSource === 'open_folder' && !selectedFolderPath && !selectedFolderHandle) return true;
+    if (contentSource === 'download_cloud' && !selectedRemoteWorkspace) return true;
     return false;
   }
 
@@ -322,9 +336,18 @@
 
     try {
       const wsName = newWorkspaceName.trim();
+      const capturedProviderPlugin = await captureProviderPluginForTransfer(
+        selectedProviderId,
+      );
 
-      // Step 1: Create local workspace
-      if (contentSource === 'open_folder') {
+      // Step 1: Create local workspace (or download from cloud)
+      if (contentSource === 'download_cloud') {
+        await handleDownloadCloud();
+        toast.success("Workspace downloaded", { description: `"${wsName}" is ready.` });
+        handleClose();
+        onComplete?.();
+        return;
+      } else if (contentSource === 'open_folder') {
         await handleOpenFolder(wsName);
       } else if (contentSource === 'import_zip') {
         await handleImportZip(wsName);
@@ -334,6 +357,10 @@
 
       // Step 2: If provider selected, link to provider
       if (selectedProviderId) {
+        await installCapturedProviderPlugin(
+          selectedProviderId,
+          capturedProviderPlugin,
+        );
         const localWs = getLocalWorkspaces().find(w => w.name === wsName);
         if (localWs) {
           await linkWorkspace(
@@ -357,7 +384,7 @@
     } catch (e) {
       console.error("[AddWorkspace] Initialization error:", e);
       if (isTierLimitError(e)) {
-        error = "Sync requires a Plus subscription. Upgrade to enable sync.";
+        error = "Workspace sync limit reached. Free plans can sync one workspace; upgrade to sync more.";
       } else if (e instanceof Error) {
         error = e.message || "Unknown error";
       } else {
@@ -434,6 +461,44 @@
       : "Done.";
   }
 
+  async function loadCloudWorkspaces() {
+    const provider = workspaceProviders[0];
+    if (!provider) return;
+    cloudLoading = true;
+    try {
+      cloudWorkspaces = await listRemoteWorkspaces(provider.contribution.id);
+    } catch (e) {
+      console.warn("[AddWorkspaceDialog] Failed to list cloud workspaces:", e);
+      cloudWorkspaces = [];
+    } finally {
+      cloudLoading = false;
+    }
+  }
+
+  async function handleDownloadCloud() {
+    if (!selectedRemoteWorkspace) throw new Error("No remote workspace selected");
+    const provider = workspaceProviders[0];
+    if (!provider) throw new Error("No workspace provider available");
+
+    progressMessage = `Downloading "${selectedRemoteWorkspace.name}"...`;
+
+    const result = await downloadWorkspace(
+      provider.contribution.id,
+      {
+        remoteId: selectedRemoteWorkspace.id,
+        name: selectedRemoteWorkspace.name,
+        link: true,
+      },
+      (progress) => {
+        importProgress = progress.percent;
+        progressMessage = progress.message;
+      },
+    );
+
+    importProgress = 100;
+    progressMessage = `Downloaded ${result.filesImported} files.`;
+  }
+
   function handleClose() {
     open = false;
     onOpenChange?.(false);
@@ -504,37 +569,32 @@
             </div>
           {/if}
 
-          <!-- Provider Dropdown (Plus only) -->
+          <!-- Sync Provider -->
           {#if workspaceProviders.length > 0}
-            {#if isPlus}
-              <div class="space-y-2">
-                <Label class="text-sm">Sync</Label>
-                <select
-                  class="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  value={selectedProviderId ?? ""}
-                  onchange={(e) => void handleProviderChange((e.target as HTMLSelectElement).value || null)}
-                >
-                  <option value="">None (local only)</option>
-                  {#each workspaceProviders as provider (provider.contribution.id)}
-                    <option value={provider.contribution.id}>
-                      {provider.contribution.label}
-                    </option>
-                  {/each}
-                </select>
-                {#if selectedProviderId && providerStatus && !providerStatus.ready}
-                  <p class="text-xs text-muted-foreground">
-                    {providerStatus.message ?? "Provider not ready."}
-                    Configure in Settings.
-                  </p>
-                {/if}
-              </div>
-            {:else}
-              <UpgradeBanner
-                feature="Sync"
-                description="Upgrade to sync workspaces across devices."
-                icon={Cloud}
-              />
-            {/if}
+            <div class="space-y-2">
+              <Label class="text-sm">Sync</Label>
+              <select
+                class="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                value={selectedProviderId ?? ""}
+                onchange={(e) => void handleProviderChange((e.target as HTMLSelectElement).value || null)}
+              >
+                <option value="">None (local only)</option>
+                {#each workspaceProviders as provider (provider.contribution.id)}
+                  <option value={provider.contribution.id}>
+                    {provider.contribution.label}
+                  </option>
+                {/each}
+              </select>
+              {#if selectedProviderId && providerStatus && !providerStatus.ready}
+                <p class="text-xs text-muted-foreground">
+                  {providerStatus.message ?? "Provider not ready."}
+                  Configure in Settings.
+                </p>
+              {/if}
+              <p class="text-xs text-muted-foreground">
+                Free includes one synced workspace on up to two devices. Upgrade to Plus for more synced workspaces.
+              </p>
+            </div>
           {/if}
 
           <!-- Content Source -->
@@ -641,6 +701,61 @@
                   </div>
                 </div>
               </button>
+            {/if}
+
+            <!-- Download from Cloud -->
+            {#if workspaceProviders.length > 0}
+              <button
+                type="button"
+                class="w-full text-left p-3 rounded-lg border-2 transition-colors {contentSource === 'download_cloud' ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
+                onclick={() => {
+                  contentSource = 'download_cloud';
+                  if (cloudWorkspaces.length === 0) loadCloudWorkspaces();
+                }}
+              >
+                <div class="flex items-start gap-3">
+                  <div class="mt-0.5">
+                    <CloudDownload class="size-5 {contentSource === 'download_cloud' ? 'text-primary' : 'text-muted-foreground'}" />
+                  </div>
+                  <div>
+                    <div class="font-medium text-sm">Download from Cloud</div>
+                    <div class="text-xs text-muted-foreground mt-0.5">
+                      Download a workspace synced from another device
+                    </div>
+                  </div>
+                </div>
+              </button>
+
+              {#if contentSource === 'download_cloud'}
+                <div class="space-y-2 pl-8">
+                  {#if cloudLoading}
+                    <div class="flex items-center gap-2 text-sm text-muted-foreground py-2">
+                      <Loader2 class="size-4 animate-spin" />
+                      Loading cloud workspaces...
+                    </div>
+                  {:else if cloudWorkspaces.length === 0}
+                    <p class="text-xs text-muted-foreground py-2">
+                      No cloud workspaces found.
+                    </p>
+                  {:else}
+                    {#each cloudWorkspaces as remote (remote.id)}
+                      <button
+                        type="button"
+                        class="w-full text-left p-2 rounded-md border transition-colors {selectedRemoteWorkspace?.id === remote.id ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'}"
+                        onclick={() => {
+                          selectedRemoteWorkspace = remote;
+                          newWorkspaceName = remote.name;
+                        }}
+                      >
+                        <div class="flex items-center gap-2">
+                          <Cloud class="size-3.5 text-muted-foreground shrink-0" />
+                          <span class="text-sm truncate">{remote.name}</span>
+                        </div>
+                      </button>
+                    {/each}
+                  {/if}
+                </div>
+              {/if}
             {/if}
 
             <!-- Start fresh -->

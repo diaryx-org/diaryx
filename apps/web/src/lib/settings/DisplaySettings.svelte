@@ -57,7 +57,7 @@
     <Label for="focus-mode" class="text-sm cursor-pointer flex flex-col gap-0.5">
       <span>Focus mode</span>
       <span class="font-normal text-xs text-muted-foreground">
-        Hide header when both sidebars are closed. Hover to reveal.
+        Fade the editor chrome when both sidebars are closed. Hover to reveal.
       </span>
     </Label>
     <Switch id="focus-mode" bind:checked={focusMode} />

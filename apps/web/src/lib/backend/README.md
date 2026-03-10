@@ -36,6 +36,34 @@ Backend abstraction layer supporting both WASM and Tauri environments.
 
 The `generated/` directory contains TypeScript types generated from Rust.
 
+## Attachment Upload Path
+
+`api.ts` now uploads entry attachments over the backend binary channel:
+
+- resolve the attachment storage path with `ResolveAttachmentPath`
+- write bytes with `writeBinary(...)`
+- register the attachment ref with the lightweight `RegisterAttachment` command
+
+This avoids base64 encoding/decoding and keeps large media uploads off the
+JSON command path in both web and Tauri runtimes.
+
+## Live Sync Event Emission
+
+`api.ts` emits browser plugin file events for both body edits and frontmatter
+edits. `setFrontmatterProperty()` and `removeFrontmatterProperty()` always
+dispatch `file_saved` for the effective entry path, even when the change is not
+a title rename.
+
+That event contract is required for provider-owned live sync. The sync guest
+uses `file_saved` to rebuild workspace metadata from disk and propagate
+description, audience, `part_of`, `contents`, and other frontmatter changes
+across connected clients without relying on host-side CRDT refresh logic.
+
+For image previews on Tauri, the frontend can also prefer native `asset:`
+URLs (`convertFileSrc`) for local verified attachment files. When native
+loading is unavailable or out-of-scope, the preview path falls back to the
+shared blob resolver.
+
 ## ZIP Import Memory Use
 
 `workerBackendNew.ts` now imports ZIP files via a streaming reader (`@zip.js/zip.js`)
@@ -70,6 +98,8 @@ The web backend no longer initializes a host-side CRDT storage bridge.
   plugin storage) and command execution.
 - Sync/CRDT orchestration is plugin-owned (for example, sync plugin commands and
   plugin surfaces in settings/sidebar/status).
+- Runtime context passed to Extism guests includes generic provider-link
+  metadata for the current workspace, not just sync-plugin-specific IDs.
 - `setupCrdtStorage()` remains a compatibility no-op in the worker API.
 
 ## Native Sync (Tauri only)

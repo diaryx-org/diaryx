@@ -428,8 +428,8 @@ impl<FS: AsyncFileSystem + 'static, C: TransportConnector + 'static> SyncClient<
                             Some(DocIdKind::Workspace(_)) => {
                                 ws_handled = true;
                             }
-                            Some(DocIdKind::Body { file_path, .. }) => {
-                                body_files_handled.insert(file_path);
+                            Some(DocIdKind::Body { body_id, .. }) => {
+                                body_files_handled.insert(body_id);
                             }
                             None => {}
                         }

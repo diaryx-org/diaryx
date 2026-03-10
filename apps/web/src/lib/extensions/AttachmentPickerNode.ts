@@ -10,13 +10,14 @@ import { Node, mergeAttributes } from "@tiptap/core";
 import type { Api } from "$lib/backend/api";
 import AttachmentPickerNodeView from "../components/AttachmentPickerNodeView.svelte";
 import { mount, unmount } from "svelte";
+import type { AttachmentMediaKind } from "@/models/services/attachmentService";
 
 export interface AttachmentPickerNodeOptions {
   entryPath: string;
   api: Api | null;
   onAttachmentSelect: (selection: {
     path: string;
-    isImage: boolean;
+    kind: AttachmentMediaKind;
     blobUrl?: string;
     sourceEntryPath: string;
   }) => void;
@@ -97,7 +98,7 @@ export const AttachmentPickerNode = Node.create<AttachmentPickerNodeOptions>({
           api: this.options.api,
           onSelect: (selection: {
             path: string;
-            isImage: boolean;
+            kind: AttachmentMediaKind;
             blobUrl?: string;
             sourceEntryPath: string;
           }) => {

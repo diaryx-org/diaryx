@@ -33,13 +33,41 @@ use diaryx_core::plugin::{
 // PublishPlugin struct
 // ============================================================================
 
+/// Per-audience access control state.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum AudienceAccessState {
+    Unpublished,
+    Public,
+    AccessControl,
+}
+
+impl Default for AudienceAccessState {
+    fn default() -> Self {
+        Self::Unpublished
+    }
+}
+
+/// Per-audience publish configuration.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct AudiencePublishConfig {
+    pub state: AudienceAccessState,
+    /// Access control method when state is `AccessControl` (e.g. "access-key").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_method: Option<String>,
+}
+
 /// Configuration for the publish plugin, stored in root frontmatter at
 /// `plugins.diaryx.publish`.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct PublishPluginConfig {
     /// Which audience tags are freely accessible (no token required).
+    /// Derived from `audience_states` for backward compatibility.
     #[serde(default)]
     pub public_audiences: Vec<String>,
+    /// Per-audience publish state and access control settings.
+    #[serde(default)]
+    pub audience_states: std::collections::HashMap<String, AudiencePublishConfig>,
 }
 
 /// Plugin that handles HTML export, audience filtering, and publishing.
@@ -392,16 +420,34 @@ fn publish_plugin_manifest() -> PluginManifest {
                     "PublishWorkspace".into(),
                     "GetPublishConfig".into(),
                     "SetPublishConfig".into(),
+                    "GetAudiencePublishStates".into(),
+                    "SetAudiencePublishState".into(),
                 ],
             },
         ],
         ui: vec![UiContribution::SidebarTab {
             id: "publish-panel".into(),
             label: "Publish".into(),
-            icon: None,
+            icon: Some("globe".into()),
             side: diaryx_core::plugin::SidebarSide::Left,
-            component: diaryx_core::plugin::ComponentRef::Builtin {
-                component_id: "publish.panel".into(),
+            component: diaryx_core::plugin::ComponentRef::Declarative {
+                fields: vec![
+                    diaryx_core::plugin::SettingsField::HostWidget {
+                        widget_id: "publish.site-panel".into(),
+                    },
+                    diaryx_core::plugin::SettingsField::Section {
+                        label: "Export".into(),
+                        description: Some(
+                            "Export this workspace to markdown, HTML, or converter-based formats."
+                                .into(),
+                        ),
+                    },
+                    diaryx_core::plugin::SettingsField::HostActionButton {
+                        label: "Export Workspace".into(),
+                        action_type: "open-export-dialog".into(),
+                        variant: Some("outline".into()),
+                    },
+                ],
             },
         }],
         cli: vec![],
@@ -612,6 +658,48 @@ impl<FS: AsyncFileSystem + Clone + 'static> PublishPlugin<FS> {
                 Ok(serde_json::json!({ "ok": true }))
             }
 
+            "GetAudiencePublishStates" => {
+                let config = self.config.read().unwrap().clone();
+                serde_json::to_value(&config.audience_states)
+                    .map_err(|e| PluginError::CommandError(e.to_string()))
+            }
+
+            "SetAudiencePublishState" => {
+                let audience = params["audience"]
+                    .as_str()
+                    .ok_or_else(|| PluginError::CommandError("missing audience".into()))?
+                    .to_string();
+                let state_config: AudiencePublishConfig =
+                    serde_json::from_value(params["config"].clone())
+                        .map_err(|e| PluginError::CommandError(format!("invalid config: {}", e)))?;
+
+                {
+                    let mut config = self.config.write().unwrap();
+                    if state_config.state == AudienceAccessState::Unpublished {
+                        config.audience_states.remove(&audience);
+                        config.public_audiences.retain(|a| a != &audience);
+                    } else {
+                        if state_config.state == AudienceAccessState::Public {
+                            if !config.public_audiences.contains(&audience) {
+                                config.public_audiences.push(audience.clone());
+                            }
+                        } else {
+                            config.public_audiences.retain(|a| a != &audience);
+                        }
+                        config
+                            .audience_states
+                            .insert(audience.clone(), state_config);
+                    }
+                }
+
+                self.save_config_to_frontmatter()
+                    .await
+                    .map_err(|e| PluginError::CommandError(e.to_string()))?;
+                let config = self.config.read().unwrap().clone();
+                serde_json::to_value(&config.audience_states)
+                    .map_err(|e| PluginError::CommandError(e.to_string()))
+            }
+
             _ => Err(PluginError::CommandError(format!(
                 "Unknown publish command: {}",
                 cmd
@@ -643,6 +731,30 @@ mod tests {
         assert_eq!(manifest.id.0, "diaryx.publish");
         assert_eq!(manifest.name, "Publish");
         assert!(!manifest.ui.is_empty());
+
+        let diaryx_core::plugin::UiContribution::SidebarTab {
+            component, icon, ..
+        } = &manifest.ui[0]
+        else {
+            panic!("expected publish sidebar tab contribution");
+        };
+        assert_eq!(icon.as_deref(), Some("globe"));
+        match component {
+            diaryx_core::plugin::ComponentRef::Declarative { fields } => {
+                // First field should be the publish site panel widget
+                assert!(matches!(
+                    &fields[0],
+                    diaryx_core::plugin::SettingsField::HostWidget { widget_id }
+                        if widget_id == "publish.site-panel"
+                ));
+                assert!(fields.iter().any(|field| matches!(
+                    field,
+                    diaryx_core::plugin::SettingsField::HostActionButton { action_type, .. }
+                        if action_type == "open-export-dialog"
+                )));
+            }
+            other => panic!("expected declarative component, got {other:?}"),
+        }
     }
 
     #[test]

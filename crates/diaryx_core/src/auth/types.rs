@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_SYNC_SERVER: &str = "https://sync.diaryx.org";
 
 /// Stored authentication credentials.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthCredentials {
     /// Sync server URL.
     pub server_url: String,

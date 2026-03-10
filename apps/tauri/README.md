@@ -12,6 +12,14 @@ part_of: '[README](/apps/README.md)'
 
 The Tauri backend for Diaryx, providing native filesystem access for the web frontend.
 
+The desktop/mobile config also enables Tauri's built-in `asset` protocol for
+common local-user directories so image previews can use native file-backed
+URLs (`convertFileSrc`) instead of copying attachment bytes through JS when the
+workspace path falls inside those scopes. Preview flows still fall back to the
+blob/binary path when a file is outside scope or native loading is unavailable.
+The Rust app enables the matching Tauri `protocol-asset` feature in
+`src-tauri/Cargo.toml`.
+
 ## Architecture
 
 The Tauri app shares the same Svelte frontend as the web app (`apps/web`), but instead of using WebAssembly with an in-memory filesystem, it uses Tauri IPC to communicate with a Rust backend that accesses the real filesystem.
@@ -96,13 +104,12 @@ The validation system checks workspace link integrity and can automatically fix 
 | Backup         | `backup_workspace`, `restore_workspace`, `backup_to_s3`, `backup_to_google_drive` |
 | Import         | `import_from_zip`, `pick_and_import_zip`                                          |
 
-## Sync Transport
+## Plugin Host Transport
 
-The Tauri app uses `SyncClient` from `diaryx_core` with `TokioConnector` (tokio-tungstenite + rustls) for WebSocket sync. `SyncClient` is generic over `TransportConnector`, allowing the transport to be swapped for platform-specific implementations (e.g., Apple's `URLSessionWebSocketTask` on iOS via a custom connector).
-
-When native sync starts, the backend re-applies the current workspace root to
-the shared `Diaryx` instance so sync path canonicalization reliably strips
-absolute workspace prefixes before constructing body document IDs.
+The Tauri app is a generic Extism plugin host. It provides plugin runtime
+context plus generic HTTP/WebSocket bridges, and plugins own sync/share
+protocol details on top of those host capabilities. The Tauri backend should
+not hardcode `SyncClient`-style transport logic for a specific provider.
 
 ## Apple IAP (In-App Purchases)
 

@@ -8,17 +8,18 @@
   } from '@/models/services/historyService';
   import { getBackend, createApi } from '$lib/backend';
   import {
-    buildWorkspaceSnapshotUploadBlob,
-    findWorkspaceRootPath,
-    resolveWorkspaceDir,
-  } from '$lib/settings/workspaceSnapshotUpload';
+    uploadWorkspaceSnapshot as uploadWorkspaceSnapshotViaPlugin,
+  } from '$lib/sync/workspaceProviderService';
   import {
-    uploadWorkspaceSnapshot,
     downloadWorkspaceSnapshot,
     getCurrentWorkspace,
     isAuthenticated as checkAuthenticated,
     isSyncEnabled,
   } from '$lib/auth';
+  import {
+    getCurrentWorkspaceId,
+    getPrimaryWorkspaceProviderLink,
+  } from '$lib/storage/localWorkspaceRegistry.svelte';
 
   import type JSZipType from 'jszip';
 
@@ -36,10 +37,20 @@
   let restoreZip: JSZipType | null = $state(null);
   let restoreLoading = $state(false);
   let restoring = $state(false);
-
   // Derived
   let selectedCount = $derived(restoreFiles.filter(f => f.selected).length);
   let allSelected = $derived(restoreFiles.length > 0 && restoreFiles.every(f => f.selected));
+
+  function getActiveProviderLink() {
+    const localWorkspaceId = getCurrentWorkspaceId();
+    return localWorkspaceId
+      ? getPrimaryWorkspaceProviderLink(localWorkspaceId)
+      : null;
+  }
+
+  function canOverwriteRemoteWorkspace(): boolean {
+    return checkAuthenticated() && isSyncEnabled() && !!getActiveProviderLink();
+  }
 
   async function loadHistory() {
     loading = true;
@@ -72,7 +83,7 @@
   async function handleOverwrite() {
     if (
       !confirm(
-        'This will replace all server data with your local files. Continue?',
+        'This will replace the linked remote workspace data with your local files. Continue?',
       )
     ) {
       return;
@@ -81,18 +92,15 @@
     overwriting = true;
     error = null;
     try {
-      const workspace = getCurrentWorkspace();
-      if (!workspace) throw new Error('No workspace selected');
+      const providerLink = getActiveProviderLink();
+      if (!providerLink) throw new Error('No linked workspace provider');
 
-      const backend = await getBackend();
-      const api = createApi(backend);
-      const workspaceRootPath = await findWorkspaceRootPath(api, backend);
-      if (!workspaceRootPath) throw new Error('Could not find workspace root');
-
-      const snapshot = await buildWorkspaceSnapshotUploadBlob(api, workspaceRootPath);
-      await uploadWorkspaceSnapshot(workspace.id, snapshot.blob, 'replace', true);
-
-      alert(`Server overwritten with ${snapshot.filesAdded} local files.`);
+      const result = await uploadWorkspaceSnapshotViaPlugin(providerLink.pluginId, {
+        remoteId: providerLink.remoteWorkspaceId,
+        mode: 'replace',
+        includeAttachments: true,
+      });
+      alert(`Remote workspace overwritten with ${result.filesUploaded} local files.`);
     } catch (e) {
       error = e instanceof Error ? e.message : 'Overwrite failed';
       console.error('[GitHistoryPanel] Overwrite error:', e);
@@ -151,6 +159,13 @@
   }
 
   const TEXT_EXTENSIONS = new Set(['.md', '.txt', '.json', '.yaml', '.yml', '.toml', '.csv', '.xml', '.html', '.css', '.js', '.ts', '.svg']);
+
+  function resolveWorkspaceDir(backend: Awaited<ReturnType<typeof getBackend>>): string {
+    return backend
+      .getWorkspacePath()
+      .replace(/\/index\.md$/, '')
+      .replace(/\/README\.md$/, '');
+  }
 
   function isTextFile(name: string): boolean {
     const dotIdx = name.lastIndexOf('.');
@@ -291,10 +306,10 @@
         <button
           class="overwrite-btn"
           onclick={handleOverwrite}
-          disabled={overwriting || !checkAuthenticated() || !isSyncEnabled()}
-          title="Replace all server data with local files"
+          disabled={overwriting || !canOverwriteRemoteWorkspace()}
+          title="Replace the linked remote workspace data with local files"
         >
-          {overwriting ? 'Overwriting...' : 'Overwrite Server'}
+          {overwriting ? 'Overwriting...' : 'Overwrite Remote'}
         </button>
         <button
           class="restore-server-btn"

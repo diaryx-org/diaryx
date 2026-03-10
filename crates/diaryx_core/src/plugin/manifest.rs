@@ -154,6 +154,15 @@ pub enum UiContribution {
         /// Optional plugin command to execute on click.
         plugin_command: Option<String>,
     },
+    /// A workspace provider surfaced in workspace-creation/linking flows.
+    WorkspaceProvider {
+        /// Unique identifier for this provider contribution.
+        id: String,
+        /// Label shown in provider picker UIs.
+        label: String,
+        /// Optional description shown in provider picker UIs.
+        description: Option<String>,
+    },
     /// An editor extension (TipTap node/mark) contributed by a plugin.
     ///
     /// The host generates a TipTap extension from this declaration and calls
@@ -372,6 +381,50 @@ pub enum SettingsField {
         #[serde(default)]
         variant: Option<String>,
     },
+    /// Action button that triggers a host-managed action instead of a plugin
+    /// command.
+    HostActionButton {
+        /// Button label.
+        label: String,
+        /// Host action type to invoke.
+        action_type: String,
+        /// Button style variant: `"default"`, `"outline"`, or `"destructive"`.
+        #[serde(default)]
+        variant: Option<String>,
+    },
+    /// Host sign-in form. Renders inline email/magic-link sign-in when not
+    /// authenticated, or account status when authenticated.
+    AuthStatus {
+        /// Label displayed above the sign-in form.
+        label: String,
+        /// Optional description / help text.
+        description: Option<String>,
+    },
+    /// Host upgrade banner. Only visible when the user is not on Plus tier.
+    /// Renders sign-in prompt if not authenticated, or purchase button if
+    /// authenticated but free tier.
+    UpgradeBanner {
+        /// Feature name requiring Plus.
+        feature: String,
+        /// Optional description for the upgrade banner.
+        description: Option<String>,
+    },
+    /// Conditional field group. Shows nested fields only when a host
+    /// condition is met. Supported conditions include auth checks like
+    /// `"authenticated"`, `"plus"`, `"not_authenticated"`,
+    /// `"not_plus"`, plus config comparisons like
+    /// `"config:import_format=dayone"`.
+    Conditional {
+        /// Condition string to evaluate.
+        condition: String,
+        /// Nested fields to render when condition is met.
+        fields: Vec<SettingsField>,
+    },
+    /// Host-managed widget embedded within a declarative panel.
+    HostWidget {
+        /// Identifier of the host widget to render.
+        widget_id: String,
+    },
 }
 
 /// A select dropdown option.
@@ -528,6 +581,9 @@ pub struct MarketplaceEntry {
     /// Requested default permissions (opaque JSON).
     #[serde(default)]
     pub requested_permissions: Option<serde_json::Value>,
+    /// Protocol version this plugin was built against.
+    #[serde(default)]
+    pub protocol_version: Option<u32>,
 }
 
 /// The parsed CDN registry (`registry.md`).
@@ -584,6 +640,9 @@ pub struct PluginWorkspaceMetadata {
     /// Requested permissions (opaque JSON).
     #[serde(default)]
     pub requested_permissions: Option<serde_json::Value>,
+    /// Protocol version this plugin was built against.
+    #[serde(default)]
+    pub protocol_version: Option<u32>,
     /// Markdown body after the frontmatter.
     #[serde(skip)]
     pub body: String,
@@ -713,6 +772,11 @@ impl PluginWorkspaceMetadata {
             .map(yaml_to_json)
             .transpose()?;
 
+        let protocol_version = fm
+            .get("protocol_version")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
+
         Ok(PluginWorkspaceMetadata {
             id,
             name,
@@ -728,6 +792,7 @@ impl PluginWorkspaceMetadata {
             ui,
             cli,
             requested_permissions,
+            protocol_version,
             body: parsed.body,
         })
     }
@@ -750,6 +815,7 @@ impl PluginWorkspaceMetadata {
             icon: None,
             screenshots: Vec::new(),
             requested_permissions: self.requested_permissions.clone(),
+            protocol_version: self.protocol_version,
         }
     }
 }
@@ -970,6 +1036,7 @@ plugins:
             icon: None,
             screenshots: vec![],
             requested_permissions: None,
+            protocol_version: Some(1),
         };
 
         let json = serde_json::to_string(&entry).unwrap();

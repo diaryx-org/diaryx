@@ -39,6 +39,7 @@
     onCreateChildEntry?: () => void;
     onRefreshTree?: () => void;
     onValidateWorkspace?: () => void;
+    onOpenWorkspaceSettings?: () => void;
     onFindInFile?: () => void;
     onWordCount?: () => void;
     onCopyAsMarkdown?: () => void;
@@ -61,6 +62,7 @@
     onCreateChildEntry,
     onRefreshTree,
     onValidateWorkspace,
+    onOpenWorkspaceSettings,
     onFindInFile,
     onWordCount,
     onCopyAsMarkdown,
@@ -173,6 +175,12 @@
       {/if}
 
       <Command.Group heading="Workspace">
+        {#if onOpenWorkspaceSettings}
+          <Command.Item onSelect={() => handleCommand(onOpenWorkspaceSettings)}>
+            <Settings class="mr-2 size-4" />
+            <span>Workspace Settings</span>
+          </Command.Item>
+        {/if}
         {#if onRefreshTree}
           <Command.Item onSelect={() => handleCommand(onRefreshTree)}>
             <RefreshCw class="mr-2 size-4" />

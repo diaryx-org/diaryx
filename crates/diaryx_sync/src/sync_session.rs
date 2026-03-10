@@ -180,9 +180,10 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
         None
     }
 
-    fn queue_body_sync_step1_for_paths(
+    /// Queue body SyncStep1 messages for the given UUIDs.
+    fn queue_body_sync_step1(
         &self,
-        file_paths: &[String],
+        uuids: &[String],
         reset_pending: bool,
         emit_initial_progress: bool,
     ) -> Vec<SessionAction> {
@@ -195,16 +196,15 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
                 pending.clear();
             }
 
-            for path in file_paths {
-                let normalized = normalize_sync_path(path);
-                if normalized.is_empty() {
+            for uuid in uuids {
+                if uuid.is_empty() {
                     continue;
                 }
-                if pending.contains(&normalized) || self.sync_manager.is_body_synced(&normalized) {
+                if pending.contains(uuid) || self.sync_manager.is_body_synced(uuid) {
                     continue;
                 }
-                pending.insert(normalized.clone());
-                docs_to_send.push(normalized);
+                pending.insert(uuid.clone());
+                docs_to_send.push(uuid.clone());
             }
         }
 
@@ -219,9 +219,9 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
             }));
         }
 
-        for (i, file_path) in docs_to_send.iter().enumerate() {
-            let body_doc_id = format_body_doc_id(&self.config.workspace_id, file_path);
-            let body_step1 = self.sync_manager.create_body_sync_step1(file_path);
+        for (i, uuid) in docs_to_send.iter().enumerate() {
+            let body_doc_id = format_body_doc_id(&self.config.workspace_id, uuid);
+            let body_step1 = self.sync_manager.create_body_sync_step1(uuid);
             let body_framed = frame_message_v2(&body_doc_id, &body_step1);
             actions.push(SessionAction::SendBinary(body_framed));
 
@@ -255,59 +255,64 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
             return actions;
         }
 
-        // Verify focused files are still in the workspace
-        let active_set: HashSet<String> =
-            self.sync_manager.get_all_file_paths().into_iter().collect();
-        let focused_paths: Vec<String> = focused_paths
+        // Verify focused files are still in the workspace (resolve to UUIDs)
+        let active_uuids: HashSet<String> =
+            self.sync_manager.get_all_file_uuids().into_iter().collect();
+
+        // Resolve focused paths to UUIDs
+        let focused_uuids: Vec<String> = focused_paths
             .into_iter()
-            .filter(|p| active_set.contains(p))
+            .filter_map(|p| self.sync_manager.resolve_uuid(&p))
+            .filter(|uuid| active_uuids.contains(uuid))
             .collect();
 
         {
             // Drop pending entries for files that are no longer active.
             let mut pending = self.pending_body_docs.lock().unwrap();
-            pending.retain(|path| active_set.contains(path));
+            pending.retain(|uuid| active_uuids.contains(uuid));
         }
 
-        let mut unsynced_paths = Vec::new();
-        let mut unloaded_paths = Vec::new();
-        let mut missing_disk_paths = Vec::new();
+        let mut unsynced_uuids = Vec::new();
+        let mut unloaded_uuids = Vec::new();
+        let mut missing_disk_uuids = Vec::new();
 
-        for path in &focused_paths {
-            if !self.sync_manager.is_body_synced(path) {
-                unsynced_paths.push(path.clone());
+        for uuid in &focused_uuids {
+            if !self.sync_manager.is_body_synced(uuid) {
+                unsynced_uuids.push(uuid.clone());
             }
-            if !self.sync_manager.is_body_loaded(path) {
-                unloaded_paths.push(path.clone());
+            if !self.sync_manager.is_body_loaded(uuid) {
+                unloaded_uuids.push(uuid.clone());
             }
-            if self.config.write_to_disk && !self.sync_manager.file_exists_for_sync(path).await {
-                missing_disk_paths.push(path.clone());
+            if self.config.write_to_disk {
+                if let Some(path) = self.sync_manager.resolve_path(uuid) {
+                    if !self.sync_manager.file_exists_for_sync(&path).await {
+                        missing_disk_uuids.push(uuid.clone());
+                    }
+                }
             }
         }
 
-        if !missing_disk_paths.is_empty() || !unloaded_paths.is_empty() {
+        if !missing_disk_uuids.is_empty() || !unloaded_uuids.is_empty() {
             log::warn!(
                 "[SyncSession] Integrity audit: focused={}, unsynced={}, unloaded={}, missing_disk={}",
-                focused_paths.len(),
-                unsynced_paths.len(),
-                unloaded_paths.len(),
-                missing_disk_paths.len()
+                focused_uuids.len(),
+                unsynced_uuids.len(),
+                unloaded_uuids.len(),
+                missing_disk_uuids.len()
             );
         }
 
-        if !missing_disk_paths.is_empty() {
+        if !missing_disk_uuids.is_empty() {
             // Force rebootstrap for missing files by clearing prior synced status.
-            for path in &missing_disk_paths {
-                self.sync_manager.close_body_sync(path);
+            for uuid in &missing_disk_uuids {
+                self.sync_manager.close_body_sync(uuid);
             }
-            let mut heal_actions =
-                self.queue_body_sync_step1_for_paths(&missing_disk_paths, false, false);
+            let mut heal_actions = self.queue_body_sync_step1(&missing_disk_uuids, false, false);
             actions.append(&mut heal_actions);
         }
 
-        if !unsynced_paths.is_empty() {
-            let mut sync_actions =
-                self.queue_body_sync_step1_for_paths(&unsynced_paths, false, false);
+        if !unsynced_uuids.is_empty() {
+            let mut sync_actions = self.queue_body_sync_step1(&unsynced_uuids, false, false);
             actions.append(&mut sync_actions);
         }
 
@@ -327,7 +332,9 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
             IncomingEvent::SnapshotImported => self.handle_snapshot_imported().await,
             IncomingEvent::Disconnected => self.handle_disconnected(),
             IncomingEvent::LocalUpdate { doc_id, data } => self.handle_local_update(&doc_id, &data),
-            IncomingEvent::SyncBodyFiles { file_paths } => self.handle_sync_body_files(&file_paths),
+            IncomingEvent::SyncBodyFiles { file_paths } => {
+                self.handle_sync_body_files(&file_paths).await
+            }
         }
     }
 
@@ -458,7 +465,7 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
         vec![SessionAction::SendBinary(framed)]
     }
 
-    fn handle_sync_body_files(&self, file_paths: &[String]) -> Vec<SessionAction> {
+    async fn handle_sync_body_files(&self, file_paths: &[String]) -> Vec<SessionAction> {
         let current_state = {
             let state = self.state.lock().unwrap();
             state.clone()
@@ -471,11 +478,47 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
 
         self.sync_manager.add_focused_files(file_paths);
 
+        // Resolve paths to UUIDs for body sync.
+        // file_paths can contain either UUIDs (already resolved) or filesystem paths.
+        let uuids: Vec<String> = file_paths
+            .iter()
+            .filter_map(|path| {
+                // If it looks like a UUID already, use it directly
+                if !path.contains('/') && !path.contains('.') {
+                    return Some(path.clone());
+                }
+                self.sync_manager.resolve_uuid(path)
+            })
+            .collect();
+
+        // Load body content from disk before syncing so that files opened
+        // for the first time have their content available in the CRDT.
+        // Skip files that already have a pending SyncStep1 — the server will
+        // provide their content via SyncStep2. Loading from disk in that
+        // window would create duplicate CRDT operations with a new client ID,
+        // causing content duplication when the server's response arrives.
+        for uuid in &uuids {
+            let is_pending = self.pending_body_docs.lock().unwrap().contains(uuid);
+            if !is_pending {
+                let _ = self.sync_manager.ensure_body_content_loaded(uuid).await;
+            }
+        }
+
+        // Clear body_synced for requested files so queue_body_sync_step1 will
+        // re-subscribe via SyncStep1. After the initial bootstrap sync, the server
+        // may stop forwarding incremental updates (siphonophore subscription lifecycle),
+        // so an explicit SyncBodyFiles request must force a fresh SyncStep1 to get
+        // the latest state via SyncStep2.
+        for uuid in &uuids {
+            self.sync_manager.clear_body_synced(uuid);
+        }
+
         log::info!(
-            "[SyncSession] SyncBodyFiles: {} files requested",
-            file_paths.len()
+            "[SyncSession] SyncBodyFiles: {} files requested, {} resolved to UUIDs",
+            file_paths.len(),
+            uuids.len()
         );
-        self.queue_body_sync_step1_for_paths(file_paths, false, false)
+        self.queue_body_sync_step1(&uuids, false, false)
     }
 
     // =========================================================================
@@ -606,9 +649,9 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
                         // Keep body bootstrap aligned with the latest workspace metadata set.
                         // This picks up newly created/renamed files without waiting for explicit
                         // on-demand requests from the UI layer.
-                        let all_paths = self.sync_manager.get_all_file_paths();
+                        let all_uuids = self.sync_manager.get_all_file_uuids();
                         let mut body_bootstrap =
-                            self.queue_body_sync_step1_for_paths(&all_paths, false, false);
+                            self.queue_body_sync_step1(&all_uuids, false, false);
                         actions.append(&mut body_bootstrap);
 
                         let mut heal_actions = self.audit_and_reconcile_integrity().await;
@@ -626,23 +669,34 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
                     }
                 }
             }
-            Some(DocIdKind::Body { file_path, .. }) => {
-                let normalized_file_path = normalize_sync_path(&file_path);
+            Some(DocIdKind::Body { body_id, .. }) => {
                 match self
                     .sync_manager
-                    .handle_body_message(&normalized_file_path, &payload, self.config.write_to_disk)
+                    .handle_body_message(&body_id, &payload, self.config.write_to_disk)
                     .await
                 {
                     Ok(result) => {
-                        self.mark_body_ready(&normalized_file_path);
+                        self.mark_body_ready(&body_id);
                         if let Some(response) = result.response {
                             let framed = frame_message_v2(&doc_id, &response);
                             actions.push(SessionAction::SendBinary(framed));
                         }
-                        if result.content.is_some() && !result.is_echo {
-                            log::debug!("[SyncSession] Body changed: {}", normalized_file_path);
+                        if let Some(content) = result.content
+                            && !result.is_echo
+                        {
+                            // Resolve UUID to path for the UI event
+                            let resolved_path = self
+                                .sync_manager
+                                .resolve_path(&body_id)
+                                .unwrap_or_else(|| body_id.clone());
+                            log::debug!(
+                                "[SyncSession] Body changed: {} ({})",
+                                resolved_path,
+                                body_id
+                            );
                             actions.push(SessionAction::Emit(SyncEvent::BodyChanged {
-                                file_path: normalized_file_path.clone(),
+                                file_path: resolved_path,
+                                body: content,
                             }));
                         }
                         let mut heal_actions = self.audit_and_reconcile_integrity().await;
@@ -654,7 +708,7 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
                     Err(e) => {
                         log::error!(
                             "[SyncSession] Error handling body message for {}: {}",
-                            normalized_file_path,
+                            body_id,
                             e
                         );
                     }
@@ -738,14 +792,40 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
         // Compatibility fallback for servers that don't emit explicit sync_complete.
         self.set_metadata_ready();
 
-        let all_paths = self.sync_manager.get_all_file_paths();
+        let all_uuids = self.sync_manager.get_all_file_uuids();
+
+        // Load body content from disk for all files before syncing.
+        // Without this, body docs start empty and the SyncStep1 sends an empty
+        // state vector, meaning files that are never edited (like the root index)
+        // would never have their content uploaded.
+        let mut loaded_count = 0usize;
+        for uuid in &all_uuids {
+            match self.sync_manager.ensure_body_content_loaded(uuid).await {
+                Ok(true) => loaded_count += 1,
+                Ok(false) => {}
+                Err(e) => {
+                    log::warn!(
+                        "[SyncSession] Failed to load body content for {}: {:?}",
+                        uuid,
+                        e
+                    );
+                }
+            }
+        }
+        if loaded_count > 0 {
+            log::info!(
+                "[SyncSession] Loaded body content from disk for {} files",
+                loaded_count
+            );
+        }
+
         let mut body_bootstrap =
-            self.queue_body_sync_step1_for_paths(&all_paths, true, !all_paths.is_empty());
+            self.queue_body_sync_step1(&all_uuids, true, !all_uuids.is_empty());
         actions.append(&mut body_bootstrap);
 
         log::info!(
-            "[SyncSession] transition_to_active: {} file paths in workspace (body bootstrap queued)",
-            all_paths.len()
+            "[SyncSession] transition_to_active: {} files in workspace (body bootstrap queued)",
+            all_uuids.len()
         );
 
         actions
@@ -824,7 +904,7 @@ mod tests {
             let Some((doc_id, payload)) = unframe_message_v2(data) else {
                 continue;
             };
-            let Some(DocIdKind::Body { file_path, .. }) = parse_doc_id(&doc_id) else {
+            let Some(DocIdKind::Body { body_id, .. }) = parse_doc_id(&doc_id) else {
                 continue;
             };
             let Ok(messages) = SyncMessage::decode_all(&payload) else {
@@ -834,7 +914,7 @@ mod tests {
                 .iter()
                 .any(|msg| matches!(msg, SyncMessage::SyncStep1(_)))
             {
-                targets.push(diaryx_core::path_utils::normalize_sync_path(&file_path));
+                targets.push(body_id);
             }
         }
 
@@ -964,6 +1044,9 @@ mod tests {
         workspace
             .set_file("other.md", test_file_metadata("other.md", "Other"))
             .unwrap();
+
+        // Rebuild UUID maps so resolve_uuid() works in audit_and_reconcile_integrity.
+        manager.rebuild_uuid_maps();
 
         // Focus on heal.md only
         manager.add_focused_files(&["heal.md".to_string()]);

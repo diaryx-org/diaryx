@@ -31,7 +31,7 @@ use crate::auth::MeResponse;
 pub enum Tier {
     /// Free tier — local-only, single workspace.
     Free,
-    /// Plus tier — multi-device sync, collaboration, publishing.
+    /// Plus tier — multi-device sync, live share, publishing.
     Plus,
 }
 
@@ -81,7 +81,7 @@ const FREE_PUBLISHED_SITE_LIMIT: u32 = 1;
 
 const PLUS_WORKSPACE_LIMIT: u32 = 10;
 const PLUS_STORAGE_LIMIT_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2 GiB
-const PLUS_PUBLISHED_SITE_LIMIT: u32 = 5;
+const PLUS_PUBLISHED_SITE_LIMIT: u32 = 1;
 
 impl BillingState {
     /// Default free-tier billing state.
@@ -126,9 +126,14 @@ impl BillingState {
         self.tier == Tier::Plus
     }
 
+    /// Whether the user can host or join live share sessions.
+    pub fn can_live_share(&self) -> bool {
+        self.tier == Tier::Plus
+    }
+
     /// Whether the user can use live collaboration.
     pub fn can_collaborate(&self) -> bool {
-        self.tier == Tier::Plus
+        self.can_live_share()
     }
 
     /// Whether the user can publish sites.
@@ -172,6 +177,7 @@ mod tests {
         let state = BillingState::free();
         assert_eq!(state.tier, Tier::Free);
         assert!(!state.can_sync());
+        assert!(!state.can_live_share());
         assert!(!state.can_collaborate());
         assert!(!state.can_publish());
         assert_eq!(state.max_workspaces(), 1);
@@ -184,10 +190,11 @@ mod tests {
         let state = BillingState::plus();
         assert_eq!(state.tier, Tier::Plus);
         assert!(state.can_sync());
+        assert!(state.can_live_share());
         assert!(state.can_collaborate());
         assert!(state.can_publish());
         assert_eq!(state.max_workspaces(), 10);
-        assert_eq!(state.max_published_sites(), 5);
+        assert_eq!(state.max_published_sites(), 1);
         assert_eq!(state.max_storage_bytes(), 2 * 1024 * 1024 * 1024);
     }
 
@@ -202,7 +209,7 @@ mod tests {
             devices: vec![],
             workspace_limit: 10,
             tier: "plus".to_string(),
-            published_site_limit: 5,
+            published_site_limit: 1,
             attachment_limit_bytes: 2_147_483_648,
         };
 

@@ -7,6 +7,7 @@
 import { getBackend } from "../backend";
 import { createApi } from "../backend/api";
 import type { WorkspaceConfig } from "../backend/generated/WorkspaceConfig";
+import { runPluginUpdateConfigFlow } from "$lib/plugins/configUpdateFlow";
 
 /**
  * Creates reactive workspace config state with backend persistence.
@@ -52,6 +53,17 @@ export function createWorkspaceConfigStore() {
       const backend = await getBackend();
       const api = createApi(backend);
       await api.setWorkspaceConfig(rootIndexPath, field, value);
+      await runPluginUpdateConfigFlow({
+        pluginId: "diaryx.daily",
+        api,
+        workspacePath: rootIndexPath,
+        params: {
+          source: "workspace_config",
+          field,
+          value,
+          root_index_path: rootIndexPath,
+        },
+      });
 
       // Update local state by re-reading the full config
       // (backend may normalize/validate the value)

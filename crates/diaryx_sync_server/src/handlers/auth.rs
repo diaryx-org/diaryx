@@ -257,6 +257,13 @@ async fn verify_magic_link(
             }),
         )
             .into_response(),
+        Err(crate::auth::MagicLinkError::DeviceLimitReached { .. }) => (
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: "Device limit reached. Remove a device to sign in on a new one.".to_string(),
+            }),
+        )
+            .into_response(),
         Err(e) => {
             error!("Failed to verify magic link: {}", e);
             (
@@ -305,6 +312,13 @@ async fn verify_code(
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid or expired code. Please request a new one.".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(crate::auth::MagicLinkError::DeviceLimitReached { .. }) => (
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: "Device limit reached. Remove a device to sign in on a new one.".to_string(),
             }),
         )
             .into_response(),
@@ -781,6 +795,13 @@ async fn passkey_auth_finish(
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: format!("Authentication failed: {}", msg),
+            }),
+        )
+            .into_response(),
+        Err(crate::auth::PasskeyError::DeviceLimitReached { .. }) => (
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: "Device limit reached. Remove a device to sign in on a new one.".to_string(),
             }),
         )
             .into_response(),

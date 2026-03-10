@@ -858,6 +858,7 @@ mod tests {
             screenshots: vec![],
             capabilities: vec!["sync_transport".into()],
             requested_permissions: None,
+            protocol_version: Some(1),
         }
     }
 

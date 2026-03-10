@@ -6,6 +6,33 @@ describe("authService quota errors", () => {
     vi.restoreAllMocks();
   });
 
+  it("treats deleting a missing workspace as already complete", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      headers: {
+        get: () => "application/json",
+      },
+      json: async () => ({
+        error: "Workspace not found",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const service = createAuthService("http://localhost:3030");
+    await expect(service.deleteWorkspace("token", "workspace-id")).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:3030/api/workspaces/workspace-id",
+      expect.objectContaining({
+        method: "DELETE",
+        headers: expect.objectContaining({
+          Authorization: "Bearer token",
+        }),
+      }),
+    );
+  });
+
   it("parses quota payload for snapshot upload", async () => {
     vi.stubGlobal(
       "fetch",

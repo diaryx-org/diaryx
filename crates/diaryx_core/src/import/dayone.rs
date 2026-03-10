@@ -26,6 +26,31 @@ pub struct DayOneParseResult {
     pub entries: Vec<Result<ImportedEntry, String>>,
 }
 
+/// Incremental Day One entry stream.
+pub struct DayOneEntryStream<'a> {
+    /// Name of the journal (from ZIP filename, e.g. "Export test").
+    pub journal_name: Option<String>,
+    entries: std::vec::IntoIter<DayOneEntry>,
+    archive: Option<zip::ZipArchive<Cursor<&'a [u8]>>>,
+    media_index: HashMap<String, String>,
+}
+
+impl<'a> DayOneEntryStream<'a> {
+    /// Get the next imported entry from the source export.
+    pub fn next_entry(&mut self) -> Option<Result<ImportedEntry, String>> {
+        let entry = self.entries.next()?;
+        let result = if let Some(archive) = self.archive.as_mut() {
+            let media_index = &self.media_index;
+            convert_entry_with_resolver(entry, |item| {
+                resolve_media_for_item(archive, media_index, item)
+            })
+        } else {
+            convert_entry_with_resolver(entry, |_| None)
+        };
+        Some(result)
+    }
+}
+
 /// Top-level Day One JSON structure.
 #[derive(Deserialize)]
 struct DayOneJournal {
@@ -70,6 +95,8 @@ struct DayOneWeather {
 #[derive(Deserialize)]
 struct DayOneMedia {
     identifier: Option<String>,
+    md5: Option<String>,
+    filename: Option<String>,
     #[serde(rename = "type")]
     media_type: Option<String>,
 }
@@ -82,11 +109,7 @@ struct DayOneMedia {
 ///
 /// ZIP files start with `PK` (`0x50 0x4B`). Everything else is treated as JSON.
 pub fn parse_dayone_auto(bytes: &[u8]) -> DayOneParseResult {
-    if bytes.len() >= 2 && bytes[0] == 0x50 && bytes[1] == 0x4B {
-        parse_dayone_zip(bytes)
-    } else {
-        parse_dayone(bytes)
-    }
+    collect_stream_result(stream_dayone_auto(bytes))
 }
 
 /// Parse a Day One `Journal.json` file into [`ImportedEntry`] values.
@@ -96,24 +119,7 @@ pub fn parse_dayone_auto(bytes: &[u8]) -> DayOneParseResult {
 /// the JSON does not embed binary content — use [`parse_dayone_zip`] for
 /// full media extraction.
 pub fn parse_dayone(bytes: &[u8]) -> DayOneParseResult {
-    let journal: DayOneJournal = match serde_json::from_slice(bytes) {
-        Ok(j) => j,
-        Err(e) => {
-            return DayOneParseResult {
-                journal_name: None,
-                entries: vec![Err(format!("Failed to parse Day One JSON: {e}"))],
-            };
-        }
-    };
-
-    DayOneParseResult {
-        journal_name: None,
-        entries: journal
-            .entries
-            .into_iter()
-            .map(|e| convert_entry(e, &HashMap::new()))
-            .collect(),
-    }
+    collect_stream_result(stream_dayone(bytes))
 }
 
 /// Parse a Day One ZIP export into [`ImportedEntry`] values.
@@ -123,21 +129,79 @@ pub fn parse_dayone(bytes: &[u8]) -> DayOneParseResult {
 /// `pdfs/` directories. Media files are matched to entries by their
 /// identifier (filename stem).
 pub fn parse_dayone_zip(bytes: &[u8]) -> DayOneParseResult {
+    collect_stream_result(stream_dayone_zip(bytes))
+}
+
+/// Open a Day One export as an incremental stream, auto-detecting ZIP vs JSON.
+pub fn stream_dayone_auto(bytes: &[u8]) -> Result<DayOneEntryStream<'_>, String> {
+    if bytes.len() >= 2 && bytes[0] == 0x50 && bytes[1] == 0x4B {
+        stream_dayone_zip(bytes)
+    } else {
+        stream_dayone(bytes)
+    }
+}
+
+/// Open a Day One JSON export as an incremental stream.
+pub fn stream_dayone(bytes: &[u8]) -> Result<DayOneEntryStream<'_>, String> {
+    let journal: DayOneJournal =
+        serde_json::from_slice(bytes).map_err(|e| format!("Failed to parse Day One JSON: {e}"))?;
+
+    Ok(DayOneEntryStream {
+        journal_name: None,
+        entries: journal.entries.into_iter(),
+        archive: None,
+        media_index: HashMap::new(),
+    })
+}
+
+/// Open a Day One ZIP export as an incremental stream.
+pub fn stream_dayone_zip(bytes: &[u8]) -> Result<DayOneEntryStream<'_>, String> {
     let cursor = Cursor::new(bytes);
-    let mut archive = match zip::ZipArchive::new(cursor) {
-        Ok(a) => a,
-        Err(e) => {
+    let mut archive =
+        zip::ZipArchive::new(cursor).map_err(|e| format!("Failed to open ZIP archive: {e}"))?;
+
+    let (journal_json, journal_name) = read_journal_json(&mut archive)?;
+    let media_index = build_media_index(&mut archive);
+    let journal: DayOneJournal = serde_json::from_slice(&journal_json)
+        .map_err(|e| format!("Failed to parse Day One JSON: {e}"))?;
+
+    Ok(DayOneEntryStream {
+        journal_name,
+        entries: journal.entries.into_iter(),
+        archive: Some(archive),
+        media_index,
+    })
+}
+
+fn collect_stream_result(stream: Result<DayOneEntryStream<'_>, String>) -> DayOneParseResult {
+    let mut stream = match stream {
+        Ok(stream) => stream,
+        Err(error) => {
             return DayOneParseResult {
                 journal_name: None,
-                entries: vec![Err(format!("Failed to open ZIP archive: {e}"))],
+                entries: vec![Err(error)],
             };
         }
     };
 
-    // Step 1: Find the .json file at the root level.
-    // Day One names it after the journal (e.g. "My Journal.json").
+    let journal_name = stream.journal_name.clone();
+    let mut entries = Vec::new();
+    while let Some(entry) = stream.next_entry() {
+        entries.push(entry);
+    }
+
+    DayOneParseResult {
+        journal_name,
+        entries,
+    }
+}
+
+fn read_journal_json(
+    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+) -> Result<(Vec<u8>, Option<String>), String> {
     let mut json_index = None;
     let mut journal_name: Option<String> = None;
+
     for i in 0..archive.len() {
         let name = match archive.by_index_raw(i) {
             Ok(e) => e.name().to_string(),
@@ -152,40 +216,25 @@ pub fn parse_dayone_zip(bytes: &[u8]) -> DayOneParseResult {
         }
     }
 
-    let journal_json = match json_index {
-        Some(idx) => {
-            let mut entry = match archive.by_index(idx) {
-                Ok(e) => e,
-                Err(e) => {
-                    return DayOneParseResult {
-                        journal_name,
-                        entries: vec![Err(format!("Failed to read JSON file from ZIP: {e}"))],
-                    };
-                }
-            };
-            let mut buf = Vec::new();
-            if let Err(e) = entry.read_to_end(&mut buf) {
-                return DayOneParseResult {
-                    journal_name,
-                    entries: vec![Err(format!("Failed to read JSON file: {e}"))],
-                };
-            }
-            buf
-        }
-        None => {
-            return DayOneParseResult {
-                journal_name: None,
-                entries: vec![Err(
-                    "ZIP archive does not contain a .json file at the root level".to_string(),
-                )],
-            };
-        }
-    };
+    let json_index = json_index
+        .ok_or_else(|| "ZIP archive does not contain a .json file at the root level".to_string())?;
 
-    // Step 2: Build media lookup — identifier -> (filename, bytes)
-    let mut media_map: HashMap<String, (String, Vec<u8>)> = HashMap::new();
+    let mut entry = archive
+        .by_index(json_index)
+        .map_err(|e| format!("Failed to read JSON file from ZIP: {e}"))?;
+    let mut buf = Vec::new();
+    entry
+        .read_to_end(&mut buf)
+        .map_err(|e| format!("Failed to read JSON file: {e}"))?;
+
+    Ok((buf, journal_name))
+}
+
+fn build_media_index(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> HashMap<String, String> {
+    let mut media_index: HashMap<String, String> = HashMap::new();
+
     for i in 0..archive.len() {
-        let mut entry = match archive.by_index(i) {
+        let entry = match archive.by_index_raw(i) {
             Ok(e) => e,
             Err(_) => continue,
         };
@@ -210,46 +259,23 @@ pub fn parse_dayone_zip(bytes: &[u8]) -> DayOneParseResult {
             .map(|(s, _)| s)
             .unwrap_or(filename);
 
-        let mut data = Vec::new();
-        if entry.read_to_end(&mut data).is_ok() {
-            media_map.insert(stem.to_string(), (filename.to_string(), data));
-        }
+        media_index.insert(normalize_media_key(stem), name);
     }
 
-    // Step 3: Parse JSON
-    let journal: DayOneJournal = match serde_json::from_slice(&journal_json) {
-        Ok(j) => j,
-        Err(e) => {
-            return DayOneParseResult {
-                journal_name,
-                entries: vec![Err(format!("Failed to parse Day One JSON: {e}"))],
-            };
-        }
-    };
-
-    // Step 4: Convert entries, resolving media from the map
-    DayOneParseResult {
-        journal_name,
-        entries: journal
-            .entries
-            .into_iter()
-            .map(|e| convert_entry(e, &media_map))
-            .collect(),
-    }
+    media_index
 }
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Convert a single deserialized Day One entry into an [`ImportedEntry`].
-///
-/// When `media_map` is non-empty (ZIP path), attachments are populated with
-/// actual binary data. When empty (JSON-only path), attachments have empty data.
-fn convert_entry(
+fn convert_entry_with_resolver<F>(
     entry: DayOneEntry,
-    media_map: &HashMap<String, (String, Vec<u8>)>,
-) -> Result<ImportedEntry, String> {
+    mut resolve_media: F,
+) -> Result<ImportedEntry, String>
+where
+    F: FnMut(&DayOneMedia) -> Option<(String, Vec<u8>)>,
+{
     let raw_text = entry.text.unwrap_or_default();
     let unescaped = unescape_dayone_markdown(&raw_text);
 
@@ -300,6 +326,7 @@ fn convert_entry(
 
     // Media attachments (photos, videos, audios, PDFs)
     let mut attachments = Vec::new();
+    let mut attachment_references: Vec<(String, String)> = Vec::new();
     for media_list in [
         &entry.photos,
         &entry.videos,
@@ -308,32 +335,32 @@ fn convert_entry(
     ] {
         if let Some(items) = media_list {
             for item in items {
-                let id = item.identifier.clone().unwrap_or_default();
                 let ext = item.media_type.clone().unwrap_or_else(|| "bin".to_string());
 
-                if !id.is_empty() {
-                    if let Some((filename, data)) = media_map.get(&id) {
-                        // Resolved from ZIP — use actual file data
-                        let actual_ext = filename.rsplit_once('.').map(|(_, e)| e).unwrap_or("bin");
-                        attachments.push(ImportedAttachment {
-                            filename: filename.clone(),
-                            content_type: mime_from_extension(actual_ext).to_string(),
-                            data: data.clone(),
-                        });
-                        continue;
-                    }
+                let (filename, content_type, data) =
+                    if let Some((filename, data)) = resolve_media(item) {
+                        let actual_ext = filename
+                            .rsplit_once('.')
+                            .map(|(_, e)| e.to_string())
+                            .unwrap_or_else(|| "bin".to_string());
+                        (filename, mime_from_extension(&actual_ext).to_string(), data)
+                    } else {
+                        let fallback_filename = fallback_media_filename(item, &ext);
+                        (
+                            fallback_filename,
+                            mime_from_extension(&ext).to_string(),
+                            Vec::new(),
+                        )
+                    };
+
+                for stem in media_reference_stems(item, &filename) {
+                    attachment_references.push((stem, filename.clone()));
                 }
 
-                // Fallback: no media map match (JSON-only or missing file)
-                let filename = if id.is_empty() {
-                    format!("media.{ext}")
-                } else {
-                    format!("{id}.{ext}")
-                };
                 attachments.push(ImportedAttachment {
                     filename,
-                    content_type: mime_from_extension(&ext).to_string(),
-                    data: Vec::new(),
+                    content_type,
+                    data,
                 });
             }
         }
@@ -342,18 +369,12 @@ fn convert_entry(
     // Replace dayone-moment:// and dayone-moment:/ URLs in the body
     // with _attachments/FILENAME references.
     let mut body = body;
-    for att in &attachments {
-        let stem = att
-            .filename
-            .rsplit_once('.')
-            .map(|(s, _)| s)
-            .unwrap_or(&att.filename);
-        // Day One uses dayone-moment://ID or dayone-moment:/ID
+    for (stem, filename) in &attachment_references {
         for pattern in [
             format!("dayone-moment://{stem}"),
             format!("dayone-moment:/{stem}"),
         ] {
-            body = body.replace(&pattern, &format!("_attachments/{}", att.filename));
+            body = body.replace(&pattern, &format!("_attachments/{filename}"));
         }
     }
 
@@ -364,6 +385,85 @@ fn convert_entry(
         metadata,
         attachments,
     })
+}
+
+fn read_media_attachment(
+    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    media_index: &HashMap<String, String>,
+    key: &str,
+) -> Option<(String, Vec<u8>)> {
+    let archive_path = media_index.get(&normalize_media_key(key))?;
+    let filename = archive_path
+        .rsplit('/')
+        .next()
+        .unwrap_or(archive_path)
+        .to_string();
+    let mut entry = archive.by_name(archive_path).ok()?;
+    let mut data = Vec::new();
+    entry.read_to_end(&mut data).ok()?;
+    Some((filename, data))
+}
+
+fn fallback_media_filename(item: &DayOneMedia, ext: &str) -> String {
+    if let Some(filename) = item.filename.as_deref().filter(|name| !name.is_empty()) {
+        return filename.to_string();
+    }
+    if let Some(id) = item.identifier.as_deref().filter(|id| !id.is_empty()) {
+        return format!("{id}.{ext}");
+    }
+    if let Some(md5) = item.md5.as_deref().filter(|md5| !md5.is_empty()) {
+        return format!("{md5}.{ext}");
+    }
+    format!("media.{ext}")
+}
+
+fn media_reference_stems(item: &DayOneMedia, resolved_filename: &str) -> Vec<String> {
+    let mut stems = Vec::new();
+
+    for value in [
+        item.identifier.as_deref(),
+        item.md5.as_deref(),
+        item.filename.as_deref().map(file_stem),
+        Some(file_stem(resolved_filename)),
+    ] {
+        if let Some(value) = value.filter(|value| !value.is_empty()) {
+            if !stems.iter().any(|existing| existing == value) {
+                stems.push(value.to_string());
+            }
+        }
+    }
+
+    stems
+}
+
+fn file_stem(filename: &str) -> &str {
+    filename
+        .rsplit_once('.')
+        .map(|(stem, _)| stem)
+        .unwrap_or(filename)
+}
+
+fn normalize_media_key(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
+fn resolve_media_for_item(
+    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    media_index: &HashMap<String, String>,
+    item: &DayOneMedia,
+) -> Option<(String, Vec<u8>)> {
+    for key in [
+        item.identifier.as_deref(),
+        item.md5.as_deref(),
+        item.filename.as_deref().map(file_stem),
+    ] {
+        if let Some(key) = key.filter(|key| !key.is_empty()) {
+            if let Some(result) = read_media_attachment(archive, media_index, key) {
+                return Some(result);
+            }
+        }
+    }
+    None
 }
 
 /// Map a file extension to a MIME content type.
@@ -814,6 +914,53 @@ mod tests {
         assert_eq!(entry.attachments[0].filename, "ABCDEF.jpeg");
         assert_eq!(entry.attachments[0].content_type, "image/jpeg");
         assert_eq!(entry.attachments[0].data, b"fake-jpeg-data");
+    }
+
+    #[test]
+    fn test_parse_dayone_zip_resolves_media_by_md5() {
+        use std::io::Write;
+
+        let journal_json = r##"{
+            "metadata": { "version": "1.0" },
+            "entries": [{
+                "uuid": "TEST123",
+                "text": "# Photo Entry\n![](dayone-moment://7FB485B610104E7F9A5B785B170035CF)",
+                "creationDate": "2020-06-15T12:00:00Z",
+                "photos": [{
+                    "identifier": "7FB485B610104E7F9A5B785B170035CF",
+                    "md5": "1e1768e844003e8585e4472a4c109265",
+                    "filename": "IMG_2860.JPG",
+                    "type": "jpeg"
+                }]
+            }]
+        }"##;
+
+        let mut buf = Vec::new();
+        {
+            let cursor = Cursor::new(&mut buf);
+            let mut zip = zip::ZipWriter::new(cursor);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("Journal.json", options).unwrap();
+            zip.write_all(journal_json.as_bytes()).unwrap();
+            zip.start_file("photos/1e1768e844003e8585e4472a4c109265.jpeg", options)
+                .unwrap();
+            zip.write_all(b"fake-md5-jpeg-data").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let result = parse_dayone_auto(&buf);
+        let entry = result.entries.into_iter().next().unwrap().unwrap();
+        assert_eq!(entry.attachments.len(), 1);
+        assert_eq!(
+            entry.attachments[0].filename,
+            "1e1768e844003e8585e4472a4c109265.jpeg"
+        );
+        assert_eq!(entry.attachments[0].data, b"fake-md5-jpeg-data");
+        assert!(
+            entry
+                .body
+                .contains("_attachments/1e1768e844003e8585e4472a4c109265.jpeg")
+        );
     }
 
     #[test]

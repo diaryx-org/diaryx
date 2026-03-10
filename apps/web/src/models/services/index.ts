@@ -12,7 +12,19 @@ export {
   getBlobUrl,
   getPathForBlobUrl,
   hasBlobUrls,
+  clearAttachmentThumbnailCache,
+  clearAttachmentVerificationCache,
+  attachmentExistsLocally,
+  getAttachmentAvailability,
+  getCachedAttachmentThumbnailUrl,
+  getAttachmentThumbnailUrl,
+  getAttachmentMediaKind,
+  formatMarkdownDestination,
+  isPreviewableAttachmentKind,
+  resolvePreviewMediaSrc,
+  resolvePreviewImageSrc,
   computeRelativeAttachmentPath,
+  type AttachmentMediaKind,
 } from './attachmentService';
 
 export {

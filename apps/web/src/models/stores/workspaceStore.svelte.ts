@@ -41,20 +41,8 @@ let showHiddenFiles = $state(
     : false
 );
 
-// Editor header display settings (default to false for minimal header)
-let showEditorTitle = $state(
-  typeof window !== 'undefined'
-    ? localStorage.getItem('diaryx-show-editor-title') === 'true'
-    : false
-);
-let showEditorPath = $state(
-  typeof window !== 'undefined'
-    ? localStorage.getItem('diaryx-show-editor-path') === 'true'
-    : false
-);
-
 // Focus mode setting (default to true on desktop, false on mobile)
-// When enabled and both sidebars are closed, the editor header fades out
+// When enabled and both sidebars are closed, editor chrome fades out
 let focusMode = $state(
   typeof window !== 'undefined'
     ? localStorage.getItem('diaryx-focus-mode') !== null
@@ -268,8 +256,6 @@ export function getWorkspaceStore() {
     get backend() { return backend; },
     get showUnlinkedFiles() { return showUnlinkedFiles; },
     get showHiddenFiles() { return showHiddenFiles; },
-    get showEditorTitle() { return showEditorTitle; },
-    get showEditorPath() { return showEditorPath; },
     get focusMode() { return focusMode; },
 
     // Tree management
@@ -428,20 +414,6 @@ export function getWorkspaceStore() {
       showHiddenFiles = show;
       if (typeof window !== 'undefined') {
         localStorage.setItem('diaryx-show-hidden-files', String(show));
-      }
-    },
-
-    setShowEditorTitle(show: boolean) {
-      showEditorTitle = show;
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('diaryx-show-editor-title', String(show));
-      }
-    },
-
-    setShowEditorPath(show: boolean) {
-      showEditorPath = show;
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('diaryx-show-editor-path', String(show));
       }
     },
 

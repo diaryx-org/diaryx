@@ -15,8 +15,10 @@ use diaryx_sync_server::{
 };
 use rusqlite::Connection;
 use serde_json::Value;
+use std::io::Write;
 use std::sync::Arc;
 use tower::util::ServiceExt;
+use zip::write::FileOptions;
 
 fn setup() -> (
     Router,
@@ -99,6 +101,20 @@ async fn read_json(response: axum::response::Response) -> Value {
     serde_json::from_slice(&bytes).expect("json body")
 }
 
+fn snapshot_zip(entries: &[(&str, &str)]) -> Vec<u8> {
+    let cursor = std::io::Cursor::new(Vec::new());
+    let mut zip = zip::ZipWriter::new(cursor);
+    let options: FileOptions<'_, ()> = FileOptions::default();
+
+    for (path, contents) in entries {
+        zip.start_file(path, options).expect("start snapshot file");
+        zip.write_all(contents.as_bytes())
+            .expect("write snapshot file");
+    }
+
+    zip.finish().expect("finish snapshot zip").into_inner()
+}
+
 #[tokio::test]
 async fn create_site_and_prevent_global_slug_conflict() {
     let (app, _repo, _sync_state, workspace_a, token_a, workspace_b, token_b) = setup();
@@ -129,7 +145,7 @@ async fn create_site_and_prevent_global_slug_conflict() {
 }
 
 #[tokio::test]
-async fn publish_respects_audience_filtering_for_public_and_private_groups() {
+async fn legacy_publish_route_is_deprecated_but_still_respects_audience_filtering() {
     let (app, _repo, sync_state, workspace_a, token_a, _workspace_b, _token_b) = setup();
 
     let storage = sync_state
@@ -211,6 +227,27 @@ async fn publish_respects_audience_filtering_for_public_and_private_groups() {
         .await
         .expect("publish response");
     assert_eq!(publish_response.status(), StatusCode::OK);
+    assert_eq!(
+        publish_response
+            .headers()
+            .get("deprecation")
+            .and_then(|v| v.to_str().ok()),
+        Some("true")
+    );
+    assert!(
+        publish_response
+            .headers()
+            .get("warning")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|value| value.contains("Deprecated API"))
+    );
+    assert!(
+        publish_response
+            .headers()
+            .get("link")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|value| value.contains("publish-with-fallback"))
+    );
     let payload = read_json(publish_response).await;
 
     let audiences = payload["audiences"].as_array().expect("audiences array");
@@ -224,4 +261,95 @@ async fn publish_respects_audience_filtering_for_public_and_private_groups() {
     assert_eq!(counts.get("public").copied(), Some(0));
     assert!(counts.get("family").copied().unwrap_or(0) > 0);
     assert!(counts.get("engl212").copied().unwrap_or(0) > 0);
+}
+
+#[tokio::test]
+async fn publish_with_fallback_returns_snapshot_required_when_server_state_is_empty() {
+    let (app, _repo, _sync_state, workspace_a, token_a, _workspace_b, _token_b) = setup();
+
+    let create_site = Request::builder()
+        .method("POST")
+        .uri(format!("/api/workspaces/{}/site", workspace_a))
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {}", token_a))
+        .body(Body::from(
+            serde_json::json!({"slug":"fallback-site","enabled":true,"auto_publish":true})
+                .to_string(),
+        ))
+        .expect("create site request");
+    let create_site_response = app
+        .clone()
+        .oneshot(create_site)
+        .await
+        .expect("create site response");
+    assert_eq!(create_site_response.status(), StatusCode::CREATED);
+
+    let publish = Request::builder()
+        .method("POST")
+        .uri(format!(
+            "/api/workspaces/{}/site/publish-with-fallback",
+            workspace_a
+        ))
+        .header("authorization", format!("Bearer {}", token_a))
+        .body(Body::empty())
+        .expect("publish request");
+    let publish_response = app
+        .clone()
+        .oneshot(publish)
+        .await
+        .expect("publish response");
+    assert_eq!(publish_response.status(), StatusCode::PRECONDITION_FAILED);
+
+    let payload = read_json(publish_response).await;
+    assert_eq!(payload["error"], "snapshot_required");
+}
+
+#[tokio::test]
+async fn publish_with_fallback_imports_snapshot_and_publishes() {
+    let (app, _repo, _sync_state, workspace_a, token_a, _workspace_b, _token_b) = setup();
+
+    let create_site = Request::builder()
+        .method("POST")
+        .uri(format!("/api/workspaces/{}/site", workspace_a))
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {}", token_a))
+        .body(Body::from(
+            serde_json::json!({"slug":"snapshot-site","enabled":true,"auto_publish":true})
+                .to_string(),
+        ))
+        .expect("create site request");
+    let create_site_response = app
+        .clone()
+        .oneshot(create_site)
+        .await
+        .expect("create site response");
+    assert_eq!(create_site_response.status(), StatusCode::CREATED);
+
+    let snapshot = snapshot_zip(&[(
+        "README.md",
+        "---\ntitle: Root\naudience: public\npublic_audience: public\n---\n\nHello from snapshot\n",
+    )]);
+
+    let publish = Request::builder()
+        .method("POST")
+        .uri(format!(
+            "/api/workspaces/{}/site/publish-with-fallback?include_attachments=false",
+            workspace_a
+        ))
+        .header("authorization", format!("Bearer {}", token_a))
+        .header("content-type", "application/zip")
+        .body(Body::from(snapshot))
+        .expect("publish request");
+    let publish_response = app
+        .clone()
+        .oneshot(publish)
+        .await
+        .expect("publish response");
+    assert_eq!(publish_response.status(), StatusCode::OK);
+
+    let payload = read_json(publish_response).await;
+    let audiences = payload["audiences"].as_array().expect("audiences array");
+    assert!(audiences.iter().any(|item| {
+        item["name"].as_str() == Some("public") && item["file_count"].as_i64().unwrap_or(0) > 0
+    }));
 }

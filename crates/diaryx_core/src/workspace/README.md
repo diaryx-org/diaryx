@@ -31,6 +31,7 @@ Workspace-level configuration lives in the root index file's YAML frontmatter `e
 | `auto_rename_to_title` | `bool` | `true` | Auto-rename file when title changes |
 | `filename_style` | `FilenameStyle` | `Preserve` | How titles map to filenames |
 | `default_audience` | `Option<String>` | `None` | Audience tag assigned to entries with no explicit/inherited audience. Unset = private. |
+| `daily_entry_folder` | `Option<String>` | `None` | Folder used by the Daily plugin for date-based entries. |
 
 ## FilenameStyle
 

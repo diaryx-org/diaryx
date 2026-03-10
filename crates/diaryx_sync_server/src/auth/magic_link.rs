@@ -25,6 +25,8 @@ pub enum MagicLinkError {
     InvalidToken,
     /// Too many magic link requests (rate limited)
     RateLimited,
+    /// Account already has the maximum number of registered devices
+    DeviceLimitReached { limit: u32 },
     /// Database error
     DatabaseError(String),
     /// Email sending error
@@ -37,6 +39,9 @@ impl std::fmt::Display for MagicLinkError {
             MagicLinkError::InvalidToken => write!(f, "Invalid or expired magic link"),
             MagicLinkError::RateLimited => {
                 write!(f, "Too many requests. Please try again later.")
+            }
+            MagicLinkError::DeviceLimitReached { limit } => {
+                write!(f, "Device limit reached for this account (max {})", limit)
             }
             MagicLinkError::DatabaseError(e) => write!(f, "Database error: {}", e),
             MagicLinkError::EmailError(e) => write!(f, "Email error: {}", e),
@@ -129,6 +134,22 @@ impl MagicLinkService {
             .repo
             .get_or_create_user(email)
             .map_err(|e| MagicLinkError::DatabaseError(e.to_string()))?;
+
+        let tier = self
+            .repo
+            .get_user_tier(&user_id)
+            .map_err(|e| MagicLinkError::DatabaseError(e.to_string()))?;
+        let device_limit = tier.defaults().device_limit;
+        let device_count = self
+            .repo
+            .count_user_devices(&user_id)
+            .map_err(|e| MagicLinkError::DatabaseError(e.to_string()))?;
+
+        if device_count >= device_limit {
+            return Err(MagicLinkError::DeviceLimitReached {
+                limit: device_limit,
+            });
+        }
 
         // Update last login
         self.repo
@@ -259,5 +280,25 @@ mod tests {
         // 4th should be rate limited
         let result = service.request_magic_link(email);
         assert!(matches!(result, Err(MagicLinkError::RateLimited)));
+    }
+
+    #[test]
+    fn test_free_tier_allows_two_devices_only() {
+        let service = setup_test_service();
+        let first = service
+            .create_session_for_email("free-devices@example.com", Some("MacBook"), None)
+            .unwrap();
+        let second = service
+            .create_session_for_email("free-devices@example.com", Some("iPhone"), None)
+            .unwrap();
+
+        assert_ne!(first.device_id, second.device_id);
+
+        let third =
+            service.create_session_for_email("free-devices@example.com", Some("iPad"), None);
+        assert!(matches!(
+            third,
+            Err(MagicLinkError::DeviceLimitReached { limit: 2 })
+        ));
     }
 }

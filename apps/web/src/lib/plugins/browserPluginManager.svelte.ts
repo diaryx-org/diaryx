@@ -1,15 +1,17 @@
 /**
  * Browser Plugin Manager — manages the lifecycle of browser-loaded Extism plugins.
  *
- * Plugins are stored as .wasm blobs in IndexedDB and loaded at startup.
- * Their manifests are merged into the pluginStore alongside any manifests
- * from the native backend.
+ * Plugins are stored in the current workspace under `.diaryx/plugins/` and
+ * loaded at startup. Legacy IndexedDB installs are migrated into the workspace
+ * on demand. Their manifests are merged into the pluginStore alongside any
+ * manifests from the native backend.
  */
 
 import {
   loadBrowserPlugin,
   inspectBrowserPlugin,
   getBrowserPluginRuntimeSupport,
+  type BrowserPluginCallOptions,
   type BrowserExtismPlugin,
   type GuestEvent,
   type RequestedPermissionsManifest,
@@ -25,9 +27,20 @@ import {
   type EditorExtensionManifest,
   type RenderFn,
 } from "./editorExtensionFactory";
+import {
+  clearPreservedPluginEditorExtensions,
+  preservePluginEditorExtensions,
+} from "./preservedEditorExtensions.svelte";
+import {
+  deleteWorkspaceTree,
+  getPluginInstallPath,
+  listWorkspaceFiles,
+  readWorkspaceBinary,
+  writeWorkspaceBinary,
+} from "$lib/workspace/workspaceAssetStorage";
 
 // ============================================================================
-// IndexedDB storage
+// Legacy IndexedDB storage (migration only)
 // ============================================================================
 
 const DB_NAME = "diaryx-plugins";
@@ -70,26 +83,24 @@ async function getAllStoredPlugins(): Promise<StoredPlugin[]> {
   });
 }
 
-async function storePlugin(entry: StoredPlugin): Promise<void> {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, "readwrite");
-    const store = tx.objectStore(STORE_NAME);
-    const request = store.put(entry);
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
-  });
+async function migrateLegacyIndexedDbPlugins(): Promise<void> {
+  const stored = await getAllStoredPlugins();
+  await Promise.all(
+    stored.map(async (entry) => {
+      const pluginPath = getPluginInstallPath(entry.id);
+      const existing = await readWorkspaceBinary(pluginPath);
+      if (!existing) {
+        await writeWorkspaceBinary(pluginPath, new Uint8Array(entry.wasm));
+      }
+    }),
+  );
 }
 
-async function removeStoredPlugin(id: string): Promise<void> {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, "readwrite");
-    const store = tx.objectStore(STORE_NAME);
-    const request = store.delete(id);
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
-  });
+async function listWorkspacePluginWasmPaths(): Promise<string[]> {
+  const files = await listWorkspaceFiles(".diaryx/plugins");
+  return files
+    .filter((path) => path.endsWith("/plugin.wasm"))
+    .sort((a, b) => a.localeCompare(b));
 }
 
 // ============================================================================
@@ -113,6 +124,32 @@ let pluginsConfigProvider:
 /** Reactive version counter — incremented when browser plugins finish loading. */
 let pluginExtensionsVersion = $state(0);
 
+type PluginEventObserver = (event: GuestEvent) => Promise<void> | void;
+const pluginEventObservers = new Set<PluginEventObserver>();
+
+function normalizePluginEventPath(path: string): string {
+  return path
+    .replace(/\\/g, "/")
+    .replace(/\/+/g, "/")
+    .replace(/^\.\//, "")
+    .replace(/^\/+/, "");
+}
+
+function invalidateEditorExtensions(): void {
+  cachedEditorExtensions = null;
+  cachedPluginCount = 0;
+  pluginExtensionsVersion++;
+}
+
+async function unloadAllPlugins(): Promise<void> {
+  await Promise.allSettled(
+    Array.from(loadedPlugins.values()).map((plugin) => plugin.close()),
+  );
+  loadedPlugins.clear();
+  browserManifests = [];
+  invalidateEditorExtensions();
+}
+
 // ============================================================================
 // Public API
 // ============================================================================
@@ -120,7 +157,7 @@ let pluginExtensionsVersion = $state(0);
 /**
  * Install a plugin from raw WASM bytes.
  *
- * The bytes are persisted in IndexedDB and the plugin is loaded immediately.
+ * The bytes are persisted in the current workspace and the plugin is loaded immediately.
  * Returns the installed plugin's manifest.
  */
 export async function installPlugin(
@@ -149,6 +186,7 @@ export async function installPlugin(
   const id = plugin.manifest.id as unknown as string;
   runtimeIdentity.pluginId = id;
   runtimeIdentity.pluginName = String(plugin.manifest.name ?? id);
+  clearPreservedPluginEditorExtensions(id);
   console.log(
     `[browserPluginManager] Installed plugin: ${id} (${plugin.manifest.name})`,
   );
@@ -163,17 +201,12 @@ export async function installPlugin(
     );
   }
 
-  // Persist to IndexedDB.
-  await storePlugin({
-    id,
-    name: name ?? plugin.manifest.name,
-    wasm: wasmBytes,
-    installedAt: Date.now(),
-  });
+  await writeWorkspaceBinary(getPluginInstallPath(id), new Uint8Array(wasmBytes));
 
   // Track loaded instance.
   loadedPlugins.set(id, plugin);
   browserManifests = [...browserManifests, plugin.manifest];
+  invalidateEditorExtensions();
 
   return plugin.manifest;
 }
@@ -181,23 +214,28 @@ export async function installPlugin(
 /**
  * Uninstall a plugin by ID.
  *
- * Closes the plugin instance and removes it from IndexedDB.
+ * Closes the plugin instance and removes it from the current workspace.
  */
 export async function uninstallPlugin(pluginId: string): Promise<void> {
+  const removedManifest =
+    loadedPlugins.get(pluginId)?.manifest ??
+    browserManifests.find((m) => (m.id as unknown as string) === pluginId);
   const plugin = loadedPlugins.get(pluginId);
   if (plugin) {
     await plugin.close();
     loadedPlugins.delete(pluginId);
   }
-  await removeStoredPlugin(pluginId);
+  await deleteWorkspaceTree(`.diaryx/plugins/${pluginId}`);
   browserManifests = browserManifests.filter(
     (m) => (m.id as unknown as string) !== pluginId,
   );
   getPluginStore().clearPluginEnabled(pluginId);
+  preservePluginEditorExtensions(removedManifest);
+  invalidateEditorExtensions();
 }
 
 /**
- * Load all installed plugins from IndexedDB.
+ * Load all installed plugins from the current workspace.
  *
  * Called once at app startup. Plugins that fail to load are logged and skipped.
  */
@@ -213,17 +251,28 @@ export async function loadAllPlugins(): Promise<void> {
   runtimeSupportError = null;
 
   try {
-    const stored = await getAllStoredPlugins();
+    await unloadAllPlugins();
+    await migrateLegacyIndexedDbPlugins();
+
+    const stored = await listWorkspacePluginWasmPaths();
     console.log(
-      `[browserPluginManager] Found ${stored.length} stored plugin(s)`,
+      `[browserPluginManager] Found ${stored.length} workspace plugin(s)`,
     );
-    for (const entry of stored) {
+    for (const pluginPath of stored) {
       try {
+        const wasmBytes = await readWorkspaceBinary(pluginPath);
+        if (!wasmBytes) {
+          continue;
+        }
         const runtimeIdentity = {
-          pluginId: entry.id,
-          pluginName: entry.name,
+          pluginId: pluginPath,
+          pluginName: pluginPath,
         };
-        const plugin = await loadBrowserPlugin(entry.wasm, {
+        const wasmBuffer = wasmBytes.buffer.slice(
+          wasmBytes.byteOffset,
+          wasmBytes.byteOffset + wasmBytes.byteLength,
+        ) as ArrayBuffer;
+        const plugin = await loadBrowserPlugin(wasmBuffer, {
           getPluginId: () => runtimeIdentity.pluginId,
           getPluginName: () => runtimeIdentity.pluginName,
           getPluginsConfig: () => pluginsConfigProvider?.(),
@@ -231,27 +280,27 @@ export async function loadAllPlugins(): Promise<void> {
         const id = plugin.manifest.id as unknown as string;
         runtimeIdentity.pluginId = id;
         runtimeIdentity.pluginName = String(plugin.manifest.name ?? id);
+        clearPreservedPluginEditorExtensions(id);
         loadedPlugins.set(id, plugin);
         browserManifests = [...browserManifests, plugin.manifest];
         console.log(
-          `[browserPluginManager] Loaded plugin: ${id} (${plugin.manifest.name})`,
+          `[browserPluginManager] Loaded plugin: ${id} (${plugin.manifest.name}) v${plugin.manifest.version}`,
         );
       } catch (e) {
         console.warn(
-          `[browserPluginManager] Failed to load plugin ${entry.id}:`,
+          `[browserPluginManager] Failed to load plugin from ${pluginPath}:`,
           e,
         );
       }
     }
   } catch (e) {
     console.warn(
-      "[browserPluginManager] Failed to load plugins from IndexedDB:",
+      "[browserPluginManager] Failed to load workspace plugins:",
       e,
     );
   }
 
-  // Signal that browser plugin extensions may have changed
-  pluginExtensionsVersion++;
+  invalidateEditorExtensions();
 }
 
 /** Configure how browser plugins read workspace permission config. */
@@ -400,6 +449,61 @@ export async function dispatchEvent(event: GuestEvent): Promise<void> {
     .filter(([pluginId]) => pluginStore.isPluginEnabled(pluginId))
     .map(([, plugin]) => plugin.callEvent(event));
   await Promise.allSettled(promises);
+  if (pluginEventObservers.size > 0) {
+    await Promise.allSettled(
+      Array.from(pluginEventObservers).map((observer) => observer(event)),
+    );
+  }
+}
+
+export function onPluginEventDispatched(
+  observer: PluginEventObserver,
+): () => void {
+  pluginEventObservers.add(observer);
+  return () => {
+    pluginEventObservers.delete(observer);
+  };
+}
+
+export async function dispatchFileOpenedEvent(path: string): Promise<void> {
+  await dispatchEvent({
+    event_type: "file_opened",
+    payload: { path: normalizePluginEventPath(path) },
+  });
+}
+
+export async function dispatchFileSavedEvent(path: string): Promise<void> {
+  await dispatchEvent({
+    event_type: "file_saved",
+    payload: { path: normalizePluginEventPath(path) },
+  });
+}
+
+export async function dispatchFileCreatedEvent(path: string): Promise<void> {
+  await dispatchEvent({
+    event_type: "file_created",
+    payload: { path: normalizePluginEventPath(path) },
+  });
+}
+
+export async function dispatchFileDeletedEvent(path: string): Promise<void> {
+  await dispatchEvent({
+    event_type: "file_deleted",
+    payload: { path: normalizePluginEventPath(path) },
+  });
+}
+
+export async function dispatchFileMovedEvent(
+  oldPath: string,
+  newPath: string,
+): Promise<void> {
+  await dispatchEvent({
+    event_type: "file_moved",
+    payload: {
+      old_path: normalizePluginEventPath(oldPath),
+      new_path: normalizePluginEventPath(newPath),
+    },
+  });
 }
 
 /**
@@ -409,14 +513,38 @@ export async function dispatchCommand(
   pluginId: string,
   cmd: string,
   params: unknown,
+  options?: BrowserPluginCallOptions,
 ): Promise<{ success: boolean; data?: unknown; error?: string }> {
+  const startedAt = performance.now();
   if (!getPluginStore().isPluginEnabled(pluginId)) {
+    console.warn("[browserPluginManager] dispatch blocked (disabled plugin)", {
+      pluginId,
+      cmd,
+    });
     return { success: false, error: `Plugin is disabled: ${pluginId}` };
   }
 
   const plugin = loadedPlugins.get(pluginId);
   if (!plugin) {
+    console.warn("[browserPluginManager] dispatch blocked (plugin not loaded)", {
+      pluginId,
+      cmd,
+      loadedPluginCount: loadedPlugins.size,
+    });
     return { success: false, error: `Plugin not loaded: ${pluginId}` };
   }
-  return plugin.callCommand(cmd, params);
+  console.debug("[browserPluginManager] dispatch start", {
+    pluginId,
+    cmd,
+  });
+  const result = await plugin.callCommand(cmd, params, options);
+  console.debug("[browserPluginManager] dispatch done", {
+    pluginId,
+    cmd,
+    elapsedMs: Math.round(performance.now() - startedAt),
+    success: result.success,
+    hasData: result.data != null,
+    error: result.error ?? null,
+  });
+  return result;
 }

@@ -11,7 +11,9 @@ use diaryx_sync_server::{
     db::{AuthRepo, init_database},
     email::EmailService,
     handlers::sites::verify_domain_route,
-    handlers::{ai_routes, api_routes, auth_routes, session_routes, site_routes},
+    handlers::{
+        ai_routes, api_routes, auth_routes, session_routes, share_session_routes, site_routes,
+    },
     kv_client::CloudflareKvClient,
     publish::{
         new_publish_lock, publish_workspace_to_r2, release_publish_lock, try_acquire_publish_lock,
@@ -270,7 +272,12 @@ async fn main() {
         .nest("/api", site_routes(sites_state.clone()))
         // Caddy verify-domain endpoint (unauthenticated)
         .nest("/api", verify_domain_route(sites_state))
-        // Session routes (for live share)
+        // Live share session routes
+        .nest(
+            "/api/share/sessions",
+            share_session_routes(sessions_state.clone()),
+        )
+        // Backward-compatible live share alias
         .nest("/api/sessions", session_routes(sessions_state))
         // Sync v2 endpoint (siphonophore-based)
         .merge(sync_v2_router);

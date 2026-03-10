@@ -12,6 +12,11 @@
     dispatchCommand,
     getPlugin as getBrowserPlugin,
   } from "$lib/plugins/browserPluginManager.svelte";
+  import { openOauthWindow } from "$lib/plugins/oauthWindow";
+  import {
+    getCurrentWorkspaceId,
+    setPluginMetadata,
+  } from "$lib/storage/localWorkspaceRegistry.svelte";
   import { getThemeStore } from "@/models/stores";
   import { getAppearanceStore } from "$lib/stores/appearance.svelte";
   import type { EntryData } from "$lib/backend/interface";
@@ -39,9 +44,49 @@
   let loading = $state(true);
   let error = $state<string | null>(null);
   let iframeReady = $state(false);
+  const COMPONENT_LOAD_TIMEOUT_MS = 20000;
+  type PluginCommandResult = {
+    success: boolean;
+    data?: unknown;
+    error?: string;
+  };
+  type HostActionEnvelope = {
+    host_action: {
+      type: string;
+      payload?: unknown;
+    };
+    follow_up?: {
+      command: string;
+      params?: Record<string, unknown>;
+    };
+  };
+  type WorkspaceMetadataPatchEnvelope = {
+    workspace_metadata_patch: {
+      plugin_id?: string;
+      data: Record<string, unknown> | null;
+    };
+  };
 
   const themeStore = getThemeStore();
   const appearanceStore = getAppearanceStore();
+
+  function cloneForPostMessage<T>(value: T): T | null {
+    try {
+      return structuredClone(value);
+    } catch {
+      try {
+        return JSON.parse(JSON.stringify(value)) as T;
+      } catch {
+        return null;
+      }
+    }
+  }
+
+  function postToIframe(message: unknown) {
+    const win = iframeEl?.contentWindow;
+    if (!win) return;
+    win.postMessage(cloneForPostMessage(message), "*");
+  }
 
   function withManagedContext(command: string, params: unknown): unknown {
     const baseParams =
@@ -75,13 +120,35 @@
   async function executePluginCommand(
     command: string,
     params: unknown,
-  ): Promise<{ success: boolean; data?: unknown; error?: string }> {
+  ): Promise<PluginCommandResult> {
+    console.debug("[PluginIframe] dispatch start", {
+      pluginId,
+      componentId,
+      command,
+      hasApi: !!api,
+      runtime: getBrowserPlugin(pluginId) ? "browser-plugin" : "backend-api",
+    });
     const commandParams = withManagedContext(command, params);
     const browserPlugin = getBrowserPlugin(pluginId);
     if (browserPlugin) {
       try {
-        return await dispatchCommand(pluginId, command, commandParams);
+        const result = await dispatchCommand(pluginId, command, commandParams);
+        console.debug("[PluginIframe] dispatch done (browser-plugin)", {
+          pluginId,
+          componentId,
+          command,
+          success: result.success,
+          hasData: result.data != null,
+          error: result.error ?? null,
+        });
+        return result;
       } catch (e) {
+        console.error("[PluginIframe] dispatch threw (browser-plugin)", {
+          pluginId,
+          componentId,
+          command,
+          error: e instanceof Error ? e.message : String(e),
+        });
         if (!api) {
           return {
             success: false,
@@ -104,13 +171,121 @@
         command,
         commandParams as any,
       );
+      console.debug("[PluginIframe] dispatch done (backend-api)", {
+        pluginId,
+        componentId,
+        command,
+        success: true,
+        hasData: data != null,
+      });
       return { success: true, data };
     } catch (e) {
+      console.error("[PluginIframe] dispatch failed (backend-api)", {
+        pluginId,
+        componentId,
+        command,
+        error: e instanceof Error ? e.message : String(e),
+      });
       return {
         success: false,
         error: e instanceof Error ? e.message : String(e),
       };
     }
+  }
+
+  function readHostActionEnvelope(data: unknown): HostActionEnvelope | null {
+    if (!data || typeof data !== "object" || !("host_action" in data)) {
+      return null;
+    }
+    const envelope = data as HostActionEnvelope;
+    if (!envelope.host_action?.type) {
+      return null;
+    }
+    return envelope;
+  }
+
+  function readWorkspaceMetadataPatch(
+    data: unknown,
+  ): WorkspaceMetadataPatchEnvelope["workspace_metadata_patch"] | null {
+    if (!data || typeof data !== "object" || !("workspace_metadata_patch" in data)) {
+      return null;
+    }
+    const patch = (data as { workspace_metadata_patch?: unknown }).workspace_metadata_patch;
+    if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+      return null;
+    }
+    const rawData = (patch as { data?: unknown }).data;
+    if (
+      rawData !== null &&
+      (rawData === undefined || typeof rawData !== "object" || Array.isArray(rawData))
+    ) {
+      return null;
+    }
+    return patch as WorkspaceMetadataPatchEnvelope["workspace_metadata_patch"];
+  }
+
+  async function applyWorkspaceMetadataPatch(data: unknown): Promise<void> {
+    const patch = readWorkspaceMetadataPatch(data);
+    if (!patch) {
+      return;
+    }
+
+    const localId = getCurrentWorkspaceId();
+    if (!localId) {
+      return;
+    }
+
+    const effectivePluginId =
+      typeof patch.plugin_id === "string" && patch.plugin_id.trim().length > 0
+        ? patch.plugin_id
+        : pluginId;
+    setPluginMetadata(localId, effectivePluginId, patch.data ?? null);
+  }
+
+  async function executePluginCommandWithHostEffects(
+    command: string,
+    params: unknown,
+  ): Promise<PluginCommandResult> {
+    let result = await executePluginCommand(command, params);
+    const hostAction = readHostActionEnvelope(result.data);
+    if (result.success && hostAction) {
+      const hostResult = await Promise.resolve().then(() => {
+        if (onHostAction) {
+          return onHostAction(hostAction.host_action);
+        }
+        if (hostAction.host_action.type !== "open-oauth") {
+          throw new Error(`Unsupported host action: ${hostAction.host_action.type}`);
+        }
+        const payload =
+          hostAction.host_action.payload &&
+          typeof hostAction.host_action.payload === "object"
+            ? (hostAction.host_action.payload as {
+                url?: string;
+                redirect_uri_prefix?: string;
+              })
+            : {};
+        return openOauthWindow({
+          url: payload.url ?? "",
+          redirect_uri_prefix: payload.redirect_uri_prefix,
+        });
+      });
+
+      if (hostAction.follow_up?.command) {
+        const hostResultPatch =
+          hostResult && typeof hostResult === "object" && !Array.isArray(hostResult)
+            ? (hostResult as Record<string, unknown>)
+            : {};
+        result = await executePluginCommandWithHostEffects(hostAction.follow_up.command, {
+          ...(hostAction.follow_up.params ?? {}),
+          ...hostResultPatch,
+        });
+      }
+    }
+
+    if (result.success) {
+      await applyWorkspaceMetadataPatch(result.data);
+    }
+    return result;
   }
 
   function extractComponentHtml(value: unknown): string | null {
@@ -164,21 +339,54 @@
 
   onMount(async () => {
     try {
-      const result = await executePluginCommand("get_component_html", {
-        component_id: componentId,
+      const startedAt = performance.now();
+      console.debug("[PluginIframe] load start", { pluginId, componentId });
+      const result: PluginCommandResult = await Promise.race([
+        executePluginCommand("get_component_html", {
+          component_id: componentId,
+        }),
+        new Promise<PluginCommandResult>((resolve) =>
+          setTimeout(() => {
+            resolve({
+              success: false,
+              error: `Timed out loading plugin component after ${COMPONENT_LOAD_TIMEOUT_MS}ms`,
+            });
+          }, COMPONENT_LOAD_TIMEOUT_MS),
+        ),
+      ]);
+      console.debug("[PluginIframe] load response", {
+        pluginId,
+        componentId,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        success: result.success,
+        hasData: result.data != null,
+        error: result.error ?? null,
       });
       const html = extractComponentHtml(result.data);
       if (!result.success || !html) {
-        console.error("[PluginIframe] get_component_html failed: success=%s, error=%s, data type=%s", result.success, result.error, typeof result.data);
+        console.error("[PluginIframe] get_component_html failed: success=%s, error=%s, data type=%s", result.success, result.error, typeof result.data, {
+          pluginId,
+          componentId,
+          result,
+        });
         error = result.error ?? "Failed to load component HTML";
         loading = false;
         return;
       }
       const blob = new Blob([html], { type: "text/html" });
       blobUrl = URL.createObjectURL(blob);
+      console.debug("[PluginIframe] iframe blob ready", {
+        pluginId,
+        componentId,
+        htmlBytes: html.length,
+      });
       loading = false;
     } catch (e) {
-      console.error("[PluginIframe] get_component_html threw:", e);
+      console.error("[PluginIframe] get_component_html threw:", {
+        pluginId,
+        componentId,
+        error: e instanceof Error ? e.message : String(e),
+      });
       error = e instanceof Error ? e.message : String(e);
       loading = false;
     }
@@ -193,16 +401,14 @@
   // Send initial theme/context to iframe once loaded
   function handleIframeLoad() {
     if (!iframeEl?.contentWindow) return;
+    console.debug("[PluginIframe] iframe loaded", { pluginId, componentId });
     iframeReady = true;
-    iframeEl.contentWindow.postMessage(
-      {
-        type: "init",
-        theme: themeStore.isDark ? "dark" : "light",
-        cssVars: collectCssVars(),
-        entry: entry ? { path: entry.path, title: entry.title, content: entry.content } : null,
-      },
-      "*"
-    );
+    postToIframe({
+      type: "init",
+      theme: themeStore.isDark ? "dark" : "light",
+      cssVars: collectCssVars(),
+      entry: entry ? { path: entry.path, title: entry.title, content: entry.content } : null,
+    });
   }
 
   // Re-send theme data when light/dark mode or appearance preset changes
@@ -212,28 +418,22 @@
     void appearanceStore.appearance;
 
     if (!iframeReady || !iframeEl?.contentWindow) return;
-    iframeEl.contentWindow.postMessage(
-      {
-        type: "theme-update",
-        theme: isDark ? "dark" : "light",
-        cssVars: collectCssVars(),
-      },
-      "*"
-    );
+    postToIframe({
+      type: "theme-update",
+      theme: isDark ? "dark" : "light",
+      cssVars: collectCssVars(),
+    });
   });
 
   // Send entry-changed event when the current entry changes
   $effect(() => {
     const e = entry;
     if (!iframeReady || !iframeEl?.contentWindow) return;
-    iframeEl.contentWindow.postMessage(
-      {
-        type: "plugin-event",
-        event: "entry-changed",
-        data: e ? { path: e.path, title: e.title, content: e.content } : null,
-      },
-      "*"
-    );
+    postToIframe({
+      type: "plugin-event",
+      event: "entry-changed",
+      data: e ? { path: e.path, title: e.title, content: e.content } : null,
+    });
   });
 
   // Listen for messages from the iframe
@@ -246,15 +446,26 @@
 
     if (data.type === "plugin-command") {
       const { command, params, requestId } = data;
-      executePluginCommand(command, params).then((result) => {
-        iframeEl?.contentWindow?.postMessage(
-          {
-            type: "plugin-response",
-            requestId,
-            result,
-          },
-          "*"
-        );
+      console.debug("[PluginIframe] iframe -> host command", {
+        pluginId,
+        componentId,
+        command,
+        requestId,
+      });
+      executePluginCommandWithHostEffects(command, params).then((result) => {
+        console.debug("[PluginIframe] host -> iframe response", {
+          pluginId,
+          componentId,
+          command,
+          requestId,
+          success: result.success,
+          error: result.error ?? null,
+        });
+        postToIframe({
+          type: "plugin-response",
+          requestId,
+          result,
+        });
       });
       return;
     }
@@ -269,26 +480,20 @@
           return onHostAction(action ?? {});
         })
         .then((result) => {
-          iframeEl?.contentWindow?.postMessage(
-            {
-              type: "host-action-response",
-              requestId,
-              success: true,
-              data: result ?? null,
-            },
-            "*"
-          );
+          postToIframe({
+            type: "host-action-response",
+            requestId,
+            success: true,
+            data: result ?? null,
+          });
         })
         .catch((e) => {
-          iframeEl?.contentWindow?.postMessage(
-            {
-              type: "host-action-response",
-              requestId,
-              success: false,
-              error: e instanceof Error ? e.message : String(e),
-            },
-            "*"
-          );
+          postToIframe({
+            type: "host-action-response",
+            requestId,
+            success: false,
+            error: e instanceof Error ? e.message : String(e),
+          });
         });
     }
   }
@@ -302,10 +507,7 @@
    * Send a plugin event to the iframe.
    */
   export function sendEvent(event: string, data: unknown) {
-    iframeEl?.contentWindow?.postMessage(
-      { type: "plugin-event", event, data },
-      "*"
-    );
+    postToIframe({ type: "plugin-event", event, data });
   }
 </script>
 

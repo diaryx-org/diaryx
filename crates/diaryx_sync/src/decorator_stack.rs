@@ -518,7 +518,11 @@ mod tests {
         });
 
         // Check CRDT was updated
-        let metadata = decorated.workspace_crdt.get_file("test.md").unwrap();
+        let uuid = decorated
+            .workspace_crdt
+            .find_by_path(Path::new("test.md"))
+            .unwrap();
+        let metadata = decorated.workspace_crdt.get_file(&uuid).unwrap();
         assert_eq!(metadata.title, Some("Test File".to_string()));
     }
 
@@ -572,7 +576,11 @@ mod tests {
                 .unwrap();
 
             // Should have the data from the first session
-            let metadata = decorated.workspace_crdt.get_file("test.md").unwrap();
+            let uuid = decorated
+                .workspace_crdt
+                .find_by_path(Path::new("test.md"))
+                .unwrap();
+            let metadata = decorated.workspace_crdt.get_file(&uuid).unwrap();
             assert_eq!(metadata.title, Some("Persistent".to_string()));
         }
     }

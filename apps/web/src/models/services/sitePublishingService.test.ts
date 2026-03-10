@@ -30,7 +30,7 @@ function jsonResponse(status: number, body: unknown): Response {
 describe('sitePublishingService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.stubGlobal('fetch', vi.fn());
+    globalThis.fetch = vi.fn() as typeof fetch;
 
     vi.mocked(getServerUrl).mockReturnValue('https://sync.example.com/');
     vi.mocked(getToken).mockReturnValue('test-token');
@@ -114,16 +114,66 @@ describe('sitePublishingService', () => {
     });
   });
 
-  it('maps empty-server-state publish failures to sync-required message', async () => {
+  it('posts publish requests to the combined fallback endpoint', async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
-      jsonResponse(500, {
-        message: 'workspace has no materialized markdown files',
+      jsonResponse(200, {
+        slug: 'my-site',
+        audiences: [{ name: 'public', file_count: 12 }],
+        published_at: 1730000000,
+      }),
+    );
+
+    await publishSite('workspace-1', { audience: 'family' });
+
+    expect(fetch).toHaveBeenCalledWith(
+      'https://sync.example.com/api/workspaces/workspace-1/site/publish-with-fallback?audience=family',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer test-token',
+          'Content-Type': 'application/json',
+        }),
+      }),
+    );
+  });
+
+  it('sends snapshot zips to the combined fallback endpoint when provided', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse(200, {
+        slug: 'my-site',
+        audiences: [{ name: 'public', file_count: 12 }],
+        published_at: 1730000000,
+      }),
+    );
+
+    const snapshot = new Blob(['zip-bytes'], { type: 'application/zip' });
+    await publishSite('workspace-1', { snapshot });
+
+    expect(fetch).toHaveBeenCalledWith(
+      'https://sync.example.com/api/workspaces/workspace-1/site/publish-with-fallback',
+      expect.objectContaining({
+        method: 'POST',
+        body: snapshot,
+        headers: expect.objectContaining({
+          Authorization: 'Bearer test-token',
+          'Content-Type': 'application/zip',
+        }),
+      }),
+    );
+  });
+
+  it('maps snapshot-required publish failures to deterministic message', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse(412, {
+        error: 'snapshot_required',
+        message: 'The server needs a workspace snapshot to publish this workspace.',
       }),
     );
 
     await expect(publishSite('workspace-1')).rejects.toMatchObject({
-      status: 500,
-      message: 'Sync must be enabled and completed at least once before publishing this workspace.',
+      status: 412,
+      code: 'snapshot_required',
+      message: 'The server needs a workspace snapshot to publish this workspace.',
     });
   });
 

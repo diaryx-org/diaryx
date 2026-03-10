@@ -36,8 +36,9 @@ This module provides filesystem abstraction through `FileSystem` (synchronous) a
 ## Backend Parity
 
 `InMemoryFileSystem` and `RealFileSystem` now both auto-create missing parent
-directories for `write_file` and `create_new` operations. This keeps behavior
-consistent across web/native backends for nested path writes.
+directories for `write_file`, `write_binary`, and `create_new` operations. This
+keeps behavior consistent across web/native backends for nested path writes,
+including attachment/media uploads.
 
 Cross-backend parity is exercised by:
 

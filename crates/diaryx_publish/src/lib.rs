@@ -16,7 +16,7 @@ mod template_render;
 mod types;
 
 pub use fs_content_provider::FilesystemContentProvider;
-pub use plugin::PublishPlugin;
+pub use plugin::{AudienceAccessState, AudiencePublishConfig, PublishPlugin, PublishPluginConfig};
 pub use publisher::Publisher;
 pub use types::{NavLink, PublishOptions, PublishResult, PublishedPage};
 

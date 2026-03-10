@@ -99,6 +99,11 @@ Returns `Response::String(new_path)` if a rename occurred, `Response::Ok` otherw
   for markdown links, root-relative refs, plain relative refs, and plain
   canonical refs that include the current entry directory. This keeps
   get/delete/move attachment commands consistent for nested entries.
+- Attachment uploads now split into two steps: callers write raw bytes through
+  the filesystem API, then `Command::RegisterAttachment` formats and records the
+  attachment link in entry frontmatter. This keeps large media off the
+  JSON/base64 command path while preserving one canonical link-formatting
+  implementation in Rust.
 - Frontmatter attachment values set through `SetFrontmatterProperty` and
   `ConvertLinks` are normalized through the same link parser pipeline used for
   `part_of`/`contents`, then formatted according to workspace `link_format`.

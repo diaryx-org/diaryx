@@ -7,14 +7,26 @@
 
 import { getBackend, createApi } from "$lib/backend";
 import type { Api } from "$lib/backend/api";
+import type { JsonValue } from "$lib/backend/generated/serde_json/JsonValue";
+import type {
+  PermissionRule,
+  PluginConfig,
+  PluginPermissions,
+} from "@/models/stores/permissionStore.svelte";
+import { inspectPluginWasm } from "$lib/plugins/browserPluginManager.svelte";
+import { executeProviderPluginCommand } from "$lib/sync/providerPluginCommands";
 import {
   addLocalWorkspace,
   setCurrentWorkspaceId,
   setPluginMetadata,
   createLocalWorkspace,
-  getWorkspaceStorageType,
   getLocalWorkspace,
+  getWorkspaceStorageType,
 } from "$lib/storage/localWorkspaceRegistry.svelte";
+import {
+  captureProviderPluginForTransfer,
+  installCapturedProviderPlugin,
+} from "$lib/sync/browserProviderBootstrap";
 
 // ============================================================================
 // Types
@@ -53,6 +65,63 @@ interface LinkWorkspaceResponse {
 
 interface DownloadWorkspaceResponse {
   files_imported: number;
+}
+
+function toPluginBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength,
+  ) as ArrayBuffer;
+}
+
+function clonePermissionRule(rule: PermissionRule): PermissionRule {
+  return {
+    include: [...(rule.include ?? [])],
+    exclude: [...(rule.exclude ?? [])],
+  };
+}
+
+async function persistPluginDefaultPermissions(args: {
+  api: Api;
+  rootIndexPath: string;
+  pluginId: string;
+  defaults: PluginPermissions;
+}): Promise<void> {
+  const { api, rootIndexPath, pluginId, defaults } = args;
+  const frontmatter = await api.getFrontmatter(rootIndexPath);
+  const existingPlugins =
+    (frontmatter.plugins as Record<string, PluginConfig> | undefined) ?? {};
+  const existingPluginConfig = existingPlugins[pluginId] ?? { permissions: {} };
+  const mergedPermissions: PluginPermissions = {
+    ...(existingPluginConfig.permissions ?? {}),
+  };
+
+  let changed = false;
+  for (const [permissionType, requestedRule] of Object.entries(defaults)) {
+    if (!requestedRule) continue;
+    if (!mergedPermissions[permissionType as keyof PluginPermissions]) {
+      mergedPermissions[permissionType as keyof PluginPermissions] =
+        clonePermissionRule(requestedRule as PermissionRule) as never;
+      changed = true;
+    }
+  }
+
+  if (!changed) return;
+
+  const nextPlugins: Record<string, PluginConfig> = {
+    ...existingPlugins,
+    [pluginId]: {
+      ...existingPluginConfig,
+      permissions: mergedPermissions,
+    },
+  };
+
+  await api.setFrontmatterProperty(
+    rootIndexPath,
+    "plugins",
+    nextPlugins as unknown as JsonValue,
+    rootIndexPath,
+  );
 }
 
 async function resolveApi(api?: Api | null): Promise<Api> {
@@ -97,9 +166,11 @@ export async function getProviderStatus(
 ): Promise<ProviderStatus> {
   try {
     const client = await resolveApi(api);
-    const result = (await client.executePluginCommand(pluginId, "GetProviderStatus", {
-      provider_id: pluginId,
-    })) as unknown as GetProviderStatusResponse;
+    const result = await executeProviderPluginCommand<GetProviderStatusResponse>({
+      api: client,
+      pluginId,
+      command: "GetProviderStatus",
+    });
     return parseStatus(result);
   } catch (e) {
     return {
@@ -114,9 +185,11 @@ export async function listRemoteWorkspaces(
   api?: Api | null,
 ): Promise<RemoteWorkspace[]> {
   const client = await resolveApi(api);
-  const result = (await client.executePluginCommand(pluginId, "ListRemoteWorkspaces", {
-    provider_id: pluginId,
-  })) as unknown as ListRemoteWorkspacesResponse;
+  const result = await executeProviderPluginCommand<ListRemoteWorkspacesResponse>({
+    api: client,
+    pluginId,
+    command: "ListRemoteWorkspaces",
+  });
   return parseRemoteWorkspaces(result);
 }
 
@@ -140,24 +213,29 @@ export async function linkWorkspace(
   api?: Api | null,
 ): Promise<{ remoteId: string; createdRemote: boolean; snapshotUploaded: boolean }> {
   const client = await resolveApi(api);
-  const local = getLocalWorkspace(params.localId);
+  const localWorkspace = getLocalWorkspace(params.localId);
 
   onProgress?.({ percent: 8, message: `Starting sync for "${params.name}"...` });
 
-  const response = (await client.executePluginCommand(pluginId, "LinkWorkspace", {
-    provider_id: pluginId,
-    local_workspace_id: params.localId,
-    name: params.name,
-    workspace_root: local?.path ?? "",
-    remote_id: params.remoteId ?? null,
-  })) as unknown as LinkWorkspaceResponse;
+  const response = await executeProviderPluginCommand<LinkWorkspaceResponse>({
+    api: client,
+    pluginId,
+    command: "LinkWorkspace",
+    params: {
+      local_workspace_id: params.localId,
+      name: params.name,
+      remote_id: params.remoteId ?? null,
+      ...(localWorkspace?.path ? { workspace_root: localWorkspace.path } : {}),
+    },
+  });
 
   const remoteId = typeof response?.remote_id === "string" ? response.remote_id : "";
   if (!remoteId) {
     throw new Error("Provider returned an invalid remote workspace ID");
   }
 
-  setPluginMetadata(params.localId, "sync", {
+  setPluginMetadata(params.localId, pluginId, {
+    remoteWorkspaceId: remoteId,
     serverId: remoteId,
     syncEnabled: true,
   });
@@ -171,18 +249,48 @@ export async function linkWorkspace(
   };
 }
 
+export async function uploadWorkspaceSnapshot(
+  pluginId: string,
+  params: { remoteId: string; mode?: "replace" | "merge"; includeAttachments?: boolean },
+  api?: Api | null,
+): Promise<{ filesUploaded: number; snapshotUploaded: boolean }> {
+  const client = await resolveApi(api);
+  const response = await executeProviderPluginCommand<{
+    files_uploaded?: number;
+    snapshot_uploaded?: boolean;
+  }>({
+    api: client,
+    pluginId,
+    command: "UploadWorkspaceSnapshot",
+    params: {
+      remote_id: params.remoteId,
+      mode: params.mode ?? "replace",
+      include_attachments: params.includeAttachments ?? true,
+    },
+  });
+
+  return {
+    filesUploaded: Number(response?.files_uploaded ?? 0),
+    snapshotUploaded: !!response?.snapshot_uploaded,
+  };
+}
+
 export async function unlinkWorkspace(
   pluginId: string,
   localId: string,
   api?: Api | null,
 ): Promise<void> {
   const client = await resolveApi(api);
-  await client.executePluginCommand(pluginId, "UnlinkWorkspace", {
-    provider_id: pluginId,
-    local_workspace_id: localId,
+  await executeProviderPluginCommand({
+    api: client,
+    pluginId,
+    command: "UnlinkWorkspace",
+    params: {
+      local_workspace_id: localId,
+    },
   });
 
-  setPluginMetadata(localId, "sync", null);
+  setPluginMetadata(localId, pluginId, null);
 }
 
 export async function downloadWorkspace(
@@ -192,6 +300,11 @@ export async function downloadWorkspace(
   api?: Api | null,
 ): Promise<{ localId: string; filesImported: number }> {
   const client = await resolveApi(api);
+  const capturedProviderPlugin = await captureProviderPluginForTransfer(pluginId);
+  const workspacePluginDefaults = capturedProviderPlugin
+    ? (await inspectPluginWasm(toPluginBuffer(capturedProviderPlugin)))
+      .requestedPermissions?.defaults
+    : undefined;
 
   onProgress?.({ percent: 10, message: "Creating local workspace..." });
 
@@ -210,17 +323,43 @@ export async function downloadWorkspace(
     addLocalWorkspace({ id: localWs.id, name: params.name, path: workspaceRoot });
   }
 
+  await installCapturedProviderPlugin(pluginId, capturedProviderPlugin);
+
+  const workspaceApi = createApi(backend);
+
   onProgress?.({ percent: 40, message: "Downloading workspace..." });
 
-  const result = (await client.executePluginCommand(pluginId, "DownloadWorkspace", {
-    provider_id: pluginId,
-    remote_id: params.remoteId,
-    workspace_root: workspaceRoot,
-    link: !!params.link,
-  })) as unknown as DownloadWorkspaceResponse;
+  const result = await executeProviderPluginCommand<DownloadWorkspaceResponse>({
+    api: client,
+    pluginId,
+    command: "DownloadWorkspace",
+    params: {
+      workspace_root: workspaceRoot,
+      remote_id: params.remoteId,
+      link: !!params.link,
+    },
+  });
+
+  if (workspacePluginDefaults) {
+    try {
+      const rootIndexPath = await workspaceApi.findRootIndex(workspaceRoot);
+      await persistPluginDefaultPermissions({
+        api: workspaceApi,
+        rootIndexPath,
+        pluginId,
+        defaults: workspacePluginDefaults,
+      });
+    } catch (error) {
+      console.warn(
+        `[workspaceProviderService] Failed to persist default permissions for ${pluginId}:`,
+        error,
+      );
+    }
+  }
 
   if (params.link) {
-    setPluginMetadata(localWs.id, "sync", {
+    setPluginMetadata(localWs.id, pluginId, {
+      remoteWorkspaceId: params.remoteId,
       serverId: params.remoteId,
       syncEnabled: true,
     });

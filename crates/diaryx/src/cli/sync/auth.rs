@@ -1,10 +1,12 @@
 //! Authentication command handlers for sync.
 //!
 //! Thin wrapper around [`diaryx_core::auth::AuthService`] with CLI-specific
-//! output formatting. HTTP is provided by reqwest, storage by Config TOML.
+//! output formatting. HTTP is provided by reqwest, storage by the native
+//! global auth store in `diaryx_core::auth`.
 
-use diaryx_core::auth::{AuthCredentials, AuthError, AuthHttpClient, AuthStorage, HttpResponse};
-use diaryx_core::config::Config;
+use diaryx_core::auth::{
+    AuthError, AuthHttpClient, DEFAULT_SYNC_SERVER, HttpResponse, NativeFileAuthStorage,
+};
 
 // =========================================================================
 // CLI HTTP Client (reqwest blocking)
@@ -86,58 +88,27 @@ impl AuthHttpClient for ReqwestAuthClient {
 }
 
 // =========================================================================
-// CLI Auth Storage (Config TOML)
-// =========================================================================
-
-/// Config TOML-based credential storage for CLI.
-pub struct ConfigAuthStorage;
-
-#[async_trait::async_trait]
-impl AuthStorage for ConfigAuthStorage {
-    async fn load_credentials(&self) -> Option<AuthCredentials> {
-        let config = Config::load().ok()?;
-        Some(AuthCredentials {
-            server_url: config
-                .sync_server_url
-                .unwrap_or_else(|| diaryx_core::auth::DEFAULT_SYNC_SERVER.to_string()),
-            session_token: config.sync_session_token,
-            email: config.sync_email,
-            workspace_id: config.sync_workspace_id,
-        })
-    }
-
-    async fn save_credentials(&self, credentials: &AuthCredentials) {
-        if let Ok(mut config) = Config::load() {
-            config.sync_server_url = Some(credentials.server_url.clone());
-            config.sync_session_token = credentials.session_token.clone();
-            config.sync_email = credentials.email.clone();
-            config.sync_workspace_id = credentials.workspace_id.clone();
-            if let Err(e) = config.save() {
-                eprintln!("Warning: Could not save config: {}", e);
-            }
-        }
-    }
-
-    async fn clear_session(&self) {
-        if let Ok(mut config) = Config::load() {
-            config.sync_session_token = None;
-            // Keep email and server URL for convenience on re-login
-            if let Err(e) = config.save() {
-                eprintln!("Warning: Could not save config: {}", e);
-            }
-        }
-    }
-}
-
-// =========================================================================
 // CLI Auth Service Factory
 // =========================================================================
 
-type CliAuthService = diaryx_core::auth::AuthService<ReqwestAuthClient, ConfigAuthStorage>;
+type CliAuthService = diaryx_core::auth::AuthService<ReqwestAuthClient, NativeFileAuthStorage>;
 
-/// Create a CLI auth service backed by reqwest and Config TOML.
+fn global_auth_storage() -> NativeFileAuthStorage {
+    NativeFileAuthStorage::global().unwrap_or_else(|| {
+        NativeFileAuthStorage::new(std::env::temp_dir().join("diaryx-auth.toml"))
+    })
+}
+
+fn current_server_url(explicit: Option<&str>) -> String {
+    explicit
+        .map(|value| value.trim_end_matches('/').to_string())
+        .or_else(|| NativeFileAuthStorage::load_global_credentials().map(|creds| creds.server_url))
+        .unwrap_or_else(|| DEFAULT_SYNC_SERVER.to_string())
+}
+
+/// Create a CLI auth service backed by reqwest and the native global auth store.
 pub fn cli_auth_service() -> CliAuthService {
-    diaryx_core::auth::AuthService::new(ReqwestAuthClient::new(), ConfigAuthStorage)
+    diaryx_core::auth::AuthService::new(ReqwestAuthClient::new(), global_auth_storage())
 }
 
 // =========================================================================
@@ -145,10 +116,8 @@ pub fn cli_auth_service() -> CliAuthService {
 // =========================================================================
 
 /// Handle the login command - initiate magic link authentication.
-pub fn handle_login(config: &Config, email: &str, server: Option<&str>) {
-    let server_url = server
-        .or(config.sync_server_url.as_deref())
-        .unwrap_or(diaryx_core::auth::DEFAULT_SYNC_SERVER);
+pub fn handle_login(email: &str, server: Option<&str>) {
+    let server_url = current_server_url(server);
 
     println!("Logging in to sync server...");
     println!("  Server: {}", server_url);
@@ -156,7 +125,7 @@ pub fn handle_login(config: &Config, email: &str, server: Option<&str>) {
     println!();
 
     let service = cli_auth_service();
-    match futures_lite::future::block_on(service.request_magic_link(email, Some(server_url))) {
+    match futures_lite::future::block_on(service.request_magic_link(email, Some(&server_url))) {
         Ok(_) => {
             println!("Check your email for a magic link!");
             println!();
@@ -178,9 +147,7 @@ pub fn handle_login(config: &Config, email: &str, server: Option<&str>) {
 }
 
 /// Handle the verify command - complete magic link authentication.
-pub fn handle_verify(config: &Config, token: &str, device_name: Option<&str>) {
-    let _ = config; // Config is read by the auth service's storage layer
-
+pub fn handle_verify(token: &str, device_name: Option<&str>) {
     println!("Verifying authentication...");
 
     let service = cli_auth_service();
@@ -208,12 +175,13 @@ pub fn handle_verify(config: &Config, token: &str, device_name: Option<&str>) {
 }
 
 /// Handle the logout command - clear stored credentials.
-pub fn handle_logout(config: &Config) {
+pub fn handle_logout() {
+    let credentials = NativeFileAuthStorage::load_global_credentials();
     let service = cli_auth_service();
     let _ = futures_lite::future::block_on(service.logout());
 
     println!("Logged out successfully.");
-    if let Some(email) = &config.sync_email {
+    if let Some(email) = credentials.and_then(|creds| creds.email) {
         println!();
         println!("To log back in:");
         println!("  diaryx sync login {}", email);
@@ -223,7 +191,6 @@ pub fn handle_logout(config: &Config) {
 #[cfg(test)]
 mod tests {
     use diaryx_core::auth::DEFAULT_SYNC_SERVER;
-    use diaryx_core::config::Config;
 
     // =========================================================================
     // URL Construction Tests (verify core auth builds correct URLs)
@@ -290,38 +257,17 @@ mod tests {
 
     #[test]
     fn test_server_url_fallback_logic() {
-        let config = Config::default();
         let explicit_server: Option<&str> = None;
-
-        let server_url = explicit_server
-            .or(config.sync_server_url.as_deref())
-            .unwrap_or(DEFAULT_SYNC_SERVER);
+        let server_url = explicit_server.unwrap_or(DEFAULT_SYNC_SERVER);
 
         assert_eq!(server_url, "https://sync.diaryx.org");
     }
 
     #[test]
     fn test_server_url_uses_explicit() {
-        let config = Config::default();
         let explicit_server = Some("https://custom.server.com");
-
-        let server_url = explicit_server
-            .or(config.sync_server_url.as_deref())
-            .unwrap_or(DEFAULT_SYNC_SERVER);
+        let server_url = explicit_server.unwrap_or(DEFAULT_SYNC_SERVER);
 
         assert_eq!(server_url, "https://custom.server.com");
-    }
-
-    #[test]
-    fn test_server_url_uses_config() {
-        let mut config = Config::default();
-        config.sync_server_url = Some("https://config.server.com".to_string());
-        let explicit_server: Option<&str> = None;
-
-        let server_url = explicit_server
-            .or(config.sync_server_url.as_deref())
-            .unwrap_or(DEFAULT_SYNC_SERVER);
-
-        assert_eq!(server_url, "https://config.server.com");
     }
 }

@@ -278,14 +278,14 @@ impl<D: SyncHookDelegate> Hook for DiarySyncHook<D> {
                 DocType::Workspace(_) => {
                     self.delegate.on_workspace_changed(&workspace_id).await;
                 }
-                DocType::Body { path, .. } => {
+                DocType::Body { body_id, .. } => {
                     eprintln!(
-                        "[DiarySyncHook] Body doc changed: ws={}, path={}, update_len={}",
+                        "[DiarySyncHook] Body doc changed: ws={}, body_id={}, update_len={}",
                         workspace_id,
-                        path,
+                        body_id,
                         update_data_ref.len()
                     );
-                    self.delegate.on_body_changed(&workspace_id, path).await;
+                    self.delegate.on_body_changed(&workspace_id, &body_id).await;
                 }
             }
         }

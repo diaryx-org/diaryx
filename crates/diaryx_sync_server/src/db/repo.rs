@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 /// Tier-based limits for user accounts.
 #[derive(Debug, Clone, Copy)]
 pub struct TierDefaults {
+    pub device_limit: u32,
     pub attachment_limit_bytes: u64,
     pub workspace_limit: u32,
     pub published_site_limit: u32,
@@ -36,14 +37,16 @@ impl UserTier {
     pub fn defaults(&self) -> TierDefaults {
         match self {
             UserTier::Free => TierDefaults {
+                device_limit: 2,
                 attachment_limit_bytes: 200 * 1024 * 1024, // 200 MiB
-                workspace_limit: 0,
+                workspace_limit: 1,
                 published_site_limit: 0,
             },
             UserTier::Plus => TierDefaults {
+                device_limit: 2,
                 attachment_limit_bytes: 2 * 1024 * 1024 * 1024, // 2 GiB
                 workspace_limit: 10,
-                published_site_limit: 5,
+                published_site_limit: 1,
             },
         }
     }
@@ -454,6 +457,17 @@ impl AuthRepo {
             .collect();
 
         Ok(devices)
+    }
+
+    /// Count devices registered for a user.
+    pub fn count_user_devices(&self, user_id: &str) -> Result<u32, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM devices WHERE user_id = ?",
+            [user_id],
+            |row| row.get(0),
+        )?;
+        Ok(count as u32)
     }
 
     /// Update device last seen time
@@ -2735,13 +2749,17 @@ mod tests {
         let repo = setup_test_db();
         let user_id = repo.get_or_create_user("limit-test@example.com").unwrap();
 
-        // Default limit is 0 (Free tier — sync requires Plus)
+        // Free users can sync one workspace by default.
         let limit = repo.get_effective_workspace_limit(&user_id).unwrap();
         assert_eq!(limit, UserTier::Free.defaults().workspace_limit);
-        assert_eq!(limit, 0);
+        assert_eq!(limit, 1);
 
-        // Free user: workspace creation should fail immediately
+        // First workspace should succeed.
         let result = repo.create_workspace(&user_id, "first").unwrap();
+        assert!(result.is_ok());
+
+        // Second workspace should fail.
+        let result = repo.create_workspace(&user_id, "second").unwrap();
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Workspace limit reached"));
 
@@ -2750,22 +2768,20 @@ mod tests {
         let limit = repo.get_effective_workspace_limit(&user_id).unwrap();
         assert_eq!(limit, UserTier::Plus.defaults().workspace_limit);
 
-        // First workspace should succeed
-        let result = repo.create_workspace(&user_id, "first").unwrap();
+        // Third workspace should succeed after the upgrade.
+        let result = repo.create_workspace(&user_id, "third").unwrap();
         assert!(result.is_ok());
 
         // Override limit to 3
         repo.set_user_workspace_limit(&user_id, Some(3)).unwrap();
         assert_eq!(repo.get_effective_workspace_limit(&user_id).unwrap(), 3);
 
-        // Second and third should succeed
-        let result = repo.create_workspace(&user_id, "second").unwrap();
-        assert!(result.is_ok());
-        let result = repo.create_workspace(&user_id, "third").unwrap();
+        // A custom limit of 3 should allow one more workspace.
+        let result = repo.create_workspace(&user_id, "fourth").unwrap();
         assert!(result.is_ok());
 
-        // Fourth should fail (limit = 3)
-        let result = repo.create_workspace(&user_id, "fourth").unwrap();
+        // Fifth should fail (limit = 3).
+        let result = repo.create_workspace(&user_id, "fifth").unwrap();
         assert!(result.is_err());
 
         // Count should be 3

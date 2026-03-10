@@ -41,6 +41,18 @@ sync timestamping uses a monotonic fallback clock in `time.rs` instead of
 - **decorator_stack** — `DecoratedFsBuilder` — composable FS decorator builder
 - **sync_plugin** — `SyncPlugin<FS>` — `WorkspacePlugin` that owns all CRDT state and handles ~50 sync commands
 
+The sync plugin manifest also exposes an explicit `WorkspaceProvider`
+contribution so hosts can surface Diaryx Cloud as a provider without inferring
+it from command names.
+
+`InitializeWorkspaceCrdt` rebuilds metadata from the logical workspace tree and
+then backfills any additional on-disk markdown files under the workspace root.
+That keeps live sync resilient when local create/rename/move operations briefly
+leave `contents` or `part_of` links stale.
+Late body updates are ignored for files whose workspace metadata is already
+tombstoned, so a just-deleted file cannot be recreated on disk by delayed body
+packets that arrive after the delete metadata sync.
+
 ## Feature-Gated Modules
 
 - **sqlite_storage** (feature: `sqlite`) — `SqliteStorage`

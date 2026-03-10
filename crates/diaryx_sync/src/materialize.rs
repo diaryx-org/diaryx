@@ -248,6 +248,27 @@ pub fn parse_snapshot_markdown(
         .and_then(parse_updated_value)
         .unwrap_or_else(|| crate::time::now_timestamp_millis());
 
+    // Preserve extra frontmatter keys not handled by known fields
+    let known_keys: &[&str] = &[
+        "title",
+        "part_of",
+        "contents",
+        "attachments",
+        "deleted",
+        "audience",
+        "description",
+        "updated",
+    ];
+    let mut extra = HashMap::new();
+    for (key, value) in fm {
+        if known_keys.contains(&key.as_str()) || key.starts_with('_') {
+            continue;
+        }
+        if let Ok(json_val) = serde_json::to_value(value) {
+            extra.insert(key.clone(), json_val);
+        }
+    }
+
     let metadata = FileMetadata {
         filename,
         title: fm.get("title").and_then(|v| v.as_str()).map(String::from),
@@ -257,7 +278,7 @@ pub fn parse_snapshot_markdown(
         deleted: fm.get("deleted").and_then(|v| v.as_bool()).unwrap_or(false),
         audience,
         description,
-        extra: HashMap::new(),
+        extra,
         modified_at,
     };
 

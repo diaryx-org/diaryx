@@ -10,12 +10,12 @@
   } from "@lucide/svelte";
   import type { Api } from "$lib/backend/api";
   import {
-    isHeicFile,
-    convertHeicToJpeg,
-    isImageFile,
     getFilename,
+    getAttachmentThumbnailUrl,
+    getAttachmentMediaKind,
     getMimeType,
-    bytesToBase64,
+    isPreviewableAttachmentKind,
+    type AttachmentMediaKind,
   } from "$lib/../models/services/attachmentService";
   import { enqueueIncrementalAttachmentUpload } from "@/controllers/attachmentController";
 
@@ -29,7 +29,7 @@
 
   export interface AttachmentSelection {
     path: string;
-    isImage: boolean;
+    kind: AttachmentMediaKind;
     blobUrl?: string;
     /** The entry path where this attachment lives (for getting data) */
     sourceEntryPath: string;
@@ -42,7 +42,7 @@
     entryTitle: string | null;
     attachments: Array<{
       path: string;
-      isImage: boolean;
+      kind: AttachmentMediaKind;
       thumbnail?: string;
     }>;
   }
@@ -53,6 +53,7 @@
   let activeTab = $state<"existing" | "upload">("existing");
   let isDragging = $state(false);
   let fileInput: HTMLInputElement | null = $state(null);
+  let loadGeneration = 0;
 
   // Track previous open state to detect transitions
   let prevOpen = false;
@@ -70,16 +71,9 @@
     } else if (!currentOpen && prevOpen) {
       // Dialog just closed - schedule cleanup
       prevOpen = false;
+      loadGeneration += 1;
       // Use setTimeout to avoid state updates during effect
       setTimeout(() => {
-        // Cleanup blob URLs from the current groups
-        for (const group of groups) {
-          for (const att of group.attachments) {
-            if (att.thumbnail) {
-              URL.revokeObjectURL(att.thumbnail);
-            }
-          }
-        }
         groups = [];
         error = null;
       }, 0);
@@ -115,6 +109,7 @@
 
   async function loadAttachments() {
     if (!api) return;
+    const generation = ++loadGeneration;
     loading = true;
     error = null;
 
@@ -138,7 +133,7 @@
           new Set(normalizedPaths),
         ).map((path) => ({
           path,
-          isImage: isImageFile(path),
+          kind: getAttachmentMediaKind(path),
           thumbnail: undefined as string | undefined,
         }));
 
@@ -152,6 +147,7 @@
       }
 
       // Show groups immediately
+      if (generation !== loadGeneration) return;
       groups = newGroups;
       loading = false;
 
@@ -159,56 +155,79 @@
       if (newGroups.length === 0) {
         activeTab = "upload";
       }
-
-      // Then load thumbnails in the background (lazy loading)
-      // Batch updates to avoid excessive re-renders
-      const thumbnailPromises: Promise<void>[] = [];
-      for (const group of newGroups) {
-        for (const attachment of group.attachments) {
-          if (attachment.isImage) {
-            thumbnailPromises.push(
-              loadThumbnail(group.entryPath, attachment.path).then((url) => {
-                if (url) {
-                  attachment.thumbnail = url;
-                }
-              })
-            );
-          }
-        }
-      }
-
-      // Update once after all thumbnails are loaded
-      if (thumbnailPromises.length > 0) {
-        Promise.all(thumbnailPromises).then(() => {
-          // Trigger a single re-render
-          groups = [...newGroups];
-        });
-      }
     } catch (e) {
+      if (generation !== loadGeneration) return;
       error = e instanceof Error ? e.message : String(e);
       loading = false;
     }
   }
 
-  async function loadThumbnail(
+  async function ensureThumbnail(
+    attachment: AttachmentGroup["attachments"][number],
     sourceEntryPath: string,
-    attachmentPath: string
   ): Promise<string | undefined> {
-    if (!api) return undefined;
-    try {
-      const data = await api.getAttachmentData(sourceEntryPath, attachmentPath);
-      const mimeType = getMimeType(attachmentPath);
-      let blob = new Blob([new Uint8Array(data)], { type: mimeType });
+    if (!api || attachment.kind !== "image") return undefined;
+    if (attachment.thumbnail) return attachment.thumbnail;
 
-      // Convert HEIC to JPEG for browser display
-      if (isHeicFile(attachmentPath)) {
-        blob = await convertHeicToJpeg(blob);
-      }
-
-      return URL.createObjectURL(blob);
-    } catch {
-      return undefined;
+    const url = await getAttachmentThumbnailUrl(
+      api,
+      sourceEntryPath,
+      attachment.path,
+    );
+    if (url && attachment.thumbnail !== url) {
+      attachment.thumbnail = url;
+      groups = [...groups];
     }
+    return url;
+  }
+
+  function lazyThumbnailTarget(
+    node: HTMLElement,
+    params: {
+      attachment: AttachmentGroup["attachments"][number];
+      sourceEntryPath: string;
+    },
+  ) {
+    let current = params;
+    let cancelled = false;
+    let observer: IntersectionObserver | null = null;
+
+    const load = async () => {
+      if (cancelled) return;
+      await ensureThumbnail(current.attachment, current.sourceEntryPath);
+    };
+
+    const startObserving = () => {
+      if (current.attachment.kind !== "image" || current.attachment.thumbnail) return;
+      if (typeof IntersectionObserver === "undefined") {
+        void load();
+        return;
+      }
+      observer?.disconnect();
+      observer = new IntersectionObserver(
+        (entries) => {
+          if (entries.some((entry) => entry.isIntersecting)) {
+            observer?.disconnect();
+            void load();
+          }
+        },
+        { rootMargin: "200px" },
+      );
+      observer.observe(node);
+    };
+
+    startObserving();
+
+    return {
+      update(next: typeof params) {
+        current = next;
+        startObserving();
+      },
+      destroy() {
+        cancelled = true;
+        observer?.disconnect();
+      },
+    };
   }
 
 
@@ -233,13 +252,13 @@
     let blobUrl = attachment.thumbnail;
 
     // If thumbnail not loaded yet, load it now
-    if (!blobUrl && attachment.isImage && api) {
-      blobUrl = await loadThumbnail(sourceEntryPath, attachment.path);
+    if (!blobUrl && attachment.kind === "image" && api) {
+      blobUrl = await ensureThumbnail(attachment, sourceEntryPath);
     }
 
     onSelect({
       path: attachment.path,
-      isImage: attachment.isImage,
+      kind: attachment.kind,
       blobUrl,
       sourceEntryPath,
     });
@@ -253,16 +272,13 @@
       loading = true;
       error = null;
 
-      // Convert file to base64
       const arrayBuffer = await file.arrayBuffer();
       const bytes = new Uint8Array(arrayBuffer);
-      const base64 = bytesToBase64(bytes);
 
-      // Upload the attachment
       const attachmentPath = await api.uploadAttachment(
         entryPath,
         file.name,
-        base64
+        bytes
       );
       const canonicalAttachmentPath = await api.canonicalizeLink(
         attachmentPath,
@@ -277,16 +293,22 @@
         entryPath,
         canonicalAttachmentPath,
         file,
+        bytes,
       );
 
-      // Create blob URL for immediate use
-      const blobUrl = URL.createObjectURL(file);
-      const isImage = isImageFile(file.name);
+      const kind = getAttachmentMediaKind(file.name, file.type);
+      const blobUrl = isPreviewableAttachmentKind(kind)
+        ? URL.createObjectURL(
+            new Blob([bytes as unknown as BlobPart], {
+              type: file.type || getMimeType(file.name),
+            }),
+          )
+        : undefined;
 
       // Select the newly uploaded attachment
       onSelect({
         path: entryRelativePath,
-        isImage,
+        kind,
         blobUrl,
         sourceEntryPath: entryPath,
       });
@@ -395,8 +417,9 @@
                       type="button"
                       class="attachment-item group relative flex flex-col items-center p-2 rounded-lg border border-transparent hover:border-primary hover:bg-accent transition-colors cursor-pointer"
                       onclick={() => handleSelect(attachment, group.entryPath)}
+                      use:lazyThumbnailTarget={{ attachment, sourceEntryPath: group.entryPath }}
                     >
-                      {#if attachment.isImage && attachment.thumbnail}
+                      {#if attachment.kind === "image" && attachment.thumbnail}
                         <img
                           src={attachment.thumbnail}
                           alt=""

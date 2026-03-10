@@ -12,10 +12,13 @@ publish = true
 [features]
 default = []
 http = ["ureq"]
+testing = []
 wasi-runner = ["dep:wasmtime", "dep:wasi-common", "dep:tempfile"]
+ws-transport = ["dep:tokio", "dep:tokio-tungstenite", "dep:futures-util", "dep:url"]
 
 [dependencies]
 diaryx_core.workspace = true
+chrono.workspace = true
 extism = "1.13"
 serde.workspace = true
 serde_json.workspace = true
@@ -26,6 +29,10 @@ thiserror.workspace = true
 futures-lite = "2"
 base64 = "0.22"
 ureq = { version = "2", optional = true }
+tokio = { version = "1", features = ["rt", "time", "sync"], optional = true }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"], optional = true }
+futures-util = { version = "0.3", optional = true }
+url = { version = "2", optional = true }
 
 # WASI module runner (for host_run_wasi_module)
 wasmtime = { version = "37", optional = true }

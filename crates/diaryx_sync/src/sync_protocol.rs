@@ -185,7 +185,7 @@ pub fn frame_message_v2(doc_id: &str, message: &[u8]) -> Vec<u8> {
 /// if let Some((doc_id, msg)) = unframe_message_v2(&data) {
 ///     match parse_doc_id(&doc_id) {
 ///         Some(DocIdKind::Workspace(id)) => { /* handle workspace */ }
-///         Some(DocIdKind::Body { workspace_id, file_path }) => { /* handle body */ }
+///         Some(DocIdKind::Body { workspace_id, body_id }) => { /* handle body */ }
 ///         None => { /* invalid doc_id */ }
 ///     }
 /// }
@@ -217,10 +217,10 @@ pub fn format_workspace_doc_id(workspace_id: &str) -> String {
 ///
 /// ```ignore
 /// let doc_id = format_body_doc_id("abc123", "journal/2024.md");
-/// assert_eq!(doc_id, "body:abc123/journal/2024.md");
+/// assert_eq!(doc_id, "body:abc123/some-uuid");
 /// ```
-pub fn format_body_doc_id(workspace_id: &str, file_path: &str) -> String {
-    format!("body:{}/{}", workspace_id, file_path)
+pub fn format_body_doc_id(workspace_id: &str, body_id: &str) -> String {
+    format!("body:{}/{}", workspace_id, body_id)
 }
 
 /// Parsed document ID kind for v2 protocol routing.
@@ -232,8 +232,8 @@ pub enum DocIdKind {
     Body {
         /// The workspace ID this body belongs to.
         workspace_id: String,
-        /// The file path within the workspace.
-        file_path: String,
+        /// The stable body document identifier (UUID from workspace CRDT).
+        body_id: String,
     },
 }
 
@@ -249,10 +249,10 @@ pub enum DocIdKind {
 ///     Some(DocIdKind::Workspace("abc123".to_string()))
 /// );
 /// assert_eq!(
-///     parse_doc_id("body:abc123/journal/2024.md"),
+///     parse_doc_id("body:abc123/some-uuid"),
 ///     Some(DocIdKind::Body {
 ///         workspace_id: "abc123".to_string(),
-///         file_path: "journal/2024.md".to_string(),
+///         body_id: "some-uuid".to_string(),
 ///     })
 /// );
 /// ```
@@ -260,10 +260,10 @@ pub fn parse_doc_id(doc_id: &str) -> Option<DocIdKind> {
     if let Some(id) = doc_id.strip_prefix("workspace:") {
         Some(DocIdKind::Workspace(id.to_string()))
     } else if let Some(rest) = doc_id.strip_prefix("body:") {
-        let (ws_id, path) = rest.split_once('/')?;
+        let (ws_id, body_id) = rest.split_once('/')?;
         Some(DocIdKind::Body {
             workspace_id: ws_id.to_string(),
-            file_path: path.to_string(),
+            body_id: body_id.to_string(),
         })
     } else {
         None
@@ -1075,12 +1075,12 @@ mod tests {
     #[test]
     fn test_format_body_doc_id() {
         assert_eq!(
-            format_body_doc_id("abc123", "journal/2024.md"),
-            "body:abc123/journal/2024.md"
+            format_body_doc_id("abc123", "some-uuid"),
+            "body:abc123/some-uuid"
         );
         assert_eq!(
-            format_body_doc_id("ws", "notes/deep/file.md"),
-            "body:ws/notes/deep/file.md"
+            format_body_doc_id("ws", "another-uuid"),
+            "body:ws/another-uuid"
         );
     }
 
@@ -1092,25 +1092,25 @@ mod tests {
 
     #[test]
     fn test_parse_doc_id_body() {
-        let result = parse_doc_id("body:abc123/journal/2024.md");
+        let result = parse_doc_id("body:abc123/some-uuid");
         assert_eq!(
             result,
             Some(DocIdKind::Body {
                 workspace_id: "abc123".to_string(),
-                file_path: "journal/2024.md".to_string(),
+                body_id: "some-uuid".to_string(),
             })
         );
     }
 
     #[test]
-    fn test_parse_doc_id_body_nested_path() {
-        // Ensure nested paths work (only first / splits workspace from path)
-        let result = parse_doc_id("body:ws/a/b/c/d.md");
+    fn test_parse_doc_id_body_nested() {
+        // Nested paths still parse correctly (only first / splits workspace from body_id)
+        let result = parse_doc_id("body:ws/a/b/c/d");
         assert_eq!(
             result,
             Some(DocIdKind::Body {
                 workspace_id: "ws".to_string(),
-                file_path: "a/b/c/d.md".to_string(),
+                body_id: "a/b/c/d".to_string(),
             })
         );
     }

@@ -20,8 +20,7 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use chrono::TimeZone;
-
+use crate::date;
 use crate::error::{DiaryxError, Result};
 use crate::frontmatter;
 use crate::fs::AsyncFileSystem;
@@ -261,8 +260,7 @@ impl FrontmatterMetadata {
 
         // Write updated timestamp if present (RFC3339 string)
         if let Some(updated) = self.updated {
-            if let Some(dt) = chrono::Utc.timestamp_millis_opt(updated).single() {
-                let formatted = dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            if let Some(formatted) = date::timestamp_millis_to_local_rfc3339(updated) {
                 lines.push(format!("updated: {}", yaml_string(&formatted)));
             } else {
                 // Fallback to raw number if timestamp is invalid
@@ -759,6 +757,33 @@ mod tests {
         assert!(yaml.contains("contents:"));
         assert!(yaml.contains("  - \"[Child](/folder/child.md)\""));
         assert!(yaml.contains("description: A description"));
+    }
+
+    #[test]
+    fn test_frontmatter_metadata_to_yaml_uses_local_offset_for_updated() {
+        let fm = FrontmatterMetadata {
+            title: Some("Test Title".to_string()),
+            part_of: None,
+            contents: None,
+            audience: None,
+            description: None,
+            attachments: None,
+            updated: Some(1_700_000_000_000),
+            extra: HashMap::new(),
+        };
+
+        let yaml = fm.to_yaml();
+        let updated_line = yaml
+            .lines()
+            .find(|line| line.starts_with("updated: "))
+            .unwrap();
+        let value = updated_line
+            .strip_prefix("updated: ")
+            .unwrap()
+            .trim_matches('"');
+        let parsed = chrono::DateTime::parse_from_rfc3339(value).unwrap();
+        assert_eq!(parsed.timestamp_millis(), 1_700_000_000_000);
+        assert!(!value.ends_with('Z'));
     }
 
     #[test]

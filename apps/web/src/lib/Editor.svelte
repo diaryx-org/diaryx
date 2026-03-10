@@ -11,7 +11,16 @@
   import { ColoredHighlightMark } from "./extensions/ColoredHighlightMark";
   import Typography from "@tiptap/extension-typography";
   import Image from "@tiptap/extension-image";
-  import { getPathForBlobUrl, getBlobUrl, isVideoFile, isAudioFile, queueResolveAttachment } from "../models/services/attachmentService";
+  import {
+    formatMarkdownDestination,
+    getPathForBlobUrl,
+    getBlobUrl,
+    isVideoFile,
+    isAudioFile,
+    isPreviewableAttachmentKind,
+    queueResolveAttachment,
+    type AttachmentMediaKind,
+  } from "../models/services/attachmentService";
   import { Table } from "@tiptap/extension-table";
   import { TableRow } from "@tiptap/extension-table-row";
   import { TableHeader } from "@tiptap/extension-table-header";
@@ -42,6 +51,7 @@
   import { FootnoteRef, preprocessFootnotes, appendFootnoteDefinitions } from "./extensions/FootnoteRef";
   import { getTemplateContextStore } from "./stores/templateContextStore.svelte";
   import { getEditorExtensions, getPluginExtensionsVersion } from "$lib/plugins/browserPluginManager.svelte";
+  import { getPreservedEditorExtensions } from "$lib/plugins/preservedEditorExtensions.svelte";
   import { getTauriEditorExtensions } from "$lib/plugins/tauriEditorExtensions";
   import type { Api } from "$lib/backend/api";
   import { isTauri } from "$lib/backend/interface";
@@ -54,16 +64,17 @@
   // On iOS Tauri, a native UIToolbar replaces the web BubbleMenu
   const useNativeToolbar = isTauri() && isIOS();
   const nativeLinkFormatStore = useNativeToolbar ? getLinkFormatStore() : null;
+  const pluginStore = getPluginStore();
 
   interface Props {
     content?: string;
     placeholder?: string;
-    onchange?: (markdown: string) => void;
+    onchange?: () => void;
     onblur?: () => void;
     readonly?: boolean;
     onFileDrop?: (
       file: File,
-    ) => Promise<{ blobUrl: string; attachmentPath: string } | null>;
+    ) => Promise<{ blobUrl: string; attachmentPath: string; kind: AttachmentMediaKind } | null>;
     // Debug mode for menus (logs shouldShow decisions to console)
     debugMenus?: boolean;
     // Callback when a link is clicked (for handling relative links to other notes)
@@ -73,7 +84,7 @@
     api?: Api | null;
     onAttachmentInsert?: (selection: {
       path: string;
-      isImage: boolean;
+      kind: AttachmentMediaKind;
       blobUrl?: string;
       sourceEntryPath: string;
     }) => void;
@@ -107,15 +118,30 @@
   let bubbleMenuElement: HTMLDivElement | undefined = $state();
   let isUpdatingContent = false; // Flag to skip onchange during programmatic updates
 
-  // Track the last content prop value we synced FROM, so we only sync when it actually changes
-  // This prevents resetting editor content when the user is typing and the prop hasn't changed
-  let lastSyncedContent: string | undefined = undefined;
+  // Track the last content prop value applied into the editor.
+  // We intentionally do not update this on local typing, so parent prop updates
+  // remain the only thing that can programmatically replace editor content.
+  let lastAppliedContentProp: string | undefined = undefined;
 
   // Track what kind of editor we built last, so we only rebuild when it truly changes.
   // This avoids constantly recreating the editor (which can lead to blank content/races).
   let lastReadonly: boolean | null = null;
   let lastPlaceholder: string | null = null;
-  let lastPluginVersion: number | null = null;
+  let lastPluginKey: string | null = null;
+
+  function getPluginExtensionKey(): string {
+    if (isTauri()) {
+      return JSON.stringify(
+        pluginStore.allManifests.map((manifest) => ({
+          id: String(manifest.id),
+          version: String(manifest.version ?? ""),
+          ui: manifest.ui,
+        })),
+      );
+    }
+
+    return `browser:${getPluginExtensionsVersion()}`;
+  }
 
   function destroyEditor() {
     editor?.destroy();
@@ -134,6 +160,7 @@
   }
 
   function createEditor() {
+    const initialContent = editor ? appendFootnoteDefinitions(editor) : content;
     destroyEditor();
 
     // In non-readonly mode, require FloatingMenu unless native iOS toolbar is active
@@ -225,6 +252,15 @@
           loading: "lazy",
         },
       }).extend({
+        renderMarkdown: (node: any) => {
+          const src = node.attrs?.src ?? "";
+          const alt = node.attrs?.alt ?? "";
+          const title = node.attrs?.title ?? "";
+          const formattedSrc = formatMarkdownDestination(src);
+          return title
+            ? `![${alt}](${formattedSrc} "${title}")`
+            : `![${alt}](${formattedSrc})`;
+        },
         addNodeView() {
           // Capture entryPath and api from the outer scope (Editor props)
           const ep = entryPath;
@@ -449,6 +485,9 @@
       // Tauri: use native backend (plugins loaded synchronously, available immediately)
       // Web: use browser Extism plugins (loaded async, editor rebuilds when ready)
       ...(isTauri() ? getTauriEditorExtensions() : getEditorExtensions()),
+      // Session-local fallback extensions keep removed plugin syntax round-trippable
+      // until the next full reload clears marked's shared tokenizer registry.
+      ...getPreservedEditorExtensions(),
     ];
 
     // Add FloatingMenu extension (for block formatting on empty lines)
@@ -593,18 +632,17 @@
     editor = new Editor({
       element,
       extensions,
-      content: preprocessFootnotes(content),
+      content: preprocessFootnotes(initialContent),
       contentType: "markdown",
       editable: !readonly,
       onCreate: () => {
-        // Track the initial content so we don't reset it on the first effect run
-        lastSyncedContent = content;
+        // Track the last external content value that has been applied so we don't
+        // overwrite the editor unless the prop actually changes.
+        lastAppliedContentProp = initialContent;
       },
-      onUpdate: ({ editor }) => {
+      onUpdate: () => {
         if (onchange && !isUpdatingContent) {
-          const markdown = appendFootnoteDefinitions(editor);
-          lastSyncedContent = markdown;
-          onchange(markdown);
+          onchange();
         }
       },
       onBlur: () => {
@@ -754,6 +792,7 @@
    */
   export function setContent(markdown: string): void {
     if (!editor) return;
+    lastAppliedContentProp = markdown;
     editor.commands.setContent(preprocessFootnotes(markdown), { contentType: "markdown" });
   }
 
@@ -845,6 +884,7 @@
         editorInitialized = true;
         lastReadonly = readonly;
         lastPlaceholder = placeholder;
+        lastPluginKey = getPluginExtensionKey();
       }
       return;
     }
@@ -863,6 +903,7 @@
       editorInitialized = true;
       lastReadonly = readonly;
       lastPlaceholder = placeholder;
+      lastPluginKey = getPluginExtensionKey();
     }
   });
 
@@ -883,36 +924,32 @@
     // Skip if we haven't done initial creation yet
     if (!editorInitialized) return;
 
-    const pluginVersion = getPluginExtensionsVersion();
+    const pluginKey = getPluginExtensionKey();
     const needsRebuild =
       readonly !== lastReadonly ||
       placeholder !== lastPlaceholder ||
-      pluginVersion !== lastPluginVersion;
+      pluginKey !== lastPluginKey;
 
     if (!needsRebuild) return;
 
     // Update tracking for what we're about to build
     lastReadonly = readonly;
     lastPlaceholder = placeholder;
-    lastPluginVersion = pluginVersion;
+    lastPluginKey = pluginKey;
 
     createEditor();
   });
 
   // Update editor content when the content prop changes (e.g., switching files)
-  // Only sync when the content PROP has actually changed from what we last synced
-  // This prevents resetting user's typing when the prop hasn't changed
+  // Only sync when the external content prop has actually changed from what we last applied.
   $effect(() => {
     if (!editor) return;
     if (content === undefined) return;
 
-    // Only sync if the content prop has actually changed from what we last synced
-    // This prevents resetting the editor when the user is typing (prop stays the same,
-    // but editor content changes)
-    if (content === lastSyncedContent) return;
+    if (content === lastAppliedContentProp) return;
 
     // Content prop changed - sync it to the editor
-    lastSyncedContent = content;
+    lastAppliedContentProp = content;
     isUpdatingContent = true;
     editor.commands.setContent(preprocessFootnotes(content), { contentType: "markdown" });
     setTimeout(() => {
@@ -947,8 +984,7 @@
     const file = e.dataTransfer?.files?.[0];
     if (file && onFileDrop) {
       const result = await onFileDrop(file);
-      // Only insert into editor if it's an image with a blob URL
-      if (result && result.blobUrl && editor && file.type.startsWith("image/")) {
+      if (result && result.blobUrl && editor && isPreviewableAttachmentKind(result.kind)) {
         editor
           .chain()
           .focus()

@@ -4,9 +4,10 @@
 //! Diaryx environment. They are registered with the Extism plugin via
 //! [`PluginBuilder`](extism::PluginBuilder).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use chrono::{Local, SecondsFormat};
 use diaryx_core::fs::AsyncFileSystem;
 use diaryx_core::plugin::permissions::PermissionType;
 use extism::{CurrentPlugin, Error as ExtismError, UserData, Val, ValType};
@@ -25,10 +26,44 @@ pub trait PluginStorage: Send + Sync {
     fn delete(&self, key: &str);
 }
 
+/// Trait for persisting plugin secrets separately from normal plugin state.
+pub trait PluginSecretStore: Send + Sync {
+    /// Load a secret by key.
+    fn get(&self, key: &str) -> Option<String>;
+    /// Store a secret by key.
+    fn set(&self, key: &str, value: &str);
+    /// Delete a secret by key.
+    fn delete(&self, key: &str);
+}
+
 /// Trait for emitting events from plugins to the host application.
 pub trait EventEmitter: Send + Sync {
     /// Emit an event (JSON payload) to the host.
     fn emit(&self, event_json: &str);
+}
+
+/// Trait for handling plugin-initiated websocket transport requests.
+pub trait WebSocketBridge: Send + Sync {
+    /// Handle a serialized websocket request and return a serialized response.
+    fn request(&self, request_json: &str) -> Result<String, String>;
+}
+
+/// Trait for plugin-to-plugin command dispatch mediated by the host.
+pub trait PluginCommandBridge: Send + Sync {
+    /// Execute a command on another plugin and return the plugin's raw JSON data.
+    fn call(
+        &self,
+        caller_plugin_id: &str,
+        plugin_id: &str,
+        command: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, String>;
+}
+
+/// Trait for exposing generic host runtime context to plugins.
+pub trait RuntimeContextProvider: Send + Sync {
+    /// Return runtime context for the caller plugin.
+    fn get_context(&self, plugin_id: &str) -> serde_json::Value;
 }
 
 /// No-op implementation of [`PluginStorage`] for plugins that don't need persistence.
@@ -40,6 +75,101 @@ impl PluginStorage for NoopStorage {
     }
     fn set(&self, _key: &str, _data: &[u8]) {}
     fn delete(&self, _key: &str) {}
+}
+
+/// No-op implementation of [`PluginSecretStore`] for hosts without secure storage.
+pub struct NoopSecretStore;
+
+impl PluginSecretStore for NoopSecretStore {
+    fn get(&self, _key: &str) -> Option<String> {
+        None
+    }
+
+    fn set(&self, _key: &str, _value: &str) {}
+
+    fn delete(&self, _key: &str) {}
+}
+
+fn sanitize_storage_key(key: &str) -> String {
+    key.chars()
+        .map(|c| {
+            if c == '/' || c == '\\' || c == ':' {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+/// File-backed [`PluginStorage`] implementation for native hosts.
+pub struct FilePluginStorage {
+    base_dir: PathBuf,
+}
+
+impl FilePluginStorage {
+    pub fn new(base_dir: PathBuf) -> Self {
+        let _ = std::fs::create_dir_all(&base_dir);
+        Self { base_dir }
+    }
+
+    fn key_to_path(&self, key: &str) -> PathBuf {
+        self.base_dir
+            .join(format!("{}.bin", sanitize_storage_key(key)))
+    }
+}
+
+impl PluginStorage for FilePluginStorage {
+    fn get(&self, key: &str) -> Option<Vec<u8>> {
+        std::fs::read(self.key_to_path(key)).ok()
+    }
+
+    fn set(&self, key: &str, data: &[u8]) {
+        let path = self.key_to_path(key);
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(path, data);
+    }
+
+    fn delete(&self, key: &str) {
+        let _ = std::fs::remove_file(self.key_to_path(key));
+    }
+}
+
+/// File-backed [`PluginSecretStore`] implementation for native hosts.
+pub struct FilePluginSecretStore {
+    base_dir: PathBuf,
+}
+
+impl FilePluginSecretStore {
+    pub fn new(base_dir: PathBuf) -> Self {
+        let _ = std::fs::create_dir_all(&base_dir);
+        Self { base_dir }
+    }
+
+    fn key_to_path(&self, key: &str) -> PathBuf {
+        self.base_dir
+            .join(format!("{}.secret", sanitize_storage_key(key)))
+    }
+}
+
+impl PluginSecretStore for FilePluginSecretStore {
+    fn get(&self, key: &str) -> Option<String> {
+        std::fs::read_to_string(self.key_to_path(key)).ok()
+    }
+
+    fn set(&self, key: &str, value: &str) {
+        let path = self.key_to_path(key);
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(path, value);
+    }
+
+    fn delete(&self, key: &str) {
+        let _ = std::fs::remove_file(self.key_to_path(key));
+    }
 }
 
 /// Trait for providing user-selected files to plugins.
@@ -87,6 +217,39 @@ impl EventEmitter for NoopEventEmitter {
     fn emit(&self, _event_json: &str) {}
 }
 
+/// No-op websocket bridge for hosts that don't support plugin-managed transport.
+pub struct NoopWebSocketBridge;
+
+impl WebSocketBridge for NoopWebSocketBridge {
+    fn request(&self, _request_json: &str) -> Result<String, String> {
+        Ok(String::new())
+    }
+}
+
+/// No-op plugin command bridge for hosts that do not support plugin-to-plugin calls.
+pub struct NoopPluginCommandBridge;
+
+impl PluginCommandBridge for NoopPluginCommandBridge {
+    fn call(
+        &self,
+        _caller_plugin_id: &str,
+        _plugin_id: &str,
+        _command: &str,
+        _params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        Err("Plugin command bridge is not available".to_string())
+    }
+}
+
+/// No-op runtime context provider for hosts without runtime context wiring.
+pub struct NoopRuntimeContextProvider;
+
+impl RuntimeContextProvider for NoopRuntimeContextProvider {
+    fn get_context(&self, _plugin_id: &str) -> serde_json::Value {
+        serde_json::json!({})
+    }
+}
+
 /// Trait for checking plugin permissions before allowing host function calls.
 ///
 /// Implementations may check static config, prompt the user, or consult
@@ -113,6 +276,8 @@ pub struct HostContext {
     pub fs: Arc<dyn AsyncFileSystem>,
     /// Persistent storage for plugin state (CRDT snapshots, etc.).
     pub storage: Arc<dyn PluginStorage>,
+    /// Persistent storage for plugin secrets (tokens, API keys).
+    pub secret_store: Arc<dyn PluginSecretStore>,
     /// Event emitter for sync events.
     pub event_emitter: Arc<dyn EventEmitter>,
     /// Which plugin this context belongs to.
@@ -121,6 +286,12 @@ pub struct HostContext {
     pub permission_checker: Option<Arc<dyn PermissionChecker>>,
     /// Provider of user-selected files (e.g. from CLI args or browser file picker).
     pub file_provider: Arc<dyn FileProvider>,
+    /// WebSocket bridge for plugin-managed sync transport.
+    pub ws_bridge: Arc<dyn WebSocketBridge>,
+    /// Host-mediated plugin-to-plugin command bridge.
+    pub plugin_command_bridge: Arc<dyn PluginCommandBridge>,
+    /// Provider of generic runtime context for the caller plugin.
+    pub runtime_context_provider: Arc<dyn RuntimeContextProvider>,
 }
 
 impl HostContext {
@@ -129,10 +300,14 @@ impl HostContext {
         Self {
             fs,
             storage: Arc::new(NoopStorage),
+            secret_store: Arc::new(NoopSecretStore),
             event_emitter: Arc::new(NoopEventEmitter),
             plugin_id: String::new(),
             permission_checker: Some(Arc::new(DenyAllPermissionChecker)),
             file_provider: Arc::new(NoopFileProvider),
+            ws_bridge: Arc::new(NoopWebSocketBridge),
+            plugin_command_bridge: Arc::new(NoopPluginCommandBridge),
+            runtime_context_provider: Arc::new(NoopRuntimeContextProvider),
         }
     }
 
@@ -155,6 +330,10 @@ impl HostContext {
         } else {
             format!("{}:{}", self.plugin_id, key)
         }
+    }
+
+    fn secret_key(&self, key: &str) -> String {
+        self.storage_key(key)
     }
 }
 
@@ -184,6 +363,13 @@ pub fn register_host_functions(
             [ValType::I64],
             user_data.clone(),
             host_read_file,
+        )
+        .with_function(
+            "host_read_binary",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_read_binary,
         )
         .with_function(
             "host_list_files",
@@ -242,11 +428,39 @@ pub fn register_host_functions(
             host_storage_set,
         )
         .with_function(
+            "host_secret_get",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_secret_get,
+        )
+        .with_function(
+            "host_secret_set",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_secret_set,
+        )
+        .with_function(
+            "host_secret_delete",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_secret_delete,
+        )
+        .with_function(
             "host_get_timestamp",
             [ValType::I64],
             [ValType::I64],
             user_data.clone(),
             host_get_timestamp,
+        )
+        .with_function(
+            "host_get_now",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_get_now,
         )
         .with_function(
             "host_http_request",
@@ -268,6 +482,20 @@ pub fn register_host_functions(
             [ValType::I64],
             user_data.clone(),
             host_request_file,
+        )
+        .with_function(
+            "host_plugin_command",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_plugin_command,
+        )
+        .with_function(
+            "host_get_runtime_context",
+            [ValType::I64],
+            [ValType::I64],
+            user_data.clone(),
+            host_get_runtime_context,
         )
         .with_function(
             "host_ws_request",
@@ -336,6 +564,41 @@ fn host_read_file(
         .map_err(|e| ExtismError::msg(format!("host_read_file: {e}")))?;
 
     plugin.memory_set_val(&mut outputs[0], content.as_str())?;
+    Ok(())
+}
+
+/// Host function: `host_read_binary(input: {path}) -> {data: base64}`
+///
+/// Reads a workspace file as raw bytes.
+fn host_read_binary(
+    plugin: &mut CurrentPlugin,
+    inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    use base64::Engine;
+
+    let input: String = plugin.memory_get_val(&inputs[0])?;
+
+    #[derive(serde::Deserialize)]
+    struct ReadInput {
+        path: String,
+    }
+
+    let parsed: ReadInput = serde_json::from_str(&input)
+        .map_err(|e| ExtismError::msg(format!("host_read_binary: invalid input: {e}")))?;
+
+    let ctx = user_data.get()?;
+    let ctx = ctx.lock().unwrap();
+    ctx.check_perm(PermissionType::ReadFiles, &parsed.path)?;
+    let bytes = futures_lite::future::block_on(ctx.fs.read_binary(Path::new(&parsed.path)))
+        .map_err(|e| ExtismError::msg(format!("host_read_binary: {e}")))?;
+    let json = serde_json::json!({
+        "data": base64::engine::general_purpose::STANDARD.encode(&bytes)
+    })
+    .to_string();
+
+    plugin.memory_set_val(&mut outputs[0], json.as_str())?;
     Ok(())
 }
 
@@ -609,6 +872,98 @@ fn host_storage_set(
     Ok(())
 }
 
+/// Host function: `host_secret_get(input: {key}) -> {value: string} or ""`
+///
+/// Loads a secret value by key.
+fn host_secret_get(
+    plugin: &mut CurrentPlugin,
+    inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    let input: String = plugin.memory_get_val(&inputs[0])?;
+
+    #[derive(serde::Deserialize)]
+    struct SecretGetInput {
+        key: String,
+    }
+
+    let parsed: SecretGetInput = serde_json::from_str(&input)
+        .map_err(|e| ExtismError::msg(format!("host_secret_get: invalid input: {e}")))?;
+
+    let ctx = user_data.get()?;
+    let ctx = ctx.lock().unwrap();
+    ctx.check_perm(PermissionType::PluginStorage, &parsed.key)?;
+    let secret_key = ctx.secret_key(&parsed.key);
+
+    let result = match ctx.secret_store.get(&secret_key) {
+        Some(value) => serde_json::json!({ "value": value }).to_string(),
+        None => String::new(),
+    };
+
+    plugin.memory_set_val(&mut outputs[0], result.as_str())?;
+    Ok(())
+}
+
+/// Host function: `host_secret_set(input: {key, value}) -> ""`
+///
+/// Persists a secret value by key.
+fn host_secret_set(
+    plugin: &mut CurrentPlugin,
+    inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    let input: String = plugin.memory_get_val(&inputs[0])?;
+
+    #[derive(serde::Deserialize)]
+    struct SecretSetInput {
+        key: String,
+        value: String,
+    }
+
+    let parsed: SecretSetInput = serde_json::from_str(&input)
+        .map_err(|e| ExtismError::msg(format!("host_secret_set: invalid input: {e}")))?;
+
+    let ctx = user_data.get()?;
+    let ctx = ctx.lock().unwrap();
+    ctx.check_perm(PermissionType::PluginStorage, &parsed.key)?;
+    let secret_key = ctx.secret_key(&parsed.key);
+    ctx.secret_store.set(&secret_key, &parsed.value);
+
+    plugin.memory_set_val(&mut outputs[0], "")?;
+    Ok(())
+}
+
+/// Host function: `host_secret_delete(input: {key}) -> ""`
+///
+/// Deletes a secret value by key.
+fn host_secret_delete(
+    plugin: &mut CurrentPlugin,
+    inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    let input: String = plugin.memory_get_val(&inputs[0])?;
+
+    #[derive(serde::Deserialize)]
+    struct SecretDeleteInput {
+        key: String,
+    }
+
+    let parsed: SecretDeleteInput = serde_json::from_str(&input)
+        .map_err(|e| ExtismError::msg(format!("host_secret_delete: invalid input: {e}")))?;
+
+    let ctx = user_data.get()?;
+    let ctx = ctx.lock().unwrap();
+    ctx.check_perm(PermissionType::PluginStorage, &parsed.key)?;
+    let secret_key = ctx.secret_key(&parsed.key);
+    ctx.secret_store.delete(&secret_key);
+
+    plugin.memory_set_val(&mut outputs[0], "")?;
+    Ok(())
+}
+
 /// Host function: `host_run_wasi_module(input: WasiRunRequest) -> WasiRunResult`
 ///
 /// Runs a WASI module stored in plugin storage. The guest provides a storage
@@ -724,19 +1079,29 @@ fn host_get_timestamp(
     Ok(())
 }
 
-/// Host function: `host_request_file(input: {key}) -> {data: base64} or ""`
+/// Host function: `host_get_now(input: "") -> local RFC 3339 timestamp string`
+fn host_get_now(
+    plugin: &mut CurrentPlugin,
+    _inputs: &[Val],
+    outputs: &mut [Val],
+    _user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    let now = Local::now().to_rfc3339_opts(SecondsFormat::Secs, false);
+    plugin.memory_set_val(&mut outputs[0], now.as_str())?;
+    Ok(())
+}
+
+/// Host function: `host_request_file(input: {key}) -> raw bytes or empty`
 ///
 /// Requests a user-provided file by key name. The host decides where the
 /// file comes from (CLI: read from path in command args; browser: File picker).
-/// Returns base64-encoded bytes wrapped in JSON, or empty string if unavailable.
+/// Returns the raw file bytes, or an empty result if unavailable.
 fn host_request_file(
     plugin: &mut CurrentPlugin,
     inputs: &[Val],
     outputs: &mut [Val],
     user_data: UserData<HostContext>,
 ) -> Result<(), ExtismError> {
-    use base64::Engine;
-
     let input: String = plugin.memory_get_val(&inputs[0])?;
 
     #[derive(serde::Deserialize)]
@@ -750,30 +1115,110 @@ fn host_request_file(
     let ctx = user_data.get()?;
     let ctx = ctx.lock().unwrap();
 
-    let result = match ctx.file_provider.get_file(&parsed.key) {
-        Some(data) => {
-            let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
-            serde_json::json!({ "data": encoded }).to_string()
+    let result = ctx.file_provider.get_file(&parsed.key).unwrap_or_default();
+
+    plugin.memory_set_val(&mut outputs[0], result.as_slice())?;
+    Ok(())
+}
+
+/// Host function: `host_plugin_command(input: {plugin_id, command, params}) -> {success, data?, error?}`
+///
+/// Executes a command on another loaded plugin through the host bridge.
+fn host_plugin_command(
+    plugin: &mut CurrentPlugin,
+    inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    #[derive(serde::Deserialize)]
+    struct PluginCommandInput {
+        plugin_id: String,
+        command: String,
+        #[serde(default)]
+        params: serde_json::Value,
+    }
+
+    let input: String = plugin.memory_get_val(&inputs[0])?;
+    let parsed: PluginCommandInput = serde_json::from_str(&input)
+        .map_err(|e| ExtismError::msg(format!("host_plugin_command: invalid input: {e}")))?;
+
+    let ctx = user_data.get()?;
+    let ctx = ctx.lock().unwrap();
+
+    let response = if parsed.plugin_id.trim().is_empty() || parsed.command.trim().is_empty() {
+        serde_json::json!({
+            "success": false,
+            "error": "plugin_id and command are required",
+        })
+    } else if parsed.plugin_id == ctx.plugin_id {
+        serde_json::json!({
+            "success": false,
+            "error": "Plugins cannot call their own commands via host_plugin_command",
+        })
+    } else {
+        let permission_target = format!("{}:{}", parsed.plugin_id, parsed.command);
+        match ctx.check_perm(PermissionType::ExecuteCommands, &permission_target) {
+            Ok(()) => match ctx.plugin_command_bridge.call(
+                &ctx.plugin_id,
+                &parsed.plugin_id,
+                &parsed.command,
+                parsed.params,
+            ) {
+                Ok(data) => serde_json::json!({
+                    "success": true,
+                    "data": data,
+                }),
+                Err(error) => serde_json::json!({
+                    "success": false,
+                    "error": error,
+                }),
+            },
+            Err(error) => serde_json::json!({
+                "success": false,
+                "error": error.to_string(),
+            }),
         }
-        None => String::new(),
     };
 
-    plugin.memory_set_val(&mut outputs[0], result.as_str())?;
+    let json = serde_json::to_string(&response)
+        .map_err(|e| ExtismError::msg(format!("host_plugin_command: serialize: {e}")))?;
+    plugin.memory_set_val(&mut outputs[0], json.as_str())?;
+    Ok(())
+}
+
+/// Host function: `host_get_runtime_context(input: "") -> json`
+///
+/// Returns generic host runtime context for the caller plugin.
+fn host_get_runtime_context(
+    plugin: &mut CurrentPlugin,
+    _inputs: &[Val],
+    outputs: &mut [Val],
+    user_data: UserData<HostContext>,
+) -> Result<(), ExtismError> {
+    let ctx = user_data.get()?;
+    let ctx = ctx.lock().unwrap();
+    let json = serde_json::to_string(&ctx.runtime_context_provider.get_context(&ctx.plugin_id))
+        .map_err(|e| ExtismError::msg(format!("host_get_runtime_context: serialize: {e}")))?;
+    plugin.memory_set_val(&mut outputs[0], json.as_str())?;
     Ok(())
 }
 
 /// Host function: `host_ws_request(input: json) -> string`
 ///
 /// Forward-compatible bridge for plugin-managed websocket ownership.
-/// Current host implementations keep socket lifecycle in JS/Rust transports,
-/// so this is intentionally a no-op stub.
+/// The concrete host bridge owns the socket lifecycle and maps these
+/// requests to runtime-specific websocket operations.
 fn host_ws_request(
     plugin: &mut CurrentPlugin,
-    _inputs: &[Val],
+    inputs: &[Val],
     outputs: &mut [Val],
-    _user_data: UserData<HostContext>,
+    user_data: UserData<HostContext>,
 ) -> Result<(), ExtismError> {
-    plugin.memory_set_val(&mut outputs[0], "")?;
+    let input: String = plugin.memory_get_val(&inputs[0])?;
+    let ctx = user_data.get()?;
+    let ctx = ctx.lock().unwrap();
+    let result = ctx.ws_bridge.request(&input).map_err(ExtismError::msg)?;
+    plugin.memory_set_val(&mut outputs[0], result.as_str())?;
     Ok(())
 }
 

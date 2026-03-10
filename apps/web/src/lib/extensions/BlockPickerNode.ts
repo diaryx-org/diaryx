@@ -79,6 +79,14 @@ export const BlockPickerNode = Node.create<BlockPickerNodeOptions>({
         }
       };
 
+      const deleteNodeAndThen = (action?: () => void) => {
+        deleteNode();
+        if (!action) return;
+        // Defer follow-up commands until the delete transaction has been
+        // applied so subsequent editor commands see the current state.
+        queueMicrotask(action);
+      };
+
       const onInsertAttachment = this.options.onInsertAttachment;
 
       svelteComponent = mount(BlockPickerNodeView, {
@@ -87,18 +95,13 @@ export const BlockPickerNode = Node.create<BlockPickerNodeOptions>({
           editor,
           showAttachment: !!onInsertAttachment,
           onSelect: (action: () => void) => {
-            deleteNode();
-            action();
+            deleteNodeAndThen(action);
           },
           onInsertAttachment: onInsertAttachment
-            ? () => {
-                deleteNode();
-                onInsertAttachment();
-              }
+            ? () => deleteNodeAndThen(onInsertAttachment)
             : undefined,
           onCancel: () => {
-            deleteNode();
-            editor.commands.focus();
+            deleteNodeAndThen(() => editor.commands.focus());
           },
         },
       });

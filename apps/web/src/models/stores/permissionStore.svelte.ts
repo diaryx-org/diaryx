@@ -78,6 +78,9 @@ let requestCounter = 0;
 
 let persistenceHandlers = $state<PermissionPersistenceHandlers | null>(null);
 
+/** When true, all permission requests are auto-allowed (for E2E testing). */
+let autoAllowAll = false;
+
 // ============================================================================
 // Permission Check Logic
 // ============================================================================
@@ -258,6 +261,7 @@ async function requestPermission(
   target: string,
   pluginsConfig?: Record<string, PluginConfig>,
 ): Promise<boolean> {
+  if (autoAllowAll) return true;
   const effectiveConfig = pluginsConfig ?? persistenceHandlers?.getPluginsConfig();
 
   // 1. Check static config
@@ -270,13 +274,16 @@ async function requestPermission(
   if (configResult === 'allowed') return true;
   if (configResult === 'denied') return false;
 
-  // 2. Check session cache
+  // 2. Plugin storage is sandboxed per-plugin — always allow.
+  if (permissionType === 'plugin_storage') return true;
+
+  // 3. Check session cache
   const key = cacheKey(pluginId, permissionType, target);
   if (key in sessionCache) {
     return sessionCache[key];
   }
 
-  // 3. Show banner and wait for user response
+  // 4. Show banner and wait for user response
   return new Promise<boolean>((resolve) => {
     const id = `perm-${++requestCounter}`;
     const request: PermissionRequest = {
@@ -464,6 +471,9 @@ export function getPermissionStore() {
     checkPermission,
     getPermissionLabel,
     formatTarget,
+    setAutoAllow(enabled: boolean) {
+      autoAllowAll = enabled;
+    },
   };
 }
 

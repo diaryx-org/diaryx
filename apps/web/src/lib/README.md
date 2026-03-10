@@ -21,6 +21,7 @@ contents:
 attachments:
   - "[utils.ts](/apps/web/src/lib/utils.ts)"
   - "[credentials.ts](/apps/web/src/lib/credentials.ts)"
+  - "[mobileSwipe.ts](/apps/web/src/lib/mobileSwipe.ts)"
   - "[wasm-stub.js](/apps/web/src/lib/wasm-stub.js)"
   - "[CommandPalette.svelte](/apps/web/src/lib/CommandPalette.svelte)"
   - "[Editor.svelte](/apps/web/src/lib/Editor.svelte)"
@@ -99,13 +100,20 @@ Browser sync now loads the Extism sync plugin from
 an older wasm-bindgen-flavored artifact, loading fails fast with a rebuild
 instruction instead of surfacing a low-level Extism import resolution error.
 
-Extism sync guest calls are serialized in `sync/pluginSyncAdapter.ts` to avoid
-re-entrant guest invocations, which can panic on internal `RefCell` borrows
-when multiple sync events race in the browser.
+Extism sync guest calls are serialized in
+`plugins/extismBrowserLoader.ts` so browser transport callbacks and host
+events cannot re-enter the guest concurrently and trip internal `RefCell`
+borrows.
 
-Browser host-side sync wiring uses `sync/pluginSyncAdapter.ts` and
-`sync/workspaceProviderService.ts` so the web app remains a plugin host and
-sync logic stays in the external sync plugin.
+Browser host-side sync wiring lives in `plugins/extismBrowserLoader.ts` and
+`sync/providerPluginCommands.ts` / `sync/workspaceProviderService.ts` so the
+web app remains a plugin host, provider commands prefer plugin-owned
+runtime/config state, and sync logic stays in the external sync plugin.
+
+`App.svelte` only auto-opens the dialog after a fresh sign-in / magic-link
+verification that still needs workspace bootstrap. It no longer reopens the
+setup flow on every page reload for authenticated users who have not enabled
+sync on the current client.
 
 On Tauri, the dialog resets the location field when opened and derives a
 fresh default path from the app document directory + workspace name when no
@@ -134,6 +142,13 @@ The command palette can now be plugin-owned via a `UiContribution::CommandPalett
 surface contribution. When no plugin owns the surface, the built-in fallback is
 limited to backup/import actions.
 
+## Editor performance
+
+`Editor.svelte` now preserves unsaved content across internal TipTap rebuilds
+while avoiding full-document markdown serialization on every keystroke. Large
+documents are serialized on demand for save/export/sync checks instead, which
+keeps typing latency down in long notes.
+
 ## Sidebar Layout
 
 - Left sidebar: built-in `Files` tab plus plugin-contributed tabs.
@@ -141,10 +156,32 @@ limited to backup/import actions.
 - Marketplace: opened from a dedicated modal surface
   (`MarketplaceDialog.svelte`): desktop `Dialog`, mobile `Drawer`.
 - Marketplace tabs now own appearance customization (`Themes`, `Typography`, `Bundles`) in addition to plugin browsing, with curated + local registries for themes and typography presets.
+- `mobileSwipe.ts` centralizes app-shell gesture gating so sidebar-open swipes are edge-triggered and modal/drawer or text-selection gestures do not leak through to the shell.
 - Plugin sidebars are host-rendered with `components/PluginSidebarPanel.svelte`.
-- Status-bar plugin items are host-rendered with `components/PluginStatusItems.svelte`.
+- Status-bar plugin items are host-rendered with `components/PluginStatusItems.svelte`, which only displays plugin-reported status and leaves plugin-specific actions to the plugin itself.
 - `RightSidebar.svelte` resets collapse-button tooltip state when collapsing to
   prevent stale tooltip visibility when reopening the panel.
+- `RightSidebar.svelte` now probes attachment local availability through
+  attachment path resolution + file existence checks instead of reading full
+  attachment bytes, keeping the properties panel responsive in media-heavy
+  entries.
+- Sidebar attachment preview clicks now reuse the shared attachment
+  resolver/blob cache for previewable media instead of calling
+  `GetAttachmentData` and creating a fresh preview blob on every open, which
+  makes repeat previews effectively instant and keeps the first open on the
+  binary read path.
+- The attachment preview dialog now opens images with a cached thumbnail
+  immediately when one already exists, then swaps to the full media when ready.
+  Videos and audio use the same preview surface. On Tauri, the full-preview
+  step prefers a native `asset:` URL for local verified media files and falls
+  back to the blob resolver when native loading is unavailable.
+- Attachment uploads and picker inserts now classify files as
+  image/video/audio/file so previewable media insert directly into the editor
+  instead of only images taking the fast embed path.
+- Attachment/media markdown serialization now wraps destinations containing
+  whitespace in angle brackets, so uploaded videos and other attachments with
+  spaced filenames persist as valid CommonMark embeds instead of degrading to
+  plain text on reload.
 - `LeftSidebar.svelte` dismisses the Settings-button tooltip on click so it
   does not remain visible after opening Settings, temporarily suppresses the
   tooltip while Settings is open/closing, and uses controlled tooltip open
@@ -163,6 +200,13 @@ The web host keeps only generic infrastructure:
 - Workspace tree/editor refresh from backend filesystem events
 
 The host does not keep a web-specific CRDT bridge module.
+
+Marketplace installs and removals now refresh plugin manifests and TipTap
+editor extensions in-place on both browser and Tauri runtimes, so editor
+features such as spoiler/math activate without a manual page reload. When a
+plugin is removed mid-session, Diaryx keeps a preserve-only fallback extension
+alive until the next reload so custom markdown syntax is not stripped from
+open notes.
 
 Left sidebar tree context menus can also be plugin-owned via
 `UiContribution::ContextMenu { target: LeftSidebarTree, ... }`. When no plugin

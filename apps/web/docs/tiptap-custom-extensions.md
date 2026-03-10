@@ -44,6 +44,11 @@ If you conditionally load an extension:
 SpoilerMark.configure({ enabled: enableSpoilers })
 ```
 
+Diaryx also keeps recently removed plugin editor extensions in a session-local
+"preserve only" mode until the next full reload. That fallback disables plugin
+behavior but keeps the parser/serializer alive so uninstalling a plugin does
+not immediately strip custom markdown like `||spoilers||` from open notes.
+
 ## Creating a Custom Mark Extension
 
 ### Basic Structure

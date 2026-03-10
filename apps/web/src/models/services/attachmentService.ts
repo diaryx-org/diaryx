@@ -6,6 +6,7 @@
  */
 
 import type { Api } from '$lib/backend/api';
+import { isTauri } from '$lib/backend/interface';
 import { getServerAttachmentUrl, getAttachmentMetadata, sha256Hex } from '$lib/sync/attachmentSyncService';
 
 // ============================================================================
@@ -14,6 +15,20 @@ import { getServerAttachmentUrl, getAttachmentMetadata, sha256Hex } from '$lib/s
 
 // Blob URL tracking for attachments (originalPath -> blobUrl)
 const blobUrlMap = new Map<string, string>();
+
+// Thumbnail URL cache keyed by attachment hash or source path.
+// This keeps picker thumbnails reusable across surfaces without holding
+// on to unbounded object URLs.
+const thumbnailUrlMap = new Map<string, string>();
+const thumbnailPromiseMap = new Map<string, Promise<string | undefined>>();
+const THUMBNAIL_CACHE_LIMIT = 96;
+const THUMBNAIL_MAX_DIMENSION_PX = 240;
+
+// Positive verification cache for synced local attachments keyed by
+// storage path + expected hash. This lets us skip repeat hashing after a
+// verified local read while still invalidating naturally when metadata changes.
+const verifiedAttachmentMap = new Map<string, true>();
+const VERIFIED_ATTACHMENT_CACHE_LIMIT = 256;
 
 // Normalization cache to avoid repeated WASM round-trips ("entryPath::rawPath" -> result)
 const normalizationCache = new Map<string, { canonical: string; sourceRelative: string }>();
@@ -36,6 +51,123 @@ function drainPendingResolves(): void {
   while (resolveInFlight < RESOLVE_CONCURRENCY && pendingResolves.length > 0) {
     resolveInFlight++;
     pendingResolves.shift()!.start();
+  }
+}
+
+function getThumbnailCacheKey(sourceEntryPath: string, attachmentPath: string): string {
+  const metadata = getAttachmentMetadata(sourceEntryPath, attachmentPath);
+  if (metadata?.hash) return `hash:${metadata.hash}`;
+  return `path:${sourceEntryPath}::${attachmentPath}`;
+}
+
+function getResolvedAttachmentMetadata(
+  entryPath: string,
+  canonicalPath: string,
+  sourceRelativePath: string,
+) {
+  return (
+    getAttachmentMetadata(entryPath, sourceRelativePath) ||
+    (canonicalPath !== sourceRelativePath
+      ? getAttachmentMetadata(entryPath, canonicalPath)
+      : null)
+  );
+}
+
+function touchThumbnailCacheEntry(key: string): string | undefined {
+  const existing = thumbnailUrlMap.get(key);
+  if (!existing) return undefined;
+  thumbnailUrlMap.delete(key);
+  thumbnailUrlMap.set(key, existing);
+  return existing;
+}
+
+function evictThumbnailCacheIfNeeded(): void {
+  while (thumbnailUrlMap.size > THUMBNAIL_CACHE_LIMIT) {
+    const oldestKey = thumbnailUrlMap.keys().next().value;
+    if (!oldestKey) break;
+    const oldestUrl = thumbnailUrlMap.get(oldestKey);
+    if (oldestUrl) {
+      URL.revokeObjectURL(oldestUrl);
+    }
+    thumbnailUrlMap.delete(oldestKey);
+  }
+}
+
+function getVerifiedAttachmentCacheKey(storagePath: string, expectedHash: string): string {
+  return `${storagePath}::${expectedHash}`;
+}
+
+function touchVerifiedAttachmentCacheEntry(key: string): boolean {
+  if (!verifiedAttachmentMap.has(key)) return false;
+  verifiedAttachmentMap.delete(key);
+  verifiedAttachmentMap.set(key, true);
+  return true;
+}
+
+function rememberVerifiedAttachment(key: string): void {
+  verifiedAttachmentMap.delete(key);
+  verifiedAttachmentMap.set(key, true);
+
+  while (verifiedAttachmentMap.size > VERIFIED_ATTACHMENT_CACHE_LIMIT) {
+    const oldestKey = verifiedAttachmentMap.keys().next().value;
+    if (!oldestKey) break;
+    verifiedAttachmentMap.delete(oldestKey);
+  }
+}
+
+async function verifyLocalAttachmentAgainstMetadata(
+  api: Api,
+  entryPath: string,
+  canonicalPath: string,
+  sourceRelativePath: string,
+  storagePath: string,
+  bytes?: Uint8Array,
+  signal?: AbortSignal,
+): Promise<'ok' | 'stale' | 'aborted'> {
+  const meta = getResolvedAttachmentMetadata(entryPath, canonicalPath, sourceRelativePath);
+  if (!meta?.hash) return 'ok';
+
+  const verificationKey = getVerifiedAttachmentCacheKey(storagePath, meta.hash);
+  if (touchVerifiedAttachmentCacheEntry(verificationKey)) {
+    return 'ok';
+  }
+
+  const localBytes = bytes ?? await api.readBinary(storagePath);
+  if (signal?.aborted) return 'aborted';
+
+  const localHash = await sha256Hex(localBytes);
+  if (signal?.aborted) return 'aborted';
+  if (localHash !== meta.hash) return 'stale';
+
+  rememberVerifiedAttachment(verificationKey);
+  return 'ok';
+}
+
+async function resolveTauriNativePreviewUrlFromPaths(
+  api: Api,
+  entryPath: string,
+  canonicalPath: string,
+  sourceRelativePath: string,
+): Promise<string | null> {
+  if (!isTauri() || isHeicFile(canonicalPath)) return null;
+
+  try {
+    const storagePath = await api.resolveAttachmentStoragePath(entryPath, sourceRelativePath);
+    if (!(await api.fileExists(storagePath))) return null;
+
+    const verification = await verifyLocalAttachmentAgainstMetadata(
+      api,
+      entryPath,
+      canonicalPath,
+      sourceRelativePath,
+      storagePath,
+    );
+    if (verification !== 'ok') return null;
+
+    const { convertFileSrc } = await import('@tauri-apps/api/core');
+    return convertFileSrc(storagePath);
+  } catch {
+    return null;
   }
 }
 
@@ -92,6 +224,8 @@ const mimeTypes: Record<string, string> = {
   rar: 'application/vnd.rar',
 };
 
+export type AttachmentMediaKind = 'image' | 'video' | 'audio' | 'file';
+
 /**
  * Get the MIME type for a file based on its extension.
  */
@@ -133,10 +267,38 @@ export function isAudioFile(path: string): boolean {
 }
 
 /**
+ * Classify an attachment by preview behavior.
+ *
+ * MIME type, when available, wins over extension-based inference so uploads
+ * like `.ogg` can be disambiguated correctly.
+ */
+export function getAttachmentMediaKind(
+  path: string,
+  mimeType?: string | null,
+): AttachmentMediaKind {
+  const normalizedMimeType = mimeType?.trim().toLowerCase();
+  if (normalizedMimeType?.startsWith('image/')) return 'image';
+  if (normalizedMimeType?.startsWith('video/')) return 'video';
+  if (normalizedMimeType?.startsWith('audio/')) return 'audio';
+
+  if (isImageFile(path)) return 'image';
+  if (isVideoFile(path)) return 'video';
+  if (isAudioFile(path)) return 'audio';
+  return 'file';
+}
+
+/**
+ * Check whether an attachment kind can be previewed inline or in the preview dialog.
+ */
+export function isPreviewableAttachmentKind(kind: AttachmentMediaKind): boolean {
+  return kind !== 'file';
+}
+
+/**
  * Check if a file is a displayable media file (image, video, or audio).
  */
 export function isMediaFile(path: string): boolean {
-  return isImageFile(path) || isVideoFile(path) || isAudioFile(path);
+  return isPreviewableAttachmentKind(getAttachmentMediaKind(path));
 }
 
 /**
@@ -144,6 +306,17 @@ export function isMediaFile(path: string): boolean {
  */
 export function getFilename(path: string): string {
   return path.split('/').pop() || path;
+}
+
+/**
+ * Format a markdown destination so paths with whitespace remain valid CommonMark.
+ */
+export function formatMarkdownDestination(path: string): string {
+  const trimmed = path.trim();
+  if (trimmed.startsWith('<') && trimmed.endsWith('>')) {
+    return path;
+  }
+  return /\s/u.test(path) ? `<${path}>` : path;
 }
 
 /**
@@ -306,18 +479,19 @@ async function resolveAttachmentFromPaths(
 
     // Check if local file hash matches CRDT metadata — if not, the attachment
     // was updated on another device and we should re-fetch from the server.
-    const meta =
-      getAttachmentMetadata(entryPath, sourceRelativePath) ||
-      (canonicalPath !== sourceRelativePath
-        ? getAttachmentMetadata(entryPath, canonicalPath)
-        : null);
-    if (meta) {
-      const localHash = await sha256Hex(bytes);
-      if (signal.aborted) return null;
-      if (localHash !== meta.hash) {
-        const serverBlobUrl = await tryServerFetch();
-        if (serverBlobUrl) return serverBlobUrl;
-      }
+    const verification = await verifyLocalAttachmentAgainstMetadata(
+      api,
+      entryPath,
+      canonicalPath,
+      sourceRelativePath,
+      storagePath,
+      bytes,
+      signal,
+    );
+    if (verification === 'aborted') return null;
+    if (verification === 'stale') {
+      const serverBlobUrl = await tryServerFetch();
+      if (serverBlobUrl) return serverBlobUrl;
     }
 
     return await createBlobUrlFromBytes(bytes);
@@ -331,6 +505,83 @@ async function resolveAttachmentFromPaths(
       console.warn(`[AttachmentService] Could not load attachment: ${sourceRelativePath}`, e);
     }
     return null;
+  }
+}
+
+async function readAttachmentBytes(
+  api: Api,
+  sourceEntryPath: string,
+  attachmentPath: string,
+): Promise<Uint8Array> {
+  const storagePath = await api.resolveAttachmentStoragePath(sourceEntryPath, attachmentPath);
+  return api.readBinary(storagePath);
+}
+
+async function fetchAttachmentBlobFromServer(
+  sourceEntryPath: string,
+  attachmentPath: string,
+): Promise<Blob | null> {
+  const serverUrl = getServerAttachmentUrl(sourceEntryPath, attachmentPath);
+  if (!serverUrl) return null;
+  try {
+    const response = await fetch(serverUrl);
+    if (!response.ok) return null;
+    let blob = await response.blob();
+    const mimeType = getMimeType(attachmentPath);
+    if (blob.type !== mimeType) {
+      blob = new Blob([blob], { type: mimeType });
+    }
+    if (isHeicFile(attachmentPath)) {
+      blob = await convertHeicToJpeg(blob);
+    }
+    return blob;
+  } catch {
+    return null;
+  }
+}
+
+async function createThumbnailBlob(blob: Blob): Promise<Blob> {
+  if (
+    typeof document === 'undefined' ||
+    !blob.type.startsWith('image/') ||
+    blob.type === 'image/svg+xml'
+  ) {
+    return blob;
+  }
+
+  const previewUrl = URL.createObjectURL(blob);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Failed to decode image'));
+      img.src = previewUrl;
+    });
+
+    const largestDimension = Math.max(image.naturalWidth, image.naturalHeight);
+    if (!Number.isFinite(largestDimension) || largestDimension <= THUMBNAIL_MAX_DIMENSION_PX) {
+      return blob;
+    }
+
+    const scale = THUMBNAIL_MAX_DIMENSION_PX / largestDimension;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+
+    const context = canvas.getContext('2d');
+    if (!context) return blob;
+
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+    const thumbnailBlob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob(resolve, 'image/jpeg', 0.82);
+    });
+
+    return thumbnailBlob ?? blob;
+  } catch {
+    return blob;
+  } finally {
+    URL.revokeObjectURL(previewUrl);
   }
 }
 
@@ -356,6 +607,26 @@ export function revokeBlobUrls(): void {
   }
   blobUrlMap.clear();
   normalizationCache.clear();
+}
+
+/**
+ * Clear cached thumbnail object URLs.
+ * Useful for tests or explicit memory cleanup.
+ */
+export function clearAttachmentThumbnailCache(): void {
+  for (const url of thumbnailUrlMap.values()) {
+    URL.revokeObjectURL(url);
+  }
+  thumbnailUrlMap.clear();
+  thumbnailPromiseMap.clear();
+}
+
+/**
+ * Clear the positive local-attachment verification cache.
+ * Useful for tests or explicit memory cleanup.
+ */
+export function clearAttachmentVerificationCache(): void {
+  verifiedAttachmentMap.clear();
 }
 
 /**
@@ -444,7 +715,7 @@ export function queueResolveAttachment(
       resolveInFlight++;
       start();
     } else {
-      pendingResolves.push({ start: () => { resolveInFlight++; start(); }, cancel: () => resolve(null) });
+      pendingResolves.push({ start, cancel: () => resolve(null) });
     }
   });
 }
@@ -519,10 +790,7 @@ export function reverseBlobUrlsToAttachmentPaths(content: string): string {
 
   // Iterate through blobUrlMap (originalPath -> blobUrl) and replace blob URLs with original paths
   for (const [originalPath, blobUrl] of blobUrlMap.entries()) {
-    // Wrap path in angle brackets if it contains spaces (CommonMark spec)
-    const pathToUse = originalPath.includes(' ')
-      ? `<${originalPath}>`
-      : originalPath;
+    const pathToUse = formatMarkdownDestination(originalPath);
     // Replace all occurrences of the blob URL with the original path
     result = result.replaceAll(blobUrl, pathToUse);
   }
@@ -560,6 +828,167 @@ export function trackBlobUrl(originalPath: string, blobUrl: string): void {
  */
 export function hasBlobUrls(): boolean {
   return blobUrlMap.size > 0;
+}
+
+/**
+ * Check whether an attachment exists locally without reading its bytes.
+ */
+export async function attachmentExistsLocally(
+  api: Api,
+  sourceEntryPath: string,
+  attachmentPath: string,
+): Promise<boolean> {
+  try {
+    const storagePath = await api.resolveAttachmentStoragePath(sourceEntryPath, attachmentPath);
+    return await api.fileExists(storagePath);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve whether an attachment is available locally, only remotely, or unknown.
+ */
+export async function getAttachmentAvailability(
+  api: Api,
+  sourceEntryPath: string,
+  attachmentPath: string,
+): Promise<'local' | 'remote' | 'unknown'> {
+  if (await attachmentExistsLocally(api, sourceEntryPath, attachmentPath)) {
+    return 'local';
+  }
+  return getAttachmentMetadata(sourceEntryPath, attachmentPath) ? 'remote' : 'unknown';
+}
+
+/**
+ * Load a cached downscaled thumbnail for an image attachment.
+ * Falls back to the original blob when thumbnail generation is unsupported.
+ */
+export async function getAttachmentThumbnailUrl(
+  api: Api,
+  sourceEntryPath: string,
+  attachmentPath: string,
+): Promise<string | undefined> {
+  if (!isImageFile(attachmentPath)) return undefined;
+
+  const cacheKey = getThumbnailCacheKey(sourceEntryPath, attachmentPath);
+  const cachedUrl = touchThumbnailCacheEntry(cacheKey);
+  if (cachedUrl) return cachedUrl;
+
+  const inFlight = thumbnailPromiseMap.get(cacheKey);
+  if (inFlight) return inFlight;
+
+  const promise = (async () => {
+    try {
+      let blob: Blob | null = null;
+
+      try {
+        const bytes = await readAttachmentBytes(api, sourceEntryPath, attachmentPath);
+        blob = new Blob([bytes as unknown as BlobPart], { type: getMimeType(attachmentPath) });
+        if (isHeicFile(attachmentPath)) {
+          blob = await convertHeicToJpeg(blob);
+        }
+      } catch {
+        blob = await fetchAttachmentBlobFromServer(sourceEntryPath, attachmentPath);
+      }
+
+      if (!blob) return undefined;
+
+      const thumbnailBlob = await createThumbnailBlob(blob);
+      const url = URL.createObjectURL(thumbnailBlob);
+      thumbnailUrlMap.set(cacheKey, url);
+      evictThumbnailCacheIfNeeded();
+      return url;
+    } catch {
+      return undefined;
+    } finally {
+      thumbnailPromiseMap.delete(cacheKey);
+    }
+  })();
+
+  thumbnailPromiseMap.set(cacheKey, promise);
+  return promise;
+}
+
+/**
+ * Peek an already-cached thumbnail URL without triggering thumbnail generation.
+ */
+export function getCachedAttachmentThumbnailUrl(
+  sourceEntryPath: string,
+  attachmentPath: string,
+): string | undefined {
+  return touchThumbnailCacheEntry(getThumbnailCacheKey(sourceEntryPath, attachmentPath));
+}
+
+/**
+ * Resolve a preview-friendly full image URL.
+ *
+ * On Tauri, this prefers a native asset URL for local verified files and falls
+ * back to the shared blob resolver otherwise.
+ */
+export async function resolvePreviewMediaSrc(
+  api: Api,
+  entryPath: string,
+  rawPath: string,
+): Promise<string | undefined> {
+  const kind = getAttachmentMediaKind(rawPath);
+  if (!isPreviewableAttachmentKind(kind)) {
+    return undefined;
+  }
+
+  if (!isTauri()) {
+    const blobUrl = await resolveAttachment(api, entryPath, rawPath);
+    return blobUrl ?? undefined;
+  }
+
+  const directPath = unwrapAngleBracketPath(rawPath);
+  const shouldTryDirectPath =
+    directPath.length > 0 &&
+    !directPath.startsWith('http://') &&
+    !directPath.startsWith('https://') &&
+    !directPath.startsWith('blob:') &&
+    !isNestedMarkdownLinkPayload(directPath);
+
+  if (shouldTryDirectPath) {
+    const nativeUrl = await resolveTauriNativePreviewUrlFromPaths(
+      api,
+      entryPath,
+      directPath,
+      directPath,
+    );
+    if (nativeUrl) return nativeUrl;
+  }
+
+  const { canonical: canonicalPath, sourceRelative: sourceRelativePath } =
+    await normalizeAttachmentReference(api, entryPath, rawPath);
+
+  if (
+    !shouldTryDirectPath ||
+    canonicalPath !== directPath ||
+    sourceRelativePath !== directPath
+  ) {
+    const nativeUrl = await resolveTauriNativePreviewUrlFromPaths(
+      api,
+      entryPath,
+      canonicalPath,
+      sourceRelativePath,
+    );
+    if (nativeUrl) return nativeUrl;
+  }
+
+  const blobUrl = await resolveAttachment(api, entryPath, rawPath);
+  return blobUrl ?? undefined;
+}
+
+/**
+ * Backward-compatible image preview helper.
+ */
+export async function resolvePreviewImageSrc(
+  api: Api,
+  entryPath: string,
+  rawPath: string,
+): Promise<string | undefined> {
+  return resolvePreviewMediaSrc(api, entryPath, rawPath);
 }
 
 /**

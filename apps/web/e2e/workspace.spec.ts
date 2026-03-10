@@ -116,3 +116,54 @@ test.describe('Workspace Navigation', () => {
     await expect(editorHelper.editor).toContainText('Line 1 more')
   })
 })
+
+test.describe('Workspace Settings', () => {
+  test('preserves scroll when opening and confirming workspace delete actions', async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem('diaryx-storage-type', 'indexeddb')
+    })
+
+    await page.goto('/')
+    await waitForAppReady(page)
+
+    await page.evaluate(async () => {
+      const { createLocalWorkspace } = await import('/src/lib/storage/localWorkspaceRegistry.svelte.ts')
+
+      for (let i = 0; i < 30; i += 1) {
+        createLocalWorkspace(`Scroll Test Workspace ${i + 1}`)
+      }
+    })
+
+    await page.getByLabel('Open settings').click()
+
+    const dialog = page.locator('[data-slot="dialog-content"]').first()
+    await dialog.getByRole('button', { name: 'Account' }).click()
+    await expect(dialog.getByText('Workspaces')).toBeVisible()
+
+    const scrollContainer = dialog.locator('[data-settings-scroll-container]')
+    const initialScrollTop = await scrollContainer.evaluate((el) => {
+      el.scrollTop = el.scrollHeight
+      return el.scrollTop
+    })
+    expect(initialScrollTop).toBeGreaterThan(0)
+
+    const deleteButtons = dialog.locator('button[title="Delete"]:not([disabled])')
+    const deleteButtonCount = await deleteButtons.count()
+    expect(deleteButtonCount).toBeGreaterThan(5)
+
+    await deleteButtons.last().click()
+    await expect(dialog.getByRole('button', { name: 'Delete locally' })).toBeVisible()
+
+    const afterConfirmOpenScrollTop = await scrollContainer.evaluate((el) => el.scrollTop)
+    expect(afterConfirmOpenScrollTop).toBeGreaterThan(Math.max(20, initialScrollTop - 80))
+
+    await dialog.getByRole('button', { name: 'Delete locally' }).click()
+
+    await expect
+      .poll(async () => await dialog.locator('button[title="Delete"]:not([disabled])').count())
+      .toBe(deleteButtonCount - 1)
+
+    const afterDeleteScrollTop = await scrollContainer.evaluate((el) => el.scrollTop)
+    expect(afterDeleteScrollTop).toBeGreaterThan(Math.max(20, afterConfirmOpenScrollTop - 120))
+  })
+})

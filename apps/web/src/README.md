@@ -43,6 +43,12 @@ infrastructure in the host.
 active entry state from those events, rather than wiring direct host CRDT
 bridge callbacks.
 
+For Playwright sync coverage, `App.svelte` also exposes a localhost-only
+`globalThis.__diaryx_e2e` bridge in dev runs. That bridge is intentionally
+limited to test helpers such as root-path lookup, content mutation, sync-status
+inspection, and provider-link introspection so browser E2E flows can drive the
+generic host without importing duplicate app modules through Vite.
+
 ## Rename Behavior
 
 `App.svelte` treats title-driven renames as a path transition:
@@ -68,5 +74,6 @@ content instead of opening the add-workspace wizard.
 `App.svelte` supports touch swipe gestures:
 
 - Swipe down from the top edge opens the command palette.
-- Swipe right closes an open right sidebar first; if right is already closed, it opens the left sidebar.
-- Swipe left closes an open left sidebar first; if left is already closed, it opens the right sidebar.
+- Swipe right closes an open right sidebar first; if right is already closed, it opens the left sidebar only when the gesture starts from the left screen edge.
+- Swipe left closes an open left sidebar first; if left is already closed, it opens the right sidebar only when the gesture starts from the right screen edge.
+- Gestures that begin inside modal/dialog surfaces or turn into an active text selection are ignored so marketplace/settings navigation and editor selection do not accidentally trigger sidebars.

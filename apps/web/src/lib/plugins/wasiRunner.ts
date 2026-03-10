@@ -15,6 +15,10 @@ import {
   PreopenDirectory,
   WASI,
 } from '@bjorn3/browser_wasi_shim';
+import {
+  getPluginStoragePath,
+  readWorkspaceBinary,
+} from "$lib/workspace/workspaceAssetStorage";
 
 export interface WasiRunRequest {
   module_key: string;
@@ -182,31 +186,52 @@ export async function handleHostRunWasiModule(
   request: WasiRunRequest,
   pluginId: string,
 ): Promise<WasiRunResult> {
-  // Load WASM bytes from plugin-scoped storage (localStorage)
-  const storageKey = `diaryx-plugin:${pluginId}:${request.module_key}`;
-  const raw = localStorage.getItem(storageKey);
-  if (!raw) {
-    return {
-      exit_code: -1,
-      stdout: '',
-      stderr: `Module not found in storage for plugin '${pluginId}': ${request.module_key}`,
-    };
+  const storagePath = getPluginStoragePath(pluginId, request.module_key);
+  const workspaceBytes = await readWorkspaceBinary(storagePath);
+  if (!workspaceBytes) {
+    const legacyKey = `diaryx-plugin:${pluginId}:${request.module_key}`;
+    const raw = localStorage.getItem(legacyKey);
+    if (!raw) {
+      return {
+        exit_code: -1,
+        stdout: '',
+        stderr: `Module not found in storage for plugin '${pluginId}': ${request.module_key}`,
+      };
+    }
+
+    let wasmB64: string;
+    try {
+      const parsed = JSON.parse(raw);
+      wasmB64 = parsed.data;
+    } catch {
+      return {
+        exit_code: -1,
+        stdout: '',
+        stderr: `Invalid storage format for module: ${request.module_key}`,
+      };
+    }
+
+    const wasmBytes = base64ToUint8Array(wasmB64).buffer as ArrayBuffer;
+    return runWasiModule(
+      wasmBytes,
+      request.args,
+      request.stdin ? base64ToUint8Array(request.stdin) : undefined,
+      request.files
+        ? new Map(
+            Object.entries(request.files).map(([path, b64]) => [
+              path,
+              base64ToUint8Array(b64),
+            ]),
+          )
+        : undefined,
+      request.output_files,
+    );
   }
 
-  // Parse the stored data (same format as host_storage_get: {data: base64})
-  let wasmB64: string;
-  try {
-    const parsed = JSON.parse(raw);
-    wasmB64 = parsed.data;
-  } catch {
-    return {
-      exit_code: -1,
-      stdout: '',
-      stderr: `Invalid storage format for module: ${request.module_key}`,
-    };
-  }
-
-  const wasmBytes = base64ToUint8Array(wasmB64).buffer as ArrayBuffer;
+  const wasmBytes = workspaceBytes.buffer.slice(
+    workspaceBytes.byteOffset,
+    workspaceBytes.byteOffset + workspaceBytes.byteLength,
+  ) as ArrayBuffer;
 
   // Decode stdin
   const stdinBytes = request.stdin ? base64ToUint8Array(request.stdin) : undefined;

@@ -26,6 +26,7 @@ use std::path::{Path, PathBuf};
 use indexmap::IndexMap;
 use serde_yaml::Value;
 
+use crate::date;
 use crate::error::{DiaryxError, Result};
 use crate::frontmatter;
 use crate::fs::AsyncFileSystem;
@@ -159,8 +160,10 @@ impl<FS: AsyncFileSystem> Diaryx<FS> {
     /// Initialize all registered plugins with the current instance state.
     ///
     /// This builds a [`PluginContext`] from the current workspace root and link format,
-    /// then calls `init` on every registered plugin.
-    pub async fn init_plugins(&self) -> std::result::Result<(), crate::plugin::PluginError> {
+    /// then calls `init` on every registered plugin. Plugins that fail to init are
+    /// marked as failed and skipped for subsequent dispatches. Returns a list of
+    /// all failures (empty means all plugins initialized successfully).
+    pub async fn init_plugins(&self) -> Vec<(crate::plugin::PluginId, crate::plugin::PluginError)> {
         let ctx = crate::plugin::PluginContext::new(self.workspace_root(), self.link_format);
         self.plugin_registry.init_all(&ctx).await
     }
@@ -339,7 +342,7 @@ impl<'a, FS: AsyncFileSystem> EntryOps<'a, FS> {
 
     /// Update the 'updated' timestamp to the current time.
     pub async fn touch_updated(&self, path: &str) -> Result<()> {
-        let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let timestamp = date::current_local_timestamp_rfc3339();
         self.set_frontmatter_property(path, "updated", Value::String(timestamp))
             .await
     }

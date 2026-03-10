@@ -3,7 +3,7 @@ title: Diaryx Monorepo
 description: README/repo for the Diaryx project
 author: adammharris
 version: v1.3.1
-updated: 2026-01-10T13:50:20-05:00
+updated: 2026-03-10T11:36:25-06:00
 contents:
 - '[AGENTS](/AGENTS.md)'
 - '[CONTRIBUTING](/CONTRIBUTING.md)'
@@ -43,7 +43,6 @@ All of this logic is defined in the `diaryx_core` Rust crate, and is used by the
 - `[crates/diaryx_daily](crates/diaryx_daily/README.md)`: Shared daily-entry domain logic for optional daily plugins.
 - `[crates/diaryx_daily_extism](crates/diaryx_daily_extism/README.md)`: Optional Extism daily plugin.
 - `[crates/diaryx](crates/diaryx/README.md)`: CLI frontend for Diaryx.
-- `[crates/diaryx_apple](crates/diaryx_apple/README.md)`: Apple bridge crate with UniFFI bindings over `diaryx_core`.
 - `[crates/diaryx_wasm](crates/diaryx_wasm/README.md)`: WebAssembly bindings for `diaryx_core`, used in `apps/web`.
 `[crates/diaryx_sync_server](crates/diaryx_sync_server/README.md)`: Sync server to allow sync/live editing functionality in Web/Tauri clients.
 - `[apps/web](apps/web/README.md)`: Svelte + TipTap frontend for Diaryx.

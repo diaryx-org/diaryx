@@ -5,7 +5,6 @@
 
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
-use ts_rs::TS;
 
 /// Deserializes a value that should be a string, but may be an integer or other type.
 /// Converts non-string values to their string representation.
@@ -43,8 +42,9 @@ where
 /// - `part_of`: Document ID of the parent (or None for root files)
 ///
 /// Use `WorkspaceCrdt::get_path()` to derive the full path from a doc_id.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct FileMetadata {
     /// Filename on disk (e.g., "my-note.md"). Required for non-deleted files.
     /// For files created before the doc-ID migration, this may be empty and
@@ -354,8 +354,9 @@ impl FileMetadata {
 ///
 /// Binary files (images, PDFs, etc.) are stored separately from the CRDT,
 /// with only their metadata tracked in the synchronization system.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct BinaryRef {
     /// Relative path within workspace (e.g., "_attachments/image.png")
     pub path: String,

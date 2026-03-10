@@ -7,7 +7,6 @@ audience:
 contents:
 - '[README](/apps/web/README.md)'
 - '[README](/apps/tauri/README.md)'
-- '[README](/apps/apple/README.md)'
 part_of: '[README](/README.md)'
 ---
 # Diaryx Frontend Apps
@@ -33,7 +32,7 @@ apps/
 │   ├── vite.config.ts
 │   └── package.json
 │
-├── tauri/                  # Tauri desktop wrapper
+└── tauri/                  # Tauri desktop wrapper
     ├── src-tauri/          # Rust Tauri backend
     │   ├── src/
     │   │   ├── commands.rs # Tauri IPC command handlers
@@ -41,9 +40,6 @@ apps/
     │   └── Cargo.toml
     ├── vite.config.ts      # Points to ../web as root
     └── package.json
-└── apple/                  # Native SwiftUI frontend (WKWebView + TipTap)
-    ├── Diaryx/             # Swift app source
-    └── editor-bundle/      # TipTap editor bundle loaded into WKWebView
 ```
 
 ## Backend Abstraction

@@ -2,7 +2,7 @@
 title: AGENTS
 description: Instructions for AI Agents
 author: adammharris
-updated: 2026-03-10T15:46:36Z
+updated: 2026-03-10T18:47:24Z
 part_of: '[README](/README.md)'
 ---
 # Instructions for AI agents
@@ -50,16 +50,12 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │   │   └── LICENSE - PolyForm Shield License 1.0.0 - apps/web/src/LICENSE.md
 │   │   ├── Marketplace Dist - Preassembled marketplace payloads for themes, typographies, and bundles - apps/web/marketplace-dist/README.md
 │   │   └── TipTap Custom Extensions - Guide to creating custom TipTap extensions with markdown support - apps/web/docs/tiptap-custom-extensions.md
-│   ├── tauri - Web app + native backend - apps/tauri/README.md
-│   └── apple - Native SwiftUI app for Diaryx using WKWebView + TipTap - apps/apple/README.md
+│   └── tauri - Web app + native backend - apps/tauri/README.md
 ├── crates - Cargo crates for Diaryx - crates/README.md
 │   ├── diaryx - CLI frontend - crates/diaryx/README.md
 │   │   └── diaryx src - Source code for the Diaryx CLI application - crates/diaryx/src/README.md
 │   │       └── Command-line module - The main CLI command implementation module - crates/diaryx/src/cli/README.md
-│   │           ├── Navigation TUI module - Interactive TUI for navigating workspace hierarchy - crates/diaryx/src/cli/nav/README.md
-│   │           └── Sync CLI module - CLI commands for workspace synchronization - crates/diaryx/src/cli/sync/README.md
-│   ├── diaryx_apple - UniFFI bridge crate for Apple clients - crates/diaryx_apple/README.md
-│   │   └── diaryx_apple src - Source code for the Apple UniFFI bridge crate - crates/diaryx_apple/src/README.md
+│   │           └── Navigation TUI module - Interactive TUI for navigating workspace hierarchy - crates/diaryx/src/cli/nav/README.md
 │   ├── diaryx_core - Core library shared by Diaryx clients - crates/diaryx_core/README.md
 │   │   └── diaryx_core src - Source code for the core Diaryx library - crates/diaryx_core/src/README.md
 │   │       ├── Entry module - Entry manipulation functionality - crates/diaryx_core/src/entry/README.md

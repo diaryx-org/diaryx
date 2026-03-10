@@ -22,7 +22,6 @@ use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 use super::body_doc_manager::BodyDocManager;
 use diaryx_core::error::Result;
@@ -35,8 +34,9 @@ use diaryx_core::workspace::Workspace;
 /// Configuration for guest mode sync.
 ///
 /// Guests need special path handling to isolate their storage from the host.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct GuestConfig {
     /// The join code for the share session.
     pub join_code: String,

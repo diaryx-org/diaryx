@@ -7,7 +7,6 @@ audience:
 - public
 contents:
 - '[README](/crates/diaryx/src/cli/nav/README.md)'
-- '[README](/crates/diaryx/src/cli/sync/README.md)'
 attachments:
 - '[mod.rs](/crates/diaryx/src/cli/mod.rs)'
 - '[args.rs](/crates/diaryx/src/cli/args.rs)'
@@ -24,7 +23,6 @@ attachments:
 - '[template.rs](/crates/diaryx/src/cli/template.rs)'
 - '[util.rs](/crates/diaryx/src/cli/util.rs)'
 - '[workspace.rs](/crates/diaryx/src/cli/workspace.rs)'
-- '[import.rs](/crates/diaryx/src/cli/import.rs)'
 - '[plugin_loader.rs](/crates/diaryx/src/cli/plugin_loader.rs)'
 - '[plugin_storage.rs](/crates/diaryx/src/cli/plugin_storage.rs)'
 - '[plugin_manager.rs](/crates/diaryx/src/cli/plugin_manager.rs)'
@@ -38,7 +36,14 @@ exclude:
 
 In the Diaryx CLI, this module provides the majority of the functionality.
 
+## Optional Cargo Features
+
+- `plugins` enables Extism plugin management, plugin manifest discovery, and plugin-native helpers such as `publish` and `preview`.
+- `edit` enables `diaryx edit`, which starts the local sync server used by the web editor.
+
 ## Plugin Management Commands
+
+Available only when the CLI is compiled with the `plugins` feature.
 
 - `diaryx plugin list` — List installed plugins (supports metadata filters and `--json`).
 - `diaryx plugin install <id>` — Install a plugin from the curated `registry-v2` by canonical ID.
@@ -58,12 +63,13 @@ Discovery filters:
 
 - `--category <value>`
 - `--tag <value>`
-- `--source internal|external`
-- `--creator <value>`
+- `--author <value>`
 - `--installed` (search only)
 - `--json` (machine-readable output)
 
 ## Dynamic Plugin Commands
+
+Available only when the CLI is compiled with the `plugins` feature.
 
 Installed plugins declare their own CLI subcommands via `CliCommand` in their manifest.
 At startup, the CLI scans `~/.diaryx/plugins/*.diaryx/manifest.json` and dynamically
@@ -71,9 +77,12 @@ adds plugin-declared commands to the clap parser. Commands are dispatched to eit
 a native handler (for commands needing native resources like WebSocket or HTTP) or
 routed to the plugin's WASM `handle_command` export.
 
-## Import Commands
+Built-in import and sync modules have been removed from the CLI. Those workflows
+now come entirely from installed plugins such as `diaryx.sync` and
+format-specific import plugins.
 
-- `diaryx import email <source>` — Import `.eml` files, directories of `.eml` files, or `.mbox` archives.
-  Options: `--folder <name>` (default: "emails"), `--dry-run`, `--verbose`.
+`publish` and `preview` remain native helper implementations, but they are
+reached through plugin-declared commands rather than top-level built-in clap
+subcommands.
 
 &nbsp;

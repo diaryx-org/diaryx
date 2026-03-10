@@ -15,44 +15,36 @@ name = "diaryx"
 path = "src/main.rs"
 
 [dependencies]
-diaryx_core = { workspace = true, features = ["native-pandoc", "import-email", "import-dayone", "import-markdown"] }
-diaryx_extism = { workspace = true, features = ["http", "ws-transport"] }
-# diaryx_sync only needed for `edit` feature (local siphonophore server)
-diaryx_sync = { workspace = true, features = ["sqlite", "native-sync", "git"], optional = true }
-async-trait = "0.1"
+diaryx_core = { path = "../diaryx_core", version = "1.3.1", default-features = false, features = ["native-pandoc", "toml-config"] }
+diaryx_extism = { path = "../diaryx_extism", version = "1.3.0", optional = true, features = ["http", "ws-transport"] }
+diaryx_sync = { path = "../diaryx_sync", version = "1.3.1", default-features = false, features = ["server"], optional = true }
 clap = { version = "4.5", features = ["derive", "env"] }
-chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
 thiserror.workspace = true
-indexmap.workspace = true
 dirs = "6.0"
 glob = "0.3"
 pathdiff = "0.2"
-base64 = "0.22"
 futures-lite = "2.3"
-futures-util = "0.3"
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "signal"] }
-tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
-sha2 = "0.10"
-urlencoding = "2.1"
-log = "0.4"
-env_logger = "0.11"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "signal"], optional = true }
+sha2 = { version = "0.10", optional = true }
+ureq = { version = "3", optional = true }
+urlencoding = { version = "2.1", optional = true }
 ratatui = "0.30"
 tui-tree-widget = "0.24"
-crossterm = "0.28"
-axum = "0.8"
-tower-http = { version = "0.6", features = ["fs"] }
-open = "5"
+crossterm = "0.29"
+axum = { version = "0.8", optional = true }
+tower-http = { version = "0.6", features = ["fs"], optional = true }
+open = { version = "5", optional = true }
 
 [features]
-default = ["edit"]
-edit = ["dep:diaryx_sync", "diaryx_sync/server"]
+default = []
+edit = ["dep:diaryx_sync", "dep:tokio", "dep:axum", "dep:open", "dep:urlencoding"]
+plugins = ["dep:diaryx_extism", "dep:tokio", "dep:axum", "dep:tower-http", "dep:open", "dep:sha2", "dep:ureq"]
 
 [build-dependencies]
-diaryx_core = { workspace = true }
+diaryx_core = { path = "../diaryx_core", version = "1.3.1", default-features = false }
 
 [dev-dependencies]
 tempfile = "3"

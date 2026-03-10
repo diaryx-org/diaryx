@@ -11,7 +11,7 @@ license-file.workspace = true
 
 [dependencies]
 # Internal crate (types module used for FileMetadata, BinaryRef, CrdtStorage, etc.)
-diaryx_core = { workspace = true }
+diaryx_core = { path = "../diaryx_core", version = "1.3.1", default-features = false }
 
 # Always-on: CRDT types and sync protocol (WASM-compatible)
 yrs = { version = "0.25", features = ["sync"] }
@@ -25,7 +25,7 @@ base64 = "0.22"
 chrono = { workspace = true }
 thiserror = { workspace = true }
 indexmap = { workspace = true }
-ts-rs = { version = "10", features = ["serde-json-impl", "indexmap-impl", "no-serde-warnings"] }
+ts-rs = { version = "10", features = ["serde-json-impl", "indexmap-impl", "no-serde-warnings"], optional = true }
 
 # Server feature: siphonophore hooks, axum WebSocket, StorageCache
 siphonophore = { version = "0.1.0", package = "diaryx-siphonophore", optional = true }
@@ -58,6 +58,9 @@ default = []
 # Enable this when compiling for wasm32 with a JS host (wasm-bindgen / wasm-pack).
 # Do NOT enable for Extism guest plugins (wasmtime, no JS).
 browser-js = ["diaryx_core/browser-js"]
+
+# TypeScript binding generation (build-time only).
+typescript = ["dep:ts-rs", "diaryx_core/typescript"]
 
 # SQLite CRDT storage (native only)
 sqlite = ["dep:rusqlite", "diaryx_core/database"]

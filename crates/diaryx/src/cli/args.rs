@@ -219,6 +219,7 @@ pub enum Commands {
     },
 
     /// Manage plugins (install, remove, update, search)
+    #[cfg(feature = "plugins")]
     Plugin {
         #[command(subcommand)]
         command: PluginCommands,
@@ -895,6 +896,7 @@ pub enum AttachmentCommands {
     },
 }
 
+#[cfg(feature = "plugins")]
 #[derive(Subcommand)]
 pub enum PluginCommands {
     /// List installed plugins

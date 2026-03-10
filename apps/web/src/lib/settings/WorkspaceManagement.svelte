@@ -82,18 +82,7 @@
     });
   });
 
-  // Server workspaces not linked locally (fallback when sync plugin isn't installed).
-  let unlinkedServerWorkspaces = $derived.by(() => {
-    if (!authState.isAuthenticated) return [];
-    const linkedServerIds = new Set(
-      allLocal
-        .map(ws => getServerWorkspaceId(ws.id))
-        .filter((id): id is string => !!id),
-    );
-    return serverWorkspaces.filter(sw => !linkedServerIds.has(sw.id));
-  });
-
-  let hasAnyWorkspaces = $derived(syncedWorkspaces.length > 0 || localWorkspaces.length > 0 || unlinkedServerWorkspaces.length > 0);
+  let hasAnyWorkspaces = $derived(syncedWorkspaces.length > 0 || localWorkspaces.length > 0);
   type ActionTone = "info" | "success" | "error";
   let syncActionStatus = $state<{
     active: boolean;
@@ -556,28 +545,26 @@
                     >
                       <Pencil class="size-3" />
                     </Button>
-                    {#if defaultProvider}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        class="size-6"
-                        onclick={() => isWorkspaceSyncEnabled(ws.id)
-                          ? handleUnlink(ws.id)
-                          : handleLink(ws.id, ws.name, getServerWorkspaceId(ws.id) ?? undefined)}
-                        disabled={ws.id !== currentId || (actionLoading && actionId === ws.id)}
-                        title={isWorkspaceSyncEnabled(ws.id)
-                          ? 'Unlink from provider'
-                          : (ws.id === currentId ? 'Enable sync using this cloud-linked workspace' : 'Switch to this workspace first to enable sync')}
-                      >
-                        {#if actionLoading && actionId === ws.id}
-                          <Loader2 class="size-3 animate-spin" />
-                        {:else if isWorkspaceSyncEnabled(ws.id)}
-                          <CloudOff class="size-3" />
-                        {:else}
-                          <CloudUpload class="size-3" />
-                        {/if}
-                      </Button>
-                    {/if}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class="size-6"
+                      onclick={() => isWorkspaceSyncEnabled(ws.id)
+                        ? handleUnlink(ws.id)
+                        : handleLink(ws.id, ws.name, getServerWorkspaceId(ws.id) ?? undefined)}
+                      disabled={ws.id !== currentId || (actionLoading && actionId === ws.id)}
+                      title={isWorkspaceSyncEnabled(ws.id)
+                        ? 'Unlink from provider'
+                        : (ws.id === currentId ? 'Enable sync using this cloud-linked workspace' : 'Switch to this workspace first to enable sync')}
+                    >
+                      {#if actionLoading && actionId === ws.id}
+                        <Loader2 class="size-3 animate-spin" />
+                      {:else if isWorkspaceSyncEnabled(ws.id)}
+                        <CloudOff class="size-3" />
+                      {:else}
+                        <CloudUpload class="size-3" />
+                      {/if}
+                    </Button>
                     <Button
                       variant="ghost"
                       size="icon"
@@ -640,39 +627,6 @@
 
         <p class="text-xs text-muted-foreground">
           These workspaces exist on the server but are not on this device.
-        </p>
-      </div>
-    {/if}
-
-    <!-- Read-only cloud workspaces (no sync plugin available) -->
-    {#if !defaultProvider && unlinkedServerWorkspaces.length > 0}
-      <div class="space-y-3">
-        <div class="flex items-center justify-between">
-          <h3 class="text-sm font-medium flex items-center gap-1.5">
-            <Cloud class="size-3.5 text-muted-foreground" />
-            Cloud Workspaces
-          </h3>
-          <span class="text-xs text-muted-foreground">
-            {unlinkedServerWorkspaces.length}
-          </span>
-        </div>
-
-        <Separator />
-
-        <div class="space-y-1">
-          {#each unlinkedServerWorkspaces as ws (ws.id)}
-            <div class="flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-muted/50">
-              <span class="flex items-center gap-1.5 flex-1 min-w-0">
-                <Cloud class="size-3.5 shrink-0 text-muted-foreground" />
-                <span class="text-sm truncate">{ws.name}</span>
-                <span class="text-[10px] px-1 py-0.5 rounded bg-muted text-muted-foreground shrink-0">cloud only</span>
-              </span>
-            </div>
-          {/each}
-        </div>
-
-        <p class="text-xs text-muted-foreground">
-          Install the Sync plugin to download and sync these workspaces on this device.
         </p>
       </div>
     {/if}

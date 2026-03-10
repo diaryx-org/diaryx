@@ -2,118 +2,9 @@
 
 use std::path::Path;
 
-use diaryx_core::frontmatter;
-
 use crate::cli::CliDiaryxAppSync;
-use crate::cli::plugin_loader::CliSyncContext;
 use crate::cli::util::{apply_workspace_config, load_config, resolve_paths};
 use crate::editor::launch_editor;
-
-/// Sync file changes to the local CRDT after editing.
-///
-/// This updates the workspace CRDT with any changes made to the file.
-/// Only syncs if the sync plugin WASM is available and CRDT database exists.
-///
-/// Returns true if changes were synced, false otherwise.
-fn sync_to_crdt(workspace_root: &Path, file_path: &Path, original_content: &str) -> bool {
-    // Only sync if CRDT database already exists (user has used sync before)
-    let ctx = match CliSyncContext::load(workspace_root) {
-        Some(ctx) => ctx,
-        None => return false, // No CRDT initialized or plugin not available, skip silently
-    };
-
-    // Read current content
-    let current_content = match std::fs::read_to_string(file_path) {
-        Ok(content) => content,
-        Err(_) => return false,
-    };
-
-    if current_content == original_content {
-        return false; // No changes
-    }
-
-    // Get relative path for CRDT key (always use forward slashes for consistency)
-    let rel_path = match file_path.strip_prefix(workspace_root) {
-        Ok(p) => p
-            .iter()
-            .map(|c| c.to_string_lossy())
-            .collect::<Vec<_>>()
-            .join("/"),
-        Err(_) => return false,
-    };
-
-    // Parse frontmatter and body
-    let (fm, body) = match frontmatter::parse_or_empty(&current_content) {
-        Ok(parsed) => (parsed.frontmatter, parsed.body),
-        Err(_) => return false,
-    };
-
-    // Extract filename from path
-    let filename = file_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("")
-        .to_string();
-
-    // Build metadata as JSON for the plugin command
-    let metadata = serde_json::json!({
-        "filename": filename,
-        "title": fm.get("title").and_then(|v| v.as_str()),
-        "part_of": fm.get("part_of").and_then(|v| v.as_str()),
-        "contents": fm.get("contents").and_then(|v| {
-            v.as_sequence().map(|seq| {
-                seq.iter()
-                    .filter_map(|v| v.as_str())
-                    .collect::<Vec<&str>>()
-            })
-        }),
-        "attachments": fm.get("attachments").and_then(|v| {
-            v.as_sequence().map(|seq| {
-                seq.iter()
-                    .filter_map(|v| v.as_str())
-                    .map(|raw| serde_json::json!({
-                        "path": raw,
-                        "source": "local",
-                    }))
-                    .collect::<Vec<_>>()
-            })
-        }).unwrap_or_default(),
-        "audience": fm.get("audience").and_then(|v| {
-            v.as_sequence().map(|seq| {
-                seq.iter()
-                    .filter_map(|v| v.as_str())
-                    .collect::<Vec<&str>>()
-            })
-        }),
-        "description": fm.get("description").and_then(|v| v.as_str()),
-        "deleted": false,
-        "modified_at": chrono::Utc::now().timestamp_millis(),
-    });
-
-    // Update workspace CRDT (metadata) via plugin
-    if let Err(e) = ctx.cmd(
-        "SetCrdtFile",
-        serde_json::json!({
-            "path": rel_path,
-            "metadata": metadata,
-        }),
-    ) {
-        eprintln!("Warning: Could not update CRDT metadata: {}", e);
-    }
-
-    // Update body document via plugin
-    if let Err(e) = ctx.cmd(
-        "SetBodyContent",
-        serde_json::json!({
-            "doc_name": rel_path,
-            "content": body,
-        }),
-    ) {
-        eprintln!("Warning: Could not update CRDT body: {}", e);
-    }
-
-    true
-}
 
 /// Handle the 'open' command
 pub fn handle_open(app: &CliDiaryxAppSync, path_or_date: &str) -> bool {
@@ -131,8 +22,6 @@ pub fn handle_open(app: &CliDiaryxAppSync, path_or_date: &str) -> bool {
     }
 
     let mut had_error = false;
-    let workspace_root = &config.default_workspace;
-
     if paths.len() == 1 && !paths[0].exists() {
         eprintln!("✗ File not found: {}", paths[0].display());
         return false;
@@ -150,15 +39,9 @@ pub fn handle_open(app: &CliDiaryxAppSync, path_or_date: &str) -> bool {
             println!("Opening: {}", path.display());
         }
 
-        // Read content before opening editor
-        let original_content = std::fs::read_to_string(path).unwrap_or_default();
-
         if let Err(e) = launch_editor(path, &config) {
             eprintln!("✗ Error launching editor for {}: {}", path.display(), e);
             had_error = true;
-        } else {
-            // Sync changes to CRDT after editor closes (only if editor succeeded)
-            sync_to_crdt(workspace_root, path, &original_content);
         }
     }
 

@@ -10,7 +10,7 @@
 //! require Tauri plugins or system APIs.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use diaryx_core::{
@@ -18,9 +18,13 @@ use diaryx_core::{
     config::Config,
     diaryx::Diaryx,
     error::SerializableError,
+    frontmatter,
     fs::{FileSystem, InMemoryFileSystem, RealFileSystem, SyncToAsyncFs},
+    plugin::permissions::{PermissionRule, PluginConfig, PluginPermissions},
     workspace::Workspace,
 };
+#[cfg(feature = "extism-plugins")]
+use diaryx_extism::protocol::GuestRequestedPermissions;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -148,6 +152,186 @@ fn make_permission_checker(
     Arc::new(diaryx_extism::FrontmatterPermissionChecker::from_workspace_root(workspace_root))
 }
 
+#[cfg(feature = "extism-plugins")]
+fn has_requested_permission_defaults(defaults: &PluginPermissions) -> bool {
+    defaults.read_files.is_some()
+        || defaults.edit_files.is_some()
+        || defaults.create_files.is_some()
+        || defaults.delete_files.is_some()
+        || defaults.move_files.is_some()
+        || defaults.http_requests.is_some()
+        || defaults.execute_commands.is_some()
+        || defaults.plugin_storage.is_some()
+}
+
+#[cfg(feature = "extism-plugins")]
+fn merge_permission_rule(
+    current: &mut Option<PermissionRule>,
+    requested: &Option<PermissionRule>,
+) -> bool {
+    let Some(requested_rule) = requested else {
+        return false;
+    };
+
+    let should_fill = match current {
+        None => true,
+        Some(rule) => rule.include.is_empty() && rule.exclude.is_empty(),
+    };
+
+    if !should_fill {
+        return false;
+    }
+
+    *current = Some(requested_rule.clone());
+    true
+}
+
+#[cfg(feature = "extism-plugins")]
+fn merge_requested_permission_defaults(
+    plugins_config: &mut HashMap<String, PluginConfig>,
+    plugin_id: &str,
+    defaults: &PluginPermissions,
+) -> bool {
+    if !has_requested_permission_defaults(defaults) {
+        return false;
+    }
+
+    let plugin_config = plugins_config.entry(plugin_id.to_string()).or_default();
+    let permissions = &mut plugin_config.permissions;
+    let mut changed = false;
+
+    changed |= merge_permission_rule(&mut permissions.read_files, &defaults.read_files);
+    changed |= merge_permission_rule(&mut permissions.edit_files, &defaults.edit_files);
+    changed |= merge_permission_rule(&mut permissions.create_files, &defaults.create_files);
+    changed |= merge_permission_rule(&mut permissions.delete_files, &defaults.delete_files);
+    changed |= merge_permission_rule(&mut permissions.move_files, &defaults.move_files);
+    changed |= merge_permission_rule(&mut permissions.http_requests, &defaults.http_requests);
+    changed |= merge_permission_rule(
+        &mut permissions.execute_commands,
+        &defaults.execute_commands,
+    );
+    changed |= merge_permission_rule(&mut permissions.plugin_storage, &defaults.plugin_storage);
+
+    changed
+}
+
+#[cfg(feature = "extism-plugins")]
+fn collect_requested_permissions(plugins_dir: &Path) -> HashMap<String, GuestRequestedPermissions> {
+    let mut requested_permissions = HashMap::new();
+
+    let entries = match std::fs::read_dir(plugins_dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            log::warn!(
+                "Failed to scan plugin manifests in '{}': {e}",
+                plugins_dir.display()
+            );
+            return requested_permissions;
+        }
+    };
+
+    for entry in entries.flatten() {
+        let wasm_path = entry.path().join("plugin.wasm");
+        if !wasm_path.exists() {
+            continue;
+        }
+
+        match diaryx_extism::inspect_plugin_wasm_manifest(&wasm_path) {
+            Ok(manifest) => {
+                if let Some(requested) = manifest.requested_permissions
+                    && has_requested_permission_defaults(&requested.defaults)
+                {
+                    requested_permissions.insert(manifest.id, requested);
+                }
+            }
+            Err(e) => {
+                log::warn!(
+                    "Failed to inspect requested permissions for '{}': {e}",
+                    wasm_path.display()
+                );
+            }
+        }
+    }
+
+    requested_permissions
+}
+
+#[cfg(feature = "extism-plugins")]
+fn persist_requested_permission_defaults(
+    workspace_root: &Path,
+    requested_permissions: &HashMap<String, GuestRequestedPermissions>,
+) -> Result<(), SerializableError> {
+    if requested_permissions.is_empty() {
+        return Ok(());
+    }
+
+    let workspace = Workspace::new(SyncToAsyncFs::new(RealFileSystem));
+    let root_index_path =
+        tauri::async_runtime::block_on(workspace.find_root_index_in_dir(workspace_root))
+            .map_err(|e: diaryx_core::error::DiaryxError| e.to_serializable())?;
+
+    let Some(root_index_path) = root_index_path else {
+        return Ok(());
+    };
+
+    let content = std::fs::read_to_string(&root_index_path).map_err(|e| SerializableError {
+        kind: "IoError".to_string(),
+        message: format!(
+            "Failed to read root index '{}': {e}",
+            root_index_path.display()
+        ),
+        path: Some(root_index_path.clone()),
+    })?;
+
+    let parsed = frontmatter::parse_or_empty(&content).map_err(|e| SerializableError {
+        kind: "ValidationError".to_string(),
+        message: format!(
+            "Failed to parse root frontmatter for '{}': {e}",
+            root_index_path.display()
+        ),
+        path: Some(root_index_path.clone()),
+    })?;
+
+    let mut plugins_config = match parsed.frontmatter.get("plugins") {
+        Some(value) => serde_yaml::from_value::<HashMap<String, PluginConfig>>(value.clone())
+            .map_err(|e| SerializableError {
+                kind: "ValidationError".to_string(),
+                message: format!(
+                    "Invalid plugin permissions in '{}': {e}",
+                    root_index_path.display()
+                ),
+                path: Some(root_index_path.clone()),
+            })?,
+        None => HashMap::new(),
+    };
+
+    let mut changed = false;
+    for (plugin_id, requested) in requested_permissions {
+        changed |= merge_requested_permission_defaults(
+            &mut plugins_config,
+            plugin_id,
+            &requested.defaults,
+        );
+    }
+
+    if !changed {
+        return Ok(());
+    }
+
+    let plugins_value = serde_yaml::to_value(&plugins_config).map_err(|e| SerializableError {
+        kind: "SerializationError".to_string(),
+        message: format!("Failed to serialize plugin permissions: {e}"),
+        path: Some(root_index_path.clone()),
+    })?;
+
+    tauri::async_runtime::block_on(workspace.set_frontmatter_property(
+        &root_index_path,
+        "plugins",
+        plugins_value,
+    ))
+    .map_err(|e: diaryx_core::error::DiaryxError| e.to_serializable())
+}
+
 // ============================================================================
 // Extism Third-Party Plugin Loading
 // ============================================================================
@@ -204,21 +388,22 @@ fn register_extism_plugins<R: Runtime, FS: diaryx_core::fs::AsyncFileSystem + 's
     if !plugins_dir.exists() {
         return Vec::new();
     }
+    let requested_permissions = collect_requested_permissions(&plugins_dir);
 
     // Use a basic real filesystem for host function file access.
     let fs: Arc<dyn diaryx_core::fs::AsyncFileSystem> =
         Arc::new(SyncToAsyncFs::new(RealFileSystem));
-    let workspace_root = diaryx.workspace_root();
+    let workspace_root_opt = diaryx.workspace_root();
     let event_emitter: Arc<dyn diaryx_extism::EventEmitter> =
         Arc::new(TauriEventEmitter { app: app.clone() });
     let ws_bridge = Arc::new(diaryx_extism::TokioWebSocketBridge::new());
     let host_ctx = Arc::new(diaryx_extism::HostContext {
         fs,
-        storage: make_plugin_storage(workspace_root.clone()),
-        secret_store: make_plugin_secret_store(workspace_root.clone()),
+        storage: make_plugin_storage(workspace_root_opt.clone()),
+        secret_store: make_plugin_secret_store(workspace_root_opt.clone()),
         event_emitter,
         plugin_id: String::new(),
-        permission_checker: Some(make_permission_checker(workspace_root)),
+        permission_checker: Some(make_permission_checker(workspace_root_opt)),
         file_provider: Arc::new(diaryx_extism::NoopFileProvider),
         ws_bridge: ws_bridge.clone(),
         plugin_command_bridge: Arc::new(TauriPluginCommandBridge { app: app.clone() }),
@@ -227,6 +412,15 @@ fn register_extism_plugins<R: Runtime, FS: diaryx_core::fs::AsyncFileSystem + 's
     let mut adapters = Vec::new();
     match diaryx_extism::load_plugins_from_dir(&plugins_dir, host_ctx) {
         Ok(plugins) => {
+            if let Err(e) =
+                persist_requested_permission_defaults(&workspace_root, &requested_permissions)
+            {
+                log::warn!(
+                    "Failed to persist requested plugin permissions for '{}': {}",
+                    workspace_root.display(),
+                    e.message
+                );
+            }
             use diaryx_core::plugin::Plugin;
             for plugin in plugins {
                 let arc = Arc::new(plugin);
@@ -2616,5 +2810,145 @@ pub async fn oauth_webview<R: Runtime>(
 
         let _ = window.close();
         Ok(serde_json::json!({ "code": code }))
+    }
+}
+
+#[cfg(all(test, feature = "extism-plugins"))]
+mod tests {
+    use super::*;
+
+    fn rule(include: &[&str], exclude: &[&str]) -> PermissionRule {
+        PermissionRule {
+            include: include.iter().map(|value| (*value).to_string()).collect(),
+            exclude: exclude.iter().map(|value| (*value).to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn merge_requested_permission_defaults_backfills_missing_rules() {
+        let mut plugins = HashMap::new();
+        let defaults = PluginPermissions {
+            read_files: Some(rule(&["all"], &[])),
+            http_requests: Some(rule(&["sync.diaryx.app"], &[])),
+            plugin_storage: Some(rule(&["all"], &[])),
+            ..PluginPermissions::default()
+        };
+
+        let changed = merge_requested_permission_defaults(&mut plugins, "diaryx.sync", &defaults);
+
+        assert!(changed);
+        let permissions = &plugins["diaryx.sync"].permissions;
+        assert_eq!(
+            permissions
+                .read_files
+                .as_ref()
+                .expect("read_files should be set")
+                .include,
+            vec!["all".to_string()]
+        );
+        assert_eq!(
+            permissions
+                .http_requests
+                .as_ref()
+                .expect("http_requests should be set")
+                .include,
+            vec!["sync.diaryx.app".to_string()]
+        );
+        assert_eq!(
+            permissions
+                .plugin_storage
+                .as_ref()
+                .expect("plugin_storage should be set")
+                .include,
+            vec!["all".to_string()]
+        );
+    }
+
+    #[test]
+    fn merge_requested_permission_defaults_preserves_existing_non_empty_rules() {
+        let mut plugins = HashMap::from([(
+            "diaryx.sync".to_string(),
+            PluginConfig {
+                download: Some("https://example.com/plugin.wasm".to_string()),
+                permissions: PluginPermissions {
+                    read_files: Some(rule(&["journal/daily"], &[])),
+                    http_requests: Some(rule(&["sync.diaryx.app"], &[])),
+                    ..PluginPermissions::default()
+                },
+            },
+        )]);
+        let defaults = PluginPermissions {
+            read_files: Some(rule(&["all"], &[])),
+            http_requests: Some(rule(&["all"], &[])),
+            plugin_storage: Some(rule(&["all"], &[])),
+            ..PluginPermissions::default()
+        };
+
+        let changed = merge_requested_permission_defaults(&mut plugins, "diaryx.sync", &defaults);
+
+        assert!(changed, "missing plugin_storage should still be backfilled");
+        let config = &plugins["diaryx.sync"];
+        assert_eq!(
+            config.download.as_deref(),
+            Some("https://example.com/plugin.wasm")
+        );
+        assert_eq!(
+            config
+                .permissions
+                .read_files
+                .as_ref()
+                .expect("existing read_files should be preserved")
+                .include,
+            vec!["journal/daily".to_string()]
+        );
+        assert_eq!(
+            config
+                .permissions
+                .http_requests
+                .as_ref()
+                .expect("existing http_requests should be preserved")
+                .include,
+            vec!["sync.diaryx.app".to_string()]
+        );
+        assert_eq!(
+            config
+                .permissions
+                .plugin_storage
+                .as_ref()
+                .expect("plugin_storage should be backfilled")
+                .include,
+            vec!["all".to_string()]
+        );
+    }
+
+    #[test]
+    fn merge_requested_permission_defaults_replaces_empty_rules() {
+        let mut plugins = HashMap::from([(
+            "diaryx.sync".to_string(),
+            PluginConfig {
+                download: None,
+                permissions: PluginPermissions {
+                    read_files: Some(rule(&[], &[])),
+                    ..PluginPermissions::default()
+                },
+            },
+        )]);
+        let defaults = PluginPermissions {
+            read_files: Some(rule(&["all"], &[])),
+            ..PluginPermissions::default()
+        };
+
+        let changed = merge_requested_permission_defaults(&mut plugins, "diaryx.sync", &defaults);
+
+        assert!(changed);
+        assert_eq!(
+            plugins["diaryx.sync"]
+                .permissions
+                .read_files
+                .as_ref()
+                .expect("empty rule should be replaced")
+                .include,
+            vec!["all".to_string()]
+        );
     }
 }

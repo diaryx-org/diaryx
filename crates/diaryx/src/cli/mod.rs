@@ -18,9 +18,6 @@ mod entry;
 /// `diaryx_core` export with audience filtering
 mod export;
 
-/// Import from external formats (email, etc.)
-mod import;
-
 /// normalize command changes filenames to slug
 mod normalize;
 
@@ -28,9 +25,11 @@ mod normalize;
 mod property;
 
 /// Preview workspace as local HTTP server
+#[cfg(feature = "plugins")]
 mod preview;
 
 /// `diaryx_core` publish
+#[cfg(feature = "plugins")]
 mod publish;
 
 /// Search command handler
@@ -38,9 +37,6 @@ mod search;
 
 /// diaryx sort command (sorting frontmatter properties)
 mod sort;
-
-/// Sync commands for remote synchronization
-mod sync;
 
 /// Navigate workspace hierarchy with TUI
 mod nav;
@@ -53,15 +49,19 @@ mod edit;
 mod template;
 
 /// Plugin storage for Extism plugins
+#[cfg(feature = "plugins")]
 mod plugin_storage;
 
 /// Plugin loading and context (Extism integration)
+#[cfg(feature = "plugins")]
 mod plugin_loader;
 
 /// Plugin management (install, remove, list, search, update)
+#[cfg(feature = "plugins")]
 mod plugin_manager;
 
 /// Generic plugin command dispatcher (native handlers + WASM)
+#[cfg(feature = "plugins")]
 mod plugin_dispatch;
 
 /// Shared CLI utilities
@@ -70,6 +70,9 @@ mod util;
 /// `diaryx_core` workspace index management
 mod workspace;
 
+#[cfg(not(feature = "plugins"))]
+use clap::Parser;
+#[cfg(feature = "plugins")]
 use clap::{CommandFactory, FromArgMatches};
 use std::path::PathBuf;
 
@@ -110,6 +113,21 @@ use args::Commands;
 /// 3. Parse args — if a core command, dispatch normally; if a plugin command,
 ///    route through the generic plugin dispatcher
 pub fn run_cli() {
+    #[cfg(not(feature = "plugins"))]
+    {
+        let cli = Cli::parse();
+        if !dispatch_core_command(cli) {
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    #[cfg(feature = "plugins")]
+    run_cli_with_plugins();
+}
+
+#[cfg(feature = "plugins")]
+fn run_cli_with_plugins() {
     // Phase 1: Discover installed plugin manifests
     let plugin_manifests = plugin_loader::discover_plugin_manifests();
 
@@ -259,6 +277,7 @@ fn dispatch_core_command(cli: Cli) -> bool {
             true
         }
 
+        #[cfg(feature = "plugins")]
         Commands::Plugin { command } => {
             plugin_manager::handle_plugin_command(command);
             true
@@ -281,37 +300,6 @@ fn dispatch_core_command(cli: Cli) -> bool {
             rt.block_on(edit::handle_edit(&workspace_root, url, port))
         }
     }
-}
-
-/// Resolve the workspace root directory from CLI arg or config.
-///
-/// Accepts a filesystem path **or** a registered workspace name. If the value
-/// exists on disk it is used directly; otherwise we try to match it against the
-/// workspace registry by name.
-fn resolve_workspace_root(workspace_arg: Option<PathBuf>) -> PathBuf {
-    if let Some(ws) = workspace_arg {
-        // If the path exists on disk, use it directly
-        if ws.exists() {
-            return ws;
-        }
-        // Try matching as a registered workspace name
-        if let Some(name) = ws.to_str() {
-            if let Ok(cfg) = Config::load() {
-                let reg = cfg.workspace_registry();
-                if let Some(entry) = reg.find_by_name(name) {
-                    if let Some(ref path) = entry.path {
-                        return path.clone();
-                    }
-                }
-            }
-        }
-        // Fall through to literal path (backward compat)
-        return ws;
-    }
-    Config::load()
-        .ok()
-        .map(|c| c.default_workspace)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
 /// Handle the uninstall command

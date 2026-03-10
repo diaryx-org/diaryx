@@ -198,6 +198,40 @@ describe('api', () => {
     })
   })
 
+  describe('attachEntryToParent', () => {
+    it('should emit a move event when the entry path changes', async () => {
+      vi.mocked(mockBackend.execute).mockResolvedValue({
+        type: 'String',
+        data: 'folder/child.md',
+      })
+
+      const result = await api.attachEntryToParent('child.md', 'folder/index.md')
+
+      expect(mockBackend.execute).toHaveBeenCalledWith({
+        type: 'AttachEntryToParent',
+        params: { entry_path: 'child.md', parent_path: 'folder/index.md' },
+      })
+      expect(result).toBe('folder/child.md')
+      expect(browserPluginEventMocks.dispatchFileMovedEvent).toHaveBeenCalledWith('child.md', 'folder/child.md')
+      expect(browserPluginEventMocks.dispatchFileSavedEvent).not.toHaveBeenCalled()
+      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
+    })
+
+    it('should emit a save event when only relationship metadata changes', async () => {
+      vi.mocked(mockBackend.execute).mockResolvedValue({
+        type: 'String',
+        data: 'child.md',
+      })
+
+      const result = await api.attachEntryToParent('child.md', 'folder/index.md')
+
+      expect(result).toBe('child.md')
+      expect(browserPluginEventMocks.dispatchFileMovedEvent).not.toHaveBeenCalled()
+      expect(browserPluginEventMocks.dispatchFileSavedEvent).toHaveBeenCalledWith('child.md')
+      expect(workspaceMirrorMocks.mirrorCurrentWorkspaceMutationToLinkedProviders).toHaveBeenCalledTimes(1)
+    })
+  })
+
   describe('getWorkspaceTree', () => {
     it('should get workspace tree', async () => {
       const mockTree = {

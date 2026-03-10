@@ -273,6 +273,20 @@ fn is_canonical_plugin_id(id: &str) -> bool {
     part_count >= 2
 }
 
+fn build_http_agent(timeout: std::time::Duration) -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(timeout))
+        .build()
+        .into()
+}
+
+fn format_http_error(err: ureq::Error) -> String {
+    match err {
+        ureq::Error::StatusCode(code) => format!("HTTP status {code}"),
+        other => other.to_string(),
+    }
+}
+
 /// List installed plugins.
 fn handle_list(filters: DiscoveryFilters, json: bool) {
     let installed = read_installed_plugins();
@@ -787,22 +801,15 @@ fn handle_info(id: &str, json: bool) {
 
 /// Fetch and parse the plugin registry.
 fn fetch_registry() -> Result<MarketplaceRegistry, String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|err| format!("HTTP client error: {err}"))?;
-
-    let response = client
+    let agent = build_http_agent(std::time::Duration::from_secs(30));
+    let mut response = agent
         .get(REGISTRY_URL)
-        .send()
-        .map_err(|err| format!("Failed to fetch registry: {err}"))?;
-
-    if !response.status().is_success() {
-        return Err(format!("Registry returned status {}", response.status()));
-    }
+        .call()
+        .map_err(|err| format!("Failed to fetch registry: {}", format_http_error(err)))?;
 
     let text = response
-        .text()
+        .body_mut()
+        .read_to_string()
         .map_err(|err| format!("Failed to read registry response: {err}"))?;
 
     MarketplaceRegistry::from_markdown(&text)
@@ -811,23 +818,15 @@ fn fetch_registry() -> Result<MarketplaceRegistry, String> {
 
 /// Download a file and return its bytes.
 fn download_bytes(url: &str) -> Result<Vec<u8>, String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .map_err(|err| format!("HTTP client error: {err}"))?;
-
-    let response = client
+    let agent = build_http_agent(std::time::Duration::from_secs(120));
+    let mut response = agent
         .get(url)
-        .send()
-        .map_err(|err| format!("Download failed: {err}"))?;
-
-    if !response.status().is_success() {
-        return Err(format!("Download returned status {}", response.status()));
-    }
+        .call()
+        .map_err(|err| format!("Download failed: {}", format_http_error(err)))?;
 
     response
-        .bytes()
-        .map(|bytes| bytes.to_vec())
+        .body_mut()
+        .read_to_vec()
         .map_err(|err| format!("Failed to read response: {err}"))
 }
 

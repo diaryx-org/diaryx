@@ -25,6 +25,15 @@ Install via `cargo`:
 cargo install diaryx
 ```
 
+This default install builds the smallest CLI surface: core file, workspace,
+search, export, and navigation commands.
+
+Optional features:
+
+- `cargo install diaryx --features edit` enables `diaryx edit` for the local web editor bridge.
+- `cargo install diaryx --features plugins` enables Extism plugin management and plugin-declared CLI commands.
+- `cargo install diaryx --features "edit plugins"` enables both optional surfaces.
+
 ## A Brief Introduction (to the CLI)
 
 Diaryx saves entries as markdown files in a folder, and provides tools for modifying frontmatter properties. It also provides a "workspace" feature for defining relationships between different entries. In this way it is similar to other "knowledge management" tools like Obsidian. But it differs by defining these relationships primarily in the frontmatter in the form of `part_of` and `contents` properties.
@@ -204,51 +213,22 @@ You can also validate specific files or directories:
 > diaryx workspace validate notes/ --recursive
 ```
 
-## Sync
+## Plugins
 
-Diaryx can sync your workspace with a remote server for backup and multi-device access:
+Sync, import, publish, and preview are now plugin-provided workflows rather
+than built-in CLI modules.
 
-On native hosts, Diaryx account/session state is stored separately from general
-CLI config in `~/.config/diaryx/auth.toml`.
+To use them, install the CLI with the `plugins` feature and then install the
+relevant plugins:
 
 ```bash
-# Login with magic link authentication
-> diaryx sync login your-email@example.com
-Logging in to sync server...
-Check your email for a magic link!
-
-# Verify the magic link token
-> diaryx sync verify <TOKEN_FROM_EMAIL>
-Successfully logged in!
-
-# Check sync status
-> diaryx sync status
-Sync Status
-===========
-Server: https://sync.diaryx.org
-Account: your-email@example.com (logged in)
-Workspace ID: abc-123-def
-
-# Start continuous sync
-> diaryx sync start
-Connecting to sync server...
-Sync is running. Press Ctrl+C to stop.
-
-# Or do one-shot operations
-> diaryx sync push    # Push local changes
-> diaryx sync pull    # Pull remote changes
+cargo install diaryx --features plugins
+diaryx plugin install diaryx.sync
+diaryx plugin install diaryx.publish
 ```
 
-### Sync Commands
-
-- `diaryx sync login <email>` - Authenticate via magic link
-- `diaryx sync verify <token>` - Complete authentication
-- `diaryx sync logout` - Clear credentials
-- `diaryx sync status` - Show sync status
-- `diaryx sync start` - Start continuous sync
-- `diaryx sync push` - One-shot push local changes
-- `diaryx sync pull` - One-shot pull remote changes
-- `diaryx sync config` - Configure sync settings
+Installed plugins can contribute their own CLI subcommands dynamically at
+startup, so the exact command surface depends on which plugins are installed.
 
 ## roadmap
 

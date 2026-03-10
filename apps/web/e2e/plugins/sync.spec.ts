@@ -1,4 +1,4 @@
-import { test, expect, waitForAppReady } from "./fixtures";
+import { test, expect, waitForAppReady } from "../fixtures";
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { access, readFile, rm } from "node:fs/promises";
 import os from "node:os";
@@ -622,6 +622,45 @@ async function readFrontmatter(
   }, entryPath);
 }
 
+function normalizeJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeJsonValue(item));
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entryValue]) => [key, normalizeJsonValue(entryValue)]),
+    );
+  }
+
+  return value;
+}
+
+async function readFrontmatterProperty(
+  page: import("@playwright/test").Page,
+  entryPath: string,
+  key: string,
+): Promise<unknown> {
+  const frontmatter = await readFrontmatter(page, entryPath);
+  return normalizeJsonValue(frontmatter?.[key] ?? null);
+}
+
+async function expectFrontmatterProperty(
+  page: import("@playwright/test").Page,
+  entryPath: string,
+  key: string,
+  expected: unknown,
+  timeoutMs: number = 30000,
+): Promise<void> {
+  await expect
+    .poll(async () => await readFrontmatterProperty(page, entryPath, key), {
+      timeout: timeoutMs,
+    })
+    .toEqual(normalizeJsonValue(expected));
+}
+
 async function entryExists(
   page: import("@playwright/test").Page,
   entryPath: string,
@@ -687,30 +726,6 @@ async function openEntryForSync(
 
   await Promise.all([
     openPromise,
-    allowPermissionPrompts(page, 1000, 15000),
-  ]);
-}
-
-async function syncFileNow(
-  page: import("@playwright/test").Page,
-  entryPath: string,
-): Promise<void> {
-  const syncPromise = page.evaluate((pathToSync) => {
-    const bridge = (globalThis as {
-      __diaryx_e2e?: {
-        syncFileNow: (path: string) => Promise<void>;
-      };
-    }).__diaryx_e2e;
-
-    if (!bridge) {
-      throw new Error("Diaryx E2E bridge is not available");
-    }
-
-    return bridge.syncFileNow(pathToSync);
-  }, entryPath);
-
-  await Promise.all([
-    syncPromise,
     allowPermissionPrompts(page, 1000, 15000),
   ]);
 }
@@ -795,6 +810,17 @@ async function waitForSyncSession(
       { timeout: 45000 },
     )
     .toMatch(/^(syncing|synced)$/);
+}
+
+async function waitForE2EBridge(
+  page: import("@playwright/test").Page,
+  timeoutMs: number = 30000,
+): Promise<void> {
+  await expect
+    .poll(async () => {
+      return await page.evaluate(() => !!(globalThis as any).__diaryx_e2e);
+    }, { timeout: timeoutMs })
+    .toBe(true);
 }
 
 async function downloadRemoteWorkspaceViaUi(
@@ -944,6 +970,10 @@ test.describe("Sync", () => {
         signInWithDevMagicLink(pageA, email),
         signInWithDevMagicLink(pageB, email),
       ]);
+      await Promise.all([
+        waitForE2EBridge(pageA),
+        waitForE2EBridge(pageB),
+      ]);
 
       // Auto-allow all permission prompts so sync plugin host calls proceed
       // without showing banners that block Playwright interactions.
@@ -1003,13 +1033,7 @@ test.describe("Sync", () => {
         createdEntryMarker,
       );
       await openEntryForSync(pageA, createdEntryPath);
-      console.log("[sync-e2e] pageA synced files after create", await listSyncedFiles(pageA));
-      console.log("[sync-e2e] pageB synced files after create", await listSyncedFiles(pageB));
-
-      await expect
-        .poll(async () => await hasSyncedFile(pageB, createdEntryPath), { timeout: 30000 })
-        .toBe(true);
-      await syncFileNow(pageB, createdEntryPath);
+      await openEntryForSync(pageB, createdEntryPath);
       await expect
         .poll(async () => await readEntryBody(pageB, createdEntryPath), { timeout: 30000 })
         .toContain(createdEntryMarker);
@@ -1021,17 +1045,12 @@ test.describe("Sync", () => {
       );
       await openEntryForSync(pageA, renamedEntryPath);
 
-      await expect
-        .poll(async () => await hasSyncedFile(pageB, createdEntryPath), { timeout: 30000 })
-        .toBe(false);
-      await expect
-        .poll(async () => await hasSyncedFile(pageB, renamedEntryPath), { timeout: 30000 })
-        .toBe(true);
-
       const destinationParentPath = await createIndexEntry(pageA, destinationParentStem);
-      await expect
-        .poll(async () => await hasSyncedFile(pageB, destinationParentPath), { timeout: 30000 })
-        .toBe(true);
+      const destinationContentsBeforeMove = await readFrontmatterProperty(
+        pageA,
+        destinationParentPath,
+        "contents",
+      );
 
       const movedEntryPath = await moveEntryToParent(
         pageA,
@@ -1040,28 +1059,38 @@ test.describe("Sync", () => {
       );
       await openEntryForSync(pageA, movedEntryPath);
 
-      // In the WASM/OPFS backend, "moving" an entry under a parent only updates
-      // part_of frontmatter — the file path doesn't change on a flat filesystem.
-      // Only assert path-based move when the path actually changed.
-      if (movedEntryPath !== renamedEntryPath) {
-        await expect
-          .poll(async () => await hasSyncedFile(pageB, renamedEntryPath), { timeout: 30000 })
-          .toBe(false);
-        await expect
-          .poll(async () => await hasSyncedFile(pageB, movedEntryPath), { timeout: 30000 })
-          .toBe(true);
-      } else {
-        // Flat filesystem: entry stays at same path, just verify it's still synced
-        await expect
-          .poll(async () => await hasSyncedFile(pageB, movedEntryPath), { timeout: 30000 })
-          .toBe(true);
-      }
-      console.log("[sync-e2e] step: syncFileNow");
-      await syncFileNow(pageB, movedEntryPath);
-      console.log("[sync-e2e] step: check body after sync");
+      await openEntryForSync(pageB, movedEntryPath);
+      console.log("[sync-e2e] step: check body after move");
       await expect
         .poll(async () => await readEntryBody(pageB, movedEntryPath), { timeout: 30000 })
         .toContain(createdEntryMarker);
+
+      await expect
+        .poll(async () => await readFrontmatterProperty(pageA, movedEntryPath, "part_of"), {
+          timeout: 30000,
+        })
+        .not.toBeNull();
+      const expectedMovedPartOf = await readFrontmatterProperty(pageA, movedEntryPath, "part_of");
+
+      const initialDestinationContentsCount = Array.isArray(destinationContentsBeforeMove)
+        ? destinationContentsBeforeMove.length
+        : 0;
+      await expect
+        .poll(async () => {
+          const contents = await readFrontmatterProperty(pageA, destinationParentPath, "contents");
+          return Array.isArray(contents) ? contents.length : 0;
+        }, {
+          timeout: 30000,
+        })
+        .toBeGreaterThan(initialDestinationContentsCount);
+      const expectedDestinationContents = await readFrontmatterProperty(
+        pageA,
+        destinationParentPath,
+        "contents",
+      );
+
+      await expectFrontmatterProperty(pageB, movedEntryPath, "part_of", expectedMovedPartOf);
+      await expectFrontmatterProperty(pageB, destinationParentPath, "contents", expectedDestinationContents);
 
       console.log("[sync-e2e] step: set frontmatter description");
       await setFrontmatterProperty(pageA, movedEntryPath, "description", descriptionMarker);
@@ -1072,23 +1101,14 @@ test.describe("Sync", () => {
         })
         .toBe(descriptionMarker);
 
-      // Edit the body on pageA BEFORE subscribing pageB.
-      // This avoids a race: if pageB sends SyncStep1 and pageA's body update
-      // reaches the server before the SyncStep1 is processed, the server won't
-      // forward the update. By editing first, the SyncStep2 response to pageB's
-      // subscription will include the edit.
+      // Edit while both clients are already subscribed to the moved entry.
+      // This is the real-time propagation path that was previously untested.
       await appendMarkerToEntry(pageA, movedEntryPath, editedBodyMarker);
 
-      // Verify pageA has the edited body — this also ensures the body update
-      // has been sent to the server before pageB subscribes.
+      // Verify pageA has the edited body before checking pageB.
       await expect
         .poll(async () => await readEntryBody(pageA, movedEntryPath), { timeout: 10000 })
         .toContain(editedBodyMarker);
-
-      // Now subscribe pageB to the body document for the moved/renamed entry.
-      // The SyncStep2 response from the server will include the body state
-      // with the edit marker already applied.
-      await openEntryForSync(pageB, movedEntryPath);
 
       await expect
         .poll(async () => await readEntryBody(pageB, movedEntryPath), { timeout: 30000 })

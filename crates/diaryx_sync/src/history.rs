@@ -30,7 +30,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 use yrs::updates::decoder::Decode;
 use yrs::{Doc, Map, ReadTxn, StateVector, Transact, Update};
 
@@ -49,8 +48,9 @@ const SNAPSHOT_INTERVAL: i64 = 100;
 const FILES_MAP_NAME: &str = "files";
 
 /// A history entry with metadata about what changed.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct HistoryEntry {
     /// Unique update ID
     pub update_id: i64,
@@ -72,8 +72,9 @@ pub struct HistoryEntry {
 }
 
 /// Type of change made to a file.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub enum ChangeType {
     /// File was added
     Added,
@@ -86,8 +87,9 @@ pub enum ChangeType {
 }
 
 /// Difference between two versions of a file.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "bindings/")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "bindings/"))]
 pub struct FileDiff {
     /// Path to the file
     pub path: String,

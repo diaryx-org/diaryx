@@ -1235,6 +1235,7 @@ fn host_http_request(
     user_data: UserData<HostContext>,
 ) -> Result<(), ExtismError> {
     use base64::Engine as _;
+    use ureq::http::Request;
 
     let input: String = plugin.memory_get_val(&inputs[0])?;
 
@@ -1271,50 +1272,59 @@ fn host_http_request(
     const MIN_HTTP_TIMEOUT_MS: u64 = 1_000;
     const MAX_HTTP_TIMEOUT_MS: u64 = 300_000;
 
-    let agent = if let Some(timeout_ms) = parsed.timeout_ms {
-        let timeout_ms = timeout_ms.clamp(MIN_HTTP_TIMEOUT_MS, MAX_HTTP_TIMEOUT_MS);
-        let timeout = std::time::Duration::from_millis(timeout_ms);
-        ureq::AgentBuilder::new()
-            .timeout_connect(timeout)
-            .timeout_read(timeout)
-            .timeout_write(timeout)
-            .build()
-    } else {
-        ureq::AgentBuilder::new().build()
-    };
+    let timeout = parsed
+        .timeout_ms
+        .map(|value| value.clamp(MIN_HTTP_TIMEOUT_MS, MAX_HTTP_TIMEOUT_MS))
+        .map(std::time::Duration::from_millis);
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(timeout)
+        .build()
+        .into();
 
-    let mut request = agent.request(&parsed.method, &parsed.url);
+    let mut request_builder = Request::builder()
+        .method(parsed.method.as_str())
+        .uri(parsed.url.as_str());
     for (key, value) in &parsed.headers {
-        request = request.set(key, value);
+        request_builder = request_builder.header(key, value);
     }
 
     let response = if let Some(b64) = &parsed.body_base64 {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(b64)
             .map_err(|e| ExtismError::msg(format!("host_http_request: base64 decode: {e}")))?;
-        request
-            .send_bytes(&bytes)
+        let request = request_builder
+            .body(bytes)
+            .map_err(|e| ExtismError::msg(format!("host_http_request: invalid request: {e}")))?;
+        agent
+            .run(request)
             .map_err(|e| ExtismError::msg(format!("host_http_request: {e}")))?
     } else if let Some(body) = &parsed.body {
-        request
-            .send_string(&body)
+        let request = request_builder
+            .body(body.clone())
+            .map_err(|e| ExtismError::msg(format!("host_http_request: invalid request: {e}")))?;
+        agent
+            .run(request)
             .map_err(|e| ExtismError::msg(format!("host_http_request: {e}")))?
     } else {
-        request
-            .call()
+        let request = request_builder
+            .body(())
+            .map_err(|e| ExtismError::msg(format!("host_http_request: invalid request: {e}")))?;
+        agent
+            .run(request)
             .map_err(|e| ExtismError::msg(format!("host_http_request: {e}")))?
     };
 
-    let status = response.status();
+    let status = response.status().as_u16();
     let mut resp_headers = std::collections::HashMap::new();
-    for name in response.headers_names() {
-        if let Some(value) = response.header(&name) {
-            resp_headers.insert(name, value.to_string());
+    for (name, value) in response.headers() {
+        if let Ok(value) = value.to_str() {
+            resp_headers.insert(name.to_string(), value.to_string());
         }
     }
-    let mut reader = response.into_reader();
-    let mut body_bytes = Vec::new();
-    std::io::Read::read_to_end(&mut reader, &mut body_bytes)
+    let mut response = response;
+    let body_bytes = response
+        .body_mut()
+        .read_to_vec()
         .map_err(|e| ExtismError::msg(format!("host_http_request: read body: {e}")))?;
     let body = String::from_utf8_lossy(&body_bytes).to_string();
     let body_base64 = Some(base64::engine::general_purpose::STANDARD.encode(&body_bytes));

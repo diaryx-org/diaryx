@@ -10,8 +10,8 @@ the `AuthHttpClient` and `AuthStorage` traits.
 
 ```
 AuthService
-├── AuthHttpClient  — CLI: reqwest blocking, WASM: js-sys fetch
-└── AuthStorage     — CLI: native auth file + legacy config fallback, WASM: localStorage
+├── AuthHttpClient  — host-provided native HTTP client or WASM fetch
+└── AuthStorage     — native auth file + legacy config fallback, or browser localStorage
 ```
 
 ## Key types
@@ -24,9 +24,9 @@ AuthService
 | `AuthStorage` | Trait for platform-specific credential persistence |
 | `MeResponse` | Server user info including tier, workspace_limit, devices |
 
-## CLI implementation
+## Native hosts
 
-See `crates/diaryx/src/cli/sync/auth.rs` for `ReqwestAuthClient` and the CLI
-integration with `NativeFileAuthStorage`. Native auth now persists to
-`~/.config/diaryx/auth.toml` (or the platform equivalent) and only falls back
-to legacy `Config.sync_*` fields for migration/compatibility.
+`NativeFileAuthStorage` persists credentials to `~/.config/diaryx/auth.toml`
+(or the platform equivalent) and falls back to legacy `Config.sync_*` fields
+for migration/compatibility. CLI plugin hosts load these credentials into the
+runtime context passed to sync-capable plugins.

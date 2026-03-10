@@ -260,6 +260,10 @@ export function createApi(backend: Backend) {
       const nextPath = expectResponse(response, 'String').data;
       if (nextPath !== entryPath) {
         await dispatchFileMovedEvent(entryPath, nextPath);
+      } else {
+        // Relationship-only moves update frontmatter/contents without changing the file path.
+        // Emit a save event so sync listeners re-read the affected entry metadata.
+        await dispatchFileSavedEvent(entryPath);
       }
       await mirrorWorkspaceMutation();
       return nextPath;

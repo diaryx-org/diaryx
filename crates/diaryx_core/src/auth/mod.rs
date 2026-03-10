@@ -11,8 +11,8 @@
 //! ┌───────────────┐
 //! │  AuthService   │ ← platform-agnostic business logic
 //! ├───────────────┤
-//! │ AuthHttpClient │ ← trait: reqwest (CLI), fetch (WASM)
-//! │ AuthStorage    │ ← trait: Config TOML (CLI), localStorage (WASM)
+//! │ AuthHttpClient │ ← trait: native HTTP client, fetch (WASM)
+//! │ AuthStorage    │ ← trait: native auth file/config, localStorage (WASM)
 //! └───────────────┘
 //! ```
 //!

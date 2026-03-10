@@ -30,24 +30,9 @@ impl NativeHandlerRegistry {
     pub fn new() -> Self {
         let mut handlers: HashMap<&'static str, NativeHandlerFn> = HashMap::new();
 
-        // Sync handlers
-        handlers.insert("sync_login", native_sync_login);
-        handlers.insert("sync_verify", native_sync_verify);
-        handlers.insert("sync_logout", native_sync_logout);
-        handlers.insert("sync_status", native_sync_status);
-        handlers.insert("sync_start", native_sync_start);
-        handlers.insert("sync_push", native_sync_push);
-        handlers.insert("sync_pull", native_sync_pull);
-        handlers.insert("sync_config", native_sync_config);
-
         // Publish handlers
         handlers.insert("publish", native_publish);
         handlers.insert("preview", native_preview);
-
-        // Import handlers
-        handlers.insert("import_email", native_import_email);
-        handlers.insert("import_dayone", native_import_dayone);
-        handlers.insert("import_markdown", native_import_markdown);
 
         Self { handlers }
     }
@@ -311,75 +296,6 @@ fn resolve_workspace_root() -> PathBuf {
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
-// ============================================================================
-// Native handler implementations
-// ============================================================================
-
-fn load_config_and_workspace(
-    _matches: &ArgMatches,
-    workspace_root: Option<&Path>,
-) -> (Config, PathBuf) {
-    let config = Config::load().unwrap_or_default();
-    let ws_root = workspace_root
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| config.default_workspace.clone());
-    (config, ws_root)
-}
-
-fn native_sync_login(matches: &ArgMatches, _workspace_root: Option<&Path>) {
-    let email = matches
-        .get_one::<String>("email")
-        .cloned()
-        .unwrap_or_default();
-    let server = matches.get_one::<String>("server").map(|s| s.as_str());
-    super::sync::auth::handle_login(&email, server);
-}
-
-fn native_sync_verify(matches: &ArgMatches, _workspace_root: Option<&Path>) {
-    let token = matches
-        .get_one::<String>("token")
-        .cloned()
-        .unwrap_or_default();
-    let device_name = matches.get_one::<String>("device-name").map(|s| s.as_str());
-    super::sync::auth::handle_verify(&token, device_name);
-}
-
-fn native_sync_logout(_matches: &ArgMatches, _workspace_root: Option<&Path>) {
-    super::sync::auth::handle_logout();
-}
-
-fn native_sync_status(_matches: &ArgMatches, workspace_root: Option<&Path>) {
-    let (config, ws_root) = load_config_and_workspace(_matches, workspace_root);
-    super::sync::status::handle_status(&config, &ws_root);
-}
-
-fn native_sync_start(matches: &ArgMatches, workspace_root: Option<&Path>) {
-    let (config, ws_root) = load_config_and_workspace(matches, workspace_root);
-    let background = matches.get_flag("background");
-    if background {
-        eprintln!("Background mode is not yet implemented.");
-        eprintln!("Running in foreground mode instead.");
-    }
-    super::sync::client::handle_start(&config, &ws_root);
-}
-
-fn native_sync_push(_matches: &ArgMatches, workspace_root: Option<&Path>) {
-    let (config, ws_root) = load_config_and_workspace(_matches, workspace_root);
-    super::sync::client::handle_push(&config, &ws_root);
-}
-
-fn native_sync_pull(_matches: &ArgMatches, workspace_root: Option<&Path>) {
-    let (config, ws_root) = load_config_and_workspace(_matches, workspace_root);
-    super::sync::client::handle_pull(&config, &ws_root);
-}
-
-fn native_sync_config(matches: &ArgMatches, _ws: Option<&Path>) {
-    let server = matches.get_one::<String>("server").cloned();
-    let workspace_id = matches.get_one::<String>("workspace-id").cloned();
-    let show = matches.get_flag("show");
-    super::sync::status::handle_config(server, workspace_id, show);
-}
-
 fn native_publish(matches: &ArgMatches, _workspace_root: Option<&Path>) {
     let destination: PathBuf = matches
         .get_one::<String>("destination")
@@ -420,73 +336,6 @@ fn native_preview(matches: &ArgMatches, _workspace_root: Option<&Path>) {
 
     super::preview::handle_preview(None, port, no_open, audience, title);
 }
-
-fn native_import_email(matches: &ArgMatches, workspace_root: Option<&Path>) {
-    let ws_root = workspace_root
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(resolve_workspace_root);
-    let source = PathBuf::from(
-        matches
-            .get_one::<String>("source")
-            .cloned()
-            .unwrap_or_default(),
-    );
-    let folder = matches
-        .get_one::<String>("folder")
-        .cloned()
-        .unwrap_or_else(|| "emails".to_string());
-    let dry_run = matches.get_flag("dry-run");
-    let verbose = matches.get_flag("verbose");
-
-    super::import::handle_import_email(&source, &folder, dry_run, verbose, Some(ws_root));
-}
-
-fn native_import_dayone(matches: &ArgMatches, workspace_root: Option<&Path>) {
-    let ws_root = workspace_root
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(resolve_workspace_root);
-    let source = PathBuf::from(
-        matches
-            .get_one::<String>("source")
-            .cloned()
-            .unwrap_or_default(),
-    );
-    let folder = matches
-        .get_one::<String>("folder")
-        .cloned()
-        .unwrap_or_else(|| "journal".to_string());
-    let dry_run = matches.get_flag("dry-run");
-    let verbose = matches.get_flag("verbose");
-
-    super::import::handle_import_dayone(&source, &folder, dry_run, verbose, Some(ws_root));
-}
-
-fn native_import_markdown(matches: &ArgMatches, workspace_root: Option<&Path>) {
-    let ws_root = workspace_root
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(resolve_workspace_root);
-    let source = PathBuf::from(
-        matches
-            .get_one::<String>("source")
-            .cloned()
-            .unwrap_or_default(),
-    );
-    let folder = matches
-        .get_one::<String>("folder")
-        .cloned()
-        .unwrap_or_else(|| {
-            source
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("imported")
-                .to_string()
-        });
-    let dry_run = matches.get_flag("dry-run");
-    let verbose = matches.get_flag("verbose");
-
-    super::import::handle_import_markdown(&source, &folder, dry_run, verbose, Some(ws_root));
-}
-
 // ============================================================================
 // clap command builder
 // ============================================================================

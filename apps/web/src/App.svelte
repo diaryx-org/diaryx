@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from "svelte";
-  import { getBackend, getBackendSync, getApiSync, isTauri, replaceBackend, resetBackend } from "./lib/backend";
+  import { getBackend, isTauri, replaceBackend, resetBackend } from "./lib/backend";
   import { FsaGestureRequiredError } from "./lib/backend/fsaErrors";
   import * as browserPlugins from "$lib/plugins/browserPluginManager.svelte";
   import { addFilesToZip } from "./lib/settings/zipUtils";
@@ -51,7 +51,10 @@
     getThemeStore,
   } from "./models/stores";
   import { getPluginStore } from "./models/stores/pluginStore.svelte";
-  import type { PluginConfig } from "./models/stores/permissionStore.svelte";
+  import type {
+    PluginConfig,
+    PluginPermissions,
+  } from "./models/stores/permissionStore.svelte";
   import { getTemplateContextStore } from "./lib/stores/templateContextStore.svelte";
   import { getAppearanceStore } from "./lib/stores/appearance.svelte";
 
@@ -93,14 +96,7 @@
         if (event.status === "error" && event.error) {
           collaborationStore.setSyncError(event.error);
         } else {
-          // Map Rust sync plugin statuses to the TS SyncStatus type
-          const statusMap: Record<string, string> = {
-            connected: "syncing",
-            reconnecting: "connecting",
-            disconnected: "idle",
-          };
-          const mapped = statusMap[event.status] ?? event.status;
-          collaborationStore.setSyncStatus(mapped as any);
+          collaborationStore.setSyncStatus(event.status);
         }
         return;
       }
@@ -390,6 +386,69 @@
     pluginPermissionsConfig = nextConfig;
   }
 
+  function hasRequestedPermissionDefaults(defaults: PluginPermissions): boolean {
+    return Object.values(defaults).some((rule) => rule != null);
+  }
+
+  function mergeRequestedPermissionDefaults(
+    currentConfig: Record<string, PluginConfig> | undefined,
+    pluginId: string,
+    defaults: PluginPermissions,
+  ): Record<string, PluginConfig> | null {
+    if (!hasRequestedPermissionDefaults(defaults)) {
+      return null;
+    }
+
+    const existingConfig = currentConfig ?? {};
+    const existingPluginConfig = existingConfig[pluginId] ?? { permissions: {} };
+    const nextPermissions: PluginPermissions = {
+      ...(existingPluginConfig.permissions ?? {}),
+    };
+    let changed = false;
+
+    for (const [permissionType, requestedRule] of Object.entries(defaults)) {
+      if (!requestedRule) continue;
+      const typedPermission = permissionType as keyof PluginPermissions;
+      const existingRule = nextPermissions[typedPermission];
+      const isEmptyRule =
+        !existingRule ||
+        ((existingRule.include?.length ?? 0) === 0 &&
+          (existingRule.exclude?.length ?? 0) === 0);
+      if (!isEmptyRule) continue;
+
+      nextPermissions[typedPermission] = {
+        include: [...(requestedRule.include ?? [])],
+        exclude: [...(requestedRule.exclude ?? [])],
+      } as never;
+      changed = true;
+    }
+
+    if (!changed) {
+      return null;
+    }
+
+    return {
+      ...existingConfig,
+      [pluginId]: {
+        ...existingPluginConfig,
+        permissions: nextPermissions,
+      },
+    };
+  }
+
+  async function persistRequestedPluginPermissionDefaults(
+    pluginId: string,
+    defaults: PluginPermissions,
+  ): Promise<void> {
+    const nextConfig = mergeRequestedPermissionDefaults(
+      pluginPermissionsConfig,
+      pluginId,
+      defaults,
+    );
+    if (!nextConfig) return;
+    await persistPluginPermissionsConfig(nextConfig);
+  }
+
   async function reloadWorkspaceScopedBrowserState(): Promise<void> {
     await Promise.all([
       themeStore.reloadFromWorkspace?.(),
@@ -403,6 +462,9 @@
     }
 
     browserPlugins.setPluginPermissionConfigProvider(() => pluginPermissionsConfig);
+    browserPlugins.setPluginPermissionConfigPersistor(
+      persistRequestedPluginPermissionDefaults,
+    );
     await browserPlugins.loadAllPlugins().catch((e: unknown) =>
       console.warn('[App] Failed to load browser plugins:', e),
     );
@@ -425,6 +487,165 @@
       return path.substring(workspaceDir.length + 1);
     }
     return path;
+  }
+
+  type DiaryxE2EBridge = {
+    getRootEntryPath: () => string | null;
+    createEntryWithMarker: (stem: string, marker: string) => Promise<string>;
+    appendMarkerToEntry: (path: string, marker: string) => Promise<void>;
+    renameEntry: (path: string, newFilename: string) => Promise<string>;
+    moveEntryToParent: (path: string, parentPath: string) => Promise<string>;
+    createIndexEntry: (stem: string) => Promise<string>;
+    readEntryBody: (path: string) => Promise<string | null>;
+    readFrontmatter: (path: string) => Promise<Record<string, unknown> | null>;
+    entryExists: (path: string) => Promise<boolean>;
+    setFrontmatterProperty: (
+      path: string,
+      key: string,
+      value: unknown,
+    ) => Promise<string | null>;
+    openEntryForSync: (path: string) => Promise<void>;
+    listSyncedFiles: () => Promise<string[]>;
+    getSyncStatus: () => Promise<string | null>;
+    setAutoAllowPermissions: (enabled: boolean) => void;
+    getPluginDiagnostics: () => { loaded: string[]; enabled: string[] };
+    installPluginInCurrentWorkspace: (wasmBase64: string) => Promise<void>;
+  };
+
+  function isLocalDevE2EBridgeEnabled(): boolean {
+    return import.meta.env.DEV
+      && typeof window !== "undefined"
+      && window.location.hostname === "localhost";
+  }
+
+  async function getCurrentApiForE2E(): Promise<Api> {
+    return createApi(await getBackend());
+  }
+
+  async function getCurrentBackendAndApiForE2E(): Promise<{
+    backendInstance: { getWorkspacePath(): string };
+    apiInstance: Api;
+  }> {
+    const backendInstance = await getBackend();
+    return {
+      backendInstance,
+      apiInstance: createApi(backendInstance),
+    };
+  }
+
+  function registerE2EBridge() {
+    if (!isLocalDevE2EBridgeEnabled()) {
+      return;
+    }
+
+    (globalThis as typeof globalThis & { __diaryx_e2e?: DiaryxE2EBridge | null }).__diaryx_e2e = {
+      getRootEntryPath(): string | null {
+        return workspaceStore.tree?.path ?? null;
+      },
+      async createEntryWithMarker(stem: string, marker: string): Promise<string> {
+        const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
+        const workspaceDir = getWorkspaceDirectoryPath(backendInstance);
+        const entryPath = `${workspaceDir}/${stem}.md`;
+        const createdPath = await apiInstance.createEntry(entryPath);
+        await apiInstance.saveEntry(createdPath, marker, workspaceStore.tree?.path);
+        return createdPath;
+      },
+      async appendMarkerToEntry(path: string, marker: string): Promise<void> {
+        const apiInstance = await getCurrentApiForE2E();
+        const entry = await apiInstance.getEntry(path);
+        const newContent = entry.content ? `${entry.content}\n${marker}` : marker;
+        await apiInstance.saveEntry(path, newContent, workspaceStore.tree?.path);
+      },
+      async renameEntry(path: string, newFilename: string): Promise<string> {
+        return await (await getCurrentApiForE2E()).renameEntry(path, newFilename);
+      },
+      async moveEntryToParent(path: string, parentPath: string): Promise<string> {
+        return await (await getCurrentApiForE2E()).attachEntryToParent(path, parentPath);
+      },
+      async createIndexEntry(stem: string): Promise<string> {
+        const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
+        const workspaceDir = getWorkspaceDirectoryPath(backendInstance);
+        const entryPath = `${workspaceDir}/${stem}.md`;
+        const createdPath = await apiInstance.createEntry(entryPath);
+        return await apiInstance.convertToIndex(createdPath);
+      },
+      async readEntryBody(path: string): Promise<string | null> {
+        try {
+          const entry = await (await getCurrentApiForE2E()).getEntry(path);
+          return entry.content ?? null;
+        } catch {
+          return null;
+        }
+      },
+      async readFrontmatter(path: string): Promise<Record<string, unknown> | null> {
+        try {
+          const entry = await (await getCurrentApiForE2E()).getEntry(path);
+          return entry.frontmatter ?? null;
+        } catch {
+          return null;
+        }
+      },
+      async entryExists(path: string): Promise<boolean> {
+        return await (await getCurrentApiForE2E()).fileExists(path);
+      },
+      async setFrontmatterProperty(path: string, key: string, value: unknown): Promise<string | null> {
+        return await (await getCurrentApiForE2E()).setFrontmatterProperty(
+          path,
+          key,
+          value as JsonValue,
+          workspaceStore.tree?.path,
+        );
+      },
+      async openEntryForSync(path: string): Promise<void> {
+        await browserPlugins.dispatchFileOpenedEvent(path);
+      },
+      async listSyncedFiles(): Promise<string[]> {
+        try {
+          const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
+          const workspaceDir = getWorkspaceDirectoryPath(backendInstance);
+          const result = await apiInstance.executePluginCommand(
+            "diaryx.sync",
+            "MaterializeWorkspace",
+            {},
+          ) as { files?: Array<{ path?: string } | string> } | Array<{ path?: string } | string>;
+          const files = Array.isArray(result) ? result : result?.files;
+          if (!Array.isArray(files)) {
+            return [];
+          }
+          return files
+            .map((file) => {
+              const relativePath = typeof file === "string" ? file : file.path;
+              return relativePath ? `${workspaceDir}/${relativePath}` : null;
+            })
+            .filter((path): path is string => path !== null);
+        } catch (e) {
+          console.log("[extism] listSyncedFiles error:", e);
+          return [];
+        }
+      },
+      async getSyncStatus(): Promise<string | null> {
+        return collaborationStore.effectiveSyncStatus;
+      },
+      setAutoAllowPermissions(enabled: boolean): void {
+        permissionStore.setAutoAllow(enabled);
+      },
+      getPluginDiagnostics(): { loaded: string[]; enabled: string[] } {
+        const pluginStore = getPluginStore();
+        const loaded = Array.from(browserPlugins.getBrowserManifests().map((manifest) => manifest.id));
+        const enabled = loaded.filter((id) => pluginStore.isPluginEnabled(id));
+        return { loaded, enabled };
+      },
+      async installPluginInCurrentWorkspace(wasmBase64: string): Promise<void> {
+        const { installLocalPlugin } = await import("$lib/plugins/pluginInstallService");
+        const binary = atob(wasmBase64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+        const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+        await installLocalPlugin(buffer, "diaryx-sync-e2e");
+      },
+    };
   }
 
   function resetTouchGestureTracking() {
@@ -586,6 +807,8 @@
 
   // Check if we're on desktop and expand sidebars by default
   onMount(async () => {
+    registerE2EBridge();
+
     // Refresh tree when zip import completes (from ImportSettings)
     window.addEventListener("import:complete", handleImportComplete);
 
@@ -795,8 +1018,6 @@
       // Gestures that begin inside modal surfaces or become text selections are ignored.
       attachMobileGestureListeners();
 
-      // E2E bridge is set up outside the try block (see below)
-
     } catch (e) {
       if (e instanceof FsaGestureRequiredError) {
         console.warn("[App] FSA needs user gesture to reconnect:", e);
@@ -808,133 +1029,11 @@
     } finally {
       entryStore.setLoading(false);
     }
-
-    // Expose E2E test bridge in dev mode for Playwright sync tests.
-    // Placed outside the try block so it's available even when the welcome screen
-    // is shown (early return). Uses dynamic getBackendSync()/getApiSync() instead
-    // of captured variables so it always operates on the current workspace.
-    if (import.meta.env.DEV) {
-      (globalThis as any).__diaryx_e2e = {
-        getRootEntryPath(): string | null {
-          return workspaceStore.tree?.path ?? null;
-        },
-        async createEntryWithMarker(stem: string, marker: string): Promise<string> {
-          const b = getBackendSync();
-          const a = getApiSync();
-          const wsPath = b.getWorkspacePath();
-          const entryPath = `${wsPath}/${stem}.md`;
-          const createdPath = await a.createEntry(entryPath);
-          await a.saveEntry(createdPath, marker);
-          await browserPlugins.dispatchFileCreatedEvent(createdPath);
-          await browserPlugins.dispatchFileSavedEvent(createdPath);
-          return createdPath;
-        },
-        async appendMarkerToEntry(path: string, marker: string): Promise<void> {
-          const a = getApiSync();
-          const entry = await a.getEntry(path);
-          const newContent = entry.content ? `${entry.content}\n${marker}` : marker;
-          await a.saveEntry(path, newContent);
-          await browserPlugins.dispatchFileSavedEvent(path);
-        },
-        async renameEntry(path: string, newFilename: string): Promise<string> {
-          const newPath = await getApiSync().renameEntry(path, newFilename);
-          await browserPlugins.dispatchFileMovedEvent(path, newPath);
-          return newPath;
-        },
-        async moveEntryToParent(path: string, parentPath: string): Promise<string> {
-          const newPath = await getApiSync().attachEntryToParent(path, parentPath);
-          await browserPlugins.dispatchFileMovedEvent(path, newPath);
-          return newPath;
-        },
-        async createIndexEntry(stem: string): Promise<string> {
-          const b = getBackendSync();
-          const a = getApiSync();
-          const wsPath = b.getWorkspacePath();
-          const entryPath = `${wsPath}/${stem}.md`;
-          const createdPath = await a.createEntry(entryPath);
-          const convertedPath = await a.convertToIndex(createdPath);
-          return convertedPath;
-        },
-        async readEntryBody(path: string): Promise<string | null> {
-          try {
-            const entry = await getApiSync().getEntry(path);
-            return entry.content ?? null;
-          } catch { return null; }
-        },
-        async readFrontmatter(path: string): Promise<Record<string, unknown> | null> {
-          try {
-            const entry = await getApiSync().getEntry(path);
-            return entry.frontmatter ?? null;
-          } catch { return null; }
-        },
-        async entryExists(path: string): Promise<boolean> {
-          return await getApiSync().fileExists(path);
-        },
-        async setFrontmatterProperty(path: string, key: string, value: unknown): Promise<string | null> {
-          const result = await getApiSync().setFrontmatterProperty(path, key, value as any);
-          await browserPlugins.dispatchFileSavedEvent(result ?? path);
-          return result;
-        },
-        async openEntryForSync(path: string): Promise<void> {
-          await browserPlugins.dispatchFileOpenedEvent(path);
-        },
-        async syncFileNow(path: string): Promise<void> {
-          const b = getBackendSync();
-          if (b.requestBodySync) {
-            await b.requestBodySync([path]);
-          } else if (b.focusSyncFiles) {
-            await b.focusSyncFiles([path]);
-          }
-        },
-        async listSyncedFiles(): Promise<string[]> {
-          try {
-            const b = getBackendSync();
-            const wsPath = b.getWorkspacePath();
-            const result = await getApiSync().executePluginCommand(
-              "diaryx.sync", "MaterializeWorkspace", {},
-            ) as any;
-            const files = Array.isArray(result) ? result : result?.files;
-            if (Array.isArray(files)) {
-              return files
-                .map((f: any) => {
-                  const rel = f.path ?? f;
-                  return rel ? `${wsPath}/${rel}` : null;
-                })
-                .filter((path): path is string => path !== null);
-            }
-            return [];
-          } catch (e) { console.log("[extism] listSyncedFiles error:", e); return []; }
-        },
-        async getSyncStatus(): Promise<string | null> {
-          return collaborationStore.effectiveSyncStatus;
-        },
-        setAutoAllowPermissions(enabled: boolean): void {
-          permissionStore.setAutoAllow(enabled);
-        },
-        getPluginDiagnostics(): { loaded: string[]; enabled: string[] } {
-          const pluginStore = getPluginStore();
-          const loaded = Array.from(browserPlugins.getBrowserManifests().map(m => m.id));
-          const enabled = loaded.filter(id => pluginStore.isPluginEnabled(id));
-          return { loaded, enabled };
-        },
-        async installPluginInCurrentWorkspace(wasmBase64: string): Promise<void> {
-          const { installLocalPlugin } = await import("$lib/plugins/pluginInstallService");
-          const binary = atob(wasmBase64);
-          const bytes = new Uint8Array(binary.length);
-          for (let i = 0; i < binary.length; i++) {
-            bytes[i] = binary.charCodeAt(i);
-          }
-          const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-          await installLocalPlugin(buffer, "diaryx-sync-e2e");
-        },
-      };
-    }
   });
 
   onDestroy(() => {
-    // Cleanup E2E bridge
-    if (import.meta.env.DEV) {
-      (globalThis as any).__diaryx_e2e = null;
+    if (isLocalDevE2EBridgeEnabled()) {
+      (globalThis as typeof globalThis & { __diaryx_e2e?: DiaryxE2EBridge | null }).__diaryx_e2e = null;
     }
     // Cleanup blob URLs
     revokeBlobUrls();
@@ -996,9 +1095,6 @@
     const newBackend = await getBackend();
     workspaceStore.setBackend(newBackend);
     rustApi = null;
-    // Re-subscribe to filesystem events on the new backend
-    cleanupEventSubscription?.();
-    cleanupEventSubscription = initEventSubscription(newBackend);
     // Refresh tree and validation from new workspace
     await refreshTree();
     await reloadWorkspaceScopedBrowserState();
@@ -1593,10 +1689,6 @@
       const newBackend = await getBackend();
       workspaceStore.setBackend(newBackend);
       rustApi = null;
-
-      // Re-subscribe to filesystem events on the new backend
-      cleanupEventSubscription?.();
-      cleanupEventSubscription = initEventSubscription(newBackend);
 
       await refreshTree();
 

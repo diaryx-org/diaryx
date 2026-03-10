@@ -18,7 +18,10 @@ import {
 } from "./extismBrowserLoader";
 import type { PluginManifest } from "$lib/backend/generated";
 import { getPluginStore } from "@/models/stores/pluginStore.svelte";
-import type { PluginConfig } from "@/models/stores/permissionStore.svelte";
+import type {
+  PluginConfig,
+  PluginPermissions,
+} from "@/models/stores/permissionStore.svelte";
 import {
   createExtensionFromManifest,
   createMarkFromManifest,
@@ -121,6 +124,11 @@ let pluginsConfigProvider:
   | (() => Record<string, PluginConfig> | undefined)
   | null = null;
 
+/** Persists plugin-declared default permissions into root frontmatter. */
+let pluginsConfigPersistor:
+  | ((pluginId: string, defaults: PluginPermissions) => Promise<void>)
+  | null = null;
+
 /** Reactive version counter — incremented when browser plugins finish loading. */
 let pluginExtensionsVersion = $state(0);
 
@@ -150,6 +158,25 @@ async function unloadAllPlugins(): Promise<void> {
   invalidateEditorExtensions();
 }
 
+function hasRequestedPermissionDefaults(
+  defaults: PluginPermissions | undefined,
+): defaults is PluginPermissions {
+  if (!defaults) return false;
+  return Object.values(defaults).some((rule) => rule != null);
+}
+
+async function persistRequestedPermissionDefaults(
+  pluginId: string,
+  requestedPermissions?: RequestedPermissionsManifest,
+): Promise<void> {
+  const defaults = requestedPermissions?.defaults;
+  if (!pluginsConfigPersistor || !hasRequestedPermissionDefaults(defaults)) {
+    return;
+  }
+
+  await pluginsConfigPersistor(pluginId, defaults);
+}
+
 // ============================================================================
 // Public API
 // ============================================================================
@@ -177,6 +204,11 @@ export async function installPlugin(
   };
   console.log(
     `[browserPluginManager] Installing plugin (${(wasmBytes.byteLength / 1024).toFixed(0)} KB)...`,
+  );
+  const inspected = await inspectBrowserPlugin(wasmBytes);
+  await persistRequestedPermissionDefaults(
+    String(inspected.manifest.id),
+    inspected.requestedPermissions,
   );
   const plugin = await loadBrowserPlugin(wasmBytes, {
     getPluginId: () => runtimeIdentity.pluginId,
@@ -272,6 +304,11 @@ export async function loadAllPlugins(): Promise<void> {
           wasmBytes.byteOffset,
           wasmBytes.byteOffset + wasmBytes.byteLength,
         ) as ArrayBuffer;
+        const inspected = await inspectBrowserPlugin(wasmBuffer);
+        await persistRequestedPermissionDefaults(
+          String(inspected.manifest.id),
+          inspected.requestedPermissions,
+        );
         const plugin = await loadBrowserPlugin(wasmBuffer, {
           getPluginId: () => runtimeIdentity.pluginId,
           getPluginName: () => runtimeIdentity.pluginName,
@@ -308,6 +345,15 @@ export function setPluginPermissionConfigProvider(
   provider: (() => Record<string, PluginConfig> | undefined) | null,
 ): void {
   pluginsConfigProvider = provider;
+}
+
+/** Configure how browser plugins persist requested default permissions. */
+export function setPluginPermissionConfigPersistor(
+  persistor:
+    | ((pluginId: string, defaults: PluginPermissions) => Promise<void>)
+    | null,
+): void {
+  pluginsConfigPersistor = persistor;
 }
 
 /** Inspect plugin manifest metadata without installing. */

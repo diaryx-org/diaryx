@@ -1,8 +1,4 @@
 //! Plugin loading and context for CLI Extism integration.
-//!
-//! Provides `CliSyncContext` which replaces the old `CrdtContext` for all
-//! sync plugin interactions, routing through Extism plugin commands instead
-//! of direct CRDT API calls.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -16,46 +12,12 @@ use diaryx_extism::{
     EventEmitter, ExtismPluginAdapter, FrontmatterPermissionChecker, HostContext,
     TokioWebSocketBridge, load_plugin_from_wasm,
 };
-use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
 use super::plugin_storage::CliPluginStorage;
 
 struct CliRuntimeContextProvider {
     workspace_root: PathBuf,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-#[serde(default)]
-struct CliWorkspaceProviderLink {
-    #[serde(rename = "pluginId")]
-    plugin_id: String,
-    #[serde(rename = "remoteWorkspaceId")]
-    remote_workspace_id: String,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-#[serde(default)]
-struct CliCurrentWorkspaceSnapshot {
-    id: Option<String>,
-    path: Option<String>,
-    provider_links: Vec<CliWorkspaceProviderLink>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-#[serde(default)]
-struct CliRuntimeContextSnapshot {
-    server_url: Option<String>,
-    auth_token: Option<String>,
-    current_workspace: CliCurrentWorkspaceSnapshot,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CliSyncRuntimeState {
-    pub server_url: String,
-    pub auth_token: Option<String>,
-    pub local_workspace_id: Option<String>,
-    pub remote_workspace_id: Option<String>,
 }
 
 impl CliRuntimeContextProvider {
@@ -69,44 +31,6 @@ impl CliRuntimeContextProvider {
 impl diaryx_extism::RuntimeContextProvider for CliRuntimeContextProvider {
     fn get_context(&self, plugin_id: &str) -> JsonValue {
         build_runtime_context(Config::load().ok(), &self.workspace_root, plugin_id)
-    }
-}
-
-pub(crate) fn resolve_sync_runtime_state(
-    config: &Config,
-    workspace_root: &Path,
-) -> CliSyncRuntimeState {
-    resolve_sync_runtime_state_from_context(
-        Some(config.clone()),
-        NativeFileAuthStorage::load_global_credentials(),
-        workspace_root,
-    )
-}
-
-fn resolve_sync_runtime_state_from_context(
-    config: Option<Config>,
-    auth_credentials: Option<AuthCredentials>,
-    workspace_root: &Path,
-) -> CliSyncRuntimeState {
-    let snapshot: CliRuntimeContextSnapshot = serde_json::from_value(
-        build_runtime_context_from_sources(config, auth_credentials, workspace_root, "diaryx.sync"),
-    )
-    .unwrap_or_default();
-
-    let remote_workspace_id = snapshot
-        .current_workspace
-        .provider_links
-        .iter()
-        .find(|link| link.plugin_id == "diaryx.sync")
-        .map(|link| link.remote_workspace_id.clone());
-
-    CliSyncRuntimeState {
-        server_url: snapshot
-            .server_url
-            .unwrap_or_else(|| diaryx_core::auth::DEFAULT_SYNC_SERVER.to_string()),
-        auth_token: snapshot.auth_token,
-        local_workspace_id: snapshot.current_workspace.id,
-        remote_workspace_id,
     }
 }
 
@@ -157,7 +81,8 @@ fn build_runtime_context_from_sources(
 
     let server_url = auth_credentials
         .as_ref()
-        .map(|credentials| credentials.server_url.clone());
+        .map(|credentials| credentials.server_url.clone())
+        .unwrap_or_else(|| diaryx_core::auth::DEFAULT_SYNC_SERVER.to_string());
     let auth_token = auth_credentials.and_then(|credentials| credentials.session_token);
 
     serde_json::json!({
@@ -184,15 +109,7 @@ impl EventEmitter for CliEventEmitter {
                 .unwrap_or("unknown");
 
             match event_type {
-                "status_changed" => {
-                    if let Some(status) = event
-                        .get("payload")
-                        .and_then(|p| p.get("status"))
-                        .and_then(|s| s.as_str())
-                    {
-                        log::debug!("Sync status: {}", status);
-                    }
-                }
+                "status_changed" => {}
                 "files_changed" => {
                     if let Some(files) = event
                         .get("payload")
@@ -224,76 +141,9 @@ impl EventEmitter for CliEventEmitter {
                         eprintln!("  Error: {}", msg);
                     }
                 }
-                _ => {
-                    log::debug!("Plugin event: {}", event_type);
-                }
+                _ => {}
             }
         }
-    }
-}
-
-/// Sync plugin context for the CLI.
-///
-/// Wraps an `ExtismPluginAdapter` loaded from `diaryx_sync.wasm`.
-/// All CRDT operations go through plugin commands.
-pub struct CliSyncContext {
-    plugin: Arc<ExtismPluginAdapter>,
-    ws_bridge: Arc<TokioWebSocketBridge>,
-}
-
-impl CliSyncContext {
-    /// Try to load the sync plugin for an existing workspace.
-    ///
-    /// Returns `None` if the CRDT database doesn't exist (user hasn't synced yet).
-    pub fn load(workspace_root: &Path) -> Option<Self> {
-        let db_path = workspace_root.join(".diaryx/crdt.db");
-        if !db_path.exists() {
-            return None;
-        }
-        Self::load_or_create(workspace_root).ok()
-    }
-
-    /// Load or create the sync plugin context for a workspace.
-    pub fn load_or_create(workspace_root: &Path) -> Result<Self, String> {
-        let diaryx_dir = workspace_root.join(".diaryx");
-        if !diaryx_dir.exists() {
-            std::fs::create_dir_all(&diaryx_dir)
-                .map_err(|e| format!("Failed to create .diaryx directory: {}", e))?;
-        }
-
-        let (plugin, ws_bridge) = load_sync_plugin(workspace_root)?;
-        Ok(Self { plugin, ws_bridge })
-    }
-
-    /// Send a command to the sync plugin and return the result.
-    pub fn cmd(&self, command: &str, params: JsonValue) -> Result<JsonValue, String> {
-        let input = serde_json::json!({
-            "command": command,
-            "params": params,
-        });
-
-        let output = self
-            .plugin
-            .call_guest("handle_command", &input.to_string())
-            .map_err(|e| format!("Plugin call failed: {}", e))?;
-
-        let response: JsonValue =
-            serde_json::from_str(&output).map_err(|e| format!("Invalid plugin response: {}", e))?;
-
-        if response.get("success").and_then(|v| v.as_bool()) == Some(true) {
-            Ok(response.get("data").cloned().unwrap_or(JsonValue::Null))
-        } else {
-            let error_msg = response
-                .get("error")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Unknown plugin error");
-            Err(error_msg.to_string())
-        }
-    }
-
-    /// Clone the generic websocket bridge configured for this sync plugin.
-    pub fn websocket_bridge(&self) -> Arc<TokioWebSocketBridge> {
-        self.ws_bridge.clone()
     }
 }
 
@@ -564,20 +414,6 @@ fn create_host_context(
 
 /// Load an arbitrary WASM plugin by ID.
 fn load_plugin(workspace_root: &Path, plugin_id: &str) -> Result<Arc<ExtismPluginAdapter>, String> {
-    let (plugin, _) = load_plugin_with_transport(workspace_root, plugin_id)?;
-    Ok(plugin)
-}
-
-fn load_sync_plugin(
-    workspace_root: &Path,
-) -> Result<(Arc<ExtismPluginAdapter>, Arc<TokioWebSocketBridge>), String> {
-    load_plugin_with_transport(workspace_root, "diaryx.sync")
-}
-
-fn load_plugin_with_transport(
-    workspace_root: &Path,
-    plugin_id: &str,
-) -> Result<(Arc<ExtismPluginAdapter>, Arc<TokioWebSocketBridge>), String> {
     let wasm_path = find_plugin_wasm(plugin_id)?;
     let ws_bridge = Arc::new(TokioWebSocketBridge::new());
     let host_context = create_host_context(workspace_root, plugin_id, ws_bridge.clone());
@@ -599,7 +435,7 @@ fn load_plugin_with_transport(
     futures_lite::future::block_on(Plugin::init(plugin.as_ref(), &ctx))
         .map_err(|e| format!("Failed to initialize plugin '{}': {}", plugin_id, e))?;
 
-    Ok((plugin, ws_bridge))
+    Ok(plugin)
 }
 
 /// Load the publish WASM plugin.
@@ -609,7 +445,7 @@ fn load_publish_plugin(workspace_root: &Path) -> Result<Arc<ExtismPluginAdapter>
 
 #[cfg(test)]
 mod tests {
-    use super::{build_runtime_context_from_sources, resolve_sync_runtime_state_from_context};
+    use super::build_runtime_context_from_sources;
     use diaryx_core::auth::AuthCredentials;
     use diaryx_core::config::Config;
     use diaryx_core::workspace_registry::WorkspaceEntry;
@@ -693,40 +529,17 @@ mod tests {
     }
 
     #[test]
-    fn resolve_sync_runtime_state_uses_runtime_context_values() {
-        let workspace_root = Path::new("/tmp/diaryx-workspace");
-        let mut config = Config::new(PathBuf::from(workspace_root));
-        config.workspaces.push(WorkspaceEntry {
-            id: "local-1".into(),
-            name: "workspace".into(),
-            path: Some(PathBuf::from(workspace_root)),
-        });
-
-        let auth_credentials = Some(AuthCredentials {
-            server_url: "https://sync.example.com".into(),
-            session_token: Some("session-token".into()),
-            email: Some("user@example.com".into()),
-            workspace_id: Some("remote-123".into()),
-        });
-
-        let runtime =
-            resolve_sync_runtime_state_from_context(Some(config), auth_credentials, workspace_root);
-
-        assert_eq!(runtime.server_url, "https://sync.example.com");
-        assert_eq!(runtime.auth_token.as_deref(), Some("session-token"));
-        assert_eq!(runtime.local_workspace_id.as_deref(), Some("local-1"));
-        assert_eq!(runtime.remote_workspace_id.as_deref(), Some("remote-123"));
-    }
-
-    #[test]
-    fn resolve_sync_runtime_state_falls_back_to_default_server() {
+    fn runtime_context_uses_default_server_without_auth() {
         let workspace_root = Path::new("/tmp/diaryx-workspace");
         let config = Config::new(PathBuf::from(workspace_root));
+        let context =
+            build_runtime_context_from_sources(Some(config), None, workspace_root, "diaryx.sync");
 
-        let runtime = resolve_sync_runtime_state_from_context(Some(config), None, workspace_root);
-
-        assert_eq!(runtime.server_url, diaryx_core::auth::DEFAULT_SYNC_SERVER);
-        assert!(runtime.auth_token.is_none());
-        assert!(runtime.remote_workspace_id.is_none());
+        assert_eq!(
+            context.get("server_url").and_then(|v| v.as_str()),
+            Some(diaryx_core::auth::DEFAULT_SYNC_SERVER)
+        );
+        assert!(context.get("auth_token").is_some());
+        assert!(context.get("auth_token").unwrap().is_null());
     }
 }

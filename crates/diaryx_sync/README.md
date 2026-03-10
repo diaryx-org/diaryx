@@ -12,6 +12,7 @@ This crate owns all CRDT and sync functionality. It provides WASM-compatible cor
 ## Feature Flags
 
 - **default** — CRDT types and sync protocol only (WASM-compatible)
+- **typescript** — TypeScript binding derives for CRDT-facing types
 - **sqlite** — SQLite-backed CRDT storage (`SqliteStorage`)
 - **server** — Siphonophore hooks, axum WebSocket server, `StorageCache`
 - **native-sync** — Native sync transport (tokio-tungstenite WebSocket)

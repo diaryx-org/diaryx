@@ -1060,7 +1060,7 @@ export async function setupSyncedPair(
   for (const [tag, page] of [["A", pageA], ["B", pageB]] as const) {
     page.on("console", (message) => {
       const text = message.text();
-      if (text.includes("[extism-plugin:") || text.includes("[extism]") || text.includes("[ws:")) {
+      if (text.includes("[extism-plugin:") || text.includes("[extism]") || text.includes("[ws:") || text.includes("[e2e:")) {
         process.stderr.write(`[${label}:page${tag}:${message.type()}] ${text}\n`);
       }
     });

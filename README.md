@@ -12,6 +12,9 @@ contents:
 - '[README](/crates/README.md)'
 - '[ROADMAP](/ROADMAP.md)'
 - '[Scripts](/scripts/scripts.md)'
+- Archive.md
+- _templates/daily-journal.md
+- _templates/weekly-review.md
 audience:
 - public
 - developers
@@ -23,56 +26,9 @@ attachments:
 - '[release.toml](/release.toml)'
 - '[Cargo.toml](/Cargo.toml)'
 ---
+Welcome to your **Daily Journal** workspace.
 
-# Diaryx
+This workspace is set up for daily journaling. Use the daily entry template to create consistent journal entries, and the weekly review template to reflect on your week.
 
-Diaryx is software for personal writing, designed to embed standardized metadata into markdown files, which leads to a wide range of emergent benefits:
-
-- No need to keep an index of the files!
-- Better portability + longevity
-- Easily readable by humans (and AI agents)
-- Hierarchal, heritable traits
-
-This repository uses Diaryx for its own documentation. The "root index file" is [README.md](README.md). In the frontmatter, it has a `contents` property that includes a list of markdown files considered part of the documentation. Each of these files has a `part_of` property set to `README.md`, allowing for bidirectional traversal. Markdown files are considered "leaf" files if they do not have a `contents` property, or "index" files if they do. A root index file is a file that has a `contents` property but no `part_of` property.
-
-All of this logic is defined in the `diaryx_core` Rust crate, and is used by the `diaryx` CLI, `diaryx_wasm`, and `apps/tauri`. Please refer to the links below for more information on these specific projects.
-
-## Codebase organization
-
-- `[crates/diaryx_core](crates/diaryx_core/README.md)`: Core logic for all Diaryx apps.
-- `[crates/diaryx_daily](crates/diaryx_daily/README.md)`: Shared daily-entry domain logic for optional daily plugins.
-- `[crates/diaryx_daily_extism](crates/diaryx_daily_extism/README.md)`: Optional Extism daily plugin.
-- `[crates/diaryx](crates/diaryx/README.md)`: CLI frontend for Diaryx.
-- `[crates/diaryx_wasm](crates/diaryx_wasm/README.md)`: WebAssembly bindings for `diaryx_core`, used in `apps/web`.
-`[crates/diaryx_sync_server](crates/diaryx_sync_server/README.md)`: Sync server to allow sync/live editing functionality in Web/Tauri clients.
-- `[apps/web](apps/web/README.md)`: Svelte + TipTap frontend for Diaryx.
-- `[apps/tauri](apps/tauri/README.md)`: Tauri frontend for Diaryx. Uses `apps/web` as its frontend, but calls the functions through the Tauri backend instead of through WebAssembly, allowing for native filesystem access.
-- `[workers/site-proxy](workers/site-proxy/README.md)`: Cloudflare Worker for serving published static sites with audience-gated access.
-
-## Plugin Marketplace And Registry
-
-Diaryx now uses a curated plugin marketplace model across web, CLI, and Tauri:
-
-- Registry schema is `v2` (`plugins/registry-v2.json`) and is treated as canonical.
-- Plugin IDs are canonical namespaced IDs (for example: `diaryx.sync`, `diaryx.publish`, `diaryx.daily`).
-- Registry installs require immutable artifact metadata: `artifact.wasmUrl`, `artifact.sha256`, `artifact.sizeBytes`, and `version`.
-- Local `.wasm` uploads remain supported but are treated as local/unmanaged plugins outside curated registry trust.
-
-Registry build/publish is generated dynamically in CI from plugin crate discovery (`cargo metadata`) plus curated catalogs in:
-
-- `plugins/catalog/internal-plugins.json`
-- `plugins/catalog/external-plugins.json`
-
-## Installation
-
-You can try a live demo of the Diaryx web frontend at [https://diaryx-org.github.io/diaryx/](https://diaryx-org.github.io/diaryx/).
-
-You can also go into GitHub releases and use the Diaryx app as you please, "except for providing any product that competes with the software or any product the licensor or any of its affiliates provides using the software." (See [the license](./LICENSE.md)).
-
-## Roadmap
-
-See the project-level roadmap [here](roadmap.md).
-
-## License
-
-PolyForm Shield 1.0. Read it [here](LICENSE.md).
+- Use the **Daily** plugin to quickly create entries for each day
+- Check out the templates in your workspace's `_templates` folder

@@ -4,6 +4,7 @@ import {
   getLocalWorkspace,
   getWorkspaceProviderLinks,
 } from "$lib/storage/localWorkspaceRegistry.svelte";
+import { getPlugin } from "$lib/plugins/browserPluginManager.svelte";
 
 type PluginCommandRunner = (
   pluginId: string,
@@ -67,6 +68,25 @@ export async function mirrorCurrentWorkspaceMutationToLinkedProviders(args: {
   await Promise.allSettled(
     providerLinks.map(async (link) => {
       try {
+        const browserPlugin = getPlugin(link.pluginId);
+        if (browserPlugin) {
+          const initResponse = await browserPlugin.callCommand("InitializeWorkspaceCrdt", {
+            provider_id: link.pluginId,
+            ...(workspaceRoot ? { workspace_path: workspaceRoot } : {}),
+          });
+          if (!initResponse.success) {
+            throw new Error(initResponse.error ?? `InitializeWorkspaceCrdt failed for ${link.pluginId}`);
+          }
+
+          const syncResponse = await browserPlugin.callCommand("TriggerWorkspaceSync", {
+            provider_id: link.pluginId,
+          });
+          if (!syncResponse.success) {
+            throw new Error(syncResponse.error ?? `TriggerWorkspaceSync failed for ${link.pluginId}`);
+          }
+          return;
+        }
+
         await args.runPluginCommand(link.pluginId, "InitializeWorkspaceCrdt", {
           provider_id: link.pluginId,
           ...(workspaceRoot ? { workspace_path: workspaceRoot } : {}),

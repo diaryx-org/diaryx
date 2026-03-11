@@ -126,6 +126,29 @@ describe("browserPluginManager permission defaults", () => {
     vi.restoreAllMocks();
   });
 
+  it("preserves absolute workspace paths in filesystem lifecycle events", async () => {
+    const { module, pluginInstance } = await loadBrowserPluginManager();
+
+    await module.installPlugin(new ArrayBuffer(4), "Sync");
+    await module.dispatchFileSavedEvent("/workspace/live-propagation.md");
+    await module.dispatchFileMovedEvent(
+      "/workspace/old-name.md",
+      "/workspace/new-name.md",
+    );
+
+    expect(pluginInstance.callEvent).toHaveBeenNthCalledWith(1, {
+      event_type: "file_saved",
+      payload: { path: "/workspace/live-propagation.md" },
+    });
+    expect(pluginInstance.callEvent).toHaveBeenNthCalledWith(2, {
+      event_type: "file_moved",
+      payload: {
+        old_path: "/workspace/old-name.md",
+        new_path: "/workspace/new-name.md",
+      },
+    });
+  });
+
   it("persists requested defaults before installing a browser plugin", async () => {
     const { assetMocks, extismMocks, module } = await loadBrowserPluginManager();
     const persistor = vi.fn().mockResolvedValue(undefined);

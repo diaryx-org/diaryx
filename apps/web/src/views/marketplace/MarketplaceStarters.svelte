@@ -2,7 +2,6 @@
   import {
     ArrowLeft,
     ExternalLink,
-    FileText,
     FolderTree,
     Loader2,
     Search,
@@ -23,12 +22,9 @@
   } from "$lib/marketplace/starterWorkspaceRegistry";
   import type { StarterWorkspaceRegistryEntry } from "$lib/marketplace/types";
   import {
-    fetchStarterWorkspaceManifest,
-    applyStarterWorkspace,
-    type StarterWorkspaceManifest,
-    type StarterApplyRuntime,
+    fetchStarterWorkspaceZip,
   } from "$lib/marketplace/starterWorkspaceApply";
-  import { getBackend, createApi } from "$lib/backend";
+  import { getBackend } from "$lib/backend";
 
   type SourceFilter = "all" | "curated" | "local";
   type SortBy = "name" | "recent";
@@ -54,8 +50,6 @@
   let applyingIds = $state<Set<string>>(new Set());
   let applyProgress = $state<string | null>(null);
   let localFileInputRef = $state<HTMLInputElement | null>(null);
-  let previewManifest = $state<StarterWorkspaceManifest | null>(null);
-  let previewLoading = $state(false);
 
   function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null;
@@ -143,27 +137,6 @@
     return allStarters.find((s) => s.id === detailStarterId) ?? null;
   });
 
-  // Load file preview when detail view opens
-  $effect(() => {
-    if (detailStarter?.artifact) {
-      loadPreview(detailStarter);
-    } else {
-      previewManifest = null;
-    }
-  });
-
-  async function loadPreview(starter: StarterWorkspaceRegistryEntry): Promise<void> {
-    previewLoading = true;
-    previewManifest = null;
-    try {
-      previewManifest = await fetchStarterWorkspaceManifest(starter);
-    } catch {
-      // Preview is best-effort
-    } finally {
-      previewLoading = false;
-    }
-  }
-
   function triggerLocalImport(): void {
     localFileInputRef?.click();
   }
@@ -214,34 +187,30 @@
 
   async function handleApply(starter: DisplayStarter): Promise<void> {
     applyingIds = new Set([...applyingIds, starter.id]);
-    applyProgress = "Fetching starter content...";
+    applyProgress = "Downloading starter...";
 
     try {
-      const manifest = await fetchStarterWorkspaceManifest(starter);
+      const zipBlob = await fetchStarterWorkspaceZip(starter);
+      const zipFile = new File([zipBlob], "starter.zip", { type: "application/zip" });
+
+      applyProgress = "Importing starter content...";
       const backend = await getBackend();
-      const api = createApi(backend);
       const workspaceDir = backend.getWorkspacePath()
         .replace(/\/index\.md$/, "")
         .replace(/\/README\.md$/, "");
 
-      const runtime: StarterApplyRuntime = {
-        createWorkspace: (path, name) => api.createWorkspace(path, name),
-        findRootIndex: (dir) => api.findRootIndex(dir),
-        saveEntry: (path, content, rootIndexPath) => api.saveEntry(path, content, rootIndexPath),
-        saveTemplate: (name, content, wsPath) => api.saveTemplate(name, content, wsPath),
-      };
-
-      const result = await applyStarterWorkspace(
-        manifest,
+      const result = await backend.importFromZip(
+        zipFile,
         workspaceDir,
-        runtime,
-        (progress) => {
-          applyProgress = progress.message;
+        (uploaded, total) => {
+          if (total > 0) {
+            applyProgress = `Importing... ${Math.round((uploaded / total) * 100)}%`;
+          }
         },
       );
 
       toast.success(
-        `Applied starter "${starter.name}": ${result.filesCreated} files, ${result.templatesCreated} templates`,
+        `Applied starter "${starter.name}": ${result.files_imported} files imported`,
       );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to apply starter");
@@ -301,22 +270,12 @@
         </div>
       {/if}
 
-      {#if previewLoading}
-        <div class="flex items-center gap-2 text-xs text-muted-foreground">
-          <Loader2 class="size-3.5 animate-spin" />
-          Loading file tree...
-        </div>
-      {:else if previewManifest}
+      {#if starter.file_count > 0}
         <div class="space-y-1">
-          <h4 class="text-xs font-medium">File tree</h4>
-          <div class="rounded-md border p-2 text-[11px] space-y-0.5 max-h-[200px] overflow-y-auto">
-            {#each previewManifest.files as file}
-              <div class="flex items-center gap-1.5 text-muted-foreground">
-                <FileText class="size-3 shrink-0" />
-                <span class="font-mono truncate">{file.path}</span>
-              </div>
-            {/each}
-          </div>
+          <h4 class="text-xs font-medium">Contents</h4>
+          <p class="text-[11px] text-muted-foreground">
+            {starter.file_count} file{starter.file_count === 1 ? "" : "s"}{#if starter.includes_templates}, including templates{/if}
+          </p>
         </div>
       {/if}
 

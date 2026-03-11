@@ -190,7 +190,9 @@ export class WorkerBackendNew implements Backend {
           if (e instanceof DOMException && e.name === "SecurityError") {
             throw new FsaGestureRequiredError();
           }
-          throw new Error("Failed to open local folder. Please try again from Settings.");
+          throw new Error(
+            "Failed to open local folder. Please try again from Settings.",
+          );
         }
       } else {
         const permission = await (handle as any).queryPermission({
@@ -220,10 +222,7 @@ export class WorkerBackendNew implements Backend {
         }
       }
 
-      await this.remote.initWithDirectoryHandle(
-        port2 as any,
-        handle!,
-      );
+      await this.remote.initWithDirectoryHandle(port2 as any, handle!);
     } else {
       const resolvedName =
         workspaceName ||
@@ -343,7 +342,9 @@ export class WorkerBackendNew implements Backend {
             if (e instanceof DOMException && e.name === "SecurityError") {
               throw new FsaGestureRequiredError();
             }
-            throw new Error("Failed to open local folder. Please try again from Settings.");
+            throw new Error(
+              "Failed to open local folder. Please try again from Settings.",
+            );
           }
         } else {
           // Verify we still have permission

@@ -187,6 +187,48 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+function extractWorkspaceUpdateBase64(result: unknown): string | null {
+  if (!result || typeof result !== "object") {
+    return null;
+  }
+
+  const record = result as Record<string, unknown>;
+  if (typeof record.data === "string" && record.data.length > 0) {
+    return record.data;
+  }
+
+  if (record.data && typeof record.data === "object") {
+    const nested = record.data as Record<string, unknown>;
+    if (typeof nested.data === "string" && nested.data.length > 0) {
+      return nested.data;
+    }
+  }
+
+  return null;
+}
+
+function extractWorkspaceUpdateCommandType(command: unknown): string | null {
+  if (!command || typeof command !== "object") {
+    return null;
+  }
+
+  const record = command as Record<string, unknown>;
+  if (typeof record.type !== "string") {
+    return null;
+  }
+
+  if (record.type === "PluginCommand") {
+    const params = record.params;
+    if (!params || typeof params !== "object") {
+      return null;
+    }
+    const innerCommand = (params as Record<string, unknown>).command;
+    return typeof innerCommand === "string" ? innerCommand : null;
+  }
+
+  return record.type;
+}
+
 async function getRuntimeContextSnapshot(): Promise<Record<string, unknown>> {
   const [
     authModule,
@@ -414,6 +456,11 @@ class BrowserSyncTransportController {
     this.callbacks = null;
   }
 
+  /** Return the workspace_id from the active connection, or null. */
+  getConnectedWorkspaceId(): string | null {
+    return this.connectRequest?.workspace_id ?? null;
+  }
+
   private normalizeServerBase(serverUrl: string): string {
     let base = serverUrl.trim().replace(/\/+$/, "");
     while (base.endsWith("/sync2") || base.endsWith("/sync")) {
@@ -507,8 +554,8 @@ class BrowserSyncTransportController {
           const idLen = arr[0];
           if (idLen > 0 && arr.length >= 1 + idLen) {
             const docId = new TextDecoder().decode(arr.slice(1, 1 + idLen));
-            if (docId.startsWith("body:")) {
-              console.debug(`[ws:recv] body doc_id=${docId} bytes=${arr.length}`);
+            if (docId.startsWith("body:") || docId.startsWith("workspace:")) {
+              console.debug(`[ws:recv] doc_id=${docId} bytes=${arr.length}`);
             }
           }
         }
@@ -564,8 +611,8 @@ class BrowserSyncTransportController {
         const idLen = data[0];
         if (idLen > 0 && data.length >= 1 + idLen) {
           const docId = new TextDecoder().decode(data.slice(1, 1 + idLen));
-          if (docId.startsWith("body:")) {
-            console.debug(`[ws:send] body doc_id=${docId} bytes=${data.length}`);
+          if (docId.startsWith("body:") || docId.startsWith("workspace:")) {
+            console.debug(`[ws:send] doc_id=${docId} bytes=${data.length}`);
           }
         }
       }
@@ -1313,6 +1360,48 @@ export async function loadBrowserPlugin(
   }
 
   const transport = new BrowserSyncTransportController();
+  async function emitWorkspaceUpdateFromCommand(command: unknown, result: unknown): Promise<void> {
+    const commandType = extractWorkspaceUpdateCommandType(command);
+
+    if (commandType !== "TriggerWorkspaceSync" && commandType !== "CreateWorkspaceUpdate") {
+      return;
+    }
+
+    const base64Data = extractWorkspaceUpdateBase64(result);
+    if (!base64Data) {
+      return;
+    }
+
+    // The WASM plugin returns raw SyncMessage bytes. The sync server expects
+    // v2-framed messages: [u8: doc_id_len][doc_id_bytes][payload].
+    // Frame the workspace update with the proper workspace doc_id before sending.
+    const workspaceId = transport.getConnectedWorkspaceId();
+    console.debug(`[extism] emitWorkspaceUpdateFromCommand: commandType=${commandType} workspaceId=${workspaceId} base64Len=${base64Data.length}`);
+    if (!workspaceId) {
+      console.warn("[extism] emitWorkspaceUpdateFromCommand: no connected workspace_id, dropping update");
+      return;
+    }
+
+    const payloadBytes = base64ToBytes(base64Data);
+
+    const docId = `workspace:${workspaceId}`;
+    const docIdBytes = new TextEncoder().encode(docId);
+    const docIdLen = Math.min(docIdBytes.length, 255);
+    const framed = new Uint8Array(1 + docIdLen + payloadBytes.length);
+    framed[0] = docIdLen;
+    framed.set(docIdBytes.subarray(0, docIdLen), 1);
+    framed.set(payloadBytes, 1 + docIdLen);
+
+    // Re-encode as base64 for the transport's send_binary handler
+    const framedBase64 = bytesToBase64(framed);
+    console.debug(`[extism] emitWorkspaceUpdateFromCommand: sending framed ws update docId=${docId} payloadBytes=${payloadBytes.length} framedBytes=${framed.length} first3=[${payloadBytes[0]},${payloadBytes[1]},${payloadBytes[2]}]`);
+
+    await transport.handleRequest(JSON.stringify({
+      type: "send_binary",
+      data: framedBase64,
+    }));
+  }
+
   let activeCallGetFile: HostFunctionOptions["getFile"] | undefined;
   const effectiveHostOpts = hostOpts
     ? {
@@ -1468,6 +1557,7 @@ export async function loadBrowserPlugin(
             if (!output)
               return { success: false, error: "No response from plugin" };
             const response = output.json() as CommandResponse;
+            await emitWorkspaceUpdateFromCommand({ type: cmd }, response);
             console.debug(`[extism] ${manifest.id}: handle_command response`, {
               command: cmd,
               success: response.success,
@@ -1499,7 +1589,9 @@ export async function loadBrowserPlugin(
           if (!output) return null;
           const text = output.text();
           if (!text) return null;
-          return JSON.parse(text);
+          const parsed = JSON.parse(text);
+          await emitWorkspaceUpdateFromCommand(command, parsed);
+          return parsed;
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
           if (message.includes("Plugin state not initialized")) {

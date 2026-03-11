@@ -46,6 +46,12 @@
   import PluginSidebarPanel from "./components/PluginSidebarPanel.svelte";
   import { Share2, History, FolderTree, Globe } from "@lucide/svelte";
   import { getPluginStore } from "@/models/stores/pluginStore.svelte";
+  import {
+    collectTreePaths,
+    collectVisibleTreePaths,
+    getRenderableSidebarChildren,
+    getTreeSelectionRange,
+  } from "./leftSidebarSelection";
 
   interface Props {
     tree: TreeNode | null;
@@ -69,6 +75,7 @@
     onMoveEntry: (fromPath: string, toParentPath: string) => void;
     onCreateChildEntry: (parentPath: string) => void;
     onDeleteEntry: (path: string) => void;
+    onDeleteEntries?: (paths: string[]) => void;
     onExport: (path: string) => void;
     onOpenBackupImport?: () => void;
     onImportMarkdownFile?: () => void;
@@ -113,6 +120,7 @@
     onMoveEntry,
     onCreateChildEntry,
     onDeleteEntry,
+    onDeleteEntries,
     onExport,
     onOpenBackupImport,
     onImportMarkdownFile,
@@ -258,6 +266,47 @@
   });
 
   let selectedEntryPath = $derived(activeEntryPath ?? currentEntry?.path ?? null);
+  let selectedEntryPaths = $state(new Set<string>());
+  let selectionAnchorPath = $state<string | null>(null);
+  let visibleTreePaths = $derived(collectVisibleTreePaths(tree, expandedNodes));
+  let knownTreePaths = $derived(new Set(collectTreePaths(tree)));
+
+  $effect(() => {
+    if (selectedEntryPaths.size === 0 && selectedEntryPath) {
+      selectedEntryPaths = new Set([selectedEntryPath]);
+      selectionAnchorPath = selectedEntryPath;
+      return;
+    }
+
+    if (
+      selectedEntryPath &&
+      selectedEntryPaths.size === 1 &&
+      !selectedEntryPaths.has(selectedEntryPath)
+    ) {
+      selectedEntryPaths = new Set([selectedEntryPath]);
+      selectionAnchorPath = selectedEntryPath;
+    }
+  });
+
+  $effect(() => {
+    if (knownTreePaths.size === 0) {
+      if (!tree) {
+        selectedEntryPaths = new Set();
+        selectionAnchorPath = null;
+      }
+      return;
+    }
+
+    const filtered = new Set(
+      Array.from(selectedEntryPaths).filter((path) => knownTreePaths.has(path)),
+    );
+    if (filtered.size !== selectedEntryPaths.size) {
+      selectedEntryPaths = filtered;
+      if (selectionAnchorPath && !filtered.has(selectionAnchorPath)) {
+        selectionAnchorPath = Array.from(filtered)[0] ?? null;
+      }
+    }
+  });
 
   // Track which nodes are currently loading children
   let loadingNodes = $state(new Set<string>());
@@ -296,17 +345,7 @@
   // Render guard: filter placeholders and dedupe by path so keyed each blocks
   // never receive duplicate keys.
   function getRenderableChildren(node: TreeNode): TreeNode[] {
-    const seen = new Set<string>();
-    const children: TreeNode[] = [];
-
-    for (const child of node.children) {
-      if (child.name.startsWith('... (')) continue;
-      if (seen.has(child.path)) continue;
-      seen.add(child.path);
-      children.push(child);
-    }
-
-    return children;
+    return getRenderableSidebarChildren(node);
   }
 
   // Handle expand with lazy loading
@@ -994,7 +1033,89 @@
   let draggedPath: string | null = $state(null);
   let dropTargetPath: string | null = $state(null);
 
-  function handleEntryClick(path: string) {
+  function isMultiSelectGesture(event: MouseEvent): boolean {
+    return !mobileState.isMobile && !mobileState.isTouchDevice && (event.metaKey || event.ctrlKey);
+  }
+
+  function setSingleSelection(path: string) {
+    selectedEntryPaths = new Set([path]);
+    selectionAnchorPath = path;
+  }
+
+  function clearMultiSelection() {
+    if (selectedEntryPath) {
+      setSingleSelection(selectedEntryPath);
+      return;
+    }
+    selectedEntryPaths = new Set();
+    selectionAnchorPath = null;
+  }
+
+  function handleRangeSelection(path: string) {
+    const anchorPath =
+      selectionAnchorPath ??
+      selectedEntryPath ??
+      Array.from(selectedEntryPaths)[0] ??
+      path;
+    const range = getTreeSelectionRange(visibleTreePaths, anchorPath, path);
+    selectedEntryPaths = new Set(range);
+  }
+
+  function toggleSelection(path: string) {
+    const next = new Set(selectedEntryPaths);
+    if (next.has(path)) {
+      next.delete(path);
+    } else {
+      next.add(path);
+    }
+    if (next.size === 0) {
+      next.add(path);
+    }
+    selectedEntryPaths = next;
+    selectionAnchorPath = path;
+  }
+
+  function getDeleteTargets(targetPath?: string): string[] {
+    if (targetPath && selectedEntryPaths.has(targetPath)) {
+      return Array.from(selectedEntryPaths);
+    }
+    if (targetPath) {
+      return [targetPath];
+    }
+    return Array.from(selectedEntryPaths);
+  }
+
+  function handleDeleteSelection(targetPath?: string) {
+    const targets = getDeleteTargets(targetPath);
+    if (targets.length === 0) return;
+    if (targets.length > 1) {
+      onDeleteEntries?.(targets);
+      return;
+    }
+    onDeleteEntry(targets[0]);
+  }
+
+  function handleContextTarget(path: string) {
+    if (!selectedEntryPaths.has(path)) {
+      setSingleSelection(path);
+    }
+  }
+
+  function handleEntryClick(path: string, event?: MouseEvent) {
+    // Right-click is handled by oncontextmenu; ignore here to preserve multi-selection
+    if (event && event.button === 2) return;
+
+    if (event?.shiftKey && !mobileState.isMobile && !mobileState.isTouchDevice) {
+      handleRangeSelection(path);
+      return;
+    }
+
+    if (event && isMultiSelectGesture(event)) {
+      toggleSelection(path);
+      return;
+    }
+
+    setSingleSelection(path);
     onOpenEntry(path);
     // On mobile, collapse after selection
     if (window.innerWidth < 768) {
@@ -1200,6 +1321,22 @@
           </div>
         {:else}
           <!-- Tree View -->
+          {#if !mobileState.isMobile && !mobileState.isTouchDevice && selectedEntryPaths.size > 1}
+            <div class="mb-2 flex items-center justify-between gap-2 rounded-md border border-sidebar-border bg-muted/50 px-2 py-1.5">
+              <p class="text-xs text-muted-foreground">
+                {selectedEntryPaths.size} selected
+              </p>
+              <Button
+                variant="ghost"
+                size="sm"
+                class="h-7 gap-1 px-2"
+                onclick={clearMultiSelection}
+              >
+                <X class="size-3.5" />
+                Deselect
+              </Button>
+            </div>
+          {/if}
           <div class="space-y-0.5" role="tree" aria-label="Workspace entries">
             {@render treeNode(tree, 0)}
           </div>
@@ -1723,7 +1860,7 @@
         class="select-none"
         role="treeitem"
         tabindex={0}
-        aria-selected={selectedEntryPath === node.path}
+        aria-selected={selectedEntryPaths.has(node.path)}
         aria-expanded={node.children.length > 0
           ? expandedNodes.has(node.path)
           : undefined}
@@ -1732,6 +1869,7 @@
         ondragstart={(e) => handleDragStart(e, node.path)}
         ondragend={handleDragEnd}
         oncontextmenu={(e) => {
+          handleContextTarget(node.path);
           if (contextMenuOwner) {
             e.preventDefault();
             openPluginOwnedContextMenu({ path: node.path, name: node.name, hasChildren: node.children.length > 0 });
@@ -1781,11 +1919,15 @@
           {/if}
           <button
             type="button"
-            class="flex-1 min-w-0 flex items-center gap-2 py-1.5 pr-2 text-sm text-left rounded-md transition-colors hover:bg-sidebar-accent active:bg-sidebar-accent {selectedEntryPath ===
-            node.path
+            class="flex-1 min-w-0 flex items-center gap-2 py-1.5 pr-2 text-sm text-left rounded-md transition-colors hover:bg-sidebar-accent active:bg-sidebar-accent {selectedEntryPaths.has(
+            node.path,
+          )
               ? 'text-sidebar-primary font-medium bg-sidebar-accent'
-              : 'text-sidebar-foreground'}"
-            onclick={() => handleEntryClick(node.path)}
+              : selectedEntryPath === node.path
+                ? 'text-sidebar-primary bg-sidebar-accent/70'
+                : 'text-sidebar-foreground'}"
+            onpointerdown={(e) => { if (e.button === 2) e.preventDefault(); }}
+            onclick={(event) => handleEntryClick(node.path, event)}
           >
             {#if node.children.length > 0}
               <Folder class="size-4 shrink-0 text-muted-foreground" />
@@ -1973,6 +2115,7 @@
               class="p-1.5 rounded-md hover:bg-sidebar-accent-foreground/10 transition-colors shrink-0"
               onclick={(e) => {
                 e.stopPropagation();
+                handleContextTarget(node.path);
                 if (contextMenuOwner) {
                   openPluginOwnedContextMenu({ path: node.path, name: node.name, hasChildren: node.children.length > 0 });
                 } else {
@@ -1997,77 +2140,98 @@
     </ContextMenu.Trigger>
 
     {#if !contextMenuOwner}
+      {@const isMultiSelected = selectedEntryPaths.size > 1 && selectedEntryPaths.has(node.path)}
+      {@const deleteTargets = getDeleteTargets(node.path)}
       <ContextMenu.Content class="w-56">
-        <ContextMenu.Item onclick={() => onCreateChildEntry(node.path)}>
-          <Plus class="size-4 mr-2" />
-          New Entry Here
-        </ContextMenu.Item>
+        {#if isMultiSelected}
+          <!-- Multi-select context menu -->
+          <ContextMenu.Item
+            class="text-destructive focus:text-destructive"
+            onclick={() => handleDeleteSelection(node.path)}
+          >
+            <Trash2 class="size-4 mr-2" />
+            Delete Selected ({deleteTargets.length})
+          </ContextMenu.Item>
 
-        {#if onRenameEntry}
-          <ContextMenu.Item onclick={() => handleRenameClick(node.path, node.name)}>
-            <Pencil class="size-4 mr-2" />
-            Rename
+          <ContextMenu.Separator />
+
+          <ContextMenu.Item onclick={clearMultiSelection}>
+            <X class="size-4 mr-2" />
+            Deselect
+          </ContextMenu.Item>
+        {:else}
+          <!-- Single entry context menu -->
+          <ContextMenu.Item onclick={() => onCreateChildEntry(node.path)}>
+            <Plus class="size-4 mr-2" />
+            New Entry Here
+          </ContextMenu.Item>
+
+          {#if onRenameEntry}
+            <ContextMenu.Item onclick={() => handleRenameClick(node.path, node.name)}>
+              <Pencil class="size-4 mr-2" />
+              Rename
+            </ContextMenu.Item>
+          {/if}
+
+          {#if onDuplicateEntry}
+            <ContextMenu.Item onclick={() => handleDuplicate(node.path)}>
+              <Copy class="size-4 mr-2" />
+              Duplicate
+            </ContextMenu.Item>
+          {/if}
+
+          {#if api}
+            <ContextMenu.Item onclick={() => handleMoveToClick(node.path)}>
+              <FolderInput class="size-4 mr-2" />
+              Move to...
+            </ContextMenu.Item>
+          {/if}
+
+          {#if onSetAudience}
+            <ContextMenu.Item onclick={() => onSetAudience(node.path)}>
+              <CircleUser class="size-4 mr-2" />
+              Set Audience...
+            </ContextMenu.Item>
+          {/if}
+
+          <ContextMenu.Separator />
+
+          <ContextMenu.Item onclick={() => onExport(node.path)}>
+            <Download class="size-4 mr-2" />
+            Export...
+          </ContextMenu.Item>
+
+          {#if onValidate}
+            <ContextMenu.Item onclick={() => onValidate(node.path)}>
+              <SearchCheck class="size-4 mr-2" />
+              Validate
+            </ContextMenu.Item>
+          {/if}
+
+          {#if onImportMarkdownFile}
+            <ContextMenu.Item onclick={() => onImportMarkdownFile()}>
+              <FolderInput class="size-4 mr-2" />
+              Import Markdown File
+            </ContextMenu.Item>
+          {/if}
+
+          {#if onOpenBackupImport}
+            <ContextMenu.Item onclick={() => onOpenBackupImport()}>
+              <Settings class="size-4 mr-2" />
+              Download Backup ZIP
+            </ContextMenu.Item>
+          {/if}
+
+          <ContextMenu.Separator />
+
+          <ContextMenu.Item
+            class="text-destructive focus:text-destructive"
+            onclick={() => handleDeleteSelection(node.path)}
+          >
+            <Trash2 class="size-4 mr-2" />
+            Delete
           </ContextMenu.Item>
         {/if}
-
-        {#if onDuplicateEntry}
-          <ContextMenu.Item onclick={() => handleDuplicate(node.path)}>
-            <Copy class="size-4 mr-2" />
-            Duplicate
-          </ContextMenu.Item>
-        {/if}
-
-        {#if api}
-          <ContextMenu.Item onclick={() => handleMoveToClick(node.path)}>
-            <FolderInput class="size-4 mr-2" />
-            Move to...
-          </ContextMenu.Item>
-        {/if}
-
-        {#if onSetAudience}
-          <ContextMenu.Item onclick={() => onSetAudience(node.path)}>
-            <CircleUser class="size-4 mr-2" />
-            Set Audience...
-          </ContextMenu.Item>
-        {/if}
-
-        <ContextMenu.Separator />
-
-        <ContextMenu.Item onclick={() => onExport(node.path)}>
-          <Download class="size-4 mr-2" />
-          Export...
-        </ContextMenu.Item>
-
-        {#if onValidate}
-          <ContextMenu.Item onclick={() => onValidate(node.path)}>
-            <SearchCheck class="size-4 mr-2" />
-            Validate
-          </ContextMenu.Item>
-        {/if}
-
-        {#if onImportMarkdownFile}
-          <ContextMenu.Item onclick={() => onImportMarkdownFile()}>
-            <FolderInput class="size-4 mr-2" />
-            Import Markdown File
-          </ContextMenu.Item>
-        {/if}
-
-        {#if onOpenBackupImport}
-          <ContextMenu.Item onclick={() => onOpenBackupImport()}>
-            <Settings class="size-4 mr-2" />
-            Download Backup ZIP
-          </ContextMenu.Item>
-        {/if}
-
-        <ContextMenu.Separator />
-
-        <ContextMenu.Item
-          class="text-destructive focus:text-destructive"
-          onclick={() => onDeleteEntry(node.path)}
-        >
-          <Trash2 class="size-4 mr-2" />
-          Delete
-        </ContextMenu.Item>
       </ContextMenu.Content>
     {/if}
   </ContextMenu.Root>

@@ -139,8 +139,7 @@ function normalizePluginEventPath(path: string): string {
   return path
     .replace(/\\/g, "/")
     .replace(/\/+/g, "/")
-    .replace(/^\.\//, "")
-    .replace(/^\/+/, "");
+    .replace(/^\.\//, "");
 }
 
 function invalidateEditorExtensions(): void {

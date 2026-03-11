@@ -4,8 +4,8 @@
 //! content source. Implementations can read from the local filesystem, from
 //! CRDT state, or from any other storage backend.
 //!
-//! Two planned implementations:
-//! - `FilesystemContentProvider` (in `diaryx_publish`) — reads local files
+//! Two implementations:
+//! - `FilesystemContentProvider` (in this module's sibling `fs_content_provider`) — reads local files
 //! - `CrdtContentProvider` (in `diaryx_sync`, feature "server") — reads CRDT state
 
 use std::collections::HashMap;

@@ -12,6 +12,7 @@
 
 import { tick } from 'svelte';
 import type { EntryData, TreeNode, Api, CreateChildResult } from '../lib/backend';
+import { getBackend } from '../lib/backend';
 import type { JsonValue } from '../lib/backend/generated/serde_json/JsonValue';
 import { entryStore, uiStore, collaborationStore } from '../models/stores';
 import {
@@ -20,9 +21,22 @@ import {
 } from '../models/services';
 import { dispatchFileOpenedEvent } from '../lib/plugins/browserPluginManager.svelte';
 
+function toSyncOpenPath(workspacePath: string, path: string): string {
+  const workspaceDir = workspacePath
+    .replace(/\/index\.md$/, '')
+    .replace(/\/README\.md$/, '');
+  const normalizedPath = path.replace(/\\/g, '/');
+  if (workspaceDir && normalizedPath.startsWith(`${workspaceDir}/`)) {
+    return normalizedPath.substring(workspaceDir.length + 1);
+  }
+  return normalizedPath.replace(/^\/+/, '');
+}
+
 // Sync/body orchestration is plugin-owned; host keeps local filesystem workflows.
 async function ensureBodySync(path: string): Promise<void> {
-  await dispatchFileOpenedEvent(path);
+  const backend = await getBackend();
+  const syncPath = toSyncOpenPath(backend.getWorkspacePath(), path);
+  await dispatchFileOpenedEvent(syncPath);
 }
 function closeBodySync(_path: string): void {}
 

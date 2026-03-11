@@ -61,12 +61,11 @@ Diaryx Monorepo - README/repo for the Diaryx project - README.md
 │   │       ├── Entry module - Entry manipulation functionality - crates/diaryx_core/src/entry/README.md
 │   │       ├── Filesystem module - Filesystem abstraction layer - crates/diaryx_core/src/fs/README.md
 │   │       ├── crates/diaryx_core/src/plugin/README.md
-│   │       ├── Publish module - ContentProvider trait — shared publish abstractions - crates/diaryx_core/src/publish/README.md
+│   │       ├── Publish module - Format-agnostic publishing pipeline - crates/diaryx_core/src/publish/README.md
 │   │       ├── Utils module - Utility functions for date and path handling - crates/diaryx_core/src/utils/README.md
 │   │       ├── Workspace module - Workspace tree organization - crates/diaryx_core/src/workspace/README.md
 │   │       └── Import module - Import external formats into Diaryx entries - crates/diaryx_core/src/import/README.md
 │   ├── crates/diaryx_daily/README.md
-│   ├── diaryx_publish - Publishing pipeline for Diaryx workspaces — converts markdown to HTML - crates/diaryx_publish/README.md
 │   ├── diaryx_wasm - WASM bindings for diaryx_core - crates/diaryx_wasm/README.md
 │   │   └── diaryx_wasm src - Source code for WASM bindings - crates/diaryx_wasm/src/README.md
 │   ├── diaryx_sync_server - Sync server used by frontends - crates/diaryx_sync_server/README.md
@@ -92,7 +91,6 @@ Read the root README.md first. For specific projects, use these entry points:
 | Core library     | crates/diaryx_core/README.md        |
 | Daily domain     | crates/diaryx_daily/README.md       |
 | Templating       | crates/diaryx_templating/README.md  |
-| Publish pipeline | crates/diaryx_publish/README.md     |
 | CLI              | crates/diaryx/README.md             |
 | Web app          | apps/web/README.md                  |
 | Tauri app        | apps/tauri/README.md                |

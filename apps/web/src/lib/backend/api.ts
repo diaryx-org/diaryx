@@ -149,9 +149,9 @@ export function createApi(backend: Backend) {
 
       if (effectivePath !== path) {
         await dispatchFileMovedEvent(path, effectivePath);
-        await mirrorWorkspaceMutation();
       }
       await dispatchFileSavedEvent(effectivePath);
+      await mirrorWorkspaceMutation();
 
       return newPath;
     },

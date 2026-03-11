@@ -139,9 +139,27 @@ fn get_filename(path: &Path) -> Result<String> {
         .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "Invalid filename"))
 }
 
-/// Convert opfs error to io::Error
+/// Convert opfs error to io::Error, mapping DOMException `NotFoundError` to
+/// `ErrorKind::NotFound` so callers can distinguish missing files from other failures.
 fn opfs_to_io_error(e: persistent::Error) -> Error {
-    Error::new(ErrorKind::Other, format!("{:?}", e))
+    let msg = format!("{:?}", e);
+    let kind = if is_not_found_js_error(&e) {
+        ErrorKind::NotFound
+    } else {
+        ErrorKind::Other
+    };
+    Error::new(kind, msg)
+}
+
+/// Check if a `JsValue` represents a DOMException with name `"NotFoundError"`.
+fn is_not_found_js_error(val: &JsValue) -> bool {
+    use wasm_bindgen::JsCast;
+    if let Some(exc) = val.dyn_ref::<web_sys::DomException>() {
+        return exc.name() == "NotFoundError";
+    }
+    // Fallback: inspect the debug representation
+    let s = format!("{:?}", val);
+    s.contains("NotFoundError")
 }
 
 // ============================================================================

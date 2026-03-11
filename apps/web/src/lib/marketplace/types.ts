@@ -99,11 +99,6 @@ export interface TemplateRegistryEntry {
   preview: string | null;
 }
 
-export interface StarterWorkspaceFile {
-  path: string;
-  content: string;
-}
-
 export interface StarterWorkspaceRegistryEntry {
   kind: "starter-workspace";
   id: string;

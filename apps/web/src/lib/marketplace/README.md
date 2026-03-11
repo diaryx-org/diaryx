@@ -34,4 +34,4 @@ entries assembled into a generated `registry.md` and published to CDN-backed R2.
 | `templateRegistry.ts` | Trusted curated template registry client (`registry.md` parser + validation + cache). |
 | `templateInstall.ts` | Template install service (fetch artifact, save to workspace `_templates/` via templating plugin). |
 | `starterWorkspaceRegistry.ts` | Trusted curated starter workspace registry client (`registry.md` parser + validation + cache). |
-| `starterWorkspaceApply.ts` | Starter workspace apply service (fetch manifest, create files + templates in workspace with progress). |
+| `starterWorkspaceApply.ts` | Starter workspace fetch service (downloads ZIP artifact from CDN for import via `backend.importFromZip()`). |

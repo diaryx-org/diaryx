@@ -4,8 +4,8 @@ use crate::sync_v2::StorageCache;
 use base64::Engine;
 use diaryx_core::export::{ExcludedFile, ExclusionReason, Exporter};
 use diaryx_core::fs::{RealFileSystem, SyncToAsyncFs};
+use diaryx_core::publish::{PublishOptions, Publisher};
 use diaryx_core::workspace::Workspace;
-use diaryx_publish::{PublishOptions, Publisher};
 use diaryx_sync::{BodyDocManager, MaterializedFile, WorkspaceCrdt, materialize_workspace};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
@@ -329,8 +329,9 @@ pub async fn publish_workspace_to_r2(
         std::fs::create_dir_all(&output_dir)
             .map_err(|e| format!("failed to create audience output dir: {}", e))?;
 
-        let renderer = diaryx_publish::NoopBodyRenderer;
-        let publisher = Publisher::new(SyncToAsyncFs::new(RealFileSystem), &renderer);
+        let renderer = diaryx_core::publish::NoopBodyRenderer;
+        let format = diaryx_core::publish::HtmlFormat;
+        let publisher = Publisher::new(SyncToAsyncFs::new(RealFileSystem), &renderer, &format);
         let options = PublishOptions {
             single_file: false,
             title: None,

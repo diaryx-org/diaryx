@@ -55,8 +55,8 @@ pub struct PublishedPage {
     pub dest_filename: String,
     /// Page title
     pub title: String,
-    /// HTML content (body only, no wrapper)
-    pub html_body: String,
+    /// Rendered content in the output format (body only, no wrapper)
+    pub rendered_body: String,
     /// Original markdown body
     pub markdown_body: String,
     /// Navigation links to children (from contents property)

@@ -55,9 +55,7 @@
   } from "$lib/marketplace/starterWorkspaceRegistry";
   import type { StarterWorkspaceRegistryEntry } from "$lib/marketplace/types";
   import {
-    fetchStarterWorkspaceManifest,
-    applyStarterWorkspace,
-    type StarterApplyRuntime,
+    fetchStarterWorkspaceZip,
   } from "$lib/marketplace/starterWorkspaceApply";
 
   interface Props {
@@ -435,34 +433,34 @@
     const wsPath = await resolveWorkspaceDirectoryForCreate(wsName);
     const localWs = createLocalWorkspace(wsName, undefined, wsPath);
     await switchWorkspace(localWs.id, localWs.name);
-    await ensureRootIndexForCurrentWorkspace(localWs.name, localWs.path);
 
-    // If a starter workspace is selected, apply its content
+    // If a starter workspace is selected, apply its content by importing the
+    // ZIP archive. The ZIP contains markdown files with proper part_of/contents
+    // frontmatter already set, so no hierarchy recalculation is needed.
+    // Skip ensureRootIndexForCurrentWorkspace — the starter provides its own
+    // root index.
     if (selectedStarter) {
-      progressMessage = "Applying starter content...";
-      const manifest = await fetchStarterWorkspaceManifest(selectedStarter);
+      progressMessage = "Downloading starter workspace...";
+      const zipBlob = await fetchStarterWorkspaceZip(selectedStarter);
+      const zipFile = new File([zipBlob], "starter.zip", { type: "application/zip" });
+
+      progressMessage = "Importing starter content...";
       const backend = await getBackend();
-      const api = createApi(backend);
       const workspaceDir = backend.getWorkspacePath()
         .replace(/\/index\.md$/, '')
         .replace(/\/README\.md$/, '');
 
-      const runtime: StarterApplyRuntime = {
-        createWorkspace: (path, name) => api.createWorkspace(path, name),
-        findRootIndex: (dir) => api.findRootIndex(dir),
-        saveEntry: (path, content, rootIndexPath) => api.saveEntry(path, content, rootIndexPath),
-        saveTemplate: (name, content, wsPath) => api.saveTemplate(name, content, wsPath),
-      };
-
-      await applyStarterWorkspace(
-        manifest,
+      await backend.importFromZip(
+        zipFile,
         workspaceDir,
-        runtime,
-        (progress) => {
-          importProgress = Math.round(progress.percent * (selectedProviderId ? 0.1 : 1));
-          progressMessage = progress.message;
+        (uploaded, total) => {
+          importProgress = total > 0
+            ? Math.round((uploaded / total) * (selectedProviderId ? 10 : 100))
+            : 0;
         },
       );
+    } else {
+      await ensureRootIndexForCurrentWorkspace(localWs.name, localWs.path);
     }
 
     importProgress = selectedProviderId ? 10 : 100;
@@ -591,7 +589,7 @@
       </Dialog.Description>
     </Dialog.Header>
 
-    <div class="py-4 space-y-4">
+    <div class="py-4 space-y-4 max-h-[60vh] overflow-y-auto">
       <!-- Error message -->
       {#if error}
         <div class="flex items-center gap-2 text-destructive text-sm p-3 bg-destructive/10 rounded-md">

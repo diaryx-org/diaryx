@@ -22,6 +22,7 @@ attachments:
   - "[utils.ts](/apps/web/src/lib/utils.ts)"
   - "[credentials.ts](/apps/web/src/lib/credentials.ts)"
   - "[mobileSwipe.ts](/apps/web/src/lib/mobileSwipe.ts)"
+  - "[leftSidebarSelection.ts](/apps/web/src/lib/leftSidebarSelection.ts)"
   - "[wasm-stub.js](/apps/web/src/lib/wasm-stub.js)"
   - "[CommandPalette.svelte](/apps/web/src/lib/CommandPalette.svelte)"
   - "[Editor.svelte](/apps/web/src/lib/Editor.svelte)"
@@ -44,23 +45,23 @@ Shared libraries, components, and utilities for the web application.
 
 ## Structure
 
-| Directory     | Purpose                                |
-| ------------- | -------------------------------------- |
-| `auth/`       | Authentication services and stores     |
-| `backend/`    | Backend abstraction layer (WASM/Tauri) |
-| `components/` | Reusable Svelte components             |
-| `device/`     | Device identification                  |
-| `extensions/` | TipTap editor extensions               |
-| `history/`    | Version history components             |
-| `hooks/`      | Svelte hooks                           |
-| `marketplace/`| Marketplace asset registry/apply logic (themes, typographies, bundles) |
-| `publish/`    | Publishing and export components       |
-| `settings/`   | Settings panel components              |
-| `share/`      | Share session components               |
-| `sync/`       | Sync plugin host-side adapters/services |
-| `storage/`    | Storage abstraction                    |
-| `stores/`     | Svelte stores                          |
-| `wasm/`       | Built WASM module                      |
+| Directory      | Purpose                                                                |
+| -------------- | ---------------------------------------------------------------------- |
+| `auth/`        | Authentication services and stores                                     |
+| `backend/`     | Backend abstraction layer (WASM/Tauri)                                 |
+| `components/`  | Reusable Svelte components                                             |
+| `device/`      | Device identification                                                  |
+| `extensions/`  | TipTap editor extensions                                               |
+| `history/`     | Version history components                                             |
+| `hooks/`       | Svelte hooks                                                           |
+| `marketplace/` | Marketplace asset registry/apply logic (themes, typographies, bundles) |
+| `publish/`     | Publishing and export components                                       |
+| `settings/`    | Settings panel components                                              |
+| `share/`       | Share session components                                               |
+| `sync/`        | Sync plugin host-side adapters/services                                |
+| `storage/`     | Storage abstraction                                                    |
+| `stores/`      | Svelte stores                                                          |
+| `wasm/`        | Built WASM module                                                      |
 
 ## Validation
 
@@ -189,6 +190,11 @@ keeps typing latency down in long notes.
   restore and transition races. Settings/Marketplace footer tooltips also
   blur their triggers on dialog close and require one pointer-leave before
   opening again.
+- `LeftSidebar.svelte` supports desktop multi-select (`Cmd`/`Ctrl` toggle,
+  `Shift` range) with a small bulk-action bar. Sidebar delete requests are
+  expanded to selected descendants and executed child-first so index entries
+  with non-empty `contents` can be removed from the UI without manual
+  leaf-by-leaf deletion.
 
 ## Plugin-Contributed Surfaces
 

@@ -22,6 +22,7 @@ import {
   clearInstalledPluginSource,
   setInstalledPluginSource,
 } from "$lib/plugins/pluginInstallSource.svelte";
+import { mirrorCurrentWorkspaceMutationToLinkedProviders } from "$lib/sync/browserWorkspaceMutationMirror";
 
 const PERMISSION_LABELS: Record<PermissionType, string> = {
   read_files: "Read files",
@@ -234,6 +235,27 @@ async function reviewAndInstall(
   return await platformInstall(bytes, fallbackName ?? pluginName, expectedPluginId);
 }
 
+async function bootstrapLinkedWorkspaceSyncState(): Promise<void> {
+  if (isTauri()) {
+    return;
+  }
+
+  const backend = await getBackend();
+  const api = createApi(backend);
+
+  await mirrorCurrentWorkspaceMutationToLinkedProviders({
+    backend: {
+      getWorkspacePath: () => backend.getWorkspacePath(),
+      resolveRootIndex: async (workspacePath) => {
+        const finder = (backend as { findRootIndex?: (path: string) => Promise<string> }).findRootIndex;
+        return typeof finder === "function" ? await finder(workspacePath) : workspacePath;
+      },
+    },
+    runPluginCommand: async (pluginId, command, params = null) =>
+      await api.executePluginCommand(pluginId, command, params),
+  });
+}
+
 export async function installRegistryPlugin(
   plugin: RegistryPlugin,
 ): Promise<void> {
@@ -251,6 +273,9 @@ export async function installRegistryPlugin(
   await verifyRegistryArtifact(bytes, plugin.artifact.sha256);
   const installedPluginId = await reviewAndInstall(bytes, plugin.name, plugin.id);
   setInstalledPluginSource(installedPluginId ?? plugin.id, "registry");
+  await bootstrapLinkedWorkspaceSyncState().catch((error) => {
+    console.warn("[pluginInstallService] Failed to bootstrap linked workspace sync state:", error);
+  });
 }
 
 export async function installLocalPlugin(
@@ -265,4 +290,7 @@ export async function installLocalPlugin(
   if (installedPluginId) {
     setInstalledPluginSource(installedPluginId, "local");
   }
+  await bootstrapLinkedWorkspaceSyncState().catch((error) => {
+    console.warn("[pluginInstallService] Failed to bootstrap linked workspace sync state:", error);
+  });
 }

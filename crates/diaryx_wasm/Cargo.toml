@@ -38,6 +38,7 @@ futures = "0.3"
 
 # Web APIs for browser storage backends (gated behind "browser" feature)
 web-sys = { version = "0.3", optional = true, features = [
+  "DomException",
   "Navigator",
   "StorageManager",
   "WorkerGlobalScope",

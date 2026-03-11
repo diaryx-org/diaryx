@@ -6,10 +6,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::fs::AsyncFileSystem;
+use crate::publish::content_provider::{ContentProvider, MaterializedFile};
+use crate::workspace::Workspace;
 use async_trait::async_trait;
-use diaryx_core::fs::AsyncFileSystem;
-use diaryx_core::publish::content_provider::{ContentProvider, MaterializedFile};
-use diaryx_core::workspace::Workspace;
 
 /// Content provider that reads files from a local filesystem.
 ///
@@ -64,14 +64,14 @@ impl<FS: AsyncFileSystem + Clone> ContentProvider for FilesystemContentProvider<
 async fn collect_tree_files<FS: AsyncFileSystem>(
     fs: &FS,
     workspace_dir: &Path,
-    node: &diaryx_core::workspace::TreeNode,
+    node: &crate::workspace::TreeNode,
     files: &mut Vec<MaterializedFile>,
 ) {
     let full_path = workspace_dir.join(&node.path);
     let path_str = node.path.to_string_lossy().replace('\\', "/");
 
     if let Ok(content) = fs.read_to_string(&full_path).await {
-        let frontmatter = match diaryx_core::frontmatter::parse_or_empty(&content) {
+        let frontmatter = match crate::frontmatter::parse_or_empty(&content) {
             Ok(parsed) => parsed
                 .frontmatter
                 .into_iter()

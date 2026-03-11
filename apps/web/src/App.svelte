@@ -10,6 +10,7 @@
     isSidebarSwipeEdgeStart,
   } from "$lib/mobileSwipe";
   import { createApi, type Api } from "./lib/backend/api";
+  import type { Backend } from "./lib/backend/interface";
   import type { JsonValue } from "./lib/backend/generated/serde_json/JsonValue";
   import { isIOS } from "$lib/hooks/useMobile.svelte";
   import { openOauthWindow } from "$lib/plugins/oauthWindow";
@@ -57,10 +58,20 @@
   } from "./models/stores/permissionStore.svelte";
   import { getTemplateContextStore } from "./lib/stores/templateContextStore.svelte";
   import { getAppearanceStore } from "./lib/stores/appearance.svelte";
+  import { mirrorCurrentWorkspaceMutationToLinkedProviders } from "$lib/sync/browserWorkspaceMutationMirror";
+  import {
+    expandDeleteSelection,
+    findTreeNode,
+    hasUnloadedSidebarChildren,
+    orderDeletePaths,
+    pruneNestedDeleteRoots,
+    selectionIncludesDescendants,
+    getRenderableSidebarChildren,
+  } from "./lib/leftSidebarSelection";
 
 
   // Import auth
-  import { initAuth, getCurrentWorkspace, verifyMagicLink, setServerUrl, refreshUserInfo, getAuthState, isAuthenticated, getWorkspaces, isSyncEnabled } from "./lib/auth";
+  import { initAuth, getCurrentWorkspace, verifyMagicLink, setServerUrl, refreshUserInfo, getAuthState, getWorkspaces, isSyncEnabled } from "./lib/auth";
   import { getLocalWorkspace, getLocalWorkspaces, getCurrentWorkspaceId, getWorkspaceStorageType, discoverOpfsWorkspaces, createLocalWorkspace, setCurrentWorkspaceId } from "$lib/storage/localWorkspaceRegistry.svelte";
 
   // Initialize theme store immediately
@@ -222,10 +233,13 @@
 
   // Add workspace dialog
   let showAddWorkspace = $state(false);
+  let justVerifiedMagicLink = false;
 
   // Delete confirmation dialog state
   let showDeleteConfirm = $state(false);
-  let pendingDeletePath = $state<string | null>(null);
+  let pendingDeletePaths = $state<string[]>([]);
+  let pendingDeleteIncludesDescendants = $state(false);
+  let isDeletingEntries = $state(false);
 
   // Generic plugin-hosted confirmation dialog state
   let showPluginConfirmDialog = $state(false);
@@ -252,9 +266,26 @@
   let showAudienceDialog = $state(false);
   let audienceDialogPath = $state<string | null>(null);
   let audienceDialogAudience = $state<string[] | null>(null);
-  let pendingDeleteName = $derived(
-    pendingDeletePath?.split('/').pop()?.replace('.md', '') ?? ''
-  );
+  let pendingDeleteName = $derived.by(() => {
+    if (pendingDeletePaths.length === 1) {
+      return pendingDeletePaths[0]?.split('/').pop()?.replace('.md', '') ?? '';
+    }
+    if (pendingDeletePaths.length > 1) {
+      return `${pendingDeletePaths.length} selected entries`;
+    }
+    return '';
+  });
+  let pendingDeleteDescription = $derived.by(() => {
+    if (pendingDeletePaths.length === 0) return "";
+    if (pendingDeletePaths.length === 1) {
+      return pendingDeleteIncludesDescendants
+        ? `Are you sure you want to delete "${pendingDeleteName}" and its descendants? This action cannot be undone.`
+        : `Are you sure you want to delete "${pendingDeleteName}"? This action cannot be undone.`;
+    }
+    return pendingDeleteIncludesDescendants
+      ? `Are you sure you want to delete ${pendingDeletePaths.length} selected entries and their descendants? This action cannot be undone.`
+      : `Are you sure you want to delete ${pendingDeletePaths.length} selected entries? This action cannot be undone.`;
+  });
 
   // Welcome screen (shown when no workspaces exist)
   let showWelcomeScreen = $state(false);
@@ -450,6 +481,8 @@
   }
 
   async function reloadWorkspaceScopedBrowserState(): Promise<void> {
+    const activeBackend = await getBackend();
+
     await Promise.all([
       themeStore.reloadFromWorkspace?.(),
       appearanceStore.reloadFromWorkspace?.(),
@@ -468,6 +501,23 @@
     await browserPlugins.loadAllPlugins().catch((e: unknown) =>
       console.warn('[App] Failed to load browser plugins:', e),
     );
+
+    await mirrorCurrentWorkspaceMutationToLinkedProviders({
+      backend: {
+        getWorkspacePath: () => activeBackend.getWorkspacePath(),
+        resolveRootIndex: async (workspacePath) => {
+          const finder = (activeBackend as { findRootIndex?: (path: string) => Promise<string> }).findRootIndex;
+          return typeof finder === "function" ? await finder(workspacePath) : workspacePath;
+        },
+      },
+      runPluginCommand: async (pluginId, command, params = null) => {
+        const api = createApi(activeBackend);
+        return await api.executePluginCommand(pluginId, command, params);
+      },
+    }).catch((e: unknown) =>
+      console.warn('[App] Failed to initialize linked workspace sync state:', e),
+    );
+
     getPluginStore().preloadInsertCommandIcons();
   }
 
@@ -487,6 +537,33 @@
       return path.substring(workspaceDir.length + 1);
     }
     return path;
+  }
+
+  function toPortableE2EPath(
+    backendInstance: { getWorkspacePath(): string },
+    path: string,
+  ): string {
+    const workspaceDir = getWorkspaceDirectoryPath(backendInstance);
+    if (workspaceDir && path.startsWith(`${workspaceDir}/`)) {
+      return path.substring(workspaceDir.length + 1);
+    }
+    return toCollaborationPath(path).replace(/^\/+/, "");
+  }
+
+  function resolveE2EPath(
+    backendInstance: { getWorkspacePath(): string },
+    path: string,
+  ): string {
+    const workspaceDir = getWorkspaceDirectoryPath(backendInstance);
+    if (!workspaceDir || !path) {
+      return path;
+    }
+    if (path.startsWith(`${workspaceDir}/`)) {
+      return path;
+    }
+
+    const relativePath = toCollaborationPath(path).replace(/^\/+/, "");
+    return relativePath ? `${workspaceDir}/${relativePath}` : workspaceDir;
   }
 
   type DiaryxE2EBridge = {
@@ -522,12 +599,8 @@
       && window.location.hostname === "localhost";
   }
 
-  async function getCurrentApiForE2E(): Promise<Api> {
-    return createApi(await getBackend());
-  }
-
   async function getCurrentBackendAndApiForE2E(): Promise<{
-    backendInstance: { getWorkspacePath(): string };
+    backendInstance: Backend;
     apiInstance: Api;
   }> {
     const backendInstance = await getBackend();
@@ -535,6 +608,92 @@
       backendInstance,
       apiInstance: createApi(backendInstance),
     };
+  }
+
+  async function getMaterializedEntryContentForE2E(
+    apiInstance: Api,
+    backendInstance: Backend,
+    path: string,
+  ): Promise<string | null> {
+    const relativePath = toPortableE2EPath(backendInstance, path);
+    const result = await apiInstance.executePluginCommand(
+      "diaryx.sync",
+      "MaterializeWorkspace",
+      {},
+    ) as { files?: Array<{ path?: string; content?: string } | string> };
+    const files = result?.files;
+    if (!Array.isArray(files)) {
+      console.debug(`[e2e:materialize] no files array in result, keys=${result ? Object.keys(result) : 'null'}`);
+      return null;
+    }
+
+    const filePaths = files.map((f) => typeof f === "string" ? f : f?.path).filter(Boolean);
+    console.debug(`[e2e:materialize] looking for "${relativePath}" in ${files.length} files: ${JSON.stringify(filePaths)}`);
+
+    for (const file of files) {
+      if (typeof file === "string") {
+        continue;
+      }
+      if (file?.path === relativePath && typeof file.content === "string") {
+        return file.content;
+      }
+    }
+    return null;
+  }
+
+  async function hydrateSyncedEntryForE2E(
+    apiInstance: Api,
+    backendInstance: Backend,
+    path: string,
+  ): Promise<boolean> {
+    if (await apiInstance.fileExists(path)) {
+      return true;
+    }
+
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const materializedContent = await getMaterializedEntryContentForE2E(
+        apiInstance,
+        backendInstance,
+        path,
+      );
+      if (materializedContent) {
+        await apiInstance.writeFile(path, materializedContent);
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    return false;
+  }
+
+  async function forceWorkspaceSyncForE2E(apiInstance: Api): Promise<void> {
+    const workspaceRoot = workspaceStore.tree?.path ?? ".";
+
+    try {
+      const initResult = await apiInstance.executePluginCommand("diaryx.sync", "InitializeWorkspaceCrdt", {
+        provider_id: "diaryx.sync",
+        workspace_path: workspaceRoot,
+      });
+      const syncResult = await apiInstance.executePluginCommand("diaryx.sync", "TriggerWorkspaceSync", {
+        provider_id: "diaryx.sync",
+      });
+      const materialized = await apiInstance.executePluginCommand(
+        "diaryx.sync",
+        "MaterializeWorkspace",
+        {},
+      ) as { files?: Array<{ path?: string } | string> };
+      const materializedFiles = Array.isArray(materialized?.files)
+        ? materialized.files.map((file) => typeof file === "string" ? file : file?.path).filter(Boolean)
+        : [];
+      console.debug(
+        `[e2e:sync] forceWorkspaceSync root=${workspaceRoot} init=${JSON.stringify(initResult)} sync=${JSON.stringify(syncResult)} files=${JSON.stringify(materializedFiles)}`,
+      );
+    } catch (error) {
+      console.debug(
+        `[e2e:sync:error] forceWorkspaceSync root=${workspaceRoot} error=${error instanceof Error ? error.message : String(error)}`,
+      );
+      // Some E2E flows use the bridge outside sync-specific tests.
+    }
   }
 
   function registerE2EBridge() {
@@ -548,34 +707,63 @@
       },
       async createEntryWithMarker(stem: string, marker: string): Promise<string> {
         const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
-        const workspaceDir = getWorkspaceDirectoryPath(backendInstance);
-        const entryPath = `${workspaceDir}/${stem}.md`;
-        const createdPath = await apiInstance.createEntry(entryPath);
-        await apiInstance.saveEntry(createdPath, marker, workspaceStore.tree?.path);
-        return createdPath;
+        const rootPath = workspaceStore.tree?.path;
+        if (!rootPath) {
+          throw new Error("No workspace root available for E2E child entry creation");
+        }
+
+        const childResult = await apiInstance.createChildEntry(rootPath);
+        let entryPath = childResult.child_path;
+        entryPath = await apiInstance.renameEntry(entryPath, `${stem}.md`);
+        await apiInstance.saveEntry(entryPath, marker, rootPath);
+        await forceWorkspaceSyncForE2E(apiInstance);
+        return toPortableE2EPath(backendInstance, entryPath);
       },
       async appendMarkerToEntry(path: string, marker: string): Promise<void> {
-        const apiInstance = await getCurrentApiForE2E();
-        const entry = await apiInstance.getEntry(path);
+        const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
+        const resolvedPath = resolveE2EPath(backendInstance, path);
+        const entry = await apiInstance.getEntry(resolvedPath);
         const newContent = entry.content ? `${entry.content}\n${marker}` : marker;
-        await apiInstance.saveEntry(path, newContent, workspaceStore.tree?.path);
+        await apiInstance.saveEntry(resolvedPath, newContent, workspaceStore.tree?.path);
+        await forceWorkspaceSyncForE2E(apiInstance);
       },
       async renameEntry(path: string, newFilename: string): Promise<string> {
-        return await (await getCurrentApiForE2E()).renameEntry(path, newFilename);
+        const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
+        const renamedPath = await apiInstance.renameEntry(resolveE2EPath(backendInstance, path), newFilename);
+        await forceWorkspaceSyncForE2E(apiInstance);
+        return toPortableE2EPath(backendInstance, renamedPath);
       },
       async moveEntryToParent(path: string, parentPath: string): Promise<string> {
-        return await (await getCurrentApiForE2E()).attachEntryToParent(path, parentPath);
+        const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
+        const movedPath = await apiInstance.attachEntryToParent(
+          resolveE2EPath(backendInstance, path),
+          resolveE2EPath(backendInstance, parentPath),
+        );
+        await forceWorkspaceSyncForE2E(apiInstance);
+        return toPortableE2EPath(backendInstance, movedPath);
       },
       async createIndexEntry(stem: string): Promise<string> {
         const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
-        const workspaceDir = getWorkspaceDirectoryPath(backendInstance);
-        const entryPath = `${workspaceDir}/${stem}.md`;
-        const createdPath = await apiInstance.createEntry(entryPath);
-        return await apiInstance.convertToIndex(createdPath);
+        const rootPath = workspaceStore.tree?.path;
+        if (!rootPath) {
+          throw new Error("No workspace root available for E2E index entry creation");
+        }
+
+        const childResult = await apiInstance.createChildEntry(rootPath);
+        let entryPath = childResult.child_path;
+        entryPath = await apiInstance.renameEntry(entryPath, `${stem}.md`);
+        const convertedPath = await apiInstance.convertToIndex(entryPath);
+        await forceWorkspaceSyncForE2E(apiInstance);
+        return toPortableE2EPath(backendInstance, convertedPath);
       },
       async readEntryBody(path: string): Promise<string | null> {
         try {
-          const entry = await (await getCurrentApiForE2E()).getEntry(path);
+          const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
+          const resolvedPath = resolveE2EPath(backendInstance, path);
+          if (!(await apiInstance.fileExists(resolvedPath))) {
+            await hydrateSyncedEntryForE2E(apiInstance, backendInstance, resolvedPath);
+          }
+          const entry = await apiInstance.getEntry(resolvedPath);
           return entry.content ?? null;
         } catch {
           return null;
@@ -583,29 +771,50 @@
       },
       async readFrontmatter(path: string): Promise<Record<string, unknown> | null> {
         try {
-          const entry = await (await getCurrentApiForE2E()).getEntry(path);
+          const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
+          const resolvedPath = resolveE2EPath(backendInstance, path);
+          if (!(await apiInstance.fileExists(resolvedPath))) {
+            await hydrateSyncedEntryForE2E(apiInstance, backendInstance, resolvedPath);
+          }
+          const entry = await apiInstance.getEntry(resolvedPath);
           return entry.frontmatter ?? null;
         } catch {
           return null;
         }
       },
       async entryExists(path: string): Promise<boolean> {
-        return await (await getCurrentApiForE2E()).fileExists(path);
+        const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
+        const resolvedPath = resolveE2EPath(backendInstance, path);
+        if (await apiInstance.fileExists(resolvedPath)) {
+          return true;
+        }
+        return await hydrateSyncedEntryForE2E(apiInstance, backendInstance, resolvedPath);
       },
       async setFrontmatterProperty(path: string, key: string, value: unknown): Promise<string | null> {
-        return await (await getCurrentApiForE2E()).setFrontmatterProperty(
-          path,
+        const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
+        const updatedPath = await apiInstance.setFrontmatterProperty(
+          resolveE2EPath(backendInstance, path),
           key,
           value as JsonValue,
           workspaceStore.tree?.path,
         );
+        await forceWorkspaceSyncForE2E(apiInstance);
+        return updatedPath ? toPortableE2EPath(backendInstance, updatedPath) : updatedPath;
       },
       async deleteEntry(path: string): Promise<boolean> {
-        const apiInstance = await getCurrentApiForE2E();
-        return await deleteEntryWithSync(apiInstance, path, null);
+        const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
+        const deleted = await deleteEntryWithSync(apiInstance, resolveE2EPath(backendInstance, path), null);
+        if (deleted) {
+          await forceWorkspaceSyncForE2E(apiInstance);
+        }
+        return deleted;
       },
       async openEntryForSync(path: string): Promise<void> {
-        await browserPlugins.dispatchFileOpenedEvent(path);
+        const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
+        const resolvedPath = resolveE2EPath(backendInstance, path);
+        const syncPath = toPortableE2EPath(backendInstance, resolvedPath);
+        await browserPlugins.dispatchFileOpenedEvent(syncPath);
+        await hydrateSyncedEntryForE2E(apiInstance, backendInstance, resolvedPath);
       },
       async listSyncedFiles(): Promise<string[]> {
         try {
@@ -638,21 +847,30 @@
         permissionStore.setAutoAllow(enabled);
       },
       async uploadAttachment(entryPath: string, filename: string, dataBase64: string): Promise<string> {
-        const apiInstance = await getCurrentApiForE2E();
+        const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
         const binary = atob(dataBase64);
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i += 1) {
           bytes[i] = binary.charCodeAt(i);
         }
-        return await apiInstance.uploadAttachment(entryPath, filename, bytes);
+        const attachmentPath = await apiInstance.uploadAttachment(
+          resolveE2EPath(backendInstance, entryPath),
+          filename,
+          bytes,
+        );
+        await forceWorkspaceSyncForE2E(apiInstance);
+        return attachmentPath;
       },
       async getAttachments(entryPath: string): Promise<string[]> {
-        const apiInstance = await getCurrentApiForE2E();
-        return await apiInstance.getAttachments(entryPath);
+        const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
+        return await apiInstance.getAttachments(resolveE2EPath(backendInstance, entryPath));
       },
       async getAttachmentData(entryPath: string, attachmentPath: string): Promise<number[]> {
-        const apiInstance = await getCurrentApiForE2E();
-        return await apiInstance.getAttachmentData(entryPath, attachmentPath);
+        const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
+        return await apiInstance.getAttachmentData(
+          resolveE2EPath(backendInstance, entryPath),
+          attachmentPath,
+        );
       },
       getPluginDiagnostics(): { loaded: string[]; enabled: string[] } {
         const pluginStore = getPluginStore();
@@ -810,7 +1028,8 @@
     void pluginManifestCount;
     void activeLocalWorkspaceId;
     if (!collaborationEnabled || !currentEntry?.path) return;
-    void browserPlugins.dispatchFileOpenedEvent(currentEntry.path);
+    const syncPath = toCollaborationPath(currentEntry.path);
+    void browserPlugins.dispatchFileOpenedEvent(syncPath);
   });
 
   $effect(() => {
@@ -894,6 +1113,7 @@
         }
         // Verify automatically and wait for completion before continuing
         await handleMagicLinkToken(token);
+        justVerifiedMagicLink = true;
       }
     }
 
@@ -1026,13 +1246,11 @@
       // Run initial validation
       await runValidation();
 
-      // Auto-open the sync wizard for clients where sync hasn't been configured yet
-      // but the server already has workspaces. This covers:
-      //   - New devices where the user clicked a magic link (token was in the URL)
-      //   - Returning authenticated sessions where sync setup was never completed
-      // The wizard auto-detects Scenario C (server has workspaces) and runs without
-      // user interaction, downloading the server workspace and enabling sync.
-      if (isAuthenticated() && getWorkspaces().length > 0 && !isSyncEnabled()) {
+      // Auto-open the sync wizard only when a magic link was just verified in this
+      // page load, the server already has workspaces, and sync hasn't been enabled yet.
+      // Previously this also fired on normal refreshes for any authenticated session
+      // without sync, causing the dialog to reappear on every reload.
+      if (justVerifiedMagicLink && getWorkspaces().length > 0 && !isSyncEnabled()) {
         showAddWorkspace = true;
       }
 
@@ -1957,33 +2175,118 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     return newPath;
   }
 
+  function openDeleteConfirm(paths: string[]) {
+    const uniquePaths = Array.from(new Set(paths));
+    pendingDeletePaths = uniquePaths;
+    pendingDeleteIncludesDescendants = selectionIncludesDescendants(
+      tree,
+      uniquePaths,
+    );
+    showDeleteConfirm = true;
+  }
+
+  async function loadDeleteSubtree(path: string, visited: Set<string>) {
+    if (visited.has(path)) return;
+    visited.add(path);
+
+    const existingNode = findTreeNode(tree, path);
+    if (!existingNode) return;
+
+    if (hasUnloadedSidebarChildren(existingNode)) {
+      await loadNodeChildren(path);
+    }
+
+    const refreshedNode = findTreeNode(tree, path);
+    if (!refreshedNode) return;
+
+    for (const child of getRenderableSidebarChildren(refreshedNode)) {
+      if (child.children.length > 0 || hasUnloadedSidebarChildren(child)) {
+        await loadDeleteSubtree(child.path, visited);
+      }
+    }
+  }
+
+  async function buildDeletePlan(paths: string[]): Promise<string[]> {
+    const deleteRoots = pruneNestedDeleteRoots(tree, paths);
+    const visited = new Set<string>();
+    for (const rootPath of deleteRoots) {
+      await loadDeleteSubtree(rootPath, visited);
+    }
+
+    return orderDeletePaths(tree, expandDeleteSelection(tree, deleteRoots));
+  }
+
   // Delete an entry - shows confirmation dialog, then delegates to controller
   async function handleDeleteEntry(path: string) {
     if (!api) return;
-    pendingDeletePath = path;
-    showDeleteConfirm = true;
+    openDeleteConfirm([path]);
+  }
+
+  async function handleDeleteEntries(paths: string[]) {
+    if (!api || paths.length === 0) return;
+    openDeleteConfirm(paths);
   }
 
   // Called when user confirms deletion in the dialog
   async function confirmDeleteEntry() {
-    const path = pendingDeletePath;
-    showDeleteConfirm = false;
-    pendingDeletePath = null;
-    if (!api || !path) return;
-    const parentPath = workspaceStore.getParentNodePath(path);
-    await deleteEntryWithSync(api, path, currentEntry?.path ?? null, async () => {
-      await refreshTree();
-      if (parentPath) {
-        await loadNodeChildren(parentPath);
+    if (!api || pendingDeletePaths.length === 0 || isDeletingEntries) return;
+
+    isDeletingEntries = true;
+    const requestedPaths = [...pendingDeletePaths];
+    const deleteRoots = pruneNestedDeleteRoots(tree, requestedPaths);
+    const parentPaths = new Set(
+      deleteRoots
+        .map((path) => workspaceStore.getParentNodePath(path))
+        .filter((path): path is string => Boolean(path)),
+    );
+
+    try {
+      const deletePlan = await buildDeletePlan(deleteRoots);
+      let deletedCount = 0;
+
+      for (const path of deletePlan) {
+        const deleted = await deleteEntryWithSync(
+          api,
+          path,
+          currentEntry?.path ?? null,
+        );
+        if (!deleted) break;
+        deletedCount++;
       }
-      await runValidation();
-    });
+
+      if (deletedCount > 0) {
+        await refreshTree();
+        for (const parentPath of parentPaths) {
+          await loadNodeChildren(parentPath);
+        }
+        await runValidation();
+      }
+
+      if (deletedCount === deletePlan.length && deletePlan.length > 0) {
+        toast.success(
+          deletePlan.length === 1
+            ? "Entry deleted"
+            : `Deleted ${deletePlan.length} entries`,
+        );
+      } else if (deletedCount > 0) {
+        toast.warning(
+          `Deleted ${deletedCount} of ${deletePlan.length} requested entries`,
+        );
+      }
+    } finally {
+      isDeletingEntries = false;
+      showDeleteConfirm = false;
+      pendingDeletePaths = [];
+      pendingDeleteIncludesDescendants = false;
+    }
   }
 
   // Called when user cancels deletion
   function cancelDeleteEntry() {
+    if (isDeletingEntries) return;
     showDeleteConfirm = false;
-    pendingDeletePath = null;
+    pendingDeletePaths = [];
+    pendingDeleteIncludesDescendants = false;
   }
 
   // Open audience dialog for a tree entry
@@ -2570,14 +2873,16 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
 <Dialog.Root bind:open={showDeleteConfirm} onOpenChange={(open) => { if (!open) cancelDeleteEntry(); }}>
   <Dialog.Content showCloseButton={false} class="sm:max-w-md">
     <Dialog.Header>
-      <Dialog.Title>Delete entry</Dialog.Title>
+      <Dialog.Title>{pendingDeletePaths.length > 1 ? "Delete entries" : "Delete entry"}</Dialog.Title>
       <Dialog.Description>
-        Are you sure you want to delete "{pendingDeleteName}"? This action cannot be undone.
+        {pendingDeleteDescription}
       </Dialog.Description>
     </Dialog.Header>
     <Dialog.Footer>
-      <Button variant="outline" onclick={cancelDeleteEntry}>Cancel</Button>
-      <Button variant="destructive" onclick={confirmDeleteEntry}>Delete</Button>
+      <Button variant="outline" onclick={cancelDeleteEntry} disabled={isDeletingEntries}>Cancel</Button>
+      <Button variant="destructive" onclick={confirmDeleteEntry} disabled={isDeletingEntries}>
+        {isDeletingEntries ? "Deleting..." : "Delete"}
+      </Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
@@ -2734,6 +3039,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     onMoveEntry={handleMoveEntry}
     onCreateChildEntry={handleCreateChildEntry}
     onDeleteEntry={handleDeleteEntry}
+    onDeleteEntries={handleDeleteEntries}
     onExport={(path) => {
       exportPath = path;
       showExportDialog = true;

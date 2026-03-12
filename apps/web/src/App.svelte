@@ -241,11 +241,54 @@
   // UI state - proxied from uiStore
   let leftSidebarCollapsed = $derived(uiStore.leftSidebarCollapsed);
   let rightSidebarCollapsed = $derived(uiStore.rightSidebarCollapsed);
+  let leftSidebarWidth = $derived(uiStore.leftSidebarWidth);
+  let rightSidebarWidth = $derived(uiStore.rightSidebarWidth);
   let showSettingsDialog = $derived(uiStore.showSettingsDialog);
   let showExportDialog = $derived(uiStore.showExportDialog);
   let showNewEntryModal = $derived(uiStore.showNewEntryModal);
   let exportPath = $derived(uiStore.exportPath);
   let editorRef = $derived(uiStore.editorRef);
+
+  // Sidebar resize state
+  let resizingSidebar = $state<'left' | 'right' | null>(null);
+  let resizeStartX = $state(0);
+  let resizeStartWidth = $state(0);
+
+  function onResizePointerDown(side: 'left' | 'right', e: PointerEvent) {
+    e.preventDefault();
+    resizingSidebar = side;
+    resizeStartX = e.clientX;
+    resizeStartWidth = side === 'left' ? leftSidebarWidth : rightSidebarWidth;
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  }
+
+  function onResizePointerMove(e: PointerEvent) {
+    if (!resizingSidebar) return;
+    const delta = resizingSidebar === 'left'
+      ? e.clientX - resizeStartX
+      : resizeStartX - e.clientX;
+    const newWidth = resizeStartWidth + delta;
+    if (resizingSidebar === 'left') {
+      uiStore.setLeftSidebarWidth(newWidth);
+    } else {
+      uiStore.setRightSidebarWidth(newWidth);
+    }
+  }
+
+  function onResizeDblClick(side: 'left' | 'right') {
+    if (side === 'left') {
+      uiStore.setLeftSidebarWidth(288);
+    } else {
+      uiStore.setRightSidebarWidth(288);
+    }
+  }
+
+  function onResizePointerUp(e: PointerEvent) {
+    if (resizingSidebar) {
+      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    }
+    resizingSidebar = null;
+  }
 
   // Right sidebar tab control (built-in tabs or plugin tab IDs)
   let requestedSidebarTab: string | null = $state(null);
@@ -3762,7 +3805,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     }}
   />
 {:else}
-<div class="flex h-full bg-background overflow-hidden">
+<div class="flex h-full bg-background overflow-hidden {resizingSidebar ? 'select-none cursor-col-resize' : ''}">
   <!-- Left Sidebar -->
   <LeftSidebar
     {tree}
@@ -3774,6 +3817,8 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     {showUnlinkedFiles}
     {api}
     collapsed={leftSidebarCollapsed}
+    sidebarWidth={leftSidebarWidth}
+    resizing={resizingSidebar === 'left'}
     onOpenEntry={openEntry}
     onToggleNode={toggleNode}
     onToggleCollapse={toggleLeftSidebar}
@@ -3827,6 +3872,20 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     onPluginHostAction={handlePluginHostAction}
   />
 
+  <!-- Left sidebar resize handle -->
+  {#if !leftSidebarCollapsed}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="hidden md:block w-1 shrink-0 cursor-col-resize select-none hover:bg-primary/20 active:bg-primary/30 transition-colors {resizingSidebar === 'left' ? 'bg-primary/30' : ''}"
+      onpointerdown={(e) => onResizePointerDown('left', e)}
+      onpointermove={onResizePointerMove}
+      onpointerup={onResizePointerUp}
+      ondblclick={() => onResizeDblClick('left')}
+      role="separator"
+      aria-orientation="vertical"
+    ></div>
+  {/if}
+
   <!-- Hidden file input for attachments (accepts all file types) -->
   <input
     type="file"
@@ -3876,7 +3935,7 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     {/if}
     {#if currentEntry}
       <!-- Mobile top navigation strip -->
-      <header class="flex items-center justify-between px-2 py-1.5 border-b border-border bg-background shrink-0 md:hidden">
+      <header class="flex items-center justify-between px-2 py-1.5 border-b border-border bg-background shrink-0 md:hidden select-none">
         <button
           type="button"
           class="p-2"
@@ -3964,10 +4023,26 @@ Entries can be nested in a hierarchy. Drag entries in the sidebar to rearrange, 
     {/if}
   </main>
 
+  <!-- Right sidebar resize handle -->
+  {#if !rightSidebarCollapsed}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="hidden md:block w-1 shrink-0 cursor-col-resize select-none hover:bg-primary/20 active:bg-primary/30 transition-colors {resizingSidebar === 'right' ? 'bg-primary/30' : ''}"
+      onpointerdown={(e) => onResizePointerDown('right', e)}
+      onpointermove={onResizePointerMove}
+      onpointerup={onResizePointerUp}
+      ondblclick={() => onResizeDblClick('right')}
+      role="separator"
+      aria-orientation="vertical"
+    ></div>
+  {/if}
+
   <!-- Right Sidebar (Properties & History) -->
   <RightSidebar
     entry={currentEntry}
     collapsed={rightSidebarCollapsed}
+    sidebarWidth={rightSidebarWidth}
+    resizing={resizingSidebar === 'right'}
     onToggleCollapse={toggleRightSidebar}
     onPropertyChange={handlePropertyChange}
     onPropertyRemove={handlePropertyRemove}

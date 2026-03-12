@@ -112,11 +112,13 @@ test.describe('Workspace Navigation', () => {
       return el && el.querySelectorAll('p').length >= 2
     }, { timeout: 3000 })
 
-    await page.keyboard.press('ArrowUp')
+    // Click at the end of the first paragraph to position cursor reliably
+    const firstParagraph = editorHelper.editor.locator('p').first()
+    await firstParagraph.click()
     await page.keyboard.press('End')
     await editorHelper.type(' more')
 
-    await expect(editorHelper.editor).toContainText('Line 1 more')
+    await expect(firstParagraph).toContainText('Line 1 more')
   })
 })
 

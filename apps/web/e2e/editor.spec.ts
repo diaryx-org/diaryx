@@ -70,10 +70,11 @@ test.describe('Editor', () => {
     await expect(h1Button).toBeVisible()
     await h1Button.click()
 
-    // Wait for the heading node and click it to ensure editor focus
+    // Wait for block picker to close and editor to regain focus
+    await editor.waitForBlockPickerClose()
+
     const heading = editor.editor.locator('h1')
     await expect(heading).toBeVisible()
-    await heading.click()
 
     await page.keyboard.type('My Heading')
 
@@ -90,6 +91,9 @@ test.describe('Editor', () => {
     const bulletButton = page.locator('.block-picker-menu .submenu-item').filter({ hasText: 'Bullet' })
     await expect(bulletButton).toBeVisible()
     await bulletButton.click()
+
+    // Wait for block picker to close and editor to regain focus
+    await editor.waitForBlockPickerClose()
 
     await page.keyboard.type('Item 1')
     await page.keyboard.press('Enter')
@@ -140,6 +144,9 @@ test.describe('Editor', () => {
     await expect(codeBlockButton).toBeVisible()
     await codeBlockButton.click()
 
+    // Wait for block picker to close and editor to regain focus
+    await editor.waitForBlockPickerClose()
+
     await page.keyboard.type('const x = 1;')
 
     const codeBlock = editor.editor.locator('pre')
@@ -153,6 +160,9 @@ test.describe('Editor', () => {
     const quoteButton = page.locator('.block-picker-menu .menu-item[title="Quote"]')
     await expect(quoteButton).toBeVisible()
     await quoteButton.click()
+
+    // Wait for block picker to close and editor to regain focus
+    await editor.waitForBlockPickerClose()
 
     await page.keyboard.type('A famous quote')
 

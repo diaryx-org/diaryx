@@ -96,6 +96,8 @@
   interface Props {
     entry: EntryData | null;
     collapsed: boolean;
+    sidebarWidth?: number;
+    resizing?: boolean;
     onToggleCollapse: () => void;
     onPropertyChange?: (key: string, value: unknown) => void;
     onPropertyRemove?: (key: string) => void;
@@ -122,6 +124,8 @@
   let {
     entry,
     collapsed,
+    sidebarWidth = 288,
+    resizing = false,
     onToggleCollapse,
     onPropertyChange,
     onPropertyRemove,
@@ -724,9 +728,10 @@
 {/if}
 
 <aside
-  class="flex flex-col h-full border-l border-border bg-sidebar text-sidebar-foreground transition-all duration-300 ease-in-out
-    {collapsed ? 'w-0 opacity-0 overflow-hidden md:w-0' : 'w-72'}
+  class="flex flex-col h-full border-l border-border bg-sidebar text-sidebar-foreground shrink-0 select-none
+    {collapsed ? 'opacity-0 overflow-hidden' : ''}
     fixed right-0 md:relative z-40 md:z-auto"
+  style="width: {collapsed ? 0 : sidebarWidth}px; {resizing ? '' : 'transition: width 0.3s ease-in-out, opacity 0.3s ease-in-out;'}"
   data-spotlight="properties-panel"
 >
   <!-- Header with collapse button -->

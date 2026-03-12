@@ -61,6 +61,8 @@
     expandedNodes: Set<string>;
     validationResult: ValidationResultWithMeta | null;
     collapsed: boolean;
+    sidebarWidth?: number;
+    resizing?: boolean;
     showUnlinkedFiles: boolean;
     api: Api | null;
     onOpenEntry: (path: string) => void;
@@ -107,6 +109,8 @@
     expandedNodes,
     validationResult,
     collapsed,
+    sidebarWidth = 288,
+    resizing = false,
     showUnlinkedFiles,
     api,
     onOpenEntry,
@@ -1260,9 +1264,10 @@
 {/if}
 
 <aside
-  class="flex flex-col h-full border-r border-border bg-sidebar text-sidebar-foreground transition-all duration-300 ease-in-out
-    {collapsed ? 'w-0 opacity-0 overflow-hidden md:w-0' : 'w-72'}
+  class="flex flex-col h-full border-r border-border bg-sidebar text-sidebar-foreground shrink-0 select-none
+    {collapsed ? 'opacity-0 overflow-hidden' : ''}
     fixed md:relative z-40 md:z-auto"
+  style="width: {collapsed ? 0 : sidebarWidth}px; {resizing ? '' : 'transition: width 0.3s ease-in-out, opacity 0.3s ease-in-out;'}"
 >
   <!-- Header -->
   <div

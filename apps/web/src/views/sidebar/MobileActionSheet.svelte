@@ -70,7 +70,7 @@
 
 <Drawer.Root bind:open onOpenChange={handleOpenChange}>
   <Drawer.Content>
-    <div class="mx-auto w-full max-w-sm">
+    <div class="mx-auto w-full max-w-sm select-none">
       <Drawer.Header>
         <Drawer.Title>{nodeName.replace(".md", "")}</Drawer.Title>
       </Drawer.Header>

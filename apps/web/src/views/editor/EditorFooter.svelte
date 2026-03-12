@@ -117,7 +117,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <footer
-  class="flex items-center justify-between px-4 md:px-6 py-2 border-t border-border bg-background
+  class="flex items-center justify-between px-4 md:px-6 py-2 border-t border-border bg-background select-none
     transition-opacity duration-300 ease-in-out
     {shouldFade ? 'absolute inset-x-0 bottom-0 z-10' : 'shrink-0'}
     {shouldFade && !isHovered ? 'opacity-0' : 'opacity-100'}

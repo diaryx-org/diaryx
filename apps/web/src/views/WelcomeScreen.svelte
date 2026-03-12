@@ -84,7 +84,7 @@
   }
 </script>
 
-<div class="flex items-center justify-center min-h-full welcome-bg px-4 overflow-hidden">
+<div class="flex items-center justify-center min-h-full welcome-bg px-4 overflow-hidden select-none">
   {#key currentView}
     <div class="w-full view-content {transitionDirection === 'forward' ? 'slide-in-right' : 'slide-in-left'}">
 

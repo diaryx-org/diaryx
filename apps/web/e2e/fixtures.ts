@@ -121,9 +121,32 @@ export class EditorHelper {
    * This inserts a BlockPickerNode inline in the editor.
    */
   async expandFloatingMenu(): Promise<void> {
-    const plusButton = await this.openFloatingMenu()
-    await plusButton.click()
-    await expect(this.page.locator('.block-picker-menu')).toBeVisible()
+    const blockPickerMenu = this.page.locator('.block-picker-menu')
+    // Retry clicking the plus button if the block picker doesn't appear
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const plusButton = await this.openFloatingMenu()
+      await plusButton.click()
+      try {
+        await expect(blockPickerMenu).toBeVisible({ timeout: 3000 })
+        return
+      } catch {
+        if (attempt === 2) throw new Error('Block picker menu did not appear after clicking plus button')
+      }
+    }
+  }
+
+  /**
+   * Wait for the block picker menu to close and the editor to regain focus.
+   * The block picker uses queueMicrotask to defer commands after node deletion,
+   * so we need to wait for this to complete before typing.
+   */
+  async waitForBlockPickerClose(): Promise<void> {
+    await expect(this.page.locator('.block-picker-menu')).not.toBeVisible({ timeout: 5000 })
+    // Wait for the microtask-deferred editor command to settle
+    await this.page.waitForFunction(() => {
+      const el = document.querySelector('.ProseMirror, [contenteditable="true"]')
+      return el && document.activeElement === el
+    }, { timeout: 5000 })
   }
 }
 

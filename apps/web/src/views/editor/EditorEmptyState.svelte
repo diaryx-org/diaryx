@@ -32,7 +32,7 @@
 
 <!-- Mobile header -->
 <header
-  class="flex items-center justify-between px-4 py-3 border-b border-border bg-card shrink-0 md:hidden"
+  class="flex items-center justify-between px-4 py-3 border-b border-border bg-card shrink-0 md:hidden select-none"
 >
   <Button
     variant="ghost"
@@ -56,7 +56,7 @@
 </header>
 
 <!-- Welcome content -->
-<div class="flex-1 flex items-center justify-center">
+<div class="flex-1 flex items-center justify-center select-none">
   <div class="text-center max-w-md px-4">
     <!-- Desktop sidebar toggle when no entry -->
     <div class="hidden md:flex justify-center mb-4">

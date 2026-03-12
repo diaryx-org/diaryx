@@ -91,6 +91,10 @@ export async function refreshTree(
         console.warn('[WorkspaceController] Could not find root index for tree:', e);
         // Fall back to filesystem tree if no root index found
         const fallbackTree = await api.getFilesystemTree(workspaceDir, showHiddenFiles, TREE_INITIAL_DEPTH);
+        // Keep the existing tree when the fallback is transiently empty
+        if (workspaceStore.tree && fallbackTree.children.length === 0) {
+          return;
+        }
         workspaceStore.setTree(fallbackTree);
       }
     }

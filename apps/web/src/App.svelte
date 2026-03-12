@@ -1329,8 +1329,9 @@
         );
         const effectivePath = updatedPath ?? resolvedPath;
         const afterEntry = await apiInstance.getEntry(effectivePath).catch(() => null);
+        const bodyChanged = (beforeEntry?.content ?? null) !== (afterEntry?.content ?? null);
         console.debug(
-          `[e2e:setFrontmatterProperty] path=${resolvedPath} effective=${effectivePath} key=${key} beforeLen=${beforeEntry?.content?.length ?? -1} afterLen=${afterEntry?.content?.length ?? -1} bodyChanged=${(beforeEntry?.content ?? null) !== (afterEntry?.content ?? null)}`,
+          `[e2e:setFrontmatterProperty] path=${resolvedPath} effective=${effectivePath} key=${key} beforeLen=${beforeEntry?.content?.length ?? -1} afterLen=${afterEntry?.content?.length ?? -1} bodyChanged=${bodyChanged}`,
         );
         if (
           effectivePath.includes("fm-concurrent-")
@@ -1346,9 +1347,11 @@
         }
         await browserPlugins.dispatchFileSavedEvent(
           toPortableE2EPath(backendInstance, effectivePath),
-          { bodyChanged: true },
+          { bodyChanged },
         );
-        await requestBodySyncForE2E(backendInstance, effectivePath);
+        if (bodyChanged) {
+          await requestBodySyncForE2E(backendInstance, effectivePath);
+        }
         await forceWorkspaceSyncForE2E(apiInstance);
         return updatedPath ? toPortableE2EPath(backendInstance, updatedPath) : updatedPath;
       },

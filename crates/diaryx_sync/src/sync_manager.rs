@@ -699,6 +699,7 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         );
 
         let mut response: Option<Vec<u8>> = None;
+        let mut remote_state_advanced = false;
 
         for (i, sync_msg) in messages.iter().enumerate() {
             match sync_msg {
@@ -740,16 +741,20 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
                     );
                     if !update.is_empty() {
                         body_doc.apply_update(update, UpdateOrigin::Remote)?;
-                    }
-
-                    // Cache the new state vector after successful SyncStep2
-                    if is_step2 {
-                        let new_sv = body_doc.encode_state_vector();
-                        let mut cache = self.last_synced_body_svs.write().unwrap();
-                        cache.insert(doc_name.to_string(), new_sv);
+                        remote_state_advanced = true;
                     }
                 }
             }
+        }
+
+        // Any successfully applied remote body update becomes the new synced baseline.
+        // Concurrent/offline recovery can arrive as plain Update messages rather than
+        // only SyncStep2, so caching only SyncStep2 leaves the doc permanently "dirty"
+        // and causes redundant reconnect resends.
+        if remote_state_advanced {
+            let new_sv = body_doc.encode_state_vector();
+            let mut cache = self.last_synced_body_svs.write().unwrap();
+            cache.insert(doc_name.clone(), new_sv);
         }
 
         let content_after = body_doc.get_body();
@@ -940,6 +945,32 @@ impl<FS: AsyncFileSystem> RustSyncManager<FS> {
         }
 
         Ok(SyncMessage::Update(update).encode())
+    }
+
+    /// Encode the full current body state for a loaded document as a sync update.
+    ///
+    /// This is used on reconnect when we need to push client-only local state
+    /// back to the server after re-subscribing via SyncStep1.
+    pub fn encode_full_body_update(&self, doc_name: &str) -> Option<Vec<u8>> {
+        let doc_name = normalize_sync_path(doc_name);
+        let body_doc = self.body_manager.get(&doc_name)?;
+
+        let update = body_doc.encode_state_as_update();
+
+        // Track the state we just emitted so later local updates can diff from it.
+        // Also treat this reconnect resend as the current synced baseline. The next
+        // explicit SyncBodyFiles should not keep re-sending the same unchanged body.
+        {
+            let new_sv = body_doc.encode_state_vector();
+            {
+                let mut sv_map = self.last_sent_body_sv.write().unwrap();
+                sv_map.insert(doc_name.clone(), new_sv.clone());
+            }
+            let mut synced_map = self.last_synced_body_svs.write().unwrap();
+            synced_map.insert(doc_name, new_sv);
+        }
+
+        Some(SyncMessage::Update(update).encode())
     }
 
     /// Check if body sync is complete for a document.

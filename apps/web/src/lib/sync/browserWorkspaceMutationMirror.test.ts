@@ -31,7 +31,7 @@ describe("browserWorkspaceMutationMirror", () => {
     });
     registryMocks.getWorkspaceProviderLinks.mockReturnValue([
       {
-        pluginId: "diaryx.sync",
+        pluginId: "diaryx.backup",
         remoteWorkspaceId: "remote-1",
         syncEnabled: true,
       },
@@ -41,12 +41,12 @@ describe("browserWorkspaceMutationMirror", () => {
   it("reinitializes and syncs all linked providers with live sync enabled", async () => {
     registryMocks.getWorkspaceProviderLinks.mockReturnValue([
       {
-        pluginId: "diaryx.sync",
+        pluginId: "diaryx.backup",
         remoteWorkspaceId: "remote-1",
         syncEnabled: true,
       },
       {
-        pluginId: "diaryx.backup",
+        pluginId: "diaryx.share",
         remoteWorkspaceId: "remote-2",
         syncEnabled: false,
       },
@@ -60,19 +60,19 @@ describe("browserWorkspaceMutationMirror", () => {
     expect(runPluginCommand).toHaveBeenCalledTimes(2);
     expect(runPluginCommand).toHaveBeenNthCalledWith(
       1,
-      "diaryx.sync",
+      "diaryx.backup",
       "InitializeWorkspaceCrdt",
       {
-        provider_id: "diaryx.sync",
+        provider_id: "diaryx.backup",
         workspace_path: "/tmp/journal/README.md",
       },
     );
     expect(runPluginCommand).toHaveBeenNthCalledWith(
       2,
-      "diaryx.sync",
+      "diaryx.backup",
       "TriggerWorkspaceSync",
       {
-        provider_id: "diaryx.sync",
+        provider_id: "diaryx.backup",
       },
     );
   });
@@ -93,10 +93,10 @@ describe("browserWorkspaceMutationMirror", () => {
 
     expect(runPluginCommand).toHaveBeenNthCalledWith(
       1,
-      "diaryx.sync",
+      "diaryx.backup",
       "InitializeWorkspaceCrdt",
       {
-        provider_id: "diaryx.sync",
+        provider_id: "diaryx.backup",
         workspace_path: "workspace/index.md",
       },
     );
@@ -106,7 +106,7 @@ describe("browserWorkspaceMutationMirror", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     registryMocks.getWorkspaceProviderLinks.mockReturnValue([
       {
-        pluginId: "diaryx.sync",
+        pluginId: "diaryx.backup",
         remoteWorkspaceId: "remote-1",
         syncEnabled: true,
       },
@@ -118,7 +118,7 @@ describe("browserWorkspaceMutationMirror", () => {
     ]);
 
     runPluginCommand.mockImplementation(async (pluginId: string) => {
-      if (pluginId === "diaryx.sync") {
+      if (pluginId === "diaryx.backup") {
         throw new Error("boom");
       }
       return {};
@@ -160,10 +160,10 @@ describe("browserWorkspaceMutationMirror", () => {
 
     expect(runPluginCommand).toHaveBeenNthCalledWith(
       1,
-      "diaryx.sync",
+      "diaryx.backup",
       "InitializeWorkspaceCrdt",
       {
-        provider_id: "diaryx.sync",
+        provider_id: "diaryx.backup",
         workspace_path: ".",
       },
     );

@@ -1076,66 +1076,78 @@ function buildHostFunctions(
         }
       },
       async host_write_file(cp: CallContext, offs: bigint) {
-        const input = cp.read(offs)?.json() as
-          | { path: string; content: string }
-          | undefined;
-        if (!input) return cp.store("");
-        const path = normalizeExtismHostPath(input.path);
-        const backend = getBackendSync();
-        const existsResp: any = await backend.execute({
-          type: "FileExists",
-          params: { path },
-        } as any);
-        const exists = existsResp?.type === "Bool" && !!existsResp.data;
-        await requirePermission(
-          opts,
-          exists ? "edit_files" : "create_files",
-          path,
-        );
-        await backend.execute({
-          type: "WriteFile",
-          params: { path, content: input.content },
-        } as any);
+        try {
+          const input = cp.read(offs)?.json() as
+            | { path: string; content: string }
+            | undefined;
+          if (!input) return cp.store("");
+          const path = normalizeExtismHostPath(input.path);
+          const backend = getBackendSync();
+          const existsResp: any = await backend.execute({
+            type: "FileExists",
+            params: { path },
+          } as any);
+          const exists = existsResp?.type === "Bool" && !!existsResp.data;
+          await requirePermission(
+            opts,
+            exists ? "edit_files" : "create_files",
+            path,
+          );
+          await backend.execute({
+            type: "WriteFile",
+            params: { path, content: input.content },
+          } as any);
+        } catch (error) {
+          console.error("[extism] host_write_file failed:", error);
+        }
         return cp.store("");
       },
       async host_delete_file(cp: CallContext, offs: bigint) {
-        const input = cp.read(offs)?.json() as
-          | { path: string }
-          | undefined;
-        if (!input) return cp.store("");
-        const path = normalizeExtismHostPath(input.path);
-        await requirePermission(opts, "delete_files", path);
-        const backend = getBackendSync();
-        await backend.execute({
-          type: "DeleteFile",
-          params: { path },
-        } as any);
+        try {
+          const input = cp.read(offs)?.json() as
+            | { path: string }
+            | undefined;
+          if (!input) return cp.store("");
+          const path = normalizeExtismHostPath(input.path);
+          await requirePermission(opts, "delete_files", path);
+          const backend = getBackendSync();
+          await backend.execute({
+            type: "DeleteFile",
+            params: { path },
+          } as any);
+        } catch (error) {
+          console.error("[extism] host_delete_file failed:", error);
+        }
         return cp.store("");
       },
       async host_write_binary(cp: CallContext, offs: bigint) {
-        const input = cp.read(offs)?.json() as
-          | { path: string; content: string }
-          | undefined;
-        if (!input) return cp.store("");
-        const path = normalizeExtismHostPath(input.path);
-        const backend = getBackendSync();
-        const existsResp: any = await backend.execute({
-          type: "FileExists",
-          params: { path },
-        } as any);
-        const exists = existsResp?.type === "Bool" && !!existsResp.data;
-        await requirePermission(
-          opts,
-          exists ? "edit_files" : "create_files",
-          path,
-        );
-        // Decode base64 to Uint8Array
-        const binary = atob(input.content);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) {
-          bytes[i] = binary.charCodeAt(i);
+        try {
+          const input = cp.read(offs)?.json() as
+            | { path: string; content: string }
+            | undefined;
+          if (!input) return cp.store("");
+          const path = normalizeExtismHostPath(input.path);
+          const backend = getBackendSync();
+          const existsResp: any = await backend.execute({
+            type: "FileExists",
+            params: { path },
+          } as any);
+          const exists = existsResp?.type === "Bool" && !!existsResp.data;
+          await requirePermission(
+            opts,
+            exists ? "edit_files" : "create_files",
+            path,
+          );
+          // Decode base64 to Uint8Array
+          const binary = atob(input.content);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+          }
+          await backend.writeBinary(path, bytes);
+        } catch (error) {
+          console.error("[extism] host_write_binary failed:", error);
         }
-        await backend.writeBinary(path, bytes);
         return cp.store("");
       },
       host_emit_event(cp: CallContext, offs: bigint) {

@@ -208,9 +208,20 @@ async function handleWelcomeScreenIfNeeded(page: Page, timeoutMs: number): Promi
     addWorkspaceDialog.waitFor({ state: 'visible', timeout: timeoutMs }),
   ])
 
-  // If the welcome screen appeared, try the standard auto-create path first.
+  // If the welcome screen appeared, select "More options" → "Minimal" bundle
+  // to create a workspace without plugins for faster, more reliable E2E tests.
   if (await welcomeHeading.isVisible().catch(() => false)) {
-    const getStartedButton = page.getByRole('button', { name: 'Get Started' })
+    const moreOptionsButton = page.getByRole('button', { name: /more options/i })
+    await expect(moreOptionsButton).toBeVisible({ timeout: 5000 })
+    await moreOptionsButton.click()
+
+    // Wait for bundle picker view and select the minimal bundle
+    const minimalBundleButton = page.getByRole('button', { name: /minimal/i }).first()
+    await expect(minimalBundleButton).toBeVisible({ timeout: 5000 })
+    await minimalBundleButton.click()
+
+    // Click "Get Started with Minimal" (or similar)
+    const getStartedButton = page.getByRole('button', { name: /get started/i })
     await expect(getStartedButton).toBeVisible({ timeout: 5000 })
     await getStartedButton.click()
 

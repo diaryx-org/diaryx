@@ -111,8 +111,8 @@ describe("hydrateOnboardingPluginPermissionDefaults", () => {
     } satisfies Pick<Response, "ok" | "status" | "arrayBuffer">);
 
     await hydrateOnboardingPluginPermissionDefaults(
-      [makeBundleDependency("diaryx.publish")],
-      [makeRegistryPlugin("diaryx.publish", null)],
+      [makeBundleDependency("diaryx.ai")],
+      [makeRegistryPlugin("diaryx.ai", null)],
       persistDefaults,
       {
         fetchImpl: fetchImpl as typeof fetch,

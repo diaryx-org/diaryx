@@ -2047,7 +2047,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx"
-version = "1.3.1"
+version = "1.3.2"
 dependencies = [
  "axum",
  "clap",
@@ -2094,7 +2094,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_core"
-version = "1.3.1"
+version = "1.3.2"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2127,7 +2127,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_daily"
-version = "1.3.1"
+version = "1.3.2"
 dependencies = [
  "chrono",
  "chrono-english",
@@ -2137,7 +2137,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_extism"
-version = "1.3.1"
+version = "1.3.2"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2162,7 +2162,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_sync"
-version = "1.3.1"
+version = "1.3.2"
 dependencies = [
  "async-trait",
  "axum",
@@ -2195,7 +2195,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_sync_server"
-version = "1.3.1"
+version = "1.3.2"
 dependencies = [
  "async-stripe",
  "async-trait",
@@ -2244,7 +2244,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_tauri"
-version = "1.3.1"
+version = "1.3.2"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2276,7 +2276,7 @@ dependencies = [
 
 [[package]]
 name = "diaryx_wasm"
-version = "1.3.1"
+version = "1.3.2"
 dependencies = [
  "async-trait",
  "chrono",

@@ -611,6 +611,7 @@
     ) => Promise<string | null>;
     deleteEntry: (path: string) => Promise<boolean>;
     openEntryForSync: (path: string) => Promise<void>;
+    queueBodyUpdateForSync: (path: string) => Promise<void>;
     listSyncedFiles: () => Promise<string[]>;
     getSyncStatus: () => Promise<string | null>;
     setAutoAllowPermissions: (enabled: boolean) => void;
@@ -934,6 +935,68 @@
     await plugin.callBinary("sync_body_files", payload);
   }
 
+  async function queueBodyUpdateForE2E(
+    apiInstance: Api,
+    backendInstance: Backend,
+    resolvedPath: string,
+  ): Promise<void> {
+    const plugin = browserPlugins.getPlugin("diaryx.sync");
+    if (!plugin) {
+      throw new Error("Sync plugin is not loaded");
+    }
+
+    const rawRegistry = localStorage.getItem("diaryx_local_workspaces");
+    const currentId = localStorage.getItem("diaryx_current_workspace");
+    if (!rawRegistry || !currentId) {
+      throw new Error("No current workspace metadata available for sync E2E");
+    }
+
+    const registry = JSON.parse(rawRegistry) as Array<{
+      id?: string;
+      pluginMetadata?: Record<string, Record<string, unknown>>;
+    }>;
+    const workspace = registry.find((entry) => entry.id === currentId);
+    const metadata = workspace?.pluginMetadata?.["diaryx.sync"]
+      ?? workspace?.pluginMetadata?.sync
+      ?? null;
+    const remoteWorkspaceId =
+      typeof metadata?.remoteWorkspaceId === "string" && metadata.remoteWorkspaceId.trim().length > 0
+        ? metadata.remoteWorkspaceId
+        : typeof metadata?.serverId === "string" && metadata.serverId.trim().length > 0
+          ? metadata.serverId
+          : null;
+
+    if (!remoteWorkspaceId) {
+      throw new Error("Current workspace is not linked to a remote sync workspace");
+    }
+
+    const portablePath = toPortableE2EPath(backendInstance, resolvedPath);
+    let bodyContent = "";
+    try {
+      const rawFileContent = await apiInstance.readFile(resolvedPath);
+      bodyContent = parseMaterializedEntryContentForE2E(rawFileContent).body;
+    } catch {
+      const entry = await apiInstance.getEntry(resolvedPath);
+      bodyContent = entry.content ?? "";
+    }
+
+    const update = await apiInstance.executePluginCommand("diaryx.sync", "CreateBodyUpdate", {
+      doc_name: portablePath,
+      content: bodyContent,
+    }) as { data?: string };
+
+    if (typeof update?.data !== "string" || update.data.length === 0) {
+      return;
+    }
+
+    const payload = new TextEncoder().encode(JSON.stringify({
+      doc_id: `body:${remoteWorkspaceId}/${portablePath}`,
+      data: update.data,
+    }));
+    await plugin.callBinary("queue_local_update", payload);
+    await requestBodySyncForE2E(backendInstance, resolvedPath);
+  }
+
   async function hydrateSyncedEntryForE2E(
     apiInstance: Api,
     backendInstance: Backend,
@@ -1069,6 +1132,8 @@
         entryPath = await apiInstance.renameEntry(entryPath, `${stem}.md`);
         await apiInstance.saveEntry(entryPath, marker, rootPath);
         await forceWorkspaceSyncForE2E(apiInstance);
+        await queueBodyUpdateForE2E(apiInstance, backendInstance, entryPath);
+        await forceWorkspaceSyncForE2E(apiInstance);
         return toPortableE2EPath(backendInstance, entryPath);
       },
       async appendMarkerToEntry(path: string, marker: string): Promise<void> {
@@ -1077,6 +1142,8 @@
         const entry = await apiInstance.getEntry(resolvedPath);
         const newContent = entry.content ? `${entry.content}\n${marker}` : marker;
         await apiInstance.saveEntry(resolvedPath, newContent, workspaceStore.tree?.path);
+        await queueBodyUpdateForE2E(apiInstance, backendInstance, resolvedPath);
+        await forceWorkspaceSyncForE2E(apiInstance);
       },
       async renameEntry(path: string, newFilename: string): Promise<string> {
         const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
@@ -1318,6 +1385,12 @@
         }
 
         await tick();
+      },
+      async queueBodyUpdateForSync(path: string): Promise<void> {
+        const { backendInstance, apiInstance } = await getCurrentBackendAndApiForE2E();
+        const resolvedPath = resolveE2EPath(backendInstance, path);
+        await queueBodyUpdateForE2E(apiInstance, backendInstance, resolvedPath);
+        await forceWorkspaceSyncForE2E(apiInstance);
       },
       async listSyncedFiles(): Promise<string[]> {
         try {

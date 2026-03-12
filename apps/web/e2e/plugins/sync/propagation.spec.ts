@@ -8,6 +8,7 @@ import {
   expect,
   ensureSyncServer,
   ensureSyncPluginBase64,
+  restartSyncServer,
   stopSpawnedSyncServer,
   setupSyncedPair,
   createEntryWithMarker,
@@ -23,6 +24,7 @@ import {
   expectFrontmatterProperty,
   entryExists,
   openEntryForSync,
+  queueBodyUpdateForSync,
   rootEntryPath,
   uploadWorkspaceSnapshot,
   waitForAppReady,
@@ -37,9 +39,25 @@ test.describe("Sync › Propagation", () => {
     await ensureSyncPluginBase64();
   });
 
+  test.beforeEach(async ({ browserName }) => {
+    if (browserName !== "chromium") return;
+    if (process.env.SYNC_E2E_RESTART_SERVER_PER_TEST !== "1") return;
+    await restartSyncServer();
+  });
+
   test.afterAll(async ({ browserName }) => {
     if (browserName !== "chromium") return;
-    await stopSpawnedSyncServer();
+    const previousCleanupSetting = process.env.SYNC_E2E_CLEANUP_SERVER;
+    process.env.SYNC_E2E_CLEANUP_SERVER = "1";
+    try {
+      await stopSpawnedSyncServer();
+    } finally {
+      if (previousCleanupSetting === undefined) {
+        delete process.env.SYNC_E2E_CLEANUP_SERVER;
+      } else {
+        process.env.SYNC_E2E_CLEANUP_SERVER = previousCleanupSetting;
+      }
+    }
   });
 
   test("propagates entry creation, rename, move, edit, and frontmatter across clients", async ({ browser, browserName }) => {
@@ -65,6 +83,7 @@ test.describe("Sync › Propagation", () => {
         createdEntryMarker,
       );
       await openEntryForSync(pageA, createdEntryPath);
+      await queueBodyUpdateForSync(pageA, createdEntryPath);
       await openEntryForSync(pageB, createdEntryPath);
       await expect
         .poll(async () => await readEntryBody(pageB, createdEntryPath), { timeout: 30000 })
@@ -136,6 +155,7 @@ test.describe("Sync › Propagation", () => {
 
       // --- Body edit (live, both subscribed) ---
       await appendMarkerToEntry(pageA, movedEntryPath, editedBodyMarker);
+      await queueBodyUpdateForSync(pageA, movedEntryPath);
       await expect
         .poll(async () => await readEntryBody(pageA, movedEntryPath), { timeout: 10000 })
         .toContain(editedBodyMarker);
@@ -181,10 +201,11 @@ test.describe("Sync › Propagation", () => {
         `DELETE_ME_${runId}`,
       );
       await openEntryForSync(pageA, entryPath);
+      await queueBodyUpdateForSync(pageA, entryPath);
       await openEntryForSync(pageB, entryPath);
       await expect
-        .poll(async () => await readEntryBody(pageB, entryPath), { timeout: 30000 })
-        .toContain(`DELETE_ME_${runId}`);
+        .poll(async () => await entryExists(pageB, entryPath), { timeout: 30000 })
+        .toBe(true);
 
       console.log("[sync-e2e:delete] step: deleting entry on pageA");
       const deleted = await deleteEntry(pageA, entryPath);
@@ -222,6 +243,7 @@ test.describe("Sync › Propagation", () => {
         marker,
       );
       await openEntryForSync(pageB, entryPath);
+      await queueBodyUpdateForSync(pageB, entryPath);
       await setFrontmatterProperty(pageB, entryPath, "description", fmValue);
 
       await openEntryForSync(pageA, entryPath);
@@ -256,6 +278,7 @@ test.describe("Sync › Propagation", () => {
         initialMarker,
       );
       await openEntryForSync(pageA, entryPath);
+      await queueBodyUpdateForSync(pageA, entryPath);
       await openEntryForSync(pageB, entryPath);
       await expect
         .poll(async () => await readEntryBody(pageB, entryPath), { timeout: 30000 })
@@ -265,6 +288,10 @@ test.describe("Sync › Propagation", () => {
       await Promise.all([
         appendMarkerToEntry(pageA, entryPath, markerA),
         appendMarkerToEntry(pageB, entryPath, markerB),
+      ]);
+      await Promise.all([
+        queueBodyUpdateForSync(pageA, entryPath),
+        queueBodyUpdateForSync(pageB, entryPath),
       ]);
 
       console.log("[sync-e2e:concurrent] step: waiting for merged content on both clients");

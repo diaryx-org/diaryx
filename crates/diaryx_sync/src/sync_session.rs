@@ -564,7 +564,34 @@ impl<FS: AsyncFileSystem> SyncSession<FS> {
             file_paths.len(),
             uuids.len()
         );
-        self.queue_body_sync_step1(&uuids, false, false)
+        let mut actions = self.queue_body_sync_step1(&uuids, false, false);
+
+        // After re-subscribing a focused body doc, also resend any local state
+        // that diverged while the transport was offline. SyncStep1 alone only
+        // asks the server for missing updates; it does not guarantee the server
+        // learns about client-only edits that were never flushed.
+        for uuid in &uuids {
+            if !self.sync_manager.body_state_changed(uuid) {
+                continue;
+            }
+
+            let body_doc_id = format_body_doc_id(&self.config.workspace_id, uuid);
+            if let Some(update) = self.sync_manager.encode_full_body_update(uuid) {
+                if update.len() <= 2 {
+                    continue;
+                }
+
+                let framed = frame_message_v2(&body_doc_id, &update);
+                actions.push(SessionAction::SendBinary(framed));
+                log::debug!(
+                    "[SyncSession] SyncBodyFiles: sent full body update for {} ({} bytes)",
+                    uuid,
+                    update.len()
+                );
+            }
+        }
+
+        actions
     }
 
     // =========================================================================

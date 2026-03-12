@@ -8,6 +8,7 @@ import {
   expect,
   ensureSyncServer,
   ensureSyncPluginBase64,
+  restartSyncServer,
   stopSpawnedSyncServer,
   setupSyncedPair,
   createEntryWithMarker,
@@ -29,9 +30,25 @@ test.describe("Sync › Attachments", () => {
     await ensureSyncPluginBase64();
   });
 
+  test.beforeEach(async ({ browserName }) => {
+    if (browserName !== "chromium") return;
+    if (process.env.SYNC_E2E_RESTART_SERVER_PER_TEST !== "1") return;
+    await restartSyncServer();
+  });
+
   test.afterAll(async ({ browserName }) => {
     if (browserName !== "chromium") return;
-    await stopSpawnedSyncServer();
+    const previousCleanupSetting = process.env.SYNC_E2E_CLEANUP_SERVER;
+    process.env.SYNC_E2E_CLEANUP_SERVER = "1";
+    try {
+      await stopSpawnedSyncServer();
+    } finally {
+      if (previousCleanupSetting === undefined) {
+        delete process.env.SYNC_E2E_CLEANUP_SERVER;
+      } else {
+        process.env.SYNC_E2E_CLEANUP_SERVER = previousCleanupSetting;
+      }
+    }
   });
 
   test("attachment metadata syncs between clients after upload", async ({ browser, browserName }) => {

@@ -8,6 +8,7 @@ import {
   expect,
   ensureSyncServer,
   ensureSyncPluginBase64,
+  restartSyncServer,
   stopSpawnedSyncServer,
   setupSyncedPair,
   createEntryWithMarker,
@@ -16,6 +17,7 @@ import {
   readEntryBody,
   expectFrontmatterProperty,
   openEntryForSync,
+  queueBodyUpdateForSync,
   waitForSyncSession,
 } from "./helpers";
 
@@ -28,9 +30,25 @@ test.describe("Sync › Offline / Reconnect", () => {
     await ensureSyncPluginBase64();
   });
 
+  test.beforeEach(async ({ browserName }) => {
+    if (browserName !== "chromium") return;
+    if (process.env.SYNC_E2E_RESTART_SERVER_PER_TEST !== "1") return;
+    await restartSyncServer();
+  });
+
   test.afterAll(async ({ browserName }) => {
     if (browserName !== "chromium") return;
-    await stopSpawnedSyncServer();
+    const previousCleanupSetting = process.env.SYNC_E2E_CLEANUP_SERVER;
+    process.env.SYNC_E2E_CLEANUP_SERVER = "1";
+    try {
+      await stopSpawnedSyncServer();
+    } finally {
+      if (previousCleanupSetting === undefined) {
+        delete process.env.SYNC_E2E_CLEANUP_SERVER;
+      } else {
+        process.env.SYNC_E2E_CLEANUP_SERVER = previousCleanupSetting;
+      }
+    }
   });
 
   test("queues edits made offline and syncs them on reconnect", async ({ browser, browserName }) => {
@@ -53,6 +71,7 @@ test.describe("Sync › Offline / Reconnect", () => {
         initialMarker,
       );
       await openEntryForSync(pageA, entryPath);
+      await queueBodyUpdateForSync(pageA, entryPath);
       await openEntryForSync(pageB, entryPath);
       await expect
         .poll(async () => await readEntryBody(pageB, entryPath), { timeout: 30000 })
@@ -81,8 +100,15 @@ test.describe("Sync › Offline / Reconnect", () => {
       console.log("[sync-e2e:offline] step: bringing pageA back online");
       await contextA.setOffline(false);
 
-      // Wait for sync to resume.
+      // Wait for sync to resume. The global status can remain "syncing" while
+      // unrelated body docs settle, so push the local offline body first and
+      // only then ask the remote client to re-open/resubscribe that entry.
       await waitForSyncSession(pageA);
+      await expect
+        .poll(async () => await readEntryBody(pageA, entryPath), { timeout: 10000 })
+        .toContain(offlineMarkerA);
+      await queueBodyUpdateForSync(pageA, entryPath);
+      await openEntryForSync(pageB, entryPath);
 
       // B should eventually see the changes that were queued offline.
       console.log("[sync-e2e:offline] step: waiting for offline edits to propagate to pageB");
@@ -117,6 +143,7 @@ test.describe("Sync › Offline / Reconnect", () => {
         initialMarker,
       );
       await openEntryForSync(pageA, entryPath);
+      await queueBodyUpdateForSync(pageA, entryPath);
       await openEntryForSync(pageB, entryPath);
       await expect
         .poll(async () => await readEntryBody(pageB, entryPath), { timeout: 30000 })
@@ -152,6 +179,27 @@ test.describe("Sync › Offline / Reconnect", () => {
         waitForSyncSession(pageA),
         waitForSyncSession(pageB),
       ]);
+
+      // Re-open the entry for sync on both clients to re-establish body CRDT
+      // subscriptions that may have been lost during the offline period.
+      await Promise.all([
+        expect
+          .poll(async () => await readEntryBody(pageA, entryPath), { timeout: 10000 })
+          .toContain(offlineA),
+        expect
+          .poll(async () => await readEntryBody(pageB, entryPath), { timeout: 10000 })
+          .toContain(offlineB),
+      ]);
+
+      // Push each client's offline body first, then re-open to re-establish
+      // subscriptions against the merged server state.
+      await Promise.all([
+        queueBodyUpdateForSync(pageA, entryPath),
+        queueBodyUpdateForSync(pageB, entryPath),
+      ]);
+      console.log("[sync-e2e:dual-offline] step: re-opening entry for sync after reconnect");
+      await openEntryForSync(pageA, entryPath);
+      await openEntryForSync(pageB, entryPath);
 
       // Both clients should eventually see both offline markers (CRDT merge).
       console.log("[sync-e2e:dual-offline] step: waiting for merged content");

@@ -195,13 +195,15 @@ async function bootstrapWorkspaceFallback(page: Page): Promise<void> {
 
 async function handleWelcomeScreenIfNeeded(page: Page, timeoutMs: number): Promise<void> {
   const editor = page.locator('.ProseMirror, [contenteditable="true"]')
+  const appSurface = page.getByRole('application').first()
   const welcomeHeading = page.getByRole('heading', { name: 'Welcome to Diaryx' })
   const addWorkspaceDialog = page.getByRole('dialog', { name: 'Add Workspace' })
 
   // Wait for the initial app state to settle into either the editor, the
-  // welcome screen, or the welcome fallback dialog.
+  // loaded app shell, the welcome screen, or the welcome fallback dialog.
   await Promise.race([
     editor.first().waitFor({ state: 'visible', timeout: timeoutMs }),
+    appSurface.waitFor({ state: 'visible', timeout: timeoutMs }),
     welcomeHeading.waitFor({ state: 'visible', timeout: timeoutMs }),
     addWorkspaceDialog.waitFor({ state: 'visible', timeout: timeoutMs }),
   ])
@@ -214,6 +216,7 @@ async function handleWelcomeScreenIfNeeded(page: Page, timeoutMs: number): Promi
 
     await Promise.race([
       editor.first().waitFor({ state: 'visible', timeout: timeoutMs }),
+      appSurface.waitFor({ state: 'visible', timeout: timeoutMs }),
       addWorkspaceDialog.waitFor({ state: 'visible', timeout: timeoutMs }),
     ])
   }
@@ -224,7 +227,10 @@ async function handleWelcomeScreenIfNeeded(page: Page, timeoutMs: number): Promi
     await completeAddWorkspaceDialog(page, timeoutMs)
   }
 
-  await editor.first().waitFor({ state: 'visible', timeout: timeoutMs })
+  await Promise.race([
+    editor.first().waitFor({ state: 'visible', timeout: timeoutMs }),
+    appSurface.waitFor({ state: 'visible', timeout: timeoutMs }),
+  ])
 }
 
 /**

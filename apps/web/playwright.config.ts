@@ -4,6 +4,7 @@ const webHost = process.env.PW_WEB_HOST ?? '127.0.0.1'
 const webPort = process.env.PW_WEB_PORT ?? '5174'
 const webServerUrl = `http://${webHost}:${webPort}`
 const appBaseUrl = process.env.PW_BASE_URL ?? `http://localhost:${webPort}`
+const reuseExistingServer = process.env.PW_REUSE_EXISTING_SERVER === '1'
 
 export default defineConfig({
   testDir: './e2e',
@@ -41,7 +42,7 @@ export default defineConfig({
   webServer: {
     command: `bun run dev -- --host ${webHost} --port ${webPort} --strictPort`,
     url: webServerUrl,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer,
     timeout: 120000,
     stdout: 'pipe',
     stderr: 'pipe',

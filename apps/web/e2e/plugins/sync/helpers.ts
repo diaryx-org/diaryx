@@ -21,6 +21,7 @@ export const APP_BASE_URL = process.env.PW_BASE_URL ?? `http://localhost:${WEB_P
 export const SYNC_SERVER_URL = process.env.SYNC_SERVER_URL
   ?? `http://${process.env.SYNC_SERVER_HOST ?? "127.0.0.1"}:${process.env.SYNC_SERVER_PORT ?? "3030"}`;
 const SHOULD_START_SYNC_SERVER = process.env.SYNC_E2E_START_SERVER !== "0";
+const SHOULD_LOG_SYNC_E2E_DEBUG = process.env.SYNC_E2E_DEBUG === "1";
 
 const REPO_ROOT = path.resolve(process.cwd(), "..", "..");
 const DEFAULT_SYNC_PLUGIN_DIR = path.resolve(REPO_ROOT, "..", "plugin-sync");
@@ -46,6 +47,19 @@ let spawnedSyncServerDbPath: string | null = null;
 
 export function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function writeSyncE2EDebug(message: string, stream: "stdout" | "stderr" = "stderr"): void {
+  if (!SHOULD_LOG_SYNC_E2E_DEBUG) {
+    return;
+  }
+
+  if (stream === "stdout") {
+    process.stdout.write(message);
+    return;
+  }
+
+  process.stderr.write(message);
 }
 
 async function fileExists(filePath: string): Promise<boolean> {
@@ -136,9 +150,11 @@ export async function ensureSyncServer(): Promise<void> {
 
   spawnedSyncServer.stdout.on("data", (chunk) => {
     process.stdout.write(`[sync-e2e-server] ${chunk}`);
+    writeSyncE2EDebug(`[sync-e2e-server] ${chunk}`, "stdout");
   });
   spawnedSyncServer.stderr.on("data", (chunk) => {
     process.stderr.write(`[sync-e2e-server] ${chunk}`);
+    writeSyncE2EDebug(`[sync-e2e-server] ${chunk}`);
   });
 
   spawnedSyncServer.once("exit", (code, signal) => {
@@ -153,20 +169,24 @@ export async function ensureSyncServer(): Promise<void> {
 }
 
 export async function stopSpawnedSyncServer(): Promise<void> {
-  // Only stop the server if this process spawned it.  When multiple Playwright
+  await stopSyncServerInternal(process.env.SYNC_E2E_CLEANUP_SERVER === "1");
+}
+
+async function stopSyncServerInternal(forceCleanup: boolean): Promise<void> {
+  // Only stop the server if this process spawned it. When multiple Playwright
   // workers import this module, each gets its own copy of spawnedSyncServer.
   // The first worker that spawned the server is the only one with a non-null
-  // reference, so only that worker can (and should) kill it.  However, in a
+  // reference, so only that worker can (and should) kill it. However, in a
   // multi-file setup the first worker to finish would kill the shared server
   // while other workers are still using it.
   //
   // To avoid this, we intentionally skip cleanup here and let the child
-  // process be reaped when the parent Playwright process exits.  The temp
+  // process be reaped when the parent Playwright process exits. The temp
   // DB directory is cleaned up by the OS or a subsequent run.
   //
   // For explicit cleanup (e.g. running a single file), set
   // SYNC_E2E_CLEANUP_SERVER=1.
-  if (process.env.SYNC_E2E_CLEANUP_SERVER !== "1") {
+  if (!forceCleanup) {
     return;
   }
 
@@ -190,6 +210,11 @@ export async function stopSpawnedSyncServer(): Promise<void> {
   if (dbPath) {
     await rm(path.dirname(dbPath), { recursive: true, force: true });
   }
+}
+
+export async function restartSyncServer(): Promise<void> {
+  await stopSyncServerInternal(true);
+  await ensureSyncServer();
 }
 
 // ---------------------------------------------------------------------------
@@ -288,23 +313,51 @@ export async function installSyncPluginInCurrentWorkspace(
 export async function signInWithDevMagicLink(
   page: import("@playwright/test").Page,
   email: string,
+  options?: {
+    waitForProviderReady?: boolean;
+  },
 ): Promise<void> {
-  await page.getByRole("button", { name: /^sign in$/i }).first().click();
-  await page.getByRole("button", { name: /advanced/i }).click();
-  await page.getByRole("textbox", { name: /^email$/i }).fill(email);
-  await page.getByLabel("Server URL").fill(SYNC_SERVER_URL);
-  await page.getByRole("button", { name: /send sign-in link/i }).click();
-  await page.getByRole("link", { name: /click here to verify/i }).click();
+  console.log(`[sync-e2e:sign-in] step: opening sign-in dialog for ${email}`);
+  const signInButton = page.getByRole("button", { name: /^sign in$/i }).first();
+  await expect(signInButton).toBeVisible({ timeout: 30000 });
+  await signInButton.click();
+
+  const advancedButton = page.getByRole("button", { name: /advanced/i });
+  if (await advancedButton.isVisible().catch(() => false)) {
+    console.log(`[sync-e2e:sign-in] step: opening advanced sign-in for ${email}`);
+    await advancedButton.click();
+  }
+
+  const emailInput = page.getByRole("textbox", { name: /^email$/i });
+  const serverUrlInput = page.getByLabel("Server URL");
+  await expect(emailInput).toBeVisible({ timeout: 30000 });
+  await expect(serverUrlInput).toBeVisible({ timeout: 30000 });
+
+  await emailInput.fill(email);
+  await serverUrlInput.fill(SYNC_SERVER_URL);
+
+  const sendLinkButton = page.getByRole("button", { name: /send sign-in link/i });
+  await expect(sendLinkButton).toBeEnabled({ timeout: 30000 });
+  console.log(`[sync-e2e:sign-in] step: sending magic link for ${email}`);
+  await sendLinkButton.click();
+
+  const verifyLink = page.getByRole("link", { name: /click here to verify/i });
+  await expect(verifyLink).toBeVisible({ timeout: 30000 });
+  console.log(`[sync-e2e:sign-in] step: following verify link for ${email}`);
+  await verifyLink.click();
 
   let authPollCount = 0;
+  console.log(`[sync-e2e:sign-in] step: waiting for auth token for ${email}`);
   await expect
     .poll(async () => {
       const hasToken = await page.evaluate(() => !!localStorage.getItem("diaryx_auth_token"));
       if (!hasToken && authPollCount++ % 5 === 0) {
         process.stderr.write(`[sync-e2e] auth_token poll #${authPollCount}: no token yet\n`);
+        writeSyncE2EDebug(`[sync-e2e] auth_token poll #${authPollCount}: no token yet\n`);
       }
       if (hasToken && authPollCount < 100) {
         process.stderr.write(`[sync-e2e] auth_token poll: token found after ${authPollCount} polls\n`);
+        writeSyncE2EDebug(`[sync-e2e] auth_token poll: token found after ${authPollCount} polls\n`);
         authPollCount = 100;
       }
       return hasToken;
@@ -313,7 +366,13 @@ export async function signInWithDevMagicLink(
     )
     .toBe(true);
 
+  if (options?.waitForProviderReady === false) {
+    await page.locator("main").click({ position: { x: 40, y: 40 } }).catch(() => undefined);
+    return;
+  }
+
   let providerPollCount = 0;
+  console.log(`[sync-e2e:sign-in] step: waiting for provider readiness for ${email}`);
   await expect
     .poll(async () => {
       const result = await page.evaluate(async () => {
@@ -331,9 +390,11 @@ export async function signInWithDevMagicLink(
       const ready = (result as { ready?: boolean })?.ready ?? false;
       if (!ready && providerPollCount++ % 5 === 0) {
         process.stderr.write(`[sync-e2e] GetProviderStatus poll #${providerPollCount}: ${JSON.stringify(result)}\n`);
+        writeSyncE2EDebug(`[sync-e2e] GetProviderStatus poll #${providerPollCount}: ${JSON.stringify(result)}\n`);
       }
       if (ready && providerPollCount < 100) {
         process.stderr.write(`[sync-e2e] GetProviderStatus: ready after ${providerPollCount} polls\n`);
+        writeSyncE2EDebug(`[sync-e2e] GetProviderStatus: ready after ${providerPollCount} polls\n`);
         providerPollCount = 100;
       }
       return ready;
@@ -343,7 +404,7 @@ export async function signInWithDevMagicLink(
     .toBe(true);
 
   await expect(page.getByText(email).first()).toBeVisible({ timeout: 15000 });
-  await page.locator("main").click({ position: { x: 40, y: 40 } });
+  await page.locator("main").click({ position: { x: 40, y: 40 } }).catch(() => undefined);
 }
 
 export async function removeCurrentDeviceFromAccount(
@@ -356,24 +417,53 @@ export async function removeCurrentDeviceFromAccount(
       throw new Error("Expected authenticated sync session before removing device");
     }
 
-    const [{ getDeviceId }, { proxyFetch }] = await Promise.all([
-      import("/src/lib/device/deviceId"),
-      import("/src/lib/backend/proxyFetch"),
-    ]);
+    const { proxyFetch } = await import("/src/lib/backend/proxyFetch");
 
-    const deviceId = getDeviceId();
-    const response = await proxyFetch(`${serverUrl}/auth/devices/${deviceId}`, {
-      method: "DELETE",
+    const listResponse = await proxyFetch(`${serverUrl}/auth/devices`, {
       headers: {
         Authorization: `Bearer ${token}`,
       },
     });
 
-    if (!response.ok) {
-      throw new Error(`Failed to delete current device: HTTP ${response.status}`);
+    if (!listResponse.ok) {
+      throw new Error(`Failed to list devices: HTTP ${listResponse.status}`);
     }
 
-    return deviceId;
+    const devices = await listResponse.json() as Array<{ id?: string }>;
+    if (!Array.isArray(devices) || devices.length === 0) {
+      throw new Error("Expected at least one device before removing a device");
+    }
+
+    const attempts: string[] = [];
+    for (const device of devices) {
+      if (!device?.id) {
+        continue;
+      }
+
+      const response = await proxyFetch(`${serverUrl}/auth/devices/${device.id}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        return device.id;
+      }
+
+      // The server rejects deleting the currently authenticated device with 400.
+      // That is fine here; we only need to free any removable device slot.
+      if (response.status === 400 || response.status === 404) {
+        attempts.push(`${device.id}:${response.status}`);
+        continue;
+      }
+
+      throw new Error(`Failed to delete device ${device.id}: HTTP ${response.status}`);
+    }
+
+    throw new Error(
+      `Failed to delete any removable device. Attempts: ${attempts.join(", ") || "none"}`,
+    );
   });
 }
 
@@ -517,11 +607,18 @@ export async function downloadRemoteWorkspaceViaUi(
   remoteWorkspaceName: string,
   remoteWorkspaceId?: string,
 ): Promise<void> {
+  const dialogOverlay = page.locator("[data-dialog-overlay]").last();
+  if (await dialogOverlay.isVisible().catch(() => false)) {
+    await page.keyboard.press("Escape").catch(() => undefined);
+    await dialogOverlay.waitFor({ state: "hidden", timeout: 5000 }).catch(() => undefined);
+  }
+
   const selectorName = await currentWorkspaceName(page);
   if (!selectorName) {
     throw new Error("No current workspace name available for selector");
   }
   process.stderr.write(`[sync-e2e] downloadRemoteWorkspace: clicking selector for "${selectorName}"\n`);
+  writeSyncE2EDebug(`[sync-e2e] downloadRemoteWorkspace: clicking selector for "${selectorName}"\n`);
 
   await page.getByRole("button", { name: new RegExp(escapeRegex(selectorName)) }).last().click();
   const newWorkspaceButton = page.getByRole("button", { name: /^new workspace$/i });
@@ -532,8 +629,10 @@ export async function downloadRemoteWorkspaceViaUi(
 
   if (hasRemoteShortcut) {
     process.stderr.write(`[sync-e2e] downloadRemoteWorkspace: using selector remote shortcut\n`);
+    writeSyncE2EDebug(`[sync-e2e] downloadRemoteWorkspace: using selector remote shortcut\n`);
     await moreOnButton.click();
     process.stderr.write(`[sync-e2e] downloadRemoteWorkspace: clicking remote workspace "${remoteWorkspaceName}"\n`);
+    writeSyncE2EDebug(`[sync-e2e] downloadRemoteWorkspace: clicking remote workspace "${remoteWorkspaceName}"\n`);
     const remoteWorkspaceButton = page.getByRole("button", {
       name: new RegExp(escapeRegex(remoteWorkspaceName), "i"),
     }).first();
@@ -541,6 +640,9 @@ export async function downloadRemoteWorkspaceViaUi(
     await remoteWorkspaceButton.click();
   } else if (remoteWorkspaceId) {
     process.stderr.write(
+      `[sync-e2e] downloadRemoteWorkspace: using direct provider download for "${remoteWorkspaceName}" (${remoteWorkspaceId})\n`,
+    );
+    writeSyncE2EDebug(
       `[sync-e2e] downloadRemoteWorkspace: using direct provider download for "${remoteWorkspaceName}" (${remoteWorkspaceId})\n`,
     );
     await Promise.all([
@@ -552,6 +654,7 @@ export async function downloadRemoteWorkspaceViaUi(
     ]);
   } else {
     process.stderr.write(`[sync-e2e] downloadRemoteWorkspace: falling back to add-workspace dialog\n`);
+    writeSyncE2EDebug(`[sync-e2e] downloadRemoteWorkspace: falling back to add-workspace dialog\n`);
     await newWorkspaceButton.click();
 
     const dialog = page.getByRole("dialog");
@@ -575,6 +678,9 @@ export async function downloadRemoteWorkspaceViaUi(
         process.stderr.write(
           `[sync-e2e] downloadRemoteWorkspace: refreshing cloud workspace list (attempt ${attempt + 1})\n`,
         );
+        writeSyncE2EDebug(
+          `[sync-e2e] downloadRemoteWorkspace: refreshing cloud workspace list (attempt ${attempt + 1})\n`,
+        );
         await downloadFromCloudButton.click();
       }
 
@@ -590,8 +696,10 @@ export async function downloadRemoteWorkspaceViaUi(
   }
 
   process.stderr.write(`[sync-e2e] downloadRemoteWorkspace: allowing permission prompts\n`);
+  writeSyncE2EDebug(`[sync-e2e] downloadRemoteWorkspace: allowing permission prompts\n`);
   await allowPermissionPrompts(page);
   process.stderr.write(`[sync-e2e] downloadRemoteWorkspace: starting poll\n`);
+  writeSyncE2EDebug(`[sync-e2e] downloadRemoteWorkspace: starting poll\n`);
 
   let pollCount = 0;
   await expect
@@ -599,6 +707,9 @@ export async function downloadRemoteWorkspaceViaUi(
       const name = await currentWorkspaceName(page);
       if (pollCount++ % 10 === 0) {
         process.stderr.write(`[sync-e2e] downloadRemoteWorkspace poll #${pollCount}: name=${JSON.stringify(name)} expected=${JSON.stringify(remoteWorkspaceName)}\n`);
+        writeSyncE2EDebug(
+          `[sync-e2e] downloadRemoteWorkspace poll #${pollCount}: name=${JSON.stringify(name)} expected=${JSON.stringify(remoteWorkspaceName)}\n`,
+        );
       }
       return name;
     }, { timeout: 60000 })
@@ -609,47 +720,59 @@ export async function downloadRemoteWorkspaceViaUi(
 // Sync status helpers
 // ---------------------------------------------------------------------------
 
+export async function readSyncState(
+  page: import("@playwright/test").Page,
+): Promise<string | null> {
+  return page.evaluate(() => {
+    const bridge = (globalThis as {
+      __diaryx_e2e?: {
+        getSyncStatus: () => Promise<string | null>;
+      };
+    }).__diaryx_e2e;
+
+    return (async () => {
+      try {
+        const { getBackend, createApi } = await import("/src/lib/backend");
+        const backend = await getBackend();
+        const api = createApi(backend);
+        const status = await api.executePluginCommand("diaryx.sync", "GetSyncStatus", {});
+
+        if (
+          status
+          && typeof status === "object"
+          && "state" in status
+          && typeof (status as { state?: unknown }).state === "string"
+        ) {
+          return (status as { state: string }).state;
+        }
+      } catch {
+        // Fall back to the UI bridge while the plugin/backend is still booting.
+      }
+
+      if (!bridge) {
+        return null;
+      }
+
+      return bridge.getSyncStatus();
+    })();
+  });
+}
+
 export async function waitForSyncSession(
   page: import("@playwright/test").Page,
 ): Promise<void> {
   await expect
-    .poll(async () =>
-      page.evaluate(() => {
-        const bridge = (globalThis as {
-          __diaryx_e2e?: {
-            getSyncStatus: () => Promise<string | null>;
-          };
-        }).__diaryx_e2e;
-
-        return (async () => {
-          try {
-            const { getBackend, createApi } = await import("/src/lib/backend");
-            const backend = await getBackend();
-            const api = createApi(backend);
-            const status = await api.executePluginCommand("diaryx.sync", "GetSyncStatus", {});
-
-            if (
-              status
-              && typeof status === "object"
-              && "state" in status
-              && typeof (status as { state?: unknown }).state === "string"
-            ) {
-              return (status as { state: string }).state;
-            }
-          } catch {
-            // Fall back to the UI bridge while the plugin/backend is still booting.
-          }
-
-          if (!bridge) {
-            return null;
-          }
-
-          return bridge.getSyncStatus();
-        })();
-      }),
-      { timeout: 45000 },
-    )
+    .poll(async () => await readSyncState(page), { timeout: 45000 })
     .toMatch(/^(syncing|synced)$/);
+}
+
+export async function waitForSyncSettled(
+  page: import("@playwright/test").Page,
+  timeoutMs: number = 60000,
+): Promise<void> {
+  await expect
+    .poll(async () => await readSyncState(page), { timeout: timeoutMs })
+    .toBe("synced");
 }
 
 export async function waitForE2EBridge(
@@ -1011,6 +1134,30 @@ export async function openEntryForSync(
   ]);
 }
 
+export async function queueBodyUpdateForSync(
+  page: import("@playwright/test").Page,
+  entryPath: string,
+): Promise<void> {
+  const queuePromise = page.evaluate((pathToQueue) => {
+    const bridge = (globalThis as {
+      __diaryx_e2e?: {
+        queueBodyUpdateForSync: (path: string) => Promise<void>;
+      };
+    }).__diaryx_e2e;
+
+    if (!bridge) {
+      throw new Error("Diaryx E2E bridge is not available");
+    }
+
+    return bridge.queueBodyUpdateForSync(pathToQueue);
+  }, entryPath);
+
+  await Promise.all([
+    queuePromise,
+    allowPermissionPrompts(page, 1000, 15000),
+  ]);
+}
+
 export async function listSyncedFiles(
   page: import("@playwright/test").Page,
 ): Promise<string[]> {
@@ -1182,6 +1329,7 @@ export async function setupSyncedPair(
       const text = message.text();
       if (text.includes("[extism-plugin:") || text.includes("[extism]") || text.includes("[ws:") || text.includes("[e2e:")) {
         process.stderr.write(`[${label}:page${tag}:${message.type()}] ${text}\n`);
+        writeSyncE2EDebug(`[${label}:page${tag}:${message.type()}] ${text}\n`);
       }
     });
   }
@@ -1296,6 +1444,7 @@ export async function setupSingleSyncClient(
     const text = message.text();
     if (text.includes("[extism-plugin:") || text.includes("[extism]") || text.includes("[ws:")) {
       process.stderr.write(`[${label}:${message.type()}] ${text}\n`);
+      writeSyncE2EDebug(`[${label}:${message.type()}] ${text}\n`);
     }
   });
 

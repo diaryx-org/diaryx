@@ -8,6 +8,7 @@ import {
   expect,
   ensureSyncServer,
   ensureSyncPluginBase64,
+  restartSyncServer,
   stopSpawnedSyncServer,
   setupSyncedPair,
   setupSingleSyncClient,
@@ -27,9 +28,12 @@ import {
   readEntryBody,
   createEntryWithMarker,
   openEntryForSync,
+  queueBodyUpdateForSync,
   escapeRegex,
   waitForAppReady,
 } from "./helpers";
+
+const SHOULD_LOG_SYNC_E2E_DEBUG = process.env.SYNC_E2E_DEBUG === "1";
 
 test.describe("Sync › Lifecycle", () => {
   test.describe.configure({ mode: "serial" });
@@ -40,9 +44,25 @@ test.describe("Sync › Lifecycle", () => {
     await ensureSyncPluginBase64();
   });
 
+  test.beforeEach(async ({ browserName }) => {
+    if (browserName !== "chromium") return;
+    if (process.env.SYNC_E2E_RESTART_SERVER_PER_TEST !== "1") return;
+    await restartSyncServer();
+  });
+
   test.afterAll(async ({ browserName }) => {
     if (browserName !== "chromium") return;
-    await stopSpawnedSyncServer();
+    const previousCleanupSetting = process.env.SYNC_E2E_CLEANUP_SERVER;
+    process.env.SYNC_E2E_CLEANUP_SERVER = "1";
+    try {
+      await stopSpawnedSyncServer();
+    } finally {
+      if (previousCleanupSetting === undefined) {
+        delete process.env.SYNC_E2E_CLEANUP_SERVER;
+      } else {
+        process.env.SYNC_E2E_CLEANUP_SERVER = previousCleanupSetting;
+      }
+    }
   });
 
   test("links, bootstraps, and propagates live workspace changes across two browser clients", async ({ browser, browserName }) => {
@@ -59,10 +79,14 @@ test.describe("Sync › Lifecycle", () => {
       // Create entry on A, verify it arrives on B.
       const entryPath = await createEntryWithMarker(pageA, `lifecycle-${runId}`, marker);
       await openEntryForSync(pageA, entryPath);
+      await queueBodyUpdateForSync(pageA, entryPath);
       await openEntryForSync(pageB, entryPath);
 
       await expect
-        .poll(async () => await readEntryBody(pageB, entryPath), { timeout: 30000 })
+        .poll(async () => {
+          await openEntryForSync(pageB, entryPath);
+          return await readEntryBody(pageB, entryPath);
+        }, { timeout: 30000 })
         .toContain(marker);
     } finally {
       await Promise.allSettled([pair.contextA.close(), pair.contextB.close()]);
@@ -123,15 +147,25 @@ test.describe("Sync › Lifecycle", () => {
       const entry2 = await createEntryWithMarker(pageA, `snap-2-${runId}`, marker2);
       await openEntryForSync(pageA, entry1);
       await openEntryForSync(pageA, entry2);
+      await Promise.all([
+        queueBodyUpdateForSync(pageA, entry1),
+        queueBodyUpdateForSync(pageA, entry2),
+      ]);
 
       // Wait for them to arrive on B.
       await openEntryForSync(pageB, entry1);
       await openEntryForSync(pageB, entry2);
       await expect
-        .poll(async () => await readEntryBody(pageB, entry1), { timeout: 30000 })
+        .poll(async () => {
+          await openEntryForSync(pageB, entry1);
+          return await readEntryBody(pageB, entry1);
+        }, { timeout: 30000 })
         .toContain(marker1);
       await expect
-        .poll(async () => await readEntryBody(pageB, entry2), { timeout: 30000 })
+        .poll(async () => {
+          await openEntryForSync(pageB, entry2);
+          return await readEntryBody(pageB, entry2);
+        }, { timeout: 30000 })
         .toContain(marker2);
 
       // Re-upload a snapshot from A.
@@ -147,27 +181,39 @@ test.describe("Sync › Lifecycle", () => {
       await contextC.addInitScript(() => {
         localStorage.setItem("diaryx-storage-type", "indexeddb");
         localStorage.setItem("diaryx_sync_enabled", "true");
+        localStorage.setItem("diaryx_e2e_skip_onboarding", "1");
+        (globalThis as { __diaryx_e2e_disable_auto_file_open?: boolean }).__diaryx_e2e_disable_auto_file_open = true;
       });
       const pageC = await contextC.newPage();
       pageC.on("console", (message) => {
         const text = message.text();
-        if (text.includes("[extism-plugin:") || text.includes("[extism]") || text.includes("[ws:")) {
+        if (
+          SHOULD_LOG_SYNC_E2E_DEBUG
+          && (text.includes("[extism-plugin:") || text.includes("[extism]") || text.includes("[ws:"))
+        ) {
           process.stderr.write(`[re-snapshot:pageC:${message.type()}] ${text}\n`);
         }
       });
 
       try {
         const wasmBase64 = await ensureSyncPluginBase64();
+        console.log("[sync-e2e:re-snapshot] step: opening pageC");
         await pageC.goto("/");
         await waitForAppReady(pageC, 45000);
+        console.log("[sync-e2e:re-snapshot] step: installing plugin on pageC");
         await installSyncPlugin(pageC, wasmBase64);
 
-        await signInWithDevMagicLink(pageC, pair.email);
+        console.log("[sync-e2e:re-snapshot] step: signing in on pageC");
+        await signInWithDevMagicLink(pageC, pair.email, { waitForProviderReady: false });
+        console.log("[sync-e2e:re-snapshot] step: waiting for pageC bridge");
         await waitForE2EBridge(pageC);
         await pageC.evaluate(() => (globalThis as any).__diaryx_e2e.setAutoAllowPermissions(true));
 
+        console.log("[sync-e2e:re-snapshot] step: downloading remote workspace on pageC");
         await downloadRemoteWorkspaceViaUi(pageC, `Sync E2E re-snapshot ${runId}`, pair.remoteId);
+        console.log("[sync-e2e:re-snapshot] step: installing workspace plugin on pageC");
         await installSyncPluginInCurrentWorkspace(pageC, wasmBase64);
+        console.log("[sync-e2e:re-snapshot] step: waiting for pageC sync session");
         await waitForSyncSession(pageC);
 
         console.log("[sync-e2e:re-snapshot] step: verifying entries in fresh download");

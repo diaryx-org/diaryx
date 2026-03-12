@@ -42,22 +42,44 @@ fn relativize_sync_path(value: &str, root_prefix: &str) -> String {
     }
 }
 
-fn normalize_metadata_paths(metadata: &FileMetadata, root_prefix: &str) -> FileMetadata {
+/// Resolve a value that may be a UUID doc-id or a path.
+/// If it's a UUID, look it up via `workspace_crdt.get_path()` and relativize.
+/// Otherwise treat it as a path and relativize directly.
+fn resolve_and_relativize(
+    value: &str,
+    root_prefix: &str,
+    workspace_crdt: &WorkspaceCrdt,
+) -> String {
+    // If it looks like a UUID (no slash, no .md suffix), resolve via CRDT
+    if !value.contains('/') && !value.ends_with(".md") {
+        if let Some(path) = workspace_crdt.get_path(value) {
+            let path_str = normalize_sync_path(&path.to_string_lossy());
+            return relativize_sync_path(&path_str, root_prefix);
+        }
+    }
+    relativize_sync_path(value, root_prefix)
+}
+
+fn normalize_metadata_paths(
+    metadata: &FileMetadata,
+    root_prefix: &str,
+    workspace_crdt: &WorkspaceCrdt,
+) -> FileMetadata {
     let mut normalized = metadata.clone();
 
     normalized.part_of = normalized
         .part_of
         .as_ref()
-        .map(|p| relativize_sync_path(p, root_prefix));
+        .map(|p| resolve_and_relativize(p, root_prefix, workspace_crdt));
 
     if let Some(contents) = &mut normalized.contents {
         for item in contents {
-            *item = relativize_sync_path(item, root_prefix);
+            *item = resolve_and_relativize(item, root_prefix, workspace_crdt);
         }
     }
 
     for attachment in &mut normalized.attachments {
-        attachment.path = relativize_sync_path(&attachment.path, root_prefix);
+        attachment.path = resolve_and_relativize(&attachment.path, root_prefix, workspace_crdt);
     }
 
     normalized
@@ -80,6 +102,9 @@ fn collect_snapshot<FS: AsyncFileSystem + Clone + Send + Sync>(
     let mut disk_markdown = BTreeMap::new();
     let mut disk_parsed = BTreeMap::new();
 
+    // Get the UUID→filesystem-path mapping from CrdtFs's cache
+    let uuid_to_fs_path = fs.inner().uuid_to_path_snapshot();
+
     let entries = block_on(fs.list_all_files_recursive(root)).expect("recursive listing failed");
     for entry in entries {
         if entry.extension().is_some_and(|ext| ext == "md") {
@@ -88,10 +113,15 @@ fn collect_snapshot<FS: AsyncFileSystem + Clone + Send + Sync>(
             let (metadata, body) = parse_snapshot_markdown(&entry.to_string_lossy(), &content)
                 .expect("markdown parse failed");
             disk_markdown.insert(rel.clone(), content);
+            let mut normalized_meta =
+                normalize_metadata_paths(&metadata, &root_prefix, workspace_crdt);
+            // The `path` field is internal CRDT state (not in frontmatter),
+            // so set it from the disk-relative path for comparison purposes.
+            normalized_meta.path = rel.clone();
             disk_parsed.insert(
                 rel,
                 FileState {
-                    metadata: normalize_metadata_paths(&metadata, &root_prefix),
+                    metadata: normalized_meta,
                     body,
                 },
             );
@@ -100,7 +130,18 @@ fn collect_snapshot<FS: AsyncFileSystem + Clone + Send + Sync>(
 
     let mut active = BTreeMap::new();
     for (key, metadata) in workspace_crdt.list_active_files() {
-        let rel = relativize_sync_path(&key, &root_prefix);
+        // Use the CrdtFs path cache to get the filesystem path for this UUID
+        let rel = if let Some(fs_path) = uuid_to_fs_path.get(&key) {
+            fs_path.clone()
+        } else {
+            // Fallback: try workspace hierarchy path, then raw key
+            if let Some(path) = workspace_crdt.get_path(&key) {
+                let path_str = normalize_sync_path(&path.to_string_lossy());
+                relativize_sync_path(&path_str, &root_prefix)
+            } else {
+                relativize_sync_path(&key, &root_prefix)
+            }
+        };
         let body = body_docs
             .get(&key)
             .expect("body doc should exist for active key")
@@ -108,7 +149,7 @@ fn collect_snapshot<FS: AsyncFileSystem + Clone + Send + Sync>(
         active.insert(
             rel,
             FileState {
-                metadata: normalize_metadata_paths(&metadata, &root_prefix),
+                metadata: normalize_metadata_paths(&metadata, &root_prefix, workspace_crdt),
                 body,
             },
         );
@@ -118,7 +159,16 @@ fn collect_snapshot<FS: AsyncFileSystem + Clone + Send + Sync>(
         .list_files()
         .into_iter()
         .filter(|(_, metadata)| metadata.deleted)
-        .map(|(key, _)| relativize_sync_path(&key, &root_prefix))
+        .map(|(key, _)| {
+            if let Some(fs_path) = uuid_to_fs_path.get(&key) {
+                fs_path.clone()
+            } else if let Some(path) = workspace_crdt.get_path(&key) {
+                let path_str = normalize_sync_path(&path.to_string_lossy());
+                relativize_sync_path(&path_str, &root_prefix)
+            } else {
+                relativize_sync_path(&key, &root_prefix)
+            }
+        })
         .collect::<BTreeSet<_>>();
 
     let sync_suppressed_exists_on_disk = disk_markdown.contains_key(sync_suppressed_rel);
@@ -166,6 +216,7 @@ fn run_crdt_scenario<FS: AsyncFileSystem + Clone + Send + Sync>(
     root: PathBuf,
 ) -> BackendSnapshot {
     let decorated = DecoratedFsBuilder::new(base).crdt_enabled(true).build();
+    decorated.set_workspace_root(root.clone());
     let fs = decorated.fs.clone();
     let workspace_crdt = Arc::clone(&decorated.workspace_crdt);
     let body_docs = Arc::clone(&decorated.body_doc_manager);
